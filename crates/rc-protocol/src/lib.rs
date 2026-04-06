@@ -83,7 +83,7 @@ impl<W: Write> ProtocolEmitter<W> {
     }
 
     pub fn emit_result(&mut self, payload: ResultPayload) -> Result<()> {
-        self.emit(json!({
+        let mut event = json!({
             "type": "result",
             "subtype": if payload.is_error { "error_during_execution" } else { "success" },
             "duration_ms": payload.duration_ms,
@@ -102,10 +102,13 @@ impl<W: Write> ProtocolEmitter<W> {
             },
             "modelUsage": payload.model_usage,
             "permission_denials": payload.permission_denials,
-            "errors": if payload.errors.is_empty() { Value::Null } else { json!(payload.errors) },
             "uuid": Uuid::new_v4(),
             "session_id": self.session_id,
-        }))
+        });
+        if !payload.errors.is_empty() {
+            event["errors"] = json!(payload.errors);
+        }
+        self.emit(event)
     }
 
     pub fn emit_permission_request(&mut self, payload: PermissionRequestPayload) -> Result<()> {

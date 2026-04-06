@@ -1531,9 +1531,15 @@ dependencies = [
 name = "rc-control-plane"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "axum",
+ "chrono",
+ "rc-runner",
  "serde",
  "serde_json",
+ "tokio",
+ "tower",
+ "uuid",
 ]
 
 [[package]]
@@ -1553,6 +1559,10 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "tempfile",
+ "thiserror",
+ "toml",
+ "walkdir",
 ]
 
 [[package]]
@@ -1569,9 +1579,12 @@ dependencies = [
 name = "rc-plugins"
 version = "0.1.0"
 dependencies = [
- "anyhow",
+ "rc-mcp",
+ "rc-skills",
  "serde",
  "serde_json",
+ "tempfile",
+ "thiserror",
  "walkdir",
 ]
 
@@ -1604,9 +1617,15 @@ name = "rc-runner"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
+ "chrono",
  "rc-config",
  "serde",
  "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "uuid",
 ]
 
 [[package]]
@@ -1629,8 +1648,12 @@ dependencies = [
 name = "rc-skills"
 version = "0.1.0"
 dependencies = [
- "anyhow",
+ "regex",
  "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "toml",
  "walkdir",
 ]
 
@@ -1728,13 +1751,17 @@ dependencies = [
  "clap",
  "rc-config",
  "rc-core",
+ "rc-mcp",
  "rc-permissions",
+ "rc-plugins",
  "rc-protocol",
  "rc-provider",
  "rc-session",
+ "rc-skills",
  "rc-telemetry",
  "rc-tools",
  "rc-tui",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",
@@ -1750,6 +1777,7 @@ dependencies = [
  "clap",
  "rc-control-plane",
  "rc-telemetry",
+ "serde_json",
  "tokio",
 ]
 
@@ -1771,11 +1799,12 @@ name = "remote-code-runner"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
  "clap",
- "rc-config",
  "rc-runner",
  "rc-telemetry",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -21,6 +22,31 @@ pub struct SessionSummary {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub transcript_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionUsageSummary {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionStats {
+    pub total_events: usize,
+    pub conversation_entries: usize,
+    pub messages_by_role: BTreeMap<String, usize>,
+    pub tool_call_count: usize,
+    pub error_count: usize,
+    pub last_stop_reason: Option<String>,
+    pub usage: SessionUsageSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionBundle {
+    pub summary: SessionSummary,
+    pub stats: SessionStats,
+    pub conversation: Vec<ConversationEntry>,
+    pub events: Vec<StoredEvent>,
 }
 
 pub struct SessionStore {
@@ -55,11 +81,20 @@ impl SessionStore {
             File::create(&transcript_path)?;
         }
         let now = Utc::now();
-        let title = title_hint
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|value| value.chars().take(80).collect::<String>())
-            .unwrap_or_else(|| format!("session-{session_id}"));
+        let existing = self.try_get_session_summary(session_id)?;
+        let title = match existing.as_ref() {
+            Some(summary) if !is_default_title(&summary.title, session_id) => summary.title.clone(),
+            Some(summary) => {
+                normalize_title_hint(title_hint).unwrap_or_else(|| summary.title.clone())
+            }
+            None => {
+                normalize_title_hint(title_hint).unwrap_or_else(|| format!("session-{session_id}"))
+            }
+        };
+        let created_at = existing
+            .as_ref()
+            .map(|summary| summary.created_at)
+            .unwrap_or(now);
         self.connection()?.execute(
             "INSERT INTO sessions (
                 session_id, title, cwd, provider_name, model, created_at, updated_at, transcript_path
@@ -77,7 +112,7 @@ impl SessionStore {
                 cwd.display().to_string(),
                 provider_name,
                 model,
-                now.to_rfc3339(),
+                created_at.to_rfc3339(),
                 now.to_rfc3339(),
                 transcript_path.display().to_string(),
             ],
@@ -139,51 +174,52 @@ impl SessionStore {
             ))
         })?;
         let raw_rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-        raw_rows
-            .into_iter()
-            .map(
-                |(
-                    session_id,
-                    title,
-                    cwd,
-                    provider_name,
-                    model,
-                    created_at,
-                    updated_at,
-                    transcript_path,
-                )| {
-                    Ok(SessionSummary {
-                        session_id: Uuid::parse_str(&session_id)?,
-                        title,
-                        cwd: PathBuf::from(cwd),
-                        provider_name,
-                        model,
-                        created_at: parse_timestamp(&created_at)?,
-                        updated_at: parse_timestamp(&updated_at)?,
-                        transcript_path: PathBuf::from(transcript_path),
-                    })
-                },
-            )
-            .collect()
+        raw_rows.into_iter().map(raw_row_to_summary).collect()
     }
 
-    pub fn load_conversation(&self, session_id: Uuid) -> Result<Vec<ConversationEntry>> {
+    pub fn get_session_summary(&self, session_id: Uuid) -> Result<SessionSummary> {
+        self.try_get_session_summary(session_id)?
+            .ok_or_else(|| anyhow!("session {} does not exist", session_id))
+    }
+
+    pub fn load_events(&self, session_id: Uuid) -> Result<Vec<StoredEvent>> {
         let transcript_path = self.session_transcript_path(session_id);
         let file = File::open(&transcript_path)
             .with_context(|| format!("failed to open {}", transcript_path.display()))?;
         let reader = BufReader::new(file);
-        let mut entries = Vec::new();
+        let mut events = Vec::new();
         for line in reader.lines() {
             let line = line?;
             if line.trim().is_empty() {
                 continue;
             }
-            let event: StoredEvent = serde_json::from_str(&line)?;
-            if let Some(conversation) = event.conversation {
-                entries.push(conversation);
-            }
+            events.push(serde_json::from_str(&line)?);
         }
-        Ok(entries)
+        Ok(events)
+    }
+
+    pub fn load_conversation(&self, session_id: Uuid) -> Result<Vec<ConversationEntry>> {
+        Ok(self
+            .load_events(session_id)?
+            .into_iter()
+            .filter_map(|event| event.conversation)
+            .collect())
+    }
+
+    pub fn load_session_bundle(&self, session_id: Uuid) -> Result<SessionBundle> {
+        let summary = self.get_session_summary(session_id)?;
+        let events = self.load_events(session_id)?;
+        let conversation = events
+            .iter()
+            .filter_map(|event| event.conversation.clone())
+            .collect::<Vec<_>>();
+        let stats = build_session_stats(&events, &conversation);
+        Ok(SessionBundle {
+            summary,
+            stats,
+            conversation,
+            events,
+        })
     }
 
     pub fn export_session(
@@ -204,6 +240,25 @@ impl SessionStore {
             fs::create_dir_all(parent)?;
         }
         fs::copy(&source, &destination)?;
+        Ok(destination)
+    }
+
+    pub fn export_session_bundle_json(
+        &self,
+        session_id: Uuid,
+        output_path: Option<PathBuf>,
+    ) -> Result<PathBuf> {
+        let bundle = self.load_session_bundle(session_id)?;
+        let destination = output_path.unwrap_or_else(|| {
+            self.paths
+                .artifacts_dir
+                .join(format!("session-{session_id}.json"))
+        });
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let contents = serde_json::to_vec_pretty(&bundle)?;
+        fs::write(&destination, contents)?;
         Ok(destination)
     }
 
@@ -254,10 +309,129 @@ impl SessionStore {
         Connection::open(&self.paths.state_db_path)
             .with_context(|| format!("failed to open {}", self.paths.state_db_path.display()))
     }
+
+    fn try_get_session_summary(&self, session_id: Uuid) -> Result<Option<SessionSummary>> {
+        let conn = self.connection()?;
+        let mut statement = conn.prepare(
+            "SELECT session_id, title, cwd, provider_name, model, created_at, updated_at, transcript_path
+             FROM sessions WHERE session_id = ?1 LIMIT 1",
+        )?;
+        let row = statement.query_row([session_id.to_string()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+            ))
+        });
+
+        match row {
+            Ok(raw) => raw_row_to_summary(raw).map(Some),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
 }
 
 fn parse_timestamp(value: &str) -> Result<DateTime<Utc>> {
     Ok(DateTime::parse_from_rfc3339(value)?.with_timezone(&Utc))
+}
+
+fn normalize_title_hint(title_hint: Option<&str>) -> Option<String> {
+    title_hint
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(80).collect::<String>())
+}
+
+fn is_default_title(title: &str, session_id: Uuid) -> bool {
+    title == format!("session-{session_id}")
+}
+
+fn raw_row_to_summary(
+    raw: (
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        String,
+        String,
+        String,
+    ),
+) -> Result<SessionSummary> {
+    let (session_id, title, cwd, provider_name, model, created_at, updated_at, transcript_path) =
+        raw;
+    Ok(SessionSummary {
+        session_id: Uuid::parse_str(&session_id)?,
+        title,
+        cwd: PathBuf::from(cwd),
+        provider_name,
+        model,
+        created_at: parse_timestamp(&created_at)?,
+        updated_at: parse_timestamp(&updated_at)?,
+        transcript_path: PathBuf::from(transcript_path),
+    })
+}
+
+fn build_session_stats(events: &[StoredEvent], conversation: &[ConversationEntry]) -> SessionStats {
+    let mut messages_by_role = BTreeMap::new();
+    let mut tool_call_count = 0usize;
+    let mut error_count = 0usize;
+    for entry in conversation {
+        let role = match entry.role {
+            rc_core::ConversationRole::System => "system",
+            rc_core::ConversationRole::User => "user",
+            rc_core::ConversationRole::Assistant => "assistant",
+            rc_core::ConversationRole::Tool => "tool",
+        };
+        *messages_by_role.entry(role.to_owned()).or_insert(0) += 1;
+        tool_call_count += entry.tool_calls.len();
+        if entry.is_error {
+            error_count += 1;
+        }
+    }
+
+    let mut usage = SessionUsageSummary::default();
+    let mut last_stop_reason = None;
+    for event in events {
+        if let Some(payload) = &event.payload {
+            if payload
+                .get("is_error")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                error_count += 1;
+            }
+            if let Some(stop_reason) = payload.get("stop_reason").and_then(Value::as_str) {
+                last_stop_reason = Some(stop_reason.to_owned());
+            }
+            if let Some(event_usage) = payload.get("usage") {
+                usage.input_tokens += event_usage
+                    .get("input_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
+                usage.output_tokens += event_usage
+                    .get("output_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
+            }
+        }
+    }
+
+    SessionStats {
+        total_events: events.len(),
+        conversation_entries: conversation.len(),
+        messages_by_role,
+        tool_call_count,
+        error_count,
+        last_stop_reason,
+        usage,
+    }
 }
 
 #[cfg(test)]
@@ -265,6 +439,7 @@ mod tests {
     use super::SessionStore;
     use rc_config::AppPaths;
     use rc_core::ConversationEntry;
+    use serde_json::json;
     use tempfile::tempdir;
     use uuid::Uuid;
 
@@ -301,5 +476,27 @@ mod tests {
         assert!(loaded.is_ok());
         let loaded = loaded.unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(loaded.len(), 1);
+
+        let appended = store.append_named_event(
+            session_id,
+            "result",
+            json!({
+                "is_error": false,
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 2, "output_tokens": 3}
+            }),
+        );
+        assert!(appended.is_ok());
+
+        let bundle = store.load_session_bundle(session_id);
+        assert!(bundle.is_ok());
+        let bundle = bundle.unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(bundle.stats.total_events, 2);
+        assert_eq!(bundle.stats.usage.output_tokens, 3);
+
+        let export = store.export_session_bundle_json(session_id, None);
+        assert!(export.is_ok());
+        let export = export.unwrap_or_else(|error| panic!("{error}"));
+        assert!(export.exists());
     }
 }
