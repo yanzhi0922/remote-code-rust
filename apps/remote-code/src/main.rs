@@ -165,6 +165,7 @@ enum AgentsCommand {
 #[derive(Subcommand, Debug)]
 enum McpCommand {
     List(McpListArgs),
+    Call(McpCallArgs),
 }
 
 #[derive(Args, Debug)]
@@ -198,6 +199,30 @@ struct McpListArgs {
 
     #[arg(long)]
     include_disabled: bool,
+
+    #[arg(long = "config")]
+    config_paths: Vec<PathBuf>,
+}
+
+#[derive(Args, Debug)]
+struct McpCallArgs {
+    #[arg(long)]
+    server: String,
+
+    #[arg(long)]
+    tool: String,
+
+    #[arg(long)]
+    json: bool,
+
+    #[arg(long = "include-disabled")]
+    include_disabled: bool,
+
+    #[arg(long = "arg")]
+    args: Vec<String>,
+
+    #[arg(long = "args-json")]
+    args_json: Option<String>,
 
     #[arg(long = "config")]
     config_paths: Vec<PathBuf>,
@@ -494,6 +519,7 @@ fn run_agents(config: &RuntimeConfig, command: AgentsCommand) -> Result<()> {
 async fn run_mcp(config: &RuntimeConfig, command: McpCommand) -> Result<()> {
     match command {
         McpCommand::List(args) => run_mcp_list(config, args).await,
+        McpCommand::Call(args) => run_mcp_call(config, args).await,
     }
 }
 
@@ -640,6 +666,61 @@ async fn run_mcp_list(config: &RuntimeConfig, args: McpListArgs) -> Result<()> {
             }
         }
     }
+    Ok(())
+}
+
+async fn run_mcp_call(config: &RuntimeConfig, args: McpCallArgs) -> Result<()> {
+    let output = build_mcp_call_output(config, &args).await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        return Ok(());
+    }
+
+    for warning in &output.warnings {
+        println!("warning: {warning}");
+    }
+    println!(
+        "server: {}  {}",
+        output.server.name,
+        format_mcp_call_source(&output.server)
+    );
+    println!("tool: {}", output.response.tool_name);
+    println!(
+        "status: {}",
+        if output.response.result.is_error {
+            "error"
+        } else {
+            "ok"
+        }
+    );
+    println!("protocol: {}", output.response.protocol_version);
+    if let Some(server_info) = &output.response.server_info {
+        match &server_info.version {
+            Some(version) => println!("peer: {} {}", server_info.name, version),
+            None => println!("peer: {}", server_info.name),
+        }
+    }
+
+    if !output.response.result.content.is_empty() {
+        println!("content:");
+        for block in &output.response.result.content {
+            if block.kind == "text"
+                && let Some(text) = block.fields.get("text").and_then(serde_json::Value::as_str)
+            {
+                for line in text.lines() {
+                    println!("  {line}");
+                }
+            } else {
+                println!("  {}", serde_json::to_string_pretty(block)?);
+            }
+        }
+    }
+
+    if let Some(structured) = &output.response.result.structured_content {
+        println!("structured:");
+        println!("{}", serde_json::to_string_pretty(structured)?);
+    }
+
     Ok(())
 }
 
@@ -1032,6 +1113,12 @@ struct RuntimeMcpDiscovery {
     warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+struct RuntimeMcpResolution {
+    entry: RuntimeMcpServerEntry,
+    warnings: Vec<String>,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 struct McpListOutput {
     warnings: Vec<String>,
@@ -1092,6 +1179,23 @@ impl McpLiveRecord {
             error: Some(error.to_string()),
         }
     }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct McpCallOutput {
+    warnings: Vec<String>,
+    server: McpCallServerRecord,
+    arguments: serde_json::Value,
+    response: rc_mcp::McpToolCallResponse,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct McpCallServerRecord {
+    name: String,
+    enabled: bool,
+    origin_kind: String,
+    origin_name: String,
+    config_path: PathBuf,
 }
 
 fn discover_runtime_extensions(config: &RuntimeConfig) -> RuntimeExtensionDiscovery {
@@ -1216,6 +1320,114 @@ async fn build_mcp_list_output(
         warnings: discovery.warnings,
         servers,
     })
+}
+
+async fn build_mcp_call_output(
+    config: &RuntimeConfig,
+    args: &McpCallArgs,
+) -> Result<McpCallOutput> {
+    let resolution = resolve_runtime_mcp_server(config, &args.server, &args.config_paths)?;
+    if !resolution.entry.server.enabled && !args.include_disabled {
+        return Err(anyhow!(
+            "MCP server `{}` is disabled; pass --include-disabled to force a tool call",
+            args.server
+        ));
+    }
+
+    let arguments = parse_mcp_call_arguments(args)?;
+    let response = rc_mcp::call_tool(
+        &resolution.entry.server,
+        &rc_mcp::McpClientInfo::new("remote-code-rust", RUNTIME_VERSION),
+        &args.tool,
+        arguments.clone(),
+    )
+    .await?;
+
+    Ok(McpCallOutput {
+        warnings: resolution.warnings,
+        server: McpCallServerRecord {
+            name: resolution.entry.server.name.clone(),
+            enabled: resolution.entry.server.enabled,
+            origin_kind: resolution.entry.origin_kind.to_owned(),
+            origin_name: resolution.entry.origin_name,
+            config_path: resolution.entry.config_path,
+        },
+        arguments,
+        response,
+    })
+}
+
+fn parse_mcp_call_arguments(args: &McpCallArgs) -> Result<serde_json::Value> {
+    let mut object = match &args.args_json {
+        Some(raw) => {
+            let parsed: serde_json::Value = serde_json::from_str(raw)
+                .map_err(|error| anyhow!("failed to parse --args-json as JSON: {error}"))?;
+            match parsed {
+                serde_json::Value::Object(map) => map,
+                _ => return Err(anyhow!("--args-json must be a JSON object")),
+            }
+        }
+        None => serde_json::Map::new(),
+    };
+
+    for pair in &args.args {
+        let (key, raw_value) = pair
+            .split_once('=')
+            .ok_or_else(|| anyhow!("invalid --arg `{pair}`; expected key=value"))?;
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(anyhow!("invalid --arg `{pair}`; key cannot be empty"));
+        }
+        let value = match serde_json::from_str::<serde_json::Value>(raw_value.trim()) {
+            Ok(parsed) => parsed,
+            Err(_) => serde_json::Value::String(raw_value.trim().to_owned()),
+        };
+        object.insert(key.to_owned(), value);
+    }
+
+    Ok(serde_json::Value::Object(object))
+}
+
+fn resolve_runtime_mcp_server(
+    config: &RuntimeConfig,
+    server_name: &str,
+    extra_config_paths: &[PathBuf],
+) -> Result<RuntimeMcpResolution> {
+    let mut discovery = discover_runtime_mcp_servers(config, extra_config_paths);
+    let mut matches = discovery
+        .servers
+        .iter()
+        .filter(|entry| entry.server.name == server_name)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    match matches.len() {
+        0 => Err(anyhow!("No MCP server named `{server_name}` was found")),
+        1 => Ok(RuntimeMcpResolution {
+            entry: matches.pop().expect("single server match must exist"),
+            warnings: discovery.warnings,
+        }),
+        _ => {
+            let candidates = matches
+                .into_iter()
+                .map(|entry| {
+                    format!(
+                        "{}:{} ({})",
+                        entry.origin_kind,
+                        entry.origin_name,
+                        entry.config_path.display()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            discovery.warnings.push(format!(
+                "Multiple MCP servers named `{server_name}` were discovered; use a unique config layout"
+            ));
+            Err(anyhow!(
+                "MCP server `{server_name}` is ambiguous across: {candidates}"
+            ))
+        }
+    }
 }
 
 fn discover_runtime_mcp_servers(
@@ -1356,6 +1568,17 @@ fn format_mcp_transport(transport: rc_mcp::McpTransport) -> &'static str {
 }
 
 fn format_mcp_source(server: &McpServerRecord) -> String {
+    match server.origin_kind.as_str() {
+        "plugin" => format!(
+            "plugin:{} ({})",
+            server.origin_name,
+            server.config_path.display()
+        ),
+        _ => format!("{} ({})", server.origin_kind, server.config_path.display()),
+    }
+}
+
+fn format_mcp_call_source(server: &McpCallServerRecord) -> String {
     match server.origin_kind.as_str() {
         "plugin" => format!(
             "plugin:{} ({})",
@@ -1854,11 +2077,12 @@ impl PermissionBroker for ChannelPermissionBroker {
 #[cfg(test)]
 mod tests {
     use super::{
-        McpListArgs, build_mcp_list_output, default_task_for_objective,
-        discover_runtime_mcp_servers, parse_agent_spec, parse_task_spec,
+        McpCallArgs, McpListArgs, build_mcp_call_output, build_mcp_list_output,
+        default_task_for_objective, discover_runtime_mcp_servers, parse_agent_spec,
+        parse_mcp_call_arguments, parse_task_spec, resolve_runtime_mcp_server,
     };
     use rc_config::{ProviderOverrides, load_runtime_config};
-    use std::{collections::BTreeSet, fs};
+    use std::{collections::BTreeSet, fs, process::Command as ProcessCommand};
     use tempfile::tempdir;
 
     #[test]
@@ -2077,5 +2301,233 @@ mod tests {
                 .unwrap_or_default()
                 .contains("include-disabled")
         );
+    }
+
+    #[test]
+    fn parse_mcp_call_arguments_merges_json_and_key_value_overrides() {
+        let parsed = parse_mcp_call_arguments(&McpCallArgs {
+            server: "mock".to_owned(),
+            tool: "search".to_owned(),
+            json: false,
+            include_disabled: false,
+            args: vec![
+                "query=rust".to_owned(),
+                "count=3".to_owned(),
+                "exact=true".to_owned(),
+            ],
+            args_json: Some(r#"{"scope":"docs","count":1}"#.to_owned()),
+            config_paths: Vec::new(),
+        })
+        .unwrap_or_else(|error| panic!("argument parse failed: {error}"));
+
+        assert_eq!(
+            parsed,
+            serde_json::json!({
+                "scope": "docs",
+                "query": "rust",
+                "count": 3,
+                "exact": true
+            })
+        );
+    }
+
+    #[test]
+    fn resolve_runtime_mcp_server_rejects_ambiguous_names() {
+        let tempdir = tempdir().unwrap_or_else(|error| panic!("tempdir failed: {error}"));
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        fs::create_dir_all(&cwd).unwrap_or_else(|error| panic!("cwd create failed: {error}"));
+        fs::create_dir_all(&profile)
+            .unwrap_or_else(|error| panic!("profile create failed: {error}"));
+
+        fs::write(
+            cwd.join("mcp.toml"),
+            "[mcp_servers.shared]\ncommand = \"python\"\n",
+        )
+        .unwrap_or_else(|error| panic!("cwd mcp write failed: {error}"));
+        fs::write(
+            profile.join("mcp.toml"),
+            "[mcp_servers.shared]\ncommand = \"python\"\n",
+        )
+        .unwrap_or_else(|error| panic!("profile mcp write failed: {error}"));
+
+        let config = load_runtime_config(
+            Some(cwd),
+            Some(profile),
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+        )
+        .unwrap_or_else(|error| panic!("config load failed: {error}"));
+
+        let error = resolve_runtime_mcp_server(&config, "shared", &[])
+            .expect_err("duplicate names should be rejected");
+        assert!(error.to_string().contains("ambiguous"));
+    }
+
+    #[tokio::test]
+    async fn mcp_call_output_invokes_stdio_tool() {
+        let Some((python, mut prefix_args)) = python_command() else {
+            eprintln!("Skipping MCP call output test because Python is unavailable.");
+            return;
+        };
+
+        let tempdir = tempdir().unwrap_or_else(|error| panic!("tempdir failed: {error}"));
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        fs::create_dir_all(&cwd).unwrap_or_else(|error| panic!("cwd create failed: {error}"));
+        fs::create_dir_all(&profile)
+            .unwrap_or_else(|error| panic!("profile create failed: {error}"));
+
+        let script = cwd.join("mock_tool_call.py");
+        fs::write(&script, mock_tool_call_server_script())
+            .unwrap_or_else(|error| panic!("mock tool script write failed: {error}"));
+        prefix_args.push("mock_tool_call.py".to_owned());
+        prefix_args.push("success".to_owned());
+
+        fs::write(
+            cwd.join("mcp.toml"),
+            format!(
+                "[mcp_servers.local]\ncommand = \"{}\"\nargs = [{}]\ncwd = \"{}\"\n",
+                python,
+                prefix_args
+                    .iter()
+                    .map(|arg| format!("\"{}\"", arg.replace('\\', "\\\\").replace('"', "\\\"")))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                cwd.display().to_string().replace('\\', "\\\\")
+            ),
+        )
+        .unwrap_or_else(|error| panic!("cwd mcp write failed: {error}"));
+
+        let config = load_runtime_config(
+            Some(cwd),
+            Some(profile),
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+        )
+        .unwrap_or_else(|error| panic!("config load failed: {error}"));
+
+        let output = build_mcp_call_output(
+            &config,
+            &McpCallArgs {
+                server: "local".to_owned(),
+                tool: "echo".to_owned(),
+                json: false,
+                include_disabled: false,
+                args: vec!["text=hello".to_owned()],
+                args_json: None,
+                config_paths: Vec::new(),
+            },
+        )
+        .await
+        .unwrap_or_else(|error| panic!("mcp call output build failed: {error}"));
+
+        assert!(output.warnings.is_empty());
+        assert_eq!(output.server.name, "local");
+        assert_eq!(output.response.tool_name, "echo");
+        assert_eq!(
+            output.response.result.content[0]
+                .fields
+                .get("text")
+                .and_then(serde_json::Value::as_str),
+            Some("echo: hello")
+        );
+    }
+
+    fn python_command() -> Option<(String, Vec<String>)> {
+        if let Ok(path) = std::env::var("PYTHON")
+            && ProcessCommand::new(&path)
+                .arg("--version")
+                .output()
+                .is_ok_and(|output| output.status.success())
+        {
+            return Some((path, Vec::new()));
+        }
+
+        for candidate in ["python", "python3"] {
+            if ProcessCommand::new(candidate)
+                .arg("--version")
+                .output()
+                .is_ok_and(|output| output.status.success())
+            {
+                return Some((candidate.to_owned(), Vec::new()));
+            }
+        }
+
+        if cfg!(windows)
+            && ProcessCommand::new("py")
+                .args(["-3", "--version"])
+                .output()
+                .is_ok_and(|output| output.status.success())
+        {
+            return Some(("py".to_owned(), vec!["-3".to_owned()]));
+        }
+
+        None
+    }
+
+    fn mock_tool_call_server_script() -> &'static str {
+        r#"
+import json
+import sys
+
+mode = sys.argv[1] if len(sys.argv) > 1 else "success"
+
+for raw in sys.stdin:
+    raw = raw.strip()
+    if not raw:
+        continue
+    message = json.loads(raw)
+    method = message.get("method")
+    message_id = message.get("id")
+
+    if method == "initialize":
+        print(json.dumps({
+            "jsonrpc": "2.0",
+            "id": message_id,
+            "result": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "mock-mcp", "version": "0.1.0"}
+            }
+        }), flush=True)
+    elif method == "notifications/initialized":
+        continue
+    elif method == "tools/call":
+        text = message["params"]["arguments"]["text"]
+        if mode == "success":
+            print(json.dumps({
+                "jsonrpc": "2.0",
+                "id": message_id,
+                "result": {
+                    "content": [{"type": "text", "text": f"echo: {text}"}],
+                    "structuredContent": {"echoed": text},
+                    "isError": False
+                }
+            }), flush=True)
+        else:
+            print(json.dumps({
+                "jsonrpc": "2.0",
+                "id": message_id,
+                "error": {"code": -32001, "message": "tool call failed"}
+            }), flush=True)
+        break
+"#
     }
 }

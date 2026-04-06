@@ -165,6 +165,36 @@ pub struct McpServerInspection {
     pub tools: Vec<McpToolDescriptor>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpToolCallContent {
+    #[serde(rename = "type")]
+    pub kind: String,
+    #[serde(flatten)]
+    pub fields: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpToolCallResult {
+    #[serde(default)]
+    pub content: Vec<McpToolCallContent>,
+    #[serde(default)]
+    pub structured_content: Option<Value>,
+    #[serde(default)]
+    pub is_error: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpToolCallResponse {
+    pub server_name: String,
+    pub tool_name: String,
+    pub protocol_version: String,
+    #[serde(default)]
+    pub server_info: Option<McpPeerInfo>,
+    pub result: McpToolCallResult,
+}
+
 #[derive(Debug, Error)]
 pub enum McpConfigError {
     #[error("failed to read MCP config at `{path}`")]
@@ -351,6 +381,21 @@ struct McpToolsListResult {
     tools: Vec<McpToolDescriptor>,
 }
 
+#[derive(Debug, Serialize)]
+struct ToolCallParams<'a> {
+    name: &'a str,
+    arguments: Value,
+}
+
+struct StdioMcpSession {
+    server_name: String,
+    child: Child,
+    stdin: ChildStdin,
+    lines: Lines<BufReader<ChildStdout>>,
+    initialized: McpInitializeResult,
+    request_timeout_secs: u64,
+}
+
 fn default_enabled() -> bool {
     true
 }
@@ -464,6 +509,33 @@ pub async fn inspect_server(
     }
 }
 
+pub async fn call_tool(
+    server: &McpServerConfig,
+    client_info: &McpClientInfo,
+    tool_name: &str,
+    arguments: Value,
+) -> Result<McpToolCallResponse, McpRuntimeError> {
+    match &server.transport {
+        McpTransportConfig::Stdio {
+            command,
+            args,
+            cwd,
+            env,
+        } => {
+            let mut session =
+                StdioMcpSession::connect(server, command, args, cwd.as_deref(), env, client_info)
+                    .await?;
+            let result = session.call_tool(tool_name, arguments).await;
+            session.shutdown().await;
+            result
+        }
+        _ => Err(McpRuntimeError::UnsupportedTransport {
+            server: server.name.clone(),
+            transport: server.transport.kind(),
+        }),
+    }
+}
+
 pub fn discover_mcp_configs(root: &Path) -> Vec<PathBuf> {
     let mut configs = WalkDir::new(root)
         .into_iter()
@@ -506,48 +578,63 @@ async fn inspect_stdio_server(
     env: &BTreeMap<String, String>,
     client_info: &McpClientInfo,
 ) -> Result<McpServerInspection, McpRuntimeError> {
-    let mut process = Command::new(command);
-    process
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    if let Some(cwd) = cwd {
-        process.current_dir(cwd);
-    }
-    if !env.is_empty() {
-        process.envs(env);
-    }
+    let mut session =
+        StdioMcpSession::connect(server, command, args, cwd, env, client_info).await?;
+    let result = session.inspect_server().await;
+    session.shutdown().await;
+    result
+}
 
-    let mut child = process.spawn().map_err(|source| McpRuntimeError::Spawn {
-        server: server.name.clone(),
-        command: command.to_owned(),
-        source,
-    })?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| McpRuntimeError::MissingPipe {
-            server: server.name.clone(),
-            pipe: "stdin",
-        })?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| McpRuntimeError::MissingPipe {
-            server: server.name.clone(),
-            pipe: "stdout",
-        })?;
-    let mut lines = BufReader::new(stdout).lines();
-    let startup_timeout = server
-        .startup_timeout_secs
-        .unwrap_or(DEFAULT_STARTUP_TIMEOUT_SECS);
-    let request_timeout = server
-        .request_timeout_secs
-        .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS);
+impl StdioMcpSession {
+    async fn connect(
+        server: &McpServerConfig,
+        command: &str,
+        args: &[String],
+        cwd: Option<&Path>,
+        env: &BTreeMap<String, String>,
+        client_info: &McpClientInfo,
+    ) -> Result<Self, McpRuntimeError> {
+        let mut process = Command::new(command);
+        process
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        if let Some(cwd) = cwd {
+            process.current_dir(cwd);
+        }
+        if !env.is_empty() {
+            process.envs(env);
+        }
 
-    let inspection = async {
+        let mut child = process.spawn().map_err(|source| McpRuntimeError::Spawn {
+            server: server.name.clone(),
+            command: command.to_owned(),
+            source,
+        })?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| McpRuntimeError::MissingPipe {
+                server: server.name.clone(),
+                pipe: "stdin",
+            })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| McpRuntimeError::MissingPipe {
+                server: server.name.clone(),
+                pipe: "stdout",
+            })?;
+        let mut lines = BufReader::new(stdout).lines();
+        let startup_timeout = server
+            .startup_timeout_secs
+            .unwrap_or(DEFAULT_STARTUP_TIMEOUT_SECS);
+        let request_timeout_secs = server
+            .request_timeout_secs
+            .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS);
+
         let initialize = JsonRpcRequest {
             jsonrpc: "2.0",
             id: 1,
@@ -575,6 +662,17 @@ async fn inspect_stdio_server(
         };
         write_message(&mut stdin, &server.name, "initialized notification", &ready).await?;
 
+        Ok(Self {
+            server_name: server.name.clone(),
+            child,
+            stdin,
+            lines,
+            initialized,
+            request_timeout_secs,
+        })
+    }
+
+    async fn inspect_server(&mut self) -> Result<McpServerInspection, McpRuntimeError> {
         let tools_request = JsonRpcRequest {
             jsonrpc: "2.0",
             id: 2,
@@ -582,35 +680,73 @@ async fn inspect_stdio_server(
             params: serde_json::json!({}),
         };
         write_message(
-            &mut stdin,
-            &server.name,
+            &mut self.stdin,
+            &self.server_name,
             "tools/list request",
             &tools_request,
         )
         .await?;
         let tools: McpToolsListResult = wait_for_response(
-            &mut lines,
-            &server.name,
+            &mut self.lines,
+            &self.server_name,
             2,
             "tools/list response",
-            request_timeout,
+            self.request_timeout_secs,
         )
         .await?;
 
         Ok(McpServerInspection {
-            server_name: server.name.clone(),
-            protocol_version: initialized.protocol_version,
-            server_info: initialized.server_info,
-            capabilities: initialized.capabilities,
-            instructions: initialized.instructions,
+            server_name: self.server_name.clone(),
+            protocol_version: self.initialized.protocol_version.clone(),
+            server_info: self.initialized.server_info.clone(),
+            capabilities: self.initialized.capabilities.clone(),
+            instructions: self.initialized.instructions.clone(),
             tools: tools.tools,
         })
     }
-    .await;
 
-    drop(stdin);
-    shutdown_child(&mut child).await;
-    inspection
+    async fn call_tool(
+        &mut self,
+        tool_name: &str,
+        arguments: Value,
+    ) -> Result<McpToolCallResponse, McpRuntimeError> {
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: 2,
+            method: "tools/call",
+            params: ToolCallParams {
+                name: tool_name,
+                arguments,
+            },
+        };
+        write_message(
+            &mut self.stdin,
+            &self.server_name,
+            "tools/call request",
+            &request,
+        )
+        .await?;
+        let result: McpToolCallResult = wait_for_response(
+            &mut self.lines,
+            &self.server_name,
+            2,
+            "tools/call response",
+            self.request_timeout_secs,
+        )
+        .await?;
+
+        Ok(McpToolCallResponse {
+            server_name: self.server_name.clone(),
+            tool_name: tool_name.to_owned(),
+            protocol_version: self.initialized.protocol_version.clone(),
+            server_info: self.initialized.server_info.clone(),
+            result,
+        })
+    }
+
+    async fn shutdown(&mut self) {
+        shutdown_child(&mut self.child).await;
+    }
 }
 
 async fn write_message<T: Serialize>(
@@ -958,6 +1094,160 @@ for raw in sys.stdin:
     }
 
     #[tokio::test]
+    async fn calls_stdio_tool_and_returns_typed_result() {
+        let Some((python, mut prefix_args)) = python_command() else {
+            eprintln!("Skipping MCP stdio tool call test because Python is unavailable.");
+            return;
+        };
+
+        let temp = ok(tempdir());
+        let script = temp.path().join("mock_tool_call.py");
+        ok(fs::write(&script, mock_tool_call_server_script()));
+        prefix_args.push(script.to_string_lossy().into_owned());
+        prefix_args.push("success".to_owned());
+
+        let server = McpServerConfig {
+            name: "mock".to_owned(),
+            enabled: true,
+            transport: McpTransportConfig::Stdio {
+                command: python,
+                args: prefix_args,
+                cwd: Some(temp.path().to_path_buf()),
+                env: BTreeMap::new(),
+            },
+            capabilities: McpCapabilityMatrix::default(),
+            startup_timeout_secs: Some(3),
+            request_timeout_secs: Some(3),
+            metadata: BTreeMap::new(),
+        };
+
+        let response = call_tool(
+            &server,
+            &McpClientInfo::new("remote-code-rust", "test"),
+            "echo",
+            serde_json::json!({"text": "hello"}),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("tool call failed: {error}"));
+
+        assert_eq!(response.server_name, "mock");
+        assert_eq!(response.tool_name, "echo");
+        assert_eq!(response.protocol_version, "2025-03-26");
+        assert_eq!(
+            response.server_info.as_ref().map(|info| info.name.as_str()),
+            Some("mock-mcp")
+        );
+        assert!(!response.result.is_error);
+        assert_eq!(response.result.content.len(), 1);
+        assert_eq!(response.result.content[0].kind, "text");
+        assert_eq!(
+            response.result.content[0]
+                .fields
+                .get("text")
+                .and_then(Value::as_str),
+            Some("echo: hello")
+        );
+        assert_eq!(
+            response.result.structured_content,
+            Some(serde_json::json!({"echoed": "hello"}))
+        );
+    }
+
+    #[tokio::test]
+    async fn preserves_tool_error_payloads() {
+        let Some((python, mut prefix_args)) = python_command() else {
+            eprintln!("Skipping MCP tool error payload test because Python is unavailable.");
+            return;
+        };
+
+        let temp = ok(tempdir());
+        let script = temp.path().join("mock_tool_call.py");
+        ok(fs::write(&script, mock_tool_call_server_script()));
+        prefix_args.push(script.to_string_lossy().into_owned());
+        prefix_args.push("tool_error".to_owned());
+
+        let server = McpServerConfig {
+            name: "mock".to_owned(),
+            enabled: true,
+            transport: McpTransportConfig::Stdio {
+                command: python,
+                args: prefix_args,
+                cwd: Some(temp.path().to_path_buf()),
+                env: BTreeMap::new(),
+            },
+            capabilities: McpCapabilityMatrix::default(),
+            startup_timeout_secs: Some(3),
+            request_timeout_secs: Some(3),
+            metadata: BTreeMap::new(),
+        };
+
+        let response = call_tool(
+            &server,
+            &McpClientInfo::new("remote-code-rust", "test"),
+            "echo",
+            serde_json::json!({"text": "boom"}),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("tool error payload should remain typed: {error}"));
+
+        assert!(response.result.is_error);
+        assert_eq!(
+            response.result.content[0]
+                .fields
+                .get("text")
+                .and_then(Value::as_str),
+            Some("tool execution failed")
+        );
+    }
+
+    #[tokio::test]
+    async fn surfaces_json_rpc_errors_from_tool_call() {
+        let Some((python, mut prefix_args)) = python_command() else {
+            eprintln!("Skipping MCP JSON-RPC error test because Python is unavailable.");
+            return;
+        };
+
+        let temp = ok(tempdir());
+        let script = temp.path().join("mock_tool_call.py");
+        ok(fs::write(&script, mock_tool_call_server_script()));
+        prefix_args.push(script.to_string_lossy().into_owned());
+        prefix_args.push("rpc_error".to_owned());
+
+        let server = McpServerConfig {
+            name: "mock".to_owned(),
+            enabled: true,
+            transport: McpTransportConfig::Stdio {
+                command: python,
+                args: prefix_args,
+                cwd: Some(temp.path().to_path_buf()),
+                env: BTreeMap::new(),
+            },
+            capabilities: McpCapabilityMatrix::default(),
+            startup_timeout_secs: Some(3),
+            request_timeout_secs: Some(3),
+            metadata: BTreeMap::new(),
+        };
+
+        let error = call_tool(
+            &server,
+            &McpClientInfo::new("remote-code-rust", "test"),
+            "echo",
+            serde_json::json!({"text": "boom"}),
+        )
+        .await
+        .expect_err("JSON-RPC tool call failure should surface as runtime error");
+
+        assert!(matches!(
+            error,
+            McpRuntimeError::Rpc {
+                code: -32001,
+                ref message,
+                ..
+            } if message == "tool call failed"
+        ));
+    }
+
+    #[tokio::test]
     async fn rejects_non_stdio_runtime_transports() {
         let server = McpServerConfig {
             name: "relay".to_owned(),
@@ -1014,5 +1304,71 @@ for raw in sys.stdin:
         }
 
         None
+    }
+
+    fn mock_tool_call_server_script() -> &'static str {
+        r#"
+import json
+import sys
+
+mode = sys.argv[1]
+
+def send(payload):
+    sys.stdout.write(json.dumps(payload) + "\n")
+    sys.stdout.flush()
+
+for raw in sys.stdin:
+    raw = raw.strip()
+    if not raw:
+        continue
+    message = json.loads(raw)
+    method = message.get("method")
+    message_id = message.get("id")
+    if method == "initialize":
+        send({
+            "jsonrpc": "2.0",
+            "id": message_id,
+            "result": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "mock-mcp", "version": "0.1.0"}
+            }
+        })
+    elif method == "notifications/initialized":
+        continue
+    elif method == "tools/call":
+        if mode == "rpc_error":
+            send({
+                "jsonrpc": "2.0",
+                "id": message_id,
+                "error": {"code": -32001, "message": "tool call failed"}
+            })
+        elif mode == "tool_error":
+            send({
+                "jsonrpc": "2.0",
+                "id": message_id,
+                "result": {
+                    "content": [
+                        {"type": "text", "text": "tool execution failed"}
+                    ],
+                    "isError": True
+                }
+            })
+        else:
+            text = message.get("params", {}).get("arguments", {}).get("text", "")
+            send({
+                "jsonrpc": "2.0",
+                "id": message_id,
+                "result": {
+                    "content": [
+                        {"type": "text", "text": f"echo: {text}"}
+                    ],
+                    "structuredContent": {
+                        "echoed": text
+                    },
+                    "isError": False
+                }
+            })
+"#
     }
 }
