@@ -11,3 +11,6 @@
 .DS_Store
 Thumbs.db
 fixtures/out/
+
+__pycache__/
+*.pyc
