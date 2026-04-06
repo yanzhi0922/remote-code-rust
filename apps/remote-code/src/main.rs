@@ -111,6 +111,10 @@ enum Commands {
         #[command(subcommand)]
         command: AgentsCommand,
     },
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommand,
+    },
     Migrate {
         #[command(subcommand)]
         command: MigrateCommand,
@@ -158,6 +162,11 @@ enum AgentsCommand {
     Plan(AgentsPlanArgs),
 }
 
+#[derive(Subcommand, Debug)]
+enum McpCommand {
+    List(McpListArgs),
+}
+
 #[derive(Args, Debug)]
 struct AgentsPlanArgs {
     #[arg(long, default_value = "codex-lead")]
@@ -174,6 +183,24 @@ struct AgentsPlanArgs {
 
     #[arg(long)]
     json: bool,
+}
+
+#[derive(Args, Debug)]
+struct McpListArgs {
+    #[arg(long)]
+    connect: bool,
+
+    #[arg(long)]
+    json: bool,
+
+    #[arg(long = "server")]
+    servers: Vec<String>,
+
+    #[arg(long)]
+    include_disabled: bool,
+
+    #[arg(long = "config")]
+    config_paths: Vec<PathBuf>,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -223,6 +250,7 @@ async fn main() -> Result<()> {
         Some(Commands::Sessions { command }) => run_sessions(&store, command),
         Some(Commands::Export(args)) => run_export(&store, args),
         Some(Commands::Agents { command }) => run_agents(&config, command),
+        Some(Commands::Mcp { command }) => run_mcp(&config, command).await,
         Some(Commands::Migrate { command }) => run_migrate(&config, command),
         Some(Commands::Resume(args)) => {
             let prompt = join_prompt(args.prompt);
@@ -463,6 +491,12 @@ fn run_agents(config: &RuntimeConfig, command: AgentsCommand) -> Result<()> {
     }
 }
 
+async fn run_mcp(config: &RuntimeConfig, command: McpCommand) -> Result<()> {
+    match command {
+        McpCommand::List(args) => run_mcp_list(config, args).await,
+    }
+}
+
 fn run_agents_plan(config: &RuntimeConfig, args: AgentsPlanArgs) -> Result<()> {
     let mut scheduler = AgentScheduler::new(args.lead.clone(), args.objective.clone());
     let agents = if args.agents.is_empty() {
@@ -532,6 +566,79 @@ fn run_agents_plan(config: &RuntimeConfig, args: AgentsPlanArgs) -> Result<()> {
             "\nTeam {}: {} agent(s), {} task(s), {} pending message(s)",
             summary.team_id, summary.total_agents, summary.total_tasks, summary.pending_messages
         );
+    }
+    Ok(())
+}
+
+async fn run_mcp_list(config: &RuntimeConfig, args: McpListArgs) -> Result<()> {
+    let output = build_mcp_list_output(config, &args).await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        return Ok(());
+    }
+
+    if output.servers.is_empty() {
+        println!("No MCP servers found.");
+        for warning in output.warnings {
+            println!("  - {warning}");
+        }
+        return Ok(());
+    }
+
+    for warning in &output.warnings {
+        println!("warning: {warning}");
+    }
+    for server in &output.servers {
+        println!(
+            "{}  {}  {}  {}",
+            server.name,
+            if server.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            },
+            format_mcp_transport(server.transport),
+            format_mcp_source(server)
+        );
+        if let Some(live) = &server.live {
+            match live.status.as_str() {
+                "ok" => {
+                    let peer = live
+                        .server_info
+                        .as_ref()
+                        .map(|info| match &info.version {
+                            Some(version) => format!("{} {}", info.name, version),
+                            None => info.name.clone(),
+                        })
+                        .unwrap_or_else(|| "unknown-server".to_owned());
+                    println!(
+                        "  connect: ok  protocol={}  tools={}  peer={peer}",
+                        live.protocol_version.as_deref().unwrap_or("unknown"),
+                        live.tool_count
+                    );
+                    for tool in &live.tools {
+                        match &tool.description {
+                            Some(description) => println!("    - {}: {description}", tool.name),
+                            None => println!("    - {}", tool.name),
+                        }
+                    }
+                }
+                "skipped" => {
+                    println!(
+                        "  connect: skipped  {}",
+                        live.error.as_deref().unwrap_or("inspection not attempted")
+                    );
+                }
+                _ => {
+                    println!(
+                        "  connect: error  {}",
+                        live.error
+                            .as_deref()
+                            .unwrap_or("inspection failed without details")
+                    );
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -911,6 +1018,82 @@ fn parse_provider_protocol(value: &str) -> Option<rc_core::ProviderProtocol> {
     }
 }
 
+#[derive(Debug, Clone)]
+struct RuntimeMcpServerEntry {
+    origin_kind: &'static str,
+    origin_name: String,
+    config_path: PathBuf,
+    server: rc_mcp::McpServerConfig,
+}
+
+#[derive(Debug, Clone, Default)]
+struct RuntimeMcpDiscovery {
+    servers: Vec<RuntimeMcpServerEntry>,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct McpListOutput {
+    warnings: Vec<String>,
+    servers: Vec<McpServerRecord>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct McpServerRecord {
+    name: String,
+    enabled: bool,
+    transport: rc_mcp::McpTransport,
+    origin_kind: String,
+    origin_name: String,
+    config_path: PathBuf,
+    live: Option<McpLiveRecord>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct McpLiveRecord {
+    status: String,
+    protocol_version: Option<String>,
+    server_info: Option<rc_mcp::McpPeerInfo>,
+    tool_count: usize,
+    tools: Vec<rc_mcp::McpToolDescriptor>,
+    error: Option<String>,
+}
+
+impl McpLiveRecord {
+    fn from_inspection(inspection: rc_mcp::McpServerInspection) -> Self {
+        Self {
+            status: "ok".to_owned(),
+            protocol_version: Some(inspection.protocol_version),
+            server_info: inspection.server_info,
+            tool_count: inspection.tools.len(),
+            tools: inspection.tools,
+            error: None,
+        }
+    }
+
+    fn skipped(reason: impl Into<String>) -> Self {
+        Self {
+            status: "skipped".to_owned(),
+            protocol_version: None,
+            server_info: None,
+            tool_count: 0,
+            tools: Vec::new(),
+            error: Some(reason.into()),
+        }
+    }
+
+    fn failed(error: impl ToString) -> Self {
+        Self {
+            status: "error".to_owned(),
+            protocol_version: None,
+            server_info: None,
+            tool_count: 0,
+            tools: Vec::new(),
+            error: Some(error.to_string()),
+        }
+    }
+}
+
 fn discover_runtime_extensions(config: &RuntimeConfig) -> RuntimeExtensionDiscovery {
     let mut skills = BTreeSet::new();
     let mut plugins = BTreeSet::new();
@@ -974,6 +1157,212 @@ fn discover_runtime_extensions(config: &RuntimeConfig) -> RuntimeExtensionDiscov
         plugins: plugins.into_iter().collect(),
         mcp_servers: mcp_servers.into_iter().collect(),
         warnings,
+    }
+}
+
+async fn build_mcp_list_output(
+    config: &RuntimeConfig,
+    args: &McpListArgs,
+) -> Result<McpListOutput> {
+    let discovery = discover_runtime_mcp_servers(config, &args.config_paths);
+    let filters = args.servers.iter().cloned().collect::<BTreeSet<_>>();
+    let mut servers = Vec::new();
+
+    for entry in discovery.servers {
+        if !filters.is_empty() && !filters.contains(&entry.server.name) {
+            continue;
+        }
+        let live = if args.connect {
+            if !entry.server.enabled && !args.include_disabled {
+                Some(McpLiveRecord::skipped(
+                    "server is disabled (pass --include-disabled to force inspection)",
+                ))
+            } else {
+                Some(
+                    match rc_mcp::inspect_server(
+                        &entry.server,
+                        &rc_mcp::McpClientInfo::new("remote-code-rust", RUNTIME_VERSION),
+                    )
+                    .await
+                    {
+                        Ok(inspection) => McpLiveRecord::from_inspection(inspection),
+                        Err(error) => McpLiveRecord::failed(error),
+                    },
+                )
+            }
+        } else {
+            None
+        };
+
+        servers.push(McpServerRecord {
+            name: entry.server.name.clone(),
+            enabled: entry.server.enabled,
+            transport: entry.server.transport.kind(),
+            origin_kind: entry.origin_kind.to_owned(),
+            origin_name: entry.origin_name,
+            config_path: entry.config_path,
+            live,
+        });
+    }
+
+    if !filters.is_empty() && servers.is_empty() {
+        return Err(anyhow!(
+            "No matching MCP servers found for: {}",
+            filters.into_iter().collect::<Vec<_>>().join(", ")
+        ));
+    }
+
+    Ok(McpListOutput {
+        warnings: discovery.warnings,
+        servers,
+    })
+}
+
+fn discover_runtime_mcp_servers(
+    config: &RuntimeConfig,
+    extra_config_paths: &[PathBuf],
+) -> RuntimeMcpDiscovery {
+    let mut discovery = RuntimeMcpDiscovery::default();
+    let mut loaded_paths = BTreeSet::new();
+    load_runtime_mcp_file(
+        &mut discovery,
+        &mut loaded_paths,
+        "cwd",
+        config.cwd.display().to_string(),
+        config.cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+    );
+    load_runtime_mcp_file(
+        &mut discovery,
+        &mut loaded_paths,
+        "profile",
+        config.paths.profile_dir.display().to_string(),
+        config
+            .paths
+            .profile_dir
+            .join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+    );
+    for path in extra_config_paths {
+        let candidate = if path.is_dir() {
+            path.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE)
+        } else {
+            path.clone()
+        };
+        load_runtime_mcp_file(
+            &mut discovery,
+            &mut loaded_paths,
+            "explicit",
+            path.display().to_string(),
+            candidate,
+        );
+    }
+
+    if config.paths.plugins_dir.exists() {
+        match rc_plugins::discover_plugins(&config.paths.plugins_dir) {
+            Ok(plugins) => {
+                for plugin in plugins {
+                    if let Some(path) = plugin.mcp_config_path() {
+                        if !loaded_paths.insert(path.clone()) {
+                            continue;
+                        }
+                        match rc_mcp::McpConfig::load(&path) {
+                            Ok(config) => push_runtime_mcp_servers(
+                                &mut discovery.servers,
+                                "plugin",
+                                plugin.manifest.name,
+                                path,
+                                config,
+                            ),
+                            Err(error) => discovery.warnings.push(format!(
+                                "Failed to load plugin MCP config for {}: {error}",
+                                plugin.manifest.name
+                            )),
+                        }
+                    }
+                }
+            }
+            Err(error) => discovery.warnings.push(format!(
+                "Failed to discover plugins for MCP inspection: {error}"
+            )),
+        }
+    }
+
+    discovery.servers.sort_by(|left, right| {
+        left.server
+            .name
+            .cmp(&right.server.name)
+            .then_with(|| left.origin_kind.cmp(right.origin_kind))
+            .then_with(|| left.origin_name.cmp(&right.origin_name))
+    });
+    discovery
+}
+
+fn load_runtime_mcp_file(
+    discovery: &mut RuntimeMcpDiscovery,
+    loaded_paths: &mut BTreeSet<PathBuf>,
+    origin_kind: &'static str,
+    origin_name: String,
+    path: PathBuf,
+) {
+    if !path.exists() {
+        if origin_kind == "explicit" {
+            discovery.warnings.push(format!(
+                "Explicit MCP config {} was not found",
+                path.display()
+            ));
+        }
+        return;
+    }
+    if !loaded_paths.insert(path.clone()) {
+        return;
+    }
+    match rc_mcp::McpConfig::load(&path) {
+        Ok(config) => push_runtime_mcp_servers(
+            &mut discovery.servers,
+            origin_kind,
+            origin_name,
+            path,
+            config,
+        ),
+        Err(error) => discovery.warnings.push(format!(
+            "Failed to load MCP config {}: {error}",
+            path.display()
+        )),
+    }
+}
+
+fn push_runtime_mcp_servers(
+    servers: &mut Vec<RuntimeMcpServerEntry>,
+    origin_kind: &'static str,
+    origin_name: String,
+    config_path: PathBuf,
+    config: rc_mcp::McpConfig,
+) {
+    for server in config.servers.into_values() {
+        servers.push(RuntimeMcpServerEntry {
+            origin_kind,
+            origin_name: origin_name.clone(),
+            config_path: config_path.clone(),
+            server,
+        });
+    }
+}
+
+fn format_mcp_transport(transport: rc_mcp::McpTransport) -> &'static str {
+    match transport {
+        rc_mcp::McpTransport::Stdio => "stdio",
+        rc_mcp::McpTransport::Http => "http",
+        rc_mcp::McpTransport::WebSocket => "websocket",
+    }
+}
+
+fn format_mcp_source(server: &McpServerRecord) -> String {
+    match server.origin_kind.as_str() {
+        "plugin" => format!(
+            "plugin:{} ({})",
+            server.origin_name,
+            server.config_path.display()
+        ),
+        _ => format!("{} ({})", server.origin_kind, server.config_path.display()),
     }
 }
 
@@ -1464,8 +1853,12 @@ impl PermissionBroker for ChannelPermissionBroker {
 
 #[cfg(test)]
 mod tests {
-    use super::{default_task_for_objective, parse_agent_spec, parse_task_spec};
+    use super::{
+        McpListArgs, build_mcp_list_output, default_task_for_objective,
+        discover_runtime_mcp_servers, parse_agent_spec, parse_task_spec,
+    };
     use rc_config::{ProviderOverrides, load_runtime_config};
+    use std::{collections::BTreeSet, fs};
     use tempfile::tempdir;
 
     #[test]
@@ -1512,5 +1905,177 @@ mod tests {
         let default_task = default_task_for_objective("Ship the next slice", &config);
         assert!(default_task.description.contains("Ship the next slice"));
         assert_eq!(default_task.budget.edit_calls, 16);
+    }
+
+    #[test]
+    fn runtime_mcp_discovery_collects_cwd_profile_and_plugin_servers() {
+        let tempdir = tempdir().unwrap_or_else(|error| panic!("tempdir failed: {error}"));
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        fs::create_dir_all(&cwd).unwrap_or_else(|error| panic!("cwd create failed: {error}"));
+        fs::create_dir_all(&profile)
+            .unwrap_or_else(|error| panic!("profile create failed: {error}"));
+
+        fs::write(
+            cwd.join("mcp.toml"),
+            "[mcp_servers.local]\ncommand = \"python\"\n",
+        )
+        .unwrap_or_else(|error| panic!("cwd mcp write failed: {error}"));
+        fs::write(
+            profile.join("mcp.toml"),
+            "[mcp_servers.profile]\nurl = \"https://example.com/mcp\"\n",
+        )
+        .unwrap_or_else(|error| panic!("profile mcp write failed: {error}"));
+
+        let plugin_root = profile.join("plugins").join("example-plugin");
+        fs::create_dir_all(plugin_root.join(".codex-plugin"))
+            .unwrap_or_else(|error| panic!("plugin manifest dir create failed: {error}"));
+        fs::write(
+            plugin_root.join(".codex-plugin").join("plugin.json"),
+            r#"{
+                "name": "example-plugin",
+                "version": "0.1.0",
+                "mcp": "mcp.toml"
+            }"#,
+        )
+        .unwrap_or_else(|error| panic!("plugin manifest write failed: {error}"));
+        fs::write(
+            plugin_root.join("mcp.toml"),
+            "[mcp_servers.plugin]\ncommand = \"python\"\n",
+        )
+        .unwrap_or_else(|error| panic!("plugin mcp write failed: {error}"));
+
+        let config = load_runtime_config(
+            Some(cwd.clone()),
+            Some(profile.clone()),
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+        )
+        .unwrap_or_else(|error| panic!("config load failed: {error}"));
+
+        let discovery = discover_runtime_mcp_servers(&config, &[]);
+        let names = discovery
+            .servers
+            .iter()
+            .map(|entry| entry.server.name.clone())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            names,
+            BTreeSet::from([
+                "local".to_owned(),
+                "plugin".to_owned(),
+                "profile".to_owned()
+            ])
+        );
+        assert!(discovery.warnings.is_empty());
+    }
+
+    #[test]
+    fn runtime_mcp_discovery_loads_explicit_config_paths() {
+        let tempdir = tempdir().unwrap_or_else(|error| panic!("tempdir failed: {error}"));
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        let extra_dir = tempdir.path().join("custom");
+        fs::create_dir_all(&cwd).unwrap_or_else(|error| panic!("cwd create failed: {error}"));
+        fs::create_dir_all(&profile)
+            .unwrap_or_else(|error| panic!("profile create failed: {error}"));
+        fs::create_dir_all(&extra_dir)
+            .unwrap_or_else(|error| panic!("extra dir create failed: {error}"));
+        fs::write(
+            extra_dir.join("mcp.toml"),
+            "[mcp_servers.explicit]\ncommand = \"python\"\n",
+        )
+        .unwrap_or_else(|error| panic!("extra mcp write failed: {error}"));
+
+        let config = load_runtime_config(
+            Some(cwd),
+            Some(profile),
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+        )
+        .unwrap_or_else(|error| panic!("config load failed: {error}"));
+
+        let discovery = discover_runtime_mcp_servers(&config, &[extra_dir]);
+        assert!(
+            discovery
+                .servers
+                .iter()
+                .any(|entry| entry.server.name == "explicit" && entry.origin_kind == "explicit")
+        );
+        assert!(discovery.warnings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn mcp_list_output_skips_disabled_servers_without_connecting() {
+        let tempdir = tempdir().unwrap_or_else(|error| panic!("tempdir failed: {error}"));
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        fs::create_dir_all(&cwd).unwrap_or_else(|error| panic!("cwd create failed: {error}"));
+        fs::create_dir_all(&profile)
+            .unwrap_or_else(|error| panic!("profile create failed: {error}"));
+
+        fs::write(
+            profile.join("mcp.toml"),
+            "[mcp_servers.disabled]\ncommand = \"python\"\nenabled = false\n",
+        )
+        .unwrap_or_else(|error| panic!("profile mcp write failed: {error}"));
+
+        let config = load_runtime_config(
+            Some(cwd),
+            Some(profile),
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+        )
+        .unwrap_or_else(|error| panic!("config load failed: {error}"));
+
+        let output = build_mcp_list_output(
+            &config,
+            &McpListArgs {
+                connect: true,
+                json: false,
+                servers: Vec::new(),
+                include_disabled: false,
+                config_paths: Vec::new(),
+            },
+        )
+        .await
+        .unwrap_or_else(|error| panic!("mcp list output build failed: {error}"));
+
+        assert_eq!(output.servers.len(), 1);
+        let live = output.servers[0]
+            .live
+            .as_ref()
+            .unwrap_or_else(|| panic!("expected live inspection metadata"));
+        assert_eq!(live.status, "skipped");
+        assert!(
+            live.error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("include-disabled")
+        );
     }
 }
