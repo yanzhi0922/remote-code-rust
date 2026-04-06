@@ -1,0 +1,17 @@
+{
+  "argv": [
+    "-p",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--session-id",
+    "fixture-session"
+  ],
+  "returncode": 0,
+  "stderr": "",
+  "stdout_lines": [
+    "{\"type\":\"system\",\"subtype\":\"init\",\"apiKeySource\":\"user\",\"remote_code_version\":\"runtime-headless\",\"cwd\":\"C:\\\\Users\\\\Yanzh\\\\Desktop\\\\remote-code-rust\",\"tools\":[\"ListDirectory\",\"ReadFile\",\"SearchText\",\"WriteFile\",\"ReplaceInFile\",\"EditFile\",\"Bash\"],\"mcp_servers\":[],\"model\":\"fixture-model\",\"permissionMode\":\"default\",\"slash_commands\":[],\"output_style\":\"default\",\"skills\":[],\"plugins\":[],\"uuid\":\"13a04852-cd76-4953-9afb-952a35a85ef7\",\"session_id\":\"fixture-session\"}",
+    "{\"type\":\"system\",\"subtype\":\"session_state_changed\",\"state\":\"idle\",\"uuid\":\"d2cf096b-d1c0-4abf-9b4a-8678c395feea\",\"session_id\":\"fixture-session\"}"
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "apiKeySource": "user",
+  "cwd": "C:\\Users\\Yanzh\\Desktop\\remote-code-rust",
+  "mcp_servers": [],
+  "model": null,
+  "output_style": "default",
+  "permissionMode": "default",
+  "plugins": [],
+  "remote_code_version": "runtime-headless",
+  "session_id": "fixture-session",
+  "skills": [],
+  "slash_commands": [],
+  "subtype": "init",
+  "tools": [
+    "ListDirectory",
+    "ReadFile",
+    "SearchText",
+    "WriteFile",
+    "ReplaceInFile",
+    "EditFile",
+    "Bash"
+  ],
+  "type": "system",
+  "uuid": "fixture-seeded-uuid"
+}

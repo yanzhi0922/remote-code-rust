@@ -1,0 +1,44 @@
+{
+  "captured_at_utc": "2026-04-06T15:52:33.744968+00:00",
+  "permission_modes": [
+    "default",
+    "acceptEdits",
+    "bypassPermissions",
+    "dontAsk",
+    "plan"
+  ],
+  "protocol_tools": [
+    "ListDirectory",
+    "ReadFile",
+    "SearchText",
+    "WriteFile",
+    "ReplaceInFile",
+    "EditFile",
+    "Bash"
+  ],
+  "reserved_provider_headers": [
+    "accept",
+    "anthropic-beta",
+    "anthropic-version",
+    "authorization",
+    "content-length",
+    "content-type",
+    "host",
+    "user-agent",
+    "x-api-key",
+    "x-app",
+    "x-anthropic-additional-protection",
+    "x-claude-code-session-id",
+    "x-claude-remote-container-id",
+    "x-claude-remote-session-id",
+    "x-client-app"
+  ],
+  "runtime_root": "C:\\Users\\Yanzh\\Desktop\\remote-code\\remote-code\\runtime-src",
+  "runtime_version": "0.2.0",
+  "source_hashes": {
+    "config.cjs": "17185e146935d4871d7afb9f664cfbced9264d266c7cf58b539a3422f6f5956a",
+    "index.js": "7a7b2fbad654a312a198aeb18e355974e9b312624cb68b6a8601ea5ee362896c",
+    "protocol.cjs": "a8424ea36deeb810bd5c89b1ac32aa71ca3b70c93a64a3d8b6a45cad1d0e24ab"
+  },
+  "source_root": "C:\\Users\\Yanzh\\Desktop\\remote-code"
+}

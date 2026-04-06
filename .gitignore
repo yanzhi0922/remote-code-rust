@@ -1,0 +1,13 @@
+/target
+/.cargo
+/.idea
+/.vscode
+*.log
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+.DS_Store
+Thumbs.db
+fixtures/out/
