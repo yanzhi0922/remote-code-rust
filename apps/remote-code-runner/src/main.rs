@@ -1,10 +1,15 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use rc_runner::{RunnerApi, RunnerConfigOverrides, describe_status, load_runner_config};
+use rc_runner::{
+    RunnerApi, RunnerConfigOverrides, describe_status, load_runner_config,
+    register_with_control_plane, send_heartbeat,
+};
 use rc_telemetry::install_tracing;
+use tracing::warn;
 
 #[derive(Parser, Debug)]
 #[command(name = "remote-code-runner", version, about = "Rust runner service")]
@@ -66,8 +71,29 @@ async fn main() -> Result<()> {
         Command::PrintConfig => println!("{}", serde_json::to_string_pretty(&config)?),
         Command::Serve => {
             let bind = config.bind;
-            let app =
-                RunnerApi::new(config, "remote-code-runner", env!("CARGO_PKG_VERSION")).router();
+            let api = RunnerApi::new(
+                config.clone(),
+                "remote-code-runner",
+                env!("CARGO_PKG_VERSION"),
+            );
+            if let Some(control_plane_url) = config.control_plane_url.clone() {
+                let registration = config.registration_request();
+                let lease = register_with_control_plane(&control_plane_url, &registration).await?;
+                let heartbeat_api = api.clone();
+                tokio::spawn(async move {
+                    let interval_secs = (lease.lease_ttl_secs / 2).max(1);
+                    let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+                    interval.tick().await;
+                    loop {
+                        interval.tick().await;
+                        let heartbeat = heartbeat_api.heartbeat().await;
+                        if let Err(error) = send_heartbeat(&control_plane_url, &heartbeat).await {
+                            warn!("failed to send heartbeat to control plane: {error}");
+                        }
+                    }
+                });
+            }
+            let app = api.router();
             let listener = tokio::net::TcpListener::bind(bind).await?;
             axum::serve(listener, app).await?;
         }

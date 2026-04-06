@@ -15,6 +15,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use rc_config::AppPaths;
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -130,6 +131,14 @@ pub struct RunnerSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunnerRegistrationLease {
+    pub runner_id: String,
+    pub registered_at: DateTime<Utc>,
+    pub lease_ttl_secs: u64,
+    pub snapshot: RunnerSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunnerStatus {
     pub ok: bool,
     pub runner_id: String,
@@ -219,6 +228,22 @@ impl RunnerApi {
     pub async fn list_sessions(&self) -> Vec<RunnerSessionRecord> {
         let sessions = self.sessions.read().await;
         sessions.values().cloned().collect()
+    }
+
+    pub async fn heartbeat(&self) -> RunnerHeartbeat {
+        let sessions = self.sessions.read().await;
+        let (active_sessions, queued_sessions) = session_counts(&sessions);
+        RunnerHeartbeat {
+            runner_id: self.meta.snapshot.registration.runner_id.clone(),
+            state: if active_sessions > 0 {
+                RunnerState::Busy
+            } else {
+                RunnerState::Idle
+            },
+            active_sessions,
+            queued_sessions,
+            timestamp: Utc::now(),
+        }
     }
 
     pub fn router(self) -> Router {
@@ -428,8 +453,57 @@ pub fn parse_key_value_map(raw: &str) -> BTreeMap<String, String> {
     values
 }
 
-async fn get_health(State(api): State<RunnerApi>) -> Json<RunnerHealth> {
-    let sessions = api.sessions.read().await;
+pub async fn register_with_control_plane(
+    control_plane_url: &str,
+    registration: &RunnerRegistrationRequest,
+) -> Result<RunnerRegistrationLease> {
+    let client = Client::new();
+    let response = client
+        .post(control_plane_endpoint(
+            control_plane_url,
+            "/v1/runners/register",
+        )?)
+        .json(registration)
+        .send()
+        .await
+        .context("runner registration request failed")?
+        .error_for_status()
+        .context("runner registration was rejected by the control plane")?;
+    response
+        .json::<RunnerRegistrationLease>()
+        .await
+        .context("failed to decode runner registration response")
+}
+
+pub async fn send_heartbeat(
+    control_plane_url: &str,
+    heartbeat: &RunnerHeartbeat,
+) -> Result<RunnerSnapshot> {
+    let client = Client::new();
+    let path = format!("/v1/runners/{}/heartbeat", heartbeat.runner_id);
+    let response = client
+        .post(control_plane_endpoint(control_plane_url, &path)?)
+        .json(heartbeat)
+        .send()
+        .await
+        .context("runner heartbeat request failed")?
+        .error_for_status()
+        .context("runner heartbeat was rejected by the control plane")?;
+    response
+        .json::<RunnerSnapshot>()
+        .await
+        .context("failed to decode runner heartbeat response")
+}
+
+fn control_plane_endpoint(base_url: &str, path: &str) -> Result<String> {
+    let base_url = base_url.trim().trim_end_matches('/');
+    if base_url.is_empty() {
+        return Err(anyhow!("control plane URL is empty"));
+    }
+    Ok(format!("{base_url}{path}"))
+}
+
+fn session_counts(sessions: &BTreeMap<Uuid, RunnerSessionRecord>) -> (usize, usize) {
     let active_sessions = sessions
         .values()
         .filter(|session| {
@@ -443,6 +517,12 @@ async fn get_health(State(api): State<RunnerApi>) -> Json<RunnerHealth> {
         .values()
         .filter(|session| matches!(session.state, SessionState::Pending))
         .count();
+    (active_sessions, queued_sessions)
+}
+
+async fn get_health(State(api): State<RunnerApi>) -> Json<RunnerHealth> {
+    let sessions = api.sessions.read().await;
+    let (active_sessions, queued_sessions) = session_counts(&sessions);
 
     Json(RunnerHealth {
         ok: true,
@@ -729,6 +809,44 @@ mod tests {
         let health: RunnerHealth = read_json(response).await;
         assert_eq!(health.state, RunnerState::Idle);
         assert_eq!(health.queued_sessions, 1);
+    }
+
+    #[tokio::test]
+    async fn runner_api_heartbeat_reports_session_counts() {
+        let profile_dir = tempdir().expect("tempdir should exist");
+        let config = load_runner_config(
+            Some(profile_dir.path().join("profile")),
+            RunnerConfigOverrides {
+                runner_id: Some("runner-c".to_owned()),
+                workspaces: Some(vec![RunnerWorkspace {
+                    workspace_id: "default".to_owned(),
+                    root_dir: profile_dir.path().join("workspace"),
+                    writable: true,
+                }]),
+                ..RunnerConfigOverrides::default()
+            },
+        )
+        .expect("config should load");
+        let api = RunnerApi::new(config, "remote-code-runner", "0.1.0");
+        let app = api.clone().router();
+
+        let _ = app
+            .oneshot(
+                Request::post("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"workspace_id": "default"}).to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        let heartbeat = api.heartbeat().await;
+        assert_eq!(heartbeat.runner_id, "runner-c");
+        assert_eq!(heartbeat.state, RunnerState::Idle);
+        assert_eq!(heartbeat.active_sessions, 0);
+        assert_eq!(heartbeat.queued_sessions, 1);
     }
 
     async fn read_json<T>(response: Response<Body>) -> T

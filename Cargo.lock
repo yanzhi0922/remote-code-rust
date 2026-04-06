@@ -1620,6 +1620,7 @@ dependencies = [
  "axum",
  "chrono",
  "rc-config",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",
@@ -1806,6 +1807,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
