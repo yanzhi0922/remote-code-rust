@@ -1,0 +1,29 @@
+[package]
+name = "remote-code"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+rc-config = { path = "../../crates/rc-config" }
+rc-core = { path = "../../crates/rc-core" }
+rc-permissions = { path = "../../crates/rc-permissions" }
+rc-protocol = { path = "../../crates/rc-protocol" }
+rc-provider = { path = "../../crates/rc-provider" }
+rc-session = { path = "../../crates/rc-session" }
+rc-telemetry = { path = "../../crates/rc-telemetry" }
+rc-tools = { path = "../../crates/rc-tools" }
+rc-tui = { path = "../../crates/rc-tui" }

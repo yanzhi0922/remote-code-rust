@@ -1,0 +1,8 @@
+{
+  "argv": [
+    "doctor"
+  ],
+  "returncode": 0,
+  "stderr": "",
+  "stdout": "Remote Code runtime doctor\n- cwd: C:\\Users\\Yanzh\\Desktop\\remote-code-rust\n- provider: fixture\n- protocol: openai\n- base URL: https://example.invalid/chat/completions\n- model: fixture-model\n- api key: present\n- input format: text\n- output format: text\n- print mode: false\n- readiness: ready\n"
+}
