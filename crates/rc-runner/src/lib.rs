@@ -192,6 +192,70 @@ pub struct RunnerSessionCreateRequest {
     pub metadata: BTreeMap<String, String>,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalState {
+    #[default]
+    Pending,
+    Approved,
+    Denied,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalDecision {
+    Approved,
+    Denied,
+    Cancelled,
+}
+
+impl From<ApprovalDecision> for ApprovalState {
+    fn from(value: ApprovalDecision) -> Self {
+        match value {
+            ApprovalDecision::Approved => ApprovalState::Approved,
+            ApprovalDecision::Denied => ApprovalState::Denied,
+            ApprovalDecision::Cancelled => ApprovalState::Cancelled,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalRequestRecord {
+    pub approval_id: Uuid,
+    pub session_id: Uuid,
+    pub runner_id: String,
+    pub state: ApprovalState,
+    pub title: String,
+    pub description: String,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub responded_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub responder: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalCreateRequest {
+    pub title: String,
+    pub description: String,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalDecisionRequest {
+    pub decision: ApprovalDecision,
+    #[serde(default)]
+    pub responder: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListResponse<T> {
     pub items: Vec<T>,
@@ -201,6 +265,7 @@ pub struct ListResponse<T> {
 pub struct RunnerApi {
     meta: RunnerMeta,
     sessions: Arc<RwLock<BTreeMap<Uuid, RunnerSessionRecord>>>,
+    approvals: Arc<RwLock<BTreeMap<Uuid, ApprovalRequestRecord>>>,
 }
 
 impl RunnerApi {
@@ -218,6 +283,7 @@ impl RunnerApi {
                 snapshot,
             },
             sessions: Arc::new(RwLock::new(BTreeMap::new())),
+            approvals: Arc::new(RwLock::new(BTreeMap::new())),
         }
     }
 
@@ -228,6 +294,11 @@ impl RunnerApi {
     pub async fn list_sessions(&self) -> Vec<RunnerSessionRecord> {
         let sessions = self.sessions.read().await;
         sessions.values().cloned().collect()
+    }
+
+    pub async fn list_approvals(&self) -> Vec<ApprovalRequestRecord> {
+        let approvals = self.approvals.read().await;
+        approvals.values().cloned().collect()
     }
 
     pub async fn heartbeat(&self) -> RunnerHeartbeat {
@@ -250,8 +321,18 @@ impl RunnerApi {
         Router::new()
             .route("/healthz", get(get_health))
             .route("/v1/meta", get(get_meta))
+            .route("/v1/approvals", get(list_approvals))
+            .route("/v1/approvals/{approval_id}", get(get_approval))
+            .route(
+                "/v1/approvals/{approval_id}/decision",
+                axum::routing::post(apply_approval_decision),
+            )
             .route("/v1/sessions", get(list_sessions).post(create_session))
             .route("/v1/sessions/{session_id}", get(get_session))
+            .route(
+                "/v1/sessions/{session_id}/approvals",
+                get(list_session_approvals).post(create_approval),
+            )
             .with_state(self)
     }
 }
@@ -520,6 +601,21 @@ fn session_counts(sessions: &BTreeMap<Uuid, RunnerSessionRecord>) -> (usize, usi
     (active_sessions, queued_sessions)
 }
 
+fn session_state_after_approval(
+    decision: ApprovalDecision,
+    has_pending_approvals: bool,
+) -> SessionState {
+    if has_pending_approvals {
+        SessionState::WaitingApproval
+    } else {
+        match decision {
+            ApprovalDecision::Approved => SessionState::Running,
+            ApprovalDecision::Denied => SessionState::Failed,
+            ApprovalDecision::Cancelled => SessionState::Cancelled,
+        }
+    }
+}
+
 async fn get_health(State(api): State<RunnerApi>) -> Json<RunnerHealth> {
     let sessions = api.sessions.read().await;
     let (active_sessions, queued_sessions) = session_counts(&sessions);
@@ -561,6 +657,47 @@ async fn get_session(
     Ok(Json(session))
 }
 
+async fn list_approvals(State(api): State<RunnerApi>) -> Json<ListResponse<ApprovalRequestRecord>> {
+    let approvals = api.approvals.read().await;
+    Json(ListResponse {
+        items: approvals.values().cloned().collect(),
+    })
+}
+
+async fn get_approval(
+    State(api): State<RunnerApi>,
+    AxumPath(approval_id): AxumPath<Uuid>,
+) -> Result<Json<ApprovalRequestRecord>, ApiError> {
+    let approvals = api.approvals.read().await;
+    let approval = approvals
+        .get(&approval_id)
+        .cloned()
+        .ok_or_else(|| ApiError::not_found(format!("approval `{approval_id}` was not found")))?;
+    Ok(Json(approval))
+}
+
+async fn list_session_approvals(
+    State(api): State<RunnerApi>,
+    AxumPath(session_id): AxumPath<Uuid>,
+) -> Result<Json<ListResponse<ApprovalRequestRecord>>, ApiError> {
+    let sessions = api.sessions.read().await;
+    if !sessions.contains_key(&session_id) {
+        return Err(ApiError::not_found(format!(
+            "session `{session_id}` was not found"
+        )));
+    }
+    drop(sessions);
+
+    let approvals = api.approvals.read().await;
+    Ok(Json(ListResponse {
+        items: approvals
+            .values()
+            .filter(|approval| approval.session_id == session_id)
+            .cloned()
+            .collect(),
+    }))
+}
+
 async fn create_session(
     State(api): State<RunnerApi>,
     Json(request): Json<RunnerSessionCreateRequest>,
@@ -596,6 +733,79 @@ async fn create_session(
     Ok((StatusCode::CREATED, Json(record)))
 }
 
+async fn create_approval(
+    State(api): State<RunnerApi>,
+    AxumPath(session_id): AxumPath<Uuid>,
+    Json(request): Json<ApprovalCreateRequest>,
+) -> Result<(StatusCode, Json<ApprovalRequestRecord>), ApiError> {
+    let mut sessions = api.sessions.write().await;
+    let session = sessions
+        .get_mut(&session_id)
+        .ok_or_else(|| ApiError::not_found(format!("session `{session_id}` was not found")))?;
+    let now = Utc::now();
+    session.state = SessionState::WaitingApproval;
+    session.updated_at = now;
+
+    let approval = ApprovalRequestRecord {
+        approval_id: Uuid::new_v4(),
+        session_id,
+        runner_id: api.meta.snapshot.registration.runner_id.clone(),
+        state: ApprovalState::Pending,
+        title: request.title,
+        description: request.description,
+        metadata: request.metadata,
+        created_at: now,
+        updated_at: now,
+        responded_at: None,
+        responder: None,
+        note: None,
+    };
+    drop(sessions);
+
+    let mut approvals = api.approvals.write().await;
+    approvals.insert(approval.approval_id, approval.clone());
+    Ok((StatusCode::CREATED, Json(approval)))
+}
+
+async fn apply_approval_decision(
+    State(api): State<RunnerApi>,
+    AxumPath(approval_id): AxumPath<Uuid>,
+    Json(request): Json<ApprovalDecisionRequest>,
+) -> Result<Json<ApprovalRequestRecord>, ApiError> {
+    let decision = request.decision;
+    let mut approvals = api.approvals.write().await;
+    let approval = approvals
+        .get_mut(&approval_id)
+        .ok_or_else(|| ApiError::not_found(format!("approval `{approval_id}` was not found")))?;
+    if !matches!(approval.state, ApprovalState::Pending) {
+        return Err(ApiError::conflict(format!(
+            "approval `{approval_id}` is already resolved"
+        )));
+    }
+
+    let now = Utc::now();
+    approval.state = decision.into();
+    approval.updated_at = now;
+    approval.responded_at = Some(now);
+    approval.responder = request.responder;
+    approval.note = request.note;
+    let updated = approval.clone();
+    let has_pending_approvals = approvals.values().any(|candidate| {
+        candidate.session_id == updated.session_id
+            && candidate.approval_id != updated.approval_id
+            && matches!(candidate.state, ApprovalState::Pending)
+    });
+    drop(approvals);
+
+    let mut sessions = api.sessions.write().await;
+    if let Some(session) = sessions.get_mut(&updated.session_id) {
+        session.state = session_state_after_approval(decision, has_pending_approvals);
+        session.updated_at = now;
+    }
+
+    Ok(Json(updated))
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct ErrorEnvelope {
     error: ErrorDetail,
@@ -619,6 +829,14 @@ impl ApiError {
         Self {
             status: StatusCode::NOT_FOUND,
             code: "not_found",
+            message,
+        }
+    }
+
+    fn conflict(message: String) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            code: "conflict",
             message,
         }
     }
@@ -847,6 +1065,244 @@ mod tests {
         assert_eq!(heartbeat.state, RunnerState::Idle);
         assert_eq!(heartbeat.active_sessions, 0);
         assert_eq!(heartbeat.queued_sessions, 1);
+    }
+
+    #[tokio::test]
+    async fn runner_router_creates_and_resolves_approvals() {
+        let profile_dir = tempdir().expect("tempdir should exist");
+        let config = load_runner_config(
+            Some(profile_dir.path().join("profile")),
+            RunnerConfigOverrides {
+                runner_id: Some("runner-approval".to_owned()),
+                workspaces: Some(vec![RunnerWorkspace {
+                    workspace_id: "default".to_owned(),
+                    root_dir: profile_dir.path().join("workspace"),
+                    writable: true,
+                }]),
+                ..RunnerConfigOverrides::default()
+            },
+        )
+        .expect("config should load");
+        let app = RunnerApi::new(config, "remote-code-runner", "0.1.0").router();
+
+        let create_session_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"workspace_id": "default"}).to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("session create should succeed");
+        let session: RunnerSessionRecord = read_json(create_session_response).await;
+
+        let approval_response = app
+            .clone()
+            .oneshot(
+                Request::post(format!("/v1/sessions/{}/approvals", session.session_id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "title": "Execute shell command",
+                            "description": "Needs user confirmation"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("approval create should succeed");
+        assert_eq!(approval_response.status(), StatusCode::CREATED);
+        let approval: ApprovalRequestRecord = read_json(approval_response).await;
+        assert_eq!(approval.state, ApprovalState::Pending);
+
+        let list_response = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/v1/sessions/{}/approvals", session.session_id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("approval list should succeed");
+        let approvals: ListResponse<ApprovalRequestRecord> = read_json(list_response).await;
+        assert_eq!(approvals.items.len(), 1);
+
+        let decide_response = app
+            .clone()
+            .oneshot(
+                Request::post(format!("/v1/approvals/{}/decision", approval.approval_id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "decision": "approved",
+                            "responder": "tester",
+                            "note": "Ship it"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("approval decision should succeed");
+        assert_eq!(decide_response.status(), StatusCode::OK);
+        let resolved: ApprovalRequestRecord = read_json(decide_response).await;
+        assert_eq!(resolved.state, ApprovalState::Approved);
+        assert_eq!(resolved.responder.as_deref(), Some("tester"));
+
+        let session_response = app
+            .oneshot(
+                Request::get(format!("/v1/sessions/{}", session.session_id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("session fetch should succeed");
+        let updated_session: RunnerSessionRecord = read_json(session_response).await;
+        assert_eq!(updated_session.state, SessionState::Running);
+    }
+
+    #[tokio::test]
+    async fn runner_router_keeps_waiting_for_remaining_approvals_and_handles_denial() {
+        let profile_dir = tempdir().expect("tempdir should exist");
+        let config = load_runner_config(
+            Some(profile_dir.path().join("profile")),
+            RunnerConfigOverrides {
+                runner_id: Some("runner-approval-multi".to_owned()),
+                workspaces: Some(vec![RunnerWorkspace {
+                    workspace_id: "default".to_owned(),
+                    root_dir: profile_dir.path().join("workspace"),
+                    writable: true,
+                }]),
+                ..RunnerConfigOverrides::default()
+            },
+        )
+        .expect("config should load");
+        let app = RunnerApi::new(config, "remote-code-runner", "0.1.0").router();
+
+        let create_session_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"workspace_id": "default"}).to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("session create should succeed");
+        let session: RunnerSessionRecord = read_json(create_session_response).await;
+
+        let create_approval = |title: &str| {
+            Request::post(format!("/v1/sessions/{}/approvals", session.session_id))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "title": title,
+                        "description": "Needs user confirmation"
+                    })
+                    .to_string(),
+                ))
+                .expect("request should build")
+        };
+
+        let first_response = app
+            .clone()
+            .oneshot(create_approval("First approval"))
+            .await
+            .expect("first approval create should succeed");
+        let first: ApprovalRequestRecord = read_json(first_response).await;
+
+        let second_response = app
+            .clone()
+            .oneshot(create_approval("Second approval"))
+            .await
+            .expect("second approval create should succeed");
+        let second: ApprovalRequestRecord = read_json(second_response).await;
+
+        let approve_first_response = app
+            .clone()
+            .oneshot(
+                Request::post(format!("/v1/approvals/{}/decision", first.approval_id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "decision": "approved",
+                            "responder": "tester"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("first approval decision should succeed");
+        assert_eq!(approve_first_response.status(), StatusCode::OK);
+
+        let waiting_session_response = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/v1/sessions/{}", session.session_id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("session fetch should succeed");
+        let waiting_session: RunnerSessionRecord = read_json(waiting_session_response).await;
+        assert_eq!(waiting_session.state, SessionState::WaitingApproval);
+
+        let deny_second_response = app
+            .clone()
+            .oneshot(
+                Request::post(format!("/v1/approvals/{}/decision", second.approval_id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "decision": "denied",
+                            "responder": "tester",
+                            "note": "Denied for safety"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("second approval decision should succeed");
+        assert_eq!(deny_second_response.status(), StatusCode::OK);
+        let denied: ApprovalRequestRecord = read_json(deny_second_response).await;
+        assert_eq!(denied.state, ApprovalState::Denied);
+
+        let failed_session_response = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/v1/sessions/{}", session.session_id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("session fetch should succeed");
+        let failed_session: RunnerSessionRecord = read_json(failed_session_response).await;
+        assert_eq!(failed_session.state, SessionState::Failed);
+
+        let duplicate_decision_response = app
+            .oneshot(
+                Request::post(format!("/v1/approvals/{}/decision", second.approval_id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "decision": "approved",
+                            "responder": "tester"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("duplicate decision request should complete");
+        assert_eq!(duplicate_decision_response.status(), StatusCode::CONFLICT);
     }
 
     async fn read_json<T>(response: Response<Body>) -> T

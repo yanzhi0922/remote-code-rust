@@ -18,7 +18,9 @@ use axum::{
 use chrono::{DateTime, Duration, Utc};
 use futures::SinkExt;
 use rc_runner::{
-    ListResponse, RunnerHeartbeat, RunnerRegistrationRequest, RunnerSnapshot, RunnerState,
+    ApprovalCreateRequest, ApprovalDecision, ApprovalDecisionRequest, ApprovalRequestRecord,
+    ApprovalState, ListResponse, RunnerHeartbeat, RunnerRegistrationRequest, RunnerSnapshot,
+    RunnerState,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock, broadcast};
@@ -148,6 +150,16 @@ pub enum TimelineEventDetail {
         owner_runner_id: Option<String>,
         state: SessionState,
     },
+    ApprovalRequested {
+        approval_id: Uuid,
+        title: String,
+        state: ApprovalState,
+    },
+    ApprovalResolved {
+        approval_id: Uuid,
+        state: ApprovalState,
+        responder: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -175,6 +187,7 @@ pub struct ControlPlaneService {
 struct Registry {
     runners: BTreeMap<String, RunnerSnapshot>,
     sessions: BTreeMap<Uuid, SessionRecord>,
+    approvals: BTreeMap<Uuid, ApprovalRequestRecord>,
 }
 
 #[derive(Debug, Clone)]
@@ -218,6 +231,12 @@ impl ControlPlaneService {
             .route("/v1/meta", get(get_meta))
             .route("/v1/events", get(list_recent_events))
             .route("/v1/events/stream", get(subscribe_events))
+            .route("/v1/approvals", get(list_approvals))
+            .route("/v1/approvals/{approval_id}", get(get_approval))
+            .route(
+                "/v1/approvals/{approval_id}/decision",
+                post(apply_approval_decision),
+            )
             .route("/v1/runners", get(list_runners))
             .route("/v1/runners/register", post(register_runner))
             .route("/v1/runners/{runner_id}", get(get_runner))
@@ -227,6 +246,10 @@ impl ControlPlaneService {
             )
             .route("/v1/sessions", get(list_sessions).post(create_session))
             .route("/v1/sessions/{session_id}", get(get_session))
+            .route(
+                "/v1/sessions/{session_id}/approvals",
+                get(list_session_approvals).post(create_approval),
+            )
             .with_state(self)
     }
 
@@ -369,6 +392,102 @@ impl Registry {
         Ok(record)
     }
 
+    fn list_approvals(&self) -> Vec<ApprovalRequestRecord> {
+        self.approvals.values().cloned().collect()
+    }
+
+    fn get_approval(&self, approval_id: Uuid) -> Result<ApprovalRequestRecord, ApiError> {
+        self.approvals
+            .get(&approval_id)
+            .cloned()
+            .ok_or_else(|| ApiError::not_found(format!("approval `{approval_id}` was not found")))
+    }
+
+    fn list_session_approvals(
+        &self,
+        session_id: Uuid,
+    ) -> Result<Vec<ApprovalRequestRecord>, ApiError> {
+        if !self.sessions.contains_key(&session_id) {
+            return Err(ApiError::not_found(format!(
+                "session `{session_id}` was not found"
+            )));
+        }
+        Ok(self
+            .approvals
+            .values()
+            .filter(|approval| approval.session_id == session_id)
+            .cloned()
+            .collect())
+    }
+
+    fn create_approval(
+        &mut self,
+        session_id: Uuid,
+        request: ApprovalCreateRequest,
+    ) -> Result<ApprovalRequestRecord, ApiError> {
+        let session = self
+            .sessions
+            .get_mut(&session_id)
+            .ok_or_else(|| ApiError::not_found(format!("session `{session_id}` was not found")))?;
+        let now = Utc::now();
+        session.state = SessionState::WaitingApproval;
+        session.updated_at = now;
+
+        let approval = ApprovalRequestRecord {
+            approval_id: Uuid::new_v4(),
+            session_id,
+            runner_id: session.owner_runner_id.clone().unwrap_or_default(),
+            state: ApprovalState::Pending,
+            title: request.title,
+            description: request.description,
+            metadata: request.metadata,
+            created_at: now,
+            updated_at: now,
+            responded_at: None,
+            responder: None,
+            note: None,
+        };
+        self.approvals
+            .insert(approval.approval_id, approval.clone());
+        Ok(approval)
+    }
+
+    fn apply_approval_decision(
+        &mut self,
+        approval_id: Uuid,
+        request: ApprovalDecisionRequest,
+    ) -> Result<ApprovalRequestRecord, ApiError> {
+        let decision = request.decision;
+        let approval = self.approvals.get_mut(&approval_id).ok_or_else(|| {
+            ApiError::not_found(format!("approval `{approval_id}` was not found"))
+        })?;
+        if !matches!(approval.state, ApprovalState::Pending) {
+            return Err(ApiError::conflict(format!(
+                "approval `{approval_id}` is already resolved"
+            )));
+        }
+
+        let now = Utc::now();
+        approval.state = decision.into();
+        approval.updated_at = now;
+        approval.responded_at = Some(now);
+        approval.responder = request.responder;
+        approval.note = request.note;
+        let updated = approval.clone();
+        let has_pending_approvals = self.approvals.values().any(|candidate| {
+            candidate.session_id == updated.session_id
+                && candidate.approval_id != updated.approval_id
+                && matches!(candidate.state, ApprovalState::Pending)
+        });
+
+        if let Some(session) = self.sessions.get_mut(&updated.session_id) {
+            session.state = session_state_after_approval(decision, has_pending_approvals);
+            session.updated_at = now;
+        }
+
+        Ok(updated)
+    }
+
     fn select_runner(
         &self,
         workspace_id: &str,
@@ -504,6 +623,23 @@ async fn get_runner(
     Ok(Json(snapshot))
 }
 
+async fn list_approvals(
+    State(service): State<ControlPlaneService>,
+) -> Json<ListResponse<ApprovalRequestRecord>> {
+    let registry = service.registry.read().await;
+    Json(ListResponse {
+        items: registry.list_approvals(),
+    })
+}
+
+async fn get_approval(
+    State(service): State<ControlPlaneService>,
+    AxumPath(approval_id): AxumPath<Uuid>,
+) -> Result<Json<ApprovalRequestRecord>, ApiError> {
+    let registry = service.registry.read().await;
+    Ok(Json(registry.get_approval(approval_id)?))
+}
+
 async fn register_runner(
     State(service): State<ControlPlaneService>,
     Json(request): Json<RunnerRegistrationRequest>,
@@ -578,6 +714,16 @@ async fn get_session(
     Ok(Json(record))
 }
 
+async fn list_session_approvals(
+    State(service): State<ControlPlaneService>,
+    AxumPath(session_id): AxumPath<Uuid>,
+) -> Result<Json<ListResponse<ApprovalRequestRecord>>, ApiError> {
+    let registry = service.registry.read().await;
+    Ok(Json(ListResponse {
+        items: registry.list_session_approvals(session_id)?,
+    }))
+}
+
 async fn create_session(
     State(service): State<ControlPlaneService>,
     Json(request): Json<CreateSessionRequest>,
@@ -598,6 +744,52 @@ async fn create_session(
         })
         .await;
     Ok((StatusCode::CREATED, Json(record)))
+}
+
+async fn create_approval(
+    State(service): State<ControlPlaneService>,
+    AxumPath(session_id): AxumPath<Uuid>,
+    Json(request): Json<ApprovalCreateRequest>,
+) -> Result<(StatusCode, Json<ApprovalRequestRecord>), ApiError> {
+    let approval = {
+        let mut registry = service.registry.write().await;
+        registry.create_approval(session_id, request)?
+    };
+    let _ = service
+        .publish_event(TimelineEventDraft {
+            runner_id: (!approval.runner_id.is_empty()).then(|| approval.runner_id.clone()),
+            session_id: Some(approval.session_id),
+            detail: TimelineEventDetail::ApprovalRequested {
+                approval_id: approval.approval_id,
+                title: approval.title.clone(),
+                state: approval.state,
+            },
+        })
+        .await;
+    Ok((StatusCode::CREATED, Json(approval)))
+}
+
+async fn apply_approval_decision(
+    State(service): State<ControlPlaneService>,
+    AxumPath(approval_id): AxumPath<Uuid>,
+    Json(request): Json<ApprovalDecisionRequest>,
+) -> Result<Json<ApprovalRequestRecord>, ApiError> {
+    let approval = {
+        let mut registry = service.registry.write().await;
+        registry.apply_approval_decision(approval_id, request)?
+    };
+    let _ = service
+        .publish_event(TimelineEventDraft {
+            runner_id: (!approval.runner_id.is_empty()).then(|| approval.runner_id.clone()),
+            session_id: Some(approval.session_id),
+            detail: TimelineEventDetail::ApprovalResolved {
+                approval_id: approval.approval_id,
+                state: approval.state,
+                responder: approval.responder.clone(),
+            },
+        })
+        .await;
+    Ok(Json(approval))
 }
 
 async fn serve_event_stream(
@@ -647,6 +839,21 @@ fn runner_rank(state: RunnerState) -> u8 {
         RunnerState::Draining => 3,
         RunnerState::Unhealthy => 4,
         RunnerState::Offline => 5,
+    }
+}
+
+fn session_state_after_approval(
+    decision: ApprovalDecision,
+    has_pending_approvals: bool,
+) -> SessionState {
+    if has_pending_approvals {
+        SessionState::WaitingApproval
+    } else {
+        match decision {
+            ApprovalDecision::Approved => SessionState::Running,
+            ApprovalDecision::Denied => SessionState::Failed,
+            ApprovalDecision::Cancelled => SessionState::Cancelled,
+        }
     }
 }
 
@@ -956,6 +1163,226 @@ mod tests {
             TimelineEventDetail::SessionCreated { .. }
         ));
         assert_eq!(events.items[2].session_id, Some(created_session.session_id));
+    }
+
+    #[tokio::test]
+    async fn approval_relay_updates_session_state_and_timeline() {
+        let service = ControlPlaneService::new(
+            load_control_plane_config(ControlPlaneConfigOverrides::default())
+                .expect("config should load"),
+            "0.1.0",
+        );
+        let app = service.router();
+
+        let registration = runner_registration("runner-approval", "default", "C:/workspace");
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/runners/register")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&registration).expect("json should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"workspace_id": "default"}).to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+        let session: SessionRecord = read_json(create_response).await;
+        assert_eq!(session.owner_runner_id.as_deref(), Some("runner-approval"));
+        assert_eq!(session.state, SessionState::Assigned);
+
+        let create_approval_response = app
+            .clone()
+            .oneshot(
+                Request::post(format!("/v1/sessions/{}/approvals", session.session_id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "title": "Run privileged tool",
+                            "description": "Needs operator approval",
+                            "metadata": {"tool": "shell_command"}
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(create_approval_response.status(), StatusCode::CREATED);
+        let approval: ApprovalRequestRecord = read_json(create_approval_response).await;
+        assert_eq!(approval.session_id, session.session_id);
+        assert_eq!(approval.runner_id, "runner-approval");
+        assert_eq!(approval.state, ApprovalState::Pending);
+
+        let approvals_response = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/approvals")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let approvals: ListResponse<ApprovalRequestRecord> = read_json(approvals_response).await;
+        assert_eq!(approvals.items.len(), 1);
+        assert_eq!(approvals.items[0].approval_id, approval.approval_id);
+
+        let session_approvals_response = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/v1/sessions/{}/approvals", session.session_id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let session_approvals: ListResponse<ApprovalRequestRecord> =
+            read_json(session_approvals_response).await;
+        assert_eq!(session_approvals.items.len(), 1);
+        assert_eq!(session_approvals.items[0].approval_id, approval.approval_id);
+
+        let pending_approval_response = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/v1/approvals/{}", approval.approval_id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let pending_approval: ApprovalRequestRecord = read_json(pending_approval_response).await;
+        assert_eq!(pending_approval.state, ApprovalState::Pending);
+
+        let waiting_session_response = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/v1/sessions/{}", session.session_id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let waiting_session: SessionRecord = read_json(waiting_session_response).await;
+        assert_eq!(waiting_session.state, SessionState::WaitingApproval);
+
+        let resolve_response = app
+            .clone()
+            .oneshot(
+                Request::post(format!("/v1/approvals/{}/decision", approval.approval_id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "decision": "approved",
+                            "responder": "operator-1",
+                            "note": "Approved for this run"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(resolve_response.status(), StatusCode::OK);
+        let resolved_approval: ApprovalRequestRecord = read_json(resolve_response).await;
+        assert_eq!(resolved_approval.state, ApprovalState::Approved);
+        assert_eq!(resolved_approval.responder.as_deref(), Some("operator-1"));
+
+        let resumed_session_response = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/v1/sessions/{}", session.session_id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let resumed_session: SessionRecord = read_json(resumed_session_response).await;
+        assert_eq!(resumed_session.state, SessionState::Running);
+
+        let duplicate_resolution_response = app
+            .clone()
+            .oneshot(
+                Request::post(format!("/v1/approvals/{}/decision", approval.approval_id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "decision": "approved",
+                            "responder": "operator-2"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(duplicate_resolution_response.status(), StatusCode::CONFLICT);
+
+        let events_response = app
+            .oneshot(
+                Request::get("/v1/events?limit=10")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let events: ListResponse<TimelineEvent> = read_json(events_response).await;
+        assert_eq!(events.items.len(), 4);
+        assert!(matches!(
+            events.items[0].detail,
+            TimelineEventDetail::RunnerRegistered { .. }
+        ));
+        assert!(matches!(
+            events.items[1].detail,
+            TimelineEventDetail::SessionCreated { .. }
+        ));
+        match &events.items[2].detail {
+            TimelineEventDetail::ApprovalRequested {
+                approval_id,
+                title,
+                state,
+            } => {
+                assert_eq!(*approval_id, approval.approval_id);
+                assert_eq!(title, "Run privileged tool");
+                assert_eq!(*state, ApprovalState::Pending);
+            }
+            other => panic!("expected approval requested event, received {other:?}"),
+        }
+        match &events.items[3].detail {
+            TimelineEventDetail::ApprovalResolved {
+                approval_id,
+                state,
+                responder,
+            } => {
+                assert_eq!(*approval_id, approval.approval_id);
+                assert_eq!(*state, ApprovalState::Approved);
+                assert_eq!(responder.as_deref(), Some("operator-1"));
+            }
+            other => panic!("expected approval resolved event, received {other:?}"),
+        }
+        assert_eq!(events.items[2].session_id, Some(session.session_id));
+        assert_eq!(events.items[3].session_id, Some(session.session_id));
+        assert_eq!(
+            events.items[2].runner_id.as_deref(),
+            Some("runner-approval")
+        );
+        assert_eq!(
+            events.items[3].runner_id.as_deref(),
+            Some("runner-approval")
+        );
     }
 
     #[tokio::test]
