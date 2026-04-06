@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -26,6 +27,9 @@ struct Cli {
     #[arg(long, env = "REMOTE_CODE_RUNNER_LEASE_TTL_SECS")]
     runner_lease_ttl_secs: Option<u64>,
 
+    #[arg(long, env = "REMOTE_CODE_PROFILE_DIR")]
+    profile_dir: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -45,6 +49,7 @@ async fn main() -> Result<()> {
         public_base_url: cli.public_base_url,
         service_name: cli.service_name,
         runner_lease_ttl_secs: cli.runner_lease_ttl_secs,
+        profile_dir: cli.profile_dir,
     })?;
 
     match cli.command.unwrap_or(Command::Serve) {

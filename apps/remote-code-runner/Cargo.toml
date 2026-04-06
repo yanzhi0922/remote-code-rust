@@ -21,5 +21,6 @@ rc-runner = { path = "../../crates/rc-runner" }
 rc-telemetry = { path = "../../crates/rc-telemetry" }
 
 [dev-dependencies]
+chrono.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
