@@ -435,6 +435,10 @@ fn run_doctor(config: &RuntimeConfig) -> Result<()> {
         format!("- print mode: {}", config.print_mode),
         format!("- discovered skills: {}", discovery.skills.len()),
         format!("- discovered plugins: {}", discovery.plugins.len()),
+        format!(
+            "- discovered plugin runtimes: {}",
+            discovery.plugin_runtimes.len()
+        ),
         format!("- discovered mcp servers: {}", discovery.mcp_servers.len()),
         format!(
             "- readiness: {}",
@@ -997,6 +1001,7 @@ struct PersistedSessionContext {
 struct RuntimeExtensionDiscovery {
     skills: Vec<String>,
     plugins: Vec<String>,
+    plugin_runtimes: Vec<String>,
     mcp_servers: Vec<String>,
     warnings: Vec<String>,
 }
@@ -1201,6 +1206,7 @@ struct McpCallServerRecord {
 fn discover_runtime_extensions(config: &RuntimeConfig) -> RuntimeExtensionDiscovery {
     let mut skills = BTreeSet::new();
     let mut plugins = BTreeSet::new();
+    let mut plugin_runtimes = BTreeSet::new();
     let mut mcp_servers = BTreeSet::new();
     let mut warnings = Vec::new();
 
@@ -1218,6 +1224,9 @@ fn discover_runtime_extensions(config: &RuntimeConfig) -> RuntimeExtensionDiscov
             Ok(discovered_plugins) => {
                 for plugin in discovered_plugins {
                     plugins.insert(plugin.manifest.name.clone());
+                    if plugin.runtime_config().is_some() {
+                        plugin_runtimes.insert(plugin.manifest.name.clone());
+                    }
                     collect_skill_names(
                         plugin.discover_bundled_skills(),
                         &mut skills,
@@ -1259,6 +1268,7 @@ fn discover_runtime_extensions(config: &RuntimeConfig) -> RuntimeExtensionDiscov
     RuntimeExtensionDiscovery {
         skills: skills.into_iter().collect(),
         plugins: plugins.into_iter().collect(),
+        plugin_runtimes: plugin_runtimes.into_iter().collect(),
         mcp_servers: mcp_servers.into_iter().collect(),
         warnings,
     }
