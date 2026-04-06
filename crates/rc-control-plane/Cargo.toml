@@ -14,6 +14,7 @@ workspace = true
 anyhow.workspace = true
 axum.workspace = true
 chrono.workspace = true
+futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
@@ -21,4 +22,6 @@ uuid.workspace = true
 rc-runner = { path = "../rc-runner" }
 
 [dev-dependencies]
+reqwest.workspace = true
+tokio-tungstenite.workspace = true
 tower = "0.5.2"
