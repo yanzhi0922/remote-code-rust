@@ -231,6 +231,7 @@ impl ControlPlaneService {
             .route("/v1/meta", get(get_meta))
             .route("/v1/events", get(list_recent_events))
             .route("/v1/events/stream", get(subscribe_events))
+            .route("/v1/approvals/stream", get(subscribe_approvals))
             .route("/v1/approvals", get(list_approvals))
             .route("/v1/approvals/{approval_id}", get(get_approval))
             .route(
@@ -240,6 +241,14 @@ impl ControlPlaneService {
             .route("/v1/runners", get(list_runners))
             .route("/v1/runners/register", post(register_runner))
             .route("/v1/runners/{runner_id}", get(get_runner))
+            .route(
+                "/v1/runners/{runner_id}/approvals",
+                get(list_runner_approvals),
+            )
+            .route(
+                "/v1/runners/{runner_id}/approvals/stream",
+                get(subscribe_runner_approvals),
+            )
             .route(
                 "/v1/runners/{runner_id}/heartbeat",
                 post(update_runner_heartbeat),
@@ -394,6 +403,23 @@ impl Registry {
 
     fn list_approvals(&self) -> Vec<ApprovalRequestRecord> {
         self.approvals.values().cloned().collect()
+    }
+
+    fn list_runner_approvals(
+        &self,
+        runner_id: &str,
+    ) -> Result<Vec<ApprovalRequestRecord>, ApiError> {
+        if !self.runners.contains_key(runner_id) {
+            return Err(ApiError::not_found(format!(
+                "runner `{runner_id}` was not found"
+            )));
+        }
+        Ok(self
+            .approvals
+            .values()
+            .filter(|approval| approval.runner_id == runner_id)
+            .cloned()
+            .collect())
     }
 
     fn get_approval(&self, approval_id: Uuid) -> Result<ApprovalRequestRecord, ApiError> {
@@ -601,12 +627,39 @@ async fn subscribe_events(
     ws.on_upgrade(move |socket| serve_event_stream(socket, service.timeline.subscribe()))
 }
 
+async fn subscribe_approvals(
+    ws: WebSocketUpgrade,
+    State(service): State<ControlPlaneService>,
+) -> Response {
+    ws.on_upgrade(move |socket| serve_approval_stream(socket, service.timeline.subscribe()))
+}
+
 async fn list_runners(
     State(service): State<ControlPlaneService>,
 ) -> Json<ListResponse<RunnerSnapshot>> {
     let registry = service.registry.read().await;
     Json(ListResponse {
         items: registry.runners.values().cloned().collect(),
+    })
+}
+
+async fn list_runner_approvals(
+    State(service): State<ControlPlaneService>,
+    AxumPath(runner_id): AxumPath<String>,
+) -> Result<Json<ListResponse<ApprovalRequestRecord>>, ApiError> {
+    let registry = service.registry.read().await;
+    Ok(Json(ListResponse {
+        items: registry.list_runner_approvals(&runner_id)?,
+    }))
+}
+
+async fn subscribe_runner_approvals(
+    ws: WebSocketUpgrade,
+    State(service): State<ControlPlaneService>,
+    AxumPath(runner_id): AxumPath<String>,
+) -> Response {
+    ws.on_upgrade(move |socket| {
+        serve_runner_approval_stream(socket, service.timeline.subscribe(), runner_id)
     })
 }
 
@@ -796,6 +849,34 @@ async fn serve_event_stream(
     mut socket: WebSocket,
     mut subscription: broadcast::Receiver<TimelineEvent>,
 ) {
+    serve_filtered_event_stream(&mut socket, &mut subscription, |_| true).await;
+}
+
+async fn serve_approval_stream(
+    mut socket: WebSocket,
+    mut subscription: broadcast::Receiver<TimelineEvent>,
+) {
+    serve_filtered_event_stream(&mut socket, &mut subscription, is_approval_event).await;
+}
+
+async fn serve_runner_approval_stream(
+    mut socket: WebSocket,
+    mut subscription: broadcast::Receiver<TimelineEvent>,
+    runner_id: String,
+) {
+    serve_filtered_event_stream(&mut socket, &mut subscription, move |event| {
+        event.runner_id.as_deref() == Some(runner_id.as_str()) && is_approval_event(event)
+    })
+    .await;
+}
+
+async fn serve_filtered_event_stream<F>(
+    socket: &mut WebSocket,
+    subscription: &mut broadcast::Receiver<TimelineEvent>,
+    filter: F,
+) where
+    F: Fn(&TimelineEvent) -> bool,
+{
     loop {
         let event = match subscription.recv().await {
             Ok(event) => event,
@@ -805,6 +886,9 @@ async fn serve_event_stream(
                 break;
             }
         };
+        if !filter(&event) {
+            continue;
+        }
         let payload = match serde_json::to_string(&event) {
             Ok(payload) => payload,
             Err(_) => break,
@@ -813,6 +897,14 @@ async fn serve_event_stream(
             break;
         }
     }
+}
+
+fn is_approval_event(event: &TimelineEvent) -> bool {
+    matches!(
+        event.detail,
+        TimelineEventDetail::ApprovalRequested { .. }
+            | TimelineEventDetail::ApprovalResolved { .. }
+    )
 }
 
 fn runner_can_host(snapshot: &RunnerSnapshot, workspace_id: &str, lease_ttl_secs: u64) -> bool {
@@ -1383,6 +1475,202 @@ mod tests {
             events.items[3].runner_id.as_deref(),
             Some("runner-approval")
         );
+    }
+
+    #[tokio::test]
+    async fn runner_approval_listing_filters_by_runner() {
+        let service = ControlPlaneService::new(
+            load_control_plane_config(ControlPlaneConfigOverrides::default())
+                .expect("config should load"),
+            "0.1.0",
+        );
+        let app = service.router();
+
+        for runner in [
+            runner_registration("runner-a", "default", "C:/workspace-a"),
+            runner_registration("runner-z", "default", "C:/workspace-z"),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::post("/v1/runners/register")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&runner).expect("json should serialize"),
+                        ))
+                        .expect("request should build"),
+                )
+                .await
+                .expect("request should succeed");
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"workspace_id": "default"}).to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let session: SessionRecord = read_json(create_response).await;
+        assert_eq!(session.owner_runner_id.as_deref(), Some("runner-a"));
+
+        let approval_response = app
+            .clone()
+            .oneshot(
+                Request::post(format!("/v1/sessions/{}/approvals", session.session_id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "title": "Needs approval",
+                            "description": "Confirm tool usage"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(approval_response.status(), StatusCode::CREATED);
+
+        let runner_a_response = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/runners/runner-a/approvals")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let runner_a_approvals: ListResponse<ApprovalRequestRecord> =
+            read_json(runner_a_response).await;
+        assert_eq!(runner_a_approvals.items.len(), 1);
+
+        let runner_z_response = app
+            .oneshot(
+                Request::get("/v1/runners/runner-z/approvals")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let runner_z_approvals: ListResponse<ApprovalRequestRecord> =
+            read_json(runner_z_response).await;
+        assert!(runner_z_approvals.items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn runner_approval_stream_only_emits_matching_approval_events() {
+        let service = ControlPlaneService::new(
+            load_control_plane_config(ControlPlaneConfigOverrides::default())
+                .expect("config should load"),
+            "0.1.0",
+        );
+        let (base_url, server_handle) = spawn_control_plane_server(service).await;
+        let ws_url =
+            base_url.replacen("http://", "ws://", 1) + "/v1/runners/runner-stream/approvals/stream";
+
+        let (mut socket, _) = connect_async(&ws_url)
+            .await
+            .expect("websocket should connect");
+
+        let client = Client::new();
+        let registration = runner_registration("runner-stream", "default", "C:/workspace");
+        let response = client
+            .post(format!("{base_url}/v1/runners/register"))
+            .json(&registration)
+            .send()
+            .await
+            .expect("registration request should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let session: SessionRecord = client
+            .post(format!("{base_url}/v1/sessions"))
+            .json(&serde_json::json!({"workspace_id": "default"}))
+            .send()
+            .await
+            .expect("session create should succeed")
+            .error_for_status()
+            .expect("session create should succeed")
+            .json()
+            .await
+            .expect("session payload should decode");
+
+        let approval: ApprovalRequestRecord = client
+            .post(format!(
+                "{base_url}/v1/sessions/{}/approvals",
+                session.session_id
+            ))
+            .json(&serde_json::json!({
+                "title": "Run tool",
+                "description": "Needs approval"
+            }))
+            .send()
+            .await
+            .expect("approval create should succeed")
+            .error_for_status()
+            .expect("approval create should succeed")
+            .json()
+            .await
+            .expect("approval payload should decode");
+
+        let requested_message = timeout(TokioDuration::from_secs(5), socket.next())
+            .await
+            .expect("requested event should arrive before timeout")
+            .expect("event stream should stay open")
+            .expect("websocket frame should parse");
+        let requested_text = match requested_message {
+            TungsteniteMessage::Text(text) => text,
+            other => panic!("expected text frame, received {other:?}"),
+        };
+        let requested_event: TimelineEvent =
+            serde_json::from_str(&requested_text).expect("event payload should deserialize");
+        assert_eq!(requested_event.runner_id.as_deref(), Some("runner-stream"));
+        assert_eq!(requested_event.session_id, Some(session.session_id));
+        assert!(matches!(
+            requested_event.detail,
+            TimelineEventDetail::ApprovalRequested { .. }
+        ));
+
+        let response = client
+            .post(format!(
+                "{base_url}/v1/approvals/{}/decision",
+                approval.approval_id
+            ))
+            .json(&serde_json::json!({
+                "decision": "approved",
+                "responder": "stream-tester"
+            }))
+            .send()
+            .await
+            .expect("approval resolve should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let resolved_message = timeout(TokioDuration::from_secs(5), socket.next())
+            .await
+            .expect("resolved event should arrive before timeout")
+            .expect("event stream should stay open")
+            .expect("websocket frame should parse");
+        let resolved_text = match resolved_message {
+            TungsteniteMessage::Text(text) => text,
+            other => panic!("expected text frame, received {other:?}"),
+        };
+        let resolved_event: TimelineEvent =
+            serde_json::from_str(&resolved_text).expect("event payload should deserialize");
+        assert_eq!(resolved_event.runner_id.as_deref(), Some("runner-stream"));
+        assert_eq!(resolved_event.session_id, Some(session.session_id));
+        assert!(matches!(
+            resolved_event.detail,
+            TimelineEventDetail::ApprovalResolved { .. }
+        ));
+
+        server_handle.abort();
+        let _ = server_handle.await;
     }
 
     #[tokio::test]
