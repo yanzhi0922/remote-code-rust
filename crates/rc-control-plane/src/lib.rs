@@ -222,6 +222,11 @@ struct RecentEventsQuery {
     limit: Option<usize>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+struct EventStreamQuery {
+    after: Option<u64>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ControlPlaneService {
     meta: ControlPlaneMeta,
@@ -403,6 +408,20 @@ impl TimelineStore {
             events.drain(..events.len() - limit);
         }
         events
+    }
+
+    async fn replay_filtered<F>(&self, after: Option<u64>, filter: F) -> Vec<TimelineEvent>
+    where
+        F: Fn(&TimelineEvent) -> bool,
+    {
+        let timeline = self.inner.lock().await;
+        timeline
+            .history
+            .iter()
+            .filter(|event| after.is_none_or(|sequence| event.sequence > sequence))
+            .filter(|event| filter(event))
+            .cloned()
+            .collect()
     }
 
     fn subscribe(&self) -> broadcast::Receiver<TimelineEvent> {
@@ -838,13 +857,24 @@ async fn list_session_events(
 
 async fn subscribe_events(
     ws: WebSocketUpgrade,
+    Query(query): Query<EventStreamQuery>,
     State(service): State<ControlPlaneService>,
 ) -> Response {
-    ws.on_upgrade(move |socket| serve_event_stream(socket, service.timeline.subscribe()))
+    let subscription = service.timeline.subscribe();
+    let backlog = if query.after.is_some() {
+        service
+            .timeline
+            .replay_filtered(query.after, |_| true)
+            .await
+    } else {
+        Vec::new()
+    };
+    ws.on_upgrade(move |socket| serve_event_stream(socket, subscription, backlog))
 }
 
 async fn subscribe_session_events(
     ws: WebSocketUpgrade,
+    Query(query): Query<EventStreamQuery>,
     State(service): State<ControlPlaneService>,
     AxumPath(session_id): AxumPath<Uuid>,
 ) -> Response {
@@ -858,8 +888,17 @@ async fn subscribe_session_events(
         return ApiError::not_found(format!("session `{session_id}` was not found"))
             .into_response();
     }
+    let subscription = service.timeline.subscribe();
+    let backlog = if query.after.is_some() {
+        service
+            .timeline
+            .replay_filtered(query.after, |event| event.session_id == Some(session_id))
+            .await
+    } else {
+        Vec::new()
+    };
     ws.on_upgrade(move |socket| {
-        serve_session_event_stream(socket, service.timeline.subscribe(), session_id)
+        serve_session_event_stream(socket, subscription, backlog, session_id)
     })
 }
 
@@ -1195,16 +1234,18 @@ async fn download_artifact(
 async fn serve_event_stream(
     mut socket: WebSocket,
     mut subscription: broadcast::Receiver<TimelineEvent>,
+    backlog: Vec<TimelineEvent>,
 ) {
-    serve_filtered_event_stream(&mut socket, &mut subscription, |_| true).await;
+    serve_filtered_event_stream(&mut socket, &mut subscription, backlog, |_| true).await;
 }
 
 async fn serve_session_event_stream(
     mut socket: WebSocket,
     mut subscription: broadcast::Receiver<TimelineEvent>,
+    backlog: Vec<TimelineEvent>,
     session_id: Uuid,
 ) {
-    serve_filtered_event_stream(&mut socket, &mut subscription, move |event| {
+    serve_filtered_event_stream(&mut socket, &mut subscription, backlog, move |event| {
         event.session_id == Some(session_id)
     })
     .await;
@@ -1214,7 +1255,13 @@ async fn serve_approval_stream(
     mut socket: WebSocket,
     mut subscription: broadcast::Receiver<TimelineEvent>,
 ) {
-    serve_filtered_event_stream(&mut socket, &mut subscription, is_approval_event).await;
+    serve_filtered_event_stream(
+        &mut socket,
+        &mut subscription,
+        Vec::new(),
+        is_approval_event,
+    )
+    .await;
 }
 
 async fn serve_runner_approval_stream(
@@ -1222,7 +1269,7 @@ async fn serve_runner_approval_stream(
     mut subscription: broadcast::Receiver<TimelineEvent>,
     runner_id: String,
 ) {
-    serve_filtered_event_stream(&mut socket, &mut subscription, move |event| {
+    serve_filtered_event_stream(&mut socket, &mut subscription, Vec::new(), move |event| {
         event.runner_id.as_deref() == Some(runner_id.as_str()) && is_approval_event(event)
     })
     .await;
@@ -1231,10 +1278,19 @@ async fn serve_runner_approval_stream(
 async fn serve_filtered_event_stream<F>(
     socket: &mut WebSocket,
     subscription: &mut broadcast::Receiver<TimelineEvent>,
+    backlog: Vec<TimelineEvent>,
     filter: F,
 ) where
     F: Fn(&TimelineEvent) -> bool,
 {
+    let mut last_sequence = 0;
+    for event in backlog {
+        if send_timeline_event(socket, &event).await.is_err() {
+            return;
+        }
+        last_sequence = event.sequence;
+    }
+
     loop {
         let event = match subscription.recv().await {
             Ok(event) => event,
@@ -1244,17 +1300,25 @@ async fn serve_filtered_event_stream<F>(
                 break;
             }
         };
-        if !filter(&event) {
+        if event.sequence <= last_sequence || !filter(&event) {
             continue;
         }
-        let payload = match serde_json::to_string(&event) {
-            Ok(payload) => payload,
-            Err(_) => break,
-        };
-        if socket.send(Message::Text(payload.into())).await.is_err() {
+        if send_timeline_event(socket, &event).await.is_err() {
             break;
         }
+        last_sequence = event.sequence;
     }
+}
+
+async fn send_timeline_event(
+    socket: &mut WebSocket,
+    event: &TimelineEvent,
+) -> std::result::Result<(), ()> {
+    let payload = serde_json::to_string(event).map_err(|_| ())?;
+    socket
+        .send(Message::Text(payload.into()))
+        .await
+        .map_err(|_| ())
 }
 
 fn is_approval_event(event: &TimelineEvent) -> bool {
@@ -2492,6 +2556,219 @@ mod tests {
         assert!(matches!(
             event.detail,
             TimelineEventDetail::RunnerRegistered { .. }
+        ));
+
+        server_handle.abort();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn websocket_stream_replays_backlog_before_live_runner_events() {
+        let service = ControlPlaneService::new(
+            load_control_plane_config(ControlPlaneConfigOverrides::default())
+                .expect("config should load"),
+            "0.1.0",
+        );
+        let (base_url, server_handle) = spawn_control_plane_server(service).await;
+        let client = Client::new();
+
+        let response = client
+            .post(format!("{base_url}/v1/runners/register"))
+            .json(&runner_registration(
+                "runner-backlog-a",
+                "default",
+                "C:/workspace/a",
+            ))
+            .send()
+            .await
+            .expect("registration request should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let ws_url = base_url.replacen("http://", "ws://", 1) + "/v1/events/stream?after=0";
+        let (mut socket, _) = connect_async(&ws_url)
+            .await
+            .expect("websocket should connect");
+
+        let backlog_message = timeout(TokioDuration::from_secs(5), socket.next())
+            .await
+            .expect("backlog event should arrive before timeout")
+            .expect("event stream should stay open")
+            .expect("websocket frame should parse");
+        let backlog_text = match backlog_message {
+            TungsteniteMessage::Text(text) => text,
+            other => panic!("expected text frame, received {other:?}"),
+        };
+        let backlog_event: TimelineEvent =
+            serde_json::from_str(&backlog_text).expect("event payload should deserialize");
+        assert_eq!(backlog_event.runner_id.as_deref(), Some("runner-backlog-a"));
+        assert!(matches!(
+            backlog_event.detail,
+            TimelineEventDetail::RunnerRegistered { .. }
+        ));
+
+        let response = client
+            .post(format!("{base_url}/v1/runners/register"))
+            .json(&runner_registration(
+                "runner-backlog-b",
+                "default",
+                "C:/workspace/b",
+            ))
+            .send()
+            .await
+            .expect("registration request should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let live_message = timeout(TokioDuration::from_secs(5), socket.next())
+            .await
+            .expect("live event should arrive before timeout")
+            .expect("event stream should stay open")
+            .expect("websocket frame should parse");
+        let live_text = match live_message {
+            TungsteniteMessage::Text(text) => text,
+            other => panic!("expected text frame, received {other:?}"),
+        };
+        let live_event: TimelineEvent =
+            serde_json::from_str(&live_text).expect("event payload should deserialize");
+        assert_eq!(live_event.runner_id.as_deref(), Some("runner-backlog-b"));
+        assert!(live_event.sequence > backlog_event.sequence);
+        assert!(matches!(
+            live_event.detail,
+            TimelineEventDetail::RunnerRegistered { .. }
+        ));
+
+        server_handle.abort();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn session_event_stream_replays_backlog_after_query() {
+        let profile = tempdir().expect("tempdir should exist");
+        let service = ControlPlaneService::new(
+            load_control_plane_config(ControlPlaneConfigOverrides {
+                profile_dir: Some(profile.path().join("profile")),
+                ..ControlPlaneConfigOverrides::default()
+            })
+            .expect("config should load"),
+            "0.1.0",
+        );
+        let (base_url, server_handle) = spawn_control_plane_server(service).await;
+
+        let client = Client::new();
+        let runner = spawn_runner_server("runner-session-backlog", "default").await;
+        let response = client
+            .post(format!("{base_url}/v1/runners/register"))
+            .json(&runner.registration)
+            .send()
+            .await
+            .expect("registration request should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let session: SessionRecord = client
+            .post(format!("{base_url}/v1/sessions"))
+            .json(&serde_json::json!({"workspace_id": "default"}))
+            .send()
+            .await
+            .expect("session create should succeed")
+            .error_for_status()
+            .expect("session create should succeed")
+            .json()
+            .await
+            .expect("session payload should decode");
+
+        let first_artifact = client
+            .post(format!(
+                "{base_url}/v1/sessions/{}/artifacts",
+                session.session_id
+            ))
+            .json(&serde_json::json!({
+                "name": "notes-one",
+                "file_name": "notes-one.txt",
+                "media_type": "text/plain",
+                "content_base64": BASE64_STANDARD.encode("hello backlog one")
+            }))
+            .send()
+            .await
+            .expect("artifact create should succeed");
+        assert_eq!(first_artifact.status(), StatusCode::CREATED);
+
+        let session_events: ListResponse<TimelineEvent> = client
+            .get(format!(
+                "{base_url}/v1/sessions/{}/events?limit=10",
+                session.session_id
+            ))
+            .send()
+            .await
+            .expect("session events request should succeed")
+            .error_for_status()
+            .expect("session events request should succeed")
+            .json()
+            .await
+            .expect("session events payload should decode");
+        let session_created_sequence = session_events
+            .items
+            .iter()
+            .find(|event| matches!(event.detail, TimelineEventDetail::SessionCreated { .. }))
+            .map(|event| event.sequence)
+            .expect("session created event should exist");
+
+        let ws_url = base_url.replacen("http://", "ws://", 1)
+            + &format!(
+                "/v1/sessions/{}/events/stream?after={session_created_sequence}",
+                session.session_id
+            );
+        let (mut socket, _) = connect_async(&ws_url)
+            .await
+            .expect("websocket should connect");
+
+        let backlog_message = timeout(TokioDuration::from_secs(5), socket.next())
+            .await
+            .expect("backlog event should arrive before timeout")
+            .expect("event stream should stay open")
+            .expect("websocket frame should parse");
+        let backlog_text = match backlog_message {
+            TungsteniteMessage::Text(text) => text,
+            other => panic!("expected text frame, received {other:?}"),
+        };
+        let backlog_event: TimelineEvent =
+            serde_json::from_str(&backlog_text).expect("event payload should deserialize");
+        assert_eq!(backlog_event.session_id, Some(session.session_id));
+        assert!(matches!(
+            backlog_event.detail,
+            TimelineEventDetail::ArtifactCreated { .. }
+        ));
+
+        let second_artifact = client
+            .post(format!(
+                "{base_url}/v1/sessions/{}/artifacts",
+                session.session_id
+            ))
+            .json(&serde_json::json!({
+                "name": "notes-two",
+                "file_name": "notes-two.txt",
+                "media_type": "text/plain",
+                "content_base64": BASE64_STANDARD.encode("hello backlog two")
+            }))
+            .send()
+            .await
+            .expect("artifact create should succeed");
+        assert_eq!(second_artifact.status(), StatusCode::CREATED);
+
+        let live_message = timeout(TokioDuration::from_secs(5), socket.next())
+            .await
+            .expect("live event should arrive before timeout")
+            .expect("event stream should stay open")
+            .expect("websocket frame should parse");
+        let live_text = match live_message {
+            TungsteniteMessage::Text(text) => text,
+            other => panic!("expected text frame, received {other:?}"),
+        };
+        let live_event: TimelineEvent =
+            serde_json::from_str(&live_text).expect("event payload should deserialize");
+        assert_eq!(live_event.session_id, Some(session.session_id));
+        assert!(live_event.sequence > backlog_event.sequence);
+        assert!(matches!(
+            live_event.detail,
+            TimelineEventDetail::ArtifactCreated { .. }
         ));
 
         server_handle.abort();

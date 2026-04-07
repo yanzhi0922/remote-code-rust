@@ -1048,6 +1048,17 @@ fn remote_events_path(session_id: Option<Uuid>, after: Option<u64>, limit: usize
     path
 }
 
+fn remote_events_stream_path(session_id: Option<Uuid>, after: Option<u64>) -> String {
+    let mut path = match session_id {
+        Some(session_id) => format!("/v1/sessions/{session_id}/events/stream"),
+        None => "/v1/events/stream".to_owned(),
+    };
+    if let Some(after) = after {
+        path.push_str(&format!("?after={after}"));
+    }
+    path
+}
+
 fn remote_event_kind(detail: &RemoteTimelineEventDetail) -> &'static str {
     match detail {
         RemoteTimelineEventDetail::RunnerRegistered { .. } => "runner_registered",
@@ -1335,10 +1346,13 @@ async fn run_remote_events_follow(control_plane_url: String, args: RemoteEventsA
         print_remote_events(&response.items);
     }
 
-    let ws_path = match args.session_id {
-        Some(session_id) => format!("/v1/sessions/{session_id}/events/stream"),
-        None => "/v1/events/stream".to_owned(),
-    };
+    let follow_after = response
+        .items
+        .last()
+        .map(|event| event.sequence)
+        .or(args.after)
+        .or(Some(0));
+    let ws_path = remote_events_stream_path(args.session_id, follow_after);
     let ws_url = build_remote_ws_url(&control_plane_url, &ws_path)?;
     let (mut socket, _) = connect_async(&ws_url).await?;
     loop {
@@ -3578,8 +3592,8 @@ mod tests {
         build_remote_http_url, build_remote_ws_url, default_task_for_objective,
         discover_runtime_mcp_servers, normalize_remote_base_url, parse_agent_spec,
         parse_mcp_call_arguments, parse_repeated_key_value_args, parse_task_spec,
-        remote_approvals_path, remote_events_path, remote_get_json, remote_post_json,
-        resolve_runtime_mcp_server,
+        remote_approvals_path, remote_events_path, remote_events_stream_path, remote_get_json,
+        remote_post_json, resolve_runtime_mcp_server,
     };
     use rc_config::{ProviderOverrides, load_runtime_config};
     use std::{collections::BTreeSet, fs, process::Command as ProcessCommand};
@@ -3689,6 +3703,15 @@ mod tests {
         assert_eq!(
             remote_events_path(Some(Uuid::nil()), Some(41), 500),
             format!("/v1/sessions/{}/events?after=41&limit=200", Uuid::nil())
+        );
+    }
+
+    #[test]
+    fn remote_events_stream_path_appends_after_query() {
+        assert_eq!(remote_events_stream_path(None, None), "/v1/events/stream");
+        assert_eq!(
+            remote_events_stream_path(Some(Uuid::nil()), Some(41)),
+            format!("/v1/sessions/{}/events/stream?after=41", Uuid::nil())
         );
     }
 
