@@ -1,6 +1,7 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::io;
+use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 use std::sync::{
     Arc,
@@ -31,7 +32,8 @@ use rc_session::{SessionStore, SessionSummary};
 use rc_skills::SkillDocument;
 use rc_telemetry::install_tracing;
 use rc_tools::{ToolExecutionContext, builtin_tool_specs, execute_tool_call};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::TcpStream;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tracing::warn;
 use uuid::Uuid;
@@ -100,6 +102,10 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Commands {
     Doctor,
+    Remote {
+        #[command(subcommand)]
+        command: RemoteCommand,
+    },
     Sessions {
         #[command(subcommand)]
         command: Option<SessionsCommand>,
@@ -131,6 +137,41 @@ enum SessionsCommand {
     Show(ShowArgs),
 }
 
+#[derive(Subcommand, Debug)]
+enum RemoteCommand {
+    Runners {
+        #[command(subcommand)]
+        command: RemoteRunnersCommand,
+    },
+    Approvals {
+        #[command(subcommand)]
+        command: RemoteApprovalsCommand,
+    },
+    Events(RemoteEventsArgs),
+    Sessions {
+        #[command(subcommand)]
+        command: RemoteSessionsCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum RemoteRunnersCommand {
+    List(RemoteRunnersListArgs),
+}
+
+#[derive(Subcommand, Debug)]
+enum RemoteApprovalsCommand {
+    List(RemoteApprovalsListArgs),
+    Respond(RemoteApprovalRespondArgs),
+}
+
+#[derive(Subcommand, Debug)]
+enum RemoteSessionsCommand {
+    List(RemoteSessionsListArgs),
+    Show(RemoteSessionShowArgs),
+    Create(RemoteSessionCreateArgs),
+}
+
 #[derive(Args, Debug)]
 struct ResumeArgs {
     session_id: Uuid,
@@ -149,6 +190,126 @@ struct ExportArgs {
 #[derive(Args, Debug)]
 struct ShowArgs {
     session_id: Uuid,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+struct RemoteTargetArgs {
+    #[arg(long, env = "REMOTE_CODE_CONTROL_PLANE_URL")]
+    control_plane_url: Option<String>,
+}
+
+#[derive(Args, Debug)]
+struct RemoteRunnersListArgs {
+    #[command(flatten)]
+    target: RemoteTargetArgs,
+
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct RemoteSessionsListArgs {
+    #[command(flatten)]
+    target: RemoteTargetArgs,
+
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct RemoteSessionShowArgs {
+    #[command(flatten)]
+    target: RemoteTargetArgs,
+
+    session_id: Uuid,
+
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct RemoteSessionCreateArgs {
+    #[command(flatten)]
+    target: RemoteTargetArgs,
+
+    #[arg(long)]
+    workspace_id: String,
+
+    #[arg(long)]
+    preferred_runner_id: Option<String>,
+
+    #[arg(long = "meta")]
+    metadata: Vec<String>,
+
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct RemoteApprovalsListArgs {
+    #[command(flatten)]
+    target: RemoteTargetArgs,
+
+    #[arg(long)]
+    session_id: Option<Uuid>,
+
+    #[arg(long)]
+    runner_id: Option<String>,
+
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum RemoteApprovalDecision {
+    Approved,
+    Denied,
+    Cancelled,
+}
+
+#[derive(Args, Debug)]
+struct RemoteApprovalRespondArgs {
+    #[command(flatten)]
+    target: RemoteTargetArgs,
+
+    approval_id: Uuid,
+
+    #[arg(long, value_enum)]
+    decision: RemoteApprovalDecision,
+
+    #[arg(long)]
+    responder: Option<String>,
+
+    #[arg(long)]
+    note: Option<String>,
+
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct RemoteEventsArgs {
+    #[command(flatten)]
+    target: RemoteTargetArgs,
+
+    #[arg(long)]
+    session_id: Option<Uuid>,
+
+    #[arg(long)]
+    after: Option<u64>,
+
+    #[arg(long, default_value_t = 20)]
+    limit: usize,
+
+    #[arg(long)]
+    follow: bool,
+
+    #[arg(long, default_value_t = 2)]
+    poll_interval_secs: u64,
+
     #[arg(long)]
     json: bool,
 }
@@ -331,6 +492,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Some(Commands::Doctor) => run_doctor(&config),
+        Some(Commands::Remote { command }) => run_remote(command).await,
         Some(Commands::Sessions { command }) => run_sessions(&store, command),
         Some(Commands::Export(args)) => run_export(&store, args),
         Some(Commands::Agents { command }) => run_agents(&config, command),
@@ -468,6 +630,568 @@ fn parse_key_value_pairs(value: &str) -> std::collections::BTreeMap<String, Stri
         .collect()
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct RemoteListResponse<T> {
+    items: Vec<T>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct RemoteRunnerSnapshot {
+    registration: RemoteRunnerRegistration,
+    state: RemoteRunnerState,
+    active_sessions: usize,
+    queued_sessions: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct RemoteRunnerRegistration {
+    runner_id: String,
+    public_base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RemoteRunnerState {
+    Starting,
+    Idle,
+    Busy,
+    Draining,
+    Unhealthy,
+    Offline,
+}
+
+impl RemoteRunnerState {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::Idle => "idle",
+            Self::Busy => "busy",
+            Self::Draining => "draining",
+            Self::Unhealthy => "unhealthy",
+            Self::Offline => "offline",
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct RemoteSessionRecord {
+    session_id: Uuid,
+    workspace_id: String,
+    owner_runner_id: Option<String>,
+    state: RemoteSessionState,
+    #[serde(default)]
+    metadata: BTreeMap<String, String>,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RemoteSessionState {
+    Pending,
+    Assigned,
+    Running,
+    WaitingApproval,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl RemoteSessionState {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Assigned => "assigned",
+            Self::Running => "running",
+            Self::WaitingApproval => "waiting_approval",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct RemoteCreateSessionRequest {
+    session_id: Option<Uuid>,
+    workspace_id: String,
+    preferred_runner_id: Option<String>,
+    metadata: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct RemoteApprovalRecord {
+    approval_id: Uuid,
+    session_id: Uuid,
+    runner_id: String,
+    state: RemoteApprovalState,
+    title: String,
+    description: String,
+    #[serde(default)]
+    metadata: BTreeMap<String, String>,
+    created_at: String,
+    updated_at: String,
+    responded_at: Option<String>,
+    #[serde(default)]
+    responder: Option<String>,
+    #[serde(default)]
+    note: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RemoteApprovalState {
+    Pending,
+    Approved,
+    Denied,
+    Cancelled,
+}
+
+impl RemoteApprovalState {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Approved => "approved",
+            Self::Denied => "denied",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct RemoteApprovalDecisionRequest {
+    decision: RemoteApprovalDecision,
+    responder: Option<String>,
+    note: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct RemoteTimelineEvent {
+    sequence: u64,
+    recorded_at: String,
+    runner_id: Option<String>,
+    session_id: Option<Uuid>,
+    detail: RemoteTimelineEventDetail,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum RemoteTimelineEventDetail {
+    RunnerRegistered {
+        lease_ttl_secs: u64,
+        workspace_ids: Vec<String>,
+        state: RemoteRunnerState,
+    },
+    RunnerHeartbeat {
+        state: RemoteRunnerState,
+        active_sessions: usize,
+        queued_sessions: usize,
+        reported_at: String,
+    },
+    SessionCreated {
+        workspace_id: String,
+        owner_runner_id: Option<String>,
+        state: RemoteSessionState,
+    },
+    ApprovalRequested {
+        approval_id: Uuid,
+        title: String,
+        state: RemoteApprovalState,
+    },
+    ApprovalResolved {
+        approval_id: Uuid,
+        state: RemoteApprovalState,
+        responder: Option<String>,
+    },
+    ArtifactCreated {
+        artifact_id: Uuid,
+        name: String,
+        file_name: String,
+        media_type: String,
+        size_bytes: u64,
+    },
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RemoteErrorEnvelope {
+    error: RemoteErrorDetail,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RemoteErrorDetail {
+    message: String,
+}
+
+#[derive(Debug, Clone)]
+struct RemoteControlPlaneTarget {
+    authority: String,
+    host_header: String,
+    base_path: String,
+}
+
+#[derive(Debug, Clone)]
+struct RemoteHttpResponse {
+    status_code: u16,
+    body: Vec<u8>,
+}
+
+fn require_control_plane_url(target: &RemoteTargetArgs) -> Result<String> {
+    target
+        .control_plane_url
+        .clone()
+        .ok_or_else(|| anyhow!("missing control plane URL; pass --control-plane-url or set REMOTE_CODE_CONTROL_PLANE_URL"))
+}
+
+fn parse_repeated_key_value_args(
+    flag_name: &str,
+    values: &[String],
+) -> Result<BTreeMap<String, String>> {
+    let mut parsed = BTreeMap::new();
+    for value in values {
+        let (key, entry_value) = value
+            .split_once('=')
+            .ok_or_else(|| anyhow!("invalid {flag_name} `{value}`; expected key=value"))?;
+        let key = key.trim();
+        let entry_value = entry_value.trim();
+        if key.is_empty() {
+            return Err(anyhow!(
+                "invalid {flag_name} `{value}`; key cannot be empty"
+            ));
+        }
+        parsed.insert(key.to_owned(), entry_value.to_owned());
+    }
+    Ok(parsed)
+}
+
+fn parse_remote_control_plane_target(raw: &str) -> Result<RemoteControlPlaneTarget> {
+    let trimmed = raw.trim().trim_end_matches('/');
+    let without_scheme = trimmed.strip_prefix("http://").ok_or_else(|| {
+        anyhow!("only http:// control plane URLs are supported in this bounded slice")
+    })?;
+    let (authority, suffix) = match without_scheme.split_once('/') {
+        Some((authority, suffix)) => (authority, format!("/{}", suffix.trim_matches('/'))),
+        None => (without_scheme, String::new()),
+    };
+    if authority.trim().is_empty() {
+        return Err(anyhow!("control plane URL is missing a host"));
+    }
+    let base_path = if suffix == "/" { String::new() } else { suffix };
+    let authority_with_port = if authority.contains(':') {
+        authority.to_owned()
+    } else {
+        format!("{authority}:80")
+    };
+    Ok(RemoteControlPlaneTarget {
+        authority: authority_with_port,
+        host_header: authority.to_owned(),
+        base_path,
+    })
+}
+
+async fn remote_get_json<T>(base_url: &str, path: &str) -> Result<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let response = remote_http_request(base_url, "GET", path, None).await?;
+    decode_remote_json_response(response)
+}
+
+async fn remote_post_json<I, O>(base_url: &str, path: &str, input: &I) -> Result<O>
+where
+    I: serde::Serialize,
+    O: serde::de::DeserializeOwned,
+{
+    let body = serde_json::to_vec(input)?;
+    let response = remote_http_request(base_url, "POST", path, Some(&body)).await?;
+    decode_remote_json_response(response)
+}
+
+fn decode_remote_json_response<T>(response: RemoteHttpResponse) -> Result<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    if (200..300).contains(&response.status_code) {
+        return Ok(serde_json::from_slice(&response.body)?);
+    }
+
+    let message = serde_json::from_slice::<RemoteErrorEnvelope>(&response.body)
+        .map(|error| error.error.message)
+        .unwrap_or_else(|_| String::from_utf8_lossy(&response.body).trim().to_owned());
+    Err(anyhow!(
+        "control plane request failed with HTTP {}: {}",
+        response.status_code,
+        if message.is_empty() {
+            "unknown error"
+        } else {
+            &message
+        }
+    ))
+}
+
+async fn remote_http_request(
+    base_url: &str,
+    method: &str,
+    path: &str,
+    body: Option<&[u8]>,
+) -> Result<RemoteHttpResponse> {
+    let target = parse_remote_control_plane_target(base_url)?;
+    let request_path = format!(
+        "{}{}",
+        target.base_path,
+        normalize_remote_request_path(path)
+    );
+    let address = target
+        .authority
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| anyhow!("failed to resolve {}", target.authority))?;
+    let mut stream = TcpStream::connect(address).await?;
+
+    let mut request = format!(
+        "{method} {request_path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nConnection: close\r\n",
+        target.host_header
+    );
+    if let Some(body) = body {
+        request.push_str("Content-Type: application/json\r\n");
+        request.push_str(&format!("Content-Length: {}\r\n", body.len()));
+    }
+    request.push_str("\r\n");
+
+    stream.write_all(request.as_bytes()).await?;
+    if let Some(body) = body {
+        stream.write_all(body).await?;
+    }
+
+    let mut response_bytes = Vec::new();
+    stream.read_to_end(&mut response_bytes).await?;
+    parse_remote_http_response(&response_bytes)
+}
+
+fn normalize_remote_request_path(path: &str) -> String {
+    if path.starts_with('/') {
+        path.to_owned()
+    } else {
+        format!("/{path}")
+    }
+}
+
+fn parse_remote_http_response(response: &[u8]) -> Result<RemoteHttpResponse> {
+    let separator = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or_else(|| anyhow!("invalid HTTP response from control plane"))?;
+    let headers = &response[..separator];
+    let body = &response[separator + 4..];
+    let headers_text = String::from_utf8(headers.to_vec())?;
+    let mut lines = headers_text.split("\r\n");
+    let status_line = lines
+        .next()
+        .ok_or_else(|| anyhow!("missing HTTP status line from control plane"))?;
+    let status_code = status_line
+        .split_whitespace()
+        .nth(1)
+        .ok_or_else(|| anyhow!("missing HTTP status code from control plane"))?
+        .parse::<u16>()?;
+
+    let mut chunked = false;
+    for line in lines {
+        if let Some((name, value)) = line.split_once(':')
+            && name.trim().eq_ignore_ascii_case("transfer-encoding")
+            && value.trim().eq_ignore_ascii_case("chunked")
+        {
+            chunked = true;
+        }
+    }
+
+    let body = if chunked {
+        decode_chunked_http_body(body)?
+    } else {
+        body.to_vec()
+    };
+    Ok(RemoteHttpResponse { status_code, body })
+}
+
+fn decode_chunked_http_body(body: &[u8]) -> Result<Vec<u8>> {
+    let mut remaining = body;
+    let mut decoded = Vec::new();
+    loop {
+        let line_end = remaining
+            .windows(2)
+            .position(|window| window == b"\r\n")
+            .ok_or_else(|| anyhow!("invalid chunked HTTP response"))?;
+        let size_line = std::str::from_utf8(&remaining[..line_end])?;
+        let size =
+            usize::from_str_radix(size_line.split(';').next().unwrap_or_default().trim(), 16)?;
+        remaining = &remaining[line_end + 2..];
+        if size == 0 {
+            break;
+        }
+        if remaining.len() < size + 2 {
+            return Err(anyhow!("invalid chunk length in HTTP response"));
+        }
+        decoded.extend_from_slice(&remaining[..size]);
+        remaining = &remaining[size + 2..];
+    }
+    Ok(decoded)
+}
+
+fn print_remote_session_summary(session: &RemoteSessionRecord) {
+    println!("Remote session {}", session.session_id);
+    println!("- workspace: {}", session.workspace_id);
+    println!("- state: {}", session.state.label());
+    println!(
+        "- runner: {}",
+        session.owner_runner_id.as_deref().unwrap_or("(unassigned)")
+    );
+    println!("- created: {}", session.created_at);
+    println!("- updated: {}", session.updated_at);
+    if !session.metadata.is_empty() {
+        println!("- metadata: {}", format_remote_metadata(&session.metadata));
+    }
+}
+
+fn print_remote_approval_summary(approval: &RemoteApprovalRecord) {
+    println!("Remote approval {}", approval.approval_id);
+    println!("- state: {}", approval.state.label());
+    println!("- session: {}", approval.session_id);
+    println!(
+        "- runner: {}",
+        if approval.runner_id.is_empty() {
+            "(unassigned-runner)"
+        } else {
+            approval.runner_id.as_str()
+        }
+    );
+    println!("- title: {}", approval.title);
+    println!("- description: {}", approval.description);
+    println!("- created: {}", approval.created_at);
+    println!("- updated: {}", approval.updated_at);
+    if let Some(responder) = &approval.responder {
+        println!("- responder: {responder}");
+    }
+    if let Some(note) = &approval.note {
+        println!("- note: {note}");
+    }
+    if !approval.metadata.is_empty() {
+        println!("- metadata: {}", format_remote_metadata(&approval.metadata));
+    }
+}
+
+fn print_remote_events(events: &[RemoteTimelineEvent]) {
+    if events.is_empty() {
+        println!("No remote events found.");
+        return;
+    }
+    for event in events {
+        println!(
+            "{}  {}  {}  session={}  runner={}  {}",
+            event.sequence,
+            event.recorded_at,
+            remote_event_kind(&event.detail),
+            event.session_id
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_owned()),
+            event.runner_id.as_deref().unwrap_or("-"),
+            remote_event_summary(&event.detail)
+        );
+    }
+}
+
+fn format_remote_metadata(metadata: &BTreeMap<String, String>) -> String {
+    metadata
+        .iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn remote_approvals_path(session_id: Option<Uuid>, runner_id: Option<&str>) -> Result<String> {
+    match (session_id, runner_id) {
+        (Some(_), Some(_)) => Err(anyhow!(
+            "choose either --session-id or --runner-id when listing approvals"
+        )),
+        (Some(session_id), None) => Ok(format!("/v1/sessions/{session_id}/approvals")),
+        (None, Some(runner_id)) => Ok(format!("/v1/runners/{runner_id}/approvals")),
+        (None, None) => Ok("/v1/approvals".to_owned()),
+    }
+}
+
+fn remote_events_path(session_id: Option<Uuid>, after: Option<u64>, limit: usize) -> String {
+    let mut path = match session_id {
+        Some(session_id) => format!("/v1/sessions/{session_id}/events"),
+        None => "/v1/events".to_owned(),
+    };
+    let mut query = Vec::new();
+    if let Some(after) = after {
+        query.push(format!("after={after}"));
+    }
+    query.push(format!("limit={}", limit.clamp(1, 200)));
+    if !query.is_empty() {
+        path.push('?');
+        path.push_str(&query.join("&"));
+    }
+    path
+}
+
+fn remote_event_kind(detail: &RemoteTimelineEventDetail) -> &'static str {
+    match detail {
+        RemoteTimelineEventDetail::RunnerRegistered { .. } => "runner_registered",
+        RemoteTimelineEventDetail::RunnerHeartbeat { .. } => "runner_heartbeat",
+        RemoteTimelineEventDetail::SessionCreated { .. } => "session_created",
+        RemoteTimelineEventDetail::ApprovalRequested { .. } => "approval_requested",
+        RemoteTimelineEventDetail::ApprovalResolved { .. } => "approval_resolved",
+        RemoteTimelineEventDetail::ArtifactCreated { .. } => "artifact_created",
+    }
+}
+
+fn remote_event_summary(detail: &RemoteTimelineEventDetail) -> String {
+    match detail {
+        RemoteTimelineEventDetail::RunnerRegistered {
+            workspace_ids, state, ..
+        } => format!("workspaces={} state={}", workspace_ids.join(","), state.label()),
+        RemoteTimelineEventDetail::RunnerHeartbeat {
+            state,
+            active_sessions,
+            queued_sessions,
+            ..
+        } => format!(
+            "state={} active={} queued={}",
+            state.label(),
+            active_sessions,
+            queued_sessions
+        ),
+        RemoteTimelineEventDetail::SessionCreated {
+            workspace_id,
+            owner_runner_id,
+            state,
+        } => format!(
+            "workspace={} runner={} state={}",
+            workspace_id,
+            owner_runner_id.as_deref().unwrap_or("(unassigned)"),
+            state.label()
+        ),
+        RemoteTimelineEventDetail::ApprovalRequested { title, state, .. } => {
+            format!("title={title} state={}", state.label())
+        }
+        RemoteTimelineEventDetail::ApprovalResolved {
+            state, responder, ..
+        } => format!(
+            "state={} responder={}",
+            state.label(),
+            responder.as_deref().unwrap_or("(none)")
+        ),
+        RemoteTimelineEventDetail::ArtifactCreated {
+            file_name,
+            media_type,
+            size_bytes,
+            ..
+        } => format!(
+            "file={} media_type={} size={}B",
+            file_name, media_type, size_bytes
+        ),
+    }
+}
+
 fn run_doctor(config: &RuntimeConfig) -> Result<()> {
     let report = validate_provider_config(&config.provider);
     let discovery = discover_runtime_extensions(config);
@@ -514,6 +1238,209 @@ fn run_doctor(config: &RuntimeConfig) -> Result<()> {
     for warning in discovery.warnings {
         println!("  - {warning}");
     }
+    Ok(())
+}
+
+async fn run_remote(command: RemoteCommand) -> Result<()> {
+    match command {
+        RemoteCommand::Runners { command } => run_remote_runners(command).await,
+        RemoteCommand::Approvals { command } => run_remote_approvals(command).await,
+        RemoteCommand::Events(args) => run_remote_events(args).await,
+        RemoteCommand::Sessions { command } => run_remote_sessions(command).await,
+    }
+}
+
+async fn run_remote_runners(command: RemoteRunnersCommand) -> Result<()> {
+    match command {
+        RemoteRunnersCommand::List(args) => run_remote_runners_list(args).await,
+    }
+}
+
+async fn run_remote_sessions(command: RemoteSessionsCommand) -> Result<()> {
+    match command {
+        RemoteSessionsCommand::List(args) => run_remote_sessions_list(args).await,
+        RemoteSessionsCommand::Show(args) => run_remote_sessions_show(args).await,
+        RemoteSessionsCommand::Create(args) => run_remote_sessions_create(args).await,
+    }
+}
+
+async fn run_remote_runners_list(args: RemoteRunnersListArgs) -> Result<()> {
+    let control_plane_url = require_control_plane_url(&args.target)?;
+    let response: RemoteListResponse<RemoteRunnerSnapshot> =
+        remote_get_json(&control_plane_url, "/v1/runners").await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        return Ok(());
+    }
+    if response.items.is_empty() {
+        println!("No remote runners found.");
+        return Ok(());
+    }
+    for runner in response.items {
+        println!(
+            "{}  {}  active={}  queued={}  {}",
+            runner.registration.runner_id,
+            runner.state.label(),
+            runner.active_sessions,
+            runner.queued_sessions,
+            runner
+                .registration
+                .public_base_url
+                .as_deref()
+                .unwrap_or("(missing-public-base-url)")
+        );
+    }
+    Ok(())
+}
+
+async fn run_remote_sessions_list(args: RemoteSessionsListArgs) -> Result<()> {
+    let control_plane_url = require_control_plane_url(&args.target)?;
+    let response: RemoteListResponse<RemoteSessionRecord> =
+        remote_get_json(&control_plane_url, "/v1/sessions").await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        return Ok(());
+    }
+    if response.items.is_empty() {
+        println!("No remote sessions found.");
+        return Ok(());
+    }
+    for session in response.items {
+        println!(
+            "{}  {}  {}  {}  {}",
+            session.session_id,
+            session.updated_at,
+            session.state.label(),
+            session.workspace_id,
+            session.owner_runner_id.as_deref().unwrap_or("(unassigned)")
+        );
+    }
+    Ok(())
+}
+
+async fn run_remote_sessions_show(args: RemoteSessionShowArgs) -> Result<()> {
+    let control_plane_url = require_control_plane_url(&args.target)?;
+    let path = format!("/v1/sessions/{}", args.session_id);
+    let session: RemoteSessionRecord = remote_get_json(&control_plane_url, &path).await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&session)?);
+        return Ok(());
+    }
+    print_remote_session_summary(&session);
+    Ok(())
+}
+
+async fn run_remote_approvals(command: RemoteApprovalsCommand) -> Result<()> {
+    match command {
+        RemoteApprovalsCommand::List(args) => run_remote_approvals_list(args).await,
+        RemoteApprovalsCommand::Respond(args) => run_remote_approvals_respond(args).await,
+    }
+}
+
+async fn run_remote_approvals_list(args: RemoteApprovalsListArgs) -> Result<()> {
+    let control_plane_url = require_control_plane_url(&args.target)?;
+    let path = remote_approvals_path(args.session_id, args.runner_id.as_deref())?;
+    let response: RemoteListResponse<RemoteApprovalRecord> =
+        remote_get_json(&control_plane_url, &path).await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        return Ok(());
+    }
+    if response.items.is_empty() {
+        println!("No remote approvals found.");
+        return Ok(());
+    }
+    for approval in response.items {
+        println!(
+            "{}  {}  {}  {}  {}",
+            approval.approval_id,
+            approval.state.label(),
+            approval.session_id,
+            if approval.runner_id.is_empty() {
+                "(unassigned-runner)"
+            } else {
+                approval.runner_id.as_str()
+            },
+            approval.title
+        );
+    }
+    Ok(())
+}
+
+async fn run_remote_approvals_respond(args: RemoteApprovalRespondArgs) -> Result<()> {
+    let control_plane_url = require_control_plane_url(&args.target)?;
+    let path = format!("/v1/approvals/{}/decision", args.approval_id);
+    let request = RemoteApprovalDecisionRequest {
+        decision: args.decision,
+        responder: args.responder,
+        note: args.note,
+    };
+    let approval: RemoteApprovalRecord = remote_post_json(&control_plane_url, &path, &request).await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&approval)?);
+        return Ok(());
+    }
+    print_remote_approval_summary(&approval);
+    Ok(())
+}
+
+async fn run_remote_events(args: RemoteEventsArgs) -> Result<()> {
+    let control_plane_url = require_control_plane_url(&args.target)?;
+    if args.follow {
+        return run_remote_events_follow(control_plane_url, args).await;
+    }
+
+    let path = remote_events_path(args.session_id, args.after, args.limit);
+    let response: RemoteListResponse<RemoteTimelineEvent> =
+        remote_get_json(&control_plane_url, &path).await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+    } else {
+        print_remote_events(&response.items);
+    }
+    Ok(())
+}
+
+async fn run_remote_events_follow(control_plane_url: String, args: RemoteEventsArgs) -> Result<()> {
+    let mut after = args.after;
+    loop {
+        let path = remote_events_path(args.session_id, after, args.limit);
+        let response: RemoteListResponse<RemoteTimelineEvent> =
+            remote_get_json(&control_plane_url, &path).await?;
+        if args.json {
+            for event in &response.items {
+                println!("{}", serde_json::to_string(event)?);
+            }
+        } else {
+            print_remote_events(&response.items);
+        }
+        after = response.items.last().map(|event| event.sequence).or(after);
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => {
+                result?;
+                break;
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_secs(args.poll_interval_secs.max(1))) => {}
+        }
+    }
+    Ok(())
+}
+
+async fn run_remote_sessions_create(args: RemoteSessionCreateArgs) -> Result<()> {
+    let control_plane_url = require_control_plane_url(&args.target)?;
+    let request = RemoteCreateSessionRequest {
+        session_id: None,
+        workspace_id: args.workspace_id,
+        preferred_runner_id: args.preferred_runner_id,
+        metadata: parse_repeated_key_value_args("--meta", &args.metadata)?,
+    };
+    let session: RemoteSessionRecord =
+        remote_post_json(&control_plane_url, "/v1/sessions", &request).await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&session)?);
+        return Ok(());
+    }
+    print_remote_session_summary(&session);
     Ok(())
 }
 
@@ -2696,12 +3623,19 @@ impl PermissionBroker for ChannelPermissionBroker {
 mod tests {
     use super::{
         McpCallArgs, McpListArgs, build_mcp_call_output, build_mcp_list_output,
-        default_task_for_objective, discover_runtime_mcp_servers, parse_agent_spec,
-        parse_mcp_call_arguments, parse_task_spec, resolve_runtime_mcp_server,
+        decode_chunked_http_body, default_task_for_objective, discover_runtime_mcp_servers,
+        parse_agent_spec, parse_mcp_call_arguments, parse_remote_control_plane_target,
+        parse_repeated_key_value_args, parse_task_spec, remote_get_json, remote_post_json,
+        resolve_runtime_mcp_server,
     };
     use rc_config::{ProviderOverrides, load_runtime_config};
     use std::{collections::BTreeSet, fs, process::Command as ProcessCommand};
     use tempfile::tempdir;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+    use uuid::Uuid;
 
     #[test]
     fn agent_spec_parser_extracts_paths_and_labels() {
@@ -2747,6 +3681,32 @@ mod tests {
         let default_task = default_task_for_objective("Ship the next slice", &config);
         assert!(default_task.description.contains("Ship the next slice"));
         assert_eq!(default_task.budget.edit_calls, 16);
+    }
+
+    #[test]
+    fn parse_remote_control_plane_target_supports_base_path() {
+        let target = parse_remote_control_plane_target("http://127.0.0.1:8787/api/v1/")
+            .unwrap_or_else(|error| panic!("target parse failed: {error}"));
+        assert_eq!(target.authority, "127.0.0.1:8787");
+        assert_eq!(target.base_path, "/api/v1");
+    }
+
+    #[test]
+    fn parse_repeated_key_value_args_collects_metadata() {
+        let metadata = parse_repeated_key_value_args(
+            "--meta",
+            &["phase=remote".to_owned(), "owner=cli".to_owned()],
+        )
+        .unwrap_or_else(|error| panic!("metadata parse failed: {error}"));
+        assert_eq!(metadata.get("phase").map(String::as_str), Some("remote"));
+        assert_eq!(metadata.get("owner").map(String::as_str), Some("cli"));
+    }
+
+    #[test]
+    fn decode_chunked_http_body_supports_basic_payload() {
+        let decoded = decode_chunked_http_body(b"5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n")
+            .unwrap_or_else(|error| panic!("chunked decode failed: {error}"));
+        assert_eq!(decoded, b"hello world");
     }
 
     #[test]
@@ -3066,6 +4026,104 @@ mod tests {
                 .and_then(serde_json::Value::as_str),
             Some("echo: hello")
         );
+    }
+
+    #[tokio::test]
+    async fn remote_http_helpers_round_trip_control_plane_json() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap_or_else(|error| panic!("listener bind failed: {error}"));
+        let address = listener
+            .local_addr()
+            .unwrap_or_else(|error| panic!("local addr failed: {error}"));
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut socket, _) = listener
+                    .accept()
+                    .await
+                    .unwrap_or_else(|error| panic!("accept failed: {error}"));
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 1024];
+                loop {
+                    let read = socket
+                        .read(&mut buffer)
+                        .await
+                        .unwrap_or_else(|error| panic!("read failed: {error}"));
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let request_text = String::from_utf8(request)
+                    .unwrap_or_else(|error| panic!("request utf8 failed: {error}"));
+                let body = if request_text.starts_with("GET /v1/runners ") {
+                    serde_json::json!({
+                        "items": [
+                            {
+                                "registration": {
+                                    "runner_id": "runner-a",
+                                    "public_base_url": "http://127.0.0.1:9000"
+                                },
+                                "state": "idle",
+                                "active_sessions": 0,
+                                "queued_sessions": 0
+                            }
+                        ]
+                    })
+                } else if request_text.starts_with("POST /v1/sessions ") {
+                    serde_json::json!({
+                        "session_id": Uuid::nil(),
+                        "workspace_id": "default",
+                        "owner_runner_id": "runner-a",
+                        "state": "assigned",
+                        "metadata": {"phase": "remote"},
+                        "created_at": "2026-04-07T00:00:00Z",
+                        "updated_at": "2026-04-07T00:00:01Z"
+                    })
+                } else {
+                    panic!("unexpected request: {request_text}");
+                };
+                let payload = serde_json::to_vec(&body)
+                    .unwrap_or_else(|error| panic!("serialize failed: {error}"));
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    payload.len()
+                );
+                socket
+                    .write_all(response.as_bytes())
+                    .await
+                    .unwrap_or_else(|error| panic!("response header write failed: {error}"));
+                socket
+                    .write_all(&payload)
+                    .await
+                    .unwrap_or_else(|error| panic!("response body write failed: {error}"));
+            }
+        });
+
+        let base_url = format!("http://{address}");
+        let runners: super::RemoteListResponse<super::RemoteRunnerSnapshot> =
+            remote_get_json(&base_url, "/v1/runners")
+                .await
+                .unwrap_or_else(|error| panic!("remote get failed: {error}"));
+        assert_eq!(runners.items.len(), 1);
+        assert_eq!(runners.items[0].registration.runner_id, "runner-a");
+
+        let created: super::RemoteSessionRecord = remote_post_json(
+            &base_url,
+            "/v1/sessions",
+            &serde_json::json!({"workspace_id": "default"}),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("remote post failed: {error}"));
+        assert_eq!(created.workspace_id, "default");
+        assert_eq!(created.owner_runner_id.as_deref(), Some("runner-a"));
+
+        server
+            .await
+            .unwrap_or_else(|error| panic!("server join failed: {error}"));
     }
 
     fn python_command() -> Option<(String, Vec<String>)> {
