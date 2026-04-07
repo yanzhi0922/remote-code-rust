@@ -745,6 +745,22 @@ async fn create_session(
             ))
         })?;
 
+    let mut sessions = api.sessions.write().await;
+    let (active_sessions, queued_sessions) = session_counts(&sessions);
+    let max_parallel_sessions = usize::from(
+        api.meta
+            .snapshot
+            .registration
+            .capabilities
+            .max_parallel_sessions,
+    );
+    if active_sessions + queued_sessions >= max_parallel_sessions {
+        return Err(ApiError::conflict(format!(
+            "runner `{}` is at session capacity ({max_parallel_sessions})",
+            api.meta.snapshot.registration.runner_id
+        )));
+    }
+
     let session_id = request.session_id.unwrap_or_else(Uuid::new_v4);
     let now = Utc::now();
     let record = RunnerSessionRecord {
@@ -757,7 +773,6 @@ async fn create_session(
         updated_at: now,
     };
 
-    let mut sessions = api.sessions.write().await;
     sessions.insert(record.session_id, record.clone());
     Ok((StatusCode::CREATED, Json(record)))
 }
@@ -1578,6 +1593,54 @@ mod tests {
             .await
             .expect("duplicate decision request should complete");
         assert_eq!(duplicate_decision_response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn runner_router_rejects_sessions_above_capacity() {
+        let profile_dir = tempdir().expect("tempdir should exist");
+        let config = load_runner_config(
+            Some(profile_dir.path().join("profile")),
+            RunnerConfigOverrides {
+                runner_id: Some("runner-capacity".to_owned()),
+                max_parallel_sessions: Some(1),
+                workspaces: Some(vec![RunnerWorkspace {
+                    workspace_id: "default".to_owned(),
+                    root_dir: profile_dir.path().join("workspace"),
+                    writable: true,
+                }]),
+                ..RunnerConfigOverrides::default()
+            },
+        )
+        .expect("config should load");
+        let app = RunnerApi::new(config, "remote-code-runner", "0.1.0").router();
+
+        let first_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"workspace_id": "default"}).to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("first request should succeed");
+        assert_eq!(first_response.status(), StatusCode::CREATED);
+
+        let second_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"workspace_id": "default"}).to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("second request should complete");
+        assert_eq!(second_response.status(), StatusCode::CONFLICT);
     }
 
     async fn read_json<T>(response: Response<Body>) -> T

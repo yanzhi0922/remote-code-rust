@@ -2110,11 +2110,18 @@ fn sanitize_artifact_component(raw: &str, fallback: &str) -> String {
 
 fn runner_can_host(snapshot: &RunnerSnapshot, workspace_id: &str, lease_ttl_secs: u64) -> bool {
     runner_is_available(snapshot, lease_ttl_secs)
+        && runner_has_capacity(snapshot)
         && snapshot
             .registration
             .workspaces
             .iter()
             .any(|workspace| workspace.workspace_id == workspace_id)
+}
+
+fn runner_has_capacity(snapshot: &RunnerSnapshot) -> bool {
+    let max_parallel_sessions =
+        usize::from(snapshot.registration.capabilities.max_parallel_sessions);
+    snapshot.active_sessions + snapshot.queued_sessions < max_parallel_sessions
 }
 
 fn runner_is_available(snapshot: &RunnerSnapshot, lease_ttl_secs: u64) -> bool {
@@ -2824,6 +2831,75 @@ mod tests {
             .find(|record| record.session_id == pending_session.session_id)
             .expect("runner should receive the recovered session");
         assert_eq!(runner_session.state, RunnerSessionState::Pending);
+    }
+
+    #[tokio::test]
+    async fn capacity_limited_runner_leaves_additional_sessions_pending() {
+        let service = ControlPlaneService::new(
+            load_control_plane_config(ControlPlaneConfigOverrides::default())
+                .expect("config should load"),
+            "0.1.0",
+        );
+        let app = service.router();
+
+        let runner = spawn_runner_server("runner-capacity", "default").await;
+        let mut registration = runner.registration.clone();
+        registration.capabilities.max_parallel_sessions = 1;
+
+        let register_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/runners/register")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&registration).expect("json should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(register_response.status(), StatusCode::OK);
+
+        let first_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"workspace_id": "default"}).to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(first_response.status(), StatusCode::CREATED);
+        let first_session: SessionRecord = read_json(first_response).await;
+        assert_eq!(
+            first_session.owner_runner_id.as_deref(),
+            Some("runner-capacity")
+        );
+        assert_eq!(first_session.state, SessionState::Assigned);
+
+        let second_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"workspace_id": "default"}).to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(second_response.status(), StatusCode::CREATED);
+        let second_session: SessionRecord = read_json(second_response).await;
+        assert!(second_session.owner_runner_id.is_none());
+        assert_eq!(second_session.state, SessionState::Pending);
+
+        let runner_sessions = runner.api.list_sessions().await;
+        assert_eq!(runner_sessions.len(), 1);
+        assert_eq!(runner_sessions[0].session_id, first_session.session_id);
     }
 
     #[tokio::test]
