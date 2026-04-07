@@ -14,12 +14,16 @@ workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 clap.workspace = true
+futures.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+tokio-tungstenite.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 rc-config = { path = "../../crates/rc-config" }
+rc-control-plane = { path = "../../crates/rc-control-plane" }
 rc-core = { path = "../../crates/rc-core" }
 rc-agents = { path = "../../crates/rc-agents" }
 rc-mcp = { path = "../../crates/rc-mcp" }
@@ -27,6 +31,7 @@ rc-permissions = { path = "../../crates/rc-permissions" }
 rc-plugins = { path = "../../crates/rc-plugins" }
 rc-protocol = { path = "../../crates/rc-protocol" }
 rc-provider = { path = "../../crates/rc-provider" }
+rc-runner = { path = "../../crates/rc-runner" }
 rc-session = { path = "../../crates/rc-session" }
 rc-skills = { path = "../../crates/rc-skills" }
 rc-telemetry = { path = "../../crates/rc-telemetry" }
