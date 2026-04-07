@@ -561,7 +561,10 @@ pub async fn send_heartbeat(
     heartbeat: &RunnerHeartbeat,
 ) -> Result<RunnerSnapshot> {
     let client = Client::new();
-    let path = format!("/v1/runners/{}/heartbeat", heartbeat.runner_id);
+    let path = format!(
+        "/v1/runners/{}/heartbeat",
+        encode_path_segment(&heartbeat.runner_id)
+    );
     let response = client
         .post(control_plane_endpoint(control_plane_url, &path)?)
         .json(heartbeat)
@@ -582,6 +585,19 @@ fn control_plane_endpoint(base_url: &str, path: &str) -> Result<String> {
         return Err(anyhow!("control plane URL is empty"));
     }
     Ok(format!("{base_url}{path}"))
+}
+
+fn encode_path_segment(raw: &str) -> String {
+    let mut encoded = String::with_capacity(raw.len());
+    for byte in raw.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(char::from(byte));
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
 }
 
 fn session_counts(sessions: &BTreeMap<Uuid, RunnerSessionRecord>) -> (usize, usize) {
@@ -883,11 +899,16 @@ fn read_env(key: &str) -> Option<String> {
 mod tests {
     use super::*;
     use axum::{
+        Json, Router,
         body::{Body, to_bytes},
+        extract::{Path as AxumPath, State},
         http::Request,
+        routing::post,
     };
     use serde::de::DeserializeOwned;
+    use std::sync::Arc;
     use tempfile::tempdir;
+    use tokio::{net::TcpListener, sync::Mutex};
     use tower::ServiceExt;
 
     #[test]
@@ -928,6 +949,12 @@ mod tests {
         assert_eq!(config.bind.to_string(), "127.0.0.1:9999");
         assert_eq!(config.max_parallel_sessions, 8);
         assert_eq!(config.labels.get("region").map(String::as_str), Some("lab"));
+    }
+
+    #[test]
+    fn encode_path_segment_escapes_reserved_bytes() {
+        assert_eq!(encode_path_segment("runner-a"), "runner-a");
+        assert_eq!(encode_path_segment("runner/a b?c"), "runner%2Fa%20b%3Fc");
     }
 
     #[tokio::test]
@@ -1065,6 +1092,82 @@ mod tests {
         assert_eq!(heartbeat.state, RunnerState::Idle);
         assert_eq!(heartbeat.active_sessions, 0);
         assert_eq!(heartbeat.queued_sessions, 1);
+    }
+
+    #[tokio::test]
+    async fn send_heartbeat_url_encodes_runner_id_segments() {
+        #[derive(Clone)]
+        struct HeartbeatCapture {
+            runner_id: Arc<Mutex<Option<String>>>,
+        }
+
+        async fn capture_heartbeat(
+            State(state): State<HeartbeatCapture>,
+            AxumPath(runner_id): AxumPath<String>,
+            Json(heartbeat): Json<RunnerHeartbeat>,
+        ) -> Json<RunnerSnapshot> {
+            *state.runner_id.lock().await = Some(runner_id.clone());
+            Json(RunnerSnapshot {
+                registration: RunnerRegistrationRequest {
+                    runner_id,
+                    control_plane_url: None,
+                    public_base_url: Some("http://127.0.0.1:9".to_owned()),
+                    workspaces: Vec::new(),
+                    labels: BTreeMap::new(),
+                    capabilities: RunnerCapabilities {
+                        interactive_approvals: true,
+                        background_sessions: true,
+                        artifact_uploads: true,
+                        max_parallel_sessions: 4,
+                    },
+                    platform: RunnerPlatform {
+                        os: "windows".to_owned(),
+                        arch: "x86_64".to_owned(),
+                        family: "windows".to_owned(),
+                    },
+                },
+                state: heartbeat.state,
+                active_sessions: heartbeat.active_sessions,
+                queued_sessions: heartbeat.queued_sessions,
+                registered_at: heartbeat.timestamp,
+                last_seen_at: heartbeat.timestamp,
+            })
+        }
+
+        let state = HeartbeatCapture {
+            runner_id: Arc::new(Mutex::new(None)),
+        };
+        let app = Router::new()
+            .route("/v1/runners/{runner_id}/heartbeat", post(capture_heartbeat))
+            .with_state(state.clone());
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("address should be readable");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("server should keep serving");
+        });
+
+        let heartbeat = RunnerHeartbeat {
+            runner_id: "runner/a b?c".to_owned(),
+            state: RunnerState::Busy,
+            active_sessions: 2,
+            queued_sessions: 1,
+            timestamp: Utc::now(),
+        };
+        let snapshot = send_heartbeat(&format!("http://{address}"), &heartbeat)
+            .await
+            .expect("heartbeat request should succeed");
+        assert_eq!(snapshot.registration.runner_id, "runner/a b?c");
+        assert_eq!(
+            state.runner_id.lock().await.as_deref(),
+            Some("runner/a b?c")
+        );
+
+        server.abort();
+        let _ = server.await;
     }
 
     #[tokio::test]

@@ -16,6 +16,11 @@ use rc_config::{
     ProviderOverrides, RUNTIME_VERSION, RuntimeConfig, import_legacy_profile, load_runtime_config,
     normalize_base_url, validate_provider_config,
 };
+use rc_control_plane::{
+    CreateSessionRequest as RemoteCreateSessionRequest, SessionRecord as RemoteSessionRecord,
+    SessionState as RemoteSessionState, TimelineEvent as RemoteTimelineEvent,
+    TimelineEventDetail as RemoteTimelineEventDetail,
+};
 use rc_core::{
     ConversationEntry, InputFormat, OutputFormat, PermissionMode, SessionState,
     default_system_prompt,
@@ -28,6 +33,12 @@ use rc_protocol::{
     UsagePayload, parse_input_line,
 };
 use rc_provider::ProviderClient;
+use rc_runner::{
+    ApprovalDecision, ApprovalDecisionRequest as SharedApprovalDecisionRequest,
+    ApprovalRequestRecord as RemoteApprovalRecord, ApprovalState as RemoteApprovalState,
+    ListResponse as RemoteListResponse, RunnerSnapshot as RemoteRunnerSnapshot,
+    RunnerState as RemoteRunnerState,
+};
 use rc_session::{SessionStore, SessionSummary};
 use rc_skills::SkillDocument;
 use rc_telemetry::install_tracing;
@@ -631,188 +642,6 @@ fn parse_key_value_pairs(value: &str) -> std::collections::BTreeMap<String, Stri
         .collect()
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct RemoteListResponse<T> {
-    items: Vec<T>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct RemoteRunnerSnapshot {
-    registration: RemoteRunnerRegistration,
-    state: RemoteRunnerState,
-    active_sessions: usize,
-    queued_sessions: usize,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct RemoteRunnerRegistration {
-    runner_id: String,
-    public_base_url: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum RemoteRunnerState {
-    Starting,
-    Idle,
-    Busy,
-    Draining,
-    Unhealthy,
-    Offline,
-}
-
-impl RemoteRunnerState {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Starting => "starting",
-            Self::Idle => "idle",
-            Self::Busy => "busy",
-            Self::Draining => "draining",
-            Self::Unhealthy => "unhealthy",
-            Self::Offline => "offline",
-        }
-    }
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct RemoteSessionRecord {
-    session_id: Uuid,
-    workspace_id: String,
-    owner_runner_id: Option<String>,
-    state: RemoteSessionState,
-    #[serde(default)]
-    metadata: BTreeMap<String, String>,
-    created_at: String,
-    updated_at: String,
-}
-
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum RemoteSessionState {
-    Pending,
-    Assigned,
-    Running,
-    WaitingApproval,
-    Completed,
-    Failed,
-    Cancelled,
-}
-
-impl RemoteSessionState {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Assigned => "assigned",
-            Self::Running => "running",
-            Self::WaitingApproval => "waiting_approval",
-            Self::Completed => "completed",
-            Self::Failed => "failed",
-            Self::Cancelled => "cancelled",
-        }
-    }
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-struct RemoteCreateSessionRequest {
-    session_id: Option<Uuid>,
-    workspace_id: String,
-    preferred_runner_id: Option<String>,
-    metadata: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct RemoteApprovalRecord {
-    approval_id: Uuid,
-    session_id: Uuid,
-    runner_id: String,
-    state: RemoteApprovalState,
-    title: String,
-    description: String,
-    #[serde(default)]
-    metadata: BTreeMap<String, String>,
-    created_at: String,
-    updated_at: String,
-    responded_at: Option<String>,
-    #[serde(default)]
-    responder: Option<String>,
-    #[serde(default)]
-    note: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum RemoteApprovalState {
-    Pending,
-    Approved,
-    Denied,
-    Cancelled,
-}
-
-impl RemoteApprovalState {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Approved => "approved",
-            Self::Denied => "denied",
-            Self::Cancelled => "cancelled",
-        }
-    }
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-struct RemoteApprovalDecisionRequest {
-    decision: RemoteApprovalDecision,
-    responder: Option<String>,
-    note: Option<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct RemoteTimelineEvent {
-    sequence: u64,
-    recorded_at: String,
-    runner_id: Option<String>,
-    session_id: Option<Uuid>,
-    detail: RemoteTimelineEventDetail,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum RemoteTimelineEventDetail {
-    RunnerRegistered {
-        lease_ttl_secs: u64,
-        workspace_ids: Vec<String>,
-        state: RemoteRunnerState,
-    },
-    RunnerHeartbeat {
-        state: RemoteRunnerState,
-        active_sessions: usize,
-        queued_sessions: usize,
-        reported_at: String,
-    },
-    SessionCreated {
-        workspace_id: String,
-        owner_runner_id: Option<String>,
-        state: RemoteSessionState,
-    },
-    ApprovalRequested {
-        approval_id: Uuid,
-        title: String,
-        state: RemoteApprovalState,
-    },
-    ApprovalResolved {
-        approval_id: Uuid,
-        state: RemoteApprovalState,
-        responder: Option<String>,
-    },
-    ArtifactCreated {
-        artifact_id: Uuid,
-        name: String,
-        file_name: String,
-        media_type: String,
-        size_bytes: u64,
-    },
-}
-
 #[derive(Debug, Clone, serde::Deserialize)]
 struct RemoteErrorEnvelope {
     error: RemoteErrorDetail,
@@ -821,6 +650,58 @@ struct RemoteErrorEnvelope {
 #[derive(Debug, Clone, serde::Deserialize)]
 struct RemoteErrorDetail {
     message: String,
+}
+
+trait StateLabel {
+    fn label(&self) -> &'static str;
+}
+
+impl StateLabel for RemoteRunnerState {
+    fn label(&self) -> &'static str {
+        match self {
+            RemoteRunnerState::Starting => "starting",
+            RemoteRunnerState::Idle => "idle",
+            RemoteRunnerState::Busy => "busy",
+            RemoteRunnerState::Draining => "draining",
+            RemoteRunnerState::Unhealthy => "unhealthy",
+            RemoteRunnerState::Offline => "offline",
+        }
+    }
+}
+
+impl StateLabel for RemoteSessionState {
+    fn label(&self) -> &'static str {
+        match self {
+            RemoteSessionState::Pending => "pending",
+            RemoteSessionState::Assigned => "assigned",
+            RemoteSessionState::Running => "running",
+            RemoteSessionState::WaitingApproval => "waiting_approval",
+            RemoteSessionState::Completed => "completed",
+            RemoteSessionState::Failed => "failed",
+            RemoteSessionState::Cancelled => "cancelled",
+        }
+    }
+}
+
+impl StateLabel for RemoteApprovalState {
+    fn label(&self) -> &'static str {
+        match self {
+            RemoteApprovalState::Pending => "pending",
+            RemoteApprovalState::Approved => "approved",
+            RemoteApprovalState::Denied => "denied",
+            RemoteApprovalState::Cancelled => "cancelled",
+        }
+    }
+}
+
+impl From<RemoteApprovalDecision> for ApprovalDecision {
+    fn from(value: RemoteApprovalDecision) -> Self {
+        match value {
+            RemoteApprovalDecision::Approved => ApprovalDecision::Approved,
+            RemoteApprovalDecision::Denied => ApprovalDecision::Denied,
+            RemoteApprovalDecision::Cancelled => ApprovalDecision::Cancelled,
+        }
+    }
 }
 
 fn require_control_plane_url(target: &RemoteTargetArgs) -> Result<String> {
@@ -949,6 +830,19 @@ fn normalize_remote_request_path(path: &str) -> String {
     }
 }
 
+fn encode_remote_path_segment(raw: &str) -> String {
+    let mut encoded = String::with_capacity(raw.len());
+    for byte in raw.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(char::from(byte));
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
+
 fn print_remote_session_summary(session: &RemoteSessionRecord) {
     println!("Remote session {}", session.session_id);
     println!("- workspace: {}", session.workspace_id);
@@ -1026,7 +920,10 @@ fn remote_approvals_path(session_id: Option<Uuid>, runner_id: Option<&str>) -> R
             "choose either --session-id or --runner-id when listing approvals"
         )),
         (Some(session_id), None) => Ok(format!("/v1/sessions/{session_id}/approvals")),
-        (None, Some(runner_id)) => Ok(format!("/v1/runners/{runner_id}/approvals")),
+        (None, Some(runner_id)) => Ok(format!(
+            "/v1/runners/{}/approvals",
+            encode_remote_path_segment(runner_id)
+        )),
         (None, None) => Ok("/v1/approvals".to_owned()),
     }
 }
@@ -1302,8 +1199,8 @@ async fn run_remote_approvals_list(args: RemoteApprovalsListArgs) -> Result<()> 
 async fn run_remote_approvals_respond(args: RemoteApprovalRespondArgs) -> Result<()> {
     let control_plane_url = require_control_plane_url(&args.target)?;
     let path = format!("/v1/approvals/{}/decision", args.approval_id);
-    let request = RemoteApprovalDecisionRequest {
-        decision: args.decision,
+    let request = SharedApprovalDecisionRequest {
+        decision: args.decision.into(),
         responder: args.responder,
         note: args.note,
     };
@@ -3588,10 +3485,10 @@ impl PermissionBroker for ChannelPermissionBroker {
 #[cfg(test)]
 mod tests {
     use super::{
-        McpCallArgs, McpListArgs, build_mcp_call_output, build_mcp_list_output,
+        McpCallArgs, McpListArgs, StateLabel, build_mcp_call_output, build_mcp_list_output,
         build_remote_http_url, build_remote_ws_url, default_task_for_objective,
-        discover_runtime_mcp_servers, normalize_remote_base_url, parse_agent_spec,
-        parse_mcp_call_arguments, parse_repeated_key_value_args, parse_task_spec,
+        discover_runtime_mcp_servers, encode_remote_path_segment, normalize_remote_base_url,
+        parse_agent_spec, parse_mcp_call_arguments, parse_repeated_key_value_args, parse_task_spec,
         remote_approvals_path, remote_events_path, remote_events_stream_path, remote_get_json,
         remote_post_json, resolve_runtime_mcp_server,
     };
@@ -3695,6 +3592,15 @@ mod tests {
             "/v1/runners/runner-a/approvals"
         );
         assert!(remote_approvals_path(Some(Uuid::nil()), Some("runner-a")).is_err());
+    }
+
+    #[test]
+    fn encode_remote_path_segment_escapes_reserved_bytes() {
+        assert_eq!(encode_remote_path_segment("runner-a"), "runner-a");
+        assert_eq!(
+            encode_remote_path_segment("runner/a b?c"),
+            "runner%2Fa%20b%3Fc"
+        );
     }
 
     #[test]
@@ -4071,11 +3977,35 @@ mod tests {
                             {
                                 "registration": {
                                     "runner_id": "runner-a",
-                                    "public_base_url": "http://127.0.0.1:9000"
+                                    "control_plane_url": "http://127.0.0.1:8787",
+                                    "public_base_url": "http://127.0.0.1:9000",
+                                    "workspaces": [
+                                        {
+                                            "workspace_id": "default",
+                                            "root_dir": "C:/workspace",
+                                            "writable": true
+                                        }
+                                    ],
+                                    "labels": {
+                                        "region": "local"
+                                    },
+                                    "capabilities": {
+                                        "interactive_approvals": true,
+                                        "background_sessions": true,
+                                        "artifact_uploads": true,
+                                        "max_parallel_sessions": 4
+                                    },
+                                    "platform": {
+                                        "os": "windows",
+                                        "arch": "x86_64",
+                                        "family": "windows"
+                                    }
                                 },
                                 "state": "idle",
                                 "active_sessions": 0,
-                                "queued_sessions": 0
+                                "queued_sessions": 0,
+                                "registered_at": "2026-04-07T00:00:00Z",
+                                "last_seen_at": "2026-04-07T00:00:00Z"
                             }
                         ]
                     })
