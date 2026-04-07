@@ -21,6 +21,7 @@ use rc_control_plane::{
     ArtifactCreateRequest as RemoteArtifactCreateRequest, ArtifactRecord as RemoteArtifactRecord,
     ControlPlaneMeta as RemoteControlPlaneMeta, CreateSessionRequest as RemoteCreateSessionRequest,
     SessionRecord as RemoteSessionRecord, SessionState as RemoteSessionState,
+    SessionStateUpdateRequest as RemoteSessionStateUpdateRequest,
     TimelineEvent as RemoteTimelineEvent, TimelineEventDetail as RemoteTimelineEventDetail,
 };
 use rc_core::{
@@ -199,6 +200,7 @@ enum RemoteSessionsCommand {
     List(RemoteSessionsListArgs),
     Show(RemoteSessionShowArgs),
     Create(RemoteSessionCreateArgs),
+    State(RemoteSessionStateArgs),
 }
 
 #[derive(Args, Debug)]
@@ -288,6 +290,48 @@ struct RemoteSessionCreateArgs {
 
     #[arg(long)]
     preferred_runner_id: Option<String>,
+
+    #[arg(long = "meta")]
+    metadata: Vec<String>,
+
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+enum RemoteSessionStateValue {
+    Pending,
+    Assigned,
+    Running,
+    WaitingApproval,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl From<RemoteSessionStateValue> for RemoteSessionState {
+    fn from(value: RemoteSessionStateValue) -> Self {
+        match value {
+            RemoteSessionStateValue::Pending => RemoteSessionState::Pending,
+            RemoteSessionStateValue::Assigned => RemoteSessionState::Assigned,
+            RemoteSessionStateValue::Running => RemoteSessionState::Running,
+            RemoteSessionStateValue::WaitingApproval => RemoteSessionState::WaitingApproval,
+            RemoteSessionStateValue::Completed => RemoteSessionState::Completed,
+            RemoteSessionStateValue::Failed => RemoteSessionState::Failed,
+            RemoteSessionStateValue::Cancelled => RemoteSessionState::Cancelled,
+        }
+    }
+}
+
+#[derive(Args, Debug)]
+struct RemoteSessionStateArgs {
+    #[command(flatten)]
+    target: RemoteTargetArgs,
+
+    session_id: Uuid,
+
+    #[arg(long, value_enum)]
+    state: RemoteSessionStateValue,
 
     #[arg(long = "meta")]
     metadata: Vec<String>,
@@ -1161,6 +1205,10 @@ fn remote_runner_path(runner_id: &str) -> String {
     format!("/v1/runners/{}", encode_remote_path_segment(runner_id))
 }
 
+fn remote_session_state_path(session_id: Uuid) -> String {
+    format!("/v1/sessions/{session_id}/state")
+}
+
 fn remote_approvals_stream_path(
     session_id: Option<Uuid>,
     runner_id: Option<&str>,
@@ -1247,6 +1295,7 @@ fn remote_event_kind(detail: &RemoteTimelineEventDetail) -> &'static str {
         RemoteTimelineEventDetail::RunnerRegistered { .. } => "runner_registered",
         RemoteTimelineEventDetail::RunnerHeartbeat { .. } => "runner_heartbeat",
         RemoteTimelineEventDetail::SessionCreated { .. } => "session_created",
+        RemoteTimelineEventDetail::SessionStateChanged { .. } => "session_state_changed",
         RemoteTimelineEventDetail::ApprovalRequested { .. } => "approval_requested",
         RemoteTimelineEventDetail::ApprovalResolved { .. } => "approval_resolved",
         RemoteTimelineEventDetail::ArtifactCreated { .. } => "artifact_created",
@@ -1283,6 +1332,14 @@ fn remote_event_summary(detail: &RemoteTimelineEventDetail) -> String {
             "workspace={} runner={} state={}",
             workspace_id,
             owner_runner_id.as_deref().unwrap_or("(unassigned)"),
+            state.label()
+        ),
+        RemoteTimelineEventDetail::SessionStateChanged {
+            previous_state,
+            state,
+        } => format!(
+            "previous_state={} state={}",
+            previous_state.label(),
             state.label()
         ),
         RemoteTimelineEventDetail::ApprovalRequested { title, state, .. } => {
@@ -1399,6 +1456,7 @@ async fn run_remote_sessions(command: RemoteSessionsCommand) -> Result<()> {
         RemoteSessionsCommand::List(args) => run_remote_sessions_list(args).await,
         RemoteSessionsCommand::Show(args) => run_remote_sessions_show(args).await,
         RemoteSessionsCommand::Create(args) => run_remote_sessions_create(args).await,
+        RemoteSessionsCommand::State(args) => run_remote_sessions_state(args).await,
     }
 }
 
@@ -1589,6 +1647,26 @@ async fn run_remote_sessions_show(args: RemoteSessionShowArgs) -> Result<()> {
     let control_plane_url = require_control_plane_url(&args.target)?;
     let path = format!("/v1/sessions/{}", args.session_id);
     let session: RemoteSessionRecord = remote_get_json(&control_plane_url, &path).await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&session)?);
+        return Ok(());
+    }
+    print_remote_session_summary(&session);
+    Ok(())
+}
+
+async fn run_remote_sessions_state(args: RemoteSessionStateArgs) -> Result<()> {
+    let control_plane_url = require_control_plane_url(&args.target)?;
+    let request = RemoteSessionStateUpdateRequest {
+        state: args.state.into(),
+        metadata: parse_repeated_key_value_args("--meta", &args.metadata)?,
+    };
+    let session: RemoteSessionRecord = remote_post_json(
+        &control_plane_url,
+        &remote_session_state_path(args.session_id),
+        &request,
+    )
+    .await?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&session)?);
         return Ok(());
@@ -4020,11 +4098,11 @@ mod tests {
         remote_approval_path, remote_approvals_path, remote_approvals_stream_path,
         remote_artifact_download_path, remote_artifacts_path, remote_events_path,
         remote_events_stream_path, remote_get_bytes, remote_get_json, remote_post_json,
-        remote_runner_path, resolve_runtime_mcp_server,
+        remote_runner_path, remote_session_state_path, resolve_runtime_mcp_server,
     };
     use base64::Engine as _;
     use rc_config::{ProviderOverrides, load_runtime_config};
-    use rc_control_plane::{ArtifactCreateRequest, ArtifactRecord};
+    use rc_control_plane::{ArtifactCreateRequest, ArtifactRecord, SessionStateUpdateRequest};
     use std::{collections::BTreeSet, fs, path::Path, process::Command as ProcessCommand};
     use tempfile::tempdir;
     use tokio::{
@@ -4182,6 +4260,14 @@ mod tests {
         assert_eq!(
             remote_artifact_download_path(Uuid::nil()),
             format!("/v1/artifacts/{}/download", Uuid::nil())
+        );
+    }
+
+    #[test]
+    fn remote_session_state_path_targets_session_control_endpoint() {
+        assert_eq!(
+            remote_session_state_path(Uuid::nil()),
+            format!("/v1/sessions/{}/state", Uuid::nil())
         );
     }
 
@@ -4599,7 +4685,7 @@ mod tests {
             .local_addr()
             .unwrap_or_else(|error| panic!("local addr failed: {error}"));
         let server = tokio::spawn(async move {
-            for _ in 0..12 {
+            for _ in 0..13 {
                 let (mut socket, _) = listener
                     .accept()
                     .await
@@ -4699,6 +4785,28 @@ mod tests {
                         "metadata": {"phase": "remote"},
                         "created_at": "2026-04-07T00:00:00Z",
                         "updated_at": "2026-04-07T00:00:01Z"
+                    })
+                } else if request_text
+                    .starts_with(&format!("POST {} ", remote_session_state_path(Uuid::nil())))
+                {
+                    let request: SessionStateUpdateRequest = serde_json::from_slice(&request_body)
+                        .unwrap_or_else(|error| panic!("session state parse failed: {error}"));
+                    assert_eq!(request.state, super::RemoteSessionState::Completed);
+                    assert_eq!(
+                        request.metadata.get("reason").map(String::as_str),
+                        Some("operator-finished")
+                    );
+                    serde_json::json!({
+                        "session_id": Uuid::nil(),
+                        "workspace_id": "default",
+                        "owner_runner_id": "runner-a",
+                        "state": "completed",
+                        "metadata": {
+                            "phase": "remote",
+                            "reason": "operator-finished"
+                        },
+                        "created_at": "2026-04-07T00:00:00Z",
+                        "updated_at": "2026-04-07T00:00:06Z"
                     })
                 } else if request_text.starts_with("GET /v1/approvals ") {
                     serde_json::json!({
@@ -4975,6 +5083,24 @@ mod tests {
         assert_eq!(
             uploaded.metadata.get("kind").map(String::as_str),
             Some("export")
+        );
+
+        let updated_session: super::RemoteSessionRecord = remote_post_json(
+            &base_url,
+            &remote_session_state_path(Uuid::nil()),
+            &SessionStateUpdateRequest {
+                state: super::RemoteSessionState::Completed,
+                metadata: [("reason".to_owned(), "operator-finished".to_owned())]
+                    .into_iter()
+                    .collect(),
+            },
+        )
+        .await
+        .unwrap_or_else(|error| panic!("remote session state update failed: {error}"));
+        assert_eq!(updated_session.state.label(), "completed");
+        assert_eq!(
+            updated_session.metadata.get("reason").map(String::as_str),
+            Some("operator-finished")
         );
 
         server

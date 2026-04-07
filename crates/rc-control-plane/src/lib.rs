@@ -26,8 +26,8 @@ use rc_config::AppPaths;
 use rc_runner::{
     ApprovalCreateRequest, ApprovalDecision, ApprovalDecisionRequest, ApprovalRequestRecord,
     ApprovalState, ListResponse, RunnerHeartbeat, RunnerRegistrationRequest,
-    RunnerSessionCreateRequest, RunnerSessionRecord, RunnerSnapshot, RunnerState,
-    SessionState as RunnerSessionState,
+    RunnerSessionCreateRequest, RunnerSessionRecord, RunnerSessionStateUpdateRequest,
+    RunnerSnapshot, RunnerState, SessionState as RunnerSessionState,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -131,6 +131,13 @@ pub struct CreateSessionRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionStateUpdateRequest {
+    pub state: SessionState,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunnerRegistrationResponse {
     pub runner_id: String,
     pub registered_at: DateTime<Utc>,
@@ -188,6 +195,10 @@ pub enum TimelineEventDetail {
     SessionCreated {
         workspace_id: String,
         owner_runner_id: Option<String>,
+        state: SessionState,
+    },
+    SessionStateChanged {
+        previous_state: SessionState,
         state: SessionState,
     },
     ApprovalRequested {
@@ -330,6 +341,10 @@ impl ControlPlaneService {
             )
             .route("/v1/sessions", get(list_sessions).post(create_session))
             .route("/v1/sessions/{session_id}", get(get_session))
+            .route(
+                "/v1/sessions/{session_id}/state",
+                post(update_session_state),
+            )
             .route(
                 "/v1/sessions/{session_id}/approvals",
                 get(list_session_approvals).post(create_approval),
@@ -523,14 +538,74 @@ impl Registry {
             )));
         }
         self.sessions.insert(record.session_id, record.clone());
-        if let Some(runner_id) = &record.owner_runner_id
-            && let Some(snapshot) = self.runners.get_mut(runner_id)
-        {
-            snapshot.active_sessions += 1;
-            snapshot.state = RunnerState::Busy;
-            snapshot.last_seen_at = record.updated_at;
+        if let Some(runner_id) = &record.owner_runner_id {
+            self.refresh_runner_session_counts(runner_id, record.updated_at);
         }
         Ok(record)
+    }
+
+    fn get_session(&self, session_id: Uuid) -> Result<SessionRecord, ApiError> {
+        self.sessions
+            .get(&session_id)
+            .cloned()
+            .ok_or_else(|| ApiError::not_found(format!("session `{session_id}` was not found")))
+    }
+
+    fn apply_session_state_update(
+        &mut self,
+        session_id: Uuid,
+        state: SessionState,
+        metadata: BTreeMap<String, String>,
+        updated_at: DateTime<Utc>,
+    ) -> Result<(SessionRecord, SessionState), ApiError> {
+        let session = self
+            .sessions
+            .get_mut(&session_id)
+            .ok_or_else(|| ApiError::not_found(format!("session `{session_id}` was not found")))?;
+        let previous_state = session.state;
+        session.state = state;
+        session.updated_at = updated_at;
+        session.metadata.extend(metadata);
+        let updated = session.clone();
+        let owner_runner_id = updated.owner_runner_id.clone();
+        if let Some(runner_id) = owner_runner_id.as_deref() {
+            self.refresh_runner_session_counts(runner_id, updated_at);
+        }
+        Ok((updated, previous_state))
+    }
+
+    fn refresh_runner_session_counts(&mut self, runner_id: &str, timestamp: DateTime<Utc>) {
+        let (active_sessions, queued_sessions) = self
+            .sessions
+            .values()
+            .filter(|session| session.owner_runner_id.as_deref() == Some(runner_id))
+            .fold((0usize, 0usize), |(active, queued), session| {
+                let active = if matches!(
+                    session.state,
+                    SessionState::Assigned | SessionState::Running | SessionState::WaitingApproval
+                ) {
+                    active + 1
+                } else {
+                    active
+                };
+                let queued = if matches!(session.state, SessionState::Pending) {
+                    queued + 1
+                } else {
+                    queued
+                };
+                (active, queued)
+            });
+
+        if let Some(snapshot) = self.runners.get_mut(runner_id) {
+            snapshot.active_sessions = active_sessions;
+            snapshot.queued_sessions = queued_sessions;
+            snapshot.state = if active_sessions > 0 {
+                RunnerState::Busy
+            } else {
+                RunnerState::Idle
+            };
+            snapshot.last_seen_at = snapshot.last_seen_at.max(timestamp);
+        }
     }
 
     fn list_approvals(&self) -> Vec<ApprovalRequestRecord> {
@@ -661,6 +736,7 @@ impl Registry {
         let now = Utc::now();
         session.state = SessionState::WaitingApproval;
         session.updated_at = now;
+        let owner_runner_id = session.owner_runner_id.clone();
 
         let approval = ApprovalRequestRecord {
             approval_id: Uuid::new_v4(),
@@ -678,6 +754,9 @@ impl Registry {
         };
         self.approvals
             .insert(approval.approval_id, approval.clone());
+        if let Some(runner_id) = owner_runner_id.as_deref() {
+            self.refresh_runner_session_counts(runner_id, now);
+        }
         Ok(approval)
     }
 
@@ -712,6 +791,9 @@ impl Registry {
         if let Some(session) = self.sessions.get_mut(&updated.session_id) {
             session.state = session_state_after_approval(decision, has_pending_approvals);
             session.updated_at = now;
+            if let Some(runner_id) = session.owner_runner_id.clone() {
+                self.refresh_runner_session_counts(&runner_id, now);
+            }
         }
 
         Ok(updated)
@@ -1109,12 +1191,74 @@ async fn get_session(
     AxumPath(session_id): AxumPath<Uuid>,
 ) -> Result<Json<SessionRecord>, ApiError> {
     let registry = service.registry.read().await;
-    let record = registry
-        .sessions
-        .get(&session_id)
-        .cloned()
-        .ok_or_else(|| ApiError::not_found(format!("session `{session_id}` was not found")))?;
-    Ok(Json(record))
+    Ok(Json(registry.get_session(session_id)?))
+}
+
+async fn update_session_state(
+    State(service): State<ControlPlaneService>,
+    AxumPath(session_id): AxumPath<Uuid>,
+    Json(request): Json<SessionStateUpdateRequest>,
+) -> Result<Json<SessionRecord>, ApiError> {
+    let existing = {
+        let registry = service.registry.read().await;
+        registry.get_session(session_id)?
+    };
+    let requested_state = request.state;
+    let metadata = request.metadata.clone();
+
+    let runner_update = if let Some(runner_id) = existing.owner_runner_id.as_deref() {
+        let runner =
+            {
+                let registry = service.registry.read().await;
+                registry.runners.get(runner_id).cloned().ok_or_else(|| {
+                    ApiError::not_found(format!("runner `{runner_id}` was not found"))
+                })?
+            };
+        Some(
+            update_runner_session_state(
+                &runner,
+                session_id,
+                &RunnerSessionStateUpdateRequest {
+                    state: session_state_to_runner(requested_state),
+                    metadata: metadata.clone(),
+                },
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+
+    let (updated, previous_state) = {
+        let mut registry = service.registry.write().await;
+        let updated_at = runner_update
+            .as_ref()
+            .map(|record| record.updated_at)
+            .unwrap_or_else(Utc::now);
+        registry.apply_session_state_update(
+            session_id,
+            runner_update
+                .as_ref()
+                .map(|record| session_state_from_runner(record.state))
+                .unwrap_or(requested_state),
+            runner_update
+                .as_ref()
+                .map(|record| record.metadata.clone())
+                .unwrap_or(metadata),
+            updated_at,
+        )?
+    };
+    let _ = service
+        .publish_event(TimelineEventDraft {
+            runner_id: updated.owner_runner_id.clone(),
+            session_id: Some(updated.session_id),
+            detail: TimelineEventDetail::SessionStateChanged {
+                previous_state,
+                state: updated.state,
+            },
+        })
+        .await;
+    Ok(Json(updated))
 }
 
 async fn list_session_approvals(
@@ -1473,6 +1617,18 @@ fn session_state_from_runner(state: RunnerSessionState) -> SessionState {
     }
 }
 
+fn session_state_to_runner(state: SessionState) -> RunnerSessionState {
+    match state {
+        SessionState::Pending => RunnerSessionState::Pending,
+        SessionState::Assigned => RunnerSessionState::Starting,
+        SessionState::Running => RunnerSessionState::Running,
+        SessionState::WaitingApproval => RunnerSessionState::WaitingApproval,
+        SessionState::Completed => RunnerSessionState::Completed,
+        SessionState::Failed => RunnerSessionState::Failed,
+        SessionState::Cancelled => RunnerSessionState::Cancelled,
+    }
+}
+
 fn runner_public_base_url(runner: &RunnerSnapshot) -> Result<&str, ApiError> {
     runner
         .registration
@@ -1517,6 +1673,45 @@ async fn dispatch_session_to_runner(
         .map_err(|error| {
             ApiError::bad_gateway(format!(
                 "failed to decode session dispatch response from runner `{}`: {error}",
+                runner.registration.runner_id
+            ))
+        })
+}
+
+async fn update_runner_session_state(
+    runner: &RunnerSnapshot,
+    session_id: Uuid,
+    request: &RunnerSessionStateUpdateRequest,
+) -> Result<RunnerSessionRecord, ApiError> {
+    let base_url = runner_public_base_url(runner)?;
+    let client = Client::new();
+    let response = client
+        .post(format!(
+            "{}/v1/sessions/{session_id}/state",
+            base_url.trim_end_matches('/')
+        ))
+        .json(request)
+        .send()
+        .await
+        .map_err(|error| {
+            ApiError::bad_gateway(format!(
+                "failed to update session `{session_id}` on runner `{}`: {error}",
+                runner.registration.runner_id
+            ))
+        })?
+        .error_for_status()
+        .map_err(|error| {
+            ApiError::bad_gateway(format!(
+                "runner `{}` rejected state update for session `{session_id}`: {error}",
+                runner.registration.runner_id
+            ))
+        })?;
+    response
+        .json::<RunnerSessionRecord>()
+        .await
+        .map_err(|error| {
+            ApiError::bad_gateway(format!(
+                "failed to decode state update response from runner `{}`: {error}",
                 runner.registration.runner_id
             ))
         })
@@ -2155,6 +2350,202 @@ mod tests {
             events.items[3].runner_id.as_deref(),
             Some("runner-approval")
         );
+    }
+
+    #[tokio::test]
+    async fn session_state_updates_relay_to_runner_and_refresh_counts() {
+        let service = ControlPlaneService::new(
+            load_control_plane_config(ControlPlaneConfigOverrides::default())
+                .expect("config should load"),
+            "0.1.0",
+        );
+        let app = service.router();
+
+        let runner = spawn_runner_server("runner-state", "default").await;
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/runners/register")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&runner.registration).expect("json should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"workspace_id": "default"}).to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+        let session: SessionRecord = read_json(create_response).await;
+        assert_eq!(session.owner_runner_id.as_deref(), Some("runner-state"));
+        assert_eq!(session.state, SessionState::Assigned);
+
+        let running_response = app
+            .clone()
+            .oneshot(
+                Request::post(format!("/v1/sessions/{}/state", session.session_id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&SessionStateUpdateRequest {
+                            state: SessionState::Running,
+                            metadata: BTreeMap::from([("phase".to_owned(), "running".to_owned())]),
+                        })
+                        .expect("json should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(running_response.status(), StatusCode::OK);
+        let running_session: SessionRecord = read_json(running_response).await;
+        assert_eq!(running_session.state, SessionState::Running);
+        assert_eq!(
+            running_session.metadata.get("phase").map(String::as_str),
+            Some("running")
+        );
+
+        let runner_snapshot_response = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/runners/runner-state")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let running_snapshot: RunnerSnapshot = read_json(runner_snapshot_response).await;
+        assert_eq!(running_snapshot.state, RunnerState::Busy);
+        assert_eq!(running_snapshot.active_sessions, 1);
+        assert_eq!(running_snapshot.queued_sessions, 0);
+
+        let runner_session = runner
+            .api
+            .list_sessions()
+            .await
+            .into_iter()
+            .find(|record| record.session_id == session.session_id)
+            .expect("runner session should exist");
+        assert_eq!(runner_session.state, RunnerSessionState::Running);
+        assert_eq!(
+            runner_session.metadata.get("phase").map(String::as_str),
+            Some("running")
+        );
+
+        let completed_response = app
+            .clone()
+            .oneshot(
+                Request::post(format!("/v1/sessions/{}/state", session.session_id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&SessionStateUpdateRequest {
+                            state: SessionState::Completed,
+                            metadata: BTreeMap::from([("result".to_owned(), "ok".to_owned())]),
+                        })
+                        .expect("json should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(completed_response.status(), StatusCode::OK);
+        let completed_session: SessionRecord = read_json(completed_response).await;
+        assert_eq!(completed_session.state, SessionState::Completed);
+        assert_eq!(
+            completed_session.metadata.get("phase").map(String::as_str),
+            Some("running")
+        );
+        assert_eq!(
+            completed_session.metadata.get("result").map(String::as_str),
+            Some("ok")
+        );
+
+        let completed_runner_response = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/runners/runner-state")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let completed_snapshot: RunnerSnapshot = read_json(completed_runner_response).await;
+        assert_eq!(completed_snapshot.state, RunnerState::Idle);
+        assert_eq!(completed_snapshot.active_sessions, 0);
+        assert_eq!(completed_snapshot.queued_sessions, 0);
+
+        let completed_runner_session = runner
+            .api
+            .list_sessions()
+            .await
+            .into_iter()
+            .find(|record| record.session_id == session.session_id)
+            .expect("runner session should exist");
+        assert_eq!(
+            completed_runner_session.state,
+            RunnerSessionState::Completed
+        );
+        assert_eq!(
+            completed_runner_session
+                .metadata
+                .get("result")
+                .map(String::as_str),
+            Some("ok")
+        );
+
+        let events_response = app
+            .oneshot(
+                Request::get("/v1/events?limit=10")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let events: ListResponse<TimelineEvent> = read_json(events_response).await;
+        assert_eq!(events.items.len(), 4);
+        assert!(matches!(
+            events.items[0].detail,
+            TimelineEventDetail::RunnerRegistered { .. }
+        ));
+        assert!(matches!(
+            events.items[1].detail,
+            TimelineEventDetail::SessionCreated { .. }
+        ));
+        match &events.items[2].detail {
+            TimelineEventDetail::SessionStateChanged {
+                previous_state,
+                state,
+            } => {
+                assert_eq!(*previous_state, SessionState::Assigned);
+                assert_eq!(*state, SessionState::Running);
+            }
+            other => panic!("expected running state change event, received {other:?}"),
+        }
+        match &events.items[3].detail {
+            TimelineEventDetail::SessionStateChanged {
+                previous_state,
+                state,
+            } => {
+                assert_eq!(*previous_state, SessionState::Running);
+                assert_eq!(*state, SessionState::Completed);
+            }
+            other => panic!("expected completion state change event, received {other:?}"),
+        }
+        assert_eq!(events.items[2].session_id, Some(session.session_id));
+        assert_eq!(events.items[3].session_id, Some(session.session_id));
+        assert_eq!(events.items[2].runner_id.as_deref(), Some("runner-state"));
+        assert_eq!(events.items[3].runner_id.as_deref(), Some("runner-state"));
     }
 
     #[tokio::test]

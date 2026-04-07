@@ -192,6 +192,13 @@ pub struct RunnerSessionCreateRequest {
     pub metadata: BTreeMap<String, String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunnerSessionStateUpdateRequest {
+    pub state: SessionState,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, String>,
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalState {
@@ -329,6 +336,10 @@ impl RunnerApi {
             )
             .route("/v1/sessions", get(list_sessions).post(create_session))
             .route("/v1/sessions/{session_id}", get(get_session))
+            .route(
+                "/v1/sessions/{session_id}/state",
+                axum::routing::post(update_session_state),
+            )
             .route(
                 "/v1/sessions/{session_id}/approvals",
                 get(list_session_approvals).post(create_approval),
@@ -749,6 +760,21 @@ async fn create_session(
     Ok((StatusCode::CREATED, Json(record)))
 }
 
+async fn update_session_state(
+    State(api): State<RunnerApi>,
+    AxumPath(session_id): AxumPath<Uuid>,
+    Json(request): Json<RunnerSessionStateUpdateRequest>,
+) -> Result<Json<RunnerSessionRecord>, ApiError> {
+    let mut sessions = api.sessions.write().await;
+    let session = sessions
+        .get_mut(&session_id)
+        .ok_or_else(|| ApiError::not_found(format!("session `{session_id}` was not found")))?;
+    session.state = request.state;
+    session.metadata.extend(request.metadata);
+    session.updated_at = Utc::now();
+    Ok(Json(session.clone()))
+}
+
 async fn create_approval(
     State(api): State<RunnerApi>,
     AxumPath(session_id): AxumPath<Uuid>,
@@ -1092,6 +1118,148 @@ mod tests {
         assert_eq!(heartbeat.state, RunnerState::Idle);
         assert_eq!(heartbeat.active_sessions, 0);
         assert_eq!(heartbeat.queued_sessions, 1);
+    }
+
+    #[tokio::test]
+    async fn session_state_updates_change_health_and_heartbeat_counts() {
+        let profile_dir = tempdir().expect("tempdir should exist");
+        let config = load_runner_config(
+            Some(profile_dir.path().join("profile")),
+            RunnerConfigOverrides {
+                runner_id: Some("runner-state".to_owned()),
+                workspaces: Some(vec![RunnerWorkspace {
+                    workspace_id: "default".to_owned(),
+                    root_dir: profile_dir.path().join("workspace"),
+                    writable: true,
+                }]),
+                ..RunnerConfigOverrides::default()
+            },
+        )
+        .expect("config should load");
+        let api = RunnerApi::new(config, "remote-code-runner", "0.1.0");
+        let app = api.clone().router();
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "workspace_id": "default",
+                            "metadata": {"phase": "queued"}
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("session create should succeed");
+        let created: RunnerSessionRecord = read_json(create_response).await;
+
+        let queued_health_response = app
+            .clone()
+            .oneshot(
+                Request::get("/healthz")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("queued health request should succeed");
+        let queued_health: RunnerHealth = read_json(queued_health_response).await;
+        assert_eq!(queued_health.state, RunnerState::Idle);
+        assert_eq!(queued_health.active_sessions, 0);
+        assert_eq!(queued_health.queued_sessions, 1);
+
+        let running_response = app
+            .clone()
+            .oneshot(
+                Request::post(format!("/v1/sessions/{}/state", created.session_id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!(RunnerSessionStateUpdateRequest {
+                            state: SessionState::Running,
+                            metadata: BTreeMap::from([("phase".to_owned(), "running".to_owned(),)]),
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("state update should succeed");
+        assert_eq!(running_response.status(), StatusCode::OK);
+        let running_session: RunnerSessionRecord = read_json(running_response).await;
+        assert_eq!(running_session.state, SessionState::Running);
+        assert_eq!(
+            running_session.metadata.get("phase").map(String::as_str),
+            Some("running")
+        );
+
+        let running_health_response = app
+            .clone()
+            .oneshot(
+                Request::get("/healthz")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("running health request should succeed");
+        let running_health: RunnerHealth = read_json(running_health_response).await;
+        assert_eq!(running_health.state, RunnerState::Busy);
+        assert_eq!(running_health.active_sessions, 1);
+        assert_eq!(running_health.queued_sessions, 0);
+
+        let running_heartbeat = api.heartbeat().await;
+        assert_eq!(running_heartbeat.state, RunnerState::Busy);
+        assert_eq!(running_heartbeat.active_sessions, 1);
+        assert_eq!(running_heartbeat.queued_sessions, 0);
+
+        let completed_response = app
+            .clone()
+            .oneshot(
+                Request::post(format!("/v1/sessions/{}/state", created.session_id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!(RunnerSessionStateUpdateRequest {
+                            state: SessionState::Completed,
+                            metadata: BTreeMap::from([("result".to_owned(), "ok".to_owned())]),
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("completion update should succeed");
+        assert_eq!(completed_response.status(), StatusCode::OK);
+        let completed_session: RunnerSessionRecord = read_json(completed_response).await;
+        assert_eq!(completed_session.state, SessionState::Completed);
+        assert_eq!(
+            completed_session.metadata.get("phase").map(String::as_str),
+            Some("running")
+        );
+        assert_eq!(
+            completed_session.metadata.get("result").map(String::as_str),
+            Some("ok")
+        );
+
+        let completed_health_response = app
+            .clone()
+            .oneshot(
+                Request::get("/healthz")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("completed health request should succeed");
+        let completed_health: RunnerHealth = read_json(completed_health_response).await;
+        assert_eq!(completed_health.state, RunnerState::Idle);
+        assert_eq!(completed_health.active_sessions, 0);
+        assert_eq!(completed_health.queued_sessions, 0);
+
+        let completed_heartbeat = api.heartbeat().await;
+        assert_eq!(completed_heartbeat.state, RunnerState::Idle);
+        assert_eq!(completed_heartbeat.active_sessions, 0);
+        assert_eq!(completed_heartbeat.queued_sessions, 0);
     }
 
     #[tokio::test]
