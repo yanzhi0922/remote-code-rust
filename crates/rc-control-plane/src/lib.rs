@@ -335,6 +335,10 @@ impl ControlPlaneService {
                 get(list_session_approvals).post(create_approval),
             )
             .route(
+                "/v1/sessions/{session_id}/approvals/stream",
+                get(subscribe_session_approvals),
+            )
+            .route(
                 "/v1/sessions/{session_id}/artifacts",
                 get(list_session_artifacts).post(create_artifact),
             )
@@ -904,9 +908,19 @@ async fn subscribe_session_events(
 
 async fn subscribe_approvals(
     ws: WebSocketUpgrade,
+    Query(query): Query<EventStreamQuery>,
     State(service): State<ControlPlaneService>,
 ) -> Response {
-    ws.on_upgrade(move |socket| serve_approval_stream(socket, service.timeline.subscribe()))
+    let subscription = service.timeline.subscribe();
+    let backlog = if query.after.is_some() {
+        service
+            .timeline
+            .replay_filtered(query.after, is_approval_event)
+            .await
+    } else {
+        Vec::new()
+    };
+    ws.on_upgrade(move |socket| serve_approval_stream(socket, subscription, backlog))
 }
 
 async fn list_runners(
@@ -930,11 +944,55 @@ async fn list_runner_approvals(
 
 async fn subscribe_runner_approvals(
     ws: WebSocketUpgrade,
+    Query(query): Query<EventStreamQuery>,
     State(service): State<ControlPlaneService>,
     AxumPath(runner_id): AxumPath<String>,
 ) -> Response {
+    let subscription = service.timeline.subscribe();
+    let backlog = if query.after.is_some() {
+        service
+            .timeline
+            .replay_filtered(query.after, |event| {
+                event.runner_id.as_deref() == Some(runner_id.as_str()) && is_approval_event(event)
+            })
+            .await
+    } else {
+        Vec::new()
+    };
     ws.on_upgrade(move |socket| {
-        serve_runner_approval_stream(socket, service.timeline.subscribe(), runner_id)
+        serve_runner_approval_stream(socket, subscription, backlog, runner_id)
+    })
+}
+
+async fn subscribe_session_approvals(
+    ws: WebSocketUpgrade,
+    Query(query): Query<EventStreamQuery>,
+    State(service): State<ControlPlaneService>,
+    AxumPath(session_id): AxumPath<Uuid>,
+) -> Response {
+    if !service
+        .registry
+        .read()
+        .await
+        .sessions
+        .contains_key(&session_id)
+    {
+        return ApiError::not_found(format!("session `{session_id}` was not found"))
+            .into_response();
+    }
+    let subscription = service.timeline.subscribe();
+    let backlog = if query.after.is_some() {
+        service
+            .timeline
+            .replay_filtered(query.after, |event| {
+                event.session_id == Some(session_id) && is_approval_event(event)
+            })
+            .await
+    } else {
+        Vec::new()
+    };
+    ws.on_upgrade(move |socket| {
+        serve_session_approval_stream(socket, subscription, backlog, session_id)
     })
 }
 
@@ -1254,23 +1312,31 @@ async fn serve_session_event_stream(
 async fn serve_approval_stream(
     mut socket: WebSocket,
     mut subscription: broadcast::Receiver<TimelineEvent>,
+    backlog: Vec<TimelineEvent>,
 ) {
-    serve_filtered_event_stream(
-        &mut socket,
-        &mut subscription,
-        Vec::new(),
-        is_approval_event,
-    )
-    .await;
+    serve_filtered_event_stream(&mut socket, &mut subscription, backlog, is_approval_event).await;
 }
 
 async fn serve_runner_approval_stream(
     mut socket: WebSocket,
     mut subscription: broadcast::Receiver<TimelineEvent>,
+    backlog: Vec<TimelineEvent>,
     runner_id: String,
 ) {
-    serve_filtered_event_stream(&mut socket, &mut subscription, Vec::new(), move |event| {
+    serve_filtered_event_stream(&mut socket, &mut subscription, backlog, move |event| {
         event.runner_id.as_deref() == Some(runner_id.as_str()) && is_approval_event(event)
+    })
+    .await;
+}
+
+async fn serve_session_approval_stream(
+    mut socket: WebSocket,
+    mut subscription: broadcast::Receiver<TimelineEvent>,
+    backlog: Vec<TimelineEvent>,
+    session_id: Uuid,
+) {
+    serve_filtered_event_stream(&mut socket, &mut subscription, backlog, move |event| {
+        event.session_id == Some(session_id) && is_approval_event(event)
     })
     .await;
 }
@@ -2431,6 +2497,254 @@ mod tests {
         assert_eq!(resolved_event.session_id, Some(session.session_id));
         assert!(matches!(
             resolved_event.detail,
+            TimelineEventDetail::ApprovalResolved { .. }
+        ));
+
+        server_handle.abort();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn approval_stream_replays_backlog_after_query() {
+        let service = ControlPlaneService::new(
+            load_control_plane_config(ControlPlaneConfigOverrides::default())
+                .expect("config should load"),
+            "0.1.0",
+        );
+        let (base_url, server_handle) = spawn_control_plane_server(service).await;
+
+        let client = Client::new();
+        let runner = spawn_runner_server("runner-approval-backlog", "default").await;
+        let response = client
+            .post(format!("{base_url}/v1/runners/register"))
+            .json(&runner.registration)
+            .send()
+            .await
+            .expect("registration request should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let session: SessionRecord = client
+            .post(format!("{base_url}/v1/sessions"))
+            .json(&serde_json::json!({"workspace_id": "default"}))
+            .send()
+            .await
+            .expect("session create should succeed")
+            .error_for_status()
+            .expect("session create should succeed")
+            .json()
+            .await
+            .expect("session payload should decode");
+
+        let approval: ApprovalRequestRecord = client
+            .post(format!(
+                "{base_url}/v1/sessions/{}/approvals",
+                session.session_id
+            ))
+            .json(&serde_json::json!({
+                "title": "Backlog approval",
+                "description": "Needs replay"
+            }))
+            .send()
+            .await
+            .expect("approval create should succeed")
+            .error_for_status()
+            .expect("approval create should succeed")
+            .json()
+            .await
+            .expect("approval payload should decode");
+
+        let ws_url = base_url.replacen("http://", "ws://", 1) + "/v1/approvals/stream?after=0";
+        let (mut socket, _) = connect_async(&ws_url)
+            .await
+            .expect("websocket should connect");
+
+        let backlog_message = timeout(TokioDuration::from_secs(5), socket.next())
+            .await
+            .expect("backlog event should arrive before timeout")
+            .expect("event stream should stay open")
+            .expect("websocket frame should parse");
+        let backlog_text = match backlog_message {
+            TungsteniteMessage::Text(text) => text,
+            other => panic!("expected text frame, received {other:?}"),
+        };
+        let backlog_event: TimelineEvent =
+            serde_json::from_str(&backlog_text).expect("event payload should deserialize");
+        assert!(matches!(
+            backlog_event.detail,
+            TimelineEventDetail::ApprovalRequested { .. }
+        ));
+        assert_eq!(backlog_event.session_id, Some(session.session_id));
+
+        let response = client
+            .post(format!(
+                "{base_url}/v1/approvals/{}/decision",
+                approval.approval_id
+            ))
+            .json(&serde_json::json!({
+                "decision": "approved",
+                "responder": "approval-backlog"
+            }))
+            .send()
+            .await
+            .expect("approval resolve should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let live_message = timeout(TokioDuration::from_secs(5), socket.next())
+            .await
+            .expect("live event should arrive before timeout")
+            .expect("event stream should stay open")
+            .expect("websocket frame should parse");
+        let live_text = match live_message {
+            TungsteniteMessage::Text(text) => text,
+            other => panic!("expected text frame, received {other:?}"),
+        };
+        let live_event: TimelineEvent =
+            serde_json::from_str(&live_text).expect("event payload should deserialize");
+        assert!(matches!(
+            live_event.detail,
+            TimelineEventDetail::ApprovalResolved { .. }
+        ));
+        assert_eq!(live_event.session_id, Some(session.session_id));
+
+        server_handle.abort();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn session_approval_stream_replays_only_matching_session_approvals() {
+        let service = ControlPlaneService::new(
+            load_control_plane_config(ControlPlaneConfigOverrides::default())
+                .expect("config should load"),
+            "0.1.0",
+        );
+        let (base_url, server_handle) = spawn_control_plane_server(service).await;
+
+        let client = Client::new();
+        let runner = spawn_runner_server("runner-session-approval-stream", "default").await;
+        let response = client
+            .post(format!("{base_url}/v1/runners/register"))
+            .json(&runner.registration)
+            .send()
+            .await
+            .expect("registration request should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let target_session: SessionRecord = client
+            .post(format!("{base_url}/v1/sessions"))
+            .json(&serde_json::json!({"workspace_id": "default"}))
+            .send()
+            .await
+            .expect("target session create should succeed")
+            .error_for_status()
+            .expect("target session create should succeed")
+            .json()
+            .await
+            .expect("target session payload should decode");
+
+        let other_session: SessionRecord = client
+            .post(format!("{base_url}/v1/sessions"))
+            .json(&serde_json::json!({"workspace_id": "default"}))
+            .send()
+            .await
+            .expect("other session create should succeed")
+            .error_for_status()
+            .expect("other session create should succeed")
+            .json()
+            .await
+            .expect("other session payload should decode");
+
+        let _other_approval: ApprovalRequestRecord = client
+            .post(format!(
+                "{base_url}/v1/sessions/{}/approvals",
+                other_session.session_id
+            ))
+            .json(&serde_json::json!({
+                "title": "Other approval",
+                "description": "Should be filtered out"
+            }))
+            .send()
+            .await
+            .expect("other approval create should succeed")
+            .error_for_status()
+            .expect("other approval create should succeed")
+            .json()
+            .await
+            .expect("other approval payload should decode");
+
+        let target_approval: ApprovalRequestRecord = client
+            .post(format!(
+                "{base_url}/v1/sessions/{}/approvals",
+                target_session.session_id
+            ))
+            .json(&serde_json::json!({
+                "title": "Target approval",
+                "description": "Should be replayed"
+            }))
+            .send()
+            .await
+            .expect("target approval create should succeed")
+            .error_for_status()
+            .expect("target approval create should succeed")
+            .json()
+            .await
+            .expect("target approval payload should decode");
+
+        let ws_url = base_url.replacen("http://", "ws://", 1)
+            + &format!(
+                "/v1/sessions/{}/approvals/stream?after=0",
+                target_session.session_id
+            );
+        let (mut socket, _) = connect_async(&ws_url)
+            .await
+            .expect("websocket should connect");
+
+        let backlog_message = timeout(TokioDuration::from_secs(5), socket.next())
+            .await
+            .expect("backlog event should arrive before timeout")
+            .expect("event stream should stay open")
+            .expect("websocket frame should parse");
+        let backlog_text = match backlog_message {
+            TungsteniteMessage::Text(text) => text,
+            other => panic!("expected text frame, received {other:?}"),
+        };
+        let backlog_event: TimelineEvent =
+            serde_json::from_str(&backlog_text).expect("event payload should deserialize");
+        assert_eq!(backlog_event.session_id, Some(target_session.session_id));
+        match backlog_event.detail {
+            TimelineEventDetail::ApprovalRequested { approval_id, .. } => {
+                assert_eq!(approval_id, target_approval.approval_id);
+            }
+            other => panic!("expected approval requested event, received {other:?}"),
+        }
+
+        let response = client
+            .post(format!(
+                "{base_url}/v1/approvals/{}/decision",
+                target_approval.approval_id
+            ))
+            .json(&serde_json::json!({
+                "decision": "denied",
+                "responder": "session-approval-stream"
+            }))
+            .send()
+            .await
+            .expect("target approval resolve should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let live_message = timeout(TokioDuration::from_secs(5), socket.next())
+            .await
+            .expect("live event should arrive before timeout")
+            .expect("event stream should stay open")
+            .expect("websocket frame should parse");
+        let live_text = match live_message {
+            TungsteniteMessage::Text(text) => text,
+            other => panic!("expected text frame, received {other:?}"),
+        };
+        let live_event: TimelineEvent =
+            serde_json::from_str(&live_text).expect("event payload should deserialize");
+        assert_eq!(live_event.session_id, Some(target_session.session_id));
+        assert!(matches!(
+            live_event.detail,
             TimelineEventDetail::ApprovalResolved { .. }
         ));
 

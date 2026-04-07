@@ -271,6 +271,12 @@ struct RemoteApprovalsListArgs {
     runner_id: Option<String>,
 
     #[arg(long)]
+    after: Option<u64>,
+
+    #[arg(long)]
+    follow: bool,
+
+    #[arg(long)]
     json: bool,
 }
 
@@ -928,6 +934,30 @@ fn remote_approvals_path(session_id: Option<Uuid>, runner_id: Option<&str>) -> R
     }
 }
 
+fn remote_approvals_stream_path(
+    session_id: Option<Uuid>,
+    runner_id: Option<&str>,
+    after: Option<u64>,
+) -> Result<String> {
+    let mut path = match (session_id, runner_id) {
+        (Some(_), Some(_)) => {
+            return Err(anyhow!(
+                "choose either --session-id or --runner-id when following approvals"
+            ));
+        }
+        (Some(session_id), None) => format!("/v1/sessions/{session_id}/approvals/stream"),
+        (None, Some(runner_id)) => format!(
+            "/v1/runners/{}/approvals/stream",
+            encode_remote_path_segment(runner_id)
+        ),
+        (None, None) => "/v1/approvals/stream".to_owned(),
+    };
+    if let Some(after) = after {
+        path.push_str(&format!("?after={after}"));
+    }
+    Ok(path)
+}
+
 fn remote_events_path(session_id: Option<Uuid>, after: Option<u64>, limit: usize) -> String {
     let mut path = match session_id {
         Some(session_id) => format!("/v1/sessions/{session_id}/events"),
@@ -1168,6 +1198,9 @@ async fn run_remote_approvals(command: RemoteApprovalsCommand) -> Result<()> {
 
 async fn run_remote_approvals_list(args: RemoteApprovalsListArgs) -> Result<()> {
     let control_plane_url = require_control_plane_url(&args.target)?;
+    if args.follow {
+        return run_remote_approvals_follow(control_plane_url, args).await;
+    }
     let path = remote_approvals_path(args.session_id, args.runner_id.as_deref())?;
     let response: RemoteListResponse<RemoteApprovalRecord> =
         remote_get_json(&control_plane_url, &path).await?;
@@ -1192,6 +1225,79 @@ async fn run_remote_approvals_list(args: RemoteApprovalsListArgs) -> Result<()> 
             },
             approval.title
         );
+    }
+    Ok(())
+}
+
+async fn run_remote_approvals_follow(
+    control_plane_url: String,
+    args: RemoteApprovalsListArgs,
+) -> Result<()> {
+    if args.after.is_none() {
+        let path = remote_approvals_path(args.session_id, args.runner_id.as_deref())?;
+        let response: RemoteListResponse<RemoteApprovalRecord> =
+            remote_get_json(&control_plane_url, &path).await?;
+        if args.json {
+            for approval in &response.items {
+                println!("{}", serde_json::to_string(approval)?);
+            }
+        } else if response.items.is_empty() {
+            println!("No remote approvals found.");
+        } else {
+            for approval in &response.items {
+                println!(
+                    "{}  {}  {}  {}  {}",
+                    approval.approval_id,
+                    approval.state.label(),
+                    approval.session_id,
+                    if approval.runner_id.is_empty() {
+                        "(unassigned-runner)"
+                    } else {
+                        approval.runner_id.as_str()
+                    },
+                    approval.title
+                );
+            }
+        }
+    }
+
+    let ws_path =
+        remote_approvals_stream_path(args.session_id, args.runner_id.as_deref(), args.after)?;
+    let ws_url = build_remote_ws_url(&control_plane_url, &ws_path)?;
+    let (mut socket, _) = connect_async(&ws_url).await?;
+    loop {
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => {
+                result?;
+                break;
+            }
+            message = socket.next() => {
+                let Some(message) = message else {
+                    break;
+                };
+                let message = message?;
+                match message {
+                    TungsteniteMessage::Text(text) => {
+                        let event: RemoteTimelineEvent = serde_json::from_str(&text)?;
+                        if args.json {
+                            println!("{}", serde_json::to_string(&event)?);
+                        } else {
+                            print_remote_events(&[event]);
+                        }
+                    }
+                    TungsteniteMessage::Binary(bytes) => {
+                        let event: RemoteTimelineEvent = serde_json::from_slice(&bytes)?;
+                        if args.json {
+                            println!("{}", serde_json::to_string(&event)?);
+                        } else {
+                            print_remote_events(&[event]);
+                        }
+                    }
+                    TungsteniteMessage::Close(_) => break,
+                    _ => {}
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -3489,8 +3595,8 @@ mod tests {
         build_remote_http_url, build_remote_ws_url, default_task_for_objective,
         discover_runtime_mcp_servers, encode_remote_path_segment, normalize_remote_base_url,
         parse_agent_spec, parse_mcp_call_arguments, parse_repeated_key_value_args, parse_task_spec,
-        remote_approvals_path, remote_events_path, remote_events_stream_path, remote_get_json,
-        remote_post_json, resolve_runtime_mcp_server,
+        remote_approvals_path, remote_approvals_stream_path, remote_events_path,
+        remote_events_stream_path, remote_get_json, remote_post_json, resolve_runtime_mcp_server,
     };
     use rc_config::{ProviderOverrides, load_runtime_config};
     use std::{collections::BTreeSet, fs, process::Command as ProcessCommand};
@@ -3592,6 +3698,26 @@ mod tests {
             "/v1/runners/runner-a/approvals"
         );
         assert!(remote_approvals_path(Some(Uuid::nil()), Some("runner-a")).is_err());
+    }
+
+    #[test]
+    fn remote_approvals_stream_path_supports_scopes_and_after_query() {
+        assert_eq!(
+            remote_approvals_stream_path(None, None, Some(4))
+                .unwrap_or_else(|error| panic!("{error}")),
+            "/v1/approvals/stream?after=4"
+        );
+        assert_eq!(
+            remote_approvals_stream_path(Some(Uuid::nil()), None, None)
+                .unwrap_or_else(|error| panic!("{error}")),
+            format!("/v1/sessions/{}/approvals/stream", Uuid::nil())
+        );
+        assert_eq!(
+            remote_approvals_stream_path(None, Some("runner/a"), Some(8))
+                .unwrap_or_else(|error| panic!("{error}")),
+            "/v1/runners/runner%2Fa/approvals/stream?after=8"
+        );
+        assert!(remote_approvals_stream_path(Some(Uuid::nil()), Some("runner-a"), None).is_err());
     }
 
     #[test]
