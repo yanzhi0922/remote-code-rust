@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::env;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -288,6 +288,14 @@ struct Registry {
 struct PlannedSession {
     record: SessionRecord,
     owner_runner: Option<RunnerSnapshot>,
+}
+
+#[derive(Debug, Clone)]
+struct PendingSessionDispatch {
+    session_id: Uuid,
+    workspace_id: String,
+    metadata: BTreeMap<String, String>,
+    runner: RunnerSnapshot,
 }
 
 #[derive(Debug, Clone)]
@@ -596,6 +604,13 @@ impl Registry {
             self.refresh_runner_session_counts(runner_id, record.updated_at);
         }
         Ok(record)
+    }
+
+    fn get_runner_snapshot(&self, runner_id: &str) -> Result<RunnerSnapshot, ApiError> {
+        self.runners
+            .get(runner_id)
+            .cloned()
+            .ok_or_else(|| ApiError::not_found(format!("runner `{runner_id}` was not found")))
     }
 
     fn get_session(&self, session_id: Uuid) -> Result<SessionRecord, ApiError> {
@@ -980,6 +995,63 @@ impl Registry {
         }
 
         Ok((updated, planned.transition))
+    }
+
+    fn plan_next_pending_session_for_runner(
+        &self,
+        runner_id: &str,
+        lease_ttl_secs: u64,
+        skipped_session_ids: &BTreeSet<Uuid>,
+    ) -> Result<Option<PendingSessionDispatch>, ApiError> {
+        let runner = self.get_runner_snapshot(runner_id)?;
+        Ok(self
+            .sessions
+            .values()
+            .filter(|session| matches!(session.state, SessionState::Pending))
+            .filter(|session| session.owner_runner_id.is_none())
+            .filter(|session| !skipped_session_ids.contains(&session.session_id))
+            .filter_map(|session| {
+                let selected = self
+                    .select_runner(&session.workspace_id, None, lease_ttl_secs)
+                    .ok()?;
+                (selected.as_deref() == Some(runner_id)).then(|| PendingSessionDispatch {
+                    session_id: session.session_id,
+                    workspace_id: session.workspace_id.clone(),
+                    metadata: session.metadata.clone(),
+                    runner: runner.clone(),
+                })
+            })
+            .min_by_key(|dispatch| {
+                self.sessions
+                    .get(&dispatch.session_id)
+                    .map(|session| (session.created_at, session.session_id))
+            }))
+    }
+
+    fn commit_pending_session_dispatch(
+        &mut self,
+        session_id: Uuid,
+        runner_id: &str,
+        dispatched: &RunnerSessionRecord,
+    ) -> Result<(SessionRecord, SessionState), ApiError> {
+        let session = self
+            .sessions
+            .get_mut(&session_id)
+            .ok_or_else(|| ApiError::not_found(format!("session `{session_id}` was not found")))?;
+        if !matches!(session.state, SessionState::Pending) || session.owner_runner_id.is_some() {
+            return Err(ApiError::conflict(format!(
+                "session `{session_id}` is no longer pending dispatch"
+            )));
+        }
+
+        let previous_state = session.state;
+        session.owner_runner_id = Some(runner_id.to_owned());
+        session.state = session_state_from_runner(dispatched.state);
+        session.metadata = dispatched.metadata.clone();
+        session.updated_at = dispatched.updated_at;
+        let updated = session.clone();
+        self.refresh_runner_session_counts(runner_id, updated.updated_at);
+        Ok((updated, previous_state))
     }
 
     fn select_runner(
@@ -1369,7 +1441,7 @@ async fn register_runner(
     State(service): State<ControlPlaneService>,
     Json(request): Json<RunnerRegistrationRequest>,
 ) -> Json<RunnerRegistrationResponse> {
-    let response = {
+    let mut response = {
         let mut registry = service.registry.write().await;
         registry.register_runner(request, service.runner_lease_ttl_secs)
     };
@@ -1390,6 +1462,13 @@ async fn register_runner(
             },
         })
         .await;
+    dispatch_pending_sessions_for_runner(&service, &response.runner_id).await;
+    if let Ok(snapshot) = {
+        let registry = service.registry.read().await;
+        registry.get_runner_snapshot(&response.runner_id)
+    } {
+        response.snapshot = snapshot;
+    }
     Json(response)
 }
 
@@ -1414,7 +1493,72 @@ async fn update_runner_heartbeat(
             },
         })
         .await;
+    dispatch_pending_sessions_for_runner(&service, &runner_id).await;
+    let snapshot = {
+        let registry = service.registry.read().await;
+        registry.get_runner_snapshot(&runner_id)?
+    };
     Ok(Json(snapshot))
+}
+
+async fn dispatch_pending_sessions_for_runner(service: &ControlPlaneService, runner_id: &str) {
+    let mut skipped_session_ids = BTreeSet::new();
+
+    loop {
+        let planned = {
+            let registry = service.registry.read().await;
+            registry
+                .plan_next_pending_session_for_runner(
+                    runner_id,
+                    service.runner_lease_ttl_secs,
+                    &skipped_session_ids,
+                )
+                .ok()
+                .flatten()
+        };
+        let Some(planned) = planned else {
+            break;
+        };
+
+        let request = RunnerSessionCreateRequest {
+            session_id: Some(planned.session_id),
+            workspace_id: planned.workspace_id.clone(),
+            metadata: planned.metadata.clone(),
+        };
+        let dispatched = match dispatch_session_to_runner(&planned.runner, &request).await {
+            Ok(dispatched) => dispatched,
+            Err(_) => {
+                skipped_session_ids.insert(planned.session_id);
+                continue;
+            }
+        };
+
+        let committed = {
+            let mut registry = service.registry.write().await;
+            registry
+                .commit_pending_session_dispatch(
+                    planned.session_id,
+                    &planned.runner.registration.runner_id,
+                    &dispatched,
+                )
+                .ok()
+        };
+        let Some((record, previous_state)) = committed else {
+            skipped_session_ids.insert(planned.session_id);
+            continue;
+        };
+
+        let _ = service
+            .publish_event(TimelineEventDraft {
+                runner_id: record.owner_runner_id.clone(),
+                session_id: Some(record.session_id),
+                detail: TimelineEventDetail::SessionStateChanged {
+                    previous_state,
+                    state: record.state,
+                },
+            })
+            .await;
+    }
 }
 
 async fn list_sessions(
@@ -2462,6 +2606,224 @@ mod tests {
             .expect("request should succeed");
         let sessions: ListResponse<SessionRecord> = read_json(sessions_response).await;
         assert!(sessions.items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn registering_runner_dispatches_existing_pending_sessions() {
+        let service = ControlPlaneService::new(
+            load_control_plane_config(ControlPlaneConfigOverrides::default())
+                .expect("config should load"),
+            "0.1.0",
+        );
+        let app = service.router();
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"workspace_id": "default"}).to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+        let pending_session: SessionRecord = read_json(create_response).await;
+        assert!(pending_session.owner_runner_id.is_none());
+        assert_eq!(pending_session.state, SessionState::Pending);
+
+        let runner = spawn_runner_server("runner-late-register", "default").await;
+        let register_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/runners/register")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&runner.registration).expect("json should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(register_response.status(), StatusCode::OK);
+        let runner_registration: RunnerRegistrationResponse = read_json(register_response).await;
+        assert_eq!(runner_registration.snapshot.state, RunnerState::Busy);
+        assert_eq!(runner_registration.snapshot.active_sessions, 1);
+        assert_eq!(runner_registration.snapshot.queued_sessions, 0);
+
+        let session_response = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/v1/sessions/{}", pending_session.session_id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let assigned_session: SessionRecord = read_json(session_response).await;
+        assert_eq!(
+            assigned_session.owner_runner_id.as_deref(),
+            Some("runner-late-register")
+        );
+        assert_eq!(assigned_session.state, SessionState::Assigned);
+
+        let runner_session = runner
+            .api
+            .list_sessions()
+            .await
+            .into_iter()
+            .find(|record| record.session_id == pending_session.session_id)
+            .expect("runner should receive the pending session");
+        assert_eq!(runner_session.state, RunnerSessionState::Pending);
+
+        let events_response = app
+            .oneshot(
+                Request::get("/v1/events?limit=10")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let events: ListResponse<TimelineEvent> = read_json(events_response).await;
+        assert_eq!(events.items.len(), 3);
+        assert!(matches!(
+            events.items[0].detail,
+            TimelineEventDetail::SessionCreated { .. }
+        ));
+        assert!(matches!(
+            events.items[1].detail,
+            TimelineEventDetail::RunnerRegistered { .. }
+        ));
+        match &events.items[2].detail {
+            TimelineEventDetail::SessionStateChanged {
+                previous_state,
+                state,
+            } => {
+                assert_eq!(*previous_state, SessionState::Pending);
+                assert_eq!(*state, SessionState::Assigned);
+            }
+            other => panic!("expected pending-to-assigned event, received {other:?}"),
+        }
+        assert_eq!(
+            events.items[2].runner_id.as_deref(),
+            Some("runner-late-register")
+        );
+        assert_eq!(events.items[2].session_id, Some(pending_session.session_id));
+    }
+
+    #[tokio::test]
+    async fn heartbeat_dispatches_pending_sessions_when_runner_recovers() {
+        let service = ControlPlaneService::new(
+            load_control_plane_config(ControlPlaneConfigOverrides::default())
+                .expect("config should load"),
+            "0.1.0",
+        );
+        let app = service.router();
+
+        let runner = spawn_runner_server("runner-recover", "default").await;
+        let register_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/runners/register")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&runner.registration).expect("json should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(register_response.status(), StatusCode::OK);
+
+        let unhealthy_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/runners/runner-recover/heartbeat")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&RunnerHeartbeat {
+                            runner_id: "runner-recover".to_owned(),
+                            state: RunnerState::Unhealthy,
+                            active_sessions: 0,
+                            queued_sessions: 0,
+                            timestamp: Utc::now(),
+                        })
+                        .expect("json should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(unhealthy_response.status(), StatusCode::OK);
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"workspace_id": "default"}).to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+        let pending_session: SessionRecord = read_json(create_response).await;
+        assert!(pending_session.owner_runner_id.is_none());
+        assert_eq!(pending_session.state, SessionState::Pending);
+
+        let recovered_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/runners/runner-recover/heartbeat")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&RunnerHeartbeat {
+                            runner_id: "runner-recover".to_owned(),
+                            state: RunnerState::Idle,
+                            active_sessions: 0,
+                            queued_sessions: 0,
+                            timestamp: Utc::now(),
+                        })
+                        .expect("json should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(recovered_response.status(), StatusCode::OK);
+        let recovered_snapshot: RunnerSnapshot = read_json(recovered_response).await;
+        assert_eq!(recovered_snapshot.state, RunnerState::Busy);
+        assert_eq!(recovered_snapshot.active_sessions, 1);
+        assert_eq!(recovered_snapshot.queued_sessions, 0);
+
+        let session_response = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/v1/sessions/{}", pending_session.session_id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let assigned_session: SessionRecord = read_json(session_response).await;
+        assert_eq!(
+            assigned_session.owner_runner_id.as_deref(),
+            Some("runner-recover")
+        );
+        assert_eq!(assigned_session.state, SessionState::Assigned);
+
+        let runner_session = runner
+            .api
+            .list_sessions()
+            .await
+            .into_iter()
+            .find(|record| record.session_id == pending_session.session_id)
+            .expect("runner should receive the recovered session");
+        assert_eq!(runner_session.state, RunnerSessionState::Pending);
     }
 
     #[tokio::test]
