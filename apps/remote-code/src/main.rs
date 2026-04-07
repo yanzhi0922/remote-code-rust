@@ -19,9 +19,9 @@ use rc_config::{
 };
 use rc_control_plane::{
     ArtifactCreateRequest as RemoteArtifactCreateRequest, ArtifactRecord as RemoteArtifactRecord,
-    CreateSessionRequest as RemoteCreateSessionRequest, SessionRecord as RemoteSessionRecord,
-    SessionState as RemoteSessionState, TimelineEvent as RemoteTimelineEvent,
-    TimelineEventDetail as RemoteTimelineEventDetail,
+    ControlPlaneMeta as RemoteControlPlaneMeta, CreateSessionRequest as RemoteCreateSessionRequest,
+    SessionRecord as RemoteSessionRecord, SessionState as RemoteSessionState,
+    TimelineEvent as RemoteTimelineEvent, TimelineEventDetail as RemoteTimelineEventDetail,
 };
 use rc_core::{
     ConversationEntry, InputFormat, OutputFormat, PermissionMode, SessionState,
@@ -153,6 +153,7 @@ enum SessionsCommand {
 
 #[derive(Subcommand, Debug)]
 enum RemoteCommand {
+    Meta(RemoteMetaArgs),
     Runners {
         #[command(subcommand)]
         command: RemoteRunnersCommand,
@@ -226,6 +227,15 @@ struct ShowArgs {
 struct RemoteTargetArgs {
     #[arg(long, env = "REMOTE_CODE_CONTROL_PLANE_URL")]
     control_plane_url: Option<String>,
+}
+
+#[derive(Args, Debug)]
+struct RemoteMetaArgs {
+    #[command(flatten)]
+    target: RemoteTargetArgs,
+
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args, Debug)]
@@ -995,6 +1005,22 @@ fn print_remote_session_summary(session: &RemoteSessionRecord) {
     }
 }
 
+fn print_remote_meta(meta: &RemoteControlPlaneMeta) {
+    println!("Remote control plane {}", meta.service);
+    println!("- version: {}", meta.version);
+    println!("- phase: {}", meta.phase);
+    println!("- bind: {}", meta.bind);
+    println!(
+        "- public base URL: {}",
+        meta.public_base_url
+            .as_deref()
+            .unwrap_or("(missing-public-base-url)")
+    );
+    println!("- runner lease TTL: {}s", meta.runner_lease_ttl_secs);
+    println!("- profile dir: {}", meta.profile_dir);
+    println!("- artifact root dir: {}", meta.artifact_root_dir);
+}
+
 fn print_remote_runner_summary(runner: &RemoteRunnerSnapshot) {
     println!("Remote runner {}", runner.registration.runner_id);
     println!("- state: {}", runner.state.label());
@@ -1332,12 +1358,24 @@ fn run_doctor(config: &RuntimeConfig) -> Result<()> {
 
 async fn run_remote(command: RemoteCommand) -> Result<()> {
     match command {
+        RemoteCommand::Meta(args) => run_remote_meta(args).await,
         RemoteCommand::Runners { command } => run_remote_runners(command).await,
         RemoteCommand::Artifacts { command } => run_remote_artifacts(command).await,
         RemoteCommand::Approvals { command } => run_remote_approvals(command).await,
         RemoteCommand::Events(args) => run_remote_events(args).await,
         RemoteCommand::Sessions { command } => run_remote_sessions(command).await,
     }
+}
+
+async fn run_remote_meta(args: RemoteMetaArgs) -> Result<()> {
+    let control_plane_url = require_control_plane_url(&args.target)?;
+    let meta: RemoteControlPlaneMeta = remote_get_json(&control_plane_url, "/v1/meta").await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&meta)?);
+        return Ok(());
+    }
+    print_remote_meta(&meta);
+    Ok(())
 }
 
 async fn run_remote_runners(command: RemoteRunnersCommand) -> Result<()> {
@@ -4561,13 +4599,24 @@ mod tests {
             .local_addr()
             .unwrap_or_else(|error| panic!("local addr failed: {error}"));
         let server = tokio::spawn(async move {
-            for _ in 0..11 {
+            for _ in 0..12 {
                 let (mut socket, _) = listener
                     .accept()
                     .await
                     .unwrap_or_else(|error| panic!("accept failed: {error}"));
                 let (request_text, request_body) = read_http_request(&mut socket).await;
-                let body = if request_text.starts_with("GET /v1/runners ") {
+                let body = if request_text.starts_with("GET /v1/meta ") {
+                    serde_json::json!({
+                        "service": "remote-code-control-plane",
+                        "version": "0.1.0-test",
+                        "phase": "phase-3",
+                        "bind": "127.0.0.1:7001",
+                        "public_base_url": "http://127.0.0.1:7001",
+                        "runner_lease_ttl_secs": 30,
+                        "profile_dir": "C:/Users/test/.remote-code-rust",
+                        "artifact_root_dir": "C:/Users/test/.remote-code-rust/artifacts"
+                    })
+                } else if request_text.starts_with("GET /v1/runners ") {
                     serde_json::json!({
                         "items": [
                             {
@@ -4819,6 +4868,12 @@ mod tests {
         });
 
         let base_url = format!("http://{address}");
+        let meta: super::RemoteControlPlaneMeta = remote_get_json(&base_url, "/v1/meta")
+            .await
+            .unwrap_or_else(|error| panic!("remote meta get failed: {error}"));
+        assert_eq!(meta.service, "remote-code-control-plane");
+        assert_eq!(meta.phase, "phase-3");
+
         let runners: super::RemoteListResponse<super::RemoteRunnerSnapshot> =
             remote_get_json(&base_url, "/v1/runners")
                 .await
