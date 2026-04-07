@@ -37,7 +37,8 @@ use rc_protocol::{
 };
 use rc_provider::ProviderClient;
 use rc_runner::{
-    ApprovalDecision, ApprovalDecisionRequest as SharedApprovalDecisionRequest,
+    ApprovalCreateRequest as SharedApprovalCreateRequest, ApprovalDecision,
+    ApprovalDecisionRequest as SharedApprovalDecisionRequest,
     ApprovalRequestRecord as RemoteApprovalRecord, ApprovalState as RemoteApprovalState,
     ListResponse as RemoteListResponse, RunnerSnapshot as RemoteRunnerSnapshot,
     RunnerState as RemoteRunnerState,
@@ -191,6 +192,7 @@ enum RemoteArtifactsCommand {
 #[derive(Subcommand, Debug)]
 enum RemoteApprovalsCommand {
     List(RemoteApprovalsListArgs),
+    Create(RemoteApprovalCreateArgs),
     Show(RemoteApprovalShowArgs),
     Respond(RemoteApprovalRespondArgs),
 }
@@ -264,6 +266,15 @@ struct RemoteRunnerShowArgs {
 struct RemoteSessionsListArgs {
     #[command(flatten)]
     target: RemoteTargetArgs,
+
+    #[arg(long)]
+    runner_id: Option<String>,
+
+    #[arg(long)]
+    workspace_id: Option<String>,
+
+    #[arg(long, value_enum)]
+    state: Option<RemoteSessionStateValue>,
 
     #[arg(long)]
     json: bool,
@@ -434,6 +445,27 @@ struct RemoteApprovalShowArgs {
     target: RemoteTargetArgs,
 
     approval_id: Uuid,
+
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct RemoteApprovalCreateArgs {
+    #[command(flatten)]
+    target: RemoteTargetArgs,
+
+    #[arg(long)]
+    session_id: Uuid,
+
+    #[arg(long)]
+    title: String,
+
+    #[arg(long)]
+    description: String,
+
+    #[arg(long = "meta")]
+    metadata: Vec<String>,
 
     #[arg(long)]
     json: bool,
@@ -1205,6 +1237,35 @@ fn remote_runner_path(runner_id: &str) -> String {
     format!("/v1/runners/{}", encode_remote_path_segment(runner_id))
 }
 
+fn remote_sessions_path(
+    runner_id: Option<&str>,
+    workspace_id: Option<&str>,
+    state: Option<RemoteSessionState>,
+) -> String {
+    let mut path = match runner_id {
+        Some(runner_id) => format!(
+            "/v1/runners/{}/sessions",
+            encode_remote_path_segment(runner_id)
+        ),
+        None => "/v1/sessions".to_owned(),
+    };
+    let mut query = Vec::new();
+    if let Some(workspace_id) = workspace_id {
+        query.push(format!(
+            "workspace_id={}",
+            encode_remote_path_segment(workspace_id)
+        ));
+    }
+    if let Some(state) = state {
+        query.push(format!("state={}", state.label()));
+    }
+    if !query.is_empty() {
+        path.push('?');
+        path.push_str(&query.join("&"));
+    }
+    path
+}
+
 fn remote_session_state_path(session_id: Uuid) -> String {
     format!("/v1/sessions/{session_id}/state")
 }
@@ -1620,8 +1681,15 @@ async fn run_remote_artifacts_upload(args: RemoteArtifactUploadArgs) -> Result<(
 
 async fn run_remote_sessions_list(args: RemoteSessionsListArgs) -> Result<()> {
     let control_plane_url = require_control_plane_url(&args.target)?;
-    let response: RemoteListResponse<RemoteSessionRecord> =
-        remote_get_json(&control_plane_url, "/v1/sessions").await?;
+    let response: RemoteListResponse<RemoteSessionRecord> = remote_get_json(
+        &control_plane_url,
+        &remote_sessions_path(
+            args.runner_id.as_deref(),
+            args.workspace_id.as_deref(),
+            args.state.map(Into::into),
+        ),
+    )
+    .await?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&response)?);
         return Ok(());
@@ -1678,6 +1746,7 @@ async fn run_remote_sessions_state(args: RemoteSessionStateArgs) -> Result<()> {
 async fn run_remote_approvals(command: RemoteApprovalsCommand) -> Result<()> {
     match command {
         RemoteApprovalsCommand::List(args) => run_remote_approvals_list(args).await,
+        RemoteApprovalsCommand::Create(args) => run_remote_approvals_create(args).await,
         RemoteApprovalsCommand::Show(args) => run_remote_approvals_show(args).await,
         RemoteApprovalsCommand::Respond(args) => run_remote_approvals_respond(args).await,
     }
@@ -1713,6 +1782,27 @@ async fn run_remote_approvals_list(args: RemoteApprovalsListArgs) -> Result<()> 
             approval.title
         );
     }
+    Ok(())
+}
+
+async fn run_remote_approvals_create(args: RemoteApprovalCreateArgs) -> Result<()> {
+    let control_plane_url = require_control_plane_url(&args.target)?;
+    let request = SharedApprovalCreateRequest {
+        title: args.title,
+        description: args.description,
+        metadata: parse_repeated_key_value_args("--meta", &args.metadata)?,
+    };
+    let approval: RemoteApprovalRecord = remote_post_json(
+        &control_plane_url,
+        &remote_approvals_path(Some(args.session_id), None)?,
+        &request,
+    )
+    .await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&approval)?);
+        return Ok(());
+    }
+    print_remote_approval_summary(&approval);
     Ok(())
 }
 
@@ -4098,11 +4188,13 @@ mod tests {
         remote_approval_path, remote_approvals_path, remote_approvals_stream_path,
         remote_artifact_download_path, remote_artifacts_path, remote_events_path,
         remote_events_stream_path, remote_get_bytes, remote_get_json, remote_post_json,
-        remote_runner_path, remote_session_state_path, resolve_runtime_mcp_server,
+        remote_runner_path, remote_session_state_path, remote_sessions_path,
+        resolve_runtime_mcp_server,
     };
     use base64::Engine as _;
     use rc_config::{ProviderOverrides, load_runtime_config};
     use rc_control_plane::{ArtifactCreateRequest, ArtifactRecord, SessionStateUpdateRequest};
+    use rc_runner::ApprovalCreateRequest as SharedApprovalCreateRequest;
     use std::{collections::BTreeSet, fs, path::Path, process::Command as ProcessCommand};
     use tempfile::tempdir;
     use tokio::{
@@ -4268,6 +4360,19 @@ mod tests {
         assert_eq!(
             remote_session_state_path(Uuid::nil()),
             format!("/v1/sessions/{}/state", Uuid::nil())
+        );
+    }
+
+    #[test]
+    fn remote_sessions_path_supports_filters_and_runner_scope() {
+        assert_eq!(remote_sessions_path(None, None, None), "/v1/sessions");
+        assert_eq!(
+            remote_sessions_path(
+                Some("runner/a"),
+                Some("default"),
+                Some(super::RemoteSessionState::Running)
+            ),
+            "/v1/runners/runner%2Fa/sessions?workspace_id=default&state=running"
         );
     }
 
@@ -4685,7 +4790,7 @@ mod tests {
             .local_addr()
             .unwrap_or_else(|error| panic!("local addr failed: {error}"));
         let server = tokio::spawn(async move {
-            for _ in 0..13 {
+            for _ in 0..15 {
                 let (mut socket, _) = listener
                     .accept()
                     .await
@@ -4786,6 +4891,22 @@ mod tests {
                         "created_at": "2026-04-07T00:00:00Z",
                         "updated_at": "2026-04-07T00:00:01Z"
                     })
+                } else if request_text.starts_with(
+                    "GET /v1/runners/runner-a/sessions?workspace_id=default&state=running ",
+                ) {
+                    serde_json::json!({
+                        "items": [
+                            {
+                                "session_id": Uuid::nil(),
+                                "workspace_id": "default",
+                                "owner_runner_id": "runner-a",
+                                "state": "running",
+                                "metadata": {"phase": "remote"},
+                                "created_at": "2026-04-07T00:00:00Z",
+                                "updated_at": "2026-04-07T00:00:01Z"
+                            }
+                        ]
+                    })
                 } else if request_text
                     .starts_with(&format!("POST {} ", remote_session_state_path(Uuid::nil())))
                 {
@@ -4826,6 +4947,33 @@ mod tests {
                                 "note": null
                             }
                         ]
+                    })
+                } else if request_text
+                    .starts_with(&format!("POST /v1/sessions/{}/approvals ", Uuid::nil()))
+                {
+                    let request: SharedApprovalCreateRequest =
+                        serde_json::from_slice(&request_body).unwrap_or_else(|error| {
+                            panic!("approval create parse failed: {error}")
+                        });
+                    assert_eq!(request.title, "Execute shell command");
+                    assert_eq!(request.description, "Needs operator confirmation");
+                    assert_eq!(
+                        request.metadata.get("tool").map(String::as_str),
+                        Some("bash_command")
+                    );
+                    serde_json::json!({
+                        "approval_id": Uuid::nil(),
+                        "session_id": Uuid::nil(),
+                        "runner_id": "runner-a",
+                        "state": "pending",
+                        "title": request.title,
+                        "description": request.description,
+                        "metadata": request.metadata,
+                        "created_at": "2026-04-07T00:00:02Z",
+                        "updated_at": "2026-04-07T00:00:02Z",
+                        "responded_at": null,
+                        "responder": null,
+                        "note": null
                     })
                 } else if request_text
                     .starts_with(&format!("GET {} ", remote_approval_path(Uuid::nil())))
@@ -5005,6 +5153,20 @@ mod tests {
         assert_eq!(created.workspace_id, "default");
         assert_eq!(created.owner_runner_id.as_deref(), Some("runner-a"));
 
+        let filtered_sessions: super::RemoteListResponse<super::RemoteSessionRecord> =
+            remote_get_json(
+                &base_url,
+                &remote_sessions_path(
+                    Some("runner-a"),
+                    Some("default"),
+                    Some(super::RemoteSessionState::Running),
+                ),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("remote filtered sessions get failed: {error}"));
+        assert_eq!(filtered_sessions.items.len(), 1);
+        assert_eq!(filtered_sessions.items[0].state.label(), "running");
+
         let approvals: super::RemoteListResponse<super::RemoteApprovalRecord> =
             remote_get_json(&base_url, "/v1/approvals")
                 .await
@@ -5012,6 +5174,26 @@ mod tests {
         assert_eq!(approvals.items.len(), 1);
         assert_eq!(approvals.items[0].title, "Run shell");
         assert_eq!(approvals.items[0].state.label(), "pending");
+
+        let created_approval: super::RemoteApprovalRecord = remote_post_json(
+            &base_url,
+            &format!("/v1/sessions/{}/approvals", Uuid::nil()),
+            &SharedApprovalCreateRequest {
+                title: "Execute shell command".to_owned(),
+                description: "Needs operator confirmation".to_owned(),
+                metadata: [("tool".to_owned(), "bash_command".to_owned())]
+                    .into_iter()
+                    .collect(),
+            },
+        )
+        .await
+        .unwrap_or_else(|error| panic!("remote approval create failed: {error}"));
+        assert_eq!(created_approval.title, "Execute shell command");
+        assert_eq!(created_approval.state.label(), "pending");
+        assert_eq!(
+            created_approval.metadata.get("tool").map(String::as_str),
+            Some("bash_command")
+        );
 
         let approval: super::RemoteApprovalRecord =
             remote_get_json(&base_url, &remote_approval_path(Uuid::nil()))

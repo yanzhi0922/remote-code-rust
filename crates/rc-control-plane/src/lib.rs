@@ -234,6 +234,13 @@ struct RecentEventsQuery {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+struct ListSessionsQuery {
+    runner_id: Option<String>,
+    workspace_id: Option<String>,
+    state: Option<SessionState>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
 struct EventStreamQuery {
     after: Option<u64>,
 }
@@ -327,6 +334,10 @@ impl ControlPlaneService {
             .route("/v1/runners", get(list_runners))
             .route("/v1/runners/register", post(register_runner))
             .route("/v1/runners/{runner_id}", get(get_runner))
+            .route(
+                "/v1/runners/{runner_id}/sessions",
+                get(list_runner_sessions),
+            )
             .route(
                 "/v1/runners/{runner_id}/approvals",
                 get(list_runner_approvals),
@@ -549,6 +560,26 @@ impl Registry {
             .get(&session_id)
             .cloned()
             .ok_or_else(|| ApiError::not_found(format!("session `{session_id}` was not found")))
+    }
+
+    fn list_sessions_filtered(&self, query: &ListSessionsQuery) -> Vec<SessionRecord> {
+        self.sessions
+            .values()
+            .filter(|session| {
+                query
+                    .runner_id
+                    .as_deref()
+                    .is_none_or(|runner_id| session.owner_runner_id.as_deref() == Some(runner_id))
+            })
+            .filter(|session| {
+                query
+                    .workspace_id
+                    .as_deref()
+                    .is_none_or(|workspace_id| session.workspace_id == workspace_id)
+            })
+            .filter(|session| query.state.is_none_or(|state| session.state == state))
+            .cloned()
+            .collect()
     }
 
     fn apply_session_state_update(
@@ -1179,10 +1210,11 @@ async fn update_runner_heartbeat(
 
 async fn list_sessions(
     State(service): State<ControlPlaneService>,
+    Query(query): Query<ListSessionsQuery>,
 ) -> Json<ListResponse<SessionRecord>> {
     let registry = service.registry.read().await;
     Json(ListResponse {
-        items: registry.sessions.values().cloned().collect(),
+        items: registry.list_sessions_filtered(&query),
     })
 }
 
@@ -1192,6 +1224,23 @@ async fn get_session(
 ) -> Result<Json<SessionRecord>, ApiError> {
     let registry = service.registry.read().await;
     Ok(Json(registry.get_session(session_id)?))
+}
+
+async fn list_runner_sessions(
+    State(service): State<ControlPlaneService>,
+    AxumPath(runner_id): AxumPath<String>,
+    Query(mut query): Query<ListSessionsQuery>,
+) -> Result<Json<ListResponse<SessionRecord>>, ApiError> {
+    let registry = service.registry.read().await;
+    if !registry.runners.contains_key(&runner_id) {
+        return Err(ApiError::not_found(format!(
+            "runner `{runner_id}` was not found"
+        )));
+    }
+    query.runner_id = Some(runner_id);
+    Ok(Json(ListResponse {
+        items: registry.list_sessions_filtered(&query),
+    }))
 }
 
 async fn update_session_state(
@@ -1984,6 +2033,138 @@ mod tests {
             .expect("request should succeed");
         let sessions: ListResponse<SessionRecord> = read_json(sessions_response).await;
         assert!(sessions.items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_sessions_supports_runner_workspace_and_state_filters() {
+        let profile = tempdir().expect("tempdir should exist");
+        let service = ControlPlaneService::new(
+            load_control_plane_config(ControlPlaneConfigOverrides {
+                profile_dir: Some(profile.path().join("profile")),
+                ..ControlPlaneConfigOverrides::default()
+            })
+            .expect("config should load"),
+            "0.1.0",
+        );
+        let app = service.router();
+
+        let runner_a = spawn_runner_server("runner-a", "default").await;
+        let runner_b = spawn_runner_server("runner-b", "alt").await;
+        for runner in [&runner_a, &runner_b] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::post("/v1/runners/register")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&runner.registration)
+                                .expect("json should serialize"),
+                        ))
+                        .expect("request should build"),
+                )
+                .await
+                .expect("registration should succeed");
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let session_a_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"workspace_id": "default"}).to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("session create should succeed");
+        assert_eq!(session_a_response.status(), StatusCode::CREATED);
+        let session_a: SessionRecord = read_json(session_a_response).await;
+
+        let session_b_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"workspace_id": "alt"}).to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("session create should succeed");
+        assert_eq!(session_b_response.status(), StatusCode::CREATED);
+        let session_b: SessionRecord = read_json(session_b_response).await;
+
+        let update_response = app
+            .clone()
+            .oneshot(
+                Request::post(format!("/v1/sessions/{}/state", session_a.session_id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "state": "completed",
+                            "metadata": {"result": "ok"}
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("state update should succeed");
+        assert_eq!(update_response.status(), StatusCode::OK);
+
+        let by_runner_response = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/sessions?runner_id=runner-a")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("filter request should succeed");
+        let by_runner: ListResponse<SessionRecord> = read_json(by_runner_response).await;
+        assert_eq!(by_runner.items.len(), 1);
+        assert_eq!(by_runner.items[0].session_id, session_a.session_id);
+
+        let by_workspace_response = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/sessions?workspace_id=alt")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("filter request should succeed");
+        let by_workspace: ListResponse<SessionRecord> = read_json(by_workspace_response).await;
+        assert_eq!(by_workspace.items.len(), 1);
+        assert_eq!(by_workspace.items[0].session_id, session_b.session_id);
+
+        let by_state_response = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/sessions?state=completed")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("filter request should succeed");
+        let by_state: ListResponse<SessionRecord> = read_json(by_state_response).await;
+        assert_eq!(by_state.items.len(), 1);
+        assert_eq!(by_state.items[0].session_id, session_a.session_id);
+
+        let runner_scoped_response = app
+            .oneshot(
+                Request::get("/v1/runners/runner-b/sessions?state=assigned")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("runner-scoped list should succeed");
+        let runner_scoped: ListResponse<SessionRecord> = read_json(runner_scoped_response).await;
+        assert_eq!(runner_scoped.items.len(), 1);
+        assert_eq!(runner_scoped.items[0].session_id, session_b.session_id);
     }
 
     #[tokio::test]
