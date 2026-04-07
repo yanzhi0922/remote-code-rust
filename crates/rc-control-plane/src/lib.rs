@@ -220,6 +220,18 @@ pub enum TimelineEventDetail {
     },
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum TimelineEventKind {
+    RunnerRegistered,
+    RunnerHeartbeat,
+    SessionCreated,
+    SessionStateChanged,
+    ApprovalRequested,
+    ApprovalResolved,
+    ArtifactCreated,
+}
+
 #[derive(Debug, Clone)]
 struct TimelineEventDraft {
     runner_id: Option<String>,
@@ -239,6 +251,7 @@ struct SessionStateTransition {
 struct RecentEventsQuery {
     after: Option<u64>,
     limit: Option<usize>,
+    kind: Option<TimelineEventKind>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -251,6 +264,7 @@ struct ListSessionsQuery {
 #[derive(Debug, Clone, Default, Deserialize)]
 struct EventStreamQuery {
     after: Option<u64>,
+    kind: Option<TimelineEventKind>,
 }
 
 #[derive(Debug, Clone)]
@@ -348,6 +362,10 @@ impl ControlPlaneService {
             .route("/v1/runners/register", post(register_runner))
             .route("/v1/runners/{runner_id}", get(get_runner))
             .route(
+                "/v1/runners/{runner_id}/artifacts",
+                get(list_runner_artifacts),
+            )
+            .route(
                 "/v1/runners/{runner_id}/sessions",
                 get(list_runner_sessions),
             )
@@ -421,10 +439,6 @@ impl TimelineStore {
         };
         let _ = self.tx.send(event.clone());
         event
-    }
-
-    async fn recent(&self, after: Option<u64>, limit: Option<usize>) -> Vec<TimelineEvent> {
-        self.recent_filtered(after, limit, |_| true).await
     }
 
     async fn recent_filtered<F>(
@@ -673,6 +687,20 @@ impl Registry {
             .approvals
             .values()
             .filter(|approval| approval.runner_id == runner_id)
+            .cloned()
+            .collect())
+    }
+
+    fn list_runner_artifacts(&self, runner_id: &str) -> Result<Vec<ArtifactRecord>, ApiError> {
+        if !self.runners.contains_key(runner_id) {
+            return Err(ApiError::not_found(format!(
+                "runner `{runner_id}` was not found"
+            )));
+        }
+        Ok(self
+            .artifacts
+            .values()
+            .filter(|artifact| artifact.runner_id.as_deref() == Some(runner_id))
             .cloned()
             .collect())
     }
@@ -980,7 +1008,12 @@ async fn list_recent_events(
     Query(query): Query<RecentEventsQuery>,
 ) -> Json<ListResponse<TimelineEvent>> {
     Json(ListResponse {
-        items: service.timeline.recent(query.after, query.limit).await,
+        items: service
+            .timeline
+            .recent_filtered(query.after, query.limit, |event| {
+                event_matches_kind(event, query.kind)
+            })
+            .await,
     })
 }
 
@@ -1001,7 +1034,7 @@ async fn list_session_events(
         items: service
             .timeline
             .recent_filtered(query.after, query.limit, |event| {
-                event.session_id == Some(session_id)
+                event.session_id == Some(session_id) && event_matches_kind(event, query.kind)
             })
             .await,
     }))
@@ -1025,6 +1058,7 @@ async fn list_runner_events(
             .timeline
             .recent_filtered(query.after, query.limit, |event| {
                 event.runner_id.as_deref() == Some(runner_id.as_str())
+                    && event_matches_kind(event, query.kind)
             })
             .await,
     }))
@@ -1039,12 +1073,12 @@ async fn subscribe_events(
     let backlog = if query.after.is_some() {
         service
             .timeline
-            .replay_filtered(query.after, |_| true)
+            .replay_filtered(query.after, |event| event_matches_kind(event, query.kind))
             .await
     } else {
         Vec::new()
     };
-    ws.on_upgrade(move |socket| serve_event_stream(socket, subscription, backlog))
+    ws.on_upgrade(move |socket| serve_event_stream(socket, subscription, backlog, query.kind))
 }
 
 async fn subscribe_session_events(
@@ -1067,13 +1101,15 @@ async fn subscribe_session_events(
     let backlog = if query.after.is_some() {
         service
             .timeline
-            .replay_filtered(query.after, |event| event.session_id == Some(session_id))
+            .replay_filtered(query.after, |event| {
+                event.session_id == Some(session_id) && event_matches_kind(event, query.kind)
+            })
             .await
     } else {
         Vec::new()
     };
     ws.on_upgrade(move |socket| {
-        serve_session_event_stream(socket, subscription, backlog, session_id)
+        serve_session_event_stream(socket, subscription, backlog, session_id, query.kind)
     })
 }
 
@@ -1089,12 +1125,15 @@ async fn subscribe_runner_events(
             .timeline
             .replay_filtered(query.after, |event| {
                 event.runner_id.as_deref() == Some(runner_id.as_str())
+                    && event_matches_kind(event, query.kind)
             })
             .await
     } else {
         Vec::new()
     };
-    ws.on_upgrade(move |socket| serve_runner_event_stream(socket, subscription, backlog, runner_id))
+    ws.on_upgrade(move |socket| {
+        serve_runner_event_stream(socket, subscription, backlog, runner_id, query.kind)
+    })
 }
 
 async fn subscribe_approvals(
@@ -1106,12 +1145,14 @@ async fn subscribe_approvals(
     let backlog = if query.after.is_some() {
         service
             .timeline
-            .replay_filtered(query.after, is_approval_event)
+            .replay_filtered(query.after, |event| {
+                approval_event_matches(event, query.kind)
+            })
             .await
     } else {
         Vec::new()
     };
-    ws.on_upgrade(move |socket| serve_approval_stream(socket, subscription, backlog))
+    ws.on_upgrade(move |socket| serve_approval_stream(socket, subscription, backlog, query.kind))
 }
 
 async fn list_runners(
@@ -1144,14 +1185,15 @@ async fn subscribe_runner_approvals(
         service
             .timeline
             .replay_filtered(query.after, |event| {
-                event.runner_id.as_deref() == Some(runner_id.as_str()) && is_approval_event(event)
+                event.runner_id.as_deref() == Some(runner_id.as_str())
+                    && approval_event_matches(event, query.kind)
             })
             .await
     } else {
         Vec::new()
     };
     ws.on_upgrade(move |socket| {
-        serve_runner_approval_stream(socket, subscription, backlog, runner_id)
+        serve_runner_approval_stream(socket, subscription, backlog, runner_id, query.kind)
     })
 }
 
@@ -1176,14 +1218,14 @@ async fn subscribe_session_approvals(
         service
             .timeline
             .replay_filtered(query.after, |event| {
-                event.session_id == Some(session_id) && is_approval_event(event)
+                event.session_id == Some(session_id) && approval_event_matches(event, query.kind)
             })
             .await
     } else {
         Vec::new()
     };
     ws.on_upgrade(move |socket| {
-        serve_session_approval_stream(socket, subscription, backlog, session_id)
+        serve_session_approval_stream(socket, subscription, backlog, session_id, query.kind)
     })
 }
 
@@ -1318,6 +1360,16 @@ async fn list_runner_sessions(
     query.runner_id = Some(runner_id);
     Ok(Json(ListResponse {
         items: registry.list_sessions_filtered(&query),
+    }))
+}
+
+async fn list_runner_artifacts(
+    State(service): State<ControlPlaneService>,
+    AxumPath(runner_id): AxumPath<String>,
+) -> Result<Json<ListResponse<ArtifactRecord>>, ApiError> {
+    let registry = service.registry.read().await;
+    Ok(Json(ListResponse {
+        items: registry.list_runner_artifacts(&runner_id)?,
     }))
 }
 
@@ -1588,8 +1640,12 @@ async fn serve_event_stream(
     mut socket: WebSocket,
     mut subscription: broadcast::Receiver<TimelineEvent>,
     backlog: Vec<TimelineEvent>,
+    kind: Option<TimelineEventKind>,
 ) {
-    serve_filtered_event_stream(&mut socket, &mut subscription, backlog, |_| true).await;
+    serve_filtered_event_stream(&mut socket, &mut subscription, backlog, move |event| {
+        event_matches_kind(event, kind)
+    })
+    .await;
 }
 
 async fn serve_session_event_stream(
@@ -1597,9 +1653,10 @@ async fn serve_session_event_stream(
     mut subscription: broadcast::Receiver<TimelineEvent>,
     backlog: Vec<TimelineEvent>,
     session_id: Uuid,
+    kind: Option<TimelineEventKind>,
 ) {
     serve_filtered_event_stream(&mut socket, &mut subscription, backlog, move |event| {
-        event.session_id == Some(session_id)
+        event.session_id == Some(session_id) && event_matches_kind(event, kind)
     })
     .await;
 }
@@ -1609,9 +1666,10 @@ async fn serve_runner_event_stream(
     mut subscription: broadcast::Receiver<TimelineEvent>,
     backlog: Vec<TimelineEvent>,
     runner_id: String,
+    kind: Option<TimelineEventKind>,
 ) {
     serve_filtered_event_stream(&mut socket, &mut subscription, backlog, move |event| {
-        event.runner_id.as_deref() == Some(runner_id.as_str())
+        event.runner_id.as_deref() == Some(runner_id.as_str()) && event_matches_kind(event, kind)
     })
     .await;
 }
@@ -1620,8 +1678,12 @@ async fn serve_approval_stream(
     mut socket: WebSocket,
     mut subscription: broadcast::Receiver<TimelineEvent>,
     backlog: Vec<TimelineEvent>,
+    kind: Option<TimelineEventKind>,
 ) {
-    serve_filtered_event_stream(&mut socket, &mut subscription, backlog, is_approval_event).await;
+    serve_filtered_event_stream(&mut socket, &mut subscription, backlog, move |event| {
+        approval_event_matches(event, kind)
+    })
+    .await;
 }
 
 async fn serve_runner_approval_stream(
@@ -1629,9 +1691,11 @@ async fn serve_runner_approval_stream(
     mut subscription: broadcast::Receiver<TimelineEvent>,
     backlog: Vec<TimelineEvent>,
     runner_id: String,
+    kind: Option<TimelineEventKind>,
 ) {
     serve_filtered_event_stream(&mut socket, &mut subscription, backlog, move |event| {
-        event.runner_id.as_deref() == Some(runner_id.as_str()) && is_approval_event(event)
+        event.runner_id.as_deref() == Some(runner_id.as_str())
+            && approval_event_matches(event, kind)
     })
     .await;
 }
@@ -1641,9 +1705,10 @@ async fn serve_session_approval_stream(
     mut subscription: broadcast::Receiver<TimelineEvent>,
     backlog: Vec<TimelineEvent>,
     session_id: Uuid,
+    kind: Option<TimelineEventKind>,
 ) {
     serve_filtered_event_stream(&mut socket, &mut subscription, backlog, move |event| {
-        event.session_id == Some(session_id) && is_approval_event(event)
+        event.session_id == Some(session_id) && approval_event_matches(event, kind)
     })
     .await;
 }
@@ -1692,6 +1757,26 @@ async fn send_timeline_event(
         .send(Message::Text(payload.into()))
         .await
         .map_err(|_| ())
+}
+
+fn event_kind(detail: &TimelineEventDetail) -> TimelineEventKind {
+    match detail {
+        TimelineEventDetail::RunnerRegistered { .. } => TimelineEventKind::RunnerRegistered,
+        TimelineEventDetail::RunnerHeartbeat { .. } => TimelineEventKind::RunnerHeartbeat,
+        TimelineEventDetail::SessionCreated { .. } => TimelineEventKind::SessionCreated,
+        TimelineEventDetail::SessionStateChanged { .. } => TimelineEventKind::SessionStateChanged,
+        TimelineEventDetail::ApprovalRequested { .. } => TimelineEventKind::ApprovalRequested,
+        TimelineEventDetail::ApprovalResolved { .. } => TimelineEventKind::ApprovalResolved,
+        TimelineEventDetail::ArtifactCreated { .. } => TimelineEventKind::ArtifactCreated,
+    }
+}
+
+fn event_matches_kind(event: &TimelineEvent, kind: Option<TimelineEventKind>) -> bool {
+    kind.is_none_or(|kind| event_kind(&event.detail) == kind)
+}
+
+fn approval_event_matches(event: &TimelineEvent, kind: Option<TimelineEventKind>) -> bool {
+    is_approval_event(event) && event_matches_kind(event, kind)
 }
 
 fn is_approval_event(event: &TimelineEvent) -> bool {
@@ -3099,6 +3184,101 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runner_artifact_listing_filters_by_runner() {
+        let service = ControlPlaneService::new(
+            load_control_plane_config(ControlPlaneConfigOverrides::default())
+                .expect("config should load"),
+            "0.1.0",
+        );
+        let app = service.router();
+
+        let runner_a = spawn_runner_server("runner-artifact-a", "default").await;
+        let runner_z = spawn_runner_server("runner-artifact-z", "default").await;
+        for registration in [&runner_a.registration, &runner_z.registration] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::post("/v1/runners/register")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(registration).expect("json should serialize"),
+                        ))
+                        .expect("request should build"),
+                )
+                .await
+                .expect("request should succeed");
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "workspace_id": "default",
+                            "preferred_runner_id": "runner-artifact-a"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let session: SessionRecord = read_json(create_response).await;
+        assert_eq!(
+            session.owner_runner_id.as_deref(),
+            Some("runner-artifact-a")
+        );
+
+        let artifact_response = app
+            .clone()
+            .oneshot(
+                Request::post(format!("/v1/sessions/{}/artifacts", session.session_id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "name": "runner-log",
+                            "file_name": "runner.log",
+                            "media_type": "text/plain",
+                            "content_base64": BASE64_STANDARD.encode("hello runner"),
+                            "metadata": {"kind": "runner-log"}
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(artifact_response.status(), StatusCode::CREATED);
+
+        let runner_a_response = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/runners/runner-artifact-a/artifacts")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let runner_a_artifacts: ListResponse<ArtifactRecord> = read_json(runner_a_response).await;
+        assert_eq!(runner_a_artifacts.items.len(), 1);
+        assert_eq!(runner_a_artifacts.items[0].file_name, "runner.log");
+
+        let runner_z_response = app
+            .oneshot(
+                Request::get("/v1/runners/runner-artifact-z/artifacts")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let runner_z_artifacts: ListResponse<ArtifactRecord> = read_json(runner_z_response).await;
+        assert!(runner_z_artifacts.items.is_empty());
+    }
+
+    #[tokio::test]
     async fn runner_event_listing_filters_by_runner() {
         let service = ControlPlaneService::new(
             load_control_plane_config(ControlPlaneConfigOverrides::default())
@@ -3169,6 +3349,23 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event.detail, TimelineEventDetail::SessionCreated { .. }))
         );
+
+        let runner_a_filtered_response = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/runners/runner-event-a/events?limit=10&kind=session_created")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let runner_a_filtered: ListResponse<TimelineEvent> =
+            read_json(runner_a_filtered_response).await;
+        assert_eq!(runner_a_filtered.items.len(), 1);
+        assert!(matches!(
+            runner_a_filtered.items[0].detail,
+            TimelineEventDetail::SessionCreated { .. }
+        ));
 
         let runner_b_response = app
             .oneshot(
@@ -3330,7 +3527,7 @@ mod tests {
             .expect("session payload should decode");
 
         let ws_url = base_url.replacen("http://", "ws://", 1)
-            + "/v1/runners/runner-event-stream/events/stream?after=0";
+            + "/v1/runners/runner-event-stream/events/stream?after=0&kind=session_created";
         let (mut socket, _) = connect_async(&ws_url)
             .await
             .expect("websocket should connect");
@@ -3338,11 +3535,6 @@ mod tests {
         let first_message = timeout(TokioDuration::from_secs(5), socket.next())
             .await
             .expect("first event should arrive before timeout")
-            .expect("event stream should stay open")
-            .expect("websocket frame should parse");
-        let second_message = timeout(TokioDuration::from_secs(5), socket.next())
-            .await
-            .expect("second event should arrive before timeout")
             .expect("event stream should stay open")
             .expect("websocket frame should parse");
 
@@ -3354,24 +3546,15 @@ mod tests {
             serde_json::from_str(&text).expect("event payload should deserialize")
         };
         let first_event = decode(first_message);
-        let second_event = decode(second_message);
+        assert!(matches!(
+            first_event.detail,
+            TimelineEventDetail::SessionCreated { .. }
+        ));
         assert_eq!(
             first_event.runner_id.as_deref(),
             Some("runner-event-stream")
         );
-        assert_eq!(
-            second_event.runner_id.as_deref(),
-            Some("runner-event-stream")
-        );
-        assert!(matches!(
-            first_event.detail,
-            TimelineEventDetail::RunnerRegistered { .. }
-        ));
-        assert!(matches!(
-            second_event.detail,
-            TimelineEventDetail::SessionCreated { .. }
-        ));
-        assert_eq!(second_event.session_id, Some(session.session_id));
+        assert_eq!(first_event.session_id, Some(session.session_id));
 
         socket.close(None).await.expect("socket should close");
         server_handle.abort();

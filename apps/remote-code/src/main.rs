@@ -334,6 +334,31 @@ impl From<RemoteSessionStateValue> for RemoteSessionState {
     }
 }
 
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+enum RemoteEventKindValue {
+    RunnerRegistered,
+    RunnerHeartbeat,
+    SessionCreated,
+    SessionStateChanged,
+    ApprovalRequested,
+    ApprovalResolved,
+    ArtifactCreated,
+}
+
+impl RemoteEventKindValue {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::RunnerRegistered => "runner_registered",
+            Self::RunnerHeartbeat => "runner_heartbeat",
+            Self::SessionCreated => "session_created",
+            Self::SessionStateChanged => "session_state_changed",
+            Self::ApprovalRequested => "approval_requested",
+            Self::ApprovalResolved => "approval_resolved",
+            Self::ArtifactCreated => "artifact_created",
+        }
+    }
+}
+
 #[derive(Args, Debug)]
 struct RemoteSessionStateArgs {
     #[command(flatten)]
@@ -358,6 +383,9 @@ struct RemoteArtifactsListArgs {
 
     #[arg(long)]
     session_id: Option<Uuid>,
+
+    #[arg(long)]
+    runner_id: Option<String>,
 
     #[arg(long)]
     json: bool,
@@ -509,6 +537,9 @@ struct RemoteEventsArgs {
 
     #[arg(long)]
     runner_id: Option<String>,
+
+    #[arg(long, value_enum)]
+    kind: Option<RemoteEventKindValue>,
 
     #[arg(long)]
     after: Option<u64>,
@@ -1297,10 +1328,17 @@ fn remote_approvals_stream_path(
     Ok(path)
 }
 
-fn remote_artifacts_path(session_id: Option<Uuid>) -> String {
-    match session_id {
-        Some(session_id) => format!("/v1/sessions/{session_id}/artifacts"),
-        None => "/v1/artifacts".to_owned(),
+fn remote_artifacts_path(session_id: Option<Uuid>, runner_id: Option<&str>) -> Result<String> {
+    match (session_id, runner_id) {
+        (Some(_), Some(_)) => Err(anyhow!(
+            "choose either --session-id or --runner-id when listing artifacts"
+        )),
+        (Some(session_id), None) => Ok(format!("/v1/sessions/{session_id}/artifacts")),
+        (None, Some(runner_id)) => Ok(format!(
+            "/v1/runners/{}/artifacts",
+            encode_remote_path_segment(runner_id)
+        )),
+        (None, None) => Ok("/v1/artifacts".to_owned()),
     }
 }
 
@@ -1331,6 +1369,7 @@ fn remote_events_path(
     runner_id: Option<&str>,
     after: Option<u64>,
     limit: usize,
+    kind: Option<RemoteEventKindValue>,
 ) -> Result<String> {
     let mut path = match (session_id, runner_id) {
         (Some(_), Some(_)) => {
@@ -1350,6 +1389,9 @@ fn remote_events_path(
         query.push(format!("after={after}"));
     }
     query.push(format!("limit={}", limit.clamp(1, 200)));
+    if let Some(kind) = kind {
+        query.push(format!("kind={}", kind.as_str()));
+    }
     if !query.is_empty() {
         path.push('?');
         path.push_str(&query.join("&"));
@@ -1361,6 +1403,7 @@ fn remote_events_stream_path(
     session_id: Option<Uuid>,
     runner_id: Option<&str>,
     after: Option<u64>,
+    kind: Option<RemoteEventKindValue>,
 ) -> Result<String> {
     let mut path = match (session_id, runner_id) {
         (Some(_), Some(_)) => {
@@ -1375,8 +1418,16 @@ fn remote_events_stream_path(
         ),
         (None, None) => "/v1/events/stream".to_owned(),
     };
+    let mut query = Vec::new();
     if let Some(after) = after {
-        path.push_str(&format!("?after={after}"));
+        query.push(format!("after={after}"));
+    }
+    if let Some(kind) = kind {
+        query.push(format!("kind={}", kind.as_str()));
+    }
+    if !query.is_empty() {
+        path.push('?');
+        path.push_str(&query.join("&"));
     }
     Ok(path)
 }
@@ -1594,7 +1645,7 @@ async fn run_remote_runners_show(args: RemoteRunnerShowArgs) -> Result<()> {
 
 async fn run_remote_artifacts_list(args: RemoteArtifactsListArgs) -> Result<()> {
     let control_plane_url = require_control_plane_url(&args.target)?;
-    let path = remote_artifacts_path(args.session_id);
+    let path = remote_artifacts_path(args.session_id, args.runner_id.as_deref())?;
     let response: RemoteListResponse<RemoteArtifactRecord> =
         remote_get_json(&control_plane_url, &path).await?;
     if args.json {
@@ -1698,7 +1749,7 @@ async fn run_remote_artifacts_upload(args: RemoteArtifactUploadArgs) -> Result<(
         content_base64: BASE64_STANDARD.encode(&bytes),
         metadata: parse_repeated_key_value_args("--meta", &args.metadata)?,
     };
-    let path = remote_artifacts_path(Some(args.session_id));
+    let path = remote_artifacts_path(Some(args.session_id), None)?;
     let artifact: RemoteArtifactRecord =
         remote_post_json(&control_plane_url, &path, &request).await?;
     if args.json {
@@ -1950,6 +2001,7 @@ async fn run_remote_events(args: RemoteEventsArgs) -> Result<()> {
         args.runner_id.as_deref(),
         args.after,
         args.limit,
+        args.kind,
     )?;
     let response: RemoteListResponse<RemoteTimelineEvent> =
         remote_get_json(&control_plane_url, &path).await?;
@@ -1967,6 +2019,7 @@ async fn run_remote_events_follow(control_plane_url: String, args: RemoteEventsA
         args.runner_id.as_deref(),
         args.after,
         args.limit,
+        args.kind,
     )?;
     let response: RemoteListResponse<RemoteTimelineEvent> =
         remote_get_json(&control_plane_url, &history_path).await?;
@@ -1984,8 +2037,12 @@ async fn run_remote_events_follow(control_plane_url: String, args: RemoteEventsA
         .map(|event| event.sequence)
         .or(args.after)
         .or(Some(0));
-    let ws_path =
-        remote_events_stream_path(args.session_id, args.runner_id.as_deref(), follow_after)?;
+    let ws_path = remote_events_stream_path(
+        args.session_id,
+        args.runner_id.as_deref(),
+        follow_after,
+        args.kind,
+    )?;
     let ws_url = build_remote_ws_url(&control_plane_url, &ws_path)?;
     let (mut socket, _) = connect_async(&ws_url).await?;
     loop {
@@ -4385,11 +4442,20 @@ mod tests {
 
     #[test]
     fn remote_artifacts_path_supports_global_and_session_scopes() {
-        assert_eq!(remote_artifacts_path(None), "/v1/artifacts");
         assert_eq!(
-            remote_artifacts_path(Some(Uuid::nil())),
+            remote_artifacts_path(None, None).unwrap_or_else(|error| panic!("{error}")),
+            "/v1/artifacts"
+        );
+        assert_eq!(
+            remote_artifacts_path(Some(Uuid::nil()), None)
+                .unwrap_or_else(|error| panic!("{error}")),
             format!("/v1/sessions/{}/artifacts", Uuid::nil())
         );
+        assert_eq!(
+            remote_artifacts_path(None, Some("runner/a")).unwrap_or_else(|error| panic!("{error}")),
+            "/v1/runners/runner%2Fa/artifacts"
+        );
+        assert!(remote_artifacts_path(Some(Uuid::nil()), Some("runner-a")).is_err());
         assert_eq!(
             remote_artifact_download_path(Uuid::nil()),
             format!("/v1/artifacts/{}/download", Uuid::nil())
@@ -4440,39 +4506,54 @@ mod tests {
     #[test]
     fn remote_events_path_builds_queries() {
         assert_eq!(
-            remote_events_path(None, None, None, 20).unwrap_or_else(|error| panic!("{error}")),
+            remote_events_path(None, None, None, 20, None)
+                .unwrap_or_else(|error| panic!("{error}")),
             "/v1/events?limit=20"
         );
         assert_eq!(
-            remote_events_path(Some(Uuid::nil()), None, Some(41), 500)
+            remote_events_path(Some(Uuid::nil()), None, Some(41), 500, None)
                 .unwrap_or_else(|error| panic!("{error}")),
             format!("/v1/sessions/{}/events?after=41&limit=200", Uuid::nil())
         );
         assert_eq!(
-            remote_events_path(None, Some("runner/a"), Some(2), 5)
-                .unwrap_or_else(|error| panic!("{error}")),
-            "/v1/runners/runner%2Fa/events?after=2&limit=5"
+            remote_events_path(
+                None,
+                Some("runner/a"),
+                Some(2),
+                5,
+                Some(super::RemoteEventKindValue::SessionCreated)
+            )
+            .unwrap_or_else(|error| panic!("{error}")),
+            "/v1/runners/runner%2Fa/events?after=2&limit=5&kind=session_created"
         );
-        assert!(remote_events_path(Some(Uuid::nil()), Some("runner-a"), None, 20).is_err());
+        assert!(remote_events_path(Some(Uuid::nil()), Some("runner-a"), None, 20, None).is_err());
     }
 
     #[test]
     fn remote_events_stream_path_appends_after_query() {
         assert_eq!(
-            remote_events_stream_path(None, None, None).unwrap_or_else(|error| panic!("{error}")),
+            remote_events_stream_path(None, None, None, None)
+                .unwrap_or_else(|error| panic!("{error}")),
             "/v1/events/stream"
         );
         assert_eq!(
-            remote_events_stream_path(Some(Uuid::nil()), None, Some(41))
+            remote_events_stream_path(Some(Uuid::nil()), None, Some(41), None)
                 .unwrap_or_else(|error| panic!("{error}")),
             format!("/v1/sessions/{}/events/stream?after=41", Uuid::nil())
         );
         assert_eq!(
-            remote_events_stream_path(None, Some("runner/a"), Some(9))
-                .unwrap_or_else(|error| panic!("{error}")),
-            "/v1/runners/runner%2Fa/events/stream?after=9"
+            remote_events_stream_path(
+                None,
+                Some("runner/a"),
+                Some(9),
+                Some(super::RemoteEventKindValue::SessionCreated)
+            )
+            .unwrap_or_else(|error| panic!("{error}")),
+            "/v1/runners/runner%2Fa/events/stream?after=9&kind=session_created"
         );
-        assert!(remote_events_stream_path(Some(Uuid::nil()), Some("runner-a"), None).is_err());
+        assert!(
+            remote_events_stream_path(Some(Uuid::nil()), Some("runner-a"), None, None).is_err()
+        );
     }
 
     #[test]
@@ -4851,7 +4932,7 @@ mod tests {
             .local_addr()
             .unwrap_or_else(|error| panic!("local addr failed: {error}"));
         let server = tokio::spawn(async move {
-            for _ in 0..16 {
+            for _ in 0..17 {
                 let (mut socket, _) = listener
                     .accept()
                     .await
@@ -5070,9 +5151,9 @@ mod tests {
                             }
                         ]
                     })
-                } else if request_text
-                    .starts_with("GET /v1/runners/runner-a/events?after=1&limit=5 ")
-                {
+                } else if request_text.starts_with(
+                    "GET /v1/runners/runner-a/events?after=1&limit=5&kind=session_created ",
+                ) {
                     serde_json::json!({
                         "items": [
                             {
@@ -5086,6 +5167,22 @@ mod tests {
                                     "owner_runner_id": "runner-a",
                                     "state": "running"
                                 }
+                            }
+                        ]
+                    })
+                } else if request_text.starts_with("GET /v1/runners/runner-a/artifacts ") {
+                    serde_json::json!({
+                        "items": [
+                            {
+                                "artifact_id": Uuid::nil(),
+                                "session_id": Uuid::nil(),
+                                "runner_id": "runner-a",
+                                "name": "runner-log",
+                                "file_name": "runner-log.txt",
+                                "media_type": "text/plain",
+                                "size_bytes": 12,
+                                "metadata": {"kind": "runner-log"},
+                                "created_at": "2026-04-07T00:00:04Z"
                             }
                         ]
                     })
@@ -5283,7 +5380,8 @@ mod tests {
 
         let events: super::RemoteListResponse<super::RemoteTimelineEvent> = remote_get_json(
             &base_url,
-            &remote_events_path(None, None, Some(1), 5).unwrap_or_else(|error| panic!("{error}")),
+            &remote_events_path(None, None, Some(1), 5, None)
+                .unwrap_or_else(|error| panic!("{error}")),
         )
         .await
         .unwrap_or_else(|error| panic!("remote events get failed: {error}"));
@@ -5298,8 +5396,14 @@ mod tests {
 
         let runner_events: super::RemoteListResponse<super::RemoteTimelineEvent> = remote_get_json(
             &base_url,
-            &remote_events_path(None, Some("runner-a"), Some(1), 5)
-                .unwrap_or_else(|error| panic!("{error}")),
+            &remote_events_path(
+                None,
+                Some("runner-a"),
+                Some(1),
+                5,
+                Some(super::RemoteEventKindValue::SessionCreated),
+            )
+            .unwrap_or_else(|error| panic!("{error}")),
         )
         .await
         .unwrap_or_else(|error| panic!("remote runner events get failed: {error}"));
@@ -5313,6 +5417,17 @@ mod tests {
             }
             other => panic!("unexpected runner event detail: {other:?}"),
         }
+
+        let runner_artifacts: super::RemoteListResponse<super::RemoteArtifactRecord> =
+            remote_get_json(
+                &base_url,
+                &remote_artifacts_path(None, Some("runner-a"))
+                    .unwrap_or_else(|error| panic!("{error}")),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("remote runner artifacts get failed: {error}"));
+        assert_eq!(runner_artifacts.items.len(), 1);
+        assert_eq!(runner_artifacts.items[0].file_name, "runner-log.txt");
 
         let artifacts: super::RemoteListResponse<super::RemoteArtifactRecord> =
             remote_get_json(&base_url, "/v1/artifacts")
