@@ -227,6 +227,14 @@ struct TimelineEventDraft {
     detail: TimelineEventDetail,
 }
 
+#[derive(Debug, Clone)]
+struct SessionStateTransition {
+    runner_id: Option<String>,
+    session_id: Uuid,
+    previous_state: SessionState,
+    state: SessionState,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 struct RecentEventsQuery {
     after: Option<u64>,
@@ -317,6 +325,11 @@ impl ControlPlaneService {
             .route(
                 "/v1/sessions/{session_id}/events/stream",
                 get(subscribe_session_events),
+            )
+            .route("/v1/runners/{runner_id}/events", get(list_runner_events))
+            .route(
+                "/v1/runners/{runner_id}/events/stream",
+                get(subscribe_runner_events),
             )
             .route("/v1/approvals/stream", get(subscribe_approvals))
             .route("/v1/approvals", get(list_approvals))
@@ -759,43 +772,52 @@ impl Registry {
         &mut self,
         session_id: Uuid,
         request: ApprovalCreateRequest,
-    ) -> Result<ApprovalRequestRecord, ApiError> {
-        let session = self
-            .sessions
-            .get_mut(&session_id)
-            .ok_or_else(|| ApiError::not_found(format!("session `{session_id}` was not found")))?;
+    ) -> Result<(ApprovalRequestRecord, Option<SessionStateTransition>), ApiError> {
         let now = Utc::now();
-        session.state = SessionState::WaitingApproval;
-        session.updated_at = now;
-        let owner_runner_id = session.owner_runner_id.clone();
-
-        let approval = ApprovalRequestRecord {
-            approval_id: Uuid::new_v4(),
-            session_id,
-            runner_id: session.owner_runner_id.clone().unwrap_or_default(),
-            state: ApprovalState::Pending,
-            title: request.title,
-            description: request.description,
-            metadata: request.metadata,
-            created_at: now,
-            updated_at: now,
-            responded_at: None,
-            responder: None,
-            note: None,
+        let (approval, transition, owner_runner_id) = {
+            let session = self.sessions.get_mut(&session_id).ok_or_else(|| {
+                ApiError::not_found(format!("session `{session_id}` was not found"))
+            })?;
+            let previous_state = session.state;
+            session.state = SessionState::WaitingApproval;
+            session.updated_at = now;
+            let owner_runner_id = session.owner_runner_id.clone();
+            let current_state = session.state;
+            let approval = ApprovalRequestRecord {
+                approval_id: Uuid::new_v4(),
+                session_id,
+                runner_id: session.owner_runner_id.clone().unwrap_or_default(),
+                state: ApprovalState::Pending,
+                title: request.title,
+                description: request.description,
+                metadata: request.metadata,
+                created_at: now,
+                updated_at: now,
+                responded_at: None,
+                responder: None,
+                note: None,
+            };
+            let transition = (previous_state != current_state).then(|| SessionStateTransition {
+                runner_id: owner_runner_id.clone(),
+                session_id,
+                previous_state,
+                state: current_state,
+            });
+            (approval, transition, owner_runner_id)
         };
         self.approvals
             .insert(approval.approval_id, approval.clone());
         if let Some(runner_id) = owner_runner_id.as_deref() {
             self.refresh_runner_session_counts(runner_id, now);
         }
-        Ok(approval)
+        Ok((approval, transition))
     }
 
     fn apply_approval_decision(
         &mut self,
         approval_id: Uuid,
         request: ApprovalDecisionRequest,
-    ) -> Result<ApprovalRequestRecord, ApiError> {
+    ) -> Result<(ApprovalRequestRecord, Option<SessionStateTransition>), ApiError> {
         let decision = request.decision;
         let approval = self.approvals.get_mut(&approval_id).ok_or_else(|| {
             ApiError::not_found(format!("approval `{approval_id}` was not found"))
@@ -819,15 +841,28 @@ impl Registry {
                 && matches!(candidate.state, ApprovalState::Pending)
         });
 
-        if let Some(session) = self.sessions.get_mut(&updated.session_id) {
+        let (transition, owner_runner_id) = if let Some(session) =
+            self.sessions.get_mut(&updated.session_id)
+        {
+            let previous_state = session.state;
             session.state = session_state_after_approval(decision, has_pending_approvals);
             session.updated_at = now;
-            if let Some(runner_id) = session.owner_runner_id.clone() {
-                self.refresh_runner_session_counts(&runner_id, now);
-            }
+            let owner_runner_id = session.owner_runner_id.clone();
+            let transition = (previous_state != session.state).then(|| SessionStateTransition {
+                runner_id: owner_runner_id.clone(),
+                session_id: session.session_id,
+                previous_state,
+                state: session.state,
+            });
+            (transition, owner_runner_id)
+        } else {
+            (None, None)
+        };
+        if let Some(runner_id) = owner_runner_id {
+            self.refresh_runner_session_counts(&runner_id, now);
         }
 
-        Ok(updated)
+        Ok((updated, transition))
     }
 
     fn select_runner(
@@ -972,6 +1007,29 @@ async fn list_session_events(
     }))
 }
 
+async fn list_runner_events(
+    State(service): State<ControlPlaneService>,
+    AxumPath(runner_id): AxumPath<String>,
+    Query(query): Query<RecentEventsQuery>,
+) -> Result<Json<ListResponse<TimelineEvent>>, ApiError> {
+    {
+        let registry = service.registry.read().await;
+        if !registry.runners.contains_key(&runner_id) {
+            return Err(ApiError::not_found(format!(
+                "runner `{runner_id}` was not found"
+            )));
+        }
+    }
+    Ok(Json(ListResponse {
+        items: service
+            .timeline
+            .recent_filtered(query.after, query.limit, |event| {
+                event.runner_id.as_deref() == Some(runner_id.as_str())
+            })
+            .await,
+    }))
+}
+
 async fn subscribe_events(
     ws: WebSocketUpgrade,
     Query(query): Query<EventStreamQuery>,
@@ -1017,6 +1075,26 @@ async fn subscribe_session_events(
     ws.on_upgrade(move |socket| {
         serve_session_event_stream(socket, subscription, backlog, session_id)
     })
+}
+
+async fn subscribe_runner_events(
+    ws: WebSocketUpgrade,
+    Query(query): Query<EventStreamQuery>,
+    State(service): State<ControlPlaneService>,
+    AxumPath(runner_id): AxumPath<String>,
+) -> Response {
+    let subscription = service.timeline.subscribe();
+    let backlog = if query.after.is_some() {
+        service
+            .timeline
+            .replay_filtered(query.after, |event| {
+                event.runner_id.as_deref() == Some(runner_id.as_str())
+            })
+            .await
+    } else {
+        Vec::new()
+    };
+    ws.on_upgrade(move |socket| serve_runner_event_stream(socket, subscription, backlog, runner_id))
 }
 
 async fn subscribe_approvals(
@@ -1416,7 +1494,7 @@ async fn create_approval(
     AxumPath(session_id): AxumPath<Uuid>,
     Json(request): Json<ApprovalCreateRequest>,
 ) -> Result<(StatusCode, Json<ApprovalRequestRecord>), ApiError> {
-    let approval = {
+    let (approval, transition) = {
         let mut registry = service.registry.write().await;
         registry.create_approval(session_id, request)?
     };
@@ -1431,6 +1509,18 @@ async fn create_approval(
             },
         })
         .await;
+    if let Some(transition) = transition {
+        let _ = service
+            .publish_event(TimelineEventDraft {
+                runner_id: transition.runner_id,
+                session_id: Some(transition.session_id),
+                detail: TimelineEventDetail::SessionStateChanged {
+                    previous_state: transition.previous_state,
+                    state: transition.state,
+                },
+            })
+            .await;
+    }
     Ok((StatusCode::CREATED, Json(approval)))
 }
 
@@ -1439,7 +1529,7 @@ async fn apply_approval_decision(
     AxumPath(approval_id): AxumPath<Uuid>,
     Json(request): Json<ApprovalDecisionRequest>,
 ) -> Result<Json<ApprovalRequestRecord>, ApiError> {
-    let approval = {
+    let (approval, transition) = {
         let mut registry = service.registry.write().await;
         registry.apply_approval_decision(approval_id, request)?
     };
@@ -1454,6 +1544,18 @@ async fn apply_approval_decision(
             },
         })
         .await;
+    if let Some(transition) = transition {
+        let _ = service
+            .publish_event(TimelineEventDraft {
+                runner_id: transition.runner_id,
+                session_id: Some(transition.session_id),
+                detail: TimelineEventDetail::SessionStateChanged {
+                    previous_state: transition.previous_state,
+                    state: transition.state,
+                },
+            })
+            .await;
+    }
     Ok(Json(approval))
 }
 
@@ -1498,6 +1600,18 @@ async fn serve_session_event_stream(
 ) {
     serve_filtered_event_stream(&mut socket, &mut subscription, backlog, move |event| {
         event.session_id == Some(session_id)
+    })
+    .await;
+}
+
+async fn serve_runner_event_stream(
+    mut socket: WebSocket,
+    mut subscription: broadcast::Receiver<TimelineEvent>,
+    backlog: Vec<TimelineEvent>,
+    runner_id: String,
+) {
+    serve_filtered_event_stream(&mut socket, &mut subscription, backlog, move |event| {
+        event.runner_id.as_deref() == Some(runner_id.as_str())
     })
     .await;
 }
@@ -2488,7 +2602,7 @@ mod tests {
             .await
             .expect("request should succeed");
         let events: ListResponse<TimelineEvent> = read_json(events_response).await;
-        assert_eq!(events.items.len(), 4);
+        assert_eq!(events.items.len(), 6);
         assert!(matches!(
             events.items[0].detail,
             TimelineEventDetail::RunnerRegistered { .. }
@@ -2510,6 +2624,16 @@ mod tests {
             other => panic!("expected approval requested event, received {other:?}"),
         }
         match &events.items[3].detail {
+            TimelineEventDetail::SessionStateChanged {
+                previous_state,
+                state,
+            } => {
+                assert_eq!(*previous_state, SessionState::Assigned);
+                assert_eq!(*state, SessionState::WaitingApproval);
+            }
+            other => panic!("expected waiting state change event, received {other:?}"),
+        }
+        match &events.items[4].detail {
             TimelineEventDetail::ApprovalResolved {
                 approval_id,
                 state,
@@ -2521,16 +2645,23 @@ mod tests {
             }
             other => panic!("expected approval resolved event, received {other:?}"),
         }
-        assert_eq!(events.items[2].session_id, Some(session.session_id));
-        assert_eq!(events.items[3].session_id, Some(session.session_id));
-        assert_eq!(
-            events.items[2].runner_id.as_deref(),
-            Some("runner-approval")
-        );
-        assert_eq!(
-            events.items[3].runner_id.as_deref(),
-            Some("runner-approval")
-        );
+        match &events.items[5].detail {
+            TimelineEventDetail::SessionStateChanged {
+                previous_state,
+                state,
+            } => {
+                assert_eq!(*previous_state, SessionState::WaitingApproval);
+                assert_eq!(*state, SessionState::Running);
+            }
+            other => panic!("expected running state change event, received {other:?}"),
+        }
+        for index in 2..=5 {
+            assert_eq!(events.items[index].session_id, Some(session.session_id));
+            assert_eq!(
+                events.items[index].runner_id.as_deref(),
+                Some("runner-approval")
+            );
+        }
     }
 
     #[tokio::test]
@@ -2968,6 +3099,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runner_event_listing_filters_by_runner() {
+        let service = ControlPlaneService::new(
+            load_control_plane_config(ControlPlaneConfigOverrides::default())
+                .expect("config should load"),
+            "0.1.0",
+        );
+        let app = service.router();
+
+        let runner_a = spawn_runner_server("runner-event-a", "default").await;
+        let runner_b = spawn_runner_server("runner-event-b", "default").await;
+        for registration in [&runner_a.registration, &runner_b.registration] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::post("/v1/runners/register")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(registration).expect("json should serialize"),
+                        ))
+                        .expect("request should build"),
+                )
+                .await
+                .expect("request should succeed");
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "workspace_id": "default",
+                            "preferred_runner_id": "runner-event-a"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+
+        let runner_a_response = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/runners/runner-event-a/events?limit=10")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let runner_a_events: ListResponse<TimelineEvent> = read_json(runner_a_response).await;
+        assert!(
+            runner_a_events.items.len() >= 2,
+            "expected runner registration and session-created events"
+        );
+        assert!(
+            runner_a_events
+                .items
+                .iter()
+                .all(|event| event.runner_id.as_deref() == Some("runner-event-a"))
+        );
+        assert!(
+            runner_a_events
+                .items
+                .iter()
+                .any(|event| matches!(event.detail, TimelineEventDetail::SessionCreated { .. }))
+        );
+
+        let runner_b_response = app
+            .oneshot(
+                Request::get("/v1/runners/runner-event-b/events?limit=10")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let runner_b_events: ListResponse<TimelineEvent> = read_json(runner_b_response).await;
+        assert_eq!(runner_b_events.items.len(), 1);
+        assert!(matches!(
+            runner_b_events.items[0].detail,
+            TimelineEventDetail::RunnerRegistered { .. }
+        ));
+    }
+
+    #[tokio::test]
     async fn runner_approval_stream_only_emits_matching_approval_events() {
         let service = ControlPlaneService::new(
             load_control_plane_config(ControlPlaneConfigOverrides::default())
@@ -3072,6 +3291,89 @@ mod tests {
             TimelineEventDetail::ApprovalResolved { .. }
         ));
 
+        server_handle.abort();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn runner_event_stream_replays_backlog_for_matching_runner() {
+        let service = ControlPlaneService::new(
+            load_control_plane_config(ControlPlaneConfigOverrides::default())
+                .expect("config should load"),
+            "0.1.0",
+        );
+        let (base_url, server_handle) = spawn_control_plane_server(service).await;
+
+        let client = Client::new();
+        let runner = spawn_runner_server("runner-event-stream", "default").await;
+        let response = client
+            .post(format!("{base_url}/v1/runners/register"))
+            .json(&runner.registration)
+            .send()
+            .await
+            .expect("registration request should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let session: SessionRecord = client
+            .post(format!("{base_url}/v1/sessions"))
+            .json(&serde_json::json!({
+                "workspace_id": "default",
+                "preferred_runner_id": "runner-event-stream"
+            }))
+            .send()
+            .await
+            .expect("session create should succeed")
+            .error_for_status()
+            .expect("session create should succeed")
+            .json()
+            .await
+            .expect("session payload should decode");
+
+        let ws_url = base_url.replacen("http://", "ws://", 1)
+            + "/v1/runners/runner-event-stream/events/stream?after=0";
+        let (mut socket, _) = connect_async(&ws_url)
+            .await
+            .expect("websocket should connect");
+
+        let first_message = timeout(TokioDuration::from_secs(5), socket.next())
+            .await
+            .expect("first event should arrive before timeout")
+            .expect("event stream should stay open")
+            .expect("websocket frame should parse");
+        let second_message = timeout(TokioDuration::from_secs(5), socket.next())
+            .await
+            .expect("second event should arrive before timeout")
+            .expect("event stream should stay open")
+            .expect("websocket frame should parse");
+
+        let decode = |message| -> TimelineEvent {
+            let text = match message {
+                TungsteniteMessage::Text(text) => text,
+                other => panic!("expected text frame, received {other:?}"),
+            };
+            serde_json::from_str(&text).expect("event payload should deserialize")
+        };
+        let first_event = decode(first_message);
+        let second_event = decode(second_message);
+        assert_eq!(
+            first_event.runner_id.as_deref(),
+            Some("runner-event-stream")
+        );
+        assert_eq!(
+            second_event.runner_id.as_deref(),
+            Some("runner-event-stream")
+        );
+        assert!(matches!(
+            first_event.detail,
+            TimelineEventDetail::RunnerRegistered { .. }
+        ));
+        assert!(matches!(
+            second_event.detail,
+            TimelineEventDetail::SessionCreated { .. }
+        ));
+        assert_eq!(second_event.session_id, Some(session.session_id));
+
+        socket.close(None).await.expect("socket should close");
         server_handle.abort();
         let _ = server_handle.await;
     }
