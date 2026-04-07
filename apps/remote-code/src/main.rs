@@ -17,9 +17,9 @@ use rc_config::{
     normalize_base_url, validate_provider_config,
 };
 use rc_control_plane::{
-    CreateSessionRequest as RemoteCreateSessionRequest, SessionRecord as RemoteSessionRecord,
-    SessionState as RemoteSessionState, TimelineEvent as RemoteTimelineEvent,
-    TimelineEventDetail as RemoteTimelineEventDetail,
+    ArtifactRecord as RemoteArtifactRecord, CreateSessionRequest as RemoteCreateSessionRequest,
+    SessionRecord as RemoteSessionRecord, SessionState as RemoteSessionState,
+    TimelineEvent as RemoteTimelineEvent, TimelineEventDetail as RemoteTimelineEventDetail,
 };
 use rc_core::{
     ConversationEntry, InputFormat, OutputFormat, PermissionMode, SessionState,
@@ -155,6 +155,10 @@ enum RemoteCommand {
         #[command(subcommand)]
         command: RemoteRunnersCommand,
     },
+    Artifacts {
+        #[command(subcommand)]
+        command: RemoteArtifactsCommand,
+    },
     Approvals {
         #[command(subcommand)]
         command: RemoteApprovalsCommand,
@@ -169,6 +173,13 @@ enum RemoteCommand {
 #[derive(Subcommand, Debug)]
 enum RemoteRunnersCommand {
     List(RemoteRunnersListArgs),
+}
+
+#[derive(Subcommand, Debug)]
+enum RemoteArtifactsCommand {
+    List(RemoteArtifactsListArgs),
+    Show(RemoteArtifactShowArgs),
+    Download(RemoteArtifactDownloadArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -257,6 +268,46 @@ struct RemoteSessionCreateArgs {
 
     #[arg(long)]
     json: bool,
+}
+
+#[derive(Args, Debug)]
+struct RemoteArtifactsListArgs {
+    #[command(flatten)]
+    target: RemoteTargetArgs,
+
+    #[arg(long)]
+    session_id: Option<Uuid>,
+
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct RemoteArtifactShowArgs {
+    #[command(flatten)]
+    target: RemoteTargetArgs,
+
+    artifact_id: Uuid,
+
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct RemoteArtifactDownloadArgs {
+    #[command(flatten)]
+    target: RemoteTargetArgs,
+
+    artifact_id: Uuid,
+
+    #[arg(long)]
+    output: Option<PathBuf>,
+
+    #[arg(long)]
+    overwrite: bool,
+
+    #[arg(long)]
+    stdout: bool,
 }
 
 #[derive(Args, Debug)]
@@ -790,6 +841,32 @@ where
     decode_remote_json_response(response).await
 }
 
+async fn remote_get_bytes(base_url: &str, path: &str) -> Result<Vec<u8>> {
+    let client = Client::new();
+    let response = client
+        .get(build_remote_http_url(base_url, path)?)
+        .send()
+        .await?;
+    let status = response.status();
+    let bytes = response.bytes().await?;
+    if status.is_success() {
+        return Ok(bytes.to_vec());
+    }
+
+    let message = serde_json::from_slice::<RemoteErrorEnvelope>(&bytes)
+        .map(|error| error.error.message)
+        .unwrap_or_else(|_| String::from_utf8_lossy(&bytes).trim().to_owned());
+    Err(anyhow!(
+        "control plane request failed with HTTP {}: {}",
+        status.as_u16(),
+        if message.is_empty() {
+            "unknown error"
+        } else {
+            message.as_str()
+        }
+    ))
+}
+
 async fn remote_post_json<I, O>(base_url: &str, path: &str, input: &I) -> Result<O>
 where
     I: serde::Serialize,
@@ -891,6 +968,26 @@ fn print_remote_approval_summary(approval: &RemoteApprovalRecord) {
     }
 }
 
+fn print_remote_artifact_summary(artifact: &RemoteArtifactRecord) {
+    println!("Remote artifact {}", artifact.artifact_id);
+    println!("- session: {}", artifact.session_id);
+    println!(
+        "- runner: {}",
+        artifact
+            .runner_id
+            .as_deref()
+            .unwrap_or("(unassigned-runner)")
+    );
+    println!("- name: {}", artifact.name);
+    println!("- file: {}", artifact.file_name);
+    println!("- media type: {}", artifact.media_type);
+    println!("- size: {}B", artifact.size_bytes);
+    println!("- created: {}", artifact.created_at);
+    if !artifact.metadata.is_empty() {
+        println!("- metadata: {}", format_remote_metadata(&artifact.metadata));
+    }
+}
+
 fn print_remote_events(events: &[RemoteTimelineEvent]) {
     if events.is_empty() {
         println!("No remote events found.");
@@ -956,6 +1053,17 @@ fn remote_approvals_stream_path(
         path.push_str(&format!("?after={after}"));
     }
     Ok(path)
+}
+
+fn remote_artifacts_path(session_id: Option<Uuid>) -> String {
+    match session_id {
+        Some(session_id) => format!("/v1/sessions/{session_id}/artifacts"),
+        None => "/v1/artifacts".to_owned(),
+    }
+}
+
+fn remote_artifact_download_path(artifact_id: Uuid) -> String {
+    format!("/v1/artifacts/{artifact_id}/download")
 }
 
 fn remote_events_path(session_id: Option<Uuid>, after: Option<u64>, limit: usize) -> String {
@@ -1103,6 +1211,7 @@ fn run_doctor(config: &RuntimeConfig) -> Result<()> {
 async fn run_remote(command: RemoteCommand) -> Result<()> {
     match command {
         RemoteCommand::Runners { command } => run_remote_runners(command).await,
+        RemoteCommand::Artifacts { command } => run_remote_artifacts(command).await,
         RemoteCommand::Approvals { command } => run_remote_approvals(command).await,
         RemoteCommand::Events(args) => run_remote_events(args).await,
         RemoteCommand::Sessions { command } => run_remote_sessions(command).await,
@@ -1112,6 +1221,14 @@ async fn run_remote(command: RemoteCommand) -> Result<()> {
 async fn run_remote_runners(command: RemoteRunnersCommand) -> Result<()> {
     match command {
         RemoteRunnersCommand::List(args) => run_remote_runners_list(args).await,
+    }
+}
+
+async fn run_remote_artifacts(command: RemoteArtifactsCommand) -> Result<()> {
+    match command {
+        RemoteArtifactsCommand::List(args) => run_remote_artifacts_list(args).await,
+        RemoteArtifactsCommand::Show(args) => run_remote_artifacts_show(args).await,
+        RemoteArtifactsCommand::Download(args) => run_remote_artifacts_download(args).await,
     }
 }
 
@@ -1149,6 +1266,93 @@ async fn run_remote_runners_list(args: RemoteRunnersListArgs) -> Result<()> {
                 .unwrap_or("(missing-public-base-url)")
         );
     }
+    Ok(())
+}
+
+async fn run_remote_artifacts_list(args: RemoteArtifactsListArgs) -> Result<()> {
+    let control_plane_url = require_control_plane_url(&args.target)?;
+    let path = remote_artifacts_path(args.session_id);
+    let response: RemoteListResponse<RemoteArtifactRecord> =
+        remote_get_json(&control_plane_url, &path).await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        return Ok(());
+    }
+    if response.items.is_empty() {
+        println!("No remote artifacts found.");
+        return Ok(());
+    }
+    for artifact in response.items {
+        println!(
+            "{}  {}  {}  {}  {}B  session={}  runner={}",
+            artifact.artifact_id,
+            artifact.created_at,
+            artifact.file_name,
+            artifact.media_type,
+            artifact.size_bytes,
+            artifact.session_id,
+            artifact
+                .runner_id
+                .as_deref()
+                .unwrap_or("(unassigned-runner)")
+        );
+    }
+    Ok(())
+}
+
+async fn run_remote_artifacts_show(args: RemoteArtifactShowArgs) -> Result<()> {
+    let control_plane_url = require_control_plane_url(&args.target)?;
+    let path = format!("/v1/artifacts/{}", args.artifact_id);
+    let artifact: RemoteArtifactRecord = remote_get_json(&control_plane_url, &path).await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&artifact)?);
+        return Ok(());
+    }
+    print_remote_artifact_summary(&artifact);
+    Ok(())
+}
+
+async fn run_remote_artifacts_download(args: RemoteArtifactDownloadArgs) -> Result<()> {
+    let control_plane_url = require_control_plane_url(&args.target)?;
+    let artifact_path = format!("/v1/artifacts/{}", args.artifact_id);
+    let artifact: RemoteArtifactRecord =
+        remote_get_json(&control_plane_url, &artifact_path).await?;
+    let bytes = remote_get_bytes(
+        &control_plane_url,
+        &remote_artifact_download_path(args.artifact_id),
+    )
+    .await?;
+
+    if args.stdout {
+        let mut stdout = tokio::io::stdout();
+        stdout.write_all(&bytes).await?;
+        stdout.flush().await?;
+        return Ok(());
+    }
+
+    let output_path = args
+        .output
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(&artifact.file_name));
+    if output_path.exists() && !args.overwrite {
+        return Err(anyhow!(
+            "refusing to overwrite {}; pass --overwrite to replace it",
+            output_path.display()
+        ));
+    }
+
+    if let Some(parent) = output_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(&output_path, &bytes).await?;
+    println!(
+        "Downloaded artifact {} to {} ({} bytes).",
+        artifact.artifact_id,
+        output_path.display(),
+        bytes.len()
+    );
     Ok(())
 }
 
@@ -3595,8 +3799,9 @@ mod tests {
         build_remote_http_url, build_remote_ws_url, default_task_for_objective,
         discover_runtime_mcp_servers, encode_remote_path_segment, normalize_remote_base_url,
         parse_agent_spec, parse_mcp_call_arguments, parse_repeated_key_value_args, parse_task_spec,
-        remote_approvals_path, remote_approvals_stream_path, remote_events_path,
-        remote_events_stream_path, remote_get_json, remote_post_json, resolve_runtime_mcp_server,
+        remote_approvals_path, remote_approvals_stream_path, remote_artifact_download_path,
+        remote_artifacts_path, remote_events_path, remote_events_stream_path, remote_get_bytes,
+        remote_get_json, remote_post_json, resolve_runtime_mcp_server,
     };
     use rc_config::{ProviderOverrides, load_runtime_config};
     use std::{collections::BTreeSet, fs, process::Command as ProcessCommand};
@@ -3718,6 +3923,19 @@ mod tests {
             "/v1/runners/runner%2Fa/approvals/stream?after=8"
         );
         assert!(remote_approvals_stream_path(Some(Uuid::nil()), Some("runner-a"), None).is_err());
+    }
+
+    #[test]
+    fn remote_artifacts_path_supports_global_and_session_scopes() {
+        assert_eq!(remote_artifacts_path(None), "/v1/artifacts");
+        assert_eq!(
+            remote_artifacts_path(Some(Uuid::nil())),
+            format!("/v1/sessions/{}/artifacts", Uuid::nil())
+        );
+        assert_eq!(
+            remote_artifact_download_path(Uuid::nil()),
+            format!("/v1/artifacts/{}/download", Uuid::nil())
+        );
     }
 
     #[test]
@@ -4075,7 +4293,7 @@ mod tests {
             .local_addr()
             .unwrap_or_else(|error| panic!("local addr failed: {error}"));
         let server = tokio::spawn(async move {
-            for _ in 0..4 {
+            for _ in 0..8 {
                 let (mut socket, _) = listener
                     .accept()
                     .await
@@ -4181,6 +4399,69 @@ mod tests {
                             }
                         ]
                     })
+                } else if request_text.starts_with("GET /v1/artifacts ") {
+                    serde_json::json!({
+                        "items": [
+                            {
+                                "artifact_id": Uuid::nil(),
+                                "session_id": Uuid::nil(),
+                                "runner_id": "runner-a",
+                                "name": "transcript",
+                                "file_name": "transcript.json",
+                                "media_type": "application/json",
+                                "size_bytes": 14,
+                                "metadata": {"kind": "export"},
+                                "created_at": "2026-04-07T00:00:04Z"
+                            }
+                        ]
+                    })
+                } else if request_text.starts_with(&format!("GET /v1/artifacts/{} ", Uuid::nil())) {
+                    serde_json::json!({
+                        "artifact_id": Uuid::nil(),
+                        "session_id": Uuid::nil(),
+                        "runner_id": "runner-a",
+                        "name": "transcript",
+                        "file_name": "transcript.json",
+                        "media_type": "application/json",
+                        "size_bytes": 14,
+                        "metadata": {"kind": "export"},
+                        "created_at": "2026-04-07T00:00:04Z"
+                    })
+                } else if request_text
+                    .starts_with(&format!("GET /v1/sessions/{}/artifacts ", Uuid::nil()))
+                {
+                    serde_json::json!({
+                        "items": [
+                            {
+                                "artifact_id": Uuid::nil(),
+                                "session_id": Uuid::nil(),
+                                "runner_id": "runner-a",
+                                "name": "transcript",
+                                "file_name": "transcript.json",
+                                "media_type": "application/json",
+                                "size_bytes": 14,
+                                "metadata": {"kind": "export"},
+                                "created_at": "2026-04-07T00:00:04Z"
+                            }
+                        ]
+                    })
+                } else if request_text
+                    .starts_with(&format!("GET /v1/artifacts/{}/download ", Uuid::nil()))
+                {
+                    let payload = b"artifact-bytes".to_vec();
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        payload.len()
+                    );
+                    socket
+                        .write_all(response.as_bytes())
+                        .await
+                        .unwrap_or_else(|error| panic!("response header write failed: {error}"));
+                    socket
+                        .write_all(&payload)
+                        .await
+                        .unwrap_or_else(|error| panic!("response body write failed: {error}"));
+                    continue;
                 } else {
                     panic!("unexpected request: {request_text}");
                 };
@@ -4239,6 +4520,36 @@ mod tests {
             }
             other => panic!("unexpected event detail: {other:?}"),
         }
+
+        let artifacts: super::RemoteListResponse<super::RemoteArtifactRecord> =
+            remote_get_json(&base_url, "/v1/artifacts")
+                .await
+                .unwrap_or_else(|error| panic!("remote artifacts get failed: {error}"));
+        assert_eq!(artifacts.items.len(), 1);
+        assert_eq!(artifacts.items[0].file_name, "transcript.json");
+
+        let session_artifacts: super::RemoteListResponse<super::RemoteArtifactRecord> =
+            remote_get_json(
+                &base_url,
+                &format!("/v1/sessions/{}/artifacts", Uuid::nil()),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("remote session artifacts get failed: {error}"));
+        assert_eq!(session_artifacts.items.len(), 1);
+
+        let artifact: super::RemoteArtifactRecord =
+            remote_get_json(&base_url, &format!("/v1/artifacts/{}", Uuid::nil()))
+                .await
+                .unwrap_or_else(|error| panic!("remote artifact show failed: {error}"));
+        assert_eq!(artifact.name, "transcript");
+
+        let artifact_bytes = remote_get_bytes(
+            &base_url,
+            &format!("/v1/artifacts/{}/download", Uuid::nil()),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("remote artifact download failed: {error}"));
+        assert_eq!(artifact_bytes, b"artifact-bytes");
 
         server
             .await
