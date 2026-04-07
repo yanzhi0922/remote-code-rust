@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -9,6 +9,7 @@ use std::sync::{
 use std::time::Instant;
 
 use anyhow::{Result, anyhow};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Args, Parser, Subcommand};
 use futures::StreamExt;
 use rc_agents::{AgentIdentity, AgentScheduler, AgentTask};
@@ -17,9 +18,10 @@ use rc_config::{
     normalize_base_url, validate_provider_config,
 };
 use rc_control_plane::{
-    ArtifactRecord as RemoteArtifactRecord, CreateSessionRequest as RemoteCreateSessionRequest,
-    SessionRecord as RemoteSessionRecord, SessionState as RemoteSessionState,
-    TimelineEvent as RemoteTimelineEvent, TimelineEventDetail as RemoteTimelineEventDetail,
+    ArtifactCreateRequest as RemoteArtifactCreateRequest, ArtifactRecord as RemoteArtifactRecord,
+    CreateSessionRequest as RemoteCreateSessionRequest, SessionRecord as RemoteSessionRecord,
+    SessionState as RemoteSessionState, TimelineEvent as RemoteTimelineEvent,
+    TimelineEventDetail as RemoteTimelineEventDetail,
 };
 use rc_core::{
     ConversationEntry, InputFormat, OutputFormat, PermissionMode, SessionState,
@@ -180,6 +182,7 @@ enum RemoteArtifactsCommand {
     List(RemoteArtifactsListArgs),
     Show(RemoteArtifactShowArgs),
     Download(RemoteArtifactDownloadArgs),
+    Upload(RemoteArtifactUploadArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -308,6 +311,33 @@ struct RemoteArtifactDownloadArgs {
 
     #[arg(long)]
     stdout: bool,
+}
+
+#[derive(Args, Debug)]
+struct RemoteArtifactUploadArgs {
+    #[command(flatten)]
+    target: RemoteTargetArgs,
+
+    #[arg(long)]
+    session_id: Uuid,
+
+    #[arg(long)]
+    file: PathBuf,
+
+    #[arg(long)]
+    name: Option<String>,
+
+    #[arg(long)]
+    file_name: Option<String>,
+
+    #[arg(long)]
+    media_type: Option<String>,
+
+    #[arg(long = "meta")]
+    metadata: Vec<String>,
+
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args, Debug)]
@@ -1066,6 +1096,24 @@ fn remote_artifact_download_path(artifact_id: Uuid) -> String {
     format!("/v1/artifacts/{artifact_id}/download")
 }
 
+fn default_artifact_name(path: &Path) -> String {
+    path.file_stem()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("artifact")
+        .to_owned()
+}
+
+fn default_artifact_file_name(path: &Path) -> String {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("artifact.bin")
+        .to_owned()
+}
+
 fn remote_events_path(session_id: Option<Uuid>, after: Option<u64>, limit: usize) -> String {
     let mut path = match session_id {
         Some(session_id) => format!("/v1/sessions/{session_id}/events"),
@@ -1229,6 +1277,7 @@ async fn run_remote_artifacts(command: RemoteArtifactsCommand) -> Result<()> {
         RemoteArtifactsCommand::List(args) => run_remote_artifacts_list(args).await,
         RemoteArtifactsCommand::Show(args) => run_remote_artifacts_show(args).await,
         RemoteArtifactsCommand::Download(args) => run_remote_artifacts_download(args).await,
+        RemoteArtifactsCommand::Upload(args) => run_remote_artifacts_upload(args).await,
     }
 }
 
@@ -1353,6 +1402,36 @@ async fn run_remote_artifacts_download(args: RemoteArtifactDownloadArgs) -> Resu
         output_path.display(),
         bytes.len()
     );
+    Ok(())
+}
+
+async fn run_remote_artifacts_upload(args: RemoteArtifactUploadArgs) -> Result<()> {
+    let control_plane_url = require_control_plane_url(&args.target)?;
+    let bytes = tokio::fs::read(&args.file)
+        .await
+        .map_err(|error| anyhow!("failed to read {}: {error}", args.file.display()))?;
+    let request = RemoteArtifactCreateRequest {
+        name: args
+            .name
+            .clone()
+            .unwrap_or_else(|| default_artifact_name(&args.file)),
+        file_name: Some(
+            args.file_name
+                .clone()
+                .unwrap_or_else(|| default_artifact_file_name(&args.file)),
+        ),
+        media_type: args.media_type.clone(),
+        content_base64: BASE64_STANDARD.encode(&bytes),
+        metadata: parse_repeated_key_value_args("--meta", &args.metadata)?,
+    };
+    let path = remote_artifacts_path(Some(args.session_id));
+    let artifact: RemoteArtifactRecord =
+        remote_post_json(&control_plane_url, &path, &request).await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&artifact)?);
+        return Ok(());
+    }
+    print_remote_artifact_summary(&artifact);
     Ok(())
 }
 
@@ -3795,20 +3874,23 @@ impl PermissionBroker for ChannelPermissionBroker {
 #[cfg(test)]
 mod tests {
     use super::{
-        McpCallArgs, McpListArgs, StateLabel, build_mcp_call_output, build_mcp_list_output,
-        build_remote_http_url, build_remote_ws_url, default_task_for_objective,
+        BASE64_STANDARD, McpCallArgs, McpListArgs, StateLabel, build_mcp_call_output,
+        build_mcp_list_output, build_remote_http_url, build_remote_ws_url,
+        default_artifact_file_name, default_artifact_name, default_task_for_objective,
         discover_runtime_mcp_servers, encode_remote_path_segment, normalize_remote_base_url,
         parse_agent_spec, parse_mcp_call_arguments, parse_repeated_key_value_args, parse_task_spec,
         remote_approvals_path, remote_approvals_stream_path, remote_artifact_download_path,
         remote_artifacts_path, remote_events_path, remote_events_stream_path, remote_get_bytes,
         remote_get_json, remote_post_json, resolve_runtime_mcp_server,
     };
+    use base64::Engine as _;
     use rc_config::{ProviderOverrides, load_runtime_config};
-    use std::{collections::BTreeSet, fs, process::Command as ProcessCommand};
+    use rc_control_plane::{ArtifactCreateRequest, ArtifactRecord};
+    use std::{collections::BTreeSet, fs, path::Path, process::Command as ProcessCommand};
     use tempfile::tempdir;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpListener,
+        net::{TcpListener, TcpStream},
     };
     use uuid::Uuid;
 
@@ -3888,6 +3970,20 @@ mod tests {
     }
 
     #[test]
+    fn artifact_default_names_use_path_parts_and_safe_fallbacks() {
+        assert_eq!(
+            default_artifact_name(Path::new("logs/transcript.json")),
+            "transcript"
+        );
+        assert_eq!(
+            default_artifact_file_name(Path::new("logs/transcript.json")),
+            "transcript.json"
+        );
+        assert_eq!(default_artifact_name(Path::new("   ")), "artifact");
+        assert_eq!(default_artifact_file_name(Path::new("   ")), "artifact.bin");
+    }
+
+    #[test]
     fn remote_approvals_path_supports_global_runner_and_session_scopes() {
         assert_eq!(
             remote_approvals_path(None, None).unwrap_or_else(|error| panic!("{error}")),
@@ -3936,6 +4032,17 @@ mod tests {
             remote_artifact_download_path(Uuid::nil()),
             format!("/v1/artifacts/{}/download", Uuid::nil())
         );
+    }
+
+    #[test]
+    fn default_artifact_helpers_fall_back_for_missing_names() {
+        assert_eq!(default_artifact_name(Path::new("upload.log")), "upload");
+        assert_eq!(
+            default_artifact_file_name(Path::new("nested/report.json")),
+            "report.json"
+        );
+        assert_eq!(default_artifact_name(Path::new("..")), "artifact");
+        assert_eq!(default_artifact_file_name(Path::new("..")), "artifact.bin");
     }
 
     #[test]
@@ -4284,6 +4391,54 @@ mod tests {
         );
     }
 
+    async fn read_http_request(socket: &mut TcpStream) -> (String, Vec<u8>) {
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        let header_end = loop {
+            let read = socket
+                .read(&mut buffer)
+                .await
+                .unwrap_or_else(|error| panic!("read failed: {error}"));
+            if read == 0 {
+                panic!("connection closed before request headers completed");
+            }
+            request.extend_from_slice(&buffer[..read]);
+            if let Some(position) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                break position + 4;
+            }
+        };
+        let header_text = String::from_utf8(request[..header_end].to_vec())
+            .unwrap_or_else(|error| panic!("request header utf8 failed: {error}"));
+        let content_length = header_text
+            .lines()
+            .find_map(|line| {
+                line.split_once(':').and_then(|(name, value)| {
+                    name.eq_ignore_ascii_case("Content-Length")
+                        .then_some(value.trim())
+                })
+            })
+            .map(|value| {
+                value
+                    .parse::<usize>()
+                    .unwrap_or_else(|error| panic!("content length parse failed: {error}"))
+            })
+            .unwrap_or(0);
+        while request.len() < header_end + content_length {
+            let read = socket
+                .read(&mut buffer)
+                .await
+                .unwrap_or_else(|error| panic!("read body failed: {error}"));
+            if read == 0 {
+                panic!("connection closed before request body completed");
+            }
+            request.extend_from_slice(&buffer[..read]);
+        }
+        (
+            header_text,
+            request[header_end..header_end + content_length].to_vec(),
+        )
+    }
+
     #[tokio::test]
     async fn remote_http_helpers_round_trip_control_plane_json() {
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -4293,28 +4448,12 @@ mod tests {
             .local_addr()
             .unwrap_or_else(|error| panic!("local addr failed: {error}"));
         let server = tokio::spawn(async move {
-            for _ in 0..8 {
+            for _ in 0..9 {
                 let (mut socket, _) = listener
                     .accept()
                     .await
                     .unwrap_or_else(|error| panic!("accept failed: {error}"));
-                let mut request = Vec::new();
-                let mut buffer = [0_u8; 1024];
-                loop {
-                    let read = socket
-                        .read(&mut buffer)
-                        .await
-                        .unwrap_or_else(|error| panic!("read failed: {error}"));
-                    if read == 0 {
-                        break;
-                    }
-                    request.extend_from_slice(&buffer[..read]);
-                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
-                        break;
-                    }
-                }
-                let request_text = String::from_utf8(request)
-                    .unwrap_or_else(|error| panic!("request utf8 failed: {error}"));
+                let (request_text, request_body) = read_http_request(&mut socket).await;
                 let body = if request_text.starts_with("GET /v1/runners ") {
                     serde_json::json!({
                         "items": [
@@ -4446,6 +4585,37 @@ mod tests {
                         ]
                     })
                 } else if request_text
+                    .starts_with(&format!("POST /v1/sessions/{}/artifacts ", Uuid::nil()))
+                {
+                    let request: ArtifactCreateRequest = serde_json::from_slice(&request_body)
+                        .unwrap_or_else(|error| panic!("artifact upload parse failed: {error}"));
+                    assert_eq!(request.name, "session-export");
+                    assert_eq!(request.file_name.as_deref(), Some("session-export.json"));
+                    assert_eq!(request.media_type.as_deref(), Some("application/json"));
+                    assert_eq!(
+                        BASE64_STANDARD
+                            .decode(request.content_base64.as_bytes())
+                            .unwrap_or_else(|error| panic!(
+                                "artifact upload decode failed: {error}"
+                            )),
+                        br#"{"ok":true}"#
+                    );
+                    assert_eq!(
+                        request.metadata.get("kind").map(String::as_str),
+                        Some("export")
+                    );
+                    serde_json::json!({
+                        "artifact_id": Uuid::nil(),
+                        "session_id": Uuid::nil(),
+                        "runner_id": "runner-a",
+                        "name": request.name,
+                        "file_name": request.file_name.unwrap_or_else(|| "session-export.json".to_owned()),
+                        "media_type": request.media_type.unwrap_or_else(|| "application/json".to_owned()),
+                        "size_bytes": 11,
+                        "metadata": request.metadata,
+                        "created_at": "2026-04-07T00:00:05Z"
+                    })
+                } else if request_text
                     .starts_with(&format!("GET /v1/artifacts/{}/download ", Uuid::nil()))
                 {
                     let payload = b"artifact-bytes".to_vec();
@@ -4550,6 +4720,29 @@ mod tests {
         .await
         .unwrap_or_else(|error| panic!("remote artifact download failed: {error}"));
         assert_eq!(artifact_bytes, b"artifact-bytes");
+
+        let uploaded: ArtifactRecord = remote_post_json(
+            &base_url,
+            &format!("/v1/sessions/{}/artifacts", Uuid::nil()),
+            &ArtifactCreateRequest {
+                name: "session-export".to_owned(),
+                file_name: Some("session-export.json".to_owned()),
+                media_type: Some("application/json".to_owned()),
+                content_base64: BASE64_STANDARD.encode(br#"{"ok":true}"#),
+                metadata: [("kind".to_owned(), "export".to_owned())]
+                    .into_iter()
+                    .collect(),
+            },
+        )
+        .await
+        .unwrap_or_else(|error| panic!("remote artifact upload failed: {error}"));
+        assert_eq!(uploaded.name, "session-export");
+        assert_eq!(uploaded.file_name, "session-export.json");
+        assert_eq!(uploaded.size_bytes, 11);
+        assert_eq!(
+            uploaded.metadata.get("kind").map(String::as_str),
+            Some("export")
+        );
 
         server
             .await
