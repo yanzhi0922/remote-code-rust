@@ -1641,12 +1641,14 @@ name = "rc-provider"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
  "rc-config",
  "rc-core",
  "rc-tools",
  "reqwest",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -1786,7 +1788,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "axum",
  "base64",
+ "chrono",
  "clap",
  "futures",
  "rc-agents",

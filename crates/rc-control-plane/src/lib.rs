@@ -505,6 +505,19 @@ impl TimelineStore {
             .collect()
     }
 
+    async fn latest_filtered<F>(&self, filter: F) -> Option<u64>
+    where
+        F: Fn(&TimelineEvent) -> bool,
+    {
+        let timeline = self.inner.lock().await;
+        timeline
+            .history
+            .iter()
+            .rev()
+            .find(|event| filter(event))
+            .map(|event| event.sequence)
+    }
+
     fn subscribe(&self) -> broadcast::Receiver<TimelineEvent> {
         self.tx.subscribe()
     }
@@ -1168,6 +1181,10 @@ async fn list_recent_events(
     State(service): State<ControlPlaneService>,
     Query(query): Query<RecentEventsQuery>,
 ) -> Json<ListResponse<TimelineEvent>> {
+    let latest_sequence = service
+        .timeline
+        .latest_filtered(|event| event_matches_kind(event, query.kind))
+        .await;
     Json(ListResponse {
         items: service
             .timeline
@@ -1175,6 +1192,7 @@ async fn list_recent_events(
                 event_matches_kind(event, query.kind)
             })
             .await,
+        latest_sequence,
     })
 }
 
@@ -1191,6 +1209,12 @@ async fn list_session_events(
             )));
         }
     }
+    let latest_sequence = service
+        .timeline
+        .latest_filtered(|event| {
+            event.session_id == Some(session_id) && event_matches_kind(event, query.kind)
+        })
+        .await;
     Ok(Json(ListResponse {
         items: service
             .timeline
@@ -1198,6 +1222,7 @@ async fn list_session_events(
                 event.session_id == Some(session_id) && event_matches_kind(event, query.kind)
             })
             .await,
+        latest_sequence,
     }))
 }
 
@@ -1214,6 +1239,13 @@ async fn list_runner_events(
             )));
         }
     }
+    let latest_sequence = service
+        .timeline
+        .latest_filtered(|event| {
+            event.runner_id.as_deref() == Some(runner_id.as_str())
+                && event_matches_kind(event, query.kind)
+        })
+        .await;
     Ok(Json(ListResponse {
         items: service
             .timeline
@@ -1222,6 +1254,7 @@ async fn list_runner_events(
                     && event_matches_kind(event, query.kind)
             })
             .await,
+        latest_sequence,
     }))
 }
 
@@ -1322,6 +1355,7 @@ async fn list_runners(
     let registry = service.registry.read().await;
     Json(ListResponse {
         items: registry.runners.values().cloned().collect(),
+        latest_sequence: None,
     })
 }
 
@@ -1330,8 +1364,18 @@ async fn list_runner_approvals(
     AxumPath(runner_id): AxumPath<String>,
 ) -> Result<Json<ListResponse<ApprovalRequestRecord>>, ApiError> {
     let registry = service.registry.read().await;
+    let items = registry.list_runner_approvals(&runner_id)?;
+    drop(registry);
+    let latest_sequence = service
+        .timeline
+        .latest_filtered(|event| {
+            event.runner_id.as_deref() == Some(runner_id.as_str())
+                && approval_event_matches(event, None)
+        })
+        .await;
     Ok(Json(ListResponse {
-        items: registry.list_runner_approvals(&runner_id)?,
+        items,
+        latest_sequence,
     }))
 }
 
@@ -1407,8 +1451,15 @@ async fn list_approvals(
     State(service): State<ControlPlaneService>,
 ) -> Json<ListResponse<ApprovalRequestRecord>> {
     let registry = service.registry.read().await;
+    let items = registry.list_approvals();
+    drop(registry);
+    let latest_sequence = service
+        .timeline
+        .latest_filtered(|event| approval_event_matches(event, None))
+        .await;
     Json(ListResponse {
-        items: registry.list_approvals(),
+        items,
+        latest_sequence,
     })
 }
 
@@ -1418,6 +1469,7 @@ async fn list_artifacts(
     let registry = service.registry.read().await;
     Json(ListResponse {
         items: registry.list_artifacts(),
+        latest_sequence: None,
     })
 }
 
@@ -1568,6 +1620,7 @@ async fn list_sessions(
     let registry = service.registry.read().await;
     Json(ListResponse {
         items: registry.list_sessions_filtered(&query),
+        latest_sequence: None,
     })
 }
 
@@ -1593,6 +1646,7 @@ async fn list_runner_sessions(
     query.runner_id = Some(runner_id);
     Ok(Json(ListResponse {
         items: registry.list_sessions_filtered(&query),
+        latest_sequence: None,
     }))
 }
 
@@ -1603,6 +1657,7 @@ async fn list_runner_artifacts(
     let registry = service.registry.read().await;
     Ok(Json(ListResponse {
         items: registry.list_runner_artifacts(&runner_id)?,
+        latest_sequence: None,
     }))
 }
 
@@ -1678,8 +1733,17 @@ async fn list_session_approvals(
     AxumPath(session_id): AxumPath<Uuid>,
 ) -> Result<Json<ListResponse<ApprovalRequestRecord>>, ApiError> {
     let registry = service.registry.read().await;
+    let items = registry.list_session_approvals(session_id)?;
+    drop(registry);
+    let latest_sequence = service
+        .timeline
+        .latest_filtered(|event| {
+            event.session_id == Some(session_id) && approval_event_matches(event, None)
+        })
+        .await;
     Ok(Json(ListResponse {
-        items: registry.list_session_approvals(session_id)?,
+        items,
+        latest_sequence,
     }))
 }
 
@@ -1690,6 +1754,7 @@ async fn list_session_artifacts(
     let registry = service.registry.read().await;
     Ok(Json(ListResponse {
         items: registry.list_session_artifacts(session_id)?,
+        latest_sequence: None,
     }))
 }
 

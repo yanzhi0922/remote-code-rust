@@ -6,9 +6,11 @@ use rc_core::{
 use rc_tools::builtin_tool_specs;
 use reqwest::Client;
 use reqwest::header::{
-    ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, USER_AGENT,
+    ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, RETRY_AFTER,
+    USER_AGENT,
 };
 use serde_json::{Value, json};
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct ProviderClient {
@@ -18,7 +20,6 @@ pub struct ProviderClient {
 impl ProviderClient {
     pub fn new() -> Result<Self> {
         let http = Client::builder()
-            .timeout(std::time::Duration::from_secs(600))
             .build()
             .context("failed to build the provider HTTP client")?;
         Ok(Self { http })
@@ -64,14 +65,9 @@ impl ProviderClient {
             .as_ref()
             .ok_or_else(|| anyhow!("provider is missing a normalized base URL"))?;
         let response = self
-            .http
-            .post(base_url)
-            .headers(build_headers(provider)?)
-            .json(&body)
-            .send()
-            .await
-            .context("openai-compatible request failed")?;
-        parse_openai_response(response.status().as_u16(), response.text().await?)
+            .send_json_request(provider, base_url, &body, "openai-compatible")
+            .await?;
+        parse_openai_response(response.0, response.1)
     }
 
     async fn complete_anthropic(
@@ -96,15 +92,90 @@ impl ProviderClient {
             .as_ref()
             .ok_or_else(|| anyhow!("provider is missing a normalized base URL"))?;
         let response = self
-            .http
-            .post(base_url)
-            .headers(build_headers(provider)?)
-            .json(&body)
-            .send()
-            .await
-            .context("anthropic-compatible request failed")?;
-        parse_anthropic_response(response.status().as_u16(), response.text().await?)
+            .send_json_request(provider, base_url, &body, "anthropic-compatible")
+            .await?;
+        parse_anthropic_response(response.0, response.1)
     }
+
+    async fn send_json_request(
+        &self,
+        provider: &ProviderConfig,
+        base_url: &str,
+        body: &Value,
+        label: &str,
+    ) -> Result<(u16, String)> {
+        let mut attempt = 0u32;
+        loop {
+            let response = self
+                .http
+                .post(base_url)
+                .headers(build_headers(provider)?)
+                .timeout(Duration::from_millis(provider.timeout_ms))
+                .json(body)
+                .send()
+                .await;
+            match response {
+                Ok(response) => {
+                    let status = response.status().as_u16();
+                    let retry_after = parse_retry_after(response.headers(), provider);
+                    let text = response
+                        .text()
+                        .await
+                        .with_context(|| format!("failed to read {label} response body"))?;
+                    if is_retryable_http_status(status) && attempt < provider.max_retries {
+                        tokio::time::sleep(compute_retry_delay(provider, attempt, retry_after))
+                            .await;
+                        attempt += 1;
+                        continue;
+                    }
+                    return Ok((status, text));
+                }
+                Err(error) => {
+                    if is_retryable_transport_error(&error) && attempt < provider.max_retries {
+                        tokio::time::sleep(compute_retry_delay(provider, attempt, None)).await;
+                        attempt += 1;
+                        continue;
+                    }
+                    return Err(error).with_context(|| format!("{label} request failed"));
+                }
+            }
+        }
+    }
+}
+
+fn is_retryable_http_status(status: u16) -> bool {
+    matches!(status, 408 | 429 | 500 | 502 | 503 | 504)
+}
+
+fn is_retryable_transport_error(error: &reqwest::Error) -> bool {
+    error.is_timeout() || error.is_connect()
+}
+
+fn compute_retry_delay(
+    provider: &ProviderConfig,
+    attempt: u32,
+    retry_after: Option<Duration>,
+) -> Duration {
+    if let Some(retry_after) = retry_after {
+        return retry_after;
+    }
+    let multiplier = 2u64.saturating_pow(attempt.min(16));
+    let delay_ms = provider
+        .retry_initial_backoff_ms
+        .saturating_mul(multiplier)
+        .min(provider.retry_max_backoff_ms);
+    Duration::from_millis(delay_ms.max(1))
+}
+
+fn parse_retry_after(headers: &HeaderMap, provider: &ProviderConfig) -> Option<Duration> {
+    if !provider.respect_retry_after {
+        return None;
+    }
+    headers
+        .get(RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
 }
 
 fn build_headers(provider: &ProviderConfig) -> Result<HeaderMap> {
@@ -465,8 +536,35 @@ fn strip_reasoning_tags(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{mock_response, parse_openai_response, strip_reasoning_tags, to_openai_messages};
+    use super::{
+        ProviderClient, mock_response, parse_openai_response, strip_reasoning_tags,
+        to_openai_messages,
+    };
+    use axum::{Json, Router, extract::State, routing::post};
     use rc_core::ConversationEntry;
+    use serde_json::json;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use tokio::net::TcpListener;
+
+    fn test_provider_config(base_url: String) -> rc_config::ProviderConfig {
+        rc_config::ProviderConfig {
+            name: "custom".to_owned(),
+            base_url: Some(base_url),
+            api_key: Some("test-key".to_owned()),
+            model: Some("test-model".to_owned()),
+            protocol: rc_core::ProviderProtocol::OpenAi,
+            timeout_ms: 1_000,
+            max_output_tokens: 512,
+            max_retries: 2,
+            retry_initial_backoff_ms: 10,
+            retry_max_backoff_ms: 20,
+            respect_retry_after: false,
+            request_header_overrides: Default::default(),
+        }
+    }
 
     #[test]
     fn reasoning_tags_are_removed() {
@@ -493,5 +591,104 @@ mod tests {
         let parsed = parsed.unwrap_or_else(|error| panic!("parse failed: {error}"));
         assert_eq!(parsed.text, "hello");
         assert_eq!(parsed.usage.output_tokens, 2);
+    }
+
+    #[tokio::test]
+    async fn provider_retries_retryable_status_then_succeeds() {
+        async fn handler(
+            State(attempts): State<Arc<AtomicUsize>>,
+        ) -> (axum::http::StatusCode, Json<serde_json::Value>) {
+            let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+            if attempt == 0 {
+                return (
+                    axum::http::StatusCode::TOO_MANY_REQUESTS,
+                    Json(json!({"error": {"message": "slow down"}})),
+                );
+            }
+            (
+                axum::http::StatusCode::OK,
+                Json(json!({
+                    "choices": [{"message": {"content": "retried ok"}}],
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 4}
+                })),
+            )
+        }
+
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap_or_else(|error| panic!("listener bind failed: {error}"));
+        let address = listener
+            .local_addr()
+            .unwrap_or_else(|error| panic!("local addr failed: {error}"));
+        let server_attempts = Arc::clone(&attempts);
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new()
+                    .route("/chat/completions", post(handler))
+                    .with_state(server_attempts),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("server failed: {error}"));
+        });
+
+        let client = ProviderClient::new().unwrap_or_else(|error| panic!("client failed: {error}"));
+        let response = client
+            .complete(
+                &test_provider_config(format!("http://{address}/chat/completions")),
+                &[ConversationEntry::user("hello")],
+            )
+            .await
+            .unwrap_or_else(|error| panic!("completion failed: {error}"));
+
+        server.abort();
+        assert_eq!(response.text, "retried ok");
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn provider_does_not_retry_non_retryable_status() {
+        async fn handler(
+            State(attempts): State<Arc<AtomicUsize>>,
+        ) -> (axum::http::StatusCode, Json<serde_json::Value>) {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            (
+                axum::http::StatusCode::UNAUTHORIZED,
+                Json(json!({"error": {"message": "bad api key"}})),
+            )
+        }
+
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap_or_else(|error| panic!("listener bind failed: {error}"));
+        let address = listener
+            .local_addr()
+            .unwrap_or_else(|error| panic!("local addr failed: {error}"));
+        let server_attempts = Arc::clone(&attempts);
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new()
+                    .route("/chat/completions", post(handler))
+                    .with_state(server_attempts),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("server failed: {error}"));
+        });
+
+        let client = ProviderClient::new().unwrap_or_else(|error| panic!("client failed: {error}"));
+        let error = client
+            .complete(
+                &test_provider_config(format!("http://{address}/chat/completions")),
+                &[ConversationEntry::user("hello")],
+            )
+            .await
+            .expect_err("request should fail");
+
+        server.abort();
+        assert!(error.to_string().contains("401"));
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 }

@@ -6,7 +6,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
@@ -486,6 +486,9 @@ struct RemoteApprovalsListArgs {
     #[arg(long)]
     follow: bool,
 
+    #[arg(long, default_value_t = 2)]
+    reconnect_delay_secs: u64,
+
     #[arg(long)]
     json: bool,
 }
@@ -574,7 +577,7 @@ struct RemoteEventsArgs {
     follow: bool,
 
     #[arg(long, default_value_t = 2)]
-    poll_interval_secs: u64,
+    reconnect_delay_secs: u64,
 
     #[arg(long)]
     json: bool,
@@ -1986,6 +1989,7 @@ async fn run_remote_approvals_follow(
     control_plane_url: String,
     args: RemoteApprovalsListArgs,
 ) -> Result<()> {
+    let mut follow_after = args.after;
     if args.after.is_none() {
         let path = remote_approvals_path(args.session_id, args.runner_id.as_deref())?;
         let response: RemoteListResponse<RemoteApprovalRecord> =
@@ -2012,47 +2016,27 @@ async fn run_remote_approvals_follow(
                 );
             }
         }
+        follow_after = merge_follow_sequence(follow_after, response.latest_sequence);
     }
 
-    let ws_path =
-        remote_approvals_stream_path(args.session_id, args.runner_id.as_deref(), args.after)?;
-    let ws_url = build_remote_ws_url(&control_plane_url, &ws_path)?;
-    let (mut socket, _) = connect_async(&ws_url).await?;
-    loop {
-        tokio::select! {
-            result = tokio::signal::ctrl_c() => {
-                result?;
-                break;
+    let session_id = args.session_id;
+    let runner_id = args.runner_id.clone();
+    let json = args.json;
+    follow_remote_timeline_stream(
+        &control_plane_url,
+        follow_after,
+        Duration::from_secs(args.reconnect_delay_secs.max(1)),
+        move |after| remote_approvals_stream_path(session_id, runner_id.as_deref(), after),
+        move |event| {
+            if json {
+                println!("{}", serde_json::to_string(&event)?);
+            } else {
+                print_remote_events(&[event]);
             }
-            message = socket.next() => {
-                let Some(message) = message else {
-                    break;
-                };
-                let message = message?;
-                match message {
-                    TungsteniteMessage::Text(text) => {
-                        let event: RemoteTimelineEvent = serde_json::from_str(&text)?;
-                        if args.json {
-                            println!("{}", serde_json::to_string(&event)?);
-                        } else {
-                            print_remote_events(&[event]);
-                        }
-                    }
-                    TungsteniteMessage::Binary(bytes) => {
-                        let event: RemoteTimelineEvent = serde_json::from_slice(&bytes)?;
-                        if args.json {
-                            println!("{}", serde_json::to_string(&event)?);
-                        } else {
-                            print_remote_events(&[event]);
-                        }
-                    }
-                    TungsteniteMessage::Close(_) => break,
-                    _ => {}
-                }
-            }
-        }
-    }
-    Ok(())
+            Ok(RemoteFollowControl::Continue)
+        },
+    )
+    .await
 }
 
 async fn run_remote_approvals_respond(args: RemoteApprovalRespondArgs) -> Result<()> {
@@ -2126,55 +2110,149 @@ async fn run_remote_events_follow(control_plane_url: String, args: RemoteEventsA
         print_remote_events(&response.items);
     }
 
-    let follow_after = response
-        .items
-        .last()
-        .map(|event| event.sequence)
-        .or(args.after)
-        .or(Some(0));
-    let ws_path = remote_events_stream_path(
-        args.session_id,
-        args.runner_id.as_deref(),
+    let follow_after = merge_follow_sequence(
+        merge_follow_sequence(
+            response.items.last().map(|event| event.sequence),
+            response.latest_sequence,
+        ),
+        args.after,
+    )
+    .or(Some(0));
+    let session_id = args.session_id;
+    let runner_id = args.runner_id.clone();
+    let kind = args.kind;
+    let json = args.json;
+    follow_remote_timeline_stream(
+        &control_plane_url,
         follow_after,
-        args.kind,
-    )?;
-    let ws_url = build_remote_ws_url(&control_plane_url, &ws_path)?;
-    let (mut socket, _) = connect_async(&ws_url).await?;
-    loop {
-        tokio::select! {
-            result = tokio::signal::ctrl_c() => {
-                result?;
-                break;
+        Duration::from_secs(args.reconnect_delay_secs.max(1)),
+        move |after| remote_events_stream_path(session_id, runner_id.as_deref(), after, kind),
+        move |event| {
+            if json {
+                println!("{}", serde_json::to_string(&event)?);
+            } else {
+                print_remote_events(&[event]);
             }
-            message = socket.next() => {
-                let Some(message) = message else {
-                    break;
-                };
-                let message = message?;
-                match message {
-                    TungsteniteMessage::Text(text) => {
-                        let event: RemoteTimelineEvent = serde_json::from_str(&text)?;
-                        if args.json {
-                            println!("{}", serde_json::to_string(&event)?);
-                        } else {
-                            print_remote_events(&[event]);
+            Ok(RemoteFollowControl::Continue)
+        },
+    )
+    .await
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RemoteFollowControl {
+    Continue,
+    Stop,
+}
+
+fn merge_follow_sequence(left: Option<u64>, right: Option<u64>) -> Option<u64> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.max(right)),
+        (Some(left), None) => Some(left),
+        (None, Some(right)) => Some(right),
+        (None, None) => None,
+    }
+}
+
+async fn follow_remote_timeline_stream<FPath, FEvent>(
+    control_plane_url: &str,
+    mut last_sequence: Option<u64>,
+    reconnect_delay: Duration,
+    mut path_builder: FPath,
+    mut event_handler: FEvent,
+) -> Result<()>
+where
+    FPath: FnMut(Option<u64>) -> Result<String>,
+    FEvent: FnMut(RemoteTimelineEvent) -> Result<RemoteFollowControl>,
+{
+    loop {
+        let ws_path = path_builder(last_sequence)?;
+        let ws_url = build_remote_ws_url(control_plane_url, &ws_path)?;
+        let (mut socket, _) = match connect_async(&ws_url).await {
+            Ok(connection) => connection,
+            Err(error) => {
+                warn!("remote follow connect failed: {error}");
+                if wait_for_remote_follow_retry(reconnect_delay).await? {
+                    return Ok(());
+                }
+                continue;
+            }
+        };
+
+        let mut should_stop = false;
+        loop {
+            tokio::select! {
+                result = tokio::signal::ctrl_c() => {
+                    result?;
+                    return Ok(());
+                }
+                message = socket.next() => {
+                    let Some(message) = message else {
+                        warn!("remote follow stream ended; reconnecting");
+                        break;
+                    };
+                    match message {
+                        Ok(TungsteniteMessage::Text(text)) => {
+                            let event: RemoteTimelineEvent = serde_json::from_str(&text)?;
+                            if last_sequence.is_none_or(|sequence| event.sequence > sequence) {
+                                last_sequence = Some(event.sequence);
+                                if matches!(event_handler(event)?, RemoteFollowControl::Stop) {
+                                    should_stop = true;
+                                    break;
+                                }
+                            }
+                        }
+                        Ok(TungsteniteMessage::Binary(bytes)) => {
+                            let event: RemoteTimelineEvent = serde_json::from_slice(&bytes)?;
+                            if last_sequence.is_none_or(|sequence| event.sequence > sequence) {
+                                last_sequence = Some(event.sequence);
+                                if matches!(event_handler(event)?, RemoteFollowControl::Stop) {
+                                    should_stop = true;
+                                    break;
+                                }
+                            }
+                        }
+                        Ok(TungsteniteMessage::Close(frame)) => {
+                            if let Some(frame) = frame {
+                                warn!(
+                                    "remote follow stream closed by server: code={} reason={}",
+                                    frame.code,
+                                    frame.reason
+                                );
+                            } else {
+                                warn!("remote follow stream closed by server");
+                            }
+                            break;
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            warn!("remote follow stream error: {error}");
+                            break;
                         }
                     }
-                    TungsteniteMessage::Binary(bytes) => {
-                        let event: RemoteTimelineEvent = serde_json::from_slice(&bytes)?;
-                        if args.json {
-                            println!("{}", serde_json::to_string(&event)?);
-                        } else {
-                            print_remote_events(&[event]);
-                        }
-                    }
-                    TungsteniteMessage::Close(_) => break,
-                    _ => {}
                 }
             }
         }
+
+        if should_stop {
+            return Ok(());
+        }
+
+        if wait_for_remote_follow_retry(reconnect_delay).await? {
+            return Ok(());
+        }
     }
-    Ok(())
+}
+
+async fn wait_for_remote_follow_retry(duration: Duration) -> Result<bool> {
+    tokio::select! {
+        _ = tokio::time::sleep(duration) => Ok(false),
+        result = tokio::signal::ctrl_c() => {
+            result?;
+            Ok(true)
+        }
+    }
 }
 
 async fn run_remote_sessions_create(args: RemoteSessionCreateArgs) -> Result<()> {
@@ -4580,22 +4658,44 @@ impl PermissionBroker for ChannelPermissionBroker {
 #[cfg(test)]
 mod tests {
     use super::{
-        BASE64_STANDARD, McpCallArgs, McpListArgs, StateLabel, build_mcp_call_output,
-        build_mcp_list_output, build_remote_http_url, build_remote_ws_url,
+        BASE64_STANDARD, McpCallArgs, McpListArgs, RemoteFollowControl, StateLabel,
+        build_mcp_call_output, build_mcp_list_output, build_remote_http_url, build_remote_ws_url,
         default_artifact_file_name, default_artifact_name, default_task_for_objective,
-        discover_runtime_mcp_servers, encode_remote_path_segment, normalize_remote_base_url,
-        parse_agent_spec, parse_mcp_call_arguments, parse_repeated_key_value_args, parse_task_spec,
+        discover_runtime_mcp_servers, encode_remote_path_segment, follow_remote_timeline_stream,
+        merge_follow_sequence, normalize_remote_base_url, parse_agent_spec,
+        parse_mcp_call_arguments, parse_repeated_key_value_args, parse_task_spec,
         remote_approval_path, remote_approvals_path, remote_approvals_stream_path,
         remote_artifact_download_path, remote_artifacts_path, remote_events_path,
         remote_events_stream_path, remote_get_bytes, remote_get_json, remote_post_json,
         remote_runner_path, remote_session_state_path, remote_sessions_path,
         resolve_runtime_mcp_server,
     };
+    use axum::{
+        Router,
+        extract::{
+            Query, State,
+            ws::{Message, WebSocketUpgrade},
+        },
+        response::IntoResponse,
+        routing::get,
+    };
     use base64::Engine as _;
+    use chrono::{DateTime, Utc};
+    use futures::SinkExt;
     use rc_config::{ProviderOverrides, load_runtime_config};
-    use rc_control_plane::{ArtifactCreateRequest, ArtifactRecord, SessionStateUpdateRequest};
+    use rc_control_plane::{
+        ArtifactCreateRequest, ArtifactRecord, SessionStateUpdateRequest, TimelineEvent,
+        TimelineEventDetail,
+    };
     use rc_runner::ApprovalCreateRequest as SharedApprovalCreateRequest;
-    use std::{collections::BTreeSet, fs, path::Path, process::Command as ProcessCommand};
+    use std::{
+        collections::BTreeSet,
+        fs,
+        path::Path,
+        process::Command as ProcessCommand,
+        sync::{Arc, Mutex as StdMutex},
+        time::Duration,
+    };
     use tempfile::tempdir;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -4855,6 +4955,135 @@ mod tests {
         );
         assert!(
             remote_events_stream_path(Some(Uuid::nil()), Some("runner-a"), None, None).is_err()
+        );
+    }
+
+    #[test]
+    fn merge_follow_sequence_prefers_highest_seen_value() {
+        assert_eq!(merge_follow_sequence(None, None), None);
+        assert_eq!(merge_follow_sequence(Some(4), None), Some(4));
+        assert_eq!(merge_follow_sequence(None, Some(6)), Some(6));
+        assert_eq!(merge_follow_sequence(Some(4), Some(6)), Some(6));
+    }
+
+    #[tokio::test]
+    async fn follow_remote_timeline_stream_reconnects_with_last_sequence() {
+        #[derive(Clone)]
+        struct FollowTestState {
+            attempts: Arc<StdMutex<Vec<Option<u64>>>>,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct StreamQuery {
+            after: Option<u64>,
+        }
+
+        async fn stream_events(
+            ws: WebSocketUpgrade,
+            Query(query): Query<StreamQuery>,
+            State(state): State<FollowTestState>,
+        ) -> impl IntoResponse {
+            let attempt_index = {
+                let mut attempts = state
+                    .attempts
+                    .lock()
+                    .unwrap_or_else(|error| panic!("attempt lock failed: {error}"));
+                attempts.push(query.after);
+                attempts.len()
+            };
+            ws.on_upgrade(move |mut socket| async move {
+                let event = match attempt_index {
+                    1 => TimelineEvent {
+                        sequence: 2,
+                        recorded_at: DateTime::parse_from_rfc3339("2026-04-08T00:00:02Z")
+                            .unwrap_or_else(|error| panic!("time parse failed: {error}"))
+                            .with_timezone(&Utc),
+                        runner_id: Some("runner-a".to_owned()),
+                        session_id: Some(Uuid::nil()),
+                        detail: TimelineEventDetail::SessionCreated {
+                            workspace_id: "default".to_owned(),
+                            owner_runner_id: Some("runner-a".to_owned()),
+                            state: rc_control_plane::SessionState::Running,
+                        },
+                    },
+                    _ => TimelineEvent {
+                        sequence: 3,
+                        recorded_at: DateTime::parse_from_rfc3339("2026-04-08T00:00:03Z")
+                            .unwrap_or_else(|error| panic!("time parse failed: {error}"))
+                            .with_timezone(&Utc),
+                        runner_id: Some("runner-a".to_owned()),
+                        session_id: Some(Uuid::nil()),
+                        detail: TimelineEventDetail::SessionStateChanged {
+                            previous_state: rc_control_plane::SessionState::Running,
+                            state: rc_control_plane::SessionState::Completed,
+                        },
+                    },
+                };
+                let payload = serde_json::to_string(&event)
+                    .unwrap_or_else(|error| panic!("serialize failed: {error}"));
+                socket
+                    .send(Message::Text(payload.into()))
+                    .await
+                    .unwrap_or_else(|error| panic!("ws send failed: {error}"));
+                let _ = socket.close().await;
+            })
+        }
+
+        let attempts = Arc::new(StdMutex::new(Vec::new()));
+        let state = FollowTestState {
+            attempts: Arc::clone(&attempts),
+        };
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap_or_else(|error| panic!("listener bind failed: {error}"));
+        let address = listener
+            .local_addr()
+            .unwrap_or_else(|error| panic!("local addr failed: {error}"));
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new()
+                    .route("/v1/events/stream", get(stream_events))
+                    .with_state(state),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("server failed: {error}"));
+        });
+
+        let received = Arc::new(StdMutex::new(Vec::new()));
+        let received_clone = Arc::clone(&received);
+        follow_remote_timeline_stream(
+            &format!("http://{address}"),
+            Some(1),
+            Duration::from_millis(20),
+            |after| remote_events_stream_path(None, None, after, None),
+            move |event| {
+                received_clone
+                    .lock()
+                    .unwrap_or_else(|error| panic!("received lock failed: {error}"))
+                    .push(event.sequence);
+                if event.sequence >= 3 {
+                    Ok(RemoteFollowControl::Stop)
+                } else {
+                    Ok(RemoteFollowControl::Continue)
+                }
+            },
+        )
+        .await
+        .unwrap_or_else(|error| panic!("follow should succeed: {error}"));
+
+        server.abort();
+        assert_eq!(
+            *attempts
+                .lock()
+                .unwrap_or_else(|error| panic!("attempt lock failed: {error}")),
+            vec![Some(1), Some(2)]
+        );
+        assert_eq!(
+            *received
+                .lock()
+                .unwrap_or_else(|error| panic!("received lock failed: {error}")),
+            vec![2, 3]
         );
     }
 

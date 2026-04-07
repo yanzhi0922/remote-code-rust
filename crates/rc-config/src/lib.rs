@@ -32,6 +32,22 @@ const RESERVED_PROVIDER_HEADER_NAMES: &[&str] = &[
     "x-client-app",
 ];
 
+const fn default_provider_max_retries() -> u32 {
+    2
+}
+
+const fn default_provider_retry_initial_backoff_ms() -> u64 {
+    500
+}
+
+const fn default_provider_retry_max_backoff_ms() -> u64 {
+    5_000
+}
+
+const fn default_provider_respect_retry_after() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppPaths {
     pub profile_dir: PathBuf,
@@ -108,6 +124,14 @@ pub struct ProviderConfig {
     pub protocol: ProviderProtocol,
     pub timeout_ms: u64,
     pub max_output_tokens: u32,
+    #[serde(default = "default_provider_max_retries")]
+    pub max_retries: u32,
+    #[serde(default = "default_provider_retry_initial_backoff_ms")]
+    pub retry_initial_backoff_ms: u64,
+    #[serde(default = "default_provider_retry_max_backoff_ms")]
+    pub retry_max_backoff_ms: u64,
+    #[serde(default = "default_provider_respect_retry_after")]
+    pub respect_retry_after: bool,
     #[serde(default)]
     pub request_header_overrides: BTreeMap<String, String>,
 }
@@ -207,6 +231,21 @@ pub fn load_provider_config(
         .and_then(|value| value.parse::<u32>().ok())
         .unwrap_or(4_096)
         .max(256);
+    let max_retries = read_env_first(&["REMOTE_CODE_PROVIDER_MAX_RETRIES"])
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(default_provider_max_retries());
+    let retry_initial_backoff_ms =
+        read_env_first(&["REMOTE_CODE_PROVIDER_RETRY_INITIAL_BACKOFF_MS"])
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(default_provider_retry_initial_backoff_ms())
+            .max(50);
+    let retry_max_backoff_ms = read_env_first(&["REMOTE_CODE_PROVIDER_RETRY_MAX_BACKOFF_MS"])
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(default_provider_retry_max_backoff_ms())
+        .max(retry_initial_backoff_ms);
+    let respect_retry_after = read_env_first(&["REMOTE_CODE_PROVIDER_RESPECT_RETRY_AFTER"])
+        .map(|value| !matches!(value.to_ascii_lowercase().as_str(), "0" | "false" | "no"))
+        .unwrap_or(default_provider_respect_retry_after());
     let request_header_overrides = build_request_header_overrides(session_id);
 
     Ok(ProviderConfig {
@@ -221,6 +260,10 @@ pub fn load_provider_config(
         protocol,
         timeout_ms,
         max_output_tokens,
+        max_retries,
+        retry_initial_backoff_ms,
+        retry_max_backoff_ms,
+        respect_retry_after,
         request_header_overrides,
     })
 }

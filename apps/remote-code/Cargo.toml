@@ -40,4 +40,6 @@ rc-tools = { path = "../../crates/rc-tools" }
 rc-tui = { path = "../../crates/rc-tui" }
 
 [dev-dependencies]
+axum.workspace = true
+chrono.workspace = true
 tempfile.workspace = true

@@ -268,6 +268,8 @@ pub struct ApprovalDecisionRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListResponse<T> {
     pub items: Vec<T>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_sequence: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -671,6 +673,7 @@ async fn list_sessions(State(api): State<RunnerApi>) -> Json<ListResponse<Runner
     let sessions = api.sessions.read().await;
     Json(ListResponse {
         items: sessions.values().cloned().collect(),
+        latest_sequence: None,
     })
 }
 
@@ -690,6 +693,7 @@ async fn list_approvals(State(api): State<RunnerApi>) -> Json<ListResponse<Appro
     let approvals = api.approvals.read().await;
     Json(ListResponse {
         items: approvals.values().cloned().collect(),
+        latest_sequence: None,
     })
 }
 
@@ -724,6 +728,7 @@ async fn list_session_approvals(
             .filter(|approval| approval.session_id == session_id)
             .cloned()
             .collect(),
+        latest_sequence: None,
     }))
 }
 
