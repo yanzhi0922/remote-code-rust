@@ -19,3 +19,6 @@ toml.workspace = true
 uuid.workspace = true
 walkdir.workspace = true
 rc-core = { path = "../rc-core" }
+
+[dev-dependencies]
+tempfile.workspace = true

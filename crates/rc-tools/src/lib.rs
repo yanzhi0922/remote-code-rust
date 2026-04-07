@@ -3,7 +3,7 @@ use std::process::Stdio;
 
 use anyhow::{Context, Result, anyhow};
 use ignore::WalkBuilder;
-use rc_core::{ToolCall, ToolResult};
+use rc_core::{HookEvent, HookShell, ToolCall, ToolResult};
 use rc_permissions::{PermissionBroker, PermissionRequest, auto_allows, classify_tool};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -57,6 +57,26 @@ impl ToolSpec {
 pub struct ToolExecutionContext {
     pub cwd: PathBuf,
     pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandHookExecutionRequest {
+    pub event: HookEvent,
+    pub command: String,
+    pub cwd: PathBuf,
+    pub input: Value,
+    pub shell: Option<HookShell>,
+    pub timeout_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandHookExecutionResult {
+    pub event: HookEvent,
+    pub command: String,
+    pub shell: HookShell,
+    pub exit_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
 }
 
 pub fn builtin_tool_specs() -> Vec<ToolSpec> {
@@ -561,10 +581,98 @@ async fn bash_command(input: &Value, context: &ToolExecutionContext) -> Result<S
     })
 }
 
+pub async fn execute_command_hook(
+    request: &CommandHookExecutionRequest,
+) -> Result<CommandHookExecutionResult> {
+    let shell = request.shell.unwrap_or_else(default_hook_shell);
+    let timeout_secs = request.timeout_secs.unwrap_or(15).max(1);
+    let mut process = build_shell_command(shell, &request.command);
+    process.current_dir(&request.cwd);
+    process.stdin(Stdio::piped());
+    process.stdout(Stdio::piped());
+    process.stderr(Stdio::piped());
+
+    let mut child = process.spawn().context("failed to spawn command hook")?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let input = serde_json::to_vec(&request.input)?;
+        tokio::spawn(async move {
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut stdin, &input).await;
+        });
+    }
+
+    let future = async {
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+        if let Some(mut stream) = child.stdout.take() {
+            let _ = stream.read_to_string(&mut stdout).await;
+        }
+        if let Some(mut stream) = child.stderr.take() {
+            let _ = stream.read_to_string(&mut stderr).await;
+        }
+        let status = child.wait().await?;
+        Ok::<_, anyhow::Error>((status.code(), stdout, stderr))
+    };
+
+    let (exit_code, stdout, stderr) =
+        tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), future)
+            .await
+            .map_err(|_| anyhow!("command hook timed out after {timeout_secs}s"))??;
+
+    Ok(CommandHookExecutionResult {
+        event: request.event,
+        command: request.command.clone(),
+        shell,
+        exit_code,
+        stdout,
+        stderr,
+    })
+}
+
+fn build_shell_command(shell: HookShell, command: &str) -> Command {
+    match shell {
+        HookShell::PowerShell => {
+            let mut cmd = Command::new("powershell");
+            cmd.args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                command,
+            ]);
+            cmd
+        }
+        HookShell::Bash => {
+            #[cfg(windows)]
+            {
+                let mut cmd = Command::new("bash");
+                cmd.args(["-lc", command]);
+                cmd
+            }
+            #[cfg(not(windows))]
+            {
+                let mut cmd = Command::new("sh");
+                cmd.args(["-lc", command]);
+                cmd
+            }
+        }
+    }
+}
+
+fn default_hook_shell() -> HookShell {
+    if cfg!(windows) {
+        HookShell::PowerShell
+    } else {
+        HookShell::Bash
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ToolExecutionContext, builtin_tool_specs, execute_tool_call};
-    use rc_core::{PermissionMode, ToolCall};
+    use super::{
+        CommandHookExecutionRequest, HookShell, ToolExecutionContext, builtin_tool_specs,
+        execute_command_hook, execute_tool_call,
+    };
+    use rc_core::{HookEvent, PermissionMode, ToolCall};
     use rc_permissions::StaticPermissionBroker;
     use serde_json::json;
     use tempfile::tempdir;
@@ -618,5 +726,35 @@ mod tests {
                 .iter()
                 .any(|spec| spec.protocol_name == "Bash")
         );
+    }
+
+    #[tokio::test]
+    async fn command_hook_receives_json_input_over_stdin() {
+        let tempdir = tempdir().expect("tempdir should work");
+        let (shell, command) = if cfg!(windows) {
+            (
+                HookShell::PowerShell,
+                "$inputJson = [Console]::In.ReadToEnd(); Write-Output $inputJson".to_owned(),
+            )
+        } else {
+            (
+                HookShell::Bash,
+                "payload=$(cat); printf '%s' \"$payload\"".to_owned(),
+            )
+        };
+
+        let result = execute_command_hook(&CommandHookExecutionRequest {
+            event: HookEvent::SessionStart,
+            command,
+            cwd: tempdir.path().to_path_buf(),
+            input: json!({"hello":"world"}),
+            shell: Some(shell),
+            timeout_secs: Some(5),
+        })
+        .await
+        .expect("hook execution should work");
+
+        assert_eq!(result.exit_code, Some(0));
+        assert!(result.stdout.contains("\"hello\":\"world\""));
     }
 }

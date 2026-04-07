@@ -248,6 +248,8 @@ pub struct ApprovalRequestRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApprovalCreateRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_id: Option<Uuid>,
     pub title: String,
     pub description: String,
     #[serde(default)]
@@ -789,7 +791,7 @@ async fn create_approval(
     session.updated_at = now;
 
     let approval = ApprovalRequestRecord {
-        approval_id: Uuid::new_v4(),
+        approval_id: request.approval_id.unwrap_or_else(Uuid::new_v4),
         session_id,
         runner_id: api.meta.snapshot.registration.runner_id.clone(),
         state: ApprovalState::Pending,
@@ -1377,6 +1379,7 @@ mod tests {
                     .header("content-type", "application/json")
                     .body(Body::from(
                         serde_json::json!({
+                            "approval_id": Uuid::nil(),
                             "title": "Execute shell command",
                             "description": "Needs user confirmation"
                         })
@@ -1388,6 +1391,7 @@ mod tests {
             .expect("approval create should succeed");
         assert_eq!(approval_response.status(), StatusCode::CREATED);
         let approval: ApprovalRequestRecord = read_json(approval_response).await;
+        assert_eq!(approval.approval_id, Uuid::nil());
         assert_eq!(approval.state, ApprovalState::Pending);
 
         let list_response = app

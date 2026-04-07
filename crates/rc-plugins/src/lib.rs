@@ -490,6 +490,14 @@ impl PluginBundle {
     }
 
     #[must_use]
+    pub fn hooks_config_path(&self) -> Option<PathBuf> {
+        self.manifest
+            .hooks
+            .as_deref()
+            .map(|relative| self.resolve_relative(relative))
+    }
+
+    #[must_use]
     pub fn mcp_config_path(&self) -> Option<PathBuf> {
         self.manifest
             .mcp
@@ -871,6 +879,10 @@ mod tests {
         assert_eq!(
             plugin.app_manifest_path(),
             Some(plugin.root.join("./.app.json"))
+        );
+        assert_eq!(
+            plugin.hooks_config_path(),
+            Some(plugin.root.join("./hooks.json"))
         );
         assert_eq!(
             plugin.mcp_config_path(),

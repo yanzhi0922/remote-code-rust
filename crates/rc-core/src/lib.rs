@@ -65,6 +65,80 @@ pub enum OutputFormat {
     StreamJson,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub enum HookEvent {
+    SessionStart,
+    PreToolUse,
+    PostToolUse,
+    PostToolUseFailure,
+}
+
+impl HookEvent {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SessionStart => "SessionStart",
+            Self::PreToolUse => "PreToolUse",
+            Self::PostToolUse => "PostToolUse",
+            Self::PostToolUseFailure => "PostToolUseFailure",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "lowercase")]
+#[clap(rename_all = "lowercase")]
+pub enum HookShell {
+    Bash,
+    PowerShell,
+}
+
+impl HookShell {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Bash => "bash",
+            Self::PowerShell => "powershell",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandHook {
+    pub command: String,
+    #[serde(default, rename = "if")]
+    pub condition: Option<String>,
+    #[serde(default)]
+    pub shell: Option<HookShell>,
+    #[serde(default)]
+    pub timeout: Option<u64>,
+    #[serde(default)]
+    pub status_message: Option<String>,
+    #[serde(default)]
+    pub once: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum HookCommand {
+    Command(CommandHook),
+}
+
+impl HookCommand {
+    pub fn as_command(&self) -> &CommandHook {
+        match self {
+            Self::Command(command) => command,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HookMatcher {
+    #[serde(default)]
+    pub matcher: Option<String>,
+    #[serde(default)]
+    pub hooks: Vec<HookCommand>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionState {
@@ -233,4 +307,42 @@ pub fn default_system_prompt(cwd: &std::path::Path) -> String {
         "You are Remote Code Rust, a concise coding agent running inside {}. Keep responses practical, prefer safe actions, and preserve compatibility with the Remote Code stream-json runtime where possible.",
         cwd.display()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HookCommand, HookEvent, HookShell};
+
+    #[test]
+    fn hook_event_round_trips_as_upstream_name() {
+        let encoded =
+            serde_json::to_string(&HookEvent::PreToolUse).expect("hook event encode should work");
+        assert_eq!(encoded, "\"PreToolUse\"");
+
+        let decoded: HookEvent =
+            serde_json::from_str(&encoded).expect("hook event decode should work");
+        assert_eq!(decoded, HookEvent::PreToolUse);
+    }
+
+    #[test]
+    fn command_hook_deserializes_upstream_shape() {
+        let hook: HookCommand = serde_json::from_str(
+            r#"{
+                "type": "command",
+                "command": "echo ready",
+                "if": "Bash(git status *)",
+                "shell": "powershell",
+                "timeout": 5,
+                "once": true
+            }"#,
+        )
+        .expect("command hook decode should work");
+
+        let command = hook.as_command();
+        assert_eq!(command.command, "echo ready");
+        assert_eq!(command.condition.as_deref(), Some("Bash(git status *)"));
+        assert_eq!(command.shell, Some(HookShell::PowerShell));
+        assert_eq!(command.timeout, Some(5));
+        assert!(command.once);
+    }
 }

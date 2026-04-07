@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow};
 use directories::BaseDirs;
 use rc_core::{
-    DEFAULT_PROFILE_DIR_NAME, InputFormat, LEGACY_PROFILE_DIR_NAME, OutputFormat, PermissionMode,
-    ProviderProtocol,
+    DEFAULT_PROFILE_DIR_NAME, HookEvent, HookMatcher, InputFormat, LEGACY_PROFILE_DIR_NAME,
+    OutputFormat, PermissionMode, ProviderProtocol,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -428,6 +428,29 @@ pub fn import_legacy_profile(
     })
 }
 
+pub fn load_hooks_file(path: impl AsRef<Path>) -> Result<BTreeMap<HookEvent, Vec<HookMatcher>>> {
+    let path = path.as_ref();
+    let content =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse hooks file {}", path.display()))
+}
+
+pub fn load_settings_hooks(
+    path: impl AsRef<Path>,
+) -> Result<BTreeMap<HookEvent, Vec<HookMatcher>>> {
+    let path = path.as_ref();
+    let content =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let value: serde_json::Value = serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse settings file {}", path.display()))?;
+    let Some(hooks) = value.get("hooks") else {
+        return Ok(BTreeMap::new());
+    };
+    serde_json::from_value(hooks.clone())
+        .with_context(|| format!("failed to decode hooks from settings {}", path.display()))
+}
+
 fn copy_directory(
     source: &Path,
     destination: &Path,
@@ -459,8 +482,13 @@ fn copy_directory(
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_base_url, normalize_protocol};
+    use std::collections::BTreeMap;
+    use std::fs;
+
+    use super::{load_hooks_file, load_settings_hooks, normalize_base_url, normalize_protocol};
+    use rc_core::HookEvent;
     use rc_core::ProviderProtocol;
+    use tempfile::tempdir;
 
     #[test]
     fn anthropic_base_url_is_normalized() {
@@ -490,5 +518,75 @@ mod tests {
     fn protocol_is_detected_from_base_url() {
         let protocol = normalize_protocol(Some("https://example.com/anthropic"), None);
         assert_eq!(protocol, ProviderProtocol::Anthropic);
+    }
+
+    #[test]
+    fn loads_hooks_file_using_upstream_shape() {
+        let temp = tempdir().expect("tempdir should work");
+        let path = temp.path().join("hooks.json");
+        fs::write(
+            &path,
+            r#"{
+                "SessionStart": [
+                    {
+                        "matcher": "startup",
+                        "hooks": [{"type": "command", "command": "echo session"}]
+                    }
+                ]
+            }"#,
+        )
+        .expect("write should work");
+
+        let hooks = load_hooks_file(&path).expect("hooks file should load");
+        assert_eq!(hooks.len(), 1);
+        assert_eq!(
+            hooks
+                .get(&HookEvent::SessionStart)
+                .expect("session start hook should exist")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn loads_hooks_from_settings_file() {
+        let temp = tempdir().expect("tempdir should work");
+        let path = temp.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{
+                "model": "test-model",
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "Bash",
+                            "hooks": [{"type": "command", "command": "echo before"}]
+                        }
+                    ]
+                }
+            }"#,
+        )
+        .expect("write should work");
+
+        let hooks = load_settings_hooks(&path).expect("settings hooks should load");
+        assert_eq!(hooks.len(), 1);
+        assert_eq!(
+            hooks
+                .get(&HookEvent::PreToolUse)
+                .expect("pre tool use hook should exist")[0]
+                .matcher
+                .as_deref(),
+            Some("Bash")
+        );
+    }
+
+    #[test]
+    fn settings_without_hooks_returns_empty_map() {
+        let temp = tempdir().expect("tempdir should work");
+        let path = temp.path().join("settings.json");
+        fs::write(&path, r#"{"model": "test-model"}"#).expect("write should work");
+
+        let hooks = load_settings_hooks(&path).expect("settings hooks should load");
+        assert_eq!(hooks, BTreeMap::new());
     }
 }

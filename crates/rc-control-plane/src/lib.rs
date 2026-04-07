@@ -291,6 +291,22 @@ struct PlannedSession {
 }
 
 #[derive(Debug, Clone)]
+struct PlannedApproval {
+    approval: ApprovalRequestRecord,
+    owner_runner: Option<RunnerSnapshot>,
+    next_session_state: SessionState,
+    transition: Option<SessionStateTransition>,
+}
+
+#[derive(Debug, Clone)]
+struct PlannedApprovalDecision {
+    approval: ApprovalRequestRecord,
+    owner_runner: Option<RunnerSnapshot>,
+    next_session_state: Option<SessionState>,
+    transition: Option<SessionStateTransition>,
+}
+
+#[derive(Debug, Clone)]
 struct TimelineStore {
     history_limit: usize,
     tx: broadcast::Sender<TimelineEvent>,
@@ -796,58 +812,89 @@ impl Registry {
         Ok(artifact)
     }
 
-    fn create_approval(
-        &mut self,
+    fn plan_approval(
+        &self,
         session_id: Uuid,
         request: ApprovalCreateRequest,
-    ) -> Result<(ApprovalRequestRecord, Option<SessionStateTransition>), ApiError> {
+    ) -> Result<PlannedApproval, ApiError> {
+        let session = self
+            .sessions
+            .get(&session_id)
+            .ok_or_else(|| ApiError::not_found(format!("session `{session_id}` was not found")))?;
         let now = Utc::now();
-        let (approval, transition, owner_runner_id) = {
-            let session = self.sessions.get_mut(&session_id).ok_or_else(|| {
-                ApiError::not_found(format!("session `{session_id}` was not found"))
-            })?;
-            let previous_state = session.state;
-            session.state = SessionState::WaitingApproval;
-            session.updated_at = now;
-            let owner_runner_id = session.owner_runner_id.clone();
-            let current_state = session.state;
-            let approval = ApprovalRequestRecord {
-                approval_id: Uuid::new_v4(),
-                session_id,
-                runner_id: session.owner_runner_id.clone().unwrap_or_default(),
-                state: ApprovalState::Pending,
-                title: request.title,
-                description: request.description,
-                metadata: request.metadata,
-                created_at: now,
-                updated_at: now,
-                responded_at: None,
-                responder: None,
-                note: None,
-            };
-            let transition = (previous_state != current_state).then(|| SessionStateTransition {
-                runner_id: owner_runner_id.clone(),
-                session_id,
-                previous_state,
-                state: current_state,
-            });
-            (approval, transition, owner_runner_id)
+        let next_session_state = SessionState::WaitingApproval;
+        let owner_runner_id = session.owner_runner_id.clone();
+        let approval = ApprovalRequestRecord {
+            approval_id: request.approval_id.unwrap_or_else(Uuid::new_v4),
+            session_id,
+            runner_id: owner_runner_id.clone().unwrap_or_default(),
+            state: ApprovalState::Pending,
+            title: request.title,
+            description: request.description,
+            metadata: request.metadata,
+            created_at: now,
+            updated_at: now,
+            responded_at: None,
+            responder: None,
+            note: None,
         };
-        self.approvals
-            .insert(approval.approval_id, approval.clone());
-        if let Some(runner_id) = owner_runner_id.as_deref() {
-            self.refresh_runner_session_counts(runner_id, now);
-        }
-        Ok((approval, transition))
+        let transition = (session.state != next_session_state).then(|| SessionStateTransition {
+            runner_id: owner_runner_id.clone(),
+            session_id,
+            previous_state: session.state,
+            state: next_session_state,
+        });
+        let owner_runner = owner_runner_id
+            .as_ref()
+            .and_then(|runner_id| self.runners.get(runner_id))
+            .cloned();
+        Ok(PlannedApproval {
+            approval,
+            owner_runner,
+            next_session_state,
+            transition,
+        })
     }
 
-    fn apply_approval_decision(
+    fn commit_planned_approval(
         &mut self,
+        planned: PlannedApproval,
+    ) -> Result<(ApprovalRequestRecord, Option<SessionStateTransition>), ApiError> {
+        if self.approvals.contains_key(&planned.approval.approval_id) {
+            return Err(ApiError::conflict(format!(
+                "approval `{}` already exists",
+                planned.approval.approval_id
+            )));
+        }
+
+        let session = self
+            .sessions
+            .get_mut(&planned.approval.session_id)
+            .ok_or_else(|| {
+                ApiError::not_found(format!(
+                    "session `{}` was not found",
+                    planned.approval.session_id
+                ))
+            })?;
+        session.state = planned.next_session_state;
+        session.updated_at = planned.approval.updated_at;
+        let owner_runner_id = session.owner_runner_id.clone();
+
+        self.approvals
+            .insert(planned.approval.approval_id, planned.approval.clone());
+        if let Some(runner_id) = owner_runner_id.as_deref() {
+            self.refresh_runner_session_counts(runner_id, planned.approval.updated_at);
+        }
+
+        Ok((planned.approval, planned.transition))
+    }
+
+    fn plan_approval_decision(
+        &self,
         approval_id: Uuid,
         request: ApprovalDecisionRequest,
-    ) -> Result<(ApprovalRequestRecord, Option<SessionStateTransition>), ApiError> {
-        let decision = request.decision;
-        let approval = self.approvals.get_mut(&approval_id).ok_or_else(|| {
+    ) -> Result<PlannedApprovalDecision, ApiError> {
+        let approval = self.approvals.get(&approval_id).ok_or_else(|| {
             ApiError::not_found(format!("approval `{approval_id}` was not found"))
         })?;
         if !matches!(approval.state, ApprovalState::Pending) {
@@ -857,40 +904,82 @@ impl Registry {
         }
 
         let now = Utc::now();
-        approval.state = decision.into();
-        approval.updated_at = now;
-        approval.responded_at = Some(now);
-        approval.responder = request.responder;
-        approval.note = request.note;
-        let updated = approval.clone();
+        let mut updated = approval.clone();
+        updated.state = request.decision.into();
+        updated.updated_at = now;
+        updated.responded_at = Some(now);
+        updated.responder = request.responder;
+        updated.note = request.note;
+
         let has_pending_approvals = self.approvals.values().any(|candidate| {
             candidate.session_id == updated.session_id
                 && candidate.approval_id != updated.approval_id
                 && matches!(candidate.state, ApprovalState::Pending)
         });
 
-        let (transition, owner_runner_id) = if let Some(session) =
-            self.sessions.get_mut(&updated.session_id)
-        {
-            let previous_state = session.state;
-            session.state = session_state_after_approval(decision, has_pending_approvals);
-            session.updated_at = now;
-            let owner_runner_id = session.owner_runner_id.clone();
-            let transition = (previous_state != session.state).then(|| SessionStateTransition {
-                runner_id: owner_runner_id.clone(),
-                session_id: session.session_id,
-                previous_state,
-                state: session.state,
-            });
-            (transition, owner_runner_id)
+        let (next_session_state, transition, owner_runner) =
+            if let Some(session) = self.sessions.get(&updated.session_id) {
+                let state = session_state_after_approval(request.decision, has_pending_approvals);
+                let owner_runner = session
+                    .owner_runner_id
+                    .as_ref()
+                    .and_then(|runner_id| self.runners.get(runner_id))
+                    .cloned();
+                let transition = (session.state != state).then(|| SessionStateTransition {
+                    runner_id: session.owner_runner_id.clone(),
+                    session_id: session.session_id,
+                    previous_state: session.state,
+                    state,
+                });
+                (Some(state), transition, owner_runner)
+            } else {
+                (None, None, None)
+            };
+
+        Ok(PlannedApprovalDecision {
+            approval: updated,
+            owner_runner,
+            next_session_state,
+            transition,
+        })
+    }
+
+    fn commit_planned_approval_decision(
+        &mut self,
+        planned: PlannedApprovalDecision,
+    ) -> Result<(ApprovalRequestRecord, Option<SessionStateTransition>), ApiError> {
+        let approval = self
+            .approvals
+            .get_mut(&planned.approval.approval_id)
+            .ok_or_else(|| {
+                ApiError::not_found(format!(
+                    "approval `{}` was not found",
+                    planned.approval.approval_id
+                ))
+            })?;
+        if !matches!(approval.state, ApprovalState::Pending) {
+            return Err(ApiError::conflict(format!(
+                "approval `{}` is already resolved",
+                planned.approval.approval_id
+            )));
+        }
+        *approval = planned.approval.clone();
+        let updated = approval.clone();
+
+        let owner_runner_id = if let Some(session) = self.sessions.get_mut(&updated.session_id) {
+            if let Some(next_state) = planned.next_session_state {
+                session.state = next_state;
+            }
+            session.updated_at = updated.updated_at;
+            session.owner_runner_id.clone()
         } else {
-            (None, None)
+            None
         };
-        if let Some(runner_id) = owner_runner_id {
-            self.refresh_runner_session_counts(&runner_id, now);
+        if let Some(runner_id) = owner_runner_id.as_deref() {
+            self.refresh_runner_session_counts(runner_id, updated.updated_at);
         }
 
-        Ok((updated, transition))
+        Ok((updated, planned.transition))
     }
 
     fn select_runner(
@@ -1546,9 +1635,34 @@ async fn create_approval(
     AxumPath(session_id): AxumPath<Uuid>,
     Json(request): Json<ApprovalCreateRequest>,
 ) -> Result<(StatusCode, Json<ApprovalRequestRecord>), ApiError> {
+    let planned = {
+        let registry = service.registry.read().await;
+        registry.plan_approval(session_id, request)?
+    };
+    if let Some(runner) = planned.owner_runner.as_ref() {
+        let relay_request = ApprovalCreateRequest {
+            approval_id: Some(planned.approval.approval_id),
+            title: planned.approval.title.clone(),
+            description: planned.approval.description.clone(),
+            metadata: planned.approval.metadata.clone(),
+        };
+        let relayed = relay_approval_to_runner(runner, session_id, &relay_request).await?;
+        if relayed.approval_id != planned.approval.approval_id {
+            return Err(ApiError::bad_gateway(format!(
+                "runner `{}` acknowledged approval `{}` instead of `{}`",
+                runner.registration.runner_id, relayed.approval_id, planned.approval.approval_id
+            )));
+        }
+        if relayed.session_id != session_id || relayed.runner_id != runner.registration.runner_id {
+            return Err(ApiError::bad_gateway(format!(
+                "runner `{}` returned mismatched approval routing for session `{session_id}`",
+                runner.registration.runner_id
+            )));
+        }
+    }
     let (approval, transition) = {
         let mut registry = service.registry.write().await;
-        registry.create_approval(session_id, request)?
+        registry.commit_planned_approval(planned)?
     };
     let _ = service
         .publish_event(TimelineEventDraft {
@@ -1581,9 +1695,47 @@ async fn apply_approval_decision(
     AxumPath(approval_id): AxumPath<Uuid>,
     Json(request): Json<ApprovalDecisionRequest>,
 ) -> Result<Json<ApprovalRequestRecord>, ApiError> {
+    let planned = {
+        let registry = service.registry.read().await;
+        registry.plan_approval_decision(approval_id, request)?
+    };
+    if let Some(runner) = planned.owner_runner.as_ref() {
+        let relay_request = ApprovalDecisionRequest {
+            decision: match planned.approval.state {
+                ApprovalState::Approved => ApprovalDecision::Approved,
+                ApprovalState::Denied => ApprovalDecision::Denied,
+                ApprovalState::Cancelled => ApprovalDecision::Cancelled,
+                ApprovalState::Pending => {
+                    return Err(ApiError::internal(format!(
+                        "approval `{approval_id}` remained pending during decision relay"
+                    )));
+                }
+            },
+            responder: planned.approval.responder.clone(),
+            note: planned.approval.note.clone(),
+        };
+        let relayed =
+            relay_approval_decision_to_runner(runner, planned.approval.approval_id, &relay_request)
+                .await?;
+        if relayed.approval_id != planned.approval.approval_id {
+            return Err(ApiError::bad_gateway(format!(
+                "runner `{}` acknowledged approval decision for `{}` instead of `{}`",
+                runner.registration.runner_id, relayed.approval_id, planned.approval.approval_id
+            )));
+        }
+        if relayed.state != planned.approval.state {
+            return Err(ApiError::bad_gateway(format!(
+                "runner `{}` returned approval state `{:?}` instead of `{:?}` for `{}`",
+                runner.registration.runner_id,
+                relayed.state,
+                planned.approval.state,
+                planned.approval.approval_id
+            )));
+        }
+    }
     let (approval, transition) = {
         let mut registry = service.registry.write().await;
-        registry.apply_approval_decision(approval_id, request)?
+        registry.commit_planned_approval_decision(planned)?
     };
     let _ = service
         .publish_event(TimelineEventDraft {
@@ -1960,6 +2112,84 @@ async fn update_runner_session_state(
         .map_err(|error| {
             ApiError::bad_gateway(format!(
                 "failed to decode state update response from runner `{}`: {error}",
+                runner.registration.runner_id
+            ))
+        })
+}
+
+async fn relay_approval_to_runner(
+    runner: &RunnerSnapshot,
+    session_id: Uuid,
+    request: &ApprovalCreateRequest,
+) -> Result<ApprovalRequestRecord, ApiError> {
+    let base_url = runner_public_base_url(runner)?;
+    let client = Client::new();
+    let response = client
+        .post(format!(
+            "{}/v1/sessions/{session_id}/approvals",
+            base_url.trim_end_matches('/')
+        ))
+        .json(request)
+        .send()
+        .await
+        .map_err(|error| {
+            ApiError::bad_gateway(format!(
+                "failed to relay approval for session `{session_id}` to runner `{}`: {error}",
+                runner.registration.runner_id
+            ))
+        })?
+        .error_for_status()
+        .map_err(|error| {
+            ApiError::bad_gateway(format!(
+                "runner `{}` rejected approval relay for session `{session_id}`: {error}",
+                runner.registration.runner_id
+            ))
+        })?;
+    response
+        .json::<ApprovalRequestRecord>()
+        .await
+        .map_err(|error| {
+            ApiError::bad_gateway(format!(
+                "failed to decode approval relay response from runner `{}`: {error}",
+                runner.registration.runner_id
+            ))
+        })
+}
+
+async fn relay_approval_decision_to_runner(
+    runner: &RunnerSnapshot,
+    approval_id: Uuid,
+    request: &ApprovalDecisionRequest,
+) -> Result<ApprovalRequestRecord, ApiError> {
+    let base_url = runner_public_base_url(runner)?;
+    let client = Client::new();
+    let response = client
+        .post(format!(
+            "{}/v1/approvals/{approval_id}/decision",
+            base_url.trim_end_matches('/')
+        ))
+        .json(request)
+        .send()
+        .await
+        .map_err(|error| {
+            ApiError::bad_gateway(format!(
+                "failed to relay approval decision `{approval_id}` to runner `{}`: {error}",
+                runner.registration.runner_id
+            ))
+        })?
+        .error_for_status()
+        .map_err(|error| {
+            ApiError::bad_gateway(format!(
+                "runner `{}` rejected approval decision `{approval_id}`: {error}",
+                runner.registration.runner_id
+            ))
+        })?;
+    response
+        .json::<ApprovalRequestRecord>()
+        .await
+        .map_err(|error| {
+            ApiError::bad_gateway(format!(
+                "failed to decode approval decision response from runner `{}`: {error}",
                 runner.registration.runner_id
             ))
         })
@@ -2574,6 +2804,21 @@ mod tests {
         assert_eq!(approval.session_id, session.session_id);
         assert_eq!(approval.runner_id, "runner-approval");
         assert_eq!(approval.state, ApprovalState::Pending);
+        let runner_approvals = runner.api.list_approvals().await;
+        assert_eq!(runner_approvals.len(), 1);
+        assert_eq!(runner_approvals[0].approval_id, approval.approval_id);
+        assert_eq!(runner_approvals[0].state, ApprovalState::Pending);
+        let runner_waiting_session = runner
+            .api
+            .list_sessions()
+            .await
+            .into_iter()
+            .find(|record| record.session_id == session.session_id)
+            .expect("runner session should exist after approval relay");
+        assert_eq!(
+            runner_waiting_session.state,
+            RunnerSessionState::WaitingApproval
+        );
 
         let approvals_response = app
             .clone()
@@ -2647,6 +2892,22 @@ mod tests {
         let resolved_approval: ApprovalRequestRecord = read_json(resolve_response).await;
         assert_eq!(resolved_approval.state, ApprovalState::Approved);
         assert_eq!(resolved_approval.responder.as_deref(), Some("operator-1"));
+        let runner_resolved_approval = runner
+            .api
+            .list_approvals()
+            .await
+            .into_iter()
+            .find(|record| record.approval_id == approval.approval_id)
+            .expect("runner approval should exist after decision relay");
+        assert_eq!(runner_resolved_approval.state, ApprovalState::Approved);
+        assert_eq!(
+            runner_resolved_approval.responder.as_deref(),
+            Some("operator-1")
+        );
+        assert_eq!(
+            runner_resolved_approval.note.as_deref(),
+            Some("Approved for this run")
+        );
 
         let resumed_session_response = app
             .clone()
@@ -2659,6 +2920,14 @@ mod tests {
             .expect("request should succeed");
         let resumed_session: SessionRecord = read_json(resumed_session_response).await;
         assert_eq!(resumed_session.state, SessionState::Running);
+        let runner_resumed_session = runner
+            .api
+            .list_sessions()
+            .await
+            .into_iter()
+            .find(|record| record.session_id == session.session_id)
+            .expect("runner session should exist after decision relay");
+        assert_eq!(runner_resumed_session.state, RunnerSessionState::Running);
 
         let duplicate_resolution_response = app
             .clone()
@@ -2747,6 +3016,106 @@ mod tests {
                 Some("runner-approval")
             );
         }
+    }
+
+    #[tokio::test]
+    async fn failed_approval_relay_does_not_mutate_control_plane_state() {
+        let service = ControlPlaneService::new(
+            load_control_plane_config(ControlPlaneConfigOverrides::default())
+                .expect("config should load"),
+            "0.1.0",
+        );
+        let app = service.clone().router();
+
+        let runner = spawn_runner_server("runner-approval-failure", "default").await;
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/runners/register")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&runner.registration).expect("json should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"workspace_id": "default"}).to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+        let session: SessionRecord = read_json(create_response).await;
+
+        {
+            let mut registry = service.registry.write().await;
+            let snapshot = registry
+                .runners
+                .get_mut("runner-approval-failure")
+                .expect("runner snapshot should exist");
+            snapshot.registration.public_base_url = Some("http://127.0.0.1:1".to_owned());
+        }
+
+        let approval_response = app
+            .clone()
+            .oneshot(
+                Request::post(format!("/v1/sessions/{}/approvals", session.session_id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "title": "Broken relay",
+                            "description": "Should fail before commit"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should complete");
+        assert_eq!(approval_response.status(), StatusCode::BAD_GATEWAY);
+
+        let approvals_response = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/approvals")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let approvals: ListResponse<ApprovalRequestRecord> = read_json(approvals_response).await;
+        assert!(approvals.items.is_empty());
+
+        let session_response = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/v1/sessions/{}", session.session_id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let control_plane_session: SessionRecord = read_json(session_response).await;
+        assert_eq!(control_plane_session.state, SessionState::Assigned);
+
+        assert!(runner.api.list_approvals().await.is_empty());
+        let runner_session = runner
+            .api
+            .list_sessions()
+            .await
+            .into_iter()
+            .find(|record| record.session_id == session.session_id)
+            .expect("runner session should still exist");
+        assert_eq!(runner_session.state, RunnerSessionState::Pending);
     }
 
     #[tokio::test]

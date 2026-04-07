@@ -25,7 +25,7 @@ use rc_control_plane::{
     TimelineEvent as RemoteTimelineEvent, TimelineEventDetail as RemoteTimelineEventDetail,
 };
 use rc_core::{
-    ConversationEntry, InputFormat, OutputFormat, PermissionMode, SessionState,
+    ConversationEntry, HookEvent, InputFormat, OutputFormat, PermissionMode, SessionState,
     default_system_prompt,
 };
 use rc_permissions::{
@@ -53,6 +53,12 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as TungsteniteMessage};
 use tracing::warn;
 use uuid::Uuid;
+
+mod runtime_hooks;
+
+use runtime_hooks::{
+    HookDecision, HookInvocationLog, HookRecord, HookRuntime, append_hook_context_entries,
+};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -118,6 +124,10 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Commands {
     Doctor,
+    Hooks {
+        #[command(subcommand)]
+        command: HooksCommand,
+    },
     Remote {
         #[command(subcommand)]
         command: RemoteCommand,
@@ -151,6 +161,11 @@ enum Commands {
 enum SessionsCommand {
     List,
     Show(ShowArgs),
+}
+
+#[derive(Subcommand, Debug)]
+enum HooksCommand {
+    List(HooksListArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -209,6 +224,14 @@ enum RemoteSessionsCommand {
 struct ResumeArgs {
     session_id: Uuid,
     prompt: Vec<String>,
+}
+
+#[derive(Args, Debug)]
+struct HooksListArgs {
+    #[arg(long)]
+    event: Option<HookEvent>,
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args, Debug)]
@@ -732,9 +755,15 @@ async fn main() -> Result<()> {
         restore_session_context(&store, &mut config)?;
         reapply_cli_overrides(&cli, &mut config);
     }
+    let session_start_source = if resume_session.is_some() {
+        "resume"
+    } else {
+        "startup"
+    };
 
     match cli.command {
         Some(Commands::Doctor) => run_doctor(&config),
+        Some(Commands::Hooks { command }) => run_hooks(&config, command),
         Some(Commands::Remote { command }) => run_remote(command).await,
         Some(Commands::Sessions { command }) => run_sessions(&store, command),
         Some(Commands::Export(args)) => run_export(&store, args),
@@ -745,22 +774,22 @@ async fn main() -> Result<()> {
         Some(Commands::Resume(args)) => {
             let prompt = join_prompt(args.prompt);
             if should_run_headless(&config) {
-                run_headless(&config, prompt).await
+                run_headless(&config, prompt, session_start_source).await
             } else if let Some(prompt) = prompt {
-                run_oneshot_text(&config, &store, prompt).await
+                run_oneshot_text(&config, &store, prompt, session_start_source).await
             } else {
-                run_interactive_shell(config.clone(), &store).await
+                run_interactive_shell(config.clone(), &store, session_start_source).await
             }
         }
         Some(Commands::Tui) => rc_tui::run_dashboard(&config, &store),
         None => {
             let prompt = join_prompt(cli.prompt);
             if should_run_headless(&config) {
-                run_headless(&config, prompt).await
+                run_headless(&config, prompt, session_start_source).await
             } else if let Some(prompt) = prompt {
-                run_oneshot_text(&config, &store, prompt).await
+                run_oneshot_text(&config, &store, prompt, session_start_source).await
             } else {
-                run_interactive_shell(config.clone(), &store).await
+                run_interactive_shell(config.clone(), &store, session_start_source).await
             }
         }
     }
@@ -1509,6 +1538,7 @@ fn remote_event_summary(detail: &RemoteTimelineEventDetail) -> String {
 fn run_doctor(config: &RuntimeConfig) -> Result<()> {
     let report = validate_provider_config(&config.provider);
     let discovery = discover_runtime_extensions(config);
+    let hooks = HookRuntime::discover(config);
     let api_key_state = if config.provider.api_key.is_some() {
         "present"
     } else {
@@ -1538,6 +1568,7 @@ fn run_doctor(config: &RuntimeConfig) -> Result<()> {
             discovery.plugin_runtimes.len()
         ),
         format!("- discovered mcp servers: {}", discovery.mcp_servers.len()),
+        format!("- discovered hooks: {}", hooks.list(None).len()),
         format!(
             "- readiness: {}",
             if report.ok { "ready" } else { "not-ready" }
@@ -1551,6 +1582,69 @@ fn run_doctor(config: &RuntimeConfig) -> Result<()> {
     }
     for warning in discovery.warnings {
         println!("  - {warning}");
+    }
+    for warning in hooks.warnings() {
+        println!("  - {warning}");
+    }
+    Ok(())
+}
+
+fn run_hooks(config: &RuntimeConfig, command: HooksCommand) -> Result<()> {
+    match command {
+        HooksCommand::List(args) => run_hooks_list(config, args),
+    }
+}
+
+fn run_hooks_list(config: &RuntimeConfig, args: HooksListArgs) -> Result<()> {
+    let hooks = HookRuntime::discover(config);
+    let records = hooks.list(args.event);
+
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "warnings": hooks.warnings(),
+                "hooks": records,
+            }))?
+        );
+        return Ok(());
+    }
+
+    if records.is_empty() {
+        println!("No hooks found.");
+    } else {
+        for HookRecord {
+            event,
+            matcher,
+            command,
+            shell,
+            timeout_secs,
+            once,
+            origin_kind,
+            origin_name,
+            config_path,
+        } in records
+        {
+            println!(
+                "{}  matcher={}  once={}  shell={}  timeout={}s",
+                event.as_str(),
+                matcher.as_deref().unwrap_or("*"),
+                once,
+                shell.map(|value| value.as_str()).unwrap_or("(default)"),
+                timeout_secs.unwrap_or(15)
+            );
+            println!(
+                "  source: {}:{} ({})",
+                origin_kind,
+                origin_name,
+                config_path.display()
+            );
+            println!("  command: {command}");
+        }
+    }
+
+    for warning in hooks.warnings() {
+        println!("warning: {warning}");
     }
     Ok(())
 }
@@ -1869,6 +1963,7 @@ async fn run_remote_approvals_list(args: RemoteApprovalsListArgs) -> Result<()> 
 async fn run_remote_approvals_create(args: RemoteApprovalCreateArgs) -> Result<()> {
     let control_plane_url = require_control_plane_url(&args.target)?;
     let request = SharedApprovalCreateRequest {
+        approval_id: None,
         title: args.title,
         description: args.description,
         metadata: parse_repeated_key_value_args("--meta", &args.metadata)?,
@@ -2568,15 +2663,27 @@ async fn run_oneshot_text(
     config: &RuntimeConfig,
     store: &SessionStore,
     prompt: String,
+    session_start_source: &'static str,
 ) -> Result<()> {
     let provider = ProviderClient::new()?;
     let broker = StaticPermissionBroker::new(config.permission_mode);
+    let mut hook_runtime = HookRuntime::discover(config);
     let mut conversation = initialize_conversation(store, config, Some(&prompt))?;
+    apply_session_start_hooks(
+        &mut hook_runtime,
+        config,
+        store,
+        &mut conversation,
+        session_start_source,
+        false,
+    )
+    .await?;
     let response = run_prompt(
         config,
         store,
         &provider,
         &broker,
+        &mut hook_runtime,
         &mut conversation,
         &prompt,
     )
@@ -2585,10 +2692,108 @@ async fn run_oneshot_text(
     Ok(())
 }
 
-async fn run_interactive_shell(mut config: RuntimeConfig, store: &SessionStore) -> Result<()> {
+async fn apply_session_start_hooks(
+    hook_runtime: &mut HookRuntime,
+    config: &RuntimeConfig,
+    store: &SessionStore,
+    conversation: &mut Vec<ConversationEntry>,
+    source: &str,
+    print_warnings: bool,
+) -> Result<Vec<String>> {
+    if conversation.len() > 1 {
+        return Ok(Vec::new());
+    }
+
+    let summary = hook_runtime.run_session_start(config, source).await;
+    append_hook_additional_contexts(
+        store,
+        config.session_id,
+        conversation,
+        &summary.additional_contexts,
+        "SessionStart hook additional context: ",
+    )?;
+    if let Some(message) = summary.initial_user_message.as_deref() {
+        store.append_named_event(
+            config.session_id,
+            "session_start_initial_user_message",
+            serde_json::json!({
+                "message": message,
+                "source": source,
+            }),
+        )?;
+        if print_warnings {
+            println!("SessionStart hook suggested initial prompt: {message}");
+        }
+    }
+    record_hook_logs(store, config.session_id, &summary.logs)?;
+    record_hook_warnings(store, config.session_id, &summary.warnings)?;
+    if print_warnings {
+        for warning in &summary.warnings {
+            println!("warning: {warning}");
+        }
+    }
+    Ok(summary.warnings)
+}
+
+fn append_hook_additional_contexts(
+    store: &SessionStore,
+    session_id: Uuid,
+    conversation: &mut Vec<ConversationEntry>,
+    contexts: &[String],
+    prefix: &str,
+) -> Result<()> {
+    if contexts.is_empty() {
+        return Ok(());
+    }
+    let start_len = conversation.len();
+    append_hook_context_entries(conversation, contexts, prefix);
+    for entry in &conversation[start_len..] {
+        store.append_conversation_entry(session_id, entry)?;
+    }
+    Ok(())
+}
+
+fn record_hook_logs(
+    store: &SessionStore,
+    session_id: Uuid,
+    logs: &[HookInvocationLog],
+) -> Result<()> {
+    for log in logs {
+        store.append_named_event(session_id, "hook_run", serde_json::to_value(log)?)?;
+    }
+    Ok(())
+}
+
+fn record_hook_warnings(store: &SessionStore, session_id: Uuid, warnings: &[String]) -> Result<()> {
+    for warning in warnings {
+        warn!("{warning}");
+        store.append_named_event(
+            session_id,
+            "hook_warning",
+            serde_json::json!({ "warning": warning }),
+        )?;
+    }
+    Ok(())
+}
+
+async fn run_interactive_shell(
+    mut config: RuntimeConfig,
+    store: &SessionStore,
+    session_start_source: &'static str,
+) -> Result<()> {
     let provider = ProviderClient::new()?;
     let broker = StaticPermissionBroker::new(config.permission_mode);
+    let mut hook_runtime = HookRuntime::discover(&config);
     let mut conversation = initialize_conversation(store, &config, None)?;
+    apply_session_start_hooks(
+        &mut hook_runtime,
+        &config,
+        store,
+        &mut conversation,
+        session_start_source,
+        true,
+    )
+    .await?;
 
     println!("Remote Code Rust interactive shell");
     println!(
@@ -2624,7 +2829,17 @@ async fn run_interactive_shell(mut config: RuntimeConfig, store: &SessionStore) 
             continue;
         }
 
-        match run_prompt(&config, store, &provider, &broker, &mut conversation, input).await {
+        match run_prompt(
+            &config,
+            store,
+            &provider,
+            &broker,
+            &mut hook_runtime,
+            &mut conversation,
+            input,
+        )
+        .await
+        {
             Ok(outcome) => {
                 println!("\n{}", outcome.text);
                 println!(
@@ -2644,7 +2859,11 @@ async fn run_interactive_shell(mut config: RuntimeConfig, store: &SessionStore) 
     Ok(())
 }
 
-async fn run_headless(config: &RuntimeConfig, inline_prompt: Option<String>) -> Result<()> {
+async fn run_headless(
+    config: &RuntimeConfig,
+    inline_prompt: Option<String>,
+    session_start_source: &'static str,
+) -> Result<()> {
     let discovery = discover_runtime_extensions(config);
     let emitter = Arc::new(Mutex::new(ProtocolEmitter::new(
         io::stdout(),
@@ -2698,7 +2917,21 @@ async fn run_headless(config: &RuntimeConfig, inline_prompt: Option<String>) -> 
     let processor_interrupted = interrupted.clone();
     let processor = tokio::spawn(async move {
         let provider = ProviderClient::new()?;
+        let mut hook_runtime = HookRuntime::discover(&processor_config);
         let mut conversation = initialize_conversation(&processor_store, &processor_config, None)?;
+        let session_start_logs = apply_session_start_hooks(
+            &mut hook_runtime,
+            &processor_config,
+            &processor_store,
+            &mut conversation,
+            session_start_source,
+            false,
+        )
+        .await?;
+        for warning in session_start_logs {
+            let mut emitter = processor_emitter.lock().await;
+            emitter.emit_status(warning)?;
+        }
         while let Some(prompt) = prompt_rx.recv().await {
             if processor_interrupted.load(Ordering::Relaxed) {
                 processor_interrupted.store(false, Ordering::Relaxed);
@@ -2714,6 +2947,7 @@ async fn run_headless(config: &RuntimeConfig, inline_prompt: Option<String>) -> 
                 &processor_store,
                 &provider,
                 processor_broker.as_ref(),
+                &mut hook_runtime,
                 &mut conversation,
                 &prompt,
             )
@@ -3852,6 +4086,7 @@ async fn run_prompt(
     store: &SessionStore,
     provider: &ProviderClient,
     broker: &dyn PermissionBroker,
+    hook_runtime: &mut HookRuntime,
     conversation: &mut Vec<ConversationEntry>,
     prompt: &str,
 ) -> Result<PromptRunOutcome> {
@@ -3960,23 +4195,56 @@ async fn run_prompt(
         }
 
         for tool_call in &response.tool_calls {
-            let tool_result = execute_tool_call(tool_call, &tool_context, broker).await?;
+            let tool_spec = builtin_tool_specs()
+                .into_iter()
+                .find(|spec| spec.name == tool_call.name)
+                .ok_or_else(|| anyhow!("unknown tool {}", tool_call.name))?;
+            let pre_summary = hook_runtime
+                .run_pre_tool_use(config, &tool_spec.protocol_name, tool_call.clone())
+                .await;
+            append_hook_additional_contexts(
+                store,
+                config.session_id,
+                conversation,
+                &pre_summary.additional_contexts,
+                "PreToolUse hook additional context: ",
+            )?;
+            record_hook_logs(store, config.session_id, &pre_summary.logs)?;
+            record_hook_warnings(store, config.session_id, &pre_summary.warnings)?;
+
+            let effective_tool_call = pre_summary.tool_call;
+            let tool_result = match pre_summary.decision {
+                HookDecision::Deny => rc_core::ToolResult {
+                    content: pre_summary
+                        .reason
+                        .unwrap_or_else(|| "Blocked by PreToolUse hook.".to_owned()),
+                    is_error: true,
+                },
+                HookDecision::Allow => {
+                    let allow_broker =
+                        StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+                    execute_tool_call(&effective_tool_call, &tool_context, &allow_broker).await?
+                }
+                HookDecision::Ask => {
+                    execute_tool_call(&effective_tool_call, &tool_context, broker).await?
+                }
+            };
             let is_permission_denied = tool_result.is_error
                 && tool_result
                     .content
                     .to_ascii_lowercase()
                     .contains("permission denied");
-            if is_permission_denied {
+            if is_permission_denied || matches!(pre_summary.decision, HookDecision::Deny) {
                 permission_denials.push(serde_json::json!({
-                    "tool_name": tool_call.name,
-                    "tool_use_id": tool_call.id,
+                    "tool_name": effective_tool_call.name,
+                    "tool_use_id": effective_tool_call.id,
                     "message": tool_result.content.clone(),
                 }));
             }
             let tool_preview = truncate_preview(&tool_result.content, 160);
             let tool_entry = ConversationEntry::tool(
-                tool_call.id.clone(),
-                tool_call.name.clone(),
+                effective_tool_call.id.clone(),
+                effective_tool_call.name.clone(),
                 tool_result.content,
                 tool_result.is_error,
             );
@@ -3985,13 +4253,46 @@ async fn run_prompt(
                 config.session_id,
                 "tool_result",
                 serde_json::json!({
-                    "tool_name": tool_call.name,
-                    "tool_use_id": tool_call.id,
+                    "tool_name": effective_tool_call.name,
+                    "tool_use_id": effective_tool_call.id,
                     "is_error": tool_entry.is_error,
                     "content_preview": tool_preview,
                 }),
             )?;
             conversation.push(tool_entry);
+
+            let post_event = if tool_result.is_error {
+                HookEvent::PostToolUseFailure
+            } else {
+                HookEvent::PostToolUse
+            };
+            let post_summary = hook_runtime
+                .run_post_tool_use(
+                    config,
+                    post_event,
+                    &tool_spec.protocol_name,
+                    &effective_tool_call,
+                    &serde_json::json!({
+                        "content": conversation
+                            .last()
+                            .map(|entry| entry.text.clone())
+                            .unwrap_or_default(),
+                        "is_error": conversation
+                            .last()
+                            .map(|entry| entry.is_error)
+                            .unwrap_or(false),
+                    }),
+                )
+                .await;
+            append_hook_additional_contexts(
+                store,
+                config.session_id,
+                conversation,
+                &post_summary.additional_contexts,
+                "PostToolUse hook additional context: ",
+            )?;
+            record_hook_logs(store, config.session_id, &post_summary.logs)?;
+            record_hook_warnings(store, config.session_id, &post_summary.warnings)?;
         }
     }
     let error = anyhow!(
@@ -4041,6 +4342,7 @@ fn handle_shell_command(
                 "  /interrupt            Cancel in-flight headless work (interactive shell is synchronous)"
             );
             println!("  /doctor               Run provider readiness checks");
+            println!("  (top-level) remote-code hooks list");
             println!("  /quit                 Exit the shell");
         }
         "/status" => {
@@ -5356,6 +5658,7 @@ mod tests {
             &base_url,
             &format!("/v1/sessions/{}/approvals", Uuid::nil()),
             &SharedApprovalCreateRequest {
+                approval_id: None,
                 title: "Execute shell command".to_owned(),
                 description: "Needs operator confirmation".to_owned(),
                 metadata: [("tool".to_owned(), "bash_command".to_owned())]
