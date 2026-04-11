@@ -1,3 +1,8 @@
+//! Provider failover with health tracking and retry logic.
+//!
+//! [`FailoverProviderClient`] wraps multiple provider configurations and
+//! automatically switches to the next healthy provider on transient failures.
+
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Instant;

@@ -1,3 +1,9 @@
+//! Built-in tool registry and execution engine.
+//!
+//! Provides 30+ built-in tools (file I/O, search, shell, web, LSP, tasks, etc.)
+//! with a [`ToolRegistry`] that supports BM25-based tool search and OpenAI /
+//! Anthropic schema generation.
+
 pub mod sandbox;
 pub mod search;
 pub mod tasks;
@@ -27,17 +33,25 @@ const IGNORED_DIRS: &[&str] = &[
     ".next",
 ];
 
+/// Specification for a single built-in tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolSpec {
+    /// Internal tool name (e.g. `"read_file"`).
     pub name: String,
+    /// Name used in provider protocol messages.
     pub protocol_name: String,
+    /// Name used for permission classification.
     pub permission_tool_name: String,
+    /// Human-readable description of what the tool does.
     pub description: String,
+    /// Whether this tool requires user permission to execute.
     pub requires_permission: bool,
+    /// JSON Schema describing the tool's input parameters.
     pub input_schema: Value,
 }
 
 impl ToolSpec {
+    /// Convert to an OpenAI-compatible function-calling schema.
     #[must_use]
     pub fn to_openai_schema(&self) -> Value {
         json!({
@@ -50,6 +64,7 @@ impl ToolSpec {
         })
     }
 
+    /// Convert to an Anthropic-compatible tool-use schema.
     #[must_use]
     pub fn to_anthropic_schema(&self) -> Value {
         json!({
@@ -60,24 +75,36 @@ impl ToolSpec {
     }
 }
 
+/// Execution context passed to every tool implementation.
 #[derive(Debug, Clone)]
 pub struct ToolExecutionContext {
+    /// Current working directory.
     pub cwd: PathBuf,
+    /// Timeout in milliseconds for tool execution.
     pub timeout_ms: u64,
 }
 
+/// Request to execute a command hook.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandHookExecutionRequest {
+    /// The hook event that triggered this execution.
     pub event: HookEvent,
+    /// The shell command to execute.
     pub command: String,
+    /// Working directory for the command.
     pub cwd: PathBuf,
+    /// JSON input passed via stdin.
     pub input: Value,
+    /// Shell interpreter to use.
     pub shell: Option<HookShell>,
+    /// Timeout in seconds.
     pub timeout_secs: Option<u64>,
 }
 
+/// Result of a command hook execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandHookExecutionResult {
+    /// The hook event that was executed.
     pub event: HookEvent,
     pub command: String,
     pub shell: HookShell,
@@ -816,6 +843,13 @@ impl Default for ToolRegistry {
     }
 }
 
+/// Execute a tool call after checking permissions.
+///
+/// Looks up the tool by name, checks permissions via the broker, and dispatches
+/// to the appropriate handler.
+///
+/// # Errors
+/// Returns an error if the tool is unknown, permission is denied, or execution fails.
 pub async fn execute_tool_call(
     call: &ToolCall,
     context: &ToolExecutionContext,

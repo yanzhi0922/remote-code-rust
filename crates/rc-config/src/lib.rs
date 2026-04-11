@@ -1,3 +1,9 @@
+//! Configuration loading and provider management.
+//!
+//! Handles discovery of application paths, loading of provider credentials from
+//! environment variables and TOML settings files, failover configuration, and
+//! legacy profile import.
+
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
@@ -5,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 use directories::BaseDirs;
+
 use rc_core::{
     DEFAULT_PROFILE_DIR_NAME, HookEvent, HookMatcher, InputFormat, LEGACY_PROFILE_DIR_NAME,
     OutputFormat, PermissionMode, ProviderProtocol,
@@ -48,15 +55,24 @@ const fn default_provider_respect_retry_after() -> bool {
     true
 }
 
+/// Well-known application paths derived from the profile directory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppPaths {
+    /// Root profile directory (e.g. `~/.remote-code-rust`).
     pub profile_dir: PathBuf,
+    /// SQLite database path for state persistence.
     pub state_db_path: PathBuf,
+    /// Directory for session transcripts.
     pub sessions_dir: PathBuf,
+    /// Directory for exported artifacts.
     pub artifacts_dir: PathBuf,
+    /// Directory for log files.
     pub logs_dir: PathBuf,
+    /// Directory for provider profiles.
     pub profiles_dir: PathBuf,
+    /// Directory for installed skills.
     pub skills_dir: PathBuf,
+    /// Directory for installed plugins.
     pub plugins_dir: PathBuf,
 }
 
@@ -111,32 +127,51 @@ impl AppPaths {
     }
 }
 
+/// CLI / env-var overrides for the active provider.
 #[derive(Debug, Clone, Default)]
 pub struct ProviderOverrides {
+    /// Provider name override.
     pub provider: Option<String>,
+    /// Base URL override.
     pub base_url: Option<String>,
+    /// API key override.
     pub api_key: Option<String>,
+    /// Model identifier override.
     pub model: Option<String>,
+    /// Protocol override.
     pub protocol: Option<ProviderProtocol>,
 }
 
+/// Full configuration for a single LLM provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
+    /// Provider name (e.g. `"openai"`, `"anthropic"`).
     pub name: String,
+    /// API base URL (inferred from protocol if not set).
     pub base_url: Option<String>,
+    /// API key for authentication.
     pub api_key: Option<String>,
+    /// Model identifier to use.
     pub model: Option<String>,
+    /// Wire protocol to use.
     pub protocol: ProviderProtocol,
+    /// Request timeout in milliseconds.
     pub timeout_ms: u64,
+    /// Maximum output tokens per request.
     pub max_output_tokens: u32,
+    /// Maximum number of retries on transient failures.
     #[serde(default = "default_provider_max_retries")]
     pub max_retries: u32,
+    /// Initial back-off delay in milliseconds for retries.
     #[serde(default = "default_provider_retry_initial_backoff_ms")]
     pub retry_initial_backoff_ms: u64,
+    /// Maximum back-off delay in milliseconds for retries.
     #[serde(default = "default_provider_retry_max_backoff_ms")]
     pub retry_max_backoff_ms: u64,
+    /// Whether to respect the `Retry-After` header from the provider.
     #[serde(default = "default_provider_respect_retry_after")]
     pub respect_retry_after: bool,
+    /// Additional HTTP headers to send with every request.
     #[serde(default)]
     pub request_header_overrides: BTreeMap<String, String>,
 }
@@ -165,26 +200,42 @@ const fn default_true() -> bool {
     true
 }
 
+/// Top-level runtime configuration assembled from CLI flags, env vars, and settings.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
+    /// Current working directory.
     pub cwd: PathBuf,
+    /// Active session identifier.
     pub session_id: Uuid,
+    /// Permission mode for tool execution.
     pub permission_mode: PermissionMode,
+    /// Input format (text or stream-json).
     pub input_format: InputFormat,
+    /// Output format (text or stream-json).
     pub output_format: OutputFormat,
+    /// Whether to print and exit (non-interactive mode).
     pub print_mode: bool,
+    /// Whether verbose logging is enabled.
     pub verbose: bool,
+    /// Whether to replay user messages from the previous session.
     pub replay_user_messages: bool,
+    /// Whether to include partial streaming messages in output.
     pub include_partial_messages: bool,
+    /// Maximum number of conversation turns per session.
     pub max_turns: usize,
+    /// Active provider configuration.
     pub provider: ProviderConfig,
+    /// Application paths.
     pub paths: AppPaths,
 }
 
+/// Result of a diagnostic check (`doctor` command).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DoctorReport {
+    /// Whether all checks passed.
     pub ok: bool,
+    /// List of issues found.
     pub issues: Vec<String>,
 }
 

@@ -1,3 +1,8 @@
+//! Stream-JSON protocol for headless / machine-readable mode.
+//!
+//! Defines the line-delimited JSON protocol used between the CLI and external
+//! consumers. [`ProtocolEmitter`] writes events; [`parse_input_line`] reads them.
+
 use std::io::Write;
 
 use anyhow::Result;
@@ -6,29 +11,40 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+/// An input message parsed from the external consumer.
 #[derive(Debug, Clone)]
 pub enum ProtocolInput {
+    /// User text input.
     User {
+        /// The user's text content.
         content: String,
     },
+    /// Response to a permission request.
     ControlResponse {
+        /// ID of the original permission request.
         request_id: String,
+        /// Whether the action is allowed.
         allow: bool,
+        /// Optional message.
         message: Option<String>,
     },
+    /// Interrupt signal.
     Interrupt,
 }
 
+/// Writes line-delimited JSON protocol events to an underlying writer.
 pub struct ProtocolEmitter<W: Write> {
     writer: W,
     session_id: Uuid,
 }
 
 impl<W: Write> ProtocolEmitter<W> {
+    /// Create a new emitter writing to `writer` for the given session.
     pub fn new(writer: W, session_id: Uuid) -> Self {
         Self { writer, session_id }
     }
 
+    /// Emit an `init` system event with session metadata.
     pub fn emit_init(&mut self, payload: InitPayload) -> Result<()> {
         self.emit(json!({
             "type": "system",
@@ -49,6 +65,7 @@ impl<W: Write> ProtocolEmitter<W> {
         }))
     }
 
+    /// Emit a session state change event.
     pub fn emit_state(&mut self, state: SessionState) -> Result<()> {
         self.emit(json!({
             "type": "system",
@@ -59,6 +76,7 @@ impl<W: Write> ProtocolEmitter<W> {
         }))
     }
 
+    /// Emit a status message event.
     pub fn emit_status(&mut self, status: impl AsRef<str>) -> Result<()> {
         self.emit(json!({
             "type": "system",
@@ -69,6 +87,7 @@ impl<W: Write> ProtocolEmitter<W> {
         }))
     }
 
+    /// Emit an assistant text message.
     pub fn emit_assistant(&mut self, text: impl AsRef<str>) -> Result<()> {
         self.emit(json!({
             "type": "assistant",
@@ -82,6 +101,7 @@ impl<W: Write> ProtocolEmitter<W> {
         }))
     }
 
+    /// Emit a result event summarising the completed turn.
     pub fn emit_result(&mut self, payload: ResultPayload) -> Result<()> {
         let mut event = json!({
             "type": "result",
@@ -111,6 +131,7 @@ impl<W: Write> ProtocolEmitter<W> {
         self.emit(event)
     }
 
+    /// Emit a permission request event for the external consumer.
     pub fn emit_permission_request(&mut self, payload: PermissionRequestPayload) -> Result<()> {
         self.emit(json!({
             "type": "control_request",
@@ -128,6 +149,7 @@ impl<W: Write> ProtocolEmitter<W> {
         }))
     }
 
+    /// Emit a cancellation event for a previously sent permission request.
     pub fn emit_permission_cancelled(&mut self, request_id: &str) -> Result<()> {
         self.emit(json!({
             "type": "control_cancel_request",
@@ -135,6 +157,7 @@ impl<W: Write> ProtocolEmitter<W> {
         }))
     }
 
+    /// Emit a tool progress heartbeat event.
     pub fn emit_tool_progress(&mut self, tool_name: &str, elapsed_time_seconds: u64) -> Result<()> {
         self.emit(json!({
             "type": "tool_progress",
@@ -153,54 +176,93 @@ impl<W: Write> ProtocolEmitter<W> {
     }
 }
 
+/// Payload for the `init` event emitted at session start.
 #[derive(Debug, Clone)]
 pub struct InitPayload {
+    /// API key source description.
     pub api_key_source: String,
+    /// Application version string.
     pub version: String,
+    /// Current working directory.
     pub cwd: String,
+    /// List of available tool names.
     pub tools: Vec<String>,
+    /// List of configured MCP server names.
     pub mcp_servers: Vec<String>,
+    /// Model identifier.
     pub model: Option<String>,
+    /// Active permission mode.
     pub permission_mode: String,
+    /// Available slash commands.
     pub slash_commands: Vec<String>,
+    /// Output style setting.
     pub output_style: String,
+    /// Available skill names.
     pub skills: Vec<String>,
+    /// Available plugin names.
     pub plugins: Vec<String>,
 }
 
+/// Payload for the `result` event emitted at turn completion.
 #[derive(Debug, Clone)]
 pub struct ResultPayload {
+    /// Whether the turn ended in error.
     pub is_error: bool,
+    /// Wall-clock duration in milliseconds.
     pub duration_ms: u64,
+    /// API duration in milliseconds.
     pub duration_api_ms: u64,
+    /// Number of conversation turns.
     pub num_turns: u32,
+    /// Final result text.
     pub result: String,
+    /// Provider stop reason.
     pub stop_reason: String,
+    /// Total estimated cost in USD.
     pub total_cost_usd: f64,
+    /// Token usage breakdown.
     pub usage: UsagePayload,
+    /// Per-model usage data.
     pub model_usage: Value,
+    /// Permission denial records.
     pub permission_denials: Vec<Value>,
+    /// Error messages encountered during the turn.
     pub errors: Vec<String>,
 }
 
+/// Token usage payload included in result events.
 #[derive(Debug, Clone, Default)]
 pub struct UsagePayload {
+    /// Input (prompt) tokens.
     pub input_tokens: u64,
+    /// Output (completion) tokens.
     pub output_tokens: u64,
 }
 
+/// Payload for the `control_request` permission event.
 #[derive(Debug, Clone)]
 pub struct PermissionRequestPayload {
+    /// Unique request identifier.
     pub request_id: String,
+    /// Tool name requesting permission.
     pub tool_name: String,
+    /// Tool use identifier.
     pub tool_use_id: String,
+    /// Short human-readable title.
     pub title: String,
+    /// Detailed description.
     pub description: String,
+    /// Tool input JSON.
     pub input: Value,
+    /// Affected path, if any.
     pub blocked_path: Option<String>,
+    /// Suggested permission rules.
     pub permission_suggestions: Vec<Value>,
 }
 
+/// Parse a single line of JSON input from the external consumer.
+///
+/// Returns `None` if the line cannot be parsed or is not a recognised event type.
 pub fn parse_input_line(line: &str) -> Option<ProtocolInput> {
     let value = serde_json::from_str::<Value>(line).ok()?;
     let kind = value.get("type")?.as_str()?;

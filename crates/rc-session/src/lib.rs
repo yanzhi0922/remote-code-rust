@@ -1,3 +1,9 @@
+//! Session persistence with SQLite metadata and NDJSON transcripts.
+//!
+//! [`SessionStore`] manages session lifecycle: creation, conversation append,
+//! event storage, and export. Each session is backed by a SQLite row for
+//! metadata and an NDJSON file for the full event transcript.
+
 pub mod memory;
 pub mod replay;
 
@@ -15,48 +21,78 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+/// Summary metadata for a single session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSummary {
+    /// Unique session identifier.
     pub session_id: Uuid,
+    /// Human-readable session title.
     pub title: String,
+    /// Working directory at session creation time.
     pub cwd: PathBuf,
+    /// Provider name used for this session.
     pub provider_name: String,
+    /// Model identifier, if known.
     pub model: Option<String>,
+    /// When the session was created.
     pub created_at: DateTime<Utc>,
+    /// When the session was last updated.
     pub updated_at: DateTime<Utc>,
+    /// Path to the NDJSON transcript file.
     pub transcript_path: PathBuf,
 }
 
+/// Token usage aggregated across a session.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionUsageSummary {
+    /// Total input tokens consumed.
     pub input_tokens: u64,
+    /// Total output tokens consumed.
     pub output_tokens: u64,
 }
 
+/// Statistical summary of a session's contents.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionStats {
+    /// Total number of stored events.
     pub total_events: usize,
+    /// Number of conversation entries.
     pub conversation_entries: usize,
+    /// Message count broken down by role.
     pub messages_by_role: BTreeMap<String, usize>,
+    /// Number of tool calls made.
     pub tool_call_count: usize,
+    /// Number of error events.
     pub error_count: usize,
+    /// Stop reason from the last provider response.
     pub last_stop_reason: Option<String>,
+    /// Token usage summary.
     pub usage: SessionUsageSummary,
 }
 
+/// A complete bundle of session data for export or inspection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionBundle {
+    /// Session metadata.
     pub summary: SessionSummary,
+    /// Session statistics.
     pub stats: SessionStats,
+    /// Full conversation history.
     pub conversation: Vec<ConversationEntry>,
+    /// All stored events.
     pub events: Vec<StoredEvent>,
 }
 
+/// Persistent session store backed by SQLite and NDJSON files.
 pub struct SessionStore {
     paths: AppPaths,
 }
 
 impl SessionStore {
+    /// Open (or create) the session store at the given application paths.
+    ///
+    /// # Errors
+    /// Returns an error if the database cannot be opened or the schema cannot be initialised.
     pub fn open(paths: AppPaths) -> Result<Self> {
         paths.ensure_exists()?;
         let store = Self { paths };
@@ -64,11 +100,16 @@ impl SessionStore {
         Ok(store)
     }
 
+    /// Return a reference to the application paths.
     #[must_use]
     pub fn paths(&self) -> &AppPaths {
         &self.paths
     }
 
+    /// Ensure a session exists with the given metadata, creating it if needed.
+    ///
+    /// # Errors
+    /// Returns an error if the transcript file or database row cannot be created.
     pub fn ensure_session(
         &self,
         session_id: Uuid,
@@ -121,6 +162,10 @@ impl SessionStore {
         Ok(transcript_path)
     }
 
+    /// Append a conversation entry to the session transcript.
+    ///
+    /// # Errors
+    /// Returns an error if the event cannot be written to the transcript file.
     pub fn append_conversation_entry(
         &self,
         session_id: Uuid,
@@ -138,6 +183,10 @@ impl SessionStore {
         Ok(())
     }
 
+    /// Append a named event with a JSON payload to the session transcript.
+    ///
+    /// # Errors
+    /// Returns an error if the event cannot be written to the transcript file.
     pub fn append_named_event(
         &self,
         session_id: Uuid,
@@ -156,6 +205,10 @@ impl SessionStore {
         Ok(())
     }
 
+    /// List all sessions ordered by last-updated time (newest first).
+    ///
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn list_sessions(&self) -> Result<Vec<SessionSummary>> {
         let conn = self.connection()?;
         let mut statement = conn.prepare(
@@ -178,11 +231,19 @@ impl SessionStore {
         raw_rows.into_iter().map(raw_row_to_summary).collect()
     }
 
+    /// Get the summary for a specific session.
+    ///
+    /// # Errors
+    /// Returns an error if the session does not exist.
     pub fn get_session_summary(&self, session_id: Uuid) -> Result<SessionSummary> {
         self.try_get_session_summary(session_id)?
             .ok_or_else(|| anyhow!("session {session_id} does not exist"))
     }
 
+    /// Load all stored events for a session from its NDJSON transcript.
+    ///
+    /// # Errors
+    /// Returns an error if the transcript file cannot be read or parsed.
     pub fn load_events(&self, session_id: Uuid) -> Result<Vec<StoredEvent>> {
         let transcript_path = self.session_transcript_path(session_id);
         let file = File::open(&transcript_path)
@@ -199,6 +260,10 @@ impl SessionStore {
         Ok(events)
     }
 
+    /// Load only the conversation entries for a session.
+    ///
+    /// # Errors
+    /// Returns an error if the transcript file cannot be read or parsed.
     pub fn load_conversation(&self, session_id: Uuid) -> Result<Vec<ConversationEntry>> {
         Ok(self
             .load_events(session_id)?
@@ -207,6 +272,10 @@ impl SessionStore {
             .collect())
     }
 
+    /// Load a complete session bundle (summary, stats, conversation, events).
+    ///
+    /// # Errors
+    /// Returns an error if the session does not exist or data cannot be read.
     pub fn load_session_bundle(&self, session_id: Uuid) -> Result<SessionBundle> {
         let summary = self.get_session_summary(session_id)?;
         let events = self.load_events(session_id)?;
@@ -223,6 +292,10 @@ impl SessionStore {
         })
     }
 
+    /// Export the session transcript to an NDJSON file.
+    ///
+    /// # Errors
+    /// Returns an error if the session does not exist or the file copy fails.
     pub fn export_session(
         &self,
         session_id: Uuid,
@@ -244,6 +317,10 @@ impl SessionStore {
         Ok(destination)
     }
 
+    /// Export the session bundle as a single JSON file.
+    ///
+    /// # Errors
+    /// Returns an error if the session cannot be loaded or the file cannot be written.
     pub fn export_session_bundle_json(
         &self,
         session_id: Uuid,

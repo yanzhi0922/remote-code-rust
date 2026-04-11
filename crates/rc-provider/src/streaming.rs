@@ -1,3 +1,11 @@
+//! Streaming support for provider responses.
+//!
+//! Extends [`ProviderClient`] with
+//! [`complete_streaming`](crate::ProviderClient::complete_streaming) which
+//! processes server-sent events (SSE) from OpenAI- and Anthropic-compatible
+//! APIs, invoking optional callbacks for text deltas, tool-call progress, and
+//! usage telemetry.
+
 use anyhow::{Context, Result, anyhow};
 use futures::StreamExt;
 use rc_config::ProviderConfig;

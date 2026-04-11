@@ -1,3 +1,8 @@
+//! Session replay and event summarisation.
+//!
+//! Converts raw [`StoredEvent`] sequences into
+//! human-readable [`ReplayEvent`] entries for display in the TUI or export.
+
 use std::collections::HashMap;
 
 use anyhow::Result;

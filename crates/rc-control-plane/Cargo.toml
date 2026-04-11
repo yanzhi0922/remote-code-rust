@@ -1,5 +1,6 @@
 [package]
 name = "rc-control-plane"
+description = "Control plane service for orchestrating remote runners and sessions"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

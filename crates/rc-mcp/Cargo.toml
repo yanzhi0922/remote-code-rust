@@ -1,5 +1,6 @@
 [package]
 name = "rc-mcp"
+description = "MCP (Model Context Protocol) client with stdio transport"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -1,3 +1,9 @@
+//! Skill discovery and SKILL.md parsing.
+//!
+//! Walks the file system to discover skill directories, parses SKILL.md files
+//! with optional TOML front matter, and extracts metadata such as triggers,
+//! descriptions, and reference file paths.
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -9,71 +15,105 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use walkdir::WalkDir;
 
+/// File name used for skill definitions.
 pub const SKILL_FILE_NAME: &str = "SKILL.md";
 
+/// Metadata extracted from a SKILL.md file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct SkillMetadata {
+    /// URL-friendly slug (derived from directory name or front matter).
     pub slug: String,
+    /// Human-readable title.
     pub title: String,
+    /// Optional short description.
     #[serde(default)]
     pub summary: Option<String>,
+    /// Path to the SKILL.md file.
     pub path: PathBuf,
+    /// Root directory of the skill.
     pub root: PathBuf,
+    /// Tags for categorisation.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Tools this skill uses.
     #[serde(default)]
     pub tools: Vec<String>,
+    /// Trigger phrases that activate this skill.
     #[serde(default)]
     pub triggers: Vec<String>,
+    /// Referenced file paths within the skill directory.
     #[serde(default)]
     pub references: Vec<PathBuf>,
+    /// Script file paths.
     #[serde(default)]
     pub scripts: Vec<PathBuf>,
+    /// Asset file paths.
     #[serde(default)]
     pub assets: Vec<PathBuf>,
 }
 
+/// A fully loaded skill document (metadata + instructions).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SkillDocument {
+    /// Skill metadata.
     pub metadata: SkillMetadata,
+    /// Raw instruction text from the SKILL.md body.
     pub instructions: String,
 }
 
+/// Lock file tracking installed skills.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SkillLockFile {
+    /// Lock file format version.
     pub version: u32,
+    /// Map of skill slug → install record.
     #[serde(default)]
     pub skills: BTreeMap<String, InstalledSkillRecord>,
 }
 
+/// Record of a single installed skill in the lock file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstalledSkillRecord {
+    /// Source identifier (e.g. GitHub repo URL).
     pub source: String,
+    /// Source type.
     #[serde(rename = "sourceType")]
     pub source_type: SkillSourceKind,
+    /// Source URL, if applicable.
     #[serde(rename = "sourceUrl")]
     pub source_url: Option<String>,
+    /// Local path to the skill directory.
     #[serde(rename = "skillPath")]
     pub skill_path: PathBuf,
+    /// Hash of the skill folder contents.
     #[serde(rename = "skillFolderHash")]
     pub skill_folder_hash: Option<String>,
+    /// Installation timestamp.
     #[serde(rename = "installedAt")]
     pub installed_at: Option<String>,
+    /// Last update timestamp.
     #[serde(rename = "updatedAt")]
     pub updated_at: Option<String>,
 }
 
+/// Origin type of an installed skill.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SkillSourceKind {
+    /// Installed from a GitHub repository.
     Github,
+    /// Installed from a local path.
     Local,
+    /// Bundled with a plugin.
     Plugin,
+    /// Installed from a directory.
     Directory,
+    /// Unknown source.
     #[serde(other)]
     Unknown,
 }
 
+/// Errors that can occur during skill discovery and loading.
 #[derive(Debug, Error)]
 pub enum SkillError {
     #[error("failed to read skill file `{path}`")]

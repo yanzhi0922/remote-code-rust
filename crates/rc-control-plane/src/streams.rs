@@ -1,3 +1,5 @@
+//! WebSocket stream serving functions for real-time event delivery.
+
 use axum::extract::ws::{Message, WebSocket};
 use futures::SinkExt;
 use tokio::sync::broadcast;

@@ -1,3 +1,9 @@
+//! MCP (Model Context Protocol) client with stdio transport.
+//!
+//! Discovers, loads, and communicates with MCP servers over JSON-RPC via
+//! stdio. Supports tool listing, tool invocation, and capability negotiation
+//! per the MCP specification.
+
 use std::{
     collections::BTreeMap,
     fs,
@@ -17,43 +23,63 @@ use tokio::{
 use walkdir::WalkDir;
 
 pub const DEFAULT_MCP_CONFIG_FILE: &str = "mcp.toml";
+/// Default MCP protocol version used during initialisation.
 pub const DEFAULT_MCP_PROTOCOL_VERSION: &str = "2025-03-26";
+/// Default timeout for MCP server startup in seconds.
 pub const DEFAULT_STARTUP_TIMEOUT_SECS: u64 = 10;
+/// Default timeout for individual MCP requests in seconds.
 pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 15;
 
+/// Transport protocol for MCP communication.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum McpTransport {
+    /// Standard I/O (child process).
     Stdio,
+    /// HTTP-based transport.
     Http,
+    /// WebSocket transport.
     WebSocket,
 }
 
+/// Configuration for a specific MCP transport.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "transport", rename_all = "snake_case")]
 pub enum McpTransportConfig {
+    /// Launch a child process and communicate over stdio.
     Stdio {
+        /// Command to execute.
         command: String,
+        /// Command-line arguments.
         #[serde(default)]
         args: Vec<String>,
+        /// Working directory for the child process.
         #[serde(default)]
         cwd: Option<PathBuf>,
+        /// Environment variables to set.
         #[serde(default)]
         env: BTreeMap<String, String>,
     },
+    /// Connect to an HTTP endpoint.
     Http {
+        /// Server URL.
         url: String,
+        /// Additional HTTP headers.
         #[serde(default)]
         headers: BTreeMap<String, String>,
     },
+    /// Connect via WebSocket.
     WebSocket {
+        /// WebSocket URL.
         url: String,
+        /// Additional HTTP headers.
         #[serde(default)]
         headers: BTreeMap<String, String>,
     },
 }
 
 impl McpTransportConfig {
+    /// Return the transport kind for this configuration.
     #[must_use]
     pub fn kind(&self) -> McpTransport {
         match self {
@@ -64,54 +90,77 @@ impl McpTransportConfig {
     }
 }
 
+/// Capability flags reported by an MCP server during initialisation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct McpCapabilityMatrix {
+    /// Server supports the `tools` capability.
     #[serde(default)]
     pub supports_tools: bool,
+    /// Server supports the `prompts` capability.
     #[serde(default)]
     pub supports_prompts: bool,
+    /// Server supports the `resources` capability.
     #[serde(default)]
     pub supports_resources: bool,
+    /// Server supports the `sampling` capability.
     #[serde(default)]
     pub supports_sampling: bool,
+    /// Server supports the `roots` capability.
     #[serde(default)]
     pub supports_roots: bool,
 }
 
+/// Configuration for a single MCP server.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpServerConfig {
+    /// Server name (used as a key in the config map).
     pub name: String,
+    /// Whether the server is enabled.
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    /// Transport configuration.
     pub transport: McpTransportConfig,
+    /// Reported capabilities.
     #[serde(default)]
     pub capabilities: McpCapabilityMatrix,
+    /// Startup timeout override in seconds.
     #[serde(default)]
     pub startup_timeout_secs: Option<u64>,
+    /// Request timeout override in seconds.
     #[serde(default)]
     pub request_timeout_secs: Option<u64>,
+    /// Arbitrary metadata.
     #[serde(default)]
     pub metadata: BTreeMap<String, String>,
 }
 
+/// Top-level MCP configuration containing all servers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct McpConfig {
+    /// Map of server name → server configuration.
     pub servers: BTreeMap<String, McpServerConfig>,
 }
 
+/// An MCP configuration file discovered on disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveredMcpConfig {
+    /// Path to the configuration file.
     pub path: PathBuf,
+    /// Parsed configuration.
     pub config: McpConfig,
 }
 
+/// Client identification sent during MCP initialisation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpClientInfo {
+    /// Client name.
     pub name: String,
+    /// Client version.
     pub version: String,
 }
 
 impl McpClientInfo {
+    /// Create a new client info with the given name and version.
     #[must_use]
     pub fn new(name: impl Into<String>, version: impl Into<String>) -> Self {
         Self {

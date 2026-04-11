@@ -1,5 +1,6 @@
 [package]
 name = "rc-permissions"
+description = "Permission system with wildcard matching and rule-based brokering"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

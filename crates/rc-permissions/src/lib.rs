@@ -1,33 +1,54 @@
+//! Permission system with wildcard matching and rule-based brokering.
+//!
+//! Implements a [`PermissionBroker`] trait with two concrete implementations:
+//! - [`StaticPermissionBroker`] — blanket allow/deny.
+//! - [`RuleBasedPermissionBroker`] — pattern-matched rules with wildcard support.
+
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use rc_core::PermissionMode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Classification of a tool by its risk level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PermissionClass {
+    /// Read-only operations (file read, search, etc.).
     Read,
+    /// File modification operations (write, edit, etc.).
     Edit,
+    /// Shell command execution.
     Command,
 }
 
+/// A request for permission to execute a tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionRequest {
+    /// Name of the tool requesting permission.
     pub tool_name: String,
+    /// Unique ID of the tool use.
     pub tool_use_id: String,
+    /// Short human-readable title.
     pub title: String,
+    /// Detailed description of the action.
     pub description: String,
+    /// JSON input to the tool.
     pub input: Value,
+    /// Path that would be affected, if applicable.
     pub blocked_path: Option<String>,
 }
 
+/// The outcome of a permission decision.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionDecision {
+    /// Whether the action is allowed.
     pub allowed: bool,
+    /// Optional message explaining the decision.
     pub message: Option<String>,
 }
 
 impl PermissionDecision {
+    /// Create an allow decision.
     #[must_use]
     pub fn allow() -> Self {
         Self {
@@ -36,6 +57,7 @@ impl PermissionDecision {
         }
     }
 
+    /// Create a deny decision with an explanatory message.
     pub fn deny(message: impl Into<String>) -> Self {
         Self {
             allowed: false,
@@ -44,19 +66,24 @@ impl PermissionDecision {
     }
 }
 
+/// Trait for permission brokering strategies.
 #[async_trait]
 pub trait PermissionBroker: Send + Sync {
+    /// Return the current permission mode.
     fn mode(&self) -> PermissionMode;
 
+    /// Decide whether to allow or deny the given request.
     async fn decide(&self, request: PermissionRequest) -> PermissionDecision;
 }
 
+/// A broker that uses a single [`PermissionMode`] for all decisions.
 #[derive(Debug, Clone)]
 pub struct StaticPermissionBroker {
     mode: PermissionMode,
 }
 
 impl StaticPermissionBroker {
+    /// Create a new static broker with the given permission mode.
     #[must_use]
     pub fn new(mode: PermissionMode) -> Self {
         Self { mode }

@@ -1,3 +1,5 @@
+//! In-memory registry for runners, sessions, approvals, and artifacts.
+
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 

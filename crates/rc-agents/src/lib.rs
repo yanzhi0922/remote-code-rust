@@ -1,3 +1,9 @@
+//! Multi-agent scheduler with mailbox-based task coordination.
+//!
+//! [`AgentScheduler`] manages a team of agents, assigns tasks based on
+//! ownership paths and label requirements, tracks budgets, and supports
+//! parallel execution with lifecycle events.
+
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use anyhow::Result;
@@ -5,66 +11,99 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Current state of an agent.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentState {
+    /// Agent is idle and available for task assignment.
     #[default]
     Idle,
+    /// Agent is actively working on a task.
     Busy,
+    /// Agent is draining and not accepting new tasks.
     Draining,
+    /// Agent is offline.
     Offline,
 }
 
+/// Lifecycle state of a task.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskState {
+    /// Task is waiting to be assigned.
     #[default]
     Pending,
+    /// Task has been assigned to an agent but not started.
     Assigned,
+    /// Task is actively running.
     Running,
+    /// Task is waiting for a tool call to complete.
     WaitingOnTool,
+    /// Task is waiting for user approval.
     WaitingOnApproval,
+    /// Task completed successfully.
     Completed,
+    /// Task failed.
     Failed,
+    /// Task was cancelled.
     Cancelled,
 }
 
+/// Kind of message sent between agents via mailboxes.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageKind {
+    /// An instruction to perform work.
     #[default]
     Instruction,
+    /// A slice of context data.
     ContextSlice,
+    /// A result from a completed sub-task.
     Result,
+    /// A lifecycle event notification.
     Event,
+    /// An approval request.
     Approval,
+    /// A shutdown signal.
     Shutdown,
 }
 
+/// Scope for tool budget tracking.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum BudgetScope {
+    /// Read operations budget.
     #[default]
     Read,
+    /// Edit operations budget.
     Edit,
+    /// Shell command budget.
     Command,
+    /// Network call budget.
     Network,
 }
 
+/// Per-task tool call budget with separate counters per scope.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolBudget {
+    /// Remaining read calls.
     pub read_calls: u32,
+    /// Remaining edit calls.
     pub edit_calls: u32,
+    /// Remaining command calls.
     pub command_calls: u32,
+    /// Remaining network calls.
     pub network_calls: u32,
 }
 
 impl ToolBudget {
+    /// Check whether the budget allows a call in the given scope.
     #[must_use]
     pub fn allows(&self, scope: BudgetScope) -> bool {
         self.remaining(scope) > 0
     }
 
+    /// Return the remaining budget for the given scope.
     #[must_use]
     pub fn remaining(&self, scope: BudgetScope) -> u32 {
         match scope {
@@ -75,6 +114,9 @@ impl ToolBudget {
         }
     }
 
+    /// Consume one unit from the given scope's budget.
+    ///
+    /// Returns `true` if the budget was decremented, `false` if it was already exhausted.
     pub fn consume(&mut self, scope: BudgetScope) -> bool {
         let counter = match scope {
             BudgetScope::Read => &mut self.read_calls,
@@ -90,29 +132,42 @@ impl ToolBudget {
     }
 }
 
+/// A slice of context data shared between agents.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ContextSlice {
+    /// Brief summary of the context.
     #[serde(default)]
     pub summary: String,
+    /// Paths to artifacts produced by the originating agent.
     #[serde(default)]
     pub artifact_paths: Vec<String>,
+    /// Environment hints for the receiving agent.
     #[serde(default)]
     pub environment_hints: BTreeMap<String, String>,
+    /// Estimated token count for this slice.
     #[serde(default)]
     pub token_estimate: u32,
 }
 
+/// Identity and configuration of a single agent in the team.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentIdentity {
+    /// Unique agent identifier.
     pub agent_id: Uuid,
+    /// Human-readable agent name.
     pub name: String,
+    /// Role description (e.g. "lead", "worker").
     pub role: String,
+    /// File paths this agent has ownership over.
     #[serde(default)]
     pub ownership_paths: Vec<String>,
+    /// Maximum number of tasks this agent can handle concurrently.
     #[serde(default = "default_max_concurrency")]
     pub max_concurrency: usize,
+    /// Arbitrary key-value labels for task matching.
     #[serde(default)]
     pub labels: BTreeMap<String, String>,
+    /// Current agent state.
     #[serde(default)]
     pub state: AgentState,
 }
@@ -122,6 +177,7 @@ fn default_max_concurrency() -> usize {
 }
 
 impl AgentIdentity {
+    /// Create a new agent identity with a random UUID.
     #[must_use]
     pub fn new(name: impl Into<String>, role: impl Into<String>) -> Self {
         Self {

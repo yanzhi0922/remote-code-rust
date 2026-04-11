@@ -1,3 +1,8 @@
+//! Control plane service for orchestrating remote runners and sessions.
+//!
+//! The control plane manages runner registration, session dispatch, approval
+//! relay, artifact storage, and real-time event streaming via WebSocket / SSE.
+
 mod handlers;
 mod helpers;
 mod registry;

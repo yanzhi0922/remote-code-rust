@@ -1,3 +1,9 @@
+//! LLM provider client with retry logic and message formatting.
+//!
+//! Supports OpenAI, Anthropic, Amazon Bedrock, and Google Vertex AI protocols.
+//! Handles message conversion, response parsing, exponential back-off retries,
+//! and mock-mode responses for testing.
+
 pub mod context;
 pub mod cost;
 pub mod failover;
@@ -20,12 +26,17 @@ use reqwest::header::{
 use serde_json::{Value, json};
 use std::time::Duration;
 
+/// HTTP client for communicating with LLM provider APIs.
 #[derive(Debug, Clone)]
 pub struct ProviderClient {
     http: Client,
 }
 
 impl ProviderClient {
+    /// Create a new provider client.
+    ///
+    /// # Errors
+    /// Returns an error if the underlying HTTP client cannot be constructed.
     pub fn new() -> Result<Self> {
         let http = Client::builder()
             .build()
@@ -33,6 +44,13 @@ impl ProviderClient {
         Ok(Self { http })
     }
 
+    /// Send a completion request to the configured provider.
+    ///
+    /// Automatically selects the correct protocol (OpenAI / Anthropic) based on
+    /// the provider configuration and retries on transient failures.
+    ///
+    /// # Errors
+    /// Returns an error if the API request fails after all retries are exhausted.
     pub async fn complete(
         &self,
         provider: &ProviderConfig,

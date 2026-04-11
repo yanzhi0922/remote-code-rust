@@ -1,5 +1,6 @@
 [package]
 name = "rc-runner"
+description = "Runner API server for remote agent execution"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

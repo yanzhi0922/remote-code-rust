@@ -1,3 +1,5 @@
+//! HTTP handler functions for the control plane axum router.
+
 use std::collections::BTreeSet;
 
 use axum::Json;

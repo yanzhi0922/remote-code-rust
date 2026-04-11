@@ -1,5 +1,6 @@
 [package]
 name = "rc-plugins"
+description = "Plugin system with JSON-RPC runtime and skill discovery"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

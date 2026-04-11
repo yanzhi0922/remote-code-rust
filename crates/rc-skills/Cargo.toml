@@ -1,5 +1,6 @@
 [package]
 name = "rc-skills"
+description = "Skill discovery and SKILL.md parsing"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

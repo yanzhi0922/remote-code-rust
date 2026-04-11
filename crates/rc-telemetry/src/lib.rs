@@ -1,3 +1,8 @@
+//! Telemetry and tracing initialization.
+//!
+//! Wraps `tracing-subscriber` to provide a single [`install_tracing`] entry
+//! point that configures either a human-readable or JSON output format.
+
 use anyhow::Result;
 use tracing_subscriber::EnvFilter;
 

@@ -1,5 +1,6 @@
 [package]
 name = "rc-tui"
+description = "Interactive TUI with Vim-like keybindings"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -1,3 +1,9 @@
+//! Runner API server for remote agent execution.
+//!
+//! Provides an axum-based HTTP API for session management, approval workflows,
+//! and health reporting. Runners register with a control plane, accept sessions,
+//! and relay approval requests back to the control plane.
+
 use std::collections::BTreeMap;
 use std::env;
 use std::net::SocketAddr;
@@ -25,72 +31,115 @@ const DEFAULT_HEARTBEAT_INTERVAL_SECS: u64 = 15;
 const DEFAULT_MAX_PARALLEL_SESSIONS: u16 = 4;
 const PHASE: &str = "phase3-remote-skeleton";
 
+/// Overrides applied to runner configuration from CLI flags or environment variables.
 #[derive(Debug, Clone, Default)]
 pub struct RunnerConfigOverrides {
+    /// Runner identifier override.
     pub runner_id: Option<String>,
+    /// Control plane URL override.
     pub control_plane_url: Option<String>,
+    /// Bind address override.
     pub bind: Option<SocketAddr>,
+    /// Public base URL override.
     pub public_base_url: Option<String>,
+    /// Heartbeat interval in seconds.
     pub heartbeat_interval_secs: Option<u64>,
+    /// Maximum number of parallel sessions.
     pub max_parallel_sessions: Option<u16>,
+    /// Workspace list override.
     pub workspaces: Option<Vec<RunnerWorkspace>>,
+    /// Label overrides.
     pub labels: Option<BTreeMap<String, String>>,
 }
 
+/// Full runner configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunnerConfig {
+    /// Unique runner identifier.
     pub runner_id: String,
+    /// Control plane URL for registration and heartbeats.
     pub control_plane_url: Option<String>,
+    /// Local bind address for the runner API server.
     pub bind: SocketAddr,
+    /// Publicly reachable URL for the runner API.
     pub public_base_url: Option<String>,
+    /// Application paths for the runner profile.
     pub profile_dir: AppPaths,
+    /// Workspaces this runner can serve.
     pub workspaces: Vec<RunnerWorkspace>,
+    /// Heartbeat interval in seconds.
     pub heartbeat_interval_secs: u64,
+    /// Maximum number of concurrent sessions.
     pub max_parallel_sessions: u16,
+    /// Arbitrary key-value labels for scheduling.
     #[serde(default)]
     pub labels: BTreeMap<String, String>,
+    /// Runner capability flags.
     pub capabilities: RunnerCapabilities,
 }
 
+/// A workspace that a runner can serve.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RunnerWorkspace {
+    /// Unique workspace identifier.
     pub workspace_id: String,
+    /// Root directory of the workspace on disk.
     pub root_dir: PathBuf,
+    /// Whether the runner has write access to this workspace.
     pub writable: bool,
 }
 
+/// Capability flags advertised by a runner.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RunnerCapabilities {
+    /// Whether the runner supports interactive approval prompts.
     pub interactive_approvals: bool,
+    /// Whether the runner can run sessions in the background.
     pub background_sessions: bool,
+    /// Whether the runner can upload artifacts.
     pub artifact_uploads: bool,
+    /// Maximum number of parallel sessions.
     pub max_parallel_sessions: u16,
 }
 
+/// Platform information for a runner.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RunnerPlatform {
+    /// Operating system name.
     pub os: String,
+    /// CPU architecture.
     pub arch: String,
+    /// OS family.
     pub family: String,
 }
 
+/// Current state of a runner.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum RunnerState {
+    /// Runner is starting up.
     Starting,
+    /// Runner is idle and accepting sessions.
     #[default]
     Idle,
+    /// Runner has active sessions.
     Busy,
+    /// Runner is draining and not accepting new sessions.
     Draining,
+    /// Runner is unhealthy.
     Unhealthy,
+    /// Runner is offline.
     Offline,
 }
 
+/// Lifecycle state of a runner-managed session.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionState {
+    /// Session is pending assignment.
     #[default]
     Pending,
+    /// Session is starting up.
     Starting,
     Running,
     WaitingApproval,

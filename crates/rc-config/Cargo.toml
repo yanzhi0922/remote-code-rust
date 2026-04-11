@@ -1,5 +1,6 @@
 [package]
 name = "rc-config"
+description = "Configuration loading and provider management"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

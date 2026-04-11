@@ -1,3 +1,5 @@
+//! Helper functions for event matching, runner selection, and approval relay.
+
 use std::env;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};

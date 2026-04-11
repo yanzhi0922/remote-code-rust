@@ -1,5 +1,6 @@
 [package]
 name = "rc-telemetry"
+description = "Telemetry and tracing initialization"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

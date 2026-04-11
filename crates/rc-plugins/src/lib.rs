@@ -1,3 +1,9 @@
+//! Plugin system with JSON-RPC runtime and skill discovery.
+//!
+//! Loads plugin manifests, discovers bundled skills, inspects runtime
+//! capabilities, and invokes plugin actions over JSON-RPC. Supports both
+//! stdio and HTTP transports.
+
 use std::{
     collections::BTreeMap,
     fs,
@@ -18,50 +24,74 @@ use tokio::{
 use walkdir::WalkDir;
 
 pub const PLUGIN_MANIFEST_FILE: &str = "plugin.json";
+/// Directory name for plugin manifests.
 pub const PLUGIN_MANIFEST_DIR: &str = ".codex-plugin";
+/// Default protocol version for plugin runtime communication.
 pub const DEFAULT_PLUGIN_RUNTIME_PROTOCOL_VERSION: &str = "2026-04-07";
+/// Default timeout for the runtime handshake in seconds.
 pub const DEFAULT_PLUGIN_HANDSHAKE_TIMEOUT_SECS: u64 = 10;
+/// Default timeout for individual runtime requests in seconds.
 pub const DEFAULT_PLUGIN_REQUEST_TIMEOUT_SECS: u64 = 15;
 
+/// Plugin manifest loaded from `.codex-plugin/manifest.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginManifest {
+    /// Plugin name.
     pub name: String,
+    /// Semantic version.
     pub version: String,
+    /// Optional description.
     #[serde(default)]
     pub description: Option<String>,
+    /// Optional author information.
     #[serde(default)]
     pub author: Option<PluginAuthor>,
+    /// Optional homepage URL.
     #[serde(default)]
     pub homepage: Option<String>,
+    /// Optional repository URL.
     #[serde(default)]
     pub repository: Option<String>,
+    /// Optional license identifier.
     #[serde(default)]
     pub license: Option<String>,
+    /// Keywords for discovery.
     #[serde(default)]
     pub keywords: Vec<String>,
+    /// Relative path to the skills directory.
     #[serde(default)]
     pub skills: Option<String>,
+    /// Relative path to the hooks configuration.
     #[serde(default)]
     pub hooks: Option<String>,
+    /// Relative path to the apps directory.
     #[serde(default)]
     pub apps: Option<String>,
+    /// Relative path to the MCP configuration.
     #[serde(default, alias = "mcpServers")]
     pub mcp: Option<String>,
+    /// Optional interface metadata.
     #[serde(default)]
     pub interface: Option<PluginInterface>,
+    /// Optional runtime configuration.
     #[serde(default)]
     pub runtime: Option<PluginRuntimeConfig>,
 }
 
+/// Author information for a plugin.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginAuthor {
+    /// Author name.
     pub name: String,
+    /// Author email.
     #[serde(default)]
     pub email: Option<String>,
+    /// Author URL.
     #[serde(default)]
     pub url: Option<String>,
 }
 
+/// Interface metadata for display in plugin registries.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginInterface {
     #[serde(rename = "displayName")]

@@ -1,5 +1,6 @@
 [package]
 name = "rc-provider"
+description = "LLM provider client with retry logic and message formatting"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
