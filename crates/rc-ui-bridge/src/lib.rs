@@ -487,7 +487,7 @@ mod tests {
         let event = UiEvent::AssistantText {
             text: "Hello, world!".to_owned(),
         };
-        let json = serde_json::to_string(&event).unwrap();
+        let json = serde_json::to_string(&event).expect("serialize should not fail");
         assert!(json.contains("AssistantText"));
         assert!(json.contains("Hello, world!"));
     }
@@ -500,8 +500,8 @@ mod tests {
             input_tokens: 500,
             output_tokens: 200,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let parsed: UiEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serialize should not fail");
+        let parsed: UiEvent = serde_json::from_str(&json).expect("deserialize should not fail");
         if let UiEvent::CostUpdate { turn_cost_usd, .. } = parsed {
             assert!((turn_cost_usd - 0.003).abs() < 0.0001);
         } else {
@@ -512,7 +512,7 @@ mod tests {
     #[test]
     fn error_category_serializes() {
         let cat = ErrorCategory::Provider;
-        let json = serde_json::to_string(&cat).unwrap();
+        let json = serde_json::to_string(&cat).expect("serialize should not fail");
         assert!(json.contains("Provider"));
     }
 
@@ -532,10 +532,10 @@ mod tests {
         let fe = CollectingFrontend::new();
         fe.render_event(&UiEvent::UserMessage {
             text: "hello".to_owned(),
-        }).await.unwrap();
+        }).await.expect("render should not fail");
         fe.render_event(&UiEvent::AssistantText {
             text: "world".to_owned(),
-        }).await.unwrap();
+        }).await.expect("render should not fail");
 
         let events = fe.events();
         assert_eq!(events.len(), 2);
@@ -548,7 +548,7 @@ mod tests {
         let action = UiAction::SubmitInput {
             text: "do something".to_owned(),
         };
-        let json = serde_json::to_string(&action).unwrap();
+        let json = serde_json::to_string(&action).expect("serialize should not fail");
         assert!(json.contains("SubmitInput"));
     }
 

@@ -50,6 +50,7 @@ enum SlashCommandAction {
 
 /// Color theme for the TUI.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct Theme {
     name: String,
     prompt_color: crossterm::style::Color,
@@ -568,9 +569,7 @@ pub async fn run_tui_app(
                         }
                     }
                     crossterm::event::KeyCode::Left => {
-                        if cursor_pos > 0 {
-                            cursor_pos -= 1;
-                        }
+                        cursor_pos = cursor_pos.saturating_sub(1);
                     }
                     crossterm::event::KeyCode::Right => {
                         if cursor_pos < input_buffer.len() {

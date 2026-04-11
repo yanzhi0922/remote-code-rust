@@ -660,19 +660,20 @@ pub fn load_settings_rules(settings: &Value) -> (Vec<PermissionRule>, Vec<Permis
     if let Some(permissions) = settings.get("permissions") {
         if let Some(allow_list) = permissions.get("allow").and_then(Value::as_array) {
             for item in allow_list {
-                if let Some(pattern) = item.as_str() {
-                    if let Ok(rule) = RuleEngine::parse_rule(pattern, PermissionDecision::allow()) {
-                        allows.push(rule);
-                    }
+                if let Some(pattern) = item.as_str()
+                    && let Ok(rule) = RuleEngine::parse_rule(pattern, PermissionDecision::allow())
+                {
+                    allows.push(rule);
                 }
             }
         }
         if let Some(deny_list) = permissions.get("deny").and_then(Value::as_array) {
             for item in deny_list {
-                if let Some(pattern) = item.as_str() {
-                    if let Ok(rule) = RuleEngine::parse_rule(pattern, PermissionDecision::deny("denied by settings")) {
-                        denies.push(rule);
-                    }
+                if let Some(pattern) = item.as_str()
+                    && let Ok(rule) =
+                        RuleEngine::parse_rule(pattern, PermissionDecision::deny("denied by settings"))
+                {
+                    denies.push(rule);
                 }
             }
         }

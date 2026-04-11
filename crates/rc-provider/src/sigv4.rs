@@ -178,7 +178,7 @@ fn to_hex(bytes: &[u8]) -> String {
     bytes
         .iter()
         .fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
-            write!(s, "{b:02x}").unwrap();
+            write!(s, "{b:02x}").expect("writing to String should not fail");
             s
         })
 }

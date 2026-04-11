@@ -773,6 +773,7 @@ impl ContextWindowManager {
         }
 
         // Strategy cascade: least → most disruptive.
+        #[allow(clippy::type_complexity)]
         let strategies: &[(&str, fn(&ContextWindowManager, &[ConversationEntry]) -> Vec<ConversationEntry>)] = &[
             ("microcompact", |mgr, conv| mgr.microcompact(conv)),
             ("sliding_window", |mgr, conv| mgr.sliding_window_compact(conv)),

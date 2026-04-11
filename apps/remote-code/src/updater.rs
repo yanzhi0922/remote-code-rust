@@ -18,6 +18,7 @@ struct GitHubRelease {
 struct GitHubAsset {
     name: String,
     browser_download_url: String,
+    #[allow(dead_code)]
     size: u64,
 }
 

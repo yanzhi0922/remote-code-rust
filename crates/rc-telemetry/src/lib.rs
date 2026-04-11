@@ -170,6 +170,7 @@ pub struct TelemetryEvent {
 pub struct Counter {
     value: AtomicU64,
     name: String,
+    #[allow(dead_code)]
     labels: HashMap<String, String>,
 }
 
@@ -210,6 +211,7 @@ impl Counter {
 pub struct Gauge {
     value: AtomicU64,
     name: String,
+    #[allow(dead_code)]
     labels: HashMap<String, String>,
 }
 
@@ -255,6 +257,7 @@ impl Gauge {
 pub struct Histogram {
     buckets: Mutex<Vec<u64>>,
     name: String,
+    #[allow(dead_code)]
     labels: HashMap<String, String>,
 }
 
@@ -335,6 +338,7 @@ struct ActiveSpan {
     name: String,
     start: Instant,
     attributes: HashMap<String, String>,
+    #[allow(dead_code)]
     parent_id: Option<SpanId>,
 }
 

@@ -512,11 +512,7 @@ mod tests {
         let workspace = std::env::temp_dir();
         let config = SandboxConfig::default_for_workspace(&workspace);
 
-        let (command, expected) = if cfg!(windows) {
-            ("echo hello", "hello")
-        } else {
-            ("echo hello", "hello")
-        };
+        let (command, expected) = ("echo hello", "hello");
 
         let result = execute_in_sandbox(command, &config)
             .await

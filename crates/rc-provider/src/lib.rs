@@ -164,18 +164,18 @@ impl ProviderClient {
         };
 
         // If thinking_budget is set and the model supports it, add reasoning_effort.
-        if is_reasoning_model {
-            if let Some(budget) = provider.thinking_budget {
-                // Map budget to reasoning_effort: low/medium/high.
-                let effort = if budget <= 5000 {
-                    "low"
-                } else if budget <= 20000 {
-                    "medium"
-                } else {
-                    "high"
-                };
-                body["reasoning_effort"] = json!(effort);
-            }
+        if is_reasoning_model
+            && let Some(budget) = provider.thinking_budget
+        {
+            // Map budget to reasoning_effort: low/medium/high.
+            let effort = if budget <= 5000 {
+                "low"
+            } else if budget <= 20000 {
+                "medium"
+            } else {
+                "high"
+            };
+            body["reasoning_effort"] = json!(effort);
         }
         let base_url = provider
             .base_url
@@ -575,10 +575,10 @@ fn parse_retry_after(headers: &HeaderMap, provider: &ProviderConfig) -> Option<D
 /// Returns `None` if neither source yields a token.
 fn load_vertex_access_token() -> Option<String> {
     // 1. Direct token from environment.
-    if let Ok(token) = std::env::var("GOOGLE_ACCESS_TOKEN") {
-        if !token.is_empty() {
-            return Some(token);
-        }
+    if let Ok(token) = std::env::var("GOOGLE_ACCESS_TOKEN")
+        && !token.is_empty()
+    {
+        return Some(token);
     }
 
     // 2. Try gcloud CLI.
@@ -1206,9 +1206,9 @@ pub fn classify_network_error(error: &str, provider_name: &str) -> ProviderError
         (ErrorCategory::Timeout, RecoveryAction::Retry)
     } else if error.contains("connection refused") || error.contains("couldn't connect") {
         (ErrorCategory::Network, RecoveryAction::Retry)
-    } else if error.contains("tls") || error.contains("certificate") || error.contains("ssl") {
-        (ErrorCategory::Network, RecoveryAction::FixConfig)
-    } else if error.contains("dns") || error.contains("resolve") {
+    } else if error.contains("tls") || error.contains("certificate") || error.contains("ssl")
+        || error.contains("dns") || error.contains("resolve")
+    {
         (ErrorCategory::Network, RecoveryAction::FixConfig)
     } else {
         (ErrorCategory::Network, RecoveryAction::Retry)

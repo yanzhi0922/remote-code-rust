@@ -2782,10 +2782,9 @@ fn which_powershell() -> String {
         if let Ok(output) = std::process::Command::new(candidate)
             .arg("-Version")
             .output()
+            && output.status.success()
         {
-            if output.status.success() {
-                return candidate.to_string();
-            }
+            return candidate.to_string();
         }
     }
     // Fall back to Windows PowerShell.
@@ -2963,7 +2962,7 @@ fn schedule_cron_tool(input: &Value, context: &ToolExecutionContext) -> Result<S
             if crons.len() < before {
                 let content = serde_json::to_string_pretty(&crons)?;
                 std::fs::write(&crons_path, content)?;
-                Ok(format!("Cron job deleted."))
+                Ok("Cron job deleted.".to_string())
             } else {
                 Ok(format!("Cron job '{id}' not found."))
             }
@@ -3741,13 +3740,12 @@ async fn mcp_call_tool(input: &Value, context: &ToolExecutionContext) -> Result<
 
     let mut server_config: Option<rc_mcp::McpServerConfig> = None;
     for candidate in &config_candidates {
-        if candidate.exists() {
-            if let Ok(config) = rc_mcp::McpConfig::load(candidate) {
-                if let Some(srv) = config.servers.get(server_name) {
-                    server_config = Some(srv.clone());
-                    break;
-                }
-            }
+        if candidate.exists()
+            && let Ok(config) = rc_mcp::McpConfig::load(candidate)
+            && let Some(srv) = config.servers.get(server_name)
+        {
+            server_config = Some(srv.clone());
+            break;
         }
     }
 
@@ -3824,7 +3822,7 @@ fn skill_execute_tool(input: &Value, context: &ToolExecutionContext) -> Result<S
                     if !skill.instructions.is_empty() {
                         output.push_str(&skill.instructions);
                     }
-                    if !arguments.is_null() && !arguments.as_object().map_or(true, |o| o.is_empty())
+                    if !arguments.is_null() && !arguments.as_object().is_none_or(|o| o.is_empty())
                     {
                         output.push_str(&format!(
                             "\n\n## Arguments\n```json\n{}\n```",
@@ -3885,10 +3883,7 @@ fn voice_input_tool(input: &Value) -> Result<String> {
         }
     };
 
-    let recorded = match record_result {
-        Ok(out) if out.status.success() && wav_path.exists() => true,
-        _ => false,
-    };
+    let recorded = matches!(record_result, Ok(out) if out.status.success() && wav_path.exists());
 
     if !recorded {
         return Ok(json!({
@@ -4012,8 +4007,8 @@ fn daemon_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> 
             let content = serde_json::to_string_pretty(&daemons)?;
             std::fs::write(&daemon_path, content)?;
 
-            if pid.is_some() {
-                Ok(format!("Daemon '{daemon_id}' started: {command} (pid={})", pid.unwrap()))
+            if let Some(p) = pid {
+                Ok(format!("Daemon '{daemon_id}' started: {command} (pid={p})"))
             } else {
                 Ok(format!("Daemon '{daemon_id}' failed to start: {command}"))
             }
@@ -4031,10 +4026,10 @@ fn daemon_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> 
                 };
 
                 // Try to kill the process if we have a PID.
-                if should_remove {
-                    if let Some(pid) = d["pid"].as_u64() {
-                        let _ = kill_process(pid as u32);
-                    }
+                if should_remove
+                    && let Some(pid) = d["pid"].as_u64()
+                {
+                    let _ = kill_process(pid as u32);
                 }
                 !should_remove
             });
@@ -4055,10 +4050,10 @@ fn daemon_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> 
                         Some(d) => {
                             // Check if the process is still alive.
                             let mut d = d.clone();
-                            if let Some(pid) = d["pid"].as_u64() {
-                                if !is_process_alive(pid as u32) {
-                                    d["status"] = json!("stopped");
-                                }
+                            if let Some(pid) = d["pid"].as_u64()
+                                && !is_process_alive(pid as u32)
+                            {
+                                d["status"] = json!("stopped");
                             }
                             Ok(serde_json::to_string_pretty(&d)?)
                         }
@@ -4080,10 +4075,10 @@ fn daemon_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> 
                     "pid": d["pid"],
                 });
                 // Check liveness.
-                if let Some(pid) = d["pid"].as_u64() {
-                    if !is_process_alive(pid as u32) {
-                        s["status"] = json!("stopped");
-                    }
+                if let Some(pid) = d["pid"].as_u64()
+                    && !is_process_alive(pid as u32)
+                {
+                    s["status"] = json!("stopped");
                 }
                 s
             }).collect();
