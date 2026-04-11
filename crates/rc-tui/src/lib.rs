@@ -176,7 +176,14 @@ pub async fn run_tui_app(
     let mut history_scroll: usize = 0;
     let mut pending_g = false;
     let mut input_buffer = String::new();
+    let mut cursor_pos: usize = 0; // Cursor position within input_buffer
     let mut command_buffer = String::new(); // for ':' commands in normal mode
+    let mut input_history: Vec<String> = Vec::new(); // History of submitted inputs
+    let mut history_index: usize = 0; // Current position in input history
+    let mut saved_buffer: String = String::new(); // Saved buffer when navigating history
+
+    // Enable mouse capture for scroll support.
+    let _ = crossterm::execute!(io::stdout(), crossterm::event::EnableMouseCapture);
 
     loop {
         // Print prompt and current input buffer.
@@ -300,12 +307,30 @@ pub async fn run_tui_app(
                     crossterm::event::KeyCode::Esc => {
                         vim_mode = VimMode::Normal;
                         input_buffer.clear();
+                        cursor_pos = 0;
                         print_line("  -- NORMAL --");
                         continue;
                     }
                     crossterm::event::KeyCode::Enter => {
+                        // Shift+Enter: insert newline for multi-line input.
+                        if event.modifiers.contains(crossterm::event::KeyModifiers::SHIFT) {
+                            input_buffer.insert(cursor_pos, '\n');
+                            cursor_pos += 1;
+                            continue;
+                        }
+
                         let input = input_buffer.trim().to_owned();
                         input_buffer.clear();
+                        cursor_pos = 0;
+
+                        // Save to input history (deduplicate).
+                        if !input.is_empty() {
+                            if input_history.last() != Some(&input) {
+                                input_history.push(input.clone());
+                            }
+                            history_index = input_history.len();
+                            saved_buffer.clear();
+                        }
 
                         // Temporarily leave raw mode for conversation turn output.
                         crossterm::terminal::disable_raw_mode()?;
@@ -329,6 +354,8 @@ pub async fn run_tui_app(
                                 &cost_tracker,
                             ) {
                                 SlashCommandAction::Quit => {
+                                    // Disable mouse capture before exit.
+                                    let _ = crossterm::execute!(io::stdout(), crossterm::event::DisableMouseCapture);
                                     let cost = cost_tracker.total_cost_usd();
                                     if cost > 0.0 {
                                         println!();
@@ -370,25 +397,86 @@ pub async fn run_tui_app(
                     crossterm::event::KeyCode::Char(c) => {
                         // Handle Ctrl+C in insert mode.
                         if c == 'c' && event.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
-                            print_line("Interrupted. Goodbye!");
-                            break;
+                            if input_buffer.is_empty() {
+                                print_line("Interrupted. Goodbye!");
+                                break;
+                            }
+                            // Ctrl+C with text: clear the input buffer.
+                            input_buffer.clear();
+                            cursor_pos = 0;
+                            print_line("  [input cleared — Ctrl+C again to exit]");
+                            continue;
                         }
-                        input_buffer.push(c);
+                        input_buffer.insert(cursor_pos, c);
+                        cursor_pos += 1;
                     }
                     crossterm::event::KeyCode::Backspace => {
-                        input_buffer.pop();
+                        if cursor_pos > 0 && !input_buffer.is_empty() {
+                            cursor_pos -= 1;
+                            input_buffer.remove(cursor_pos);
+                        }
+                    }
+                    crossterm::event::KeyCode::Delete => {
+                        if cursor_pos < input_buffer.len() {
+                            input_buffer.remove(cursor_pos);
+                        }
+                    }
+                    crossterm::event::KeyCode::Left => {
+                        if cursor_pos > 0 {
+                            cursor_pos -= 1;
+                        }
+                    }
+                    crossterm::event::KeyCode::Right => {
+                        if cursor_pos < input_buffer.len() {
+                            cursor_pos += 1;
+                        }
+                    }
+                    crossterm::event::KeyCode::Home => {
+                        cursor_pos = 0;
+                    }
+                    crossterm::event::KeyCode::End => {
+                        cursor_pos = input_buffer.len();
                     }
                     crossterm::event::KeyCode::Up => {
-                        if history_scroll < conversation.len() {
+                        // Navigate input history (if not at first char, move up in conversation).
+                        if cursor_pos == 0 && !input_history.is_empty() && history_index > 0 {
+                            if history_index == input_history.len() {
+                                saved_buffer = input_buffer.clone();
+                            }
+                            history_index -= 1;
+                            input_buffer = input_history[history_index].clone();
+                            cursor_pos = input_buffer.len();
+                        } else if history_scroll < conversation.len() {
                             history_scroll += 1;
                         }
                     }
                     crossterm::event::KeyCode::Down => {
-                        history_scroll = history_scroll.saturating_sub(1);
+                        // Navigate input history forward.
+                        if cursor_pos == 0 && history_index < input_history.len() {
+                            history_index += 1;
+                            if history_index == input_history.len() {
+                                input_buffer = saved_buffer.clone();
+                            } else {
+                                input_buffer = input_history[history_index].clone();
+                            }
+                            cursor_pos = input_buffer.len();
+                        } else if history_scroll > 0 {
+                            history_scroll = history_scroll.saturating_sub(1);
+                        }
                     }
                     crossterm::event::KeyCode::Tab => {
-                        // Auto-completion placeholder — append two spaces.
-                        input_buffer.push_str("  ");
+                        // Tab completion for slash commands.
+                        if input_buffer.starts_with('/') {
+                            let completions = complete_slash_command(&input_buffer);
+                            if completions.len() == 1 {
+                                input_buffer = completions[0].clone();
+                                cursor_pos = input_buffer.len();
+                            } else if !completions.is_empty() {
+                                // Show available completions.
+                                let display = completions.join("  ");
+                                print_line(&format!("  {display}"));
+                            }
+                        }
                     }
                     _ => {}
                 }
@@ -398,6 +486,7 @@ pub async fn run_tui_app(
     }
 
     // Restore terminal state.
+    let _ = crossterm::execute!(io::stdout(), crossterm::event::DisableMouseCapture);
     crossterm::terminal::disable_raw_mode()?;
     crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen)?;
 
@@ -758,4 +847,17 @@ fn handle_slash_command(
         }
     }
     SlashCommandAction::Continue
+}
+
+/// Complete a partial slash command input.
+fn complete_slash_command(partial: &str) -> Vec<String> {
+    let all_commands = [
+        "/help", "/status", "/cost", "/compact", "/clear",
+        "/sessions", "/doctor", "/quit", "/exit",
+    ];
+    all_commands
+        .iter()
+        .filter(|cmd| cmd.starts_with(partial))
+        .map(|cmd| cmd.to_string())
+        .collect::<Vec<_>>()
 }

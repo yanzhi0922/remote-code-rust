@@ -292,8 +292,27 @@ impl PermissionBroker for RuleBasedPermissionBroker {
 #[must_use]
 pub fn classify_tool(name: &str) -> PermissionClass {
     match name {
-        "list_directory" | "read_file" | "search_text" | "glob" | "grep" => PermissionClass::Read,
-        "write_file" | "replace_in_file" | "edit_file" => PermissionClass::Edit,
+        // Read-only tools
+        "list_directory" | "read_file" | "search_text" | "glob" | "grep"
+        | "config_read" | "tool_search" | "skill_discover" | "list_peers"
+        | "ctx_inspect" | "team_status" | "memory_read" | "list_mcp_resources"
+        | "read_mcp_resource" | "verify_plan" | "brief" | "monitor"
+        | "terminal_capture" | "lsp" | "suggest_pr" => PermissionClass::Read,
+
+        // File editing tools
+        "write_file" | "replace_in_file" | "edit_file" | "notebook_edit" | "snip" => {
+            PermissionClass::Edit
+        }
+
+        // Memory write is an edit
+        "memory_write" => PermissionClass::Edit,
+
+        // Task/todo management
+        "todo_write" | "task_create" | "task_get" | "task_list" | "task_stop" | "task_update" => {
+            PermissionClass::Edit
+        }
+
+        // Everything else is a command
         _ => PermissionClass::Command,
     }
 }
@@ -340,13 +359,17 @@ pub fn classify_risk(tool_name: &str, input: &Value) -> RiskLevel {
         | "config_read" | "tool_search" | "skill_discover" | "list_peers"
         | "ctx_inspect" | "team_status" | "memory_read" | "list_mcp_resources"
         | "read_mcp_resource" | "verify_plan" | "brief" | "monitor"
-        | "terminal_capture" => RiskLevel::Safe,
+        | "terminal_capture" | "lsp" | "suggest_pr" => RiskLevel::Safe,
 
         // File edits are low risk if within workspace.
-        "write_file" | "replace_in_file" | "edit_file" | "notebook_edit" | "snip" => RiskLevel::Low,
+        "write_file" | "replace_in_file" | "edit_file" | "notebook_edit" | "snip" => {
+            RiskLevel::Low
+        }
 
         // Task management is low risk.
-        "todo_write" | "task_create" | "task_get" | "task_list" | "task_stop" | "task_update" => RiskLevel::Low,
+        "todo_write" | "task_create" | "task_get" | "task_list" | "task_stop" | "task_update" => {
+            RiskLevel::Low
+        }
 
         // Plan mode tools are safe.
         "enter_plan_mode" | "exit_plan_mode" | "send_message" => RiskLevel::Safe,
@@ -356,6 +379,15 @@ pub fn classify_risk(tool_name: &str, input: &Value) -> RiskLevel {
 
         // Sleep is safe.
         "sleep" => RiskLevel::Safe,
+
+        // Memory write is low risk.
+        "memory_write" => RiskLevel::Low,
+
+        // Voice input is safe (read-only capture).
+        "voice_input" => RiskLevel::Safe,
+
+        // Git worktree tools are low risk.
+        "enter_worktree" | "exit_worktree" => RiskLevel::Low,
 
         // Bash commands need risk analysis based on content.
         "bash_command" | "powershell" | "repl" => classify_command_risk(input),
@@ -388,47 +420,112 @@ fn classify_command_risk(input: &Value) -> RiskLevel {
         .unwrap_or("");
 
     let command_lower = command.to_ascii_lowercase();
+    let command_trimmed = command_lower.trim();
 
-    // Safe read-only commands.
+    // Empty commands are safe.
+    if command_trimmed.is_empty() {
+        return RiskLevel::Safe;
+    }
+
+    // --- Safe read-only commands ---
     let safe_prefixes = [
-        "ls", "dir", "cat", "head", "tail", "grep", "find", "wc",
-        "echo", "pwd", "whoami", "which", "where", "type",
-        "git status", "git log", "git diff", "git branch", "git tag", "git remote",
-        "git show", "git stash list",
-        "cargo check", "cargo build", "cargo test", "cargo clippy", "cargo fmt",
-        "cargo doc", "cargo tree", "cargo metadata",
-        "npm list", "npm view", "node --version", "npm --version",
-        "python --version", "python3 --version", "rustc --version",
+        // File listing/viewing
+        "ls", "dir", "cat", "head", "tail", "less", "more", "file",
+        "grep", "egrep", "rg", "ag", "ack", "find", "locate",
+        "wc", "sort", "uniq", "cut", "tr", "tee", "xargs",
+        "echo", "printf", "pwd", "whoami", "hostname", "uname",
+        "which", "where", "type", "command -v", "env", "printenv",
+        "stat", "file", "du", "df", "free", "top", "ps", "lsof",
+        // Git read-only
+        "git status", "git log", "git diff", "git branch", "git tag",
+        "git remote", "git show", "git stash list", "git blame",
+        "git reflog", "git shortlog", "git describe", "git rev-parse",
+        "git ls-files", "git ls-tree", "git ls-remote",
+        "git config --get", "git config --list",
+        // Cargo read-only
+        "cargo check", "cargo build", "cargo test", "cargo clippy",
+        "cargo fmt", "cargo doc", "cargo tree", "cargo metadata",
+        "cargo locate-project", "cargo pkgid", "cargo --version",
+        "cargo search", "cargo info",
+        // npm/node read-only
+        "npm list", "npm view", "npm info", "npm show", "npm outdated",
+        "npm pack --dry-run", "npm --version", "node --version",
+        "npx --version", "npx which",
+        // Python read-only
+        "python --version", "python3 --version", "pip list", "pip show",
+        "pip freeze", "pip check", "python -c \"import", "python3 -c \"import",
+        "rustc --version", "rustup show", "rustup toolchain list",
+        // Go read-only
+        "go version", "go list", "go vet", "go doc",
+        // Docker read-only
+        "docker ps", "docker images", "docker version", "docker info",
+        "docker logs", "docker inspect", "docker stats",
+        // Kubernetes read-only
+        "kubectl get", "kubectl describe", "kubectl logs", "kubectl version",
+        // Misc safe
+        "date", "cal", "uptime", "arch", "nproc", "lscpu",
+        "gh repo view", "gh pr list", "gh issue list", "gh api",
     ];
 
     for prefix in &safe_prefixes {
-        if command_lower.starts_with(prefix) {
+        if command_trimmed.starts_with(prefix) {
             return RiskLevel::Safe;
         }
     }
 
-    // Low risk: common development commands.
+    // --- Low risk: common development commands ---
     let low_risk_prefixes = [
+        // Git mutating (but normal workflow)
         "git add", "git commit", "git checkout", "git switch",
-        "cargo add", "cargo run", "cargo update",
-        "npm install", "npm run", "npm test",
-        "pip install", "pip list",
-        "mkdir", "touch", "cp", "mv",
+        "git stash", "git merge", "git rebase", "git cherry-pick",
+        "git pull", "git fetch", "git push", "git reset --soft",
+        "git restore", "git rm --cached", "git mv",
+        // Cargo mutating
+        "cargo add", "cargo run", "cargo update", "cargo install",
+        "cargo publish --dry-run", "cargo clean",
+        // npm/node mutating
+        "npm install", "npm run", "npm test", "npm start",
+        "npm build", "npm ci", "npm uninstall",
+        // Python mutating
+        "pip install", "python -m pip", "python3 -m pip",
+        // Go mutating
+        "go build", "go test", "go run", "go mod tidy", "go mod download",
+        // Docker build/run
+        "docker build", "docker compose up", "docker compose build",
+        // File operations (non-destructive)
+        "mkdir", "touch", "cp", "mv", "ln -s", "chmod +x",
+        "tar ", "unzip ", "7z ",
     ];
 
     for prefix in &low_risk_prefixes {
-        if command_lower.starts_with(prefix) {
+        if command_trimmed.starts_with(prefix) {
             return RiskLevel::Low;
         }
     }
 
-    // High risk: destructive commands.
+    // --- High risk: destructive or dangerous commands ---
     let high_risk_patterns = [
-        "rm -rf /", "del /s /q c:", "format ", "shutdown",
-        "curl ", "wget ", "| sh", "| bash",
+        // System-destructive
+        "rm -rf /", "rm -rf /*", "del /s /q c:", "format ",
+        "shutdown", "reboot", "halt", "poweroff",
         "> /etc/", "chmod 777", "chown ",
         "dd if=", "mkfs.", ":(){ :|:& };:",
-        "sudo rm", "sudo del",
+        "sudo rm", "sudo del", "sudo shutdown",
+        // Download and execute
+        "curl ", "wget ",
+        "| sh", "| bash", "| zsh", "| fish",
+        "| sudo ",
+        // Credential/environment leaks
+        "export ", "setenv ", "aws ", "gcloud ", "az ",
+        // Package manager global operations
+        "npm install -g", "pip install --user",
+        // Force operations
+        "rm -rf", "git push --force", "git push -f",
+        "git clean -fdx", "git reset --hard",
+        // Network listeners
+        "nc -l", "ncat -l", "socat ",
+        // Fork bombs and resource exhaustion
+        "fork ", "bomb", "while true",
     ];
 
     for pattern in &high_risk_patterns {
@@ -437,7 +534,7 @@ fn classify_command_risk(input: &Value) -> RiskLevel {
         }
     }
 
-    // Default: medium risk for unknown commands.
+    // --- Medium risk: everything else ---
     RiskLevel::Medium
 }
 

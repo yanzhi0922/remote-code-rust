@@ -259,6 +259,12 @@ pub struct UsageSummary {
     /// Number of output (completion) tokens.
     #[serde(default)]
     pub output_tokens: u64,
+    /// Anthropic cache read tokens (tokens served from cache).
+    #[serde(default)]
+    pub cache_read_input_tokens: u64,
+    /// Anthropic cache creation tokens (tokens written to cache).
+    #[serde(default)]
+    pub cache_creation_input_tokens: u64,
 }
 
 /// A single entry in the conversation history.

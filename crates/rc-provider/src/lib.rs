@@ -406,6 +406,8 @@ fn parse_openai_response(status: u16, raw_text: String) -> Result<ProviderRespon
                 .get("completion_tokens")
                 .and_then(Value::as_u64)
                 .unwrap_or_default(),
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
         },
         stop_reason: payload
             .get("choices")
@@ -462,6 +464,14 @@ fn parse_anthropic_response(status: u16, raw_text: String) -> Result<ProviderRes
                 .unwrap_or_default(),
             output_tokens: usage
                 .get("output_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or_default(),
+            cache_read_input_tokens: usage
+                .get("cache_read_input_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or_default(),
+            cache_creation_input_tokens: usage
+                .get("cache_creation_input_tokens")
                 .and_then(Value::as_u64)
                 .unwrap_or_default(),
         },
@@ -558,6 +568,8 @@ fn mock_response(conversation: &[ConversationEntry]) -> ProviderResponse {
         usage: UsageSummary {
             input_tokens: 16,
             output_tokens: 12,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
         },
         stop_reason: "end_turn".to_owned(),
     }
@@ -589,6 +601,19 @@ fn strip_reasoning_tags(text: &str) -> String {
 /// When `is_resume` is true (conversation has prior tool results), the tool list
 /// is kept exactly as-is to avoid `deferred_tools_delta` cache-miss issues.
 fn add_stable_cache_control(body: &mut Value, is_resume: bool) {
+    // 0. Stabilize tool ordering — sort tools by name for deterministic cache keys.
+    //    This ensures the same tool set always produces the same prefix regardless of
+    //    HashMap iteration order or registration order.
+    if let Some(tools) = body.get_mut("tools")
+        && let Some(tools_arr) = tools.as_array_mut()
+    {
+        tools_arr.sort_by(|a, b| {
+            let name_a = a.get("name").and_then(Value::as_str).unwrap_or("");
+            let name_b = b.get("name").and_then(Value::as_str).unwrap_or("");
+            name_a.cmp(name_b)
+        });
+    }
+
     // 1. System message — always ensure array format with cache_control.
     if let Some(system) = body.get_mut("system") {
         if system.is_string() {

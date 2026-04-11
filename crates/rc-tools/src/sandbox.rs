@@ -297,35 +297,20 @@ async fn execute_windows(
 }
 
 /// macOS Seatbelt execution using `sandbox-exec`.
+///
+/// Generates a comprehensive SBPL (Seatbelt Profile Language) policy that:
+/// - Denies all operations by default
+/// - Allows reading system directories (/usr, /System, /Library, etc.)
+/// - Allows executing standard shells and development tools
+/// - Allows read/write access to workspace directories
+/// - Optionally allows network access
 #[cfg(target_os = "macos")]
 async fn execute_seatbelt(
     command: &str,
     policy: &SeatbeltPolicy,
     timeout: Duration,
 ) -> Result<SandboxResult> {
-    // Generate SBPL policy string.
-    let mut sbpl = String::from("(version 1)\n");
-    sbpl += "(deny default)\n";
-
-    // Allow basic system operations.
-    sbpl += "(allow file-read* (subpath \"/usr\"))\n";
-    sbpl += "(allow file-read* (subpath \"/System\"))\n";
-    sbpl += "(allow file-read* (subpath \"/Library\"))\n";
-    sbpl += "(allow process-exec (literal \"/bin/sh\"))\n";
-    sbpl += "(allow process-exec (literal \"/bin/bash\"))\n";
-    sbpl += "(allow process-exec (literal \"/bin/zsh\"))\n";
-
-    // Allow workspace directories.
-    for dir in &policy.allowed_dirs {
-        let path = dir.display();
-        sbpl += &format!("(allow file-read* (subpath \"{path}\"))\n");
-        sbpl += &format!("(allow file-write* (subpath \"{path}\"))\n");
-    }
-
-    // Network control.
-    if policy.allow_network {
-        sbpl += "(allow network*)\n";
-    }
+    let sbpl = generate_seatbelt_policy(policy);
 
     // Execute via sandbox-exec.
     let output = tokio::time::timeout(
@@ -362,6 +347,94 @@ async fn execute_seatbelt(
             timed_out: true,
         }),
     }
+}
+
+/// Generate a Seatbelt SBPL policy string for the given workspace directories.
+#[cfg(target_os = "macos")]
+fn generate_seatbelt_policy(policy: &SeatbeltPolicy) -> String {
+    let mut sbpl = String::from("(version 1)\n");
+    sbpl += "(deny default)\n";
+
+    // --- System read access ---
+    // Allow reading from standard system directories.
+    let read_only_subpaths = [
+        "/usr",
+        "/System",
+        "/Library",
+        "/bin",
+        "/sbin",
+        "/opt",
+        "/etc",
+        "/private/etc",
+        "/private/tmp",
+        "/private/var/db/dyld",
+        "/AppleInternal",
+    ];
+    for path in &read_only_subpaths {
+        sbpl += &format!("(allow file-read* (subpath \"{path}\"))\n");
+    }
+
+    // --- Developer tool directories ---
+    // Xcode command line tools, Homebrew, MacPorts, etc.
+    let dev_paths = [
+        "/Applications/Xcode.app",
+        "/Library/Developer",
+        "/usr/local",
+        "/opt/homebrew",
+        "/opt/local",
+    ];
+    for path in &dev_paths {
+        sbpl += &format!("(allow file-read* (subpath \"{path}\"))\n");
+        // Also allow executing binaries from these directories.
+        sbpl += &format!("(allow process-exec (subpath \"{path}\"))\n");
+    }
+
+    // --- Shell execution ---
+    let shells = [
+        "/bin/sh",
+        "/bin/bash",
+        "/bin/zsh",
+        "/bin/cat",
+        "/bin/ls",
+        "/bin/mkdir",
+        "/bin/rm",
+        "/bin/cp",
+        "/bin/mv",
+        "/usr/bin/env",
+    ];
+    for shell in &shells {
+        sbpl += &format!("(allow process-exec (literal \"{shell}\"))\n");
+    }
+
+    // --- Process operations ---
+    sbpl += "(allow process-fork)\n";
+    sbpl += "(allow process-exec (subpath \"/usr/bin\"))\n";
+    sbpl += "(allow process-exec (subpath \"/usr/local/bin\"))\n";
+
+    // --- Temporary directories ---
+    sbpl += "(allow file-read* (subpath \"/tmp\"))\n";
+    sbpl += "(allow file-write* (subpath \"/tmp\"))\n";
+
+    // --- Workspace directories ---
+    for dir in &policy.allowed_dirs {
+        let path = dir.display();
+        sbpl += &format!("(allow file-read* (subpath \"{path}\"))\n");
+        sbpl += &format!("(allow file-write* (subpath \"{path}\"))\n");
+        sbpl += &format!("(allow process-exec (subpath \"{path}\"))\n");
+    }
+
+    // --- Network control ---
+    if policy.allow_network {
+        sbpl += "(allow network*)\n";
+        sbpl += "(allow system-socket)\n";
+    }
+
+    // --- Signals and IPC ---
+    sbpl += "(allow signal (target self))\n";
+    sbpl += "(allow mach-lookup)\n";
+    sbpl += "(allow file-read-metadata)\n";
+
+    sbpl
 }
 
 // ---------------------------------------------------------------------------

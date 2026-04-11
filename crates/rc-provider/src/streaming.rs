@@ -9,7 +9,7 @@
 use anyhow::{Context, Result, anyhow};
 use futures::StreamExt;
 use rc_config::ProviderConfig;
-use rc_core::{ConversationEntry, ProviderProtocol, ProviderResponse, ToolCall, UsageSummary};
+use rc_core::{ConversationEntry, ConversationRole, ProviderProtocol, ProviderResponse, ToolCall, UsageSummary};
 use rc_tools::builtin_tool_specs;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -269,7 +269,7 @@ impl ProviderClient {
         callbacks: Option<&StreamingCallbacks>,
     ) -> Result<ProviderResponse> {
         let (system, messages) = to_anthropic_messages(conversation);
-        let body = json!({
+        let mut body = json!({
             "model": provider.model,
             "system": system,
             "messages": messages,
@@ -280,6 +280,11 @@ impl ProviderClient {
             "max_tokens": provider.max_output_tokens,
             "stream": true,
         });
+        // Apply stable cache control breakpoints (system, tools, latest user message).
+        let is_resume = conversation
+            .iter()
+            .any(|entry| matches!(entry.role, ConversationRole::Tool));
+        crate::add_stable_cache_control(&mut body, is_resume);
         let base_url = provider
             .base_url
             .as_ref()
@@ -331,6 +336,14 @@ impl ProviderClient {
                                 let inp =
                                     u.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
                                 usage.input_tokens = inp;
+                                usage.cache_read_input_tokens = u
+                                    .get("cache_read_input_tokens")
+                                    .and_then(Value::as_u64)
+                                    .unwrap_or(0);
+                                usage.cache_creation_input_tokens = u
+                                    .get("cache_creation_input_tokens")
+                                    .and_then(Value::as_u64)
+                                    .unwrap_or(0);
                                 if let Some(cb) =
                                     callbacks.as_ref().and_then(|c| c.on_usage.as_ref())
                                 {
