@@ -819,14 +819,16 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
             name: "schedule_cron".to_owned(),
             protocol_name: "ScheduleCron".to_owned(),
             permission_tool_name: "Edit".to_owned(),
-            description: "Schedule a cron job that runs a command periodically.".to_owned(),
+            description: "Schedule a cron job that runs a command periodically. Supports create, list, and delete actions.".to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
                 "properties": {
+                    "action": {"type": "string", "enum": ["create", "add", "list", "delete", "remove"], "description": "Action to perform (defaults to create)"},
                     "schedule": {"type": "string", "description": "Cron expression (e.g. '*/5 * * * *')"},
                     "command": {"type": "string"},
-                    "description": {"type": "string"}
+                    "description": {"type": "string"},
+                    "id": {"type": "string", "description": "Cron job ID for delete"}
                 },
                 "required": ["schedule", "command"],
                 "additionalProperties": false,
@@ -853,17 +855,18 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
             name: "workflow".to_owned(),
             protocol_name: "Workflow".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "Create, run, or check status of a simple workflow.".to_owned(),
+            description: "Create, run, list, delete, or check status of a simple workflow with sequential step execution.".to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["create", "run", "status"]},
+                    "action": {"type": "string", "enum": ["create", "run", "status", "list", "delete"]},
                     "name": {"type": "string"},
                     "steps": {
                         "type": "array",
                         "items": {"type": "string"}
-                    }
+                    },
+                    "description": {"type": "string", "description": "Description for the workflow (used with create)"}
                 },
                 "required": ["action", "name"],
                 "additionalProperties": false,
@@ -2894,13 +2897,7 @@ fn monitor_tool(input: &Value) -> Result<String> {
 }
 
 fn schedule_cron_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
-    let schedule = input["schedule"]
-        .as_str()
-        .ok_or_else(|| anyhow!("schedule is required (cron expression)"))?;
-    let command = input["command"]
-        .as_str()
-        .ok_or_else(|| anyhow!("command is required"))?;
-    let description = input["description"].as_str().unwrap_or("");
+    let action = input["action"].as_str().unwrap_or("create");
 
     let crons_dir = context.cwd.join(".remote-code-rust");
     std::fs::create_dir_all(&crons_dir)?;
@@ -2913,24 +2910,63 @@ fn schedule_cron_tool(input: &Value, context: &ToolExecutionContext) -> Result<S
         Vec::new()
     };
 
-    let entry = json!({
-        "schedule": schedule,
-        "command": command,
-        "description": description,
-        "created_at": std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
-    });
-    crons.push(entry);
+    match action {
+        "create" | "add" => {
+            let schedule = input["schedule"]
+                .as_str()
+                .ok_or_else(|| anyhow!("schedule is required (cron expression)"))?;
+            let command = input["command"]
+                .as_str()
+                .ok_or_else(|| anyhow!("command is required"))?;
+            let description = input["description"].as_str().unwrap_or("");
 
-    let content = serde_json::to_string_pretty(&crons)?;
-    std::fs::write(&crons_path, content)?;
+            let entry = json!({
+                "id": format!("cron-{}", crons.len() + 1),
+                "schedule": schedule,
+                "command": command,
+                "description": description,
+                "created_at": std::time::SystemTime::now()
+                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+            });
+            crons.push(entry);
 
-    Ok(format!(
-        "Cron job saved: '{}' → {}",
-        schedule, command
-    ))
+            let content = serde_json::to_string_pretty(&crons)?;
+            std::fs::write(&crons_path, content)?;
+
+            Ok(format!(
+                "Cron job saved: '{}' → {}",
+                schedule, command
+            ))
+        }
+        "list" => {
+            Ok(json!({
+                "crons": crons,
+                "count": crons.len(),
+            }).to_string())
+        }
+        "delete" | "remove" => {
+            let id = input["id"]
+                .as_str()
+                .or_else(|| input["schedule"].as_str())
+                .ok_or_else(|| anyhow!("id or schedule is required for delete"))?;
+
+            let before = crons.len();
+            crons.retain(|c| {
+                c["id"].as_str() != Some(id) && c["schedule"].as_str() != Some(id)
+            });
+
+            if crons.len() < before {
+                let content = serde_json::to_string_pretty(&crons)?;
+                std::fs::write(&crons_path, content)?;
+                Ok(format!("Cron job deleted."))
+            } else {
+                Ok(format!("Cron job '{id}' not found."))
+            }
+        }
+        _ => Err(anyhow!("action must be 'create', 'list', or 'delete'")),
+    }
 }
 
 async fn remote_trigger_tool(input: &Value) -> Result<String> {
@@ -3001,10 +3037,16 @@ fn workflow_tool(input: &Value, context: &ToolExecutionContext) -> Result<String
                         .collect()
                 })
                 .unwrap_or_default();
+            let description = input["description"].as_str().unwrap_or("");
             let entry = json!({
                 "name": name,
+                "description": description,
                 "steps": steps,
                 "status": "created",
+                "created_at": std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
             });
             workflows.push(entry);
             let content = serde_json::to_string_pretty(&workflows)?;
@@ -3013,14 +3055,79 @@ fn workflow_tool(input: &Value, context: &ToolExecutionContext) -> Result<String
         }
         "run" => {
             let wf = workflows
-                .iter_mut()
-                .find(|w| w["name"].as_str() == Some(name));
+                .iter()
+                .find(|w| w["name"].as_str() == Some(name))
+                .cloned();
             match wf {
                 Some(w) => {
-                    w["status"] = json!("running");
-                    let content = serde_json::to_string_pretty(&workflows)?;
-                    std::fs::write(&wf_path, content)?;
-                    Ok(format!("Workflow '{name}' started."))
+                    let steps = w["steps"]
+                        .as_array()
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+
+                    // Execute each step sequentially.
+                    let mut results = Vec::new();
+                    let mut all_success = true;
+                    for (i, step) in steps.iter().enumerate() {
+                        let output = std::process::Command::new(if cfg!(windows) { "cmd" } else { "sh" })
+                            .arg(if cfg!(windows) { "/C" } else { "-c" })
+                            .arg(step)
+                            .current_dir(&context.cwd)
+                            .output();
+
+                        let result = match output {
+                            Ok(out) => {
+                                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                                let success = out.status.success();
+                                if !success {
+                                    all_success = false;
+                                }
+                                json!({
+                                    "step": i + 1,
+                                    "command": step,
+                                    "success": success,
+                                    "stdout": stdout.chars().take(2000).collect::<String>(),
+                                    "stderr": stderr.chars().take(1000).collect::<String>(),
+                                })
+                            }
+                            Err(e) => {
+                                all_success = false;
+                                json!({
+                                    "step": i + 1,
+                                    "command": step,
+                                    "success": false,
+                                    "error": e.to_string(),
+                                })
+                            }
+                        };
+                        results.push(result);
+                    }
+
+                    // Update workflow status.
+                    let wf_mut = workflows
+                        .iter_mut()
+                        .find(|w| w["name"].as_str() == Some(name));
+                    if let Some(w) = wf_mut {
+                        w["status"] = if all_success { json!("completed") } else { json!("failed") };
+                        w["last_run"] = json!(std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0));
+                        let content = serde_json::to_string_pretty(&workflows)?;
+                        std::fs::write(&wf_path, content)?;
+                    }
+
+                    Ok(json!({
+                        "workflow": name,
+                        "status": if all_success { "completed" } else { "failed" },
+                        "steps_executed": results.len(),
+                        "results": results,
+                    }).to_string())
                 }
                 None => Err(anyhow!("workflow '{name}' not found")),
             }
@@ -3037,7 +3144,32 @@ fn workflow_tool(input: &Value, context: &ToolExecutionContext) -> Result<String
                 .to_string()),
             }
         }
-        _ => Err(anyhow!("action must be 'create', 'run', or 'status'")),
+        "list" => {
+            let names: Vec<Value> = workflows
+                .iter()
+                .map(|w| json!({
+                    "name": w["name"],
+                    "status": w["status"],
+                    "steps": w["steps"].as_array().map(|a| a.len()).unwrap_or(0),
+                }))
+                .collect();
+            Ok(json!({
+                "workflows": names,
+                "count": names.len(),
+            }).to_string())
+        }
+        "delete" => {
+            let before = workflows.len();
+            workflows.retain(|w| w["name"].as_str() != Some(name));
+            if workflows.len() < before {
+                let content = serde_json::to_string_pretty(&workflows)?;
+                std::fs::write(&wf_path, content)?;
+                Ok(format!("Workflow '{name}' deleted."))
+            } else {
+                Ok(format!("Workflow '{name}' not found."))
+            }
+        }
+        _ => Err(anyhow!("action must be 'create', 'run', 'status', 'list', or 'delete'")),
     }
 }
 
