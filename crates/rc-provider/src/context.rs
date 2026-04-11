@@ -133,6 +133,24 @@ impl ContextWindowManager {
         }
     }
 
+    /// Create a manager whose token budget is derived from the model name.
+    ///
+    /// Uses [`crate::model_info::get_model_info`] to look up the maximum
+    /// context window and output reserve for the given model, then constructs
+    /// a [`ContextWindowManager`] with those values.
+    #[must_use]
+    pub fn for_model(model: &str) -> Self {
+        let info = crate::model_info::get_model_info(model);
+        Self {
+            max_tokens: info.max_context,
+            output_reserve: info.max_output,
+            compaction_threshold: DEFAULT_COMPACTION_THRESHOLD,
+            recent_turns: DEFAULT_RECENT_TURNS,
+            tool_output_max_chars: DEFAULT_TOOL_OUTPUT_MAX_CHARS,
+            estimator: TokenEstimator::new(),
+        }
+    }
+
     /// Return the available budget for input tokens.
     #[must_use]
     pub fn available_budget(&self) -> u64 {
@@ -543,5 +561,34 @@ mod tests {
                 .any(|e| e.text.contains("[Context Summary")),
             "compacted conversation should contain a summary of older messages"
         );
+    }
+
+    // -- for_model() tests --------------------------------------------------
+
+    #[test]
+    fn for_model_creates_correct_manager() {
+        // GLM-4-Plus → 128 K / 4 K
+        let mgr = ContextWindowManager::for_model("glm-4-plus");
+        assert_eq!(mgr.available_budget(), 128_000 - 4_096);
+
+        // GLM-4-Long → 1 M / 4 K
+        let mgr = ContextWindowManager::for_model("glm-4-long");
+        assert_eq!(mgr.available_budget(), 1_000_000 - 4_096);
+
+        // GPT-4o → 128 K / 16 K
+        let mgr = ContextWindowManager::for_model("gpt-4o");
+        assert_eq!(mgr.available_budget(), 128_000 - 16_384);
+
+        // Claude 3.5 Sonnet → 200 K / 8 K
+        let mgr = ContextWindowManager::for_model("claude-3.5-sonnet");
+        assert_eq!(mgr.available_budget(), 200_000 - 8_192);
+
+        // o1 → 200 K / 100 K
+        let mgr = ContextWindowManager::for_model("o1");
+        assert_eq!(mgr.available_budget(), 200_000 - 100_000);
+
+        // Unknown → 128 K / 4 K (default)
+        let mgr = ContextWindowManager::for_model("some-random-model");
+        assert_eq!(mgr.available_budget(), 128_000 - 4_096);
     }
 }

@@ -1,6 +1,7 @@
 pub mod context;
 pub mod cost;
 pub mod failover;
+pub mod model_info;
 pub mod streaming;
 
 pub use streaming::StreamingCallbacks;

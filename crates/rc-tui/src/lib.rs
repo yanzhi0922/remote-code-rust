@@ -108,10 +108,8 @@ pub async fn run_tui_app(
     let provider = ProviderClient::new()?;
     let broker = StaticPermissionBroker::new(config.permission_mode);
 
-    // TODO: Read context window size from provider/model config when available.
-    //       Current defaults (128K input, 4K output reserve) suit modern models
-    //       like GPT-4o, Claude 3.5 Sonnet, etc.
-    let context_manager = ContextWindowManager::new(128_000, 4_096);
+    let model_name = config.provider.model.as_deref().unwrap_or("unknown");
+    let context_manager = ContextWindowManager::for_model(model_name);
     let cost_tracker = CostTracker::new();
     let mut conversation = load_or_create_conversation(store, &config)?;
 

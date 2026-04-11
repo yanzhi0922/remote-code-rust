@@ -329,7 +329,8 @@ pub(crate) async fn run_prompt(
     let mut num_turns = 0u32;
     let mut permission_denials = Vec::new();
     let mut total_tool_calls = 0usize;
-    let context_manager = ContextWindowManager::new(128_000, 4_096);
+    let model_name = config.provider.model.as_deref().unwrap_or("unknown");
+    let context_manager = ContextWindowManager::for_model(model_name);
     for turn_index in 0..config.max_turns {
         num_turns += 1;
 
