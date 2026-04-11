@@ -37,9 +37,9 @@ The primary command name remains `remote-code`.
 
 ### Interactive Mode
 
-- `remote-code tui` ✅ interactive TUI with Vim mode and slash commands
+- `remote-code tui` ✅ interactive TUI with Vim mode, Tab completion, Ctrl+R history search, and theme system (dark/light/monokai/solarized)
 - `remote-code headless` ✅ headless mode with stdin/stdout piping
-- `remote-code --ssh <host>` ✅ SSH remote execution mode
+- `remote-code --ssh <host>` ✅ SSH remote execution mode with config file, agent forwarding, port forwarding, and timeout support
 
 Additional flags may be introduced, but existing supported compatibility flags must remain additive rather than breaking.
 
