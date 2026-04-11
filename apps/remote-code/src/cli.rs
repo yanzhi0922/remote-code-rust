@@ -106,6 +106,20 @@ pub enum Commands {
     },
     /// Connect to a remote host via SSH and run remote-code.
     Ssh(SshArgs),
+    /// Check for updates or self-update.
+    Update {
+        #[command(subcommand)]
+        command: UpdateCommand,
+    },
+}
+
+/// Subcommands for the update command.
+#[derive(Subcommand, Debug)]
+pub enum UpdateCommand {
+    /// Check if a newer version is available.
+    Check,
+    /// Download and install the latest version.
+    Run,
 }
 
 #[derive(Subcommand, Debug)]

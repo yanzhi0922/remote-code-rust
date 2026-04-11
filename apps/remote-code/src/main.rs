@@ -10,6 +10,7 @@ mod remote;
 #[allow(dead_code)]
 mod runtime_hooks;
 mod sessions;
+mod updater;
 
 use anyhow::Result;
 use rc_config::{ProviderOverrides, load_runtime_config};
@@ -93,6 +94,13 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Tui) => rc_tui::run_tui_app(config.clone(), &store).await,
         Some(Commands::Ssh(args)) => run_ssh(args).await,
+        Some(Commands::Update { command }) => {
+            use cli::UpdateCommand;
+            match command {
+                UpdateCommand::Check => updater::run_check().await,
+                UpdateCommand::Run => updater::run_update().await,
+            }
+        }
         None => {
             let prompt = join_prompt(cli.prompt);
             if should_run_headless(&config) {
