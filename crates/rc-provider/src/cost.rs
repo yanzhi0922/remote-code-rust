@@ -1,4 +1,16 @@
 //! Cost tracking for API usage.
+//!
+//! Pricing sources (per million tokens, USD):
+//!
+//! - OpenAI:    <https://platform.openai.com/pricing> (2025-01, 2026-04)
+//! - Anthropic: <https://docs.anthropic.com/pricing> (2025-01)
+//! - 智谱 AI:   <https://open.bigmodel.cn/pricing> (2025-01, 2026-04)
+//! - MiniMax:   <https://www.minimaxi.com/pricing> (2025-06, 2026-04)
+//! - DeepSeek:  <https://platform.deepseek.com/pricing> (2025-01)
+//! - Qwen:      <https://help.aliyun.com> (2025-01)
+//! - Google:    <https://ai.google.dev/pricing> (2025-01)
+//! - Moonshot:  <https://platform.moonshot.cn/pricing> (2025-01)
+//! - 百度 ERNIE: <https://cloud.baidu.com> (2025-01)
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -134,11 +146,51 @@ pub fn estimate_cost(model: &str, input_tokens: u64, output_tokens: u64) -> f64 
     input_cost + output_cost
 }
 
-/// Return (input_price_per_million, output_price_per_million) for a model.
+/// Return `(input_price_per_million, output_price_per_million)` for a model.
+///
+/// All prices are in **USD per million tokens**.  For Chinese providers that
+/// publish CNY pricing, an approximate conversion rate of ¥1 ≈ $0.14 is used.
+#[allow(clippy::too_many_lines)]
 fn pricing_for_model(model: &str) -> (f64, f64) {
     let lower = model.to_ascii_lowercase();
 
-    // GPT-4o family
+    // ---- OpenAI family -----------------------------------------------------
+
+    // o3: $2.00 / $8.00 per million (reasoning)
+    // Source: https://platform.openai.com/pricing — 2025-04
+    if lower == "o3" {
+        return (2.00, 8.00);
+    }
+
+    // o4-mini: $1.10 / $4.40 per million (reasoning)
+    // Source: https://platform.openai.com/pricing — 2025-04
+    if lower.contains("o4-mini") {
+        return (1.10, 4.40);
+    }
+
+    // o3-mini: $1.10 / $4.40 per million
+    if lower.contains("o3-mini") {
+        return (1.10, 4.40);
+    }
+
+    // o1: $15.00 / $60.00 per million
+    // o1-preview: same tier
+    if lower == "o1" || lower.contains("o1-preview") {
+        return (15.00, 60.00);
+    }
+
+    // o1-mini: $1.50 / $6.00 per million
+    if lower.contains("o1-mini") {
+        return (1.50, 6.00);
+    }
+
+    // GPT-4.5: $30.00 / $120.00 per million (conservative estimate)
+    // Source: https://platform.openai.com/pricing — 2025-04
+    if lower.contains("gpt-4.5") || lower.contains("gpt-45") {
+        return (30.00, 120.00);
+    }
+
+    // GPT-4o family (non-mini)
     if lower.contains("gpt-4o") && !lower.contains("mini") {
         // $2.50 / $10.00 per million tokens
         return (2.50, 10.00);
@@ -153,7 +205,7 @@ fn pricing_for_model(model: &str) -> (f64, f64) {
         return (10.00, 30.00);
     }
 
-    // GPT-4
+    // GPT-4 (base)
     if lower.contains("gpt-4") {
         return (30.00, 60.00);
     }
@@ -163,29 +215,202 @@ fn pricing_for_model(model: &str) -> (f64, f64) {
         return (0.50, 1.50);
     }
 
+    // ---- Anthropic family --------------------------------------------------
+
+    // Claude 4: conservative estimate based on Opus tier
+    // Source: https://docs.anthropic.com/pricing — 2026-04
+    if lower.contains("claude-4") || lower.contains("claude4") {
+        return (15.00, 75.00);
+    }
+
+    // Claude 3.7 Sonnet
+    if lower.contains("claude-3.7") || lower.contains("claude-3-7") {
+        return (3.00, 15.00);
+    }
+
     // Claude 3.5 Sonnet
     if lower.contains("claude-3-5-sonnet") || lower.contains("claude-3.5-sonnet") {
         return (3.00, 15.00);
     }
 
+    // Claude 3.5 Haiku
+    if lower.contains("claude-3-5-haiku") || lower.contains("claude-3.5-haiku") {
+        return (0.80, 4.00);
+    }
+
     // Claude 3 Opus
-    if lower.contains("claude-3-opus") || lower.contains("claude-3-opus") {
+    if lower.contains("claude-3-opus") || lower.contains("claude.3-opus") {
         return (15.00, 75.00);
     }
 
     // Claude 3 Haiku
-    if lower.contains("claude-3-haiku") || lower.contains("claude-3-haiku") {
+    if lower.contains("claude-3-haiku") || lower.contains("claude.3-haiku") {
         return (0.25, 1.25);
     }
 
-    // GLM-4 family (pricing in CNY, approximate USD conversion at ~0.14)
-    if lower.contains("glm-4") {
-        // ¥0.05/千token ≈ $0.07/千token ≈ $70/M tokens (both in/out)
-        let per_m = 0.05 / 1000.0 * 1_000_000.0 * 0.14;
-        return (per_m, per_m);
+    // Claude 3 Sonnet (original)
+    if lower.contains("claude-3") {
+        return (3.00, 15.00);
     }
 
-    // Default: use GPT-4o-mini pricing as a safe fallback
+    // ---- GLM family (智谱 AI) ----------------------------------------------
+
+    // GLM-5.1: ¥0.05/千token in, ¥0.05/千token out ≈ $7.0/M tokens
+    // Source: https://open.bigmodel.cn/pricing — 2026-04
+    if lower.contains("glm-5") || lower.contains("glm5") {
+        return (7.00, 7.00);
+    }
+
+    // GLM-4-Plus: ¥0.05/千token ≈ $7.0/M tokens
+    if lower.contains("glm-4-plus") {
+        return (7.00, 7.00);
+    }
+
+    // GLM-4-Long: ¥0.001/千token ≈ $0.14/M tokens (very cheap for long context)
+    if lower.contains("glm-4-long") {
+        return (0.14, 0.14);
+    }
+
+    // GLM-4V / GLM-4V-Plus: ¥0.01/千token ≈ $1.4/M tokens
+    if lower.contains("glm-4v") {
+        return (1.40, 1.40);
+    }
+
+    // GLM-4-Air: ¥0.001/千token ≈ $0.14/M tokens
+    if lower.contains("glm-4-air") {
+        return (0.14, 0.14);
+    }
+
+    // GLM-4-Flash / FlashX: free tier, minimal cost estimate
+    if lower.contains("glm-4-flash") {
+        return (0.01, 0.01);
+    }
+
+    // GLM-4 (base) catch-all
+    if lower.contains("glm-4") || lower.contains("glm4") {
+        return (7.00, 7.00);
+    }
+
+    // ---- MiniMax family ----------------------------------------------------
+
+    // MiniMax-M1: ¥0.01/千token ≈ $1.4/M tokens
+    // Source: https://www.minimaxi.com/pricing — 2025-06
+    if lower.contains("minimax-m1") {
+        return (1.40, 1.40);
+    }
+
+    // MiniMax-M2.7: ¥0.01/千token ≈ $1.4/M tokens
+    // Source: https://www.minimaxi.com/pricing — 2026-04
+    if lower.contains("minimax-m2") {
+        return (1.40, 1.40);
+    }
+
+    // abab-7: ¥0.005/千token ≈ $0.7/M tokens
+    if lower.contains("abab-7") || lower.contains("abab7") {
+        return (0.70, 0.70);
+    }
+
+    // abab-6.5s: ¥0.002/千token ≈ $0.28/M tokens
+    if lower.contains("abab-6") || lower.contains("abab6") {
+        return (0.28, 0.28);
+    }
+
+    // ---- DeepSeek family ---------------------------------------------------
+
+    // DeepSeek-R1: $0.55 / $2.19 per million (reasoning)
+    // Source: https://platform.deepseek.com/pricing — 2025-01
+    if lower.contains("deepseek-r1") {
+        return (0.55, 2.19);
+    }
+
+    // DeepSeek-V3 / V2.5: $0.27 / $1.10 per million
+    if lower.contains("deepseek") {
+        return (0.27, 1.10);
+    }
+
+    // ---- Qwen family (通义千问) ---------------------------------------------
+
+    // Qwen-Max: ¥0.02/千token ≈ $2.8/M tokens
+    // Source: https://help.aliyun.com — 2025-01
+    if lower.contains("qwen-max") {
+        return (2.80, 2.80);
+    }
+
+    // Qwen-VL-Max: ¥0.02/千token ≈ $2.8/M tokens
+    if lower.contains("qwen-vl") {
+        return (2.80, 2.80);
+    }
+
+    // Qwen-Long: ¥0.0005/千token ≈ $0.07/M tokens
+    if lower.contains("qwen-long") {
+        return (0.07, 0.07);
+    }
+
+    // Qwen-Plus / Qwen-Turbo: ¥0.004/千token ≈ $0.56/M tokens
+    if lower.contains("qwen") {
+        return (0.56, 0.56);
+    }
+
+    // ---- Google Gemini family -----------------------------------------------
+
+    // Gemini 2.5 Pro: $1.25 / $10.00 per million
+    // Source: https://ai.google.dev/pricing — 2025-03
+    if lower.contains("gemini-2.5") || lower.contains("gemini-25") {
+        return (1.25, 10.00);
+    }
+
+    // Gemini 2.0 Pro: $1.25 / $5.00 per million
+    if lower.contains("gemini-2.0-pro") || lower.contains("gemini-20-pro") {
+        return (1.25, 5.00);
+    }
+
+    // Gemini 2.0 Flash: $0.10 / $0.40 per million
+    if lower.contains("gemini-2.0") || lower.contains("gemini-20") {
+        return (0.10, 0.40);
+    }
+
+    // Gemini 1.5 Pro: $1.25 / $5.00 per million
+    if lower.contains("gemini-1.5-pro") || lower.contains("gemini-15-pro") {
+        return (1.25, 5.00);
+    }
+
+    // Gemini 1.5 Flash: $0.075 / $0.30 per million
+    if lower.contains("gemini-1.5") || lower.contains("gemini-15") {
+        return (0.075, 0.30);
+    }
+
+    // Gemini catch-all
+    if lower.contains("gemini") {
+        return (0.10, 0.40);
+    }
+
+    // ---- Moonshot / Kimi family ---------------------------------------------
+
+    // moonshot-v1: ¥0.012/千token in, ¥0.012/千token out ≈ $1.68/M tokens
+    // Source: https://platform.moonshot.cn/pricing — 2025-01
+    if lower.contains("moonshot") || lower.contains("kimi") {
+        return (1.68, 1.68);
+    }
+
+    // ---- ERNIE / 百度文心 family --------------------------------------------
+
+    // ERNIE-4.0: ¥0.12/千token ≈ $16.8/M tokens
+    // Source: https://cloud.baidu.com — 2025-01
+    if lower.contains("ernie-4") {
+        return (16.80, 16.80);
+    }
+
+    // ERNIE-3.5: ¥0.012/千token ≈ $1.68/M tokens
+    if lower.contains("ernie-3") {
+        return (1.68, 1.68);
+    }
+
+    // ERNIE catch-all
+    if lower.contains("ernie") {
+        return (1.68, 1.68);
+    }
+
+    // ---- Default: use GPT-4o-mini pricing as a safe fallback ---------------
     (0.15, 0.60)
 }
 
@@ -217,6 +442,87 @@ mod tests {
         assert!(
             (cost - 0.75).abs() < 0.01,
             "expected ~0.75, got {cost}"
+        );
+    }
+
+    #[test]
+    fn estimate_cost_deepseek_v3() {
+        let cost = estimate_cost("deepseek-v3", 1_000_000, 1_000_000);
+        assert!(
+            (cost - 1.37).abs() < 0.01,
+            "expected ~1.37, got {cost}"
+        );
+    }
+
+    #[test]
+    fn estimate_cost_deepseek_r1() {
+        let cost = estimate_cost("deepseek-r1", 1_000_000, 1_000_000);
+        assert!(
+            (cost - 2.74).abs() < 0.01,
+            "expected ~2.74, got {cost}"
+        );
+    }
+
+    #[test]
+    fn estimate_cost_gemini_flash() {
+        let cost = estimate_cost("gemini-2.0-flash", 1_000_000, 1_000_000);
+        assert!(
+            (cost - 0.50).abs() < 0.01,
+            "expected ~0.50, got {cost}"
+        );
+    }
+
+    #[test]
+    fn estimate_cost_moonshot() {
+        let cost = estimate_cost("moonshot-v1-128k", 1_000_000, 1_000_000);
+        assert!(
+            (cost - 3.36).abs() < 0.01,
+            "expected ~3.36, got {cost}"
+        );
+    }
+
+    #[test]
+    fn estimate_cost_minimax_m1() {
+        let cost = estimate_cost("minimax-m1", 1_000_000, 1_000_000);
+        assert!(
+            (cost - 2.80).abs() < 0.01,
+            "expected ~2.80, got {cost}"
+        );
+    }
+
+    #[test]
+    fn estimate_cost_glm5() {
+        let cost = estimate_cost("glm-5.1", 1_000_000, 1_000_000);
+        assert!(
+            (cost - 14.00).abs() < 0.01,
+            "expected ~14.00, got {cost}"
+        );
+    }
+
+    #[test]
+    fn estimate_cost_ernie_4() {
+        let cost = estimate_cost("ernie-4.0-8k", 1_000_000, 1_000_000);
+        assert!(
+            (cost - 33.60).abs() < 0.01,
+            "expected ~33.60, got {cost}"
+        );
+    }
+
+    #[test]
+    fn estimate_cost_o3() {
+        let cost = estimate_cost("o3", 1_000_000, 1_000_000);
+        assert!(
+            (cost - 10.00).abs() < 0.01,
+            "expected ~10.00, got {cost}"
+        );
+    }
+
+    #[test]
+    fn estimate_cost_o4_mini() {
+        let cost = estimate_cost("o4-mini", 1_000_000, 1_000_000);
+        assert!(
+            (cost - 5.50).abs() < 0.01,
+            "expected ~5.50, got {cost}"
         );
     }
 
