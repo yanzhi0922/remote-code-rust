@@ -52,7 +52,7 @@ The `remote-code` process owns:
 - plugin discovery and runtime communication
 - multi-agent task planning and parallel execution
 - context window management and auto-compaction
-- memory system (CLAUDE.md style persistence)
+- memory system (RC.md persistent memory, global/project scoped)
 - cost tracking and telemetry
 
 It does not directly embed plugin code from arbitrary JavaScript sources. External plugins are projected through child processes with a negotiated JSON-RPC protocol.
@@ -303,7 +303,7 @@ When context approaches the window limit:
 
 ## Memory System Architecture
 
-`rc-session` implements CLAUDE.md style persistent memory:
+`rc-session` implements RC.md persistent memory:
 
 - `memory_read` — load memories from the memory store
 - `memory_write` — persist observations and facts

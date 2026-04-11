@@ -67,7 +67,7 @@ Deliverables:
 - ✅ context window management with auto-compaction
 - ✅ Anthropic API cache optimization
 - ✅ cost tracking per model
-- ✅ memory system (CLAUDE.md style persistence)
+- ✅ memory system (RC.md persistent memory, global/project scoped)
 - ✅ streaming tool execution with callbacks
 - ✅ interactive TUI with Vim mode and slash commands
 - ✅ full conversation loop (provider → tool → provider)
@@ -112,7 +112,7 @@ Deliverables:
 - ✅ provider failover and routing policy
 - ✅ fine-grained permission rules with wildcard matching
 - ✅ cost tracking and telemetry per model
-- ✅ memory system with persistent CLAUDE.md style storage
+- ✅ memory system with persistent RC.md storage (global/project scoped)
 - ✅ multi-agent parallel execution
 - ✅ BM25 tool search engine
 - ✅ lazy tool loading

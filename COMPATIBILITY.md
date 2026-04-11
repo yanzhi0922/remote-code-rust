@@ -347,7 +347,7 @@ New capability for monitoring AI spending:
 
 New capability for persistent memory:
 
-- CLAUDE.md style memory persistence ✅
+- RC.md persistent memory (global/project scoped) ✅
 - `memory_read` / `memory_write` tools ✅
 - Per-project memory scoping ✅
 - Automatic memory loading on session start ✅

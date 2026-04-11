@@ -546,7 +546,8 @@ impl Default for PermissionCache {
 
 /// Load permission rules from a settings JSON structure.
 ///
-/// Expects a format compatible with upstream `.claude/settings.json`:
+/// Expects a format compatible with `.remote-code-rust/settings.json`
+/// (also compatible with upstream `.claude/settings.json` format):
 /// ```json
 /// {
 ///   "permissions": {

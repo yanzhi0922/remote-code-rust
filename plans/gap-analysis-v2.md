@@ -48,7 +48,7 @@
 | 沙箱 | `rc-tools::sandbox` | ~177 行 | ⚠️ 基础 | 环境过滤 + 超时 + 工作目录 |
 | 权限系统 | `rc-permissions` | ~438 行 | ✅ 可用 | 5 模式 + 规则引擎 + 通配符 |
 | 会话管理 | `rc-session` | ~580 行 | ✅ 成熟 | SQLite + NDJSON + 导出/恢复 |
-| 记忆系统 | `rc-session::memory` | ~207 行 | ✅ 可用 | CLAUDE.md 全局/项目双作用域 |
+| 记忆系统 | `rc-session::memory` | ~207 行 | ✅ 可用 | RC.md 全局/项目双作用域 |
 | 多代理 | `rc-agents` | ~1,018 行 | ✅ 可用 | 调度器 + 邮箱 + 预算 + 团队 |
 | MCP | `rc-mcp` | ~1,424 行 | ✅ 成熟 | stdio/HTTP/WebSocket 三传输 |
 | Skills | `rc-skills` | — | ✅ 可用 | SKILL.md 发现 + TOML 解析 |
@@ -688,7 +688,7 @@ graph TB
         A3["完整流式 SSE"]
         A4["上下文管理 + 自动压缩"]
         A5["成本追踪"]
-        A6["记忆系统 (CLAUDE.md)"]
+        A6["记忆系统 (RC.md)"]
         A7["多代理调度器"]
         A8["MCP 三传输"]
         A9["插件系统"]

@@ -1,8 +1,8 @@
-//! CLAUDE.md-style memory system.
+//! RC.md persistent memory system.
 //!
 //! Provides persistent memory across sessions via Markdown files:
-//! - **Global memory**: `~/.remote-code-rust/CLAUDE.md`
-//! - **Project memory**: `<project>/.remote-code-rust/CLAUDE.md`
+//! - **Global memory**: `~/.remote-code-rust/RC.md`
+//! - **Project memory**: `<project>/.remote-code-rust/RC.md`
 
 use std::fs;
 use std::io::Write as IoWrite;
@@ -10,15 +10,15 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-const MEMORY_FILENAME: &str = "CLAUDE.md";
+const MEMORY_FILENAME: &str = "RC.md";
 const PROFILE_DIR: &str = ".remote-code-rust";
 
 /// Manages persistent memory files (global and project-scoped).
 #[derive(Debug, Clone)]
 pub struct MemoryManager {
-    /// Global memory path (`~/.remote-code-rust/CLAUDE.md`).
+    /// Global memory path (`~/.remote-code-rust/RC.md`).
     global_path: PathBuf,
-    /// Project memory path (`<project>/.remote-code-rust/CLAUDE.md`).
+    /// Project memory path (`<project>/.remote-code-rust/RC.md`).
     project_path: Option<PathBuf>,
 }
 

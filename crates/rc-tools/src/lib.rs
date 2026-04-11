@@ -612,7 +612,7 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
             name: "memory_read".to_owned(),
             protocol_name: "MemoryRead".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "Read persistent memory (CLAUDE.md style) from global and/or project scope.".to_owned(),
+            description: "Read persistent memory (RC.md) from global and/or project scope.".to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -626,7 +626,7 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
             name: "memory_write".to_owned(),
             protocol_name: "MemoryWrite".to_owned(),
             permission_tool_name: "Edit".to_owned(),
-            description: "Write or append to persistent memory (CLAUDE.md style) in global or project scope.".to_owned(),
+            description: "Write or append to persistent memory (RC.md) in global or project scope.".to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
