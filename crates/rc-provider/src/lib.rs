@@ -3,6 +3,12 @@
 //! Supports OpenAI, Anthropic, Amazon Bedrock, and Google Vertex AI protocols.
 //! Handles message conversion, response parsing, exponential back-off retries,
 //! and mock-mode responses for testing.
+//!
+//! # Error classification
+//!
+//! The [`ProviderError`] enum provides structured error classification matching
+//! upstream Claude Code's `categorizeRetryableAPIError`. Each variant carries
+//! enough context for the caller to decide whether to retry, compact, or abort.
 
 pub mod context;
 pub mod cost;
@@ -639,6 +645,145 @@ fn add_stable_cache_control(body: &mut Value, is_resume: bool) {
     let _ = is_resume;
 }
 
+// ---------------------------------------------------------------------------
+// Structured error classification
+// ---------------------------------------------------------------------------
+
+/// Structured provider error with classification for retry/recovery decisions.
+///
+/// Matches upstream Claude Code's `categorizeRetryableAPIError` logic.
+#[derive(Debug, Clone)]
+pub struct ProviderError {
+    /// Error category.
+    pub category: ErrorCategory,
+    /// HTTP status code (if applicable).
+    pub status_code: Option<u16>,
+    /// Human-readable error message.
+    pub message: String,
+    /// Provider name that produced the error.
+    pub provider_name: String,
+    /// Suggested recovery action.
+    pub recovery: RecoveryAction,
+}
+
+/// Classification of provider errors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorCategory {
+    /// Rate limit exceeded (429).
+    RateLimit,
+    /// Authentication failure (401/403).
+    Authentication,
+    /// Request too large / prompt too long (400/413).
+    PromptTooLong,
+    /// Model not found or unavailable (404).
+    ModelNotFound,
+    /// Server error (5xx).
+    ServerError,
+    /// Network / connectivity error.
+    Network,
+    /// Timeout.
+    Timeout,
+    /// Streaming interrupted.
+    StreamInterrupted,
+    /// Invalid request format.
+    InvalidRequest,
+    /// Quota / billing exceeded (402).
+    QuotaExceeded,
+    /// Unknown / unclassified error.
+    Unknown,
+}
+
+/// Suggested recovery action for a provider error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryAction {
+    /// Retry with exponential backoff.
+    Retry,
+    /// Retry after compacting the conversation.
+    CompactAndRetry,
+    /// Failover to a different provider.
+    Failover,
+    /// Abort the operation.
+    Abort,
+    /// Ask the user to fix configuration.
+    FixConfig,
+}
+
+/// Classify an HTTP status code and error message into a structured error.
+#[must_use]
+pub fn classify_provider_error(
+    status_code: u16,
+    message: &str,
+    provider_name: &str,
+) -> ProviderError {
+    let (category, recovery) = match status_code {
+        429 => (ErrorCategory::RateLimit, RecoveryAction::Retry),
+        401 | 403 => (ErrorCategory::Authentication, RecoveryAction::FixConfig),
+        402 => (ErrorCategory::QuotaExceeded, RecoveryAction::Failover),
+        404 => (ErrorCategory::ModelNotFound, RecoveryAction::FixConfig),
+        413 => (ErrorCategory::PromptTooLong, RecoveryAction::CompactAndRetry),
+        400 => {
+            // Check if it's a prompt-too-long error disguised as 400.
+            if message.contains("prompt is too long")
+                || message.contains("context_length_exceeded")
+                || message.contains("maximum context length")
+            {
+                (ErrorCategory::PromptTooLong, RecoveryAction::CompactAndRetry)
+            } else {
+                (ErrorCategory::InvalidRequest, RecoveryAction::Abort)
+            }
+        }
+        500 | 502 | 503 | 504 => (ErrorCategory::ServerError, RecoveryAction::Retry),
+        _ => (ErrorCategory::Unknown, RecoveryAction::Retry),
+    };
+
+    ProviderError {
+        category,
+        status_code: Some(status_code),
+        message: message.to_owned(),
+        provider_name: provider_name.to_owned(),
+        recovery,
+    }
+}
+
+/// Classify a network/transport error.
+#[must_use]
+pub fn classify_network_error(error: &str, provider_name: &str) -> ProviderError {
+    let (category, recovery) = if error.contains("timed out") || error.contains("timeout") {
+        (ErrorCategory::Timeout, RecoveryAction::Retry)
+    } else if error.contains("connection refused") || error.contains("couldn't connect") {
+        (ErrorCategory::Network, RecoveryAction::Retry)
+    } else if error.contains("tls") || error.contains("certificate") || error.contains("ssl") {
+        (ErrorCategory::Network, RecoveryAction::FixConfig)
+    } else if error.contains("dns") || error.contains("resolve") {
+        (ErrorCategory::Network, RecoveryAction::FixConfig)
+    } else {
+        (ErrorCategory::Network, RecoveryAction::Retry)
+    };
+
+    ProviderError {
+        category,
+        status_code: None,
+        message: error.to_owned(),
+        provider_name: provider_name.to_owned(),
+        recovery,
+    }
+}
+
+/// Check if an error is retryable.
+#[must_use]
+pub fn is_retryable(error: &ProviderError) -> bool {
+    matches!(
+        error.recovery,
+        RecoveryAction::Retry | RecoveryAction::CompactAndRetry | RecoveryAction::Failover
+    )
+}
+
+/// Check if an error indicates the prompt is too long.
+#[must_use]
+pub fn is_prompt_too_long(error: &ProviderError) -> bool {
+    error.category == ErrorCategory::PromptTooLong
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -795,5 +940,98 @@ mod tests {
         server.abort();
         assert!(error.to_string().contains("401"));
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    // ── Error classification tests ────────────────────────────────────
+
+    #[test]
+    fn classify_429_as_rate_limit() {
+        let err = super::classify_provider_error(429, "rate limited", "test-provider");
+        assert_eq!(err.category, super::ErrorCategory::RateLimit);
+        assert_eq!(err.recovery, super::RecoveryAction::Retry);
+        assert!(super::is_retryable(&err));
+    }
+
+    #[test]
+    fn classify_401_as_authentication() {
+        let err = super::classify_provider_error(401, "invalid api key", "test-provider");
+        assert_eq!(err.category, super::ErrorCategory::Authentication);
+        assert_eq!(err.recovery, super::RecoveryAction::FixConfig);
+        assert!(!super::is_retryable(&err));
+    }
+
+    #[test]
+    fn classify_400_prompt_too_long() {
+        let err = super::classify_provider_error(
+            400,
+            "prompt is too long: maximum context length exceeded",
+            "test-provider",
+        );
+        assert_eq!(err.category, super::ErrorCategory::PromptTooLong);
+        assert_eq!(err.recovery, super::RecoveryAction::CompactAndRetry);
+        assert!(super::is_prompt_too_long(&err));
+        assert!(super::is_retryable(&err));
+    }
+
+    #[test]
+    fn classify_400_context_length_exceeded() {
+        let err = super::classify_provider_error(
+            400,
+            "context_length_exceeded",
+            "test-provider",
+        );
+        assert_eq!(err.category, super::ErrorCategory::PromptTooLong);
+        assert!(super::is_prompt_too_long(&err));
+    }
+
+    #[test]
+    fn classify_500_as_server_error() {
+        let err = super::classify_provider_error(500, "internal server error", "test-provider");
+        assert_eq!(err.category, super::ErrorCategory::ServerError);
+        assert_eq!(err.recovery, super::RecoveryAction::Retry);
+        assert!(super::is_retryable(&err));
+    }
+
+    #[test]
+    fn classify_503_as_server_error() {
+        let err = super::classify_provider_error(503, "service unavailable", "test-provider");
+        assert_eq!(err.category, super::ErrorCategory::ServerError);
+        assert!(super::is_retryable(&err));
+    }
+
+    #[test]
+    fn classify_404_as_model_not_found() {
+        let err = super::classify_provider_error(404, "model not found", "test-provider");
+        assert_eq!(err.category, super::ErrorCategory::ModelNotFound);
+        assert_eq!(err.recovery, super::RecoveryAction::FixConfig);
+    }
+
+    #[test]
+    fn classify_402_as_quota_exceeded() {
+        let err = super::classify_provider_error(402, "insufficient quota", "test-provider");
+        assert_eq!(err.category, super::ErrorCategory::QuotaExceeded);
+        assert_eq!(err.recovery, super::RecoveryAction::Failover);
+    }
+
+    #[test]
+    fn classify_network_timeout() {
+        let err = super::classify_network_error("connection timed out", "test-provider");
+        assert_eq!(err.category, super::ErrorCategory::Timeout);
+        assert_eq!(err.recovery, super::RecoveryAction::Retry);
+        assert!(super::is_retryable(&err));
+    }
+
+    #[test]
+    fn classify_network_dns_error() {
+        let err = super::classify_network_error("dns resolve failed", "test-provider");
+        assert_eq!(err.category, super::ErrorCategory::Network);
+        assert_eq!(err.recovery, super::RecoveryAction::FixConfig);
+    }
+
+    #[test]
+    fn classify_400_generic_as_invalid_request() {
+        let err = super::classify_provider_error(400, "invalid parameter", "test-provider");
+        assert_eq!(err.category, super::ErrorCategory::InvalidRequest);
+        assert_eq!(err.recovery, super::RecoveryAction::Abort);
     }
 }

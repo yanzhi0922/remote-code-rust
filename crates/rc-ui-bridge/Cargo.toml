@@ -1,6 +1,6 @@
 [package]
-name = "rc-telemetry"
-description = "Structured telemetry with OpenTelemetry-compatible spans and metrics"
+name = "rc-ui-bridge"
+description = "Abstract UI bridge trait for TUI, GUI, and Remote-Control frontends"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,7 +13,11 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
+uuid.workspace = true
+rc-core = { path = "../rc-core" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "time"] }

@@ -1449,6 +1449,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rc-event-bus"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "rc-mcp"
 version = "0.1.0"
 dependencies = [
@@ -1565,6 +1575,8 @@ name = "rc-telemetry"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "serde",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1608,6 +1620,19 @@ dependencies = [
  "rc-session",
  "rc-tools",
  "tokio",
+]
+
+[[package]]
+name = "rc-ui-bridge"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "rc-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

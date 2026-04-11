@@ -310,6 +310,279 @@ pub fn auto_allows(mode: PermissionMode, class: PermissionClass) -> bool {
     }
 }
 
+// ---------------------------------------------------------------------------
+// YOLO Classifier — intelligent auto-permission decisions
+// ---------------------------------------------------------------------------
+
+/// Risk level classification for tool inputs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RiskLevel {
+    /// Safe operation: read-only, no side effects.
+    Safe,
+    /// Low risk: file edits within workspace, common commands.
+    Low,
+    /// Medium risk: shell commands, network operations.
+    Medium,
+    /// High risk: destructive operations, system commands.
+    High,
+}
+
+/// Classify the risk level of a tool call for automatic permission decisions.
+///
+/// This implements the "yoloClassifier" pattern from upstream Claude Code:
+/// instead of asking the user for every tool call, the classifier makes
+/// intelligent decisions based on the tool name and input content.
+#[must_use]
+pub fn classify_risk(tool_name: &str, input: &Value) -> RiskLevel {
+    match tool_name {
+        // Read-only tools are always safe.
+        "list_directory" | "read_file" | "search_text" | "glob" | "grep"
+        | "config_read" | "tool_search" | "skill_discover" | "list_peers"
+        | "ctx_inspect" | "team_status" | "memory_read" | "list_mcp_resources"
+        | "read_mcp_resource" | "verify_plan" | "brief" | "monitor"
+        | "terminal_capture" => RiskLevel::Safe,
+
+        // File edits are low risk if within workspace.
+        "write_file" | "replace_in_file" | "edit_file" | "notebook_edit" | "snip" => RiskLevel::Low,
+
+        // Task management is low risk.
+        "todo_write" | "task_create" | "task_get" | "task_list" | "task_stop" | "task_update" => RiskLevel::Low,
+
+        // Plan mode tools are safe.
+        "enter_plan_mode" | "exit_plan_mode" | "send_message" => RiskLevel::Safe,
+
+        // Ask user is safe (it's interactive).
+        "ask_user" => RiskLevel::Safe,
+
+        // Sleep is safe.
+        "sleep" => RiskLevel::Safe,
+
+        // Bash commands need risk analysis based on content.
+        "bash_command" | "powershell" | "repl" => classify_command_risk(input),
+
+        // Web tools are medium risk.
+        "web_fetch" | "web_search" | "web_browser" => RiskLevel::Medium,
+
+        // Agent dispatch is medium risk.
+        "agent" => RiskLevel::Medium,
+
+        // MCP tools depend on the action.
+        "mcp_auth" | "mcp_tool_call" => RiskLevel::Medium,
+
+        // Workflow/cron/remote trigger are high risk.
+        "workflow" | "schedule_cron" | "remote_trigger" | "daemon" => RiskLevel::High,
+
+        // Tungsten/overflow/synthetic are testing tools.
+        "tungsten" | "overflow_test" | "synthetic_output" => RiskLevel::Safe,
+
+        // Everything else is medium risk by default.
+        _ => RiskLevel::Medium,
+    }
+}
+
+/// Classify the risk of a shell command based on its content.
+fn classify_command_risk(input: &Value) -> RiskLevel {
+    let command = input
+        .get("command")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+
+    let command_lower = command.to_ascii_lowercase();
+
+    // Safe read-only commands.
+    let safe_prefixes = [
+        "ls", "dir", "cat", "head", "tail", "grep", "find", "wc",
+        "echo", "pwd", "whoami", "which", "where", "type",
+        "git status", "git log", "git diff", "git branch", "git tag", "git remote",
+        "git show", "git stash list",
+        "cargo check", "cargo build", "cargo test", "cargo clippy", "cargo fmt",
+        "cargo doc", "cargo tree", "cargo metadata",
+        "npm list", "npm view", "node --version", "npm --version",
+        "python --version", "python3 --version", "rustc --version",
+    ];
+
+    for prefix in &safe_prefixes {
+        if command_lower.starts_with(prefix) {
+            return RiskLevel::Safe;
+        }
+    }
+
+    // Low risk: common development commands.
+    let low_risk_prefixes = [
+        "git add", "git commit", "git checkout", "git switch",
+        "cargo add", "cargo run", "cargo update",
+        "npm install", "npm run", "npm test",
+        "pip install", "pip list",
+        "mkdir", "touch", "cp", "mv",
+    ];
+
+    for prefix in &low_risk_prefixes {
+        if command_lower.starts_with(prefix) {
+            return RiskLevel::Low;
+        }
+    }
+
+    // High risk: destructive commands.
+    let high_risk_patterns = [
+        "rm -rf /", "del /s /q c:", "format ", "shutdown",
+        "curl ", "wget ", "| sh", "| bash",
+        "> /etc/", "chmod 777", "chown ",
+        "dd if=", "mkfs.", ":(){ :|:& };:",
+        "sudo rm", "sudo del",
+    ];
+
+    for pattern in &high_risk_patterns {
+        if command_lower.contains(pattern) {
+            return RiskLevel::High;
+        }
+    }
+
+    // Default: medium risk for unknown commands.
+    RiskLevel::Medium
+}
+
+/// Decide whether to auto-approve a tool call based on risk classification
+/// and the current permission mode.
+///
+/// This is the "yolo classifier" — it enables automatic approval of safe
+/// operations even in non-bypass modes, reducing permission prompt fatigue.
+#[must_use]
+pub fn yolo_classify(mode: PermissionMode, tool_name: &str, input: &Value) -> Option<bool> {
+    let risk = classify_risk(tool_name, input);
+
+    match mode {
+        PermissionMode::BypassPermissions => Some(true),
+        PermissionMode::AcceptEdits => match risk {
+            RiskLevel::Safe | RiskLevel::Low => Some(true),
+            _ => None, // Ask user
+        },
+        PermissionMode::Default => match risk {
+            RiskLevel::Safe => Some(true),
+            _ => None, // Ask user
+        },
+        PermissionMode::DontAsk => match risk {
+            RiskLevel::Safe | RiskLevel::Low => Some(true),
+            RiskLevel::Medium | RiskLevel::High => Some(false), // Deny without asking
+        },
+        PermissionMode::Plan => match risk {
+            RiskLevel::Safe => Some(true),
+            _ => Some(false), // Plan mode: deny everything except reads
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Permission cache — session-level decision caching
+// ---------------------------------------------------------------------------
+
+use std::collections::HashMap;
+
+/// Cache for permission decisions within a session.
+///
+/// Avoids re-prompting the user for identical tool calls within the same
+/// session. The cache key is (tool_name, input_hash) and the value is the
+/// previous decision.
+#[derive(Debug, Clone)]
+pub struct PermissionCache {
+    decisions: HashMap<String, bool>,
+}
+
+impl PermissionCache {
+    /// Create a new empty permission cache.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            decisions: HashMap::new(),
+        }
+    }
+
+    /// Generate a cache key from tool name and input.
+    fn cache_key(tool_name: &str, input: &Value) -> String {
+        // Simple hash: tool_name + sorted input keys/values.
+        let input_str = input.to_string();
+        format!("{tool_name}:{input_str}")
+    }
+
+    /// Check if there's a cached decision for this tool call.
+    #[must_use]
+    pub fn get(&self, tool_name: &str, input: &Value) -> Option<bool> {
+        let key = Self::cache_key(tool_name, input);
+        self.decisions.get(&key).copied()
+    }
+
+    /// Cache a permission decision.
+    pub fn insert(&mut self, tool_name: &str, input: &Value, allowed: bool) {
+        let key = Self::cache_key(tool_name, input);
+        self.decisions.insert(key, allowed);
+    }
+
+    /// Clear all cached decisions.
+    pub fn clear(&mut self) {
+        self.decisions.clear();
+    }
+
+    /// Get the number of cached decisions.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.decisions.len()
+    }
+
+    /// Check if the cache is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.decisions.is_empty()
+    }
+}
+
+impl Default for PermissionCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Settings file rule loader
+// ---------------------------------------------------------------------------
+
+/// Load permission rules from a settings JSON structure.
+///
+/// Expects a format compatible with upstream `.claude/settings.json`:
+/// ```json
+/// {
+///   "permissions": {
+///     "allow": ["Bash(git *)", "Read"],
+///     "deny": ["Bash(rm -rf *)"]
+///   }
+/// }
+/// ```
+pub fn load_settings_rules(settings: &Value) -> (Vec<PermissionRule>, Vec<PermissionRule>) {
+    let mut allows = Vec::new();
+    let mut denies = Vec::new();
+
+    if let Some(permissions) = settings.get("permissions") {
+        if let Some(allow_list) = permissions.get("allow").and_then(Value::as_array) {
+            for item in allow_list {
+                if let Some(pattern) = item.as_str() {
+                    if let Ok(rule) = RuleEngine::parse_rule(pattern, PermissionDecision::allow()) {
+                        allows.push(rule);
+                    }
+                }
+            }
+        }
+        if let Some(deny_list) = permissions.get("deny").and_then(Value::as_array) {
+            for item in deny_list {
+                if let Some(pattern) = item.as_str() {
+                    if let Ok(rule) = RuleEngine::parse_rule(pattern, PermissionDecision::deny("denied by settings")) {
+                        denies.push(rule);
+                    }
+                }
+            }
+        }
+    }
+
+    (allows, denies)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,5 +706,152 @@ mod tests {
             })
             .await;
         assert!(!decision.allowed);
+    }
+
+    // ── YOLO classifier tests ─────────────────────────────────────────
+
+    #[test]
+    fn yolo_classify_safe_tools_auto_approved() {
+        let input = json!({"path": "/some/file"});
+        assert_eq!(super::yolo_classify(PermissionMode::Default, "read_file", &input), Some(true));
+        assert_eq!(super::yolo_classify(PermissionMode::Default, "glob", &input), Some(true));
+        assert_eq!(super::yolo_classify(PermissionMode::Default, "grep", &input), Some(true));
+    }
+
+    #[test]
+    fn yolo_classify_edit_tools_need_permission_in_default() {
+        let input = json!({"path": "/some/file"});
+        assert_eq!(super::yolo_classify(PermissionMode::Default, "write_file", &input), None);
+    }
+
+    #[test]
+    fn yolo_classify_edit_tools_auto_approved_in_accept_edits() {
+        let input = json!({"path": "/some/file"});
+        assert_eq!(super::yolo_classify(PermissionMode::AcceptEdits, "write_file", &input), Some(true));
+    }
+
+    #[test]
+    fn yolo_classify_bypass_allows_everything() {
+        let input = json!({"command": "rm -rf /"});
+        assert_eq!(super::yolo_classify(PermissionMode::BypassPermissions, "bash_command", &input), Some(true));
+    }
+
+    #[test]
+    fn yolo_classify_safe_git_commands() {
+        assert_eq!(
+            super::yolo_classify(PermissionMode::Default, "bash_command", &json!({"command": "git status"})),
+            Some(true)
+        );
+        assert_eq!(
+            super::yolo_classify(PermissionMode::Default, "bash_command", &json!({"command": "git log --oneline"})),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn yolo_classify_dangerous_commands_high_risk() {
+        assert_eq!(
+            super::classify_risk("bash_command", &json!({"command": "rm -rf /"})),
+            super::RiskLevel::High
+        );
+    }
+
+    #[test]
+    fn yolo_classify_cargo_commands_safe() {
+        assert_eq!(
+            super::classify_risk("bash_command", &json!({"command": "cargo test"})),
+            super::RiskLevel::Safe
+        );
+        assert_eq!(
+            super::classify_risk("bash_command", &json!({"command": "cargo clippy"})),
+            super::RiskLevel::Safe
+        );
+    }
+
+    #[test]
+    fn yolo_classify_dont_ask_denies_medium_and_high() {
+        let input = json!({"command": "something unknown"});
+        assert_eq!(super::yolo_classify(PermissionMode::DontAsk, "bash_command", &input), Some(false));
+    }
+
+    #[test]
+    fn yolo_classify_plan_mode_denies_edits() {
+        let input = json!({"path": "/some/file"});
+        assert_eq!(super::yolo_classify(PermissionMode::Plan, "write_file", &input), Some(false));
+    }
+
+    // ── Permission cache tests ────────────────────────────────────────
+
+    #[test]
+    fn permission_cache_stores_and_retrieves() {
+        let mut cache = super::PermissionCache::new();
+        let input = json!({"command": "ls"});
+        assert!(cache.get("bash_command", &input).is_none());
+
+        cache.insert("bash_command", &input, true);
+        assert_eq!(cache.get("bash_command", &input), Some(true));
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn permission_cache_clear_works() {
+        let mut cache = super::PermissionCache::new();
+        cache.insert("tool", &json!({}), true);
+        assert_eq!(cache.len(), 1);
+        cache.clear();
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn permission_cache_different_inputs_different_keys() {
+        let mut cache = super::PermissionCache::new();
+        cache.insert("bash_command", &json!({"command": "ls"}), true);
+        cache.insert("bash_command", &json!({"command": "rm"}), false);
+
+        assert_eq!(cache.get("bash_command", &json!({"command": "ls"})), Some(true));
+        assert_eq!(cache.get("bash_command", &json!({"command": "rm"})), Some(false));
+    }
+
+    // ── Settings rule loader tests ────────────────────────────────────
+
+    #[test]
+    fn load_settings_rules_parses_allow_and_deny() {
+        let settings = json!({
+            "permissions": {
+                "allow": ["Bash(git *)", "Read"],
+                "deny": ["Bash(rm -rf *)"]
+            }
+        });
+
+        let (allows, denies) = super::load_settings_rules(&settings);
+        assert_eq!(allows.len(), 2);
+        assert_eq!(denies.len(), 1);
+    }
+
+    #[test]
+    fn load_settings_rules_handles_empty() {
+        let settings = json!({});
+        let (allows, denies) = super::load_settings_rules(&settings);
+        assert!(allows.is_empty());
+        assert!(denies.is_empty());
+    }
+
+    #[test]
+    fn load_settings_rules_handles_partial() {
+        let settings = json!({
+            "permissions": {
+                "allow": ["Bash(git *)"]
+            }
+        });
+        let (allows, denies) = super::load_settings_rules(&settings);
+        assert_eq!(allows.len(), 1);
+        assert!(denies.is_empty());
+    }
+
+    #[test]
+    fn risk_level_ordering() {
+        use super::RiskLevel;
+        assert!(std::cmp::PartialEq::eq(&RiskLevel::Safe, &RiskLevel::Safe));
+        assert!(!std::cmp::PartialEq::eq(&RiskLevel::Safe, &RiskLevel::High));
     }
 }

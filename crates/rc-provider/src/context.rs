@@ -4,6 +4,19 @@
 //! conversation and can compact it when the budget is exceeded. Compaction
 //! preserves the system prompt, keeps the most recent turns, and replaces
 //! older turns with a short summary.
+//!
+//! # Advanced compaction strategies
+//!
+//! Three compaction strategies are available, matching upstream Claude Code:
+//!
+//! - **`compact`** — Standard compaction: preserve system prompt + recent N turns,
+//!   summarize the rest.
+//! - **`reactive_compact`** — Triggered when the provider returns a
+//!   `prompt-too-long` error. More aggressive: keeps only the last 2 turns.
+//! - **`context_collapse`** — Replaces the entire conversation (except system
+//!   prompt) with a single summary entry. Used as a last resort.
+//! - **`microcompact`** — Removes only tool outputs and truncates verbose entries
+//!   without changing conversation structure.
 
 use rc_core::{ConversationEntry, ConversationRole};
 
@@ -267,6 +280,182 @@ impl ContextWindowManager {
     #[must_use]
     pub fn truncate_tool_output_default(&self, output: &str) -> String {
         self.truncate_tool_output(output, self.tool_output_max_chars)
+    }
+
+    // ── Advanced compaction strategies ──────────────────────────────────
+
+    /// Reactive compaction: a more aggressive compaction triggered when the
+    /// provider returns a `prompt-too-long` error.
+    ///
+    /// Compared to [`compact`](Self::compact), this keeps only the last 2
+    /// user/assistant turns (instead of `recent_turns`) and aggressively
+    /// truncates tool outputs.
+    pub fn reactive_compact(&self, conversation: &[ConversationEntry]) -> Vec<ConversationEntry> {
+        if conversation.is_empty() {
+            return Vec::new();
+        }
+
+        let system_entry = conversation
+            .iter()
+            .find(|e| matches!(e.role, ConversationRole::System))
+            .cloned();
+
+        let non_system: Vec<(usize, &ConversationEntry)> = conversation
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| !matches!(e.role, ConversationRole::System))
+            .collect();
+
+        // Keep only the last 2 turns (much more aggressive than standard).
+        let reactive_turns = 2;
+        let cutoff_idx = if non_system.len() <= reactive_turns * 2 {
+            return conversation.to_vec();
+        } else {
+            let mut user_count = 0usize;
+            let mut split_point = non_system.len();
+            for (i, entry) in non_system.iter().rev() {
+                if matches!(entry.role, ConversationRole::User) {
+                    user_count += 1;
+                    if user_count >= reactive_turns {
+                        split_point = *i;
+                        break;
+                    }
+                }
+            }
+            split_point
+        };
+
+        let mut result = Vec::new();
+        if let Some(sys) = system_entry {
+            result.push(sys);
+        }
+
+        // Generate summary for older entries.
+        let older: Vec<&ConversationEntry> =
+            non_system.iter().take(cutoff_idx).map(|(_, e)| *e).collect();
+        if !older.is_empty() {
+            let summary = build_summary(&older);
+            result.push(ConversationEntry::system(format!(
+                "[reactive-compaction] {summary}"
+            )));
+        }
+
+        // Append recent entries with aggressive tool output truncation.
+        for (_, entry) in non_system.iter().skip(cutoff_idx) {
+            let mut truncated = (*entry).clone();
+            if matches!(entry.role, ConversationRole::Tool) {
+                let truncated_text = self.truncate_tool_output(&entry.text, 2000);
+                truncated.text = truncated_text;
+            }
+            result.push(truncated);
+        }
+
+        result
+    }
+
+    /// Context collapse: replaces the entire conversation (except system prompt)
+    /// with a single summary entry. This is the last-resort compaction strategy.
+    ///
+    /// Use when even `reactive_compact` doesn't free enough tokens.
+    pub fn context_collapse(&self, conversation: &[ConversationEntry]) -> Vec<ConversationEntry> {
+        if conversation.is_empty() {
+            return Vec::new();
+        }
+
+        let system_entry = conversation
+            .iter()
+            .find(|e| matches!(e.role, ConversationRole::System))
+            .cloned();
+
+        // Summarize everything except the system prompt.
+        let non_system: Vec<&ConversationEntry> = conversation
+            .iter()
+            .filter(|e| !matches!(e.role, ConversationRole::System))
+            .collect();
+
+        let mut result = Vec::new();
+        if let Some(sys) = system_entry {
+            result.push(sys);
+        }
+
+        if !non_system.is_empty() {
+            let summary = build_summary(&non_system);
+            result.push(ConversationEntry::system(format!(
+                "[context-collapse] Full conversation summary:\n{summary}"
+            )));
+            // Keep only the very last user message if available.
+            if let Some(last_user) = non_system.iter().rev().find(|e| matches!(e.role, ConversationRole::User)) {
+                result.push((*last_user).clone());
+            }
+        }
+
+        result
+    }
+
+    /// Microcompact: removes tool outputs and truncates verbose entries
+    /// without changing the conversation structure.
+    ///
+    /// This is the least disruptive strategy — it keeps all turns but shrinks
+    /// large tool outputs and truncates long assistant messages.
+    pub fn microcompact(&self, conversation: &[ConversationEntry]) -> Vec<ConversationEntry> {
+        conversation
+            .iter()
+            .map(|entry| {
+                let mut compacted = entry.clone();
+                match entry.role {
+                    ConversationRole::Tool => {
+                        // Truncate tool outputs to a shorter limit.
+                        if entry.text.chars().count() > 2000 {
+                            compacted.text = self.truncate_tool_output(&entry.text, 2000);
+                        }
+                    }
+                    ConversationRole::Assistant => {
+                        // Truncate very long assistant messages.
+                        if entry.text.chars().count() > 5000 {
+                            let truncated: String = entry.text.chars().take(5000).collect();
+                            compacted.text = format!(
+                                "{truncated}\n\n[... microcompact: truncated from {} chars]",
+                                entry.text.chars().count()
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+                compacted
+            })
+            .collect()
+    }
+
+    /// Select the best compaction strategy based on current usage.
+    ///
+    /// Returns the compacted conversation using the least disruptive strategy
+    /// that will bring usage below the threshold.
+    pub fn auto_compact(&self, conversation: &[ConversationEntry]) -> Vec<ConversationEntry> {
+        let ratio = self.usage_ratio(conversation);
+
+        if ratio < self.compaction_threshold {
+            // No compaction needed.
+            return conversation.to_vec();
+        }
+
+        // Try strategies from least to most disruptive.
+        let micro = self.microcompact(conversation);
+        if self.usage_ratio(&micro) < self.compaction_threshold {
+            return micro;
+        }
+
+        let standard = self.compact(conversation);
+        if self.usage_ratio(&standard) < self.compaction_threshold {
+            return standard;
+        }
+
+        let reactive = self.reactive_compact(conversation);
+        if self.usage_ratio(&reactive) < self.compaction_threshold {
+            return reactive;
+        }
+
+        // Last resort: full context collapse.
+        self.context_collapse(conversation)
     }
 }
 
