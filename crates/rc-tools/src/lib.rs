@@ -2650,6 +2650,10 @@ async fn powershell_tool(input: &Value, context: &ToolExecutionContext) -> Resul
         .and_then(Value::as_u64)
         .unwrap_or(context.timeout_ms)
         .clamp(1_000, 600_000);
+    let working_dir = input["cwd"]
+        .as_str()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| context.cwd.clone());
 
     if !cfg!(windows) {
         return Ok(
@@ -2657,13 +2661,27 @@ async fn powershell_tool(input: &Value, context: &ToolExecutionContext) -> Resul
         );
     }
 
-    let mut process = Command::new("powershell");
-    process.args(["-NoProfile", "-Command", command]);
-    process.current_dir(&context.cwd);
+    // Try pwsh (PowerShell 7+) first, then fall back to powershell (5.1).
+    let pwsh_path = which_powershell();
+    let mut process = Command::new(&pwsh_path);
+    process.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        command,
+    ]);
+    process.current_dir(&working_dir);
     process.stdout(Stdio::piped());
     process.stderr(Stdio::piped());
 
-    let mut child = process.spawn().context("failed to spawn powershell")?;
+    // Set UTF-8 output encoding for proper character handling.
+    process.env("PS_OUTPUT_ENCODING", "utf8");
+
+    let mut child = process
+        .spawn()
+        .with_context(|| format!("failed to spawn {pwsh_path}"))?;
     let future = async {
         let mut stdout = String::new();
         let mut stderr = String::new();
@@ -2674,13 +2692,14 @@ async fn powershell_tool(input: &Value, context: &ToolExecutionContext) -> Resul
             let _ = stream.read_to_string(&mut stderr).await;
         }
         let status = child.wait().await?;
-        Ok::<_, anyhow::Error>((status.success(), stdout, stderr))
+        Ok::<_, anyhow::Error>((status.code(), stdout, stderr))
     };
-    let (success, stdout, stderr) =
+    let (exit_code, stdout, stderr) =
         tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), future)
             .await
             .map_err(|_| anyhow!("powershell timed out after {timeout_ms}ms"))??;
 
+    let success = exit_code.unwrap_or(1) == 0;
     let mut parts = Vec::new();
     if !stdout.trim().is_empty() {
         parts.push(format!("stdout:\n{}", stdout.trim_end()));
@@ -2689,13 +2708,34 @@ async fn powershell_tool(input: &Value, context: &ToolExecutionContext) -> Resul
         parts.push(format!("stderr:\n{}", stderr.trim_end()));
     }
     if !success {
-        parts.push("exit_status: failed".to_owned());
+        parts.push(format!("exit_status: {} (failed)", exit_code.unwrap_or(-1)));
     }
     Ok(if parts.is_empty() {
         "command completed with no output".to_owned()
     } else {
         parts.join("\n\n")
     })
+}
+
+/// Find the best available PowerShell executable.
+///
+/// Prefers `pwsh` (PowerShell 7+, cross-platform) over `powershell`
+/// (Windows PowerShell 5.1) for better compatibility and features.
+fn which_powershell() -> String {
+    // Try pwsh first (PowerShell 7+).
+    let pwsh_candidates = ["pwsh", "pwsh.exe"];
+    for candidate in &pwsh_candidates {
+        if let Ok(output) = std::process::Command::new(candidate)
+            .arg("-Version")
+            .output()
+        {
+            if output.status.success() {
+                return candidate.to_string();
+            }
+        }
+    }
+    // Fall back to Windows PowerShell.
+    "powershell".to_string()
 }
 
 async fn repl_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
