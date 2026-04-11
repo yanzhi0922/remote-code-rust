@@ -85,6 +85,52 @@ impl ProviderClient {
         }
     }
 
+    /// Complete a conversation with automatic context compaction on context_length_exceeded errors.
+    ///
+    /// This implements the "reactiveCompact" pattern: if the API returns a 400 error
+    /// indicating the context is too long, the conversation is automatically compacted
+    /// and the request is retried (up to `max_retries` times).
+    pub async fn complete_with_auto_compact(
+        &self,
+        provider: &ProviderConfig,
+        conversation: &[ConversationEntry],
+        context_manager: &context::ContextWindowManager,
+    ) -> Result<ProviderResponse> {
+        let mut current = conversation.to_vec();
+        let max_retries = 3;
+
+        for attempt in 0..=max_retries {
+            match self.complete(provider, &current).await {
+                Ok(response) => return Ok(response),
+                Err(error) => {
+                    let error_str = error.to_string().to_ascii_lowercase();
+                    let is_context_too_long = error_str.contains("context_length_exceeded")
+                        || error_str.contains("prompt_too_long")
+                        || error_str.contains("too many tokens")
+                        || error_str.contains("maximum context length")
+                        || error_str.contains("reduce the length");
+
+                    if !is_context_too_long || attempt >= max_retries {
+                        return Err(error);
+                    }
+
+                    // Try to compact the conversation.
+                    match context_manager.compact_on_error(&current) {
+                        Some(compacted) => {
+                            current = compacted;
+                        }
+                        None => {
+                            return Err(error);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Should not reach here, but just in case.
+        self.complete(provider, &current).await
+    }
+
     async fn complete_openai(
         &self,
         provider: &ProviderConfig,

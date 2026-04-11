@@ -457,6 +457,35 @@ impl ContextWindowManager {
         // Last resort: full context collapse.
         self.context_collapse(conversation)
     }
+
+    /// Compact the conversation in response to an API error (e.g. context_length_exceeded).
+    ///
+    /// This is the "reactiveCompact" pattern from upstream: when the API rejects a request
+    /// because the context is too long, this method aggressively compacts and returns a
+    /// shorter conversation that should fit within the model's context window.
+    ///
+    /// Returns `Some(compacted)` if compaction was performed, `None` if the conversation
+    /// is already too short to compact further.
+    pub fn compact_on_error(&self, conversation: &[ConversationEntry]) -> Option<Vec<ConversationEntry>> {
+        if conversation.len() <= 3 {
+            // Can't compact further — system + 1 user + 1 assistant is the minimum.
+            return None;
+        }
+
+        // Try progressive compaction strategies, most aggressive first since we already
+        // know the context is too long (the API told us).
+        let reactive = self.reactive_compact(conversation);
+        if reactive.len() < conversation.len() {
+            return Some(reactive);
+        }
+
+        let collapsed = self.context_collapse(conversation);
+        if collapsed.len() < conversation.len() {
+            return Some(collapsed);
+        }
+
+        None
+    }
 }
 
 impl Default for ContextWindowManager {
