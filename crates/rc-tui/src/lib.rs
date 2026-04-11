@@ -624,7 +624,8 @@ async fn run_conversation_turn(
         }
 
         for tool_call in &response.tool_calls {
-            println!("  [tool] {} ...", tool_call.name);
+            let tool_start = std::time::Instant::now();
+            println!("  ⏳ [tool] {} — running...", tool_call.name);
 
             // Capture tool execution errors as error tool results instead of
             // propagating, to keep conversation state consistent for the next
@@ -632,13 +633,25 @@ async fn run_conversation_turn(
             let tool_result = match execute_tool_call(tool_call, &tool_context, broker).await {
                 Ok(result) => result,
                 Err(error) => {
-                    eprintln!("  [tool] {} — execution error: {error}", tool_call.name);
+                    let elapsed = tool_start.elapsed();
+                    eprintln!(
+                        "  ✗ [tool] {} — error ({:.1}s): {error}",
+                        tool_call.name,
+                        elapsed.as_secs_f64()
+                    );
                     rc_core::ToolResult {
                         content: format!("Tool execution error: {error}"),
                         is_error: true,
                     }
                 }
             };
+            let elapsed = tool_start.elapsed();
+            let status = if tool_result.is_error { "✗" } else { "✓" };
+            println!(
+                "  {status} [tool] {} — done ({:.1}s)",
+                tool_call.name,
+                elapsed.as_secs_f64()
+            );
 
             // Truncate tool output for context management
             let truncated_output = context_manager.truncate_tool_output_default(&tool_result.content);

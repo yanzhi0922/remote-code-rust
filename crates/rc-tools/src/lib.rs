@@ -529,6 +529,22 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
                 "additionalProperties": false,
             }),
         },
+        ToolSpec {
+            name: "skill_execute".to_owned(),
+            protocol_name: "ExecuteSkill".to_owned(),
+            permission_tool_name: "ExecuteSkill".to_owned(),
+            description: "Load and return the instructions of a specific skill by slug. The skill content is injected into the conversation context for the agent to follow.".to_owned(),
+            requires_permission: false,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "slug": {"type": "string", "description": "The skill slug to load"},
+                    "arguments": {"type": "object", "description": "Optional arguments to pass to the skill"}
+                },
+                "required": ["slug"],
+                "additionalProperties": false,
+            }),
+        },
         // ── Send message tool ──────────────────────────────────────────────
         ToolSpec {
             name: "send_message".to_owned(),
@@ -1002,6 +1018,23 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "mcp_call".to_owned(),
+            protocol_name: "McpCall".to_owned(),
+            permission_tool_name: "McpCall".to_owned(),
+            description: "Call a tool on an MCP server directly. Loads the MCP config, connects to the specified server, and invokes the named tool with the given arguments.".to_owned(),
+            requires_permission: true,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "server": {"type": "string", "description": "MCP server name as defined in the MCP config"},
+                    "tool": {"type": "string", "description": "Name of the tool to call on the MCP server"},
+                    "arguments": {"type": "object", "description": "Arguments to pass to the MCP tool"}
+                },
+                "required": ["server", "tool"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
             name: "list_mcp_resources".to_owned(),
             protocol_name: "ListMcpResources".to_owned(),
             permission_tool_name: "Read".to_owned(),
@@ -1256,8 +1289,10 @@ pub async fn execute_tool_call(
         "overflow_test" => overflow_test_tool(&call.input),
         "synthetic_output" => synthetic_output_tool(&call.input),
         "mcp_auth" => mcp_auth_tool(&call.input, context),
+        "mcp_call" => mcp_call_tool(&call.input, context).await,
         "list_mcp_resources" => list_mcp_resources_tool(&call.input),
         "read_mcp_resource" => read_mcp_resource_tool(&call.input),
+        "skill_execute" => skill_execute_tool(&call.input, context),
         "voice_input" => voice_input_tool(&call.input),
         "daemon" => daemon_tool(&call.input, context),
         _ => Err(anyhow!("unsupported tool {}", spec.name)),
@@ -3391,6 +3426,128 @@ fn read_mcp_resource_tool(input: &Value) -> Result<String> {
         "message": "MCP resource reading requires an active MCP connection. No content available in current context."
     })
     .to_string())
+}
+
+/// Call a tool on an MCP server directly.
+///
+/// Loads the MCP configuration, finds the specified server, connects via
+/// stdio transport, and invokes the named tool with the provided arguments.
+async fn mcp_call_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
+    let server_name = input["server"]
+        .as_str()
+        .ok_or_else(|| anyhow!("server is required"))?;
+    let tool_name = input["tool"]
+        .as_str()
+        .ok_or_else(|| anyhow!("tool is required"))?;
+    let arguments = input.get("arguments").cloned().unwrap_or(json!({}));
+
+    // Discover MCP config files in the workspace.
+    let config_candidates = [
+        context.cwd.join(".mcp.json"),
+        context.cwd.join(".remote-code-rust").join("mcp.json"),
+    ];
+
+    let mut server_config: Option<rc_mcp::McpServerConfig> = None;
+    for candidate in &config_candidates {
+        if candidate.exists() {
+            if let Ok(config) = rc_mcp::McpConfig::load(candidate) {
+                if let Some(srv) = config.servers.get(server_name) {
+                    server_config = Some(srv.clone());
+                    break;
+                }
+            }
+        }
+    }
+
+    let server = server_config.ok_or_else(|| {
+        anyhow!(
+            "MCP server '{server_name}' not found. Checked: {}",
+            config_candidates
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })?;
+
+    let client_info = rc_mcp::McpClientInfo::new("remote-code-rust", env!("CARGO_PKG_VERSION"));
+    let response = rc_mcp::call_tool(&server, &client_info, tool_name, arguments).await?;
+
+    let mut parts = Vec::new();
+    parts.push(format!("server:  {}", response.server_name));
+    parts.push(format!("tool:    {}", response.tool_name));
+    parts.push(format!("success: {}", !response.result.is_error));
+
+    if !response.result.content.is_empty() {
+        let content_text: Vec<String> = response
+            .result
+            .content
+            .iter()
+            .filter_map(|c| {
+                if c.kind == "text" {
+                    c.fields.get("text").and_then(|v| v.as_str()).map(String::from)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if !content_text.is_empty() {
+            parts.push(format!("output:\n{}", content_text.join("\n")));
+        }
+    }
+
+    Ok(parts.join("\n"))
+}
+
+/// Load and return a skill's instructions by slug.
+///
+/// Searches the workspace skill directories for a matching skill and returns
+/// its full content (instructions) for the agent to follow.
+fn skill_execute_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
+    let slug = input["slug"]
+        .as_str()
+        .ok_or_else(|| anyhow!("slug is required"))?;
+    let arguments = input.get("arguments").cloned().unwrap_or(json!({}));
+
+    let search_dirs = [
+        context.cwd.join(".roo"),
+        context.cwd.join(".remote-code-rust"),
+        context.cwd.clone(),
+    ];
+
+    for dir in &search_dirs {
+        if !dir.exists() {
+            continue;
+        }
+        if let Ok(skills) = rc_skills::discover_skills(dir) {
+            for skill in skills {
+                if skill.metadata.slug == slug {
+                    let summary = skill.metadata.summary.as_deref().unwrap_or("(no summary)");
+                    let mut output = format!(
+                        "# Skill: {} ({})\n\n{}\n\n",
+                        skill.metadata.title,
+                        skill.metadata.slug,
+                        summary
+                    );
+                    if !skill.instructions.is_empty() {
+                        output.push_str(&skill.instructions);
+                    }
+                    if !arguments.is_null() && !arguments.as_object().map_or(true, |o| o.is_empty())
+                    {
+                        output.push_str(&format!(
+                            "\n\n## Arguments\n```json\n{}\n```",
+                            serde_json::to_string_pretty(&arguments)?
+                        ));
+                    }
+                    return Ok(output);
+                }
+            }
+        }
+    }
+
+    Err(anyhow!(
+        "Skill '{slug}' not found. Use skill_discover to list available skills."
+    ))
 }
 
 fn voice_input_tool(input: &Value) -> Result<String> {
