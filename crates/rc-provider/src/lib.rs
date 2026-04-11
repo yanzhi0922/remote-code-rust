@@ -14,6 +14,7 @@ pub mod context;
 pub mod cost;
 pub mod failover;
 pub mod model_info;
+pub mod sigv4;
 pub mod streaming;
 
 pub use streaming::StreamingCallbacks;
@@ -72,16 +73,8 @@ impl ProviderClient {
         match provider.protocol {
             ProviderProtocol::OpenAi => self.complete_openai(provider, conversation).await,
             ProviderProtocol::Anthropic => self.complete_anthropic(provider, conversation).await,
-            ProviderProtocol::Bedrock => {
-                // Placeholder: Bedrock uses SigV4 auth which requires AWS SDK.
-                // Fall back to OpenAI-compatible endpoint format for now.
-                self.complete_openai(provider, conversation).await
-            }
-            ProviderProtocol::Vertex => {
-                // Placeholder: Vertex AI uses Google OAuth2 which requires gcloud auth.
-                // Fall back to OpenAI-compatible endpoint format for now.
-                self.complete_openai(provider, conversation).await
-            }
+            ProviderProtocol::Bedrock => self.complete_bedrock(provider, conversation).await,
+            ProviderProtocol::Vertex => self.complete_vertex(provider, conversation).await,
         }
     }
 
@@ -190,6 +183,260 @@ impl ProviderClient {
         parse_anthropic_response(response.0, response.1)
     }
 
+    /// Send a completion request to Amazon Bedrock using native SigV4 signing.
+    ///
+    /// If AWS credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) are not
+    /// available, falls back to the OpenAI-compatible path (useful for Bedrock
+    /// proxies like LiteLLM).
+    ///
+    /// Bedrock Claude models use the Anthropic Messages API format, so the
+    /// response is parsed with the Anthropic response parser.
+    async fn complete_bedrock(
+        &self,
+        provider: &ProviderConfig,
+        conversation: &[ConversationEntry],
+    ) -> Result<ProviderResponse> {
+        let credentials = match sigv4::load_aws_credentials() {
+            Some(creds) => creds,
+            None => {
+                // No AWS credentials — fall back to OpenAI-compatible proxy mode.
+                return self.complete_openai(provider, conversation).await;
+            }
+        };
+
+        let model = provider
+            .model
+            .as_deref()
+            .ok_or_else(|| anyhow!("Bedrock provider requires a model ID (e.g. anthropic.claude-sonnet-4-20250514-v1:0)"))?;
+
+        // Build Anthropic-format body for Claude models on Bedrock.
+        let (system, messages) = to_anthropic_messages(conversation);
+        let body = json!({
+            "anthropic_version": "bedrock-2023-05-31",
+            "system": system,
+            "messages": messages,
+            "tools": builtin_tool_specs()
+                .into_iter()
+                .map(|tool| tool.to_anthropic_schema())
+                .collect::<Vec<_>>(),
+            "max_tokens": provider.max_output_tokens,
+        });
+        let payload = serde_json::to_vec(&body)
+            .context("failed to serialise Bedrock request body")?;
+
+        // Construct Bedrock InvokeModel URL.
+        let host = format!("bedrock-runtime.{}.amazonaws.com", credentials.region);
+        let encoded_model = model.replace(':', "%3A").replace('+', "%2B");
+        let path = format!("/model/{encoded_model}/invoke");
+        let url = format!("https://{host}{path}");
+
+        let (status, text) = self
+            .send_bedrock_request(&url, &host, &path, &payload, provider, &credentials)
+            .await?;
+
+        // Bedrock returns Anthropic-format responses for Claude models.
+        parse_anthropic_response(status, text)
+    }
+
+    /// Send a signed Bedrock request with retry logic.
+    ///
+    /// Each retry attempt re-signs the request because the `X-Amz-Date` timestamp
+    /// changes.
+    async fn send_bedrock_request(
+        &self,
+        url: &str,
+        host: &str,
+        path: &str,
+        payload: &[u8],
+        provider: &ProviderConfig,
+        credentials: &sigv4::AwsCredentials,
+    ) -> Result<(u16, String)> {
+        let mut attempt = 0u32;
+        loop {
+            // Sign the request (must be done per-attempt for fresh timestamp).
+            let signed = sigv4::sign("POST", host, path, payload, credentials, "bedrock");
+
+            let mut headers = HeaderMap::new();
+            headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+            headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+            headers.insert(
+                HeaderName::from_static("host"),
+                HeaderValue::from_str(&signed.host)?,
+            );
+            headers.insert(
+                HeaderName::from_static("x-amz-date"),
+                HeaderValue::from_str(&signed.x_amz_date)?,
+            );
+            headers.insert(
+                HeaderName::from_static("x-amz-content-sha256"),
+                HeaderValue::from_str(&signed.x_amz_content_sha256)?,
+            );
+            headers.insert(
+                AUTHORIZATION,
+                HeaderValue::from_str(&signed.authorization)?,
+            );
+            if let Some(ref token) = signed.x_amz_security_token {
+                headers.insert(
+                    HeaderName::from_static("x-amz-security-token"),
+                    HeaderValue::from_str(token)?,
+                );
+            }
+
+            let response = self
+                .http
+                .post(url)
+                .headers(headers)
+                .timeout(Duration::from_millis(provider.timeout_ms))
+                .body(payload.to_vec())
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) => {
+                    let status = resp.status().as_u16();
+                    let retry_after = parse_retry_after(resp.headers(), provider);
+                    let text = resp
+                        .text()
+                        .await
+                        .context("failed to read Bedrock response body")?;
+                    if is_retryable_http_status(status) && attempt < provider.max_retries {
+                        tokio::time::sleep(compute_retry_delay(provider, attempt, retry_after))
+                            .await;
+                        attempt += 1;
+                        continue;
+                    }
+                    return Ok((status, text));
+                }
+                Err(error) => {
+                    if is_retryable_transport_error(&error) && attempt < provider.max_retries {
+                        tokio::time::sleep(compute_retry_delay(provider, attempt, None)).await;
+                        attempt += 1;
+                        continue;
+                    }
+                    return Err(error).context("Bedrock request failed");
+                }
+            }
+        }
+    }
+
+    /// Send a completion request to Google Vertex AI using OAuth2 Bearer auth.
+    ///
+    /// If Google credentials are not available, falls back to the OpenAI-compatible
+    /// path (useful for Vertex AI proxies).
+    ///
+    /// Vertex AI Claude models use the Anthropic Messages API format, so the
+    /// response is parsed with the Anthropic response parser.
+    async fn complete_vertex(
+        &self,
+        provider: &ProviderConfig,
+        conversation: &[ConversationEntry],
+    ) -> Result<ProviderResponse> {
+        let access_token = match load_vertex_access_token() {
+            Some(token) => token,
+            None => {
+                // No Google credentials — fall back to OpenAI-compatible proxy mode.
+                return self.complete_openai(provider, conversation).await;
+            }
+        };
+
+        let model = provider
+            .model
+            .as_deref()
+            .ok_or_else(|| anyhow!("Vertex AI provider requires a model ID (e.g. claude-sonnet-4@20250514)"))?;
+
+        let project = std::env::var("GOOGLE_CLOUD_PROJECT")
+            .or_else(|_| std::env::var("GCLOUD_PROJECT"))
+            .map_err(|_| anyhow!("Vertex AI requires GOOGLE_CLOUD_PROJECT or GCLOUD_PROJECT env var"))?;
+
+        let region = std::env::var("GOOGLE_CLOUD_REGION")
+            .or_else(|_| std::env::var("CLOUD_ML_REGION"))
+            .unwrap_or_else(|_| "us-east5".to_string());
+
+        // Build Anthropic-format body for Claude models on Vertex AI.
+        let (system, messages) = to_anthropic_messages(conversation);
+        let body = json!({
+            "anthropic_version": "vertex-2023-10-16",
+            "system": system,
+            "messages": messages,
+            "tools": builtin_tool_specs()
+                .into_iter()
+                .map(|tool| tool.to_anthropic_schema())
+                .collect::<Vec<_>>(),
+            "max_tokens": provider.max_output_tokens,
+        });
+
+        // Construct Vertex AI URL.
+        let url = format!(
+            "https://{region}-aiplatform.googleapis.com/v1/projects/{project}/locations/{region}/publishers/anthropic/models/{model}:invokeModel"
+        );
+
+        let (status, text) = self
+            .send_vertex_request(&url, &access_token, &body, provider)
+            .await?;
+
+        // Vertex AI returns Anthropic-format responses for Claude models.
+        parse_anthropic_response(status, text)
+    }
+
+    /// Send a Vertex AI request with Bearer token auth and retry logic.
+    async fn send_vertex_request(
+        &self,
+        url: &str,
+        access_token: &str,
+        body: &Value,
+        provider: &ProviderConfig,
+    ) -> Result<(u16, String)> {
+        let mut attempt = 0u32;
+        loop {
+            let mut headers = HeaderMap::new();
+            headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+            headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+            headers.insert(
+                AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {access_token}"))?,
+            );
+            headers.insert(
+                USER_AGENT,
+                HeaderValue::from_str(&format!("remote-code-rust/{}", env!("CARGO_PKG_VERSION")))?,
+            );
+
+            let response = self
+                .http
+                .post(url)
+                .headers(headers)
+                .timeout(Duration::from_millis(provider.timeout_ms))
+                .json(body)
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) => {
+                    let status = resp.status().as_u16();
+                    let retry_after = parse_retry_after(resp.headers(), provider);
+                    let text = resp
+                        .text()
+                        .await
+                        .context("failed to read Vertex AI response body")?;
+                    if is_retryable_http_status(status) && attempt < provider.max_retries {
+                        tokio::time::sleep(compute_retry_delay(provider, attempt, retry_after))
+                            .await;
+                        attempt += 1;
+                        continue;
+                    }
+                    return Ok((status, text));
+                }
+                Err(error) => {
+                    if is_retryable_transport_error(&error) && attempt < provider.max_retries {
+                        tokio::time::sleep(compute_retry_delay(provider, attempt, None)).await;
+                        attempt += 1;
+                        continue;
+                    }
+                    return Err(error).context("Vertex AI request failed");
+                }
+            }
+        }
+    }
+
     async fn send_json_request(
         &self,
         provider: &ProviderConfig,
@@ -269,6 +516,37 @@ fn parse_retry_after(headers: &HeaderMap, provider: &ProviderConfig) -> Option<D
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.trim().parse::<u64>().ok())
         .map(Duration::from_secs)
+}
+
+/// Load a Google Cloud OAuth2 access token for Vertex AI.
+///
+/// Tries, in order:
+/// 1. `GOOGLE_ACCESS_TOKEN` environment variable (direct token).
+/// 2. `gcloud auth print-access-token` CLI command.
+///
+/// Returns `None` if neither source yields a token.
+fn load_vertex_access_token() -> Option<String> {
+    // 1. Direct token from environment.
+    if let Ok(token) = std::env::var("GOOGLE_ACCESS_TOKEN") {
+        if !token.is_empty() {
+            return Some(token);
+        }
+    }
+
+    // 2. Try gcloud CLI.
+    let output = std::process::Command::new("gcloud")
+        .args(["auth", "print-access-token"])
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !token.is_empty() {
+            return Some(token);
+        }
+    }
+
+    None
 }
 
 fn build_headers(provider: &ProviderConfig) -> Result<HeaderMap> {

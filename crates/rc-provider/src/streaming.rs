@@ -81,13 +81,25 @@ impl ProviderClient {
         }
 
         match provider.protocol {
-            ProviderProtocol::OpenAi | ProviderProtocol::Bedrock | ProviderProtocol::Vertex => {
+            ProviderProtocol::OpenAi => {
                 self.complete_streaming_openai(provider, conversation, callbacks.as_ref())
                     .await
             }
             ProviderProtocol::Anthropic => {
                 self.complete_streaming_anthropic(provider, conversation, callbacks.as_ref())
                     .await
+            }
+            // Native Bedrock/Vertex use non-streaming for now (SSE event-stream
+            // parsing for Bedrock is not yet implemented).  If a base_url is set
+            // (proxy mode) we fall back to OpenAI-compatible streaming.
+            ProviderProtocol::Bedrock | ProviderProtocol::Vertex => {
+                if provider.base_url.is_some() {
+                    self.complete_streaming_openai(provider, conversation, callbacks.as_ref())
+                        .await
+                } else {
+                    // Native mode — fall back to non-streaming completion.
+                    self.complete(provider, conversation).await
+                }
             }
         }
     }
