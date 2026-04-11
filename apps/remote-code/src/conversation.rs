@@ -642,3 +642,214 @@ pub(crate) fn run_migrate(
         }
     }
 }
+
+/// Detect whether this is a first run and launch an interactive setup wizard.
+///
+/// A first run is detected when:
+/// - No API key is configured (neither env var nor CLI override)
+/// - No `settings.json` exists in the profile directory
+///
+/// The wizard guides the user through:
+/// 1. Provider selection (Anthropic / OpenAI / DeepSeek / GLM / Custom)
+/// 2. API key entry
+/// 3. Model selection (with sensible defaults per provider)
+/// 4. Saves the configuration to `settings.json`
+pub(crate) fn run_first_run_wizard(config: &mut RuntimeConfig) -> Result<()> {
+
+    let settings_path = config.paths.profile_dir.join("settings.json");
+    let has_settings = settings_path.exists();
+    let has_api_key = config.provider.api_key.is_some();
+
+    // Not a first run if settings exist or API key is configured.
+    if has_settings && has_api_key {
+        return Ok(());
+    }
+
+    // Only run the wizard when connected to a terminal (stdin is tty).
+    // In headless / CI environments, skip silently.
+    if !atty_check() {
+        if !has_api_key {
+            eprintln!(
+                "⚠ No API key configured. Set REMOTE_CODE_API_KEY or run interactively to set up."
+            );
+        }
+        return Ok(());
+    }
+
+    println!();
+    println!("╔══════════════════════════════════════════════════════════╗");
+    println!("║          Welcome to Remote Code Rust!                   ║");
+    println!("║                                                          ║");
+    println!("║  Let's set up your provider configuration.              ║");
+    println!("╚══════════════════════════════════════════════════════════╝");
+    println!();
+
+    // Step 1: Provider selection
+    println!("Which LLM provider would you like to use?");
+    println!("  1) Anthropic (Claude)");
+    println!("  2) OpenAI (GPT / o-series)");
+    println!("  3) DeepSeek");
+    println!("  4) 智谱 AI (GLM)");
+    println!("  5) MiniMax");
+    println!("  6) Custom (OpenAI-compatible)");
+    println!("  7) Custom (Anthropic-compatible)");
+    println!();
+    let provider_choice = read_line_prompt("Enter choice [1-7]: ")?;
+
+    let (provider_name, protocol, default_base_url, default_model) = match provider_choice
+        .trim()
+    {
+        "1" => (
+            "anthropic",
+            rc_core::ProviderProtocol::Anthropic,
+            "https://api.anthropic.com",
+            "claude-sonnet-4-20250514",
+        ),
+        "2" => (
+            "openai",
+            rc_core::ProviderProtocol::OpenAi,
+            "https://api.openai.com",
+            "gpt-4o",
+        ),
+        "3" => (
+            "deepseek",
+            rc_core::ProviderProtocol::OpenAi,
+            "https://api.deepseek.com",
+            "deepseek-chat",
+        ),
+        "4" => (
+            "glm",
+            rc_core::ProviderProtocol::OpenAi,
+            "https://open.bigmodel.cn/api/paas",
+            "glm-5-plus",
+        ),
+        "5" => (
+            "minimax",
+            rc_core::ProviderProtocol::OpenAi,
+            "https://api.minimax.chat",
+            "MiniMax-M1",
+        ),
+        "6" => (
+            "custom",
+            rc_core::ProviderProtocol::OpenAi,
+            "",
+            "",
+        ),
+        "7" => (
+            "custom",
+            rc_core::ProviderProtocol::Anthropic,
+            "",
+            "",
+        ),
+        _ => {
+            println!("  → Using default: OpenAI-compatible");
+            (
+                "custom",
+                rc_core::ProviderProtocol::OpenAi,
+                "",
+                "",
+            )
+        }
+    };
+
+    // Step 2: Base URL
+    let base_url = if default_base_url.is_empty() {
+        let input = read_line_prompt("Enter base URL: ")?;
+        Some(input.trim().to_owned())
+    } else {
+        let input = read_line_prompt(&format!("Base URL [{default_base_url}]: "))?;
+        let trimmed = input.trim().to_owned();
+        if trimmed.is_empty() {
+            Some(default_base_url.to_owned())
+        } else {
+            Some(trimmed)
+        }
+    };
+
+    // Step 3: API Key
+    let api_key = {
+        let input = read_line_prompt("Enter your API key: ")?;
+        let trimmed = input.trim().to_owned();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    };
+
+    if api_key.is_none() {
+        println!();
+        println!("  ⚠ No API key entered. You can set it later via:");
+        println!("    export REMOTE_CODE_API_KEY=<your-key>");
+        println!();
+    }
+
+    // Step 4: Model
+    let model = if default_model.is_empty() {
+        let input = read_line_prompt("Enter model name: ")?;
+        let trimmed = input.trim().to_owned();
+        if trimmed.is_empty() { None } else { Some(trimmed) }
+    } else {
+        let input = read_line_prompt(&format!("Model [{default_model}]: "))?;
+        let trimmed = input.trim().to_owned();
+        if trimmed.is_empty() {
+            Some(default_model.to_owned())
+        } else {
+            Some(trimmed)
+        }
+    };
+
+    // Step 5: Save to settings.json
+    let settings = serde_json::json!({
+        "provider": provider_name,
+        "baseUrl": base_url,
+        "apiKey": api_key,
+        "model": model,
+        "protocol": protocol.as_str(),
+    });
+
+    let settings_dir = &config.paths.profile_dir;
+    std::fs::create_dir_all(settings_dir)?;
+    let settings_file = std::fs::File::create(&settings_path)?;
+    serde_json::to_writer_pretty(settings_file, &settings)?;
+    println!();
+    println!("  ✓ Configuration saved to {}", settings_path.display());
+
+    // Step 6: Apply to current config
+    config.provider.name = provider_name.to_owned();
+    config.provider.protocol = protocol;
+    if let Some(url) = &base_url {
+        config.provider.base_url = Some(url.clone());
+    }
+    config.provider.api_key = api_key.clone();
+    if let Some(m) = &model {
+        config.provider.model = Some(m.clone());
+    }
+
+
+    println!("  ✓ Provider: {provider_name}");
+    if let Some(m) = &model {
+        println!("  ✓ Model:    {m}");
+    }
+    println!();
+    println!("  Setup complete! Run `remote-code doctor` to verify your configuration.");
+    println!();
+
+    Ok(())
+}
+
+/// Check if stdin is connected to a terminal (TTY).
+fn atty_check() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal()
+}
+
+/// Read a line from stdin with a prompt.
+fn read_line_prompt(prompt: &str) -> Result<String> {
+    use std::io::{self, Write};
+    print!("{prompt}");
+    io::stdout().flush()?;
+    let mut buf = String::new();
+    io::stdin().read_line(&mut buf)?;
+    Ok(buf)
+}

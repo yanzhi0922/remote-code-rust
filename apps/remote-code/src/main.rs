@@ -18,8 +18,8 @@ use rc_telemetry::install_tracing;
 
 use clap::Parser;
 use cli::{Cli, Commands};
-use conversation::{reapply_cli_overrides, restore_session_context, run_doctor, run_migrate,
-    run_oneshot_text};
+use conversation::{reapply_cli_overrides, restore_session_context, run_doctor,
+    run_first_run_wizard, run_migrate, run_oneshot_text};
 use headless::{run_headless, should_run_headless};
 use hooks::run_hooks;
 use interactive::run_interactive_shell;
@@ -63,6 +63,12 @@ async fn main() -> Result<()> {
     if resume_session.is_some() {
         restore_session_context(&store, &mut config)?;
         reapply_cli_overrides(&cli, &mut config);
+    }
+
+    // Launch the first-run wizard if no API key or settings are detected.
+    // Only runs for interactive sessions (no subcommand or Resume without prompt).
+    if !cli.print_mode && cli.command.is_none() || matches!(&cli.command, Some(Commands::Resume(_)) if cli.prompt.is_empty()) {
+        run_first_run_wizard(&mut config)?;
     }
 
     match cli.command {
