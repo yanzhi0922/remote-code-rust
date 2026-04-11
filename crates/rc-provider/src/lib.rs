@@ -129,18 +129,54 @@ impl ProviderClient {
         provider: &ProviderConfig,
         conversation: &[ConversationEntry],
     ) -> Result<ProviderResponse> {
-        let body = json!({
-            "model": provider.model,
-            "messages": to_openai_messages(conversation),
-            "tools": builtin_tool_specs()
-                .into_iter()
-                .map(|tool| tool.to_openai_schema())
-                .collect::<Vec<_>>(),
-            "tool_choice": "auto",
-            "temperature": 0.1,
-            "max_tokens": provider.max_output_tokens,
-            "stream": false,
-        });
+        let model_name = provider.model.as_deref().unwrap_or("");
+        let is_reasoning_model = model_name.starts_with("o1")
+            || model_name.starts_with("o3")
+            || model_name.starts_with("o4");
+
+        let mut body = if is_reasoning_model {
+            // Reasoning models (o1/o3/o4-mini) do not support temperature
+            // and use max_completion_tokens instead of max_tokens.
+            json!({
+                "model": provider.model,
+                "messages": to_openai_messages(conversation),
+                "tools": builtin_tool_specs()
+                    .into_iter()
+                    .map(|tool| tool.to_openai_schema())
+                    .collect::<Vec<_>>(),
+                "tool_choice": "auto",
+                "max_completion_tokens": provider.max_output_tokens,
+                "stream": false,
+            })
+        } else {
+            json!({
+                "model": provider.model,
+                "messages": to_openai_messages(conversation),
+                "tools": builtin_tool_specs()
+                    .into_iter()
+                    .map(|tool| tool.to_openai_schema())
+                    .collect::<Vec<_>>(),
+                "tool_choice": "auto",
+                "temperature": 0.1,
+                "max_tokens": provider.max_output_tokens,
+                "stream": false,
+            })
+        };
+
+        // If thinking_budget is set and the model supports it, add reasoning_effort.
+        if is_reasoning_model {
+            if let Some(budget) = provider.thinking_budget {
+                // Map budget to reasoning_effort: low/medium/high.
+                let effort = if budget <= 5000 {
+                    "low"
+                } else if budget <= 20000 {
+                    "medium"
+                } else {
+                    "high"
+                };
+                body["reasoning_effort"] = json!(effort);
+            }
+        }
         let base_url = provider
             .base_url
             .as_ref()
@@ -168,6 +204,18 @@ impl ProviderClient {
             "max_tokens": provider.max_output_tokens,
             "stream": false,
         });
+        // Enable extended thinking if a budget is configured.
+        if let Some(budget) = provider.thinking_budget {
+            body["thinking"] = json!({
+                "type": "enabled",
+                "budget_tokens": budget,
+            });
+            // Anthropic requires max_tokens > budget_tokens.
+            let current_max = body.get("max_tokens").and_then(Value::as_u64).unwrap_or(0);
+            if current_max <= u64::from(budget) {
+                body["max_tokens"] = json!(u64::from(budget) + 4096);
+            }
+        }
         // Detect resume: if there are tool-role entries, this is a continued conversation.
         let is_resume = conversation
             .iter()
@@ -716,9 +764,18 @@ fn parse_openai_response(status: u16, raw_text: String) -> Result<ProviderRespon
     let raw_assistant_text = coerce_text_content(choice.get("content")).trim().to_owned();
     let usage = payload.get("usage").cloned().unwrap_or_default();
 
+    // OpenAI reasoning models may include reasoning in the refusal field or
+    // as a reasoning_content field (non-standard, some providers expose it).
+    let reasoning_text = choice
+        .get("reasoning_content")
+        .and_then(Value::as_str)
+        .map(String::from)
+        .or_else(|| choice.get("reasoning").and_then(Value::as_str).map(String::from));
+
     Ok(ProviderResponse {
         text: strip_reasoning_tags(&raw_assistant_text),
         history_text: Some(raw_assistant_text),
+        thinking: reasoning_text,
         content_blocks: Vec::new(),
         tool_calls,
         usage: UsageSummary {
@@ -774,11 +831,22 @@ fn parse_anthropic_response(status: u16, raw_text: String) -> Result<ProviderRes
         .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
         .filter_map(parse_anthropic_tool_call)
         .collect::<Vec<_>>();
+    let thinking_text: String = blocks
+        .iter()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("thinking"))
+        .filter_map(|block| block.get("thinking").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("\n");
     let usage = payload.get("usage").cloned().unwrap_or_default();
 
     Ok(ProviderResponse {
         text: strip_reasoning_tags(&text),
         history_text: Some(text),
+        thinking: if thinking_text.is_empty() {
+            None
+        } else {
+            Some(thinking_text)
+        },
         content_blocks: blocks,
         tool_calls,
         usage: UsageSummary {
@@ -875,6 +943,7 @@ fn mock_response(conversation: &[ConversationEntry]) -> ProviderResponse {
             format!("mock provider response: {}", truncate(&user_prompt))
         },
         history_text: Some(user_prompt.clone()),
+        thinking: None,
         content_blocks: Vec::new(),
         tool_calls: if !has_tool_result_after_latest_user
             && user_prompt.to_ascii_lowercase().contains("list files")
@@ -1162,6 +1231,7 @@ mod tests {
             retry_max_backoff_ms: 20,
             respect_retry_after: false,
             request_header_overrides: Default::default(),
+            thinking_budget: None,
         }
     }
 

@@ -374,6 +374,9 @@ pub struct ProviderResponse {
     /// Optional abbreviated text for context compaction.
     #[serde(default)]
     pub history_text: Option<String>,
+    /// Extended thinking/reasoning content (if enabled and returned by the model).
+    #[serde(default)]
+    pub thinking: Option<String>,
     /// Anthropic-style content blocks.
     #[serde(default)]
     pub content_blocks: Vec<Value>,

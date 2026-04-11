@@ -266,6 +266,7 @@ impl ProviderClient {
         Ok(ProviderResponse {
             text: crate::strip_reasoning_tags(&raw_text),
             history_text: Some(raw_text),
+            thinking: None,
             content_blocks: Vec::new(),
             tool_calls,
             usage,
@@ -292,6 +293,17 @@ impl ProviderClient {
             "max_tokens": provider.max_output_tokens,
             "stream": true,
         });
+        // Enable extended thinking if a budget is configured.
+        if let Some(budget) = provider.thinking_budget {
+            body["thinking"] = json!({
+                "type": "enabled",
+                "budget_tokens": budget,
+            });
+            let current_max = body.get("max_tokens").and_then(Value::as_u64).unwrap_or(0);
+            if current_max <= u64::from(budget) {
+                body["max_tokens"] = json!(u64::from(budget) + 4096);
+            }
+        }
         // Apply stable cache control breakpoints (system, tools, latest user message).
         let is_resume = conversation
             .iter()
@@ -312,6 +324,7 @@ impl ProviderClient {
         let mut current_text_block_index: Option<usize> = None;
         let mut usage = UsageSummary::default();
         let mut stop_reason = "end_turn".to_owned();
+        let mut thinking_parts: Vec<String> = Vec::new();
 
         let mut stream = response.bytes_stream();
         let mut sse_buffer = String::new();
@@ -377,6 +390,16 @@ impl ProviderClient {
                                 "text" => {
                                     current_text_block_index = Some(index);
                                 }
+                                "thinking" => {
+                                    // Thinking block — accumulate thinking deltas.
+                                    // The content_block itself may contain initial thinking text.
+                                    if let Some(thinking) = content_block
+                                        .and_then(|b| b.get("thinking"))
+                                        .and_then(Value::as_str)
+                                    {
+                                        thinking_parts.push(thinking.to_owned());
+                                    }
+                                }
                                 "tool_use" => {
                                     let id = content_block
                                         .and_then(|b| b.get("id"))
@@ -418,7 +441,12 @@ impl ProviderClient {
                                     .unwrap_or("")
                             });
 
-                            if (delta_type == "text_delta"
+                            if delta_type == "thinking_delta"
+                                && let Some(thinking) =
+                                    delta.and_then(|d| d.get("thinking")).and_then(Value::as_str)
+                            {
+                                thinking_parts.push(thinking.to_owned());
+                            } else if (delta_type == "text_delta"
                                 || current_text_block_index == Some(index))
                                 && let Some(text) =
                                     delta.and_then(|d| d.get("text")).and_then(Value::as_str)
@@ -514,9 +542,15 @@ impl ProviderClient {
             }
         }
 
+        let thinking_text = if thinking_parts.is_empty() {
+            None
+        } else {
+            Some(thinking_parts.join(""))
+        };
         Ok(ProviderResponse {
             text: crate::strip_reasoning_tags(&raw_text),
             history_text: Some(raw_text),
+            thinking: thinking_text,
             content_blocks,
             tool_calls,
             usage,

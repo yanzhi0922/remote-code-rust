@@ -174,6 +174,11 @@ pub struct ProviderConfig {
     /// Additional HTTP headers to send with every request.
     #[serde(default)]
     pub request_header_overrides: BTreeMap<String, String>,
+    /// Token budget for extended thinking/reasoning (Anthropic Claude only).
+    /// When set, enables extended thinking with the specified token budget.
+    /// Must be less than `max_output_tokens`.
+    #[serde(default)]
+    pub thinking_budget: Option<u32>,
 }
 
 /// Configuration for provider failover / load-balancing.
@@ -354,6 +359,7 @@ pub fn load_provider_config(
         retry_max_backoff_ms,
         respect_retry_after,
         request_header_overrides,
+        thinking_budget: None,
     })
 }
 
@@ -563,6 +569,7 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            thinking_budget: None,
         });
     }
 
@@ -585,6 +592,7 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            thinking_budget: None,
         });
     }
 
@@ -607,6 +615,7 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            thinking_budget: None,
         });
     }
 
@@ -632,6 +641,7 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            thinking_budget: None,
         });
     }
 
@@ -659,6 +669,7 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            thinking_budget: None,
         });
     }
 
@@ -692,6 +703,7 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            thinking_budget: None,
         });
     }
 
@@ -715,6 +727,7 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            thinking_budget: None,
         });
     }
 
@@ -738,6 +751,7 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            thinking_budget: None,
         });
     }
 
@@ -761,6 +775,7 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            thinking_budget: None,
         });
     }
 
@@ -784,6 +799,7 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            thinking_budget: None,
         });
     }
 
@@ -805,6 +821,7 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            thinking_budget: None,
         });
     }
 
