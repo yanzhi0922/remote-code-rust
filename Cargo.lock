@@ -1529,9 +1529,7 @@ dependencies = [
  "rc-provider",
  "rc-session",
  "rc-tools",
- "serde_json",
  "tokio",
- "uuid",
 ]
 
 [[package]]

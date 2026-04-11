@@ -6,7 +6,7 @@
 //! Supports basic Vim key bindings in the input loop:
 //! - `h/j/k/l` — navigate message history (normal mode)
 //! - `i` — enter insert (input) mode
-//! - `Esc` — return to normal mode
+//! - `Esc` — return to normal mode (type "esc" + Enter in line-buffered terminals)
 //! - `G` — jump to bottom of history
 //! - `gg` — jump to top of history
 //! - `:q` — quit
@@ -19,6 +19,7 @@ use rc_core::{ConversationEntry, ConversationRole, default_system_prompt};
 use rc_permissions::StaticPermissionBroker;
 use rc_provider::ProviderClient;
 use rc_provider::context::ContextWindowManager;
+use rc_provider::cost::CostTracker;
 use rc_session::SessionStore;
 use rc_tools::{ToolExecutionContext, builtin_tool_specs, execute_tool_call};
 use tokio::io::AsyncBufReadExt;
@@ -30,6 +31,16 @@ enum VimMode {
     Normal,
     /// Insert mode: text input for conversation.
     Insert,
+}
+
+/// Result of handling a slash command.
+enum SlashCommandAction {
+    /// Continue the input loop normally.
+    Continue,
+    /// Reset history scroll position (e.g. after /clear).
+    ResetScroll,
+    /// Exit the interactive session.
+    Quit,
 }
 
 // ---------------------------------------------------------------------------
@@ -87,14 +98,21 @@ pub fn run_dashboard(config: &RuntimeConfig, store: &SessionStore) -> Result<()>
 /// - Multi-turn conversation with the provider
 /// - Automatic tool execution with permission checks
 /// - Context window compaction
+/// - Cost tracking across turns
 /// - Slash commands for session management
+/// - Graceful Ctrl+C handling during input
 pub async fn run_tui_app(
     config: RuntimeConfig,
     store: &SessionStore,
 ) -> Result<()> {
     let provider = ProviderClient::new()?;
     let broker = StaticPermissionBroker::new(config.permission_mode);
+
+    // TODO: Read context window size from provider/model config when available.
+    //       Current defaults (128K input, 4K output reserve) suit modern models
+    //       like GPT-4o, Claude 3.5 Sonnet, etc.
     let context_manager = ContextWindowManager::new(128_000, 4_096);
+    let cost_tracker = CostTracker::new();
     let mut conversation = load_or_create_conversation(store, &config)?;
 
     println!("Remote Code Rust — Interactive Mode");
@@ -127,9 +145,26 @@ pub async fn run_tui_app(
         print!("{prompt}");
         io::stdout().flush()?;
 
-        let line = match lines.next_line().await? {
+        // Use tokio::select! to handle Ctrl+C gracefully during input.
+        // During provider calls (inside run_conversation_turn), Ctrl+C will
+        // still terminate the process — this is standard CLI behavior.
+        let line_opt = tokio::select! {
+            result = lines.next_line() => {
+                match result {
+                    Ok(Some(line)) => Some(line),
+                    Ok(None) => None, // EOF
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            _ = tokio::signal::ctrl_c() => {
+                println!("\nInterrupted. Goodbye!");
+                None
+            }
+        };
+
+        let line = match line_opt {
             Some(line) => line,
-            None => break, // EOF
+            None => break,
         };
 
         let input = line.trim();
@@ -205,7 +240,13 @@ pub async fn run_tui_app(
                 continue;
             }
             VimMode::Insert => {
-                if input == "\u{1b}" || input.eq_ignore_ascii_case("esc") {
+                // In line-buffered mode, the terminal doesn't send raw escape
+                // sequences. Users can switch to normal mode by typing "esc",
+                // "ESC", or the literal escape character followed by Enter.
+                if input.eq_ignore_ascii_case("esc")
+                    || input == "\u{1b}"
+                    || input == "^["
+                {
                     vim_mode = VimMode::Normal;
                     println!("  -- NORMAL --");
                     continue;
@@ -219,8 +260,17 @@ pub async fn run_tui_app(
 
         // Handle slash commands
         if input.starts_with('/') {
-            if handle_slash_command(input, &config, store, &conversation, &context_manager) {
-                break; // quit
+            match handle_slash_command(
+                input,
+                &config,
+                store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+            ) {
+                SlashCommandAction::Quit => break,
+                SlashCommandAction::ResetScroll => history_scroll = 0,
+                SlashCommandAction::Continue => {}
             }
             continue;
         }
@@ -233,12 +283,21 @@ pub async fn run_tui_app(
             &mut conversation,
             &context_manager,
             &broker,
+            &cost_tracker,
             input,
         )
         .await
         {
             eprintln!("Error: {error}");
+            eprintln!("  (your message was saved; the conversation state may be inconsistent)");
         }
+    }
+
+    // Print cost summary on exit
+    let cost = cost_tracker.total_cost_usd();
+    if cost > 0.0 {
+        println!();
+        print!("{}", cost_tracker.summary());
     }
 
     Ok(())
@@ -258,7 +317,7 @@ fn load_or_create_conversation(
         &config.cwd,
         &config.provider.name,
         config.provider.model.as_deref(),
-        config.provider.model.as_deref(),
+        None, // title_hint: let the store generate a default title
     )?;
 
     let mut conversation = store.load_conversation(config.session_id).unwrap_or_default();
@@ -279,7 +338,11 @@ fn load_or_create_conversation(
 /// 2. Call provider
 /// 3. If tool calls → execute tools → go to 2
 /// 4. If no tool calls → display response → done
-#[allow(clippy::too_many_lines)]
+///
+/// Tool execution errors are captured as error tool results rather than
+/// propagating, ensuring the conversation state remains consistent for
+/// the next provider call.
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 async fn run_conversation_turn(
     provider: &ProviderClient,
     config: &RuntimeConfig,
@@ -287,6 +350,7 @@ async fn run_conversation_turn(
     conversation: &mut Vec<ConversationEntry>,
     context_manager: &ContextWindowManager,
     broker: &StaticPermissionBroker,
+    cost_tracker: &CostTracker,
     prompt: &str,
 ) -> Result<()> {
     // Add user message
@@ -298,6 +362,12 @@ async fn run_conversation_turn(
         cwd: config.cwd.clone(),
         timeout_ms: config.provider.timeout_ms,
     };
+
+    let model_name = config
+        .provider
+        .model
+        .as_deref()
+        .unwrap_or("unknown");
 
     let mut total_input_tokens = 0u64;
     let mut total_output_tokens = 0u64;
@@ -317,6 +387,9 @@ async fn run_conversation_turn(
         let response = provider.complete(&config.provider, conversation).await?;
         total_input_tokens += response.usage.input_tokens;
         total_output_tokens += response.usage.output_tokens;
+
+        // Record usage in cost tracker
+        cost_tracker.record(model_name, response.usage.input_tokens, response.usage.output_tokens);
 
         // Build and persist assistant entry
         let assistant_entry = ConversationEntry {
@@ -355,7 +428,19 @@ async fn run_conversation_turn(
         for tool_call in &response.tool_calls {
             println!("  [tool] {} ...", tool_call.name);
 
-            let tool_result = execute_tool_call(tool_call, &tool_context, broker).await?;
+            // Capture tool execution errors as error tool results instead of
+            // propagating, to keep conversation state consistent for the next
+            // provider call.
+            let tool_result = match execute_tool_call(tool_call, &tool_context, broker).await {
+                Ok(result) => result,
+                Err(error) => {
+                    eprintln!("  [tool] {} — execution error: {error}", tool_call.name);
+                    rc_core::ToolResult {
+                        content: format!("Tool execution error: {error}"),
+                        is_error: true,
+                    }
+                }
+            };
 
             // Truncate tool output for context management
             let truncated_output = context_manager.truncate_tool_output_default(&tool_result.content);
@@ -428,14 +513,19 @@ fn truncate_display(text: &str, max_chars: usize) -> String {
 // Slash commands
 // ---------------------------------------------------------------------------
 
-/// Handle slash commands. Returns `true` if the user wants to quit.
+/// Handle slash commands.
+///
+/// Modifies `conversation` in-place for /clear and /compact! commands.
+/// Returns a [`SlashCommandAction`] indicating what the caller should do next.
+#[allow(clippy::too_many_lines)]
 fn handle_slash_command(
     input: &str,
     config: &RuntimeConfig,
     store: &SessionStore,
-    conversation: &[ConversationEntry],
+    conversation: &mut Vec<ConversationEntry>,
     context_manager: &ContextWindowManager,
-) -> bool {
+    cost_tracker: &CostTracker,
+) -> SlashCommandAction {
     let trimmed = input.trim();
     let mut parts = trimmed.split_whitespace();
     let command = parts.next().unwrap_or_default();
@@ -443,12 +533,15 @@ fn handle_slash_command(
     match command {
         "/help" => {
             println!("Available commands:");
-            println!("  /help     Show this help");
-            println!("  /status   Show session and provider details");
-            println!("  /compact  Show context compaction info");
-            println!("  /tools    List available tools");
-            println!("  /sessions List recent sessions");
-            println!("  /quit     Exit the interactive session");
+            println!("  /help      Show this help");
+            println!("  /status    Show session and provider details");
+            println!("  /compact   Show context compaction info");
+            println!("  /compact!  Force context compaction now");
+            println!("  /tools     List available tools");
+            println!("  /sessions  List recent sessions");
+            println!("  /cost      Show accumulated cost summary");
+            println!("  /clear     Clear conversation (keeps system prompt)");
+            println!("  /quit      Exit the interactive session");
         }
         "/status" => {
             println!("Session:  {}", config.session_id);
@@ -478,6 +571,22 @@ fn handle_slash_command(
             println!("Conversation entries: {}", conversation.len());
             let usage_ratio = context_manager.usage_ratio(conversation);
             println!("Context usage: {:.1}%", usage_ratio * 100.0);
+            let total_cost = cost_tracker.total_cost_usd();
+            if total_cost > 0.0 {
+                println!("Estimated cost: ${total_cost:.6} USD");
+            }
+        }
+        "/compact!" => {
+            // Force compaction regardless of current threshold
+            let before = conversation.len();
+            let compacted = context_manager.compact(conversation);
+            let removed = before.saturating_sub(compacted.len());
+            *conversation = compacted;
+            if removed > 0 {
+                println!("Force-compacted: removed {removed} entries.");
+            } else {
+                println!("Conversation is too short to compact (needs more than 8 non-system entries).");
+            }
         }
         "/compact" => {
             let ratio = context_manager.usage_ratio(conversation);
@@ -515,10 +624,29 @@ fn handle_slash_command(
                 Err(error) => eprintln!("Error listing sessions: {error}"),
             }
         }
-        "/quit" | "/exit" => return true,
+        "/cost" => {
+            print!("{}", cost_tracker.summary());
+        }
+        "/clear" => {
+            // Preserve the system prompt, clear everything else.
+            // Note: the transcript file (JSONL) is append-only, so old entries
+            // remain on disk. This only clears the in-memory conversation that
+            // gets sent to the provider.
+            let system_prompt = conversation
+                .iter()
+                .find(|e| matches!(e.role, ConversationRole::System))
+                .cloned()
+                .unwrap_or_else(|| ConversationEntry::system(default_system_prompt(&config.cwd)));
+            conversation.clear();
+            conversation.push(system_prompt);
+            println!("Conversation cleared (system prompt preserved).");
+            println!("Note: transcript history is still saved in the session file.");
+            return SlashCommandAction::ResetScroll;
+        }
+        "/quit" | "/exit" => return SlashCommandAction::Quit,
         _ => {
             println!("Unknown command `{trimmed}`. Type /help for a list of commands.");
         }
     }
-    false
+    SlashCommandAction::Continue
 }

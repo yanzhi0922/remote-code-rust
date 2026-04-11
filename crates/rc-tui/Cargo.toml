@@ -13,11 +13,9 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 tokio.workspace = true
-uuid.workspace = true
 rc-core = { path = "../rc-core" }
 rc-config = { path = "../rc-config" }
 rc-session = { path = "../rc-session" }
 rc-provider = { path = "../rc-provider" }
 rc-tools = { path = "../rc-tools" }
 rc-permissions = { path = "../rc-permissions" }
-serde_json.workspace = true
