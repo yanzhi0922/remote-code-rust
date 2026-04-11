@@ -486,6 +486,313 @@ impl ContextWindowManager {
 
         None
     }
+    // ── L3-L5 Advanced compaction strategies ──────────────────────────
+
+    /// L3: Sliding window compaction with progressive summarization.
+    ///
+    /// Instead of a fixed cutoff, this strategy keeps entries within a dynamic
+    /// token budget. Older entries are progressively summarized in groups,
+    /// allowing more fine-grained control than the standard `compact()`.
+    ///
+    /// Each "window" of N entries is summarized into a single entry, reducing
+    /// token usage while preserving chronological context.
+    pub fn sliding_window_compact(&self, conversation: &[ConversationEntry]) -> Vec<ConversationEntry> {
+        if conversation.is_empty() {
+            return Vec::new();
+        }
+
+        let system_entry = conversation
+            .iter()
+            .find(|e| matches!(e.role, ConversationRole::System))
+            .cloned();
+
+        let non_system: Vec<&ConversationEntry> = conversation
+            .iter()
+            .filter(|e| !matches!(e.role, ConversationRole::System))
+            .collect();
+
+        if non_system.is_empty() {
+            return conversation.to_vec();
+        }
+
+        // Determine how many entries to keep verbatim at the end.
+        let keep_recent = self.recent_turns * 2; // user/assistant pairs
+        if non_system.len() <= keep_recent {
+            return conversation.to_vec();
+        }
+
+        let older_slice = &non_system[..non_system.len() - keep_recent];
+        let recent_slice = &non_system[non_system.len() - keep_recent..];
+
+        // Chunk older entries into groups of ~6 and summarize each chunk.
+        let chunk_size = 6;
+        let mut summaries = Vec::new();
+        for chunk in older_slice.chunks(chunk_size) {
+            let summary = build_summary(chunk);
+            summaries.push(summary);
+        }
+
+        let mut result = Vec::new();
+        if let Some(sys) = system_entry {
+            result.push(sys);
+        }
+
+        // Merge all chunk summaries into a single system entry.
+        if !summaries.is_empty() {
+            let combined = summaries.join("\n\n---\n\n");
+            result.push(ConversationEntry::system(format!(
+                "[sliding-window-compaction] {combined}"
+            )));
+        }
+
+        // Append the recent entries verbatim.
+        for entry in recent_slice {
+            result.push((*entry).clone());
+        }
+
+        result
+    }
+
+    /// L4: Priority-based compaction.
+    ///
+    /// Assigns a priority score to each entry based on its content:
+    /// - Entries with tool calls: high priority (they contain actionable state)
+    /// - Error entries: high priority (they contain debugging context)
+    /// - System entries: always preserved
+    /// - Recent entries: boosted priority
+    /// - Older plain text: low priority (candidates for summarization)
+    ///
+    /// Low-priority entries are summarized, high-priority ones are kept intact.
+    pub fn priority_compact(&self, conversation: &[ConversationEntry]) -> Vec<ConversationEntry> {
+        if conversation.is_empty() {
+            return Vec::new();
+        }
+
+        let total = conversation.len();
+
+        // Score each entry: higher = more important to keep.
+        let scored: Vec<(usize, u32, &ConversationEntry)> = conversation
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                let mut score: u32 = 0;
+
+                // System entries are always kept.
+                if matches!(entry.role, ConversationRole::System) {
+                    score += 1000;
+                }
+
+                // Entries with tool calls are important.
+                if !entry.tool_calls.is_empty() {
+                    score += 50;
+                }
+
+                // Error entries contain debugging context.
+                if entry.is_error {
+                    score += 40;
+                }
+
+                // Assistant entries with substantial content.
+                if matches!(entry.role, ConversationRole::Assistant) && entry.text.chars().count() > 100 {
+                    score += 20;
+                }
+
+                // Recency boost: more recent entries get higher scores.
+                let recency = (total - i) as u32;
+                score += recency.min(30);
+
+                (i, score, entry)
+            })
+            .collect();
+
+        // Determine a score threshold: keep entries above the median score.
+        let mut scores: Vec<u32> = scored.iter().map(|(_, s, _)| *s).collect();
+        scores.sort();
+        let median = scores.get(scores.len() / 2).copied().unwrap_or(0);
+
+        let mut kept = Vec::new();
+        let mut summarized_indices = Vec::new();
+
+        for (i, score, entry) in &scored {
+            if *score >= median || matches!(entry.role, ConversationRole::System) {
+                kept.push((*entry).clone());
+            } else {
+                summarized_indices.push(*i);
+            }
+        }
+
+        // If nothing was summarized, return original.
+        if summarized_indices.is_empty() {
+            return conversation.to_vec();
+        }
+
+        // Build summary for the removed entries.
+        let summarized_entries: Vec<&ConversationEntry> = summarized_indices
+            .iter()
+            .map(|&i| &conversation[i])
+            .collect();
+        let summary = build_summary(&summarized_entries);
+
+        // Reconstruct: system + summary + kept entries (in order).
+        let mut result = Vec::new();
+        let mut summary_inserted = false;
+
+        for entry in &kept {
+            if matches!(entry.role, ConversationRole::System) && !summary_inserted {
+                result.push(entry.clone());
+                // Insert summary right after system prompt.
+                result.push(ConversationEntry::system(format!(
+                    "[priority-compaction] {summary}"
+                )));
+                summary_inserted = true;
+            } else if !summary_inserted {
+                // Shouldn't happen, but handle gracefully.
+                result.push(entry.clone());
+            } else {
+                result.push(entry.clone());
+            }
+        }
+
+        if !summary_inserted {
+            result.push(ConversationEntry::system(format!(
+                "[priority-compaction] {summary}"
+            )));
+        }
+
+        result
+    }
+
+    /// L5: Semantic chunk compaction.
+    ///
+    /// Groups entries into semantic "turns" (user query + assistant response +
+    /// any tool calls/results) and progressively summarizes from oldest to
+    /// newest until the token budget is met.
+    ///
+    /// This preserves the logical structure of the conversation better than
+    /// simple windowing.
+    pub fn semantic_chunk_compact(&self, conversation: &[ConversationEntry]) -> Vec<ConversationEntry> {
+        if conversation.is_empty() {
+            return Vec::new();
+        }
+
+        let system_entry = conversation
+            .iter()
+            .find(|e| matches!(e.role, ConversationRole::System))
+            .cloned();
+
+        // Group non-system entries into semantic chunks.
+        // A chunk starts with each User entry and includes subsequent
+        // Assistant + Tool entries until the next User entry.
+        let non_system: Vec<&ConversationEntry> = conversation
+            .iter()
+            .filter(|e| !matches!(e.role, ConversationRole::System))
+            .collect();
+
+        let mut chunks: Vec<Vec<&ConversationEntry>> = Vec::new();
+        let mut current_chunk = Vec::new();
+
+        for entry in &non_system {
+            if matches!(entry.role, ConversationRole::User) && !current_chunk.is_empty() {
+                chunks.push(std::mem::take(&mut current_chunk));
+            }
+            current_chunk.push(*entry);
+        }
+        if !current_chunk.is_empty() {
+            chunks.push(current_chunk);
+        }
+
+        if chunks.len() <= 2 {
+            return conversation.to_vec();
+        }
+
+        // Calculate token cost for each chunk.
+        let chunk_tokens: Vec<u64> = chunks
+            .iter()
+            .map(|chunk| {
+                chunk
+                    .iter()
+                    .map(|e| self.estimator.estimate_entry(e))
+                    .sum()
+            })
+            .collect();
+
+        let budget = self.available_budget();
+        let total_tokens: u64 = chunk_tokens.iter().sum();
+
+        // If within budget, no compaction needed.
+        if total_tokens <= budget {
+            return conversation.to_vec();
+        }
+
+        // Progressive summarization: summarize oldest chunks first.
+        // Keep the last 2 chunks intact, summarize the rest.
+        let keep_chunks = 2;
+        let mut result = Vec::new();
+
+        if let Some(sys) = system_entry {
+            result.push(sys);
+        }
+
+        // Summarize older chunks.
+        let older_chunks = &chunks[..chunks.len() - keep_chunks];
+        if !older_chunks.is_empty() {
+            let older_entries: Vec<&ConversationEntry> = older_chunks.iter().flat_map(|c| c.iter().copied()).collect();
+            let summary = build_summary(&older_entries);
+            result.push(ConversationEntry::system(format!(
+                "[semantic-chunk-compaction] Summarized {} earlier conversation turns:\n{summary}",
+                older_chunks.len(),
+            )));
+        }
+
+        // Keep recent chunks intact.
+        for chunk in &chunks[chunks.len() - keep_chunks..] {
+            for entry in chunk {
+                result.push((*entry).clone());
+            }
+        }
+
+        result
+    }
+
+    /// Enhanced auto-compaction with L3-L5 strategies.
+    ///
+    /// Tries strategies from least to most disruptive:
+    /// 1. No compaction (if within budget)
+    /// 2. L4: Microcompact (truncate tool outputs)
+    /// 3. L3: Sliding window (progressive chunk summarization)
+    /// 4. L5: Semantic chunk (topic-based summarization)
+    /// 5. L4: Priority-based (keep important entries)
+    /// 6. Standard compact (fixed turn preservation)
+    /// 7. Reactive compact (aggressive turn reduction)
+    /// 8. Context collapse (last resort)
+    pub fn auto_compact_v2(&self, conversation: &[ConversationEntry]) -> Vec<ConversationEntry> {
+        let ratio = self.usage_ratio(conversation);
+
+        if ratio < self.compaction_threshold {
+            return conversation.to_vec();
+        }
+
+        // Strategy cascade: least → most disruptive.
+        let strategies: &[(&str, fn(&ContextWindowManager, &[ConversationEntry]) -> Vec<ConversationEntry>)] = &[
+            ("microcompact", |mgr, conv| mgr.microcompact(conv)),
+            ("sliding_window", |mgr, conv| mgr.sliding_window_compact(conv)),
+            ("semantic_chunk", |mgr, conv| mgr.semantic_chunk_compact(conv)),
+            ("priority", |mgr, conv| mgr.priority_compact(conv)),
+            ("standard", |mgr, conv| mgr.compact(conv)),
+            ("reactive", |mgr, conv| mgr.reactive_compact(conv)),
+            ("collapse", |mgr, conv| mgr.context_collapse(conv)),
+        ];
+
+        for (_name, strategy) in strategies {
+            let result = strategy(self, conversation);
+            if self.usage_ratio(&result) < self.compaction_threshold {
+                return result;
+            }
+        }
+
+        // Absolute last resort.
+        self.context_collapse(conversation)
+    }
 }
 
 impl Default for ContextWindowManager {
