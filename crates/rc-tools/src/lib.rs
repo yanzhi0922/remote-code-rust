@@ -912,6 +912,18 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "list_worktrees".to_owned(),
+            protocol_name: "ListWorktrees".to_owned(),
+            permission_tool_name: "Read".to_owned(),
+            description: "List all git worktrees in the current repository.".to_owned(),
+            requires_permission: false,
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
             name: "brief".to_owned(),
             protocol_name: "Brief".to_owned(),
             permission_tool_name: "Read".to_owned(),
@@ -1280,8 +1292,9 @@ pub async fn execute_tool_call(
         "remote_trigger" => remote_trigger_tool(&call.input).await,
         "workflow" => workflow_tool(&call.input, context),
         "suggest_pr" => suggest_pr_tool(context),
-        "enter_worktree" => enter_worktree_tool(&call.input),
-        "exit_worktree" => exit_worktree_tool(&call.input),
+        "enter_worktree" => enter_worktree_tool(&call.input, context),
+        "exit_worktree" => exit_worktree_tool(&call.input, context),
+        "list_worktrees" => list_worktrees_tool(context),
         "brief" => brief_tool(&call.input),
         "ctx_inspect" => ctx_inspect_tool(&call.input),
         "list_peers" => list_peers_tool(),
@@ -3066,28 +3079,172 @@ fn suggest_pr_tool(context: &ToolExecutionContext) -> Result<String> {
     .to_string())
 }
 
-fn enter_worktree_tool(input: &Value) -> Result<String> {
+fn enter_worktree_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
     let branch = input["branch"]
         .as_str()
         .ok_or_else(|| anyhow!("branch is required"))?;
-    Ok(json!({
-        "command": format!("git worktree add ../{branch} {branch}"),
-        "branch": branch,
-        "note": "Run the command above to create a new worktree for this branch."
-    })
-    .to_string())
+
+    // Determine the worktree path.
+    let worktree_dir = input["path"]
+        .as_str()
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| format!("../{branch}"));
+
+    // Try to actually create the worktree.
+    let output = std::process::Command::new("git")
+        .args(["worktree", "add", &worktree_dir, branch])
+        .current_dir(&context.cwd)
+        .output();
+
+    match output {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            // Resolve the absolute path of the new worktree.
+            let abs_path = if std::path::Path::new(&worktree_dir).is_absolute() {
+                worktree_dir.clone()
+            } else {
+                let mut p = context.cwd.clone();
+                p.pop();
+                p.push(&worktree_dir);
+                p.to_string_lossy().to_string()
+            };
+            Ok(json!({
+                "status": "created",
+                "branch": branch,
+                "path": abs_path,
+                "output": stdout,
+                "note": format!("Worktree created at {worktree_dir}. Use this path as the working directory for parallel work on branch '{branch}'.")
+            }).to_string())
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            // If the worktree already exists, provide helpful info.
+            if stderr.contains("already") {
+                Ok(json!({
+                    "status": "already_exists",
+                    "branch": branch,
+                    "path": worktree_dir,
+                    "output": stderr,
+                    "note": "This worktree already exists. You can work in that directory."
+                }).to_string())
+            } else {
+                // Fall back to command suggestion.
+                Ok(json!({
+                    "status": "manual",
+                    "command": format!("git worktree add {worktree_dir} {branch}"),
+                    "branch": branch,
+                    "error": stderr,
+                    "note": "Could not auto-create worktree. Run the command above manually."
+                }).to_string())
+            }
+        }
+        Err(_) => {
+            // Git not available, provide command suggestion.
+            Ok(json!({
+                "status": "manual",
+                "command": format!("git worktree add {worktree_dir} {branch}"),
+                "branch": branch,
+                "note": "Run the command above to create a new worktree for this branch."
+            }).to_string())
+        }
+    }
 }
 
-fn exit_worktree_tool(input: &Value) -> Result<String> {
+fn exit_worktree_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
     let branch = input["branch"]
         .as_str()
         .ok_or_else(|| anyhow!("branch is required"))?;
-    Ok(json!({
-        "command": format!("git worktree remove ../{branch}"),
-        "branch": branch,
-        "note": "Run the command above to remove the worktree for this branch."
-    })
-    .to_string())
+
+    let worktree_dir = input["path"]
+        .as_str()
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| format!("../{branch}"));
+
+    // Try to actually remove the worktree.
+    let output = std::process::Command::new("git")
+        .args(["worktree", "remove", &worktree_dir])
+        .current_dir(&context.cwd)
+        .output();
+
+    match output {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            Ok(json!({
+                "status": "removed",
+                "branch": branch,
+                "path": worktree_dir,
+                "output": stdout,
+                "note": format!("Worktree at {worktree_dir} has been removed.")
+            }).to_string())
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            // Fall back to command suggestion.
+            Ok(json!({
+                "status": "manual",
+                "command": format!("git worktree remove {worktree_dir}"),
+                "branch": branch,
+                "error": stderr,
+                "note": "Could not auto-remove worktree. Run the command above manually."
+            }).to_string())
+        }
+        Err(_) => {
+            Ok(json!({
+                "status": "manual",
+                "command": format!("git worktree remove {worktree_dir}"),
+                "branch": branch,
+                "note": "Run the command above to remove the worktree for this branch."
+            }).to_string())
+        }
+    }
+}
+
+fn list_worktrees_tool(context: &ToolExecutionContext) -> Result<String> {
+    let output = std::process::Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(&context.cwd)
+        .output();
+
+    match output {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let worktrees: Vec<Value> = stdout
+                .split("\n\n")
+                .filter(|block| !block.is_empty())
+                .map(|block| {
+                    let mut path = "";
+                    let mut branch = "";
+                    let mut is_bare = false;
+                    for line in block.lines() {
+                        if let Some(p) = line.strip_prefix("worktree ") {
+                            path = p;
+                        } else if let Some(b) = line.strip_prefix("branch refs/heads/") {
+                            branch = b;
+                        } else if line == "bare" {
+                            is_bare = true;
+                        }
+                    }
+                    json!({
+                        "path": path,
+                        "branch": branch,
+                        "is_bare": is_bare,
+                    })
+                })
+                .collect();
+            Ok(json!({
+                "worktrees": worktrees,
+                "count": worktrees.len(),
+            }).to_string())
+        }
+        Ok(_) => Ok(json!({
+            "worktrees": [],
+            "note": "Not in a git repository or git worktree not supported."
+        }).to_string()),
+        Err(_) => Ok(json!({
+            "worktrees": [],
+            "note": "git is not available."
+        }).to_string()),
+    }
 }
 
 fn brief_tool(input: &Value) -> Result<String> {
