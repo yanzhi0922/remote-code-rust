@@ -544,47 +544,88 @@ pub(crate) fn run_doctor(config: &RuntimeConfig) -> Result<()> {
     } else {
         "missing"
     };
+
+    // Gather additional diagnostic information.
+    let tool_count = rc_tools::builtin_tool_specs().len();
+    let model_info = rc_provider::model_info::get_model_info(
+        config.provider.model.as_deref().unwrap_or("unknown"),
+    );
+    let profile_dir = config.paths.profile_dir.display();
+
     let lines = [
-        "Remote Code Rust runtime doctor".to_owned(),
-        format!("- cwd: {}", config.cwd.display()),
-        format!("- provider: {}", config.provider.name),
-        format!("- protocol: {}", config.provider.protocol.as_str()),
+        "=== Remote Code Rust — Doctor Report ===".to_owned(),
+        String::new(),
+        "[Runtime]".to_owned(),
+        format!("  version:        {}", env!("CARGO_PKG_VERSION")),
+        format!("  cwd:            {}", config.cwd.display()),
+        format!("  profile dir:    {profile_dir}"),
+        format!("  session id:     {}", config.session_id),
+        format!("  permission mode: {:?}", config.permission_mode),
+        String::new(),
+        "[Provider]".to_owned(),
+        format!("  name:           {}", config.provider.name),
+        format!("  protocol:       {}", config.provider.protocol.as_str()),
         format!(
-            "- base URL: {}",
+            "  base URL:       {}",
             config.provider.base_url.as_deref().unwrap_or("(missing)")
         ),
         format!(
-            "- model: {}",
+            "  model:          {}",
             config.provider.model.as_deref().unwrap_or("(missing)")
         ),
-        format!("- api key: {api_key_state}"),
-        format!("- input format: {:?}", config.input_format),
-        format!("- output format: {:?}", config.output_format),
-        format!("- print mode: {}", config.print_mode),
-        format!("- discovered skills: {}", discovery.skills.len()),
-        format!("- discovered plugins: {}", discovery.plugins.len()),
+        format!("  api key:        {api_key_state}"),
         format!(
-            "- discovered plugin runtimes: {}",
+            "  context window: {} tokens (output reserve: {})",
+            model_info.max_context, model_info.max_output
+        ),
+        format!(
+            "  capabilities:   multimodal={}, reasoning={}",
+            model_info.multimodal,
+            model_info.capabilities.contains(&rc_provider::model_info::ModelCapability::Reasoning)
+        ),
+        String::new(),
+        "[Tools]".to_owned(),
+        format!("  builtin tools:  {tool_count}"),
+        format!("  input format:   {:?}", config.input_format),
+        format!("  output format:  {:?}", config.output_format),
+        String::new(),
+        "[Extensions]".to_owned(),
+        format!("  skills:         {}", discovery.skills.len()),
+        format!("  plugins:        {}", discovery.plugins.len()),
+        format!(
+            "  plugin runtimes: {}",
             discovery.plugin_runtimes.len()
         ),
-        format!("- discovered mcp servers: {}", discovery.mcp_servers.len()),
-        format!("- discovered hooks: {}", hooks.list(None).len()),
+        format!("  mcp servers:    {}", discovery.mcp_servers.len()),
+        format!("  hooks:          {}", hooks.list(None).len()),
+        String::new(),
+        "[Readiness]".to_owned(),
         format!(
-            "- readiness: {}",
-            if report.ok { "ready" } else { "not-ready" }
+            "  status:         {}",
+            if report.ok { "✓ READY" } else { "✗ NOT READY" }
         ),
     ];
     for line in lines {
         println!("{line}");
     }
-    for issue in report.issues {
-        println!("  - {issue}");
+    if !report.issues.is_empty() {
+        println!();
+        println!("[Issues]");
+        for issue in report.issues {
+            println!("  ✗ {issue}");
+        }
     }
-    for warning in discovery.warnings {
-        println!("  - {warning}");
+    if !discovery.warnings.is_empty() {
+        println!();
+        println!("[Warnings]");
+        for warning in discovery.warnings {
+            println!("  ⚠ {warning}");
+        }
     }
-    for warning in hooks.warnings() {
-        println!("  - {warning}");
+    if !hooks.warnings().is_empty() {
+        for warning in hooks.warnings() {
+            println!("  ⚠ {warning}");
+        }
     }
     Ok(())
 }
