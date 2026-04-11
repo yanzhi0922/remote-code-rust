@@ -1,3 +1,6 @@
+pub mod memory;
+pub mod replay;
+
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
@@ -61,6 +64,7 @@ impl SessionStore {
         Ok(store)
     }
 
+    #[must_use]
     pub fn paths(&self) -> &AppPaths {
         &self.paths
     }
@@ -91,10 +95,7 @@ impl SessionStore {
                 normalize_title_hint(title_hint).unwrap_or_else(|| format!("session-{session_id}"))
             }
         };
-        let created_at = existing
-            .as_ref()
-            .map(|summary| summary.created_at)
-            .unwrap_or(now);
+        let created_at = existing.as_ref().map_or(now, |summary| summary.created_at);
         self.connection()?.execute(
             "INSERT INTO sessions (
                 session_id, title, cwd, provider_name, model, created_at, updated_at, transcript_path
@@ -179,7 +180,7 @@ impl SessionStore {
 
     pub fn get_session_summary(&self, session_id: Uuid) -> Result<SessionSummary> {
         self.try_get_session_summary(session_id)?
-            .ok_or_else(|| anyhow!("session {} does not exist", session_id))
+            .ok_or_else(|| anyhow!("session {session_id} does not exist"))
     }
 
     pub fn load_events(&self, session_id: Uuid) -> Result<Vec<StoredEvent>> {
@@ -229,7 +230,7 @@ impl SessionStore {
     ) -> Result<PathBuf> {
         let source = self.session_transcript_path(session_id);
         if !source.exists() {
-            return Err(anyhow!("session {} does not exist", session_id));
+            return Err(anyhow!("session {session_id} does not exist"));
         }
         let destination = output_path.unwrap_or_else(|| {
             self.paths
@@ -262,6 +263,7 @@ impl SessionStore {
         Ok(destination)
     }
 
+    #[must_use]
     pub fn session_transcript_path(&self, session_id: Uuid) -> PathBuf {
         self.paths.sessions_dir.join(format!("{session_id}.ndjson"))
     }

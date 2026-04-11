@@ -298,6 +298,7 @@ impl RunnerApi {
         }
     }
 
+    #[must_use]
     pub fn meta(&self) -> &RunnerMeta {
         &self.meta
     }
@@ -353,6 +354,7 @@ impl RunnerApi {
 }
 
 impl RunnerConfig {
+    #[must_use]
     pub fn snapshot(&self) -> RunnerSnapshot {
         let now = Utc::now();
         RunnerSnapshot {
@@ -365,6 +367,7 @@ impl RunnerConfig {
         }
     }
 
+    #[must_use]
     pub fn registration_request(&self) -> RunnerRegistrationRequest {
         RunnerRegistrationRequest {
             runner_id: self.runner_id.clone(),
@@ -379,6 +382,7 @@ impl RunnerConfig {
 }
 
 impl RunnerPlatform {
+    #[must_use]
     pub fn detect() -> Self {
         Self {
             os: env::consts::OS.to_owned(),

@@ -61,14 +61,15 @@ pub struct AppPaths {
 }
 
 impl AppPaths {
+    /// # Errors
+    /// Returns an error if the user home directory cannot be located.
     pub fn discover(profile_override: Option<PathBuf>) -> Result<Self> {
-        let profile_dir = match profile_override {
-            Some(path) => path,
-            None => {
-                let base_dirs = BaseDirs::new()
-                    .ok_or_else(|| anyhow!("failed to locate the user home directory"))?;
-                base_dirs.home_dir().join(DEFAULT_PROFILE_DIR_NAME)
-            }
+        let profile_dir = if let Some(path) = profile_override {
+            path
+        } else {
+            let base_dirs = BaseDirs::new()
+                .ok_or_else(|| anyhow!("failed to locate the user home directory"))?;
+            base_dirs.home_dir().join(DEFAULT_PROFILE_DIR_NAME)
         };
 
         Ok(Self {
@@ -83,6 +84,8 @@ impl AppPaths {
         })
     }
 
+    /// # Errors
+    /// Returns an error if any directory cannot be created.
     pub fn ensure_exists(&self) -> Result<()> {
         for directory in [
             &self.profile_dir,
@@ -99,6 +102,8 @@ impl AppPaths {
         Ok(())
     }
 
+    /// # Errors
+    /// Returns an error if the user home directory cannot be located.
     pub fn legacy_profile_dir() -> Result<PathBuf> {
         let base_dirs =
             BaseDirs::new().ok_or_else(|| anyhow!("failed to locate the user home directory"))?;
@@ -136,6 +141,31 @@ pub struct ProviderConfig {
     pub request_header_overrides: BTreeMap<String, String>,
 }
 
+/// Configuration for provider failover / load-balancing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FailoverConfig {
+    /// Ordered list of provider configurations to try.
+    pub providers: Vec<ProviderConfig>,
+    /// Maximum number of providers to attempt before giving up.
+    #[serde(default = "default_failover_max_attempts")]
+    pub max_failover_attempts: usize,
+    /// HTTP status codes that should trigger a failover to the next provider.
+    #[serde(default)]
+    pub failover_on_status: Vec<u16>,
+    /// Whether a timeout error should trigger failover.
+    #[serde(default = "default_true")]
+    pub failover_on_timeout: bool,
+}
+
+const fn default_failover_max_attempts() -> usize {
+    3
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
     pub cwd: PathBuf,
@@ -158,7 +188,10 @@ pub struct DoctorReport {
     pub issues: Vec<String>,
 }
 
+#[allow(clippy::fn_params_excessive_bools)]
 #[allow(clippy::too_many_arguments)]
+/// # Errors
+/// Returns an error if configuration loading fails.
 pub fn load_runtime_config(
     cwd_override: Option<PathBuf>,
     profile_dir_override: Option<PathBuf>,
@@ -197,6 +230,8 @@ pub fn load_runtime_config(
     })
 }
 
+/// # Errors
+/// Returns an error if provider configuration is invalid.
 pub fn load_provider_config(
     overrides: ProviderOverrides,
     session_id: Option<Uuid>,
@@ -217,6 +252,8 @@ pub fn load_provider_config(
             match raw.to_ascii_lowercase().as_str() {
                 "openai" => Some(ProviderProtocol::OpenAi),
                 "anthropic" => Some(ProviderProtocol::Anthropic),
+                "bedrock" => Some(ProviderProtocol::Bedrock),
+                "vertex" => Some(ProviderProtocol::Vertex),
                 _ => None,
             }
         })
@@ -244,8 +281,9 @@ pub fn load_provider_config(
         .unwrap_or(default_provider_retry_max_backoff_ms())
         .max(retry_initial_backoff_ms);
     let respect_retry_after = read_env_first(&["REMOTE_CODE_PROVIDER_RESPECT_RETRY_AFTER"])
-        .map(|value| !matches!(value.to_ascii_lowercase().as_str(), "0" | "false" | "no"))
-        .unwrap_or(default_provider_respect_retry_after());
+        .map_or(default_provider_respect_retry_after(), |value| {
+            !matches!(value.to_ascii_lowercase().as_str(), "0" | "false" | "no")
+        });
     let request_header_overrides = build_request_header_overrides(session_id);
 
     Ok(ProviderConfig {
@@ -268,6 +306,7 @@ pub fn load_provider_config(
     })
 }
 
+#[must_use]
 pub fn validate_provider_config(provider: &ProviderConfig) -> DoctorReport {
     let mut issues = Vec::new();
     if provider.base_url.is_none() {
@@ -285,6 +324,7 @@ pub fn validate_provider_config(provider: &ProviderConfig) -> DoctorReport {
     }
 }
 
+#[must_use]
 pub fn normalize_protocol(
     base_url: Option<&str>,
     explicit_protocol: Option<ProviderProtocol>,
@@ -306,6 +346,7 @@ pub fn normalize_protocol(
     }
 }
 
+#[must_use]
 pub fn normalize_base_url(base_url: Option<String>, protocol: ProviderProtocol) -> Option<String> {
     let raw = base_url?;
     let trimmed = raw.trim().trim_end_matches('/').to_owned();
@@ -328,6 +369,8 @@ pub fn normalize_base_url(base_url: Option<String>, protocol: ProviderProtocol) 
                 format!("{trimmed}/chat/completions")
             }
         }
+        // Bedrock and Vertex use OpenAI-compatible endpoints for now.
+        ProviderProtocol::Bedrock | ProviderProtocol::Vertex => trimmed,
     };
     Some(normalized)
 }
@@ -402,6 +445,145 @@ fn read_env_first(keys: &[&str]) -> Option<String> {
     })
 }
 
+/// Discover provider configurations from well-known environment variables.
+///
+/// Checks for the following keys and creates a [`ProviderConfig`] for each one
+/// that is present:
+///
+/// | Env var              | Provider name | Protocol  | Base URL                                              | Model          |
+/// |----------------------|---------------|-----------|-------------------------------------------------------|----------------|
+/// | `GLM_API_KEY`        | `glm`         | `openai`  | `https://open.bigmodel.cn/api/paas/v4`                | `glm-4-plus`   |
+/// | `ANTHROPIC_API_KEY`  | `anthropic`   | `anthropic`| *(default)*                                           | *(default)*    |
+/// | `OPENAI_API_KEY`     | `openai`      | `openai`  | *(default)*                                           | *(default)*    |
+///
+/// The returned list only contains entries for keys that are actually set.
+/// This function is intended to be called **before** the main
+/// [`load_provider_config`] so that the discovered providers can be merged or
+/// offered as fallbacks.
+pub fn discover_env_providers() -> Vec<ProviderConfig> {
+    let mut providers = Vec::new();
+
+    // GLM / ZhipuAI — OpenAI-compatible endpoint
+    if let Some(api_key) = read_env_first(&["GLM_API_KEY"]) {
+        let base_url = normalize_base_url(
+            Some("https://open.bigmodel.cn/api/paas/v4".to_owned()),
+            ProviderProtocol::OpenAi,
+        );
+        providers.push(ProviderConfig {
+            name: "glm".to_owned(),
+            base_url,
+            api_key: Some(api_key),
+            model: Some("glm-4-plus".to_owned()),
+            protocol: ProviderProtocol::OpenAi,
+            timeout_ms: 600_000,
+            max_output_tokens: 4_096,
+            max_retries: default_provider_max_retries(),
+            retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+            retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+            respect_retry_after: default_provider_respect_retry_after(),
+            request_header_overrides: BTreeMap::new(),
+        });
+    }
+
+    // Anthropic
+    if let Some(api_key) = read_env_first(&["ANTHROPIC_API_KEY"]) {
+        let base_url = normalize_base_url(
+            read_env_first(&["ANTHROPIC_BASE_URL"]),
+            ProviderProtocol::Anthropic,
+        );
+        providers.push(ProviderConfig {
+            name: "anthropic".to_owned(),
+            base_url,
+            api_key: Some(api_key),
+            model: read_env_first(&["ANTHROPIC_MODEL"]),
+            protocol: ProviderProtocol::Anthropic,
+            timeout_ms: 600_000,
+            max_output_tokens: 4_096,
+            max_retries: default_provider_max_retries(),
+            retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+            retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+            respect_retry_after: default_provider_respect_retry_after(),
+            request_header_overrides: BTreeMap::new(),
+        });
+    }
+
+    // OpenAI
+    if let Some(api_key) = read_env_first(&["OPENAI_API_KEY"]) {
+        let base_url = normalize_base_url(
+            read_env_first(&["OPENAI_BASE_URL"]),
+            ProviderProtocol::OpenAi,
+        );
+        providers.push(ProviderConfig {
+            name: "openai".to_owned(),
+            base_url,
+            api_key: Some(api_key),
+            model: read_env_first(&["OPENAI_MODEL"]),
+            protocol: ProviderProtocol::OpenAi,
+            timeout_ms: 600_000,
+            max_output_tokens: 4_096,
+            max_retries: default_provider_max_retries(),
+            retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+            retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+            respect_retry_after: default_provider_respect_retry_after(),
+            request_header_overrides: BTreeMap::new(),
+        });
+    }
+
+    // AWS Bedrock — discovered via AWS credentials
+    if read_env_first(&["AWS_ACCESS_KEY_ID"]).is_some()
+        && read_env_first(&["AWS_SECRET_ACCESS_KEY"]).is_some()
+    {
+        let region =
+            read_env_first(&["AWS_REGION"]).unwrap_or_else(|| "us-east-1".to_owned());
+        let base_url = Some(format!(
+            "https://bedrock-runtime.{region}.amazonaws.com"
+        ));
+        providers.push(ProviderConfig {
+            name: "bedrock".to_owned(),
+            base_url,
+            api_key: None, // Bedrock uses SigV4, not Bearer tokens
+            model: read_env_first(&["BEDROCK_MODEL"]),
+            protocol: ProviderProtocol::Bedrock,
+            timeout_ms: 600_000,
+            max_output_tokens: 4_096,
+            max_retries: default_provider_max_retries(),
+            retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+            retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+            respect_retry_after: default_provider_respect_retry_after(),
+            request_header_overrides: BTreeMap::new(),
+        });
+    }
+
+    // Google Vertex AI — discovered via GCP credentials or project env
+    if read_env_first(&["GOOGLE_APPLICATION_CREDENTIALS"]).is_some()
+        || read_env_first(&["VERTEX_PROJECT"]).is_some()
+    {
+        let project =
+            read_env_first(&["VERTEX_PROJECT"]).unwrap_or_else(|| "default".to_owned());
+        let region =
+            read_env_first(&["VERTEX_REGION"]).unwrap_or_else(|| "us-central1".to_owned());
+        let base_url = Some(format!(
+            "https://{region}-aiplatform.googleapis.com/v1/projects/{project}/locations/{region}/endpoints/openapi"
+        ));
+        providers.push(ProviderConfig {
+            name: "vertex".to_owned(),
+            base_url,
+            api_key: None, // Vertex uses OAuth2, not Bearer tokens
+            model: read_env_first(&["VERTEX_MODEL"]),
+            protocol: ProviderProtocol::Vertex,
+            timeout_ms: 600_000,
+            max_output_tokens: 4_096,
+            max_retries: default_provider_max_retries(),
+            retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+            retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+            respect_retry_after: default_provider_respect_retry_after(),
+            request_header_overrides: BTreeMap::new(),
+        });
+    }
+
+    providers
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LegacyImportSummary {
     pub source_dir: PathBuf,
@@ -411,6 +593,8 @@ pub struct LegacyImportSummary {
     pub imported_paths: Vec<PathBuf>,
 }
 
+/// # Errors
+/// Returns an error if the legacy profile cannot be imported.
 pub fn import_legacy_profile(
     source_dir: Option<PathBuf>,
     destination: &AppPaths,
@@ -471,6 +655,8 @@ pub fn import_legacy_profile(
     })
 }
 
+/// # Errors
+/// Returns an error if the hooks file cannot be read or parsed.
 pub fn load_hooks_file(path: impl AsRef<Path>) -> Result<BTreeMap<HookEvent, Vec<HookMatcher>>> {
     let path = path.as_ref();
     let content =
@@ -479,6 +665,8 @@ pub fn load_hooks_file(path: impl AsRef<Path>) -> Result<BTreeMap<HookEvent, Vec
         .with_context(|| format!("failed to parse hooks file {}", path.display()))
 }
 
+/// # Errors
+/// Returns an error if the settings file cannot be read or parsed.
 pub fn load_settings_hooks(
     path: impl AsRef<Path>,
 ) -> Result<BTreeMap<HookEvent, Vec<HookMatcher>>> {

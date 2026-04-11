@@ -1,3 +1,10 @@
+pub mod context;
+pub mod cost;
+pub mod failover;
+pub mod streaming;
+
+pub use streaming::StreamingCallbacks;
+
 use anyhow::{Context, Result, anyhow};
 use rc_config::ProviderConfig;
 use rc_core::{
@@ -40,6 +47,16 @@ impl ProviderClient {
         match provider.protocol {
             ProviderProtocol::OpenAi => self.complete_openai(provider, conversation).await,
             ProviderProtocol::Anthropic => self.complete_anthropic(provider, conversation).await,
+            ProviderProtocol::Bedrock => {
+                // Placeholder: Bedrock uses SigV4 auth which requires AWS SDK.
+                // Fall back to OpenAI-compatible endpoint format for now.
+                self.complete_openai(provider, conversation).await
+            }
+            ProviderProtocol::Vertex => {
+                // Placeholder: Vertex AI uses Google OAuth2 which requires gcloud auth.
+                // Fall back to OpenAI-compatible endpoint format for now.
+                self.complete_openai(provider, conversation).await
+            }
         }
     }
 
@@ -76,7 +93,7 @@ impl ProviderClient {
         conversation: &[ConversationEntry],
     ) -> Result<ProviderResponse> {
         let (system, messages) = to_anthropic_messages(conversation);
-        let body = json!({
+        let mut body = json!({
             "model": provider.model,
             "system": system,
             "messages": messages,
@@ -87,6 +104,7 @@ impl ProviderClient {
             "max_tokens": provider.max_output_tokens,
             "stream": false,
         });
+        add_cache_control(&mut body);
         let base_url = provider
             .base_url
             .as_ref()
@@ -270,12 +288,7 @@ fn to_anthropic_messages(conversation: &[ConversationEntry]) -> (String, Vec<Val
                 "content": [{"type": "text", "text": entry.history_text()}],
             }),
             ConversationRole::Assistant => {
-                if !entry.content_blocks.is_empty() {
-                    json!({
-                        "role": "assistant",
-                        "content": entry.content_blocks,
-                    })
-                } else {
+                if entry.content_blocks.is_empty() {
                     let mut blocks = Vec::new();
                     if !entry.history_text().is_empty() {
                         blocks.push(json!({"type": "text", "text": entry.history_text()}));
@@ -291,6 +304,11 @@ fn to_anthropic_messages(conversation: &[ConversationEntry]) -> (String, Vec<Val
                     json!({
                         "role": "assistant",
                         "content": blocks,
+                    })
+                } else {
+                    json!({
+                        "role": "assistant",
+                        "content": entry.content_blocks,
                     })
                 }
             }
@@ -478,8 +496,10 @@ fn mock_response(conversation: &[ConversationEntry]) -> ProviderResponse {
         .iter()
         .rev()
         .find(|entry| matches!(entry.role, ConversationRole::User))
-        .map(ConversationEntry::history_text)
-        .unwrap_or_else(|| "No prompt supplied.".to_owned());
+        .map_or_else(
+            || "No prompt supplied.".to_owned(),
+            ConversationEntry::history_text,
+        );
     let has_tool_result_after_latest_user = conversation
         .iter()
         .rev()
@@ -500,8 +520,7 @@ fn mock_response(conversation: &[ConversationEntry]) -> ProviderResponse {
                 id: "mock-tool-call-1".to_owned(),
                 name: builtin_tool_specs()
                     .first()
-                    .map(|tool| tool.name.clone())
-                    .unwrap_or_else(|| "list_directory".to_owned()),
+                    .map_or_else(|| "list_directory".to_owned(), |tool| tool.name.clone()),
                 input: json!({"path": ".", "recursive": false, "max_entries": 32}),
             }]
         } else {
@@ -532,6 +551,49 @@ fn strip_reasoning_tags(text: &str) -> String {
         remaining.replace_range(start..end, "");
     }
     remaining.trim().to_owned()
+}
+
+/// Add Anthropic prompt caching markers (`cache_control: {"type": "ephemeral"}`)
+/// to strategic locations in the request body so that the system prompt,
+/// tool definitions, and the most recent user message are cached server-side.
+fn add_cache_control(body: &mut Value) {
+    // 1. Cache the system message.
+    if let Some(system) = body.get_mut("system") {
+        // Anthropic expects `system` as an array of content blocks.
+        if system.is_string() {
+            let text = system.as_str().unwrap_or("").to_owned();
+            *system = json!([{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]);
+        } else if let Some(system_arr) = system.as_array_mut()
+            && let Some(last_block) = system_arr.last_mut()
+        {
+            last_block["cache_control"] = json!({"type": "ephemeral"});
+        }
+    }
+
+    // 2. Cache the tool definitions.
+    if let Some(tools) = body.get_mut("tools")
+        && let Some(tools_arr) = tools.as_array_mut()
+        && let Some(last_tool) = tools_arr.last_mut()
+    {
+        last_tool["cache_control"] = json!({"type": "ephemeral"});
+    }
+
+    // 3. Cache the most recent user message.
+    if let Some(messages) = body.get_mut("messages")
+        && let Some(msg_arr) = messages.as_array_mut()
+    {
+        for msg in msg_arr.iter_mut().rev() {
+            if msg["role"] == "user" {
+                if let Some(content) = msg.get_mut("content")
+                    && let Some(content_arr) = content.as_array_mut()
+                    && let Some(last_block) = content_arr.last_mut()
+                {
+                    last_block["cache_control"] = json!({"type": "ephemeral"});
+                }
+                break;
+            }
+        }
+    }
 }
 
 #[cfg(test)]

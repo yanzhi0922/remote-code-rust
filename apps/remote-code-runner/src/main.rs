@@ -64,7 +64,7 @@ async fn wait_for_shutdown_or_timeout(
     shutdown: &mut watch::Receiver<bool>,
 ) -> bool {
     tokio::select! {
-        _ = tokio::time::sleep(duration) => false,
+        () = tokio::time::sleep(duration) => false,
         changed = shutdown.changed() => changed.is_err() || *shutdown.borrow(),
     }
 }

@@ -140,12 +140,11 @@ pub fn load_skill(path: impl AsRef<Path>) -> Result<SkillDocument, SkillError> {
     let (front_matter, body) = split_front_matter(path, &instructions)?;
     let root = path
         .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
-    let slug = root
-        .file_name()
-        .map(|value| value.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "unknown-skill".to_owned());
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+    let slug = root.file_name().map_or_else(
+        || "unknown-skill".to_owned(),
+        |value| value.to_string_lossy().into_owned(),
+    );
     let title = front_matter
         .title
         .clone()
@@ -276,7 +275,7 @@ fn extract_triggers(body: &str) -> Vec<String> {
 
 fn split_trigger_line(line: &str) -> Vec<String> {
     line.split(',')
-        .map(|item| item.trim())
+        .map(str::trim)
         .filter(|item| !item.is_empty())
         .map(str::to_owned)
         .collect()
@@ -320,7 +319,7 @@ fn discover_files(root: PathBuf) -> Vec<PathBuf> {
         .into_iter()
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_file())
-        .map(|entry| entry.into_path())
+        .map(walkdir::DirEntry::into_path)
         .collect::<Vec<_>>();
     files.sort();
     files

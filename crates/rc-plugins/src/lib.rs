@@ -821,8 +821,7 @@ fn resolve_plugin_root(manifest_path: &Path) -> PathBuf {
     {
         return parent
             .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| parent.to_path_buf());
+            .map_or_else(|| parent.to_path_buf(), Path::to_path_buf);
     }
     parent.to_path_buf()
 }
@@ -1133,31 +1132,25 @@ mod tests {
     }
 
     fn python_command() -> Option<(String, Vec<String>)> {
+        let probe = |cmd: &str, args: &[&str]| -> bool {
+            let mut cmd = ProcessCommand::new(cmd);
+            cmd.args(args).args(["-c", "import json"]);
+            cmd.output().is_ok_and(|output| output.status.success())
+        };
+
         if let Ok(path) = std::env::var("PYTHON")
-            && ProcessCommand::new(&path)
-                .arg("--version")
-                .output()
-                .is_ok_and(|output| output.status.success())
+            && probe(&path, &[])
         {
             return Some((path, Vec::new()));
         }
 
         for candidate in ["python", "python3"] {
-            if ProcessCommand::new(candidate)
-                .arg("--version")
-                .output()
-                .is_ok_and(|output| output.status.success())
-            {
+            if probe(candidate, &[]) {
                 return Some((candidate.to_owned(), Vec::new()));
             }
         }
 
-        if cfg!(windows)
-            && ProcessCommand::new("py")
-                .args(["-3", "--version"])
-                .output()
-                .is_ok_and(|output| output.status.success())
-        {
+        if cfg!(windows) && probe("py", &["-3"]) {
             return Some(("py".to_owned(), vec!["-3".to_owned()]));
         }
 
@@ -1171,7 +1164,10 @@ import sys
 
 mode = sys.argv[1] if len(sys.argv) > 1 else "success"
 
-for raw in sys.stdin:
+while True:
+    raw = sys.stdin.readline()
+    if not raw:
+        break
     raw = raw.strip()
     if not raw:
         continue

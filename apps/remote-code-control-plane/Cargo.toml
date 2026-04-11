@@ -19,5 +19,4 @@ tokio.workspace = true
 rc-control-plane = { path = "../../crates/rc-control-plane" }
 rc-telemetry = { path = "../../crates/rc-telemetry" }
 
-[dev-dependencies]
-serde_json.workspace = true
+

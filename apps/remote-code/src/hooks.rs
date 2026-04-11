@@ -126,6 +126,7 @@ pub struct RuntimeHookDiscovery {
 
 impl RuntimeHookDiscovery {
     #[must_use]
+    #[allow(dead_code)]
     pub fn supported_count(&self) -> usize {
         self.hooks.iter().filter(|hook| hook.supported).count()
     }
@@ -307,6 +308,7 @@ pub async fn run_hooks(config: &RuntimeConfig, command: HooksCommand) -> Result<
     }
 }
 
+#[allow(dead_code)]
 pub fn print_hooks_overview(config: &RuntimeConfig) -> Result<()> {
     let output = build_hooks_list_output(
         config,
@@ -509,6 +511,7 @@ pub async fn ensure_session_start_hooks(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub async fn apply_user_prompt_hooks(
     discovery: &RuntimeHookDiscovery,
     config: &RuntimeConfig,
@@ -645,6 +648,7 @@ pub async fn apply_post_tool_hooks(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub async fn apply_permission_denied_hooks(
     discovery: &RuntimeHookDiscovery,
     config: &RuntimeConfig,
@@ -956,6 +960,7 @@ fn wildcard_match(pattern: &str, candidate: &str) -> bool {
     dp[pattern.len()][candidate.len()]
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_event_hooks(
     discovery: &RuntimeHookDiscovery,
     event: HookEventName,
@@ -1094,7 +1099,6 @@ async fn execute_command_hook(
             };
         }
         Err(_) => {
-            let _ = child.kill().await;
             return ExecutedHookOutcome {
                 status: "timeout",
                 blocked_reason: blocking.then(|| {
@@ -1115,18 +1119,18 @@ async fn execute_command_hook(
     let parsed = parse_hook_response(&stdout);
     let updated_input = parsed
         .as_ref()
-        .and_then(|response| normalized_updated_input(response));
+        .and_then(normalized_updated_input);
     let additional_context = parsed
         .as_ref()
-        .and_then(|response| normalized_additional_context(response));
+        .and_then(normalized_additional_context);
     let blocked_reason = if parsed
         .as_ref()
-        .is_some_and(|response| hook_response_blocks(response))
+        .is_some_and(hook_response_blocks)
     {
         Some(
             parsed
                 .as_ref()
-                .and_then(|response| normalized_stop_reason(response))
+                .and_then(normalized_stop_reason)
                 .unwrap_or_else(|| format!("Hook `{}` blocked the action.", hook.display)),
         )
     } else if blocking && !output.status.success() {
@@ -1360,7 +1364,7 @@ mod tests {
             config.paths.profile_dir.join("hooks.json"),
             format!(
                 r#"{{"pre_tool_use":[{{"matcher":"write","hooks":[{{"type":"command","command":"{}","shell":"{}","once":true}}]}}]}}"#,
-                command.replace('\\', "\\\\").replace('"', "\\\""),
+                command.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n"),
                 shell
             ),
         )
@@ -1424,7 +1428,7 @@ mod tests {
             config.paths.profile_dir.join("hooks.json"),
             format!(
                 r#"{{"SessionStart":[{{"hooks":[{{"type":"command","command":"{}","shell":"{}"}}]}}]}}"#,
-                command.replace('\\', "\\\\").replace('"', "\\\""),
+                command.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n"),
                 shell
             ),
         )

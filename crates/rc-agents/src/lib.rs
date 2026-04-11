@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -694,6 +695,110 @@ impl AgentScheduler {
             message: message.into(),
         });
     }
+
+    /// Execute multiple pending tasks in parallel using tokio.
+    ///
+    /// Each task is spawned as an independent tokio task. The `executor` closure
+    /// receives the task ID and title, and returns a `Result<String>`.
+    pub async fn execute_parallel<F, Fut>(
+        &self,
+        task_ids: &[Uuid],
+        executor: F,
+    ) -> Vec<Result<String>>
+    where
+        F: Fn(Uuid, String) -> Fut + Clone + Send + 'static,
+        Fut: std::future::Future<Output = Result<String>> + Send,
+    {
+        let mut handles = Vec::new();
+        for &task_id in task_ids {
+            if let Some(task) = self.tasks.get(&task_id)
+                && task.state == TaskState::Pending
+            {
+                let title = task.title.clone();
+                let exec = executor.clone();
+                handles.push(tokio::spawn(async move { exec(task_id, title).await }));
+            }
+        }
+        let mut results = Vec::new();
+        for handle in handles {
+            match handle.await {
+                Ok(result) => results.push(result),
+                Err(e) => results.push(Err(anyhow::anyhow!("Task panicked: {}", e))),
+            }
+        }
+        results
+    }
+
+    /// Produce a team status report with per-agent active task counts.
+    #[must_use]
+    pub fn team_status(&self) -> TeamStatusReport {
+        TeamStatusReport {
+            team_id: self.team_id,
+            lead: self.lead.clone(),
+            objective: self.objective.clone(),
+            agents: self
+                .agents
+                .iter()
+                .map(|(id, agent)| AgentStatusEntry {
+                    id: *id,
+                    name: agent.name.clone(),
+                    role: agent.role.clone(),
+                    state: agent.state,
+                    active_tasks: self
+                        .tasks
+                        .values()
+                        .filter(|t| {
+                            t.owner == Some(*id)
+                                && matches!(
+                                    t.state,
+                                    TaskState::Assigned
+                                        | TaskState::Running
+                                        | TaskState::WaitingOnTool
+                                        | TaskState::WaitingOnApproval
+                                )
+                        })
+                        .count(),
+                })
+                .collect(),
+            pending_tasks: self
+                .tasks
+                .values()
+                .filter(|t| t.state == TaskState::Pending)
+                .count(),
+            completed_tasks: self
+                .tasks
+                .values()
+                .filter(|t| t.state == TaskState::Completed)
+                .count(),
+            failed_tasks: self
+                .tasks
+                .values()
+                .filter(|t| t.state == TaskState::Failed)
+                .count(),
+        }
+    }
+}
+
+/// A snapshot of the team's current status.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamStatusReport {
+    pub team_id: Uuid,
+    pub lead: String,
+    pub objective: String,
+    pub agents: Vec<AgentStatusEntry>,
+    pub pending_tasks: usize,
+    pub completed_tasks: usize,
+    pub failed_tasks: usize,
+}
+
+/// Per-agent status within a team report.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentStatusEntry {
+    pub id: Uuid,
+    pub name: String,
+    pub role: String,
+    pub state: AgentState,
+    pub active_tasks: usize,
 }
 
 fn has_ownership_match(agent_paths: &[String], task_paths: &[String]) -> bool {
@@ -740,7 +845,7 @@ mod tests {
         let mut identity = AgentIdentity::new(name, "worker");
         identity.ownership_paths = ownership_paths
             .iter()
-            .map(|value| value.to_string())
+            .map(std::string::ToString::to_string)
             .collect();
         identity
     }

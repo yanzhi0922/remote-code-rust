@@ -14,3 +14,20 @@ fixtures/out/
 
 __pycache__/
 *.pyc
+*.swp
+*.swo
+*.orig
+.env
+.env.*
+nul
+.ruff_cache/
+
+# Temporary build artifacts and warning lists
+C*persistent*
+C*pedantic*
+C*clippy*
+C*warnings*
+C*app-warnings*
+remaining-warnings.txt
+fix_pedantic.py
+key_for_test.txt

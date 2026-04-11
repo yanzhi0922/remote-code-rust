@@ -21,6 +21,7 @@ pub enum PermissionMode {
 }
 
 impl PermissionMode {
+    #[must_use]
     pub fn as_legacy_str(self) -> &'static str {
         match self {
             Self::Default => "default",
@@ -38,13 +39,20 @@ pub enum ProviderProtocol {
     #[default]
     OpenAi,
     Anthropic,
+    /// AWS Bedrock (placeholder — uses SigV4 auth).
+    Bedrock,
+    /// Google Vertex AI (placeholder — uses GCP auth).
+    Vertex,
 }
 
 impl ProviderProtocol {
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::OpenAi => "openai",
             Self::Anthropic => "anthropic",
+            Self::Bedrock => "bedrock",
+            Self::Vertex => "vertex",
         }
     }
 }
@@ -75,6 +83,7 @@ pub enum HookEvent {
 }
 
 impl HookEvent {
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::SessionStart => "SessionStart",
@@ -94,6 +103,7 @@ pub enum HookShell {
 }
 
 impl HookShell {
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Bash => "bash",
@@ -124,6 +134,7 @@ pub enum HookCommand {
 }
 
 impl HookCommand {
+    #[must_use]
     pub fn as_command(&self) -> &CommandHook {
         match self {
             Self::Command(command) => command,
@@ -148,6 +159,7 @@ pub enum SessionState {
 }
 
 impl SessionState {
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Idle => "idle",
@@ -259,6 +271,7 @@ impl ConversationEntry {
         }
     }
 
+    #[must_use]
     pub fn history_text(&self) -> String {
         self.history_text
             .clone()
@@ -302,6 +315,7 @@ pub struct StoredEvent {
     pub payload: Option<Value>,
 }
 
+#[must_use]
 pub fn default_system_prompt(cwd: &std::path::Path) -> String {
     format!(
         "You are Remote Code Rust, a concise coding agent running inside {}. Keep responses practical, prefer safe actions, and preserve compatibility with the Remote Code stream-json runtime where possible.",

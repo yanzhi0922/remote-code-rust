@@ -542,7 +542,7 @@ pub fn discover_mcp_configs(root: &Path) -> Vec<PathBuf> {
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_file())
         .filter(|entry| entry.file_name() == DEFAULT_MCP_CONFIG_FILE)
-        .map(|entry| entry.into_path())
+        .map(walkdir::DirEntry::into_path)
         .collect::<Vec<_>>();
     configs.sort();
     configs
@@ -933,10 +933,10 @@ mod tests {
     #[test]
     fn rejects_server_without_transport() {
         let error = McpConfig::from_toml_str(
-            r#"
+            r"
                 [mcp_servers.invalid]
                 enabled = true
-            "#,
+            ",
         )
         .expect_err("server without transport should fail");
 
@@ -997,7 +997,10 @@ def send(payload):
     sys.stdout.write(json.dumps(payload) + "\n")
     sys.stdout.flush()
 
-for raw in sys.stdin:
+while True:
+    raw = sys.stdin.readline()
+    if not raw:
+        break
     raw = raw.strip()
     if not raw:
         continue
@@ -1275,31 +1278,25 @@ for raw in sys.stdin:
     }
 
     fn python_command() -> Option<(String, Vec<String>)> {
+        let probe = |cmd: &str, args: &[&str]| -> bool {
+            let mut cmd = ProcessCommand::new(cmd);
+            cmd.args(args).args(["-c", "import json"]);
+            cmd.output().is_ok_and(|output| output.status.success())
+        };
+
         if let Ok(path) = std::env::var("PYTHON")
-            && ProcessCommand::new(&path)
-                .arg("--version")
-                .output()
-                .is_ok_and(|output| output.status.success())
+            && probe(&path, &[])
         {
             return Some((path, Vec::new()));
         }
 
         for candidate in ["python", "python3"] {
-            if ProcessCommand::new(candidate)
-                .arg("--version")
-                .output()
-                .is_ok_and(|output| output.status.success())
-            {
+            if probe(candidate, &[]) {
                 return Some((candidate.to_owned(), Vec::new()));
             }
         }
 
-        if cfg!(windows)
-            && ProcessCommand::new("py")
-                .args(["-3", "--version"])
-                .output()
-                .is_ok_and(|output| output.status.success())
-        {
+        if cfg!(windows) && probe("py", &["-3"]) {
             return Some(("py".to_owned(), vec!["-3".to_owned()]));
         }
 
@@ -1317,7 +1314,10 @@ def send(payload):
     sys.stdout.write(json.dumps(payload) + "\n")
     sys.stdout.flush()
 
-for raw in sys.stdin:
+while True:
+    raw = sys.stdin.readline()
+    if not raw:
+        break
     raw = raw.strip()
     if not raw:
         continue
