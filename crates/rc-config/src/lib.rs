@@ -428,7 +428,7 @@ pub fn normalize_base_url(base_url: Option<String>, protocol: ProviderProtocol) 
 
 fn build_request_header_overrides(session_id: Option<Uuid>) -> BTreeMap<String, String> {
     let mut merged = BTreeMap::new();
-    if let Some(raw) = read_env_first(&["ANTHROPIC_CUSTOM_HEADERS"]) {
+    if let Some(raw) = read_env_first(&["REMOTE_CODE_CUSTOM_HEADERS", "ANTHROPIC_CUSTOM_HEADERS"]) {
         for line in raw.lines() {
             let trimmed = line.trim();
             if trimmed.is_empty() {
@@ -503,11 +503,16 @@ fn read_env_first(keys: &[&str]) -> Option<String> {
 ///
 /// ## Standard API Providers
 ///
-/// | Env var              | Provider name | Protocol  | Base URL                                              | Model          |
-/// |----------------------|---------------|-----------|-------------------------------------------------------|----------------|
-/// | `GLM_API_KEY`        | `glm`         | `openai`  | `https://open.bigmodel.cn/api/paas/v4`                | `glm-4-plus`   |
-/// | `ANTHROPIC_API_KEY`  | `anthropic`   | `anthropic`| *(default)*                                           | *(default)*    |
-/// | `OPENAI_API_KEY`     | `openai`      | `openai`  | *(default)*                                           | *(default)*    |
+/// | Env var (primary)              | Fallback              | Provider name | Protocol  | Base URL                                              | Model          |
+/// |--------------------------------|-----------------------|---------------|-----------|-------------------------------------------------------|----------------|
+/// | `GLM_API_KEY`                  | —                     | `glm`         | `openai`  | `https://open.bigmodel.cn/api/paas/v4`                | `glm-4-plus`   |
+/// | `REMOTE_CODE_API_KEY`          | `ANTHROPIC_API_KEY`   | `anthropic`   | `anthropic`| *(default)*                                           | *(default)*    |
+/// | `OPENAI_API_KEY`               | —                     | `openai`      | `openai`  | *(default)*                                           | *(default)*    |
+///
+/// Additional overrides for the Anthropic provider:
+/// - `REMOTE_CODE_ANTHROPIC_BASE_URL` → `ANTHROPIC_BASE_URL`
+/// - `REMOTE_CODE_ANTHROPIC_MODEL` → `ANTHROPIC_MODEL`
+/// - `REMOTE_CODE_CUSTOM_HEADERS` → `ANTHROPIC_CUSTOM_HEADERS`
 ///
 /// ## Coding Plan Providers (Subscription-based AI Coding)
 ///
@@ -561,17 +566,17 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
         });
     }
 
-    // Anthropic
-    if let Some(api_key) = read_env_first(&["ANTHROPIC_API_KEY"]) {
+    // Anthropic — REMOTE_CODE_API_KEY preferred, ANTHROPIC_API_KEY as fallback
+    if let Some(api_key) = read_env_first(&["REMOTE_CODE_API_KEY", "ANTHROPIC_API_KEY"]) {
         let base_url = normalize_base_url(
-            read_env_first(&["ANTHROPIC_BASE_URL"]),
+            read_env_first(&["REMOTE_CODE_ANTHROPIC_BASE_URL", "ANTHROPIC_BASE_URL"]),
             ProviderProtocol::Anthropic,
         );
         providers.push(ProviderConfig {
             name: "anthropic".to_owned(),
             base_url,
             api_key: Some(api_key),
-            model: read_env_first(&["ANTHROPIC_MODEL"]),
+            model: read_env_first(&["REMOTE_CODE_ANTHROPIC_MODEL", "ANTHROPIC_MODEL"]),
             protocol: ProviderProtocol::Anthropic,
             timeout_ms: 600_000,
             max_output_tokens: 4_096,
