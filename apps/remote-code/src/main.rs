@@ -121,6 +121,12 @@ async fn run_ssh(args: cli::SshArgs) -> Result<()> {
     // Build the SSH command
     let mut cmd_args = Vec::new();
 
+    // SSH config file
+    if let Some(config) = &args.config {
+        cmd_args.push("-F".to_owned());
+        cmd_args.push(config.to_string_lossy().to_string());
+    }
+
     // Port
     if args.port != 22 {
         cmd_args.push("-p".to_owned());
@@ -132,6 +138,36 @@ async fn run_ssh(args: cli::SshArgs) -> Result<()> {
         cmd_args.push("-i".to_owned());
         cmd_args.push(identity.to_string_lossy().to_string());
     }
+
+    // Verbose
+    if args.verbose {
+        cmd_args.push("-v".to_owned());
+    }
+
+    // Agent forwarding
+    if args.forward_agent {
+        cmd_args.push("-A".to_owned());
+    }
+
+    // Local port forwarding
+    for fwd in &args.local_forward {
+        cmd_args.push("-L".to_owned());
+        cmd_args.push(fwd.clone());
+    }
+
+    // Remote port forwarding
+    for fwd in &args.remote_forward {
+        cmd_args.push("-R".to_owned());
+        cmd_args.push(fwd.clone());
+    }
+
+    // Connection timeout
+    cmd_args.push("-o".to_owned());
+    cmd_args.push(format!("ConnectTimeout={}", args.timeout));
+
+    // Disable strict host key checking for convenience (can be overridden via config)
+    cmd_args.push("-o".to_owned());
+    cmd_args.push("StrictHostKeyChecking=accept-new".to_owned());
 
     // Build user@host
     let target = if let Some(user) = &args.user {
@@ -145,14 +181,22 @@ async fn run_ssh(args: cli::SshArgs) -> Result<()> {
     if let Some(command) = &args.command {
         cmd_args.push(command.clone());
     } else {
-        // Default: start an interactive shell
-        cmd_args.push("remote-code".to_owned());
+        // Default: start remote-code on the remote host with any extra args.
+        let mut remote_cmd = String::from("remote-code");
+        for extra in &args.remote_args {
+            remote_cmd.push(' ');
+            remote_cmd.push_str(extra);
+        }
+        cmd_args.push(remote_cmd);
     }
 
     println!("Connecting via SSH: ssh {}", cmd_args.join(" "));
 
     let status = StdCommand::new("ssh")
         .args(&cmd_args)
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
         .status()
         .context("failed to execute ssh command — is ssh installed?")?;
 

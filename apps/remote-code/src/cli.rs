@@ -700,6 +700,34 @@ pub struct SshArgs {
     /// Identity file (SSH private key path).
     #[arg(short = 'i', long)]
     pub identity: Option<PathBuf>,
+
+    /// SSH config file path.
+    #[arg(short = 'F', long)]
+    pub config: Option<PathBuf>,
+
+    /// Enable verbose SSH output (-v).
+    #[arg(short = 'v', long)]
+    pub verbose: bool,
+
+    /// Enable SSH agent forwarding (-A).
+    #[arg(short = 'A', long)]
+    pub forward_agent: bool,
+
+    /// Local port forwarding (e.g. "8080:localhost:80").
+    #[arg(short = 'L', long)]
+    pub local_forward: Vec<String>,
+
+    /// Remote port forwarding (e.g. "9090:localhost:8080").
+    #[arg(short = 'R', long)]
+    pub remote_forward: Vec<String>,
+
+    /// Connection timeout in seconds.
+    #[arg(long, default_value_t = 30)]
+    pub timeout: u64,
+
+    /// Extra arguments to pass to remote-code on the remote host.
+    #[arg(long)]
+    pub remote_args: Vec<String>,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]

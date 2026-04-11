@@ -1096,13 +1096,15 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
             name: "daemon".to_owned(),
             protocol_name: "Daemon".to_owned(),
             permission_tool_name: "Daemon".to_owned(),
-            description: "Manage background daemon processes (start, stop, status).".to_owned(),
+            description: "Manage background daemon processes: start (spawn background), stop (kill by id), status, list, restart, and logs.".to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["start", "stop", "status"]},
-                    "command": {"type": "string"}
+                    "action": {"type": "string", "enum": ["start", "stop", "status", "list", "restart", "logs"]},
+                    "command": {"type": "string", "description": "Command to run (for start)"},
+                    "id": {"type": "string", "description": "Daemon ID (for stop, restart, logs)"},
+                    "lines": {"type": "integer", "description": "Number of log lines to read (for logs, default 50)", "minimum": 1, "maximum": 500}
                 },
                 "required": ["action"],
                 "additionalProperties": false,
@@ -3854,7 +3856,7 @@ fn voice_input_tool(input: &Value) -> Result<String> {
 fn daemon_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
     let action = input["action"]
         .as_str()
-        .ok_or_else(|| anyhow!("action is required (start, stop, or status)"))?;
+        .ok_or_else(|| anyhow!("action is required (start, stop, status, list, restart, or logs)"))?;
 
     let daemon_dir = context.cwd.join(".remote-code-rust");
     std::fs::create_dir_all(&daemon_dir)?;
@@ -3872,40 +3874,262 @@ fn daemon_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> 
             let command = input["command"]
                 .as_str()
                 .ok_or_else(|| anyhow!("command is required for start action"))?;
+
+            // Create log files for stdout/stderr.
+            let daemon_id = format!("daemon-{}", daemons.len() + 1);
+            let stdout_path = daemon_dir.join(format!("{daemon_id}.stdout.log"));
+            let stderr_path = daemon_dir.join(format!("{daemon_id}.stderr.log"));
+
+            let stdout_file = std::fs::File::create(&stdout_path)?;
+            let stderr_file = std::fs::File::create(&stderr_path)?;
+
+            // Spawn the process in the background.
+            let shell = if cfg!(windows) { "cmd" } else { "sh" };
+            let flag = if cfg!(windows) { "/C" } else { "-c" };
+            let child = std::process::Command::new(shell)
+                .arg(flag)
+                .arg(command)
+                .current_dir(&context.cwd)
+                .stdout(std::process::Stdio::from(stdout_file))
+                .stderr(std::process::Stdio::from(stderr_file))
+                .spawn();
+
+            let (pid, status) = match child {
+                Ok(c) => {
+                    let pid = c.id();
+                    // We cannot hold the Child across the match because we need to
+                    // store data in the JSON. The process will continue running in
+                    // the background after the Child handle is dropped (on Unix it
+                    // is reparented to init; on Windows it continues independently).
+                    drop(c);
+                    (Some(pid as u64), "running")
+                }
+                Err(_) => (None, "failed_to_start"),
+            };
+
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+
             let entry = json!({
+                "id": daemon_id,
                 "command": command,
-                "status": "running",
-                "pid": null,
-                "started_at": std::time::SystemTime::now()
-                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0),
+                "status": status,
+                "pid": pid,
+                "started_at": now,
+                "stdout_log": stdout_path.to_string_lossy(),
+                "stderr_log": stderr_path.to_string_lossy(),
             });
             daemons.push(entry);
             let content = serde_json::to_string_pretty(&daemons)?;
             std::fs::write(&daemon_path, content)?;
-            Ok(format!("Daemon started: {command}"))
+
+            if pid.is_some() {
+                Ok(format!("Daemon '{daemon_id}' started: {command} (pid={})", pid.unwrap()))
+            } else {
+                Ok(format!("Daemon '{daemon_id}' failed to start: {command}"))
+            }
         }
         "stop" => {
-            let command = input["command"].as_str().unwrap_or("");
+            let id = input["id"].as_str();
             let count_before = daemons.len();
+
             daemons.retain(|d| {
-                if command.is_empty() {
-                    false // stop all
+                let should_remove = if let Some(id_val) = id {
+                    d["id"].as_str() == Some(id_val) || d["command"].as_str() == Some(id_val)
                 } else {
-                    d["command"].as_str() != Some(command)
+                    // Stop all: remove everything.
+                    true
+                };
+
+                // Try to kill the process if we have a PID.
+                if should_remove {
+                    if let Some(pid) = d["pid"].as_u64() {
+                        let _ = kill_process(pid as u32);
+                    }
                 }
+                !should_remove
             });
+
             let stopped = count_before - daemons.len();
             let content = serde_json::to_string_pretty(&daemons)?;
             std::fs::write(&daemon_path, content)?;
             Ok(format!("Stopped {stopped} daemon(s)."))
         }
         "status" => {
-            Ok(serde_json::to_string_pretty(&daemons)?)
+            let id = input["id"].as_str();
+            match id {
+                Some(id_val) => {
+                    let daemon = daemons.iter().find(|d| {
+                        d["id"].as_str() == Some(id_val) || d["command"].as_str() == Some(id_val)
+                    });
+                    match daemon {
+                        Some(d) => {
+                            // Check if the process is still alive.
+                            let mut d = d.clone();
+                            if let Some(pid) = d["pid"].as_u64() {
+                                if !is_process_alive(pid as u32) {
+                                    d["status"] = json!("stopped");
+                                }
+                            }
+                            Ok(serde_json::to_string_pretty(&d)?)
+                        }
+                        None => Ok(json!({
+                            "id": id_val,
+                            "status": "not_found",
+                        }).to_string()),
+                    }
+                }
+                None => Ok(serde_json::to_string_pretty(&daemons)?),
+            }
         }
-        _ => Err(anyhow!("action must be 'start', 'stop', or 'status'")),
+        "list" => {
+            let summary: Vec<Value> = daemons.iter().map(|d| {
+                let mut s = json!({
+                    "id": d["id"],
+                    "command": d["command"],
+                    "status": d["status"],
+                    "pid": d["pid"],
+                });
+                // Check liveness.
+                if let Some(pid) = d["pid"].as_u64() {
+                    if !is_process_alive(pid as u32) {
+                        s["status"] = json!("stopped");
+                    }
+                }
+                s
+            }).collect();
+            Ok(json!({
+                "daemons": summary,
+                "count": summary.len(),
+            }).to_string())
+        }
+        "restart" => {
+            let id = input["id"]
+                .as_str()
+                .ok_or_else(|| anyhow!("id is required for restart action"))?;
+
+            let daemon = daemons.iter().find(|d| {
+                d["id"].as_str() == Some(id) || d["command"].as_str() == Some(id)
+            }).cloned();
+
+            match daemon {
+                Some(d) => {
+                    let command = d["command"].as_str().unwrap_or("").to_string();
+                    // Stop the old one.
+                    if let Some(pid) = d["pid"].as_u64() {
+                        let _ = kill_process(pid as u32);
+                    }
+                    // Remove old entry.
+                    daemons.retain(|e| e["id"].as_str() != d["id"].as_str());
+                    let content = serde_json::to_string_pretty(&daemons)?;
+                    std::fs::write(&daemon_path, content)?;
+                    // Start a new one with the same command.
+                    drop(d);
+                    let restart_input = json!({
+                        "action": "start",
+                        "command": command,
+                    });
+                    daemon_tool(&restart_input, context)
+                }
+                None => Err(anyhow!("daemon '{id}' not found")),
+            }
+        }
+        "logs" => {
+            let id = input["id"]
+                .as_str()
+                .ok_or_else(|| anyhow!("id is required for logs action"))?;
+            let lines = input["lines"].as_u64().unwrap_or(50) as usize;
+
+            let daemon = daemons.iter().find(|d| {
+                d["id"].as_str() == Some(id) || d["command"].as_str() == Some(id)
+            });
+
+            match daemon {
+                Some(d) => {
+                    let stdout_log = d["stdout_log"].as_str().unwrap_or("");
+                    let stderr_log = d["stderr_log"].as_str().unwrap_or("");
+
+                    let stdout_content = if std::path::Path::new(stdout_log).exists() {
+                        read_last_n_lines(stdout_log, lines)
+                    } else {
+                        String::new()
+                    };
+                    let stderr_content = if std::path::Path::new(stderr_log).exists() {
+                        read_last_n_lines(stderr_log, lines)
+                    } else {
+                        String::new()
+                    };
+
+                    Ok(json!({
+                        "id": id,
+                        "stdout": stdout_content,
+                        "stderr": stderr_content,
+                    }).to_string())
+                }
+                None => Err(anyhow!("daemon '{id}' not found")),
+            }
+        }
+        _ => Err(anyhow!("action must be 'start', 'stop', 'status', 'list', 'restart', or 'logs'")),
     }
+}
+
+/// Try to kill a process by PID (cross-platform best-effort).
+fn kill_process(pid: u32) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/F"])
+            .output()?;
+    }
+    #[cfg(not(windows))]
+    {
+        // Use the POSIX kill command.
+        let _ = std::process::Command::new("kill")
+            .arg(pid.to_string())
+            .output();
+    }
+    Ok(())
+}
+
+/// Check if a process is still alive (cross-platform best-effort).
+fn is_process_alive(pid: u32) -> bool {
+    #[cfg(windows)]
+    {
+        let output = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .output();
+        match output {
+            Ok(out) => {
+                let text = String::from_utf8_lossy(&out.stdout);
+                text.contains(&pid.to_string())
+            }
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        // kill -0 checks existence without sending a signal.
+        let output = std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .output();
+        match output {
+            Ok(out) => out.status.success(),
+            Err(_) => false,
+        }
+    }
+}
+
+/// Read the last N lines from a file.
+fn read_last_n_lines(path: &str, n: usize) -> String {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return String::new(),
+    };
+    let lines: Vec<&str> = content.lines().collect();
+    let start = if lines.len() > n { lines.len() - n } else { 0 };
+    lines[start..].join("\n")
 }
 
 // ── Command hooks ──────────────────────────────────────────────────────────
