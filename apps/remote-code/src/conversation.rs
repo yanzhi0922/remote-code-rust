@@ -324,6 +324,7 @@ pub(crate) async fn run_prompt(
     let tool_context = ToolExecutionContext {
         cwd: config.cwd.clone(),
         timeout_ms: config.provider.timeout_ms,
+        sub_agent: None,
     };
     let mut usage = UsagePayload::default();
     let mut num_turns = 0u32;

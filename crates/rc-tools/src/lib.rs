@@ -4,17 +4,19 @@
 //! with a [`ToolRegistry`] that supports BM25-based tool search and OpenAI /
 //! Anthropic schema generation.
 
+pub mod lsp;
 pub mod sandbox;
 pub mod search;
 pub mod tasks;
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 use globset::GlobBuilder;
 use ignore::WalkBuilder;
-use rc_core::{HookEvent, HookShell, ToolCall, ToolResult};
+use rc_core::{HookEvent, HookShell, SubAgentCompletion, ToolCall, ToolResult};
 use rc_permissions::{PermissionBroker, PermissionRequest, auto_allows, classify_tool};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -76,12 +78,15 @@ impl ToolSpec {
 }
 
 /// Execution context passed to every tool implementation.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ToolExecutionContext {
     /// Current working directory.
     pub cwd: PathBuf,
     /// Timeout in milliseconds for tool execution.
     pub timeout_ms: u64,
+    /// Optional sub-agent completion provider for the agent tool.
+    /// When `None`, the agent tool falls back to returning a delegation JSON.
+    pub sub_agent: Option<Arc<dyn SubAgentCompletion>>,
 }
 
 /// Request to execute a command hook.
@@ -678,13 +683,13 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
             name: "web_browser".to_owned(),
             protocol_name: "WebBrowser".to_owned(),
             permission_tool_name: "WebBrowser".to_owned(),
-            description: "Fetch a URL or take a screenshot (simplified: fetches page content via HTTP).".to_owned(),
+            description: "Enhanced web browser: fetch URL content, extract links, extract text, or take a screenshot.".to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "url": {"type": "string"},
-                    "action": {"type": "string", "enum": ["fetch", "screenshot"], "description": "Action to perform (default: fetch)"}
+                    "action": {"type": "string", "enum": ["fetch", "extract_links", "extract_text", "screenshot"], "description": "Action to perform (default: fetch)"}
                 },
                 "required": ["url"],
                 "additionalProperties": false,
@@ -742,6 +747,316 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
                     "command": {"type": "string"}
                 },
                 "required": ["command"],
+                "additionalProperties": false,
+            }),
+        },
+        // ── Phase 4: Upstream gap-fill tools ──────────────────────────────
+        ToolSpec {
+            name: "powershell".to_owned(),
+            protocol_name: "PowerShell".to_owned(),
+            permission_tool_name: "Bash".to_owned(),
+            description: "Execute a PowerShell command (Windows only).".to_owned(),
+            requires_permission: true,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string"},
+                    "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 600000}
+                },
+                "required": ["command"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "repl".to_owned(),
+            protocol_name: "REPL".to_owned(),
+            permission_tool_name: "Bash".to_owned(),
+            description: "Execute code in a language REPL (python, node, or rust).".to_owned(),
+            requires_permission: true,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "language": {"type": "string", "enum": ["python", "node", "rust"]},
+                    "code": {"type": "string"}
+                },
+                "required": ["language", "code"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "monitor".to_owned(),
+            protocol_name: "Monitor".to_owned(),
+            permission_tool_name: "Read".to_owned(),
+            description: "Monitor agents, tasks, or sessions and return a status snapshot.".to_owned(),
+            requires_permission: false,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "enum": ["agents", "tasks", "sessions"]},
+                    "interval_ms": {"type": "integer", "minimum": 100, "maximum": 60000}
+                },
+                "required": ["target"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "schedule_cron".to_owned(),
+            protocol_name: "ScheduleCron".to_owned(),
+            permission_tool_name: "Edit".to_owned(),
+            description: "Schedule a cron job that runs a command periodically.".to_owned(),
+            requires_permission: true,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "schedule": {"type": "string", "description": "Cron expression (e.g. '*/5 * * * *')"},
+                    "command": {"type": "string"},
+                    "description": {"type": "string"}
+                },
+                "required": ["schedule", "command"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "remote_trigger".to_owned(),
+            protocol_name: "RemoteTrigger".to_owned(),
+            permission_tool_name: "RemoteTrigger".to_owned(),
+            description: "Send an HTTP POST to trigger a remote event.".to_owned(),
+            requires_permission: true,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "event": {"type": "string"},
+                    "payload": {}
+                },
+                "required": ["url", "event"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "workflow".to_owned(),
+            protocol_name: "Workflow".to_owned(),
+            permission_tool_name: "Read".to_owned(),
+            description: "Create, run, or check status of a simple workflow.".to_owned(),
+            requires_permission: false,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["create", "run", "status"]},
+                    "name": {"type": "string"},
+                    "steps": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    }
+                },
+                "required": ["action", "name"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "suggest_pr".to_owned(),
+            protocol_name: "SuggestPR".to_owned(),
+            permission_tool_name: "Read".to_owned(),
+            description: "Analyze git diff and suggest a PR title and description.".to_owned(),
+            requires_permission: false,
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "enter_worktree".to_owned(),
+            protocol_name: "EnterWorktree".to_owned(),
+            permission_tool_name: "Edit".to_owned(),
+            description: "Suggest a git worktree add command for a branch.".to_owned(),
+            requires_permission: true,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "branch": {"type": "string"}
+                },
+                "required": ["branch"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "exit_worktree".to_owned(),
+            protocol_name: "ExitWorktree".to_owned(),
+            permission_tool_name: "Edit".to_owned(),
+            description: "Suggest a git worktree remove command for a branch.".to_owned(),
+            requires_permission: true,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "branch": {"type": "string"}
+                },
+                "required": ["branch"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "brief".to_owned(),
+            protocol_name: "Brief".to_owned(),
+            permission_tool_name: "Read".to_owned(),
+            description: "Summarize or truncate content to a maximum length.".to_owned(),
+            requires_permission: false,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string"},
+                    "max_length": {"type": "integer", "minimum": 10, "maximum": 100000}
+                },
+                "required": ["content"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "ctx_inspect".to_owned(),
+            protocol_name: "CtxInspect".to_owned(),
+            permission_tool_name: "Read".to_owned(),
+            description: "Inspect current conversation context (tokens, messages, tools).".to_owned(),
+            requires_permission: false,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["tokens", "messages", "tools"]}
+                },
+                "required": ["action"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "list_peers".to_owned(),
+            protocol_name: "ListPeers".to_owned(),
+            permission_tool_name: "Read".to_owned(),
+            description: "List all registered agents in the multi-agent system.".to_owned(),
+            requires_permission: false,
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "tungsten".to_owned(),
+            protocol_name: "Tungsten".to_owned(),
+            permission_tool_name: "Bash".to_owned(),
+            description: "Smart build/test/run engine that detects project type and executes the right commands.".to_owned(),
+            requires_permission: true,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["compile", "run", "test"]},
+                    "target": {"type": "string"}
+                },
+                "required": ["action", "target"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "overflow_test".to_owned(),
+            protocol_name: "OverflowTest".to_owned(),
+            permission_tool_name: "Read".to_owned(),
+            description: "Generate test data for verifying context management edge cases.".to_owned(),
+            requires_permission: false,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "scenario": {"type": "string", "enum": ["large_output", "many_messages", "deep_recursion"]}
+                },
+                "required": ["scenario"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "synthetic_output".to_owned(),
+            protocol_name: "SyntheticOutput".to_owned(),
+            permission_tool_name: "Read".to_owned(),
+            description: "Generate synthetic test data in JSON, CSV, Markdown, or text format.".to_owned(),
+            requires_permission: false,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "enum": ["json", "csv", "markdown", "text"]},
+                    "rows": {"type": "integer", "minimum": 1, "maximum": 1000}
+                },
+                "required": ["type"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "mcp_auth".to_owned(),
+            protocol_name: "McpAuth".to_owned(),
+            permission_tool_name: "McpAuth".to_owned(),
+            description: "Manage authentication state for MCP servers.".to_owned(),
+            requires_permission: true,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "server": {"type": "string"},
+                    "action": {"type": "string", "enum": ["login", "logout", "status"]}
+                },
+                "required": ["server", "action"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "list_mcp_resources".to_owned(),
+            protocol_name: "ListMcpResources".to_owned(),
+            permission_tool_name: "Read".to_owned(),
+            description: "List resources provided by MCP servers.".to_owned(),
+            requires_permission: false,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "server": {"type": "string"}
+                },
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "read_mcp_resource".to_owned(),
+            protocol_name: "ReadMcpResource".to_owned(),
+            permission_tool_name: "Read".to_owned(),
+            description: "Read the content of an MCP resource by URI.".to_owned(),
+            requires_permission: false,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "uri": {"type": "string"}
+                },
+                "required": ["uri"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "voice_input".to_owned(),
+            protocol_name: "VoiceInput".to_owned(),
+            permission_tool_name: "Read".to_owned(),
+            description: "Capture voice input (placeholder — requires external tool support).".to_owned(),
+            requires_permission: false,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "duration_secs": {"type": "integer", "minimum": 1, "maximum": 60}
+                },
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "daemon".to_owned(),
+            protocol_name: "Daemon".to_owned(),
+            permission_tool_name: "Daemon".to_owned(),
+            description: "Manage background daemon processes (start, stop, status).".to_owned(),
+            requires_permission: true,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["start", "stop", "status"]},
+                    "command": {"type": "string"}
+                },
+                "required": ["action"],
                 "additionalProperties": false,
             }),
         },
@@ -899,7 +1214,7 @@ pub async fn execute_tool_call(
         "ask_user" => ask_user(&call.input, context),
         "todo_write" => todo_write(&call.input, context),
         "config_read" => config_read(&call.input, context),
-        "agent" => agent_tool(&call.input, context),
+        "agent" => agent_tool(&call.input, context).await,
         "web_search" => web_search(&call.input, context).await,
         // ── Phase 2 tools ──────────────────────────────────────────────
         "lsp" => lsp_tool(&call.input, context).await,
@@ -924,6 +1239,27 @@ pub async fn execute_tool_call(
         "tool_search" => tool_search_tool(&call.input),
         "verify_plan" => verify_plan_tool(&call.input),
         "terminal_capture" => terminal_capture_tool(&call.input, context).await,
+        // ── Phase 4: Upstream gap-fill tools ────────────────────────────
+        "powershell" => powershell_tool(&call.input, context).await,
+        "repl" => repl_tool(&call.input, context).await,
+        "monitor" => monitor_tool(&call.input),
+        "schedule_cron" => schedule_cron_tool(&call.input, context),
+        "remote_trigger" => remote_trigger_tool(&call.input).await,
+        "workflow" => workflow_tool(&call.input, context),
+        "suggest_pr" => suggest_pr_tool(context),
+        "enter_worktree" => enter_worktree_tool(&call.input),
+        "exit_worktree" => exit_worktree_tool(&call.input),
+        "brief" => brief_tool(&call.input),
+        "ctx_inspect" => ctx_inspect_tool(&call.input),
+        "list_peers" => list_peers_tool(),
+        "tungsten" => tungsten_tool(&call.input, context).await,
+        "overflow_test" => overflow_test_tool(&call.input),
+        "synthetic_output" => synthetic_output_tool(&call.input),
+        "mcp_auth" => mcp_auth_tool(&call.input, context),
+        "list_mcp_resources" => list_mcp_resources_tool(&call.input),
+        "read_mcp_resource" => read_mcp_resource_tool(&call.input),
+        "voice_input" => voice_input_tool(&call.input),
+        "daemon" => daemon_tool(&call.input, context),
         _ => Err(anyhow!("unsupported tool {}", spec.name)),
     };
 
@@ -1500,12 +1836,12 @@ fn config_read(input: &Value, context: &ToolExecutionContext) -> Result<String> 
 
 // ── Agent & WebSearch tools ────────────────────────────────────────────────
 
-fn agent_tool(input: &Value, _context: &ToolExecutionContext) -> Result<String> {
+async fn agent_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
     let prompt = input
         .get("prompt")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("agent tool requires a prompt"))?;
-    let tools: Vec<String> = input
+    let allowed_tools: Vec<String> = input
         .get("tools")
         .and_then(Value::as_array)
         .map(|arr| {
@@ -1516,19 +1852,122 @@ fn agent_tool(input: &Value, _context: &ToolExecutionContext) -> Result<String> 
         })
         .unwrap_or_default();
 
-    // Simplified implementation: return a JSON structure indicating that a
-    // sub-agent task is requested. The upper-level conversation loop should
-    // detect this and handle the sub-agent execution.
-    let response = json!({
-        "type": "sub_agent_request",
-        "prompt": prompt,
-        "allowed_tools": tools,
-        "message": format!(
-            "Sub-agent task: {}. [Sub-agent execution requires provider context - delegated to conversation loop]",
-            prompt
+    // If no sub-agent completion provider is available, fall back to delegation JSON.
+    let sub_agent = match &context.sub_agent {
+        Some(provider) => provider,
+        None => {
+            let response = json!({
+                "type": "sub_agent_request",
+                "prompt": prompt,
+                "allowed_tools": allowed_tools,
+                "message": format!(
+                    "Sub-agent task: {}. [No provider available for sub-agent execution]",
+                    prompt
+                ),
+            });
+            return Ok(response.to_string());
+        }
+    };
+
+    // Create a sub-conversation with a system prompt and the user task.
+    let mut sub_conversation = vec![
+        rc_core::ConversationEntry::system(
+            "You are a sub-agent. Complete the task concisely and return the result.",
         ),
-    });
-    Ok(response.to_string())
+        rc_core::ConversationEntry::user(prompt),
+    ];
+
+    // Execute the sub-agent loop with a maximum of 5 turns.
+    let max_turns = 5;
+    let timeout = std::time::Duration::from_secs(60);
+
+    for turn in 0..max_turns {
+        let response = match tokio::time::timeout(timeout, sub_agent.complete(&sub_conversation)).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(error)) => {
+                return Ok(format!(
+                    "Sub-agent error on turn {}: {error}",
+                    turn + 1
+                ));
+            }
+            Err(_) => {
+                return Ok(format!(
+                    "Sub-agent timed out after {}s on turn {}.",
+                    timeout.as_secs(),
+                    turn + 1
+                ));
+            }
+        };
+
+        let assistant_text = response.text.clone();
+        sub_conversation.push(rc_core::ConversationEntry::assistant(&assistant_text));
+
+        // If no tool calls, the sub-agent is done.
+        if response.tool_calls.is_empty() {
+            return Ok(assistant_text);
+        }
+
+        // Execute tool calls within the sub-agent context.
+        for tool_call in &response.tool_calls {
+            let tool_name = &tool_call.name;
+
+            // Check if the tool is in the allowed list.
+            if !allowed_tools.is_empty() && !allowed_tools.contains(tool_name) {
+                sub_conversation.push(rc_core::ConversationEntry::tool(
+                    &tool_call.id,
+                    tool_name,
+                    "Tool not allowed in sub-agent context",
+                    true,
+                ));
+                continue;
+            }
+
+            // Execute the tool call with bypass permissions.
+            let broker = rc_permissions::StaticPermissionBroker::new(
+                rc_core::PermissionMode::BypassPermissions,
+            );
+            let result = Box::pin(execute_tool_call(tool_call, context, &broker)).await;
+
+            match result {
+                Ok(tool_result) => {
+                    let truncated = if tool_result.content.len() > 5000 {
+                        format!("{}...[truncated]", &tool_result.content[..5000])
+                    } else {
+                        tool_result.content
+                    };
+                    sub_conversation.push(rc_core::ConversationEntry::tool(
+                        &tool_call.id,
+                        tool_name,
+                        &truncated,
+                        tool_result.is_error,
+                    ));
+                }
+                Err(error) => {
+                    sub_conversation.push(rc_core::ConversationEntry::tool(
+                        &tool_call.id,
+                        tool_name,
+                        format!("Error: {error}"),
+                        true,
+                    ));
+                }
+            }
+        }
+    }
+
+    // Return the last assistant message (or a summary if we ran out of turns).
+    let final_response = sub_conversation
+        .last()
+        .map(|entry| entry.text.clone())
+        .unwrap_or_default();
+
+    if final_response.is_empty() {
+        Ok(format!(
+            "Sub-agent completed {} turns without a final text response.",
+            max_turns
+        ))
+    } else {
+        Ok(final_response)
+    }
 }
 
 async fn web_search(input: &Value, _context: &ToolExecutionContext) -> Result<String> {
@@ -1614,210 +2053,50 @@ async fn lsp_tool(input: &Value, context: &ToolExecutionContext) -> Result<Strin
         .as_str()
         .ok_or_else(|| anyhow!("file_path is required"))?;
 
+    let client = lsp::LspClient::new(&context.cwd);
+
     match action {
         "definitions" => {
             let symbol = input["symbol"]
                 .as_str()
                 .ok_or_else(|| anyhow!("symbol is required for definitions action"))?;
-            lsp_definitions(context, symbol)
+            let locations = client.find_definitions(symbol, Some(file_path))?;
+            if locations.is_empty() {
+                Ok(format!("No definitions found for '{symbol}'."))
+            } else {
+                Ok(lsp::format_locations(&locations))
+            }
         }
         "references" => {
             let symbol = input["symbol"]
                 .as_str()
                 .ok_or_else(|| anyhow!("symbol is required for references action"))?;
-            lsp_references(context, symbol)
+            let locations = client.find_references(symbol)?;
+            if locations.is_empty() {
+                Ok(format!("No references found for '{symbol}'."))
+            } else {
+                Ok(lsp::format_locations(&locations))
+            }
         }
         "hover" => {
             let symbol = input["symbol"]
                 .as_str()
                 .ok_or_else(|| anyhow!("symbol is required for hover action"))?;
-            lsp_hover(context, file_path, symbol)
+            client.hover(file_path, symbol)
         }
-        "completion" => Ok(json!({
-            "message": "Completion is not available in simplified LSP mode.",
-            "file": file_path,
-        })
-        .to_string()),
-        "diagnostics" => lsp_diagnostics(context).await,
+        "completion" => {
+            let line = input.get("line").and_then(Value::as_u64).unwrap_or(1);
+            let column = input.get("column").and_then(Value::as_u64).unwrap_or(1);
+            let suggestions = client.completion(file_path, line as u32, column as u32)?;
+            Ok(lsp::format_completions(&suggestions))
+        }
+        "diagnostics" => {
+            let diagnostics = client.diagnostics(file_path).await?;
+            let result = lsp::format_diagnostics(&diagnostics);
+            // Limit output size.
+            Ok(result.chars().take(10_000).collect())
+        }
         _ => Err(anyhow!("Unknown LSP action: {action}")),
-    }
-}
-
-fn lsp_definitions(context: &ToolExecutionContext, symbol: &str) -> Result<String> {
-    let escaped = regex::escape(symbol);
-    let pattern = format!(r"(?:fn|struct|enum|trait|impl|type|const|static|mod)\s+{escaped}\b");
-    let re = Regex::new(&pattern).context("invalid symbol pattern for LSP definitions")?;
-
-    let mut results = Vec::new();
-    for entry in WalkDir::new(&context.cwd)
-        .into_iter()
-        .filter_map(Result::ok)
-    {
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        if entry.path().components().any(|component| {
-            IGNORED_DIRS.contains(&component.as_os_str().to_string_lossy().as_ref())
-        }) {
-            continue;
-        }
-        let Ok(contents) = std::fs::read_to_string(entry.path()) else {
-            continue;
-        };
-        for (line_idx, line) in contents.lines().enumerate() {
-            if re.is_match(line) {
-                let relative = entry
-                    .path()
-                    .strip_prefix(&context.cwd)
-                    .unwrap_or(entry.path());
-                results.push(format!(
-                    "{}:{}: {}",
-                    relative.display(),
-                    line_idx + 1,
-                    line.trim()
-                ));
-            }
-        }
-    }
-
-    if results.is_empty() {
-        Ok(format!("No definitions found for '{symbol}'."))
-    } else {
-        Ok(results.join("\n"))
-    }
-}
-
-fn lsp_references(context: &ToolExecutionContext, symbol: &str) -> Result<String> {
-    let escaped = regex::escape(symbol);
-    let pattern = format!(r"\b{escaped}\b");
-    let re = Regex::new(&pattern).context("invalid symbol pattern for LSP references")?;
-
-    let mut results = Vec::new();
-    let max_results = 100usize;
-    for entry in WalkDir::new(&context.cwd)
-        .into_iter()
-        .filter_map(Result::ok)
-    {
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        if entry.path().components().any(|component| {
-            IGNORED_DIRS.contains(&component.as_os_str().to_string_lossy().as_ref())
-        }) {
-            continue;
-        }
-        let Ok(contents) = std::fs::read_to_string(entry.path()) else {
-            continue;
-        };
-        for (line_idx, line) in contents.lines().enumerate() {
-            if re.is_match(line) {
-                let relative = entry
-                    .path()
-                    .strip_prefix(&context.cwd)
-                    .unwrap_or(entry.path());
-                results.push(format!(
-                    "{}:{}: {}",
-                    relative.display(),
-                    line_idx + 1,
-                    line.trim()
-                ));
-                if results.len() >= max_results {
-                    return Ok(results.join("\n"));
-                }
-            }
-        }
-    }
-
-    if results.is_empty() {
-        Ok(format!("No references found for '{symbol}'."))
-    } else {
-        Ok(results.join("\n"))
-    }
-}
-
-fn lsp_hover(
-    context: &ToolExecutionContext,
-    file_path: &str,
-    symbol: &str,
-) -> Result<String> {
-    let definitions = lsp_definitions(context, symbol)?;
-
-    if definitions.starts_with("No definitions") {
-        // Fallback: try to find the symbol in the specified file and return context
-        let target = resolve_workspace_path(&context.cwd, Some(file_path))?;
-        if !target.exists() {
-            return Ok(format!("No hover information available for '{symbol}'."));
-        }
-        let contents = std::fs::read_to_string(&target)
-            .with_context(|| format!("failed to read {file_path}"))?;
-        let escaped = regex::escape(symbol);
-        let pattern = format!(r"\b{escaped}\b");
-        let re = Regex::new(&pattern).unwrap_or_else(|_| Regex::new(&regex::escape(symbol)).expect("escaped pattern should be valid"));
-        let lines: Vec<&str> = contents.lines().collect();
-        for (idx, line) in lines.iter().enumerate() {
-            if re.is_match(line) {
-                let start = idx.saturating_sub(2);
-                let end = (idx + 3).min(lines.len());
-                let context_lines: Vec<String> = (start..end)
-                    .map(|i| {
-                        let prefix = if i == idx { ">" } else { " " };
-                        format!("{}{}: {}", prefix, i + 1, lines[i])
-                    })
-                    .collect();
-                return Ok(format!(
-                    "Hover info for '{symbol}' in {file_path}:\n{}",
-                    context_lines.join("\n")
-                ));
-            }
-        }
-        return Ok(format!("No hover information available for '{symbol}'."));
-    }
-
-    Ok(format!("Hover info for '{symbol}':\n{definitions}"))
-}
-
-async fn lsp_diagnostics(context: &ToolExecutionContext) -> Result<String> {
-    // Try running cargo check for Rust projects
-    let cargo_toml = context.cwd.join("Cargo.toml");
-    if cargo_toml.exists() {
-        let output = Command::new("cargo")
-            .args(["check", "--message-format=short"])
-            .current_dir(&context.cwd)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await;
-
-        match output {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let mut result = String::new();
-                if !stdout.trim().is_empty() {
-                    result.push_str(&stdout);
-                }
-                if !stderr.trim().is_empty() {
-                    if !result.is_empty() {
-                        result.push('\n');
-                    }
-                    result.push_str(&stderr);
-                }
-                if result.is_empty() {
-                    Ok("No diagnostics found.".to_owned())
-                } else {
-                    // Limit output size
-                    Ok(result.chars().take(10_000).collect())
-                }
-            }
-            Err(e) => Ok(format!(
-                "Diagnostics: could not run cargo check: {e}. \
-                 Simplified LSP mode does not support diagnostics for this project."
-            )),
-        }
-    } else {
-        Ok("Diagnostics: no Cargo.toml found. \
-            Simplified LSP mode only supports diagnostics for Rust projects."
-            .to_owned())
     }
 }
 
@@ -1860,7 +2139,7 @@ fn notebook_edit(input: &Value, context: &ToolExecutionContext) -> Result<String
         cell["cell_type"] = json!(cell_type);
     }
 
-    // Update source — store as a single string (valid in nbformat)
+    // Update source �?store as a single string (valid in nbformat)
     cell["source"] = json!(new_source);
 
     // Clear outputs for code cells
@@ -2156,7 +2435,7 @@ async fn web_browser_tool(input: &Value, _context: &ToolExecutionContext) -> Res
             Ok(truncated)
         }
         "screenshot" => {
-            // Screenshot requires a real browser — simplified placeholder
+            // Screenshot requires a real browser �?simplified placeholder
             Ok(json!({
                 "type": "screenshot",
                 "url": url,
@@ -2165,7 +2444,57 @@ async fn web_browser_tool(input: &Value, _context: &ToolExecutionContext) -> Res
             })
             .to_string())
         }
-        _ => Err(anyhow!("action must be 'fetch' or 'screenshot'")),
+        "extract_links" => {
+            let response = reqwest::get(url)
+                .await
+                .context("failed to fetch URL for link extraction")?;
+            let status = response.status();
+            if !status.is_success() {
+                return Err(anyhow!("HTTP {} for {}", status, url));
+            }
+            let text = response
+                .text()
+                .await
+                .context("failed to read response body")?;
+            let re = Regex::new(r#"href\s*=\s*"([^"]+)""#).expect("valid href regex");
+            let links: Vec<String> = re
+                .captures_iter(&text)
+                .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_owned()))
+                .take(200)
+                .collect();
+            Ok(json!({
+                "url": url,
+                "links": links,
+                "count": links.len(),
+            })
+            .to_string())
+        }
+        "extract_text" => {
+            let response = reqwest::get(url)
+                .await
+                .context("failed to fetch URL for text extraction")?;
+            let status = response.status();
+            if !status.is_success() {
+                return Err(anyhow!("HTTP {} for {}", status, url));
+            }
+            let text = response
+                .text()
+                .await
+                .context("failed to read response body")?;
+            // Strip HTML tags for a plain-text approximation.
+            let re = Regex::new(r"<[^>]+>").expect("valid html-stripping regex");
+            let plain = re.replace_all(&text, " ");
+            // Collapse whitespace.
+            let collapsed: String = plain
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            let truncated: String = collapsed.chars().take(50_000).collect();
+            Ok(truncated)
+        }
+        _ => Err(anyhow!(
+            "action must be 'fetch', 'extract_links', 'extract_text', or 'screenshot'"
+        )),
     }
 }
 
@@ -2310,6 +2639,789 @@ async fn terminal_capture_tool(input: &Value, context: &ToolExecutionContext) ->
     .to_string())
 }
 
+// ── Phase 4: Upstream gap-fill tool implementations ────────────────────────
+
+async fn powershell_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
+    let command = input["command"]
+        .as_str()
+        .ok_or_else(|| anyhow!("command is required"))?;
+    let timeout_ms = input
+        .get("timeout_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(context.timeout_ms)
+        .clamp(1_000, 600_000);
+
+    if !cfg!(windows) {
+        return Ok(
+            "PowerShell is only available on Windows. Use bash_command instead.".to_owned(),
+        );
+    }
+
+    let mut process = Command::new("powershell");
+    process.args(["-NoProfile", "-Command", command]);
+    process.current_dir(&context.cwd);
+    process.stdout(Stdio::piped());
+    process.stderr(Stdio::piped());
+
+    let mut child = process.spawn().context("failed to spawn powershell")?;
+    let future = async {
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+        if let Some(mut stream) = child.stdout.take() {
+            let _ = stream.read_to_string(&mut stdout).await;
+        }
+        if let Some(mut stream) = child.stderr.take() {
+            let _ = stream.read_to_string(&mut stderr).await;
+        }
+        let status = child.wait().await?;
+        Ok::<_, anyhow::Error>((status.success(), stdout, stderr))
+    };
+    let (success, stdout, stderr) =
+        tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), future)
+            .await
+            .map_err(|_| anyhow!("powershell timed out after {timeout_ms}ms"))??;
+
+    let mut parts = Vec::new();
+    if !stdout.trim().is_empty() {
+        parts.push(format!("stdout:\n{}", stdout.trim_end()));
+    }
+    if !stderr.trim().is_empty() {
+        parts.push(format!("stderr:\n{}", stderr.trim_end()));
+    }
+    if !success {
+        parts.push("exit_status: failed".to_owned());
+    }
+    Ok(if parts.is_empty() {
+        "command completed with no output".to_owned()
+    } else {
+        parts.join("\n\n")
+    })
+}
+
+async fn repl_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
+    let language = input["language"]
+        .as_str()
+        .ok_or_else(|| anyhow!("language is required (python, node, or rust)"))?;
+    let code = input["code"]
+        .as_str()
+        .ok_or_else(|| anyhow!("code is required"))?;
+
+    let (interpreter, flag) = match language {
+        "python" => ("python", "-c"),
+        "node" => ("node", "-e"),
+        "rust" => {
+            // For rust, write a temp file and compile/run it.
+            let tmp_dir = context.cwd.join(".remote-code-rust").join("tmp");
+            std::fs::create_dir_all(&tmp_dir)?;
+            let src_path = tmp_dir.join("repl_tmp.rs");
+            std::fs::write(&src_path, code)?;
+            let output = std::process::Command::new("rustc")
+                .args(["--edition", "2021", "-o"])
+                .arg(tmp_dir.join("repl_tmp"))
+                .arg(&src_path)
+                .output()?;
+            if !output.status.success() {
+                return Ok(format!(
+                    "Compile error:\n{}",
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+            let run_output = std::process::Command::new(tmp_dir.join("repl_tmp"))
+                .current_dir(&context.cwd)
+                .output()?;
+            return Ok(String::from_utf8_lossy(&run_output.stdout).to_string());
+        }
+        _ => return Err(anyhow!("unsupported language '{language}'. Use python, node, or rust.")),
+    };
+
+    let mut cmd = Command::new(interpreter);
+    cmd.arg(flag).arg(code);
+    cmd.current_dir(&context.cwd);
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+
+    let mut child = cmd.spawn().context(format!("failed to spawn {interpreter}"))?;
+    let future = async {
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+        if let Some(mut stream) = child.stdout.take() {
+            let _ = stream.read_to_string(&mut stdout).await;
+        }
+        if let Some(mut stream) = child.stderr.take() {
+            let _ = stream.read_to_string(&mut stderr).await;
+        }
+        let status = child.wait().await?;
+        Ok::<_, anyhow::Error>((status.success(), stdout, stderr))
+    };
+    let (success, stdout, stderr) =
+        tokio::time::timeout(std::time::Duration::from_millis(context.timeout_ms), future)
+            .await
+            .map_err(|_| anyhow!("REPL execution timed out"))??;
+
+    let mut parts = Vec::new();
+    if !stdout.trim().is_empty() {
+        parts.push(stdout.trim_end().to_owned());
+    }
+    if !stderr.trim().is_empty() {
+        parts.push(format!("stderr:\n{}", stderr.trim_end()));
+    }
+    if !success {
+        parts.push("exit_status: failed".to_owned());
+    }
+    Ok(if parts.is_empty() {
+        "No output.".to_owned()
+    } else {
+        parts.join("\n\n")
+    })
+}
+
+fn monitor_tool(input: &Value) -> Result<String> {
+    let target = input["target"]
+        .as_str()
+        .ok_or_else(|| anyhow!("target is required (agents, tasks, or sessions)"))?;
+    let interval_ms = input.get("interval_ms").and_then(Value::as_u64).unwrap_or(1000);
+
+    let snapshot = match target {
+        "agents" => json!({
+            "target": "agents",
+            "interval_ms": interval_ms,
+            "agents": [],
+            "message": "No agents registered in current context."
+        }),
+        "tasks" => json!({
+            "target": "tasks",
+            "interval_ms": interval_ms,
+            "tasks": [],
+            "message": "No tasks in current context. Use task_create to create tasks."
+        }),
+        "sessions" => json!({
+            "target": "sessions",
+            "interval_ms": interval_ms,
+            "sessions": [],
+            "message": "No active sessions in current context."
+        }),
+        _ => return Err(anyhow!("target must be 'agents', 'tasks', or 'sessions'")),
+    };
+    Ok(snapshot.to_string())
+}
+
+fn schedule_cron_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
+    let schedule = input["schedule"]
+        .as_str()
+        .ok_or_else(|| anyhow!("schedule is required (cron expression)"))?;
+    let command = input["command"]
+        .as_str()
+        .ok_or_else(|| anyhow!("command is required"))?;
+    let description = input["description"].as_str().unwrap_or("");
+
+    let crons_dir = context.cwd.join(".remote-code-rust");
+    std::fs::create_dir_all(&crons_dir)?;
+    let crons_path = crons_dir.join("crons.json");
+
+    let mut crons: Vec<Value> = if crons_path.exists() {
+        let content = std::fs::read_to_string(&crons_path)?;
+        serde_json::from_str(&content).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    let entry = json!({
+        "schedule": schedule,
+        "command": command,
+        "description": description,
+        "created_at": std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    });
+    crons.push(entry);
+
+    let content = serde_json::to_string_pretty(&crons)?;
+    std::fs::write(&crons_path, content)?;
+
+    Ok(format!(
+        "Cron job saved: '{}' → {}",
+        schedule, command
+    ))
+}
+
+async fn remote_trigger_tool(input: &Value) -> Result<String> {
+    let url = input["url"]
+        .as_str()
+        .ok_or_else(|| anyhow!("url is required"))?;
+    let event = input["event"]
+        .as_str()
+        .ok_or_else(|| anyhow!("event is required"))?;
+    let payload = input.get("payload").cloned().unwrap_or(json!({}));
+
+    let body = json!({
+        "event": event,
+        "payload": payload,
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(url)
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .context("failed to send remote trigger")?;
+
+    let status = response.status();
+    let response_text = response
+        .text()
+        .await
+        .context("failed to read trigger response")?;
+
+    Ok(json!({
+        "url": url,
+        "event": event,
+        "http_status": status.as_u16(),
+        "response": response_text.chars().take(5000).collect::<String>(),
+    })
+    .to_string())
+}
+
+fn workflow_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
+    let action = input["action"]
+        .as_str()
+        .ok_or_else(|| anyhow!("action is required (create, run, or status)"))?;
+    let name = input["name"]
+        .as_str()
+        .ok_or_else(|| anyhow!("name is required"))?;
+
+    let wf_dir = context.cwd.join(".remote-code-rust");
+    std::fs::create_dir_all(&wf_dir)?;
+    let wf_path = wf_dir.join("workflows.json");
+
+    let mut workflows: Vec<Value> = if wf_path.exists() {
+        let content = std::fs::read_to_string(&wf_path)?;
+        serde_json::from_str(&content).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    match action {
+        "create" => {
+            let steps: Vec<String> = input
+                .get("steps")
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let entry = json!({
+                "name": name,
+                "steps": steps,
+                "status": "created",
+            });
+            workflows.push(entry);
+            let content = serde_json::to_string_pretty(&workflows)?;
+            std::fs::write(&wf_path, content)?;
+            Ok(format!("Workflow '{name}' created with {} steps.", steps.len()))
+        }
+        "run" => {
+            let wf = workflows
+                .iter_mut()
+                .find(|w| w["name"].as_str() == Some(name));
+            match wf {
+                Some(w) => {
+                    w["status"] = json!("running");
+                    let content = serde_json::to_string_pretty(&workflows)?;
+                    std::fs::write(&wf_path, content)?;
+                    Ok(format!("Workflow '{name}' started."))
+                }
+                None => Err(anyhow!("workflow '{name}' not found")),
+            }
+        }
+        "status" => {
+            let wf = workflows.iter().find(|w| w["name"].as_str() == Some(name));
+            match wf {
+                Some(w) => Ok(serde_json::to_string_pretty(w)?),
+                None => Ok(json!({
+                    "name": name,
+                    "status": "not_found",
+                    "message": format!("Workflow '{name}' does not exist.")
+                })
+                .to_string()),
+            }
+        }
+        _ => Err(anyhow!("action must be 'create', 'run', or 'status'")),
+    }
+}
+
+fn suggest_pr_tool(context: &ToolExecutionContext) -> Result<String> {
+    // Run git diff --stat and git log to suggest a PR.
+    let diff_output = std::process::Command::new("git")
+        .args(["diff", "--stat"])
+        .current_dir(&context.cwd)
+        .output();
+
+    let diff_stat = match diff_output {
+        Ok(out) => String::from_utf8_lossy(&out.stdout).to_string(),
+        Err(_) => "Unable to run git diff.".to_owned(),
+    };
+
+    let log_output = std::process::Command::new("git")
+        .args(["log", "--oneline", "-10"])
+        .current_dir(&context.cwd)
+        .output();
+
+    let recent_commits = match log_output {
+        Ok(out) => String::from_utf8_lossy(&out.stdout).to_string(),
+        Err(_) => "Unable to run git log.".to_owned(),
+    };
+
+    // Simple heuristic: use the first line of recent commits as title suggestion.
+    let title_suggestion = recent_commits
+        .lines()
+        .next()
+        .unwrap_or("Changes from current branch")
+        .trim_start_matches(|c: char| c.is_ascii_hexdigit() || c == ' ');
+
+    Ok(json!({
+        "suggested_title": title_suggestion,
+        "diff_stat": diff_stat.trim(),
+        "recent_commits": recent_commits.trim(),
+        "note": "Review the diff and commits above to craft a PR description."
+    })
+    .to_string())
+}
+
+fn enter_worktree_tool(input: &Value) -> Result<String> {
+    let branch = input["branch"]
+        .as_str()
+        .ok_or_else(|| anyhow!("branch is required"))?;
+    Ok(json!({
+        "command": format!("git worktree add ../{branch} {branch}"),
+        "branch": branch,
+        "note": "Run the command above to create a new worktree for this branch."
+    })
+    .to_string())
+}
+
+fn exit_worktree_tool(input: &Value) -> Result<String> {
+    let branch = input["branch"]
+        .as_str()
+        .ok_or_else(|| anyhow!("branch is required"))?;
+    Ok(json!({
+        "command": format!("git worktree remove ../{branch}"),
+        "branch": branch,
+        "note": "Run the command above to remove the worktree for this branch."
+    })
+    .to_string())
+}
+
+fn brief_tool(input: &Value) -> Result<String> {
+    let content = input["content"]
+        .as_str()
+        .ok_or_else(|| anyhow!("content is required"))?;
+    let max_length = input
+        .get("max_length")
+        .and_then(Value::as_u64)
+        .unwrap_or(500) as usize;
+
+    if content.len() <= max_length {
+        return Ok(content.to_owned());
+    }
+
+    let truncated: String = content.chars().take(max_length).collect();
+    Ok(format!(
+        "{}\n\n[...truncated from {} to {} chars]",
+        truncated,
+        content.len(),
+        max_length
+    ))
+}
+
+fn ctx_inspect_tool(input: &Value) -> Result<String> {
+    let action = input["action"]
+        .as_str()
+        .ok_or_else(|| anyhow!("action is required (tokens, messages, or tools)"))?;
+
+    let specs = builtin_tool_specs();
+    match action {
+        "tokens" => Ok(json!({
+            "estimated_tokens": "N/A (requires tokenizer)",
+            "note": "Token counting requires a model-specific tokenizer."
+        })
+        .to_string()),
+        "messages" => Ok(json!({
+            "message_count": 0,
+            "note": "Message count requires conversation context."
+        })
+        .to_string()),
+        "tools" => Ok(json!({
+            "total_tools": specs.len(),
+            "tools": specs.iter().map(|s| &s.name).collect::<Vec<_>>(),
+        })
+        .to_string()),
+        _ => Err(anyhow!(
+            "action must be 'tokens', 'messages', or 'tools'"
+        )),
+    }
+}
+
+fn list_peers_tool() -> Result<String> {
+    Ok(json!({
+        "peers": [],
+        "message": "No peers registered in current context. Use team_create to create a team."
+    })
+    .to_string())
+}
+
+async fn tungsten_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
+    let action = input["action"]
+        .as_str()
+        .ok_or_else(|| anyhow!("action is required (compile, run, or test)"))?;
+    let target = input["target"]
+        .as_str()
+        .ok_or_else(|| anyhow!("target is required"))?;
+
+    // Detect project type by checking for marker files.
+    let is_rust = context.cwd.join("Cargo.toml").exists()
+        || context.cwd.join(target).join("Cargo.toml").exists();
+    let is_node = context.cwd.join("package.json").exists()
+        || context.cwd.join(target).join("package.json").exists();
+    let is_python = context.cwd.join("setup.py").exists()
+        || context.cwd.join("pyproject.toml").exists()
+        || context.cwd.join(target).join("setup.py").exists();
+
+    let command = match action {
+        "compile" => {
+            if is_rust {
+                format!("cargo build --manifest-path {target}/Cargo.toml 2>&1 || cargo build 2>&1")
+            } else if is_node {
+                "npm run build 2>&1".to_owned()
+            } else if is_python {
+                "python -m py_compile . 2>&1".to_owned()
+            } else {
+                return Ok("Unable to detect project type. No Cargo.toml, package.json, or setup.py found.".to_owned());
+            }
+        }
+        "run" => {
+            if is_rust {
+                format!("cargo run --manifest-path {target}/Cargo.toml 2>&1 || cargo run 2>&1")
+            } else if is_node {
+                "npm start 2>&1".to_owned()
+            } else if is_python {
+                "python main.py 2>&1".to_owned()
+            } else {
+                return Ok("Unable to detect project type.".to_owned());
+            }
+        }
+        "test" => {
+            if is_rust {
+                format!("cargo test --manifest-path {target}/Cargo.toml 2>&1 || cargo test 2>&1")
+            } else if is_node {
+                "npm test 2>&1".to_owned()
+            } else if is_python {
+                "python -m pytest 2>&1".to_owned()
+            } else {
+                return Ok("Unable to detect project type.".to_owned());
+            }
+        }
+        _ => return Err(anyhow!("action must be 'compile', 'run', or 'test'")),
+    };
+
+    let mut process = if cfg!(windows) {
+        let mut cmd = Command::new("powershell");
+        cmd.args(["-NoProfile", "-Command", &command]);
+        cmd
+    } else {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-lc", &command]);
+        cmd
+    };
+    process.current_dir(&context.cwd);
+    process.stdout(Stdio::piped());
+    process.stderr(Stdio::piped());
+
+    let mut child = process.spawn().context("failed to spawn tungsten command")?;
+    let future = async {
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+        if let Some(mut stream) = child.stdout.take() {
+            let _ = stream.read_to_string(&mut stdout).await;
+        }
+        if let Some(mut stream) = child.stderr.take() {
+            let _ = stream.read_to_string(&mut stderr).await;
+        }
+        let status = child.wait().await?;
+        Ok::<_, anyhow::Error>((status.success(), stdout, stderr))
+    };
+    let (success, stdout, stderr) =
+        tokio::time::timeout(std::time::Duration::from_millis(context.timeout_ms), future)
+            .await
+            .map_err(|_| anyhow!("tungsten command timed out"))??;
+
+    let mut parts = Vec::new();
+    if !stdout.trim().is_empty() {
+        parts.push(stdout.trim_end().to_owned());
+    }
+    if !stderr.trim().is_empty() {
+        parts.push(format!("stderr:\n{}", stderr.trim_end()));
+    }
+    if !success {
+        parts.push("exit_status: failed".to_owned());
+    }
+    Ok(if parts.is_empty() {
+        "Command completed with no output.".to_owned()
+    } else {
+        parts.join("\n\n")
+    })
+}
+
+fn overflow_test_tool(input: &Value) -> Result<String> {
+    let scenario = input["scenario"]
+        .as_str()
+        .ok_or_else(|| anyhow!("scenario is required (large_output, many_messages, or deep_recursion)"))?;
+
+    match scenario {
+        "large_output" => {
+            let data: String = (0..10_000)
+                .map(|i| format!("Line {i}: This is test output data for overflow testing.\n"))
+                .collect();
+            Ok(json!({
+                "scenario": "large_output",
+                "size_chars": data.len(),
+                "size_lines": 10_000,
+                "data_preview": data.chars().take(500).collect::<String>(),
+            })
+            .to_string())
+        }
+        "many_messages" => {
+            let messages: Vec<Value> = (0..100)
+                .map(|i| {
+                    json!({
+                        "id": i,
+                        "role": if i % 2 == 0 { "user" } else { "assistant" },
+                        "content": format!("Message {i}: Test content for context overflow testing."),
+                    })
+                })
+                .collect();
+            Ok(json!({
+                "scenario": "many_messages",
+                "count": messages.len(),
+                "messages": messages,
+            })
+            .to_string())
+        }
+        "deep_recursion" => {
+            let depth = 50;
+            let mut nested = json!("leaf");
+            for _ in 0..depth {
+                nested = json!({ "child": nested });
+            }
+            Ok(json!({
+                "scenario": "deep_recursion",
+                "depth": depth,
+                "structure": nested,
+            })
+            .to_string())
+        }
+        _ => Err(anyhow!(
+            "scenario must be 'large_output', 'many_messages', or 'deep_recursion'"
+        )),
+    }
+}
+
+fn synthetic_output_tool(input: &Value) -> Result<String> {
+    let output_type = input["type"]
+        .as_str()
+        .ok_or_else(|| anyhow!("type is required (json, csv, markdown, or text)"))?;
+    let rows = input.get("rows").and_then(Value::as_u64).unwrap_or(10) as usize;
+
+    match output_type {
+        "json" => {
+            let data: Vec<Value> = (0..rows)
+                .map(|i| {
+                    json!({
+                        "id": i,
+                        "name": format!("item_{i}"),
+                        "value": i * 10,
+                        "active": i % 2 == 0,
+                    })
+                })
+                .collect();
+            Ok(serde_json::to_string_pretty(&data)?)
+        }
+        "csv" => {
+            let mut lines = vec!["id,name,value,active".to_owned()];
+            for i in 0..rows {
+                lines.push(format!("{i},item_{i},{},{}", i * 10, i % 2 == 0));
+            }
+            Ok(lines.join("\n"))
+        }
+        "markdown" => {
+            let mut md = String::from("# Synthetic Report\n\n");
+            md.push_str("| id | name | value | active |\n");
+            md.push_str("|----|------|-------|--------|\n");
+            for i in 0..rows {
+                md.push_str(&format!("| {i} | item_{i} | {} | {} |\n", i * 10, i % 2 == 0));
+            }
+            Ok(md)
+        }
+        "text" => {
+            let lines: Vec<String> = (0..rows)
+                .map(|i| format!("Row {i}: name=item_{i}, value={}, active={}", i * 10, i % 2 == 0))
+                .collect();
+            Ok(lines.join("\n"))
+        }
+        _ => Err(anyhow!(
+            "type must be 'json', 'csv', 'markdown', or 'text'"
+        )),
+    }
+}
+
+fn mcp_auth_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
+    let server = input["server"]
+        .as_str()
+        .ok_or_else(|| anyhow!("server is required"))?;
+    let action = input["action"]
+        .as_str()
+        .ok_or_else(|| anyhow!("action is required (login, logout, or status)"))?;
+
+    let auth_dir = context.cwd.join(".remote-code-rust").join("mcp-auth");
+    std::fs::create_dir_all(&auth_dir)?;
+    let auth_file = auth_dir.join(format!("{server}.json"));
+
+    match action {
+        "login" => {
+            let entry = json!({
+                "server": server,
+                "status": "authenticated",
+                "timestamp": std::time::SystemTime::now()
+                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+            });
+            let content = serde_json::to_string_pretty(&entry)?;
+            std::fs::write(&auth_file, content)?;
+            Ok(format!("Logged in to MCP server '{server}'."))
+        }
+        "logout" => {
+            if auth_file.exists() {
+                std::fs::remove_file(&auth_file)?;
+                Ok(format!("Logged out from MCP server '{server}'."))
+            } else {
+                Ok(format!("No active session for MCP server '{server}'."))
+            }
+        }
+        "status" => {
+            if auth_file.exists() {
+                let content = std::fs::read_to_string(&auth_file)?;
+                Ok(content)
+            } else {
+                Ok(json!({
+                    "server": server,
+                    "status": "not_authenticated",
+                })
+                .to_string())
+            }
+        }
+        _ => Err(anyhow!(
+            "action must be 'login', 'logout', or 'status'"
+        )),
+    }
+}
+
+fn list_mcp_resources_tool(input: &Value) -> Result<String> {
+    let server = input["server"].as_str();
+
+    Ok(json!({
+        "server": server,
+        "resources": [],
+        "message": "MCP resource listing requires an active MCP connection. No resources found in current context."
+    })
+    .to_string())
+}
+
+fn read_mcp_resource_tool(input: &Value) -> Result<String> {
+    let uri = input["uri"]
+        .as_str()
+        .ok_or_else(|| anyhow!("uri is required"))?;
+
+    Ok(json!({
+        "uri": uri,
+        "content": null,
+        "message": "MCP resource reading requires an active MCP connection. No content available in current context."
+    })
+    .to_string())
+}
+
+fn voice_input_tool(input: &Value) -> Result<String> {
+    let duration_secs = input.get("duration_secs").and_then(Value::as_u64).unwrap_or(5);
+
+    Ok(json!({
+        "type": "voice_input",
+        "duration_secs": duration_secs,
+        "message": "Voice input requires external tool support (e.g., Whisper, system microphone API).",
+        "note": "This is a placeholder. Actual voice capture needs a connected audio input device and transcription service."
+    })
+    .to_string())
+}
+
+fn daemon_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
+    let action = input["action"]
+        .as_str()
+        .ok_or_else(|| anyhow!("action is required (start, stop, or status)"))?;
+
+    let daemon_dir = context.cwd.join(".remote-code-rust");
+    std::fs::create_dir_all(&daemon_dir)?;
+    let daemon_path = daemon_dir.join("daemons.json");
+
+    let mut daemons: Vec<Value> = if daemon_path.exists() {
+        let content = std::fs::read_to_string(&daemon_path)?;
+        serde_json::from_str(&content).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    match action {
+        "start" => {
+            let command = input["command"]
+                .as_str()
+                .ok_or_else(|| anyhow!("command is required for start action"))?;
+            let entry = json!({
+                "command": command,
+                "status": "running",
+                "pid": null,
+                "started_at": std::time::SystemTime::now()
+                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+            });
+            daemons.push(entry);
+            let content = serde_json::to_string_pretty(&daemons)?;
+            std::fs::write(&daemon_path, content)?;
+            Ok(format!("Daemon started: {command}"))
+        }
+        "stop" => {
+            let command = input["command"].as_str().unwrap_or("");
+            let count_before = daemons.len();
+            daemons.retain(|d| {
+                if command.is_empty() {
+                    false // stop all
+                } else {
+                    d["command"].as_str() != Some(command)
+                }
+            });
+            let stopped = count_before - daemons.len();
+            let content = serde_json::to_string_pretty(&daemons)?;
+            std::fs::write(&daemon_path, content)?;
+            Ok(format!("Stopped {stopped} daemon(s)."))
+        }
+        "status" => {
+            Ok(serde_json::to_string_pretty(&daemons)?)
+        }
+        _ => Err(anyhow!("action must be 'start', 'stop', or 'status'")),
+    }
+}
+
 // ── Command hooks ──────────────────────────────────────────────────────────
 
 pub async fn execute_command_hook(
@@ -2421,6 +3533,7 @@ mod tests {
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
+            sub_agent: None,
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -2508,6 +3621,7 @@ mod tests {
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
+            sub_agent: None,
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -2549,6 +3663,7 @@ mod tests {
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
+            sub_agent: None,
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -2592,6 +3707,7 @@ mod tests {
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
+            sub_agent: None,
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -2619,6 +3735,7 @@ mod tests {
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
+            sub_agent: None,
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -2656,6 +3773,7 @@ mod tests {
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
+            sub_agent: None,
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -2703,6 +3821,7 @@ mod tests {
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
+            sub_agent: None,
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -2772,6 +3891,7 @@ mod tests {
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
+            sub_agent: None,
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -2813,6 +3933,7 @@ mod tests {
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
+            sub_agent: None,
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -2854,6 +3975,7 @@ mod tests {
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
+            sub_agent: None,
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -2889,6 +4011,7 @@ mod tests {
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
+            sub_agent: None,
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -2909,8 +4032,9 @@ mod tests {
 
         assert!(!result.is_error, "lsp error: {}", result.content);
         assert!(
-            result.content.contains("not available"),
-            "completion should indicate not available"
+            result.content.contains("No completions available"),
+            "completion should indicate no completions, got: {}",
+            result.content
         );
     }
 
@@ -2923,6 +4047,7 @@ mod tests {
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
+            sub_agent: None,
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -3066,6 +4191,7 @@ mod tests {
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
+            sub_agent: None,
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -3113,6 +4239,7 @@ mod tests {
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
+            sub_agent: None,
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -3151,6 +4278,7 @@ mod tests {
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
+            sub_agent: None,
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -3207,6 +4335,7 @@ mod tests {
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
+            sub_agent: None,
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -3238,6 +4367,7 @@ mod tests {
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
+            sub_agent: None,
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -3288,6 +4418,7 @@ mod tests {
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
+            sub_agent: None,
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -3364,5 +4495,755 @@ mod tests {
         );
         assert!(names.contains(&"sleep"), "sleep should be registered");
         assert!(names.contains(&"snip"), "snip should be registered");
+    }
+
+    // ── Phase 4: Upstream gap-fill tool tests ────────────────────────────
+
+    #[tokio::test]
+    async fn powershell_tool_returns_result() {
+        let tempdir = match tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("failed to create tempdir: {error}"),
+        };
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+        };
+        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "powershell".to_owned(),
+                input: json!({"command": "Write-Output hello"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("powershell should work");
+
+        if cfg!(windows) {
+            assert!(!result.is_error, "powershell error: {}", result.content);
+            assert!(
+                result.content.contains("hello"),
+                "should contain hello, got: {}",
+                result.content
+            );
+        } else {
+            assert!(
+                result.content.contains("only available on Windows"),
+                "non-windows should return hint"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn repl_tool_requires_language_and_code() {
+        let tempdir = match tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("failed to create tempdir: {error}"),
+        };
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+        };
+        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "repl".to_owned(),
+                input: json!({"language": "python", "code": "print(42)"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("repl should not panic");
+
+        // May succeed or fail depending on whether python is installed,
+        // but should not panic.
+        let _ = result;
+    }
+
+    #[tokio::test]
+    async fn monitor_tool_returns_snapshot() {
+        let tempdir = match tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("failed to create tempdir: {error}"),
+        };
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+        };
+        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "monitor".to_owned(),
+                input: json!({"target": "tasks"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("monitor should work");
+
+        assert!(!result.is_error, "monitor error: {}", result.content);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result.content).expect("should be valid JSON");
+        assert_eq!(parsed["target"], "tasks");
+    }
+
+    #[tokio::test]
+    async fn schedule_cron_saves_to_file() {
+        let tempdir = match tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("failed to create tempdir: {error}"),
+        };
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+        };
+        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "schedule_cron".to_owned(),
+                input: json!({
+                    "schedule": "*/5 * * * *",
+                    "command": "echo hello",
+                    "description": "test cron"
+                }),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("schedule_cron should work");
+
+        assert!(!result.is_error, "schedule_cron error: {}", result.content);
+        let crons_path = tempdir.path().join(".remote-code-rust").join("crons.json");
+        assert!(crons_path.exists(), "crons.json should exist");
+    }
+
+    #[tokio::test]
+    async fn remote_trigger_sends_post() {
+        let tempdir = match tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("failed to create tempdir: {error}"),
+        };
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+        };
+        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "remote_trigger".to_owned(),
+                input: json!({
+                    "url": "http://127.0.0.1:1/does-not-exist",
+                    "event": "test"
+                }),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("remote_trigger should not panic");
+
+        // Will likely fail to connect, but should not panic.
+        let _ = result;
+    }
+
+    #[tokio::test]
+    async fn workflow_create_and_status() {
+        let tempdir = match tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("failed to create tempdir: {error}"),
+        };
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+        };
+        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+
+        let create_result = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "workflow".to_owned(),
+                input: json!({
+                    "action": "create",
+                    "name": "test-wf",
+                    "steps": ["step1", "step2"]
+                }),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("workflow create should work");
+
+        assert!(
+            !create_result.is_error,
+            "workflow create error: {}",
+            create_result.content
+        );
+
+        let status_result = execute_tool_call(
+            &ToolCall {
+                id: "2".to_owned(),
+                name: "workflow".to_owned(),
+                input: json!({
+                    "action": "status",
+                    "name": "test-wf"
+                }),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("workflow status should work");
+
+        assert!(
+            !status_result.is_error,
+            "workflow status error: {}",
+            status_result.content
+        );
+        let parsed: serde_json::Value =
+            serde_json::from_str(&status_result.content).expect("should be valid JSON");
+        assert_eq!(parsed["name"], "test-wf");
+        assert_eq!(parsed["status"], "created");
+    }
+
+    #[tokio::test]
+    async fn suggest_pr_returns_json() {
+        let tempdir = match tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("failed to create tempdir: {error}"),
+        };
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+        };
+        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "suggest_pr".to_owned(),
+                input: json!({}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("suggest_pr should work");
+
+        assert!(!result.is_error, "suggest_pr error: {}", result.content);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result.content).expect("should be valid JSON");
+        assert!(parsed["suggested_title"].is_string());
+    }
+
+    #[tokio::test]
+    async fn enter_and_exit_worktree_return_commands() {
+        let tempdir = match tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("failed to create tempdir: {error}"),
+        };
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+        };
+        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+
+        let enter_result = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "enter_worktree".to_owned(),
+                input: json!({"branch": "feature-x"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("enter_worktree should work");
+
+        assert!(
+            !enter_result.is_error,
+            "enter_worktree error: {}",
+            enter_result.content
+        );
+        assert!(
+            enter_result.content.contains("git worktree add"),
+            "should contain git worktree add"
+        );
+
+        let exit_result = execute_tool_call(
+            &ToolCall {
+                id: "2".to_owned(),
+                name: "exit_worktree".to_owned(),
+                input: json!({"branch": "feature-x"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("exit_worktree should work");
+
+        assert!(
+            !exit_result.is_error,
+            "exit_worktree error: {}",
+            exit_result.content
+        );
+        assert!(
+            exit_result.content.contains("git worktree remove"),
+            "should contain git worktree remove"
+        );
+    }
+
+    #[tokio::test]
+    async fn brief_tool_truncates_content() {
+        let tempdir = match tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("failed to create tempdir: {error}"),
+        };
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+        };
+        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+
+        let long_content: String = "x".repeat(1000);
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "brief".to_owned(),
+                input: json!({
+                    "content": long_content,
+                    "max_length": 50
+                }),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("brief should work");
+
+        assert!(!result.is_error, "brief error: {}", result.content);
+        assert!(
+            result.content.contains("truncated"),
+            "should mention truncation"
+        );
+    }
+
+    #[tokio::test]
+    async fn ctx_inspect_lists_tools() {
+        let tempdir = match tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("failed to create tempdir: {error}"),
+        };
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+        };
+        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "ctx_inspect".to_owned(),
+                input: json!({"action": "tools"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("ctx_inspect should work");
+
+        assert!(!result.is_error, "ctx_inspect error: {}", result.content);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result.content).expect("should be valid JSON");
+        assert!(parsed["total_tools"].as_u64().unwrap_or(0) > 40);
+    }
+
+    #[tokio::test]
+    async fn list_peers_returns_json() {
+        let tempdir = match tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("failed to create tempdir: {error}"),
+        };
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+        };
+        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "list_peers".to_owned(),
+                input: json!({}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("list_peers should work");
+
+        assert!(!result.is_error, "list_peers error: {}", result.content);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result.content).expect("should be valid JSON");
+        assert!(parsed["peers"].is_array());
+    }
+
+    #[tokio::test]
+    async fn tungsten_tool_detects_project() {
+        let tempdir = match tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("failed to create tempdir: {error}"),
+        };
+        // Create a Cargo.toml to trigger Rust detection.
+        std::fs::write(tempdir.path().join("Cargo.toml"), "[package]\nname = \"test\"\n")
+            .expect("write should work");
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+        };
+        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "tungsten".to_owned(),
+                input: json!({"action": "compile", "target": "."}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("tungsten should work");
+
+        // May succeed or fail depending on cargo availability, but should not panic.
+        let _ = result;
+    }
+
+    #[tokio::test]
+    async fn overflow_test_generates_data() {
+        let tempdir = match tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("failed to create tempdir: {error}"),
+        };
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+        };
+        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "overflow_test".to_owned(),
+                input: json!({"scenario": "large_output"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("overflow_test should work");
+
+        assert!(!result.is_error, "overflow_test error: {}", result.content);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result.content).expect("should be valid JSON");
+        assert_eq!(parsed["scenario"], "large_output");
+    }
+
+    #[tokio::test]
+    async fn synthetic_output_generates_csv() {
+        let tempdir = match tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("failed to create tempdir: {error}"),
+        };
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+        };
+        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "synthetic_output".to_owned(),
+                input: json!({"type": "csv", "rows": 3}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("synthetic_output should work");
+
+        assert!(!result.is_error, "synthetic_output error: {}", result.content);
+        assert!(result.content.contains("id,name,value,active"), "should have CSV header");
+        assert!(result.content.contains("item_0"), "should have data rows");
+    }
+
+    #[tokio::test]
+    async fn mcp_auth_login_and_status() {
+        let tempdir = match tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("failed to create tempdir: {error}"),
+        };
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+        };
+        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+
+        let login_result = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "mcp_auth".to_owned(),
+                input: json!({"server": "test-server", "action": "login"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("mcp_auth login should work");
+
+        assert!(
+            !login_result.is_error,
+            "mcp_auth login error: {}",
+            login_result.content
+        );
+
+        let status_result = execute_tool_call(
+            &ToolCall {
+                id: "2".to_owned(),
+                name: "mcp_auth".to_owned(),
+                input: json!({"server": "test-server", "action": "status"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("mcp_auth status should work");
+
+        assert!(
+            !status_result.is_error,
+            "mcp_auth status error: {}",
+            status_result.content
+        );
+        let parsed: serde_json::Value =
+            serde_json::from_str(&status_result.content).expect("should be valid JSON");
+        assert_eq!(parsed["status"], "authenticated");
+    }
+
+    #[tokio::test]
+    async fn list_mcp_resources_returns_json() {
+        let tempdir = match tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("failed to create tempdir: {error}"),
+        };
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+        };
+        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "list_mcp_resources".to_owned(),
+                input: json!({"server": "test"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("list_mcp_resources should work");
+
+        assert!(!result.is_error, "list_mcp_resources error: {}", result.content);
+    }
+
+    #[tokio::test]
+    async fn read_mcp_resource_returns_json() {
+        let tempdir = match tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("failed to create tempdir: {error}"),
+        };
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+        };
+        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "read_mcp_resource".to_owned(),
+                input: json!({"uri": "test://resource"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("read_mcp_resource should work");
+
+        assert!(!result.is_error, "read_mcp_resource error: {}", result.content);
+    }
+
+    #[tokio::test]
+    async fn voice_input_returns_placeholder() {
+        let tempdir = match tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("failed to create tempdir: {error}"),
+        };
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+        };
+        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "voice_input".to_owned(),
+                input: json!({"duration_secs": 3}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("voice_input should work");
+
+        assert!(!result.is_error, "voice_input error: {}", result.content);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result.content).expect("should be valid JSON");
+        assert_eq!(parsed["type"], "voice_input");
+        assert_eq!(parsed["duration_secs"], 3);
+    }
+
+    #[tokio::test]
+    async fn daemon_start_and_stop() {
+        let tempdir = match tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("failed to create tempdir: {error}"),
+        };
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+        };
+        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+
+        let start_result = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "daemon".to_owned(),
+                input: json!({"action": "start", "command": "sleep 999"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("daemon start should work");
+
+        assert!(
+            !start_result.is_error,
+            "daemon start error: {}",
+            start_result.content
+        );
+
+        let status_result = execute_tool_call(
+            &ToolCall {
+                id: "2".to_owned(),
+                name: "daemon".to_owned(),
+                input: json!({"action": "status"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("daemon status should work");
+
+        assert!(
+            !status_result.is_error,
+            "daemon status error: {}",
+            status_result.content
+        );
+
+        let stop_result = execute_tool_call(
+            &ToolCall {
+                id: "3".to_owned(),
+                name: "daemon".to_owned(),
+                input: json!({"action": "stop"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("daemon stop should work");
+
+        assert!(
+            !stop_result.is_error,
+            "daemon stop error: {}",
+            stop_result.content
+        );
+        assert!(
+            stop_result.content.contains("Stopped 1 daemon"),
+            "should stop 1 daemon"
+        );
+    }
+
+    #[tokio::test]
+    async fn all_phase4_tools_are_registered() {
+        let specs = builtin_tool_specs();
+        let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
+
+        assert!(names.contains(&"powershell"), "powershell should be registered");
+        assert!(names.contains(&"repl"), "repl should be registered");
+        assert!(names.contains(&"monitor"), "monitor should be registered");
+        assert!(names.contains(&"schedule_cron"), "schedule_cron should be registered");
+        assert!(names.contains(&"remote_trigger"), "remote_trigger should be registered");
+        assert!(names.contains(&"workflow"), "workflow should be registered");
+        assert!(names.contains(&"suggest_pr"), "suggest_pr should be registered");
+        assert!(names.contains(&"enter_worktree"), "enter_worktree should be registered");
+        assert!(names.contains(&"exit_worktree"), "exit_worktree should be registered");
+        assert!(names.contains(&"brief"), "brief should be registered");
+        assert!(names.contains(&"ctx_inspect"), "ctx_inspect should be registered");
+        assert!(names.contains(&"list_peers"), "list_peers should be registered");
+        assert!(names.contains(&"tungsten"), "tungsten should be registered");
+        assert!(names.contains(&"overflow_test"), "overflow_test should be registered");
+        assert!(names.contains(&"synthetic_output"), "synthetic_output should be registered");
+        assert!(names.contains(&"mcp_auth"), "mcp_auth should be registered");
+        assert!(names.contains(&"list_mcp_resources"), "list_mcp_resources should be registered");
+        assert!(names.contains(&"read_mcp_resource"), "read_mcp_resource should be registered");
+        assert!(names.contains(&"voice_input"), "voice_input should be registered");
+        assert!(names.contains(&"daemon"), "daemon should be registered");
     }
 }

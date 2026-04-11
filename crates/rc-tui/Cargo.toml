@@ -13,6 +13,8 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+async-trait.workspace = true
+crossterm.workspace = true
 tokio.workspace = true
 rc-core = { path = "../rc-core" }
 rc-config = { path = "../rc-config" }

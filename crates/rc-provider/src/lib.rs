@@ -123,7 +123,11 @@ impl ProviderClient {
             "max_tokens": provider.max_output_tokens,
             "stream": false,
         });
-        add_cache_control(&mut body);
+        // Detect resume: if there are tool-role entries, this is a continued conversation.
+        let is_resume = conversation
+            .iter()
+            .any(|entry| matches!(entry.role, ConversationRole::Tool));
+        add_stable_cache_control(&mut body, is_resume);
         let base_url = provider
             .base_url
             .as_ref()
@@ -572,24 +576,31 @@ fn strip_reasoning_tags(text: &str) -> String {
     remaining.trim().to_owned()
 }
 
-/// Add Anthropic prompt caching markers (`cache_control: {"type": "ephemeral"}`)
+/// Add stable Anthropic prompt caching markers (`cache_control: {"type": "ephemeral"}`)
 /// to strategic locations in the request body so that the system prompt,
 /// tool definitions, and the most recent user message are cached server-side.
-fn add_cache_control(body: &mut Value) {
-    // 1. Cache the system message.
+///
+/// When `is_resume` is true (conversation has prior tool results), the tool list
+/// is kept exactly as-is to avoid `deferred_tools_delta` cache-miss issues.
+fn add_stable_cache_control(body: &mut Value, is_resume: bool) {
+    // 1. System message — always ensure array format with cache_control.
     if let Some(system) = body.get_mut("system") {
-        // Anthropic expects `system` as an array of content blocks.
         if system.is_string() {
             let text = system.as_str().unwrap_or("").to_owned();
-            *system = json!([{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]);
+            *system = json!([{
+                "type": "text",
+                "text": text,
+                "cache_control": {"type": "ephemeral"}
+            }]);
         } else if let Some(system_arr) = system.as_array_mut()
-            && let Some(last_block) = system_arr.last_mut()
+            && let Some(last) = system_arr.last_mut()
         {
-            last_block["cache_control"] = json!({"type": "ephemeral"});
+            last["cache_control"] = json!({"type": "ephemeral"});
         }
     }
 
-    // 2. Cache the tool definitions.
+    // 2. Tools — mark the last tool with cache_control.
+    //    In resume scenarios, do NOT add or remove any tools to keep the list stable.
     if let Some(tools) = body.get_mut("tools")
         && let Some(tools_arr) = tools.as_array_mut()
         && let Some(last_tool) = tools_arr.last_mut()
@@ -597,22 +608,35 @@ fn add_cache_control(body: &mut Value) {
         last_tool["cache_control"] = json!({"type": "ephemeral"});
     }
 
-    // 3. Cache the most recent user message.
+    // 3. Most recent user message — ensure content is array format, mark cache_control.
     if let Some(messages) = body.get_mut("messages")
         && let Some(msg_arr) = messages.as_array_mut()
     {
         for msg in msg_arr.iter_mut().rev() {
             if msg["role"] == "user" {
-                if let Some(content) = msg.get_mut("content")
-                    && let Some(content_arr) = content.as_array_mut()
-                    && let Some(last_block) = content_arr.last_mut()
-                {
-                    last_block["cache_control"] = json!({"type": "ephemeral"});
+                if let Some(content) = msg.get_mut("content") {
+                    if content.is_string() {
+                        let text = content.as_str().unwrap_or("").to_owned();
+                        *content = json!([{
+                            "type": "text",
+                            "text": text,
+                            "cache_control": {"type": "ephemeral"}
+                        }]);
+                    } else if let Some(content_arr) = content.as_array_mut()
+                        && let Some(last_block) = content_arr.last_mut()
+                    {
+                        last_block["cache_control"] = json!({"type": "ephemeral"});
+                    }
                 }
                 break;
             }
         }
     }
+
+    // 4. Resume scenario: tool list must remain identical to avoid cache invalidation.
+    //    The `is_resume` flag is recorded here for future use; currently the tool list
+    //    is always the full builtin set, which is inherently stable.
+    let _ = is_resume;
 }
 
 #[cfg(test)]

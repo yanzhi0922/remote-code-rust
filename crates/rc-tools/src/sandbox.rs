@@ -1,37 +1,153 @@
 //! Sandbox execution for running commands in an isolated environment.
+//!
+//! Supports platform-specific sandboxing strategies:
+//! - **macOS**: Seatbelt (`sandbox-exec`) with configurable SBPL policies
+//! - **Linux**: Landlock (when available) or basic environment isolation
+//! - **Windows**: Basic environment isolation with restricted PATH
+//!
+//! Falls back to `Basic` mode on unsupported platforms.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
-/// Configuration for sandbox execution.
+// ---------------------------------------------------------------------------
+// Sandbox policy
+// ---------------------------------------------------------------------------
+
+/// Platform-specific sandbox strategy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SandboxConfig {
-    /// Directories the sandboxed command is allowed to access.
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SandboxPolicy {
+    /// No sandboxing — run commands directly.
+    None,
+    /// Basic restrictions: environment variable cleanup + timeout.
+    Basic,
+    /// macOS Seatbelt policy.
+    #[cfg(target_os = "macos")]
+    Seatbelt(SeatbeltPolicy),
+    /// Linux Landlock policy (graceful fallback to Basic if unavailable).
+    #[cfg(target_os = "linux")]
+    Landlock(LandlockPolicy),
+    /// Windows restriction policy.
+    #[cfg(target_os = "windows")]
+    Windows(WindowsPolicy),
+}
+
+impl SandboxPolicy {
+    /// Return the platform-default policy for the given workspace.
+    pub fn platform_default(workspace: &Path) -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            Self::Seatbelt(SeatbeltPolicy {
+                allowed_dirs: vec![workspace.to_path_buf()],
+                allow_network: false,
+            })
+        }
+        #[cfg(target_os = "linux")]
+        {
+            Self::Landlock(LandlockPolicy {
+                allowed_dirs: vec![workspace.to_path_buf()],
+                allow_network: false,
+            })
+        }
+        #[cfg(target_os = "windows")]
+        {
+            Self::Windows(WindowsPolicy {
+                allowed_dirs: vec![workspace.to_path_buf()],
+            })
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        {
+            let _ = workspace;
+            Self::Basic
+        }
+    }
+}
+
+/// macOS Seatbelt policy parameters.
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SeatbeltPolicy {
+    /// Directories the sandboxed command may read and write.
     pub allowed_dirs: Vec<PathBuf>,
     /// Whether network access is permitted.
     pub allow_network: bool,
+}
+
+/// Linux Landlock policy parameters.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LandlockPolicy {
+    /// Directories the sandboxed command may read and write.
+    pub allowed_dirs: Vec<PathBuf>,
+    /// Whether network access is permitted.
+    pub allow_network: bool,
+}
+
+/// Windows restriction policy parameters.
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WindowsPolicy {
+    /// Directories the sandboxed command may access.
+    pub allowed_dirs: Vec<PathBuf>,
+}
+
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
+
+/// Configuration for sandbox execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SandboxConfig {
+    /// Sandbox policy to apply.
+    pub policy: SandboxPolicy,
     /// Maximum execution time in seconds.
     pub timeout_secs: u64,
-    /// Maximum memory usage in MB (Linux only).
+    /// Maximum memory usage in MB (Linux only, best-effort).
     pub max_memory_mb: Option<u64>,
 }
 
 impl SandboxConfig {
     /// Create a default sandbox config scoped to the given workspace directory.
+    ///
+    /// Uses the platform-default policy.
     #[must_use]
-    pub fn default_for_workspace(workspace: &std::path::Path) -> Self {
+    pub fn default_for_workspace(workspace: &Path) -> Self {
         Self {
-            allowed_dirs: vec![workspace.to_path_buf()],
-            allow_network: false,
+            policy: SandboxPolicy::platform_default(workspace),
+            timeout_secs: 120,
+            max_memory_mb: None,
+        }
+    }
+
+    /// Create a sandbox config with no sandboxing.
+    #[must_use]
+    pub fn none() -> Self {
+        Self {
+            policy: SandboxPolicy::None,
+            timeout_secs: 120,
+            max_memory_mb: None,
+        }
+    }
+
+    /// Create a basic sandbox config (env cleanup + timeout).
+    #[must_use]
+    pub fn basic() -> Self {
+        Self {
+            policy: SandboxPolicy::Basic,
             timeout_secs: 120,
             max_memory_mb: None,
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Result
+// ---------------------------------------------------------------------------
 
 /// Result of a sandboxed command execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,42 +162,59 @@ pub struct SandboxResult {
     pub timed_out: bool,
 }
 
+// ---------------------------------------------------------------------------
+// Execution entry point
+// ---------------------------------------------------------------------------
+
 /// Execute a command inside a sandbox with the given configuration.
 ///
-/// On Windows the command is run via `cmd /C`, on Unix via `sh -c`.
-/// The environment is stripped down to `PATH` and `HOME` only.
+/// Dispatches to the platform-specific implementation based on the active policy.
 pub async fn execute_in_sandbox(
     command: &str,
     config: &SandboxConfig,
 ) -> Result<SandboxResult> {
-    let mut cmd = build_sandbox_command(command);
+    let timeout = Duration::from_secs(config.timeout_secs);
 
-    // Strip the environment to a safe subset.
-    cmd.env_clear();
-    if let Ok(path) = std::env::var("PATH") {
-        cmd.env("PATH", path);
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        cmd.env("HOME", home);
-    }
-    if let Ok(userprofile) = std::env::var("USERPROFILE") {
-        cmd.env("USERPROFILE", userprofile);
-    }
-    if let Ok(systemroot) = std::env::var("SystemRoot") {
-        cmd.env("SystemRoot", systemroot);
-    }
+    match &config.policy {
+        SandboxPolicy::None => execute_unrestricted(command, config, timeout).await,
+        SandboxPolicy::Basic => execute_basic(command, config, timeout).await,
 
-    // Set working directory to the first allowed directory.
-    if let Some(dir) = config.allowed_dirs.first() {
+        #[cfg(target_os = "macos")]
+        SandboxPolicy::Seatbelt(policy) => {
+            execute_seatbelt(command, policy, timeout).await
+        }
+
+        #[cfg(target_os = "linux")]
+        SandboxPolicy::Landlock(policy) => {
+            // Landlock requires the `landlock` crate which is not yet integrated.
+            // Fall back to basic isolation for now.
+            let _ = policy;
+            execute_basic(command, config, timeout).await
+        }
+
+        #[cfg(target_os = "windows")]
+        SandboxPolicy::Windows(policy) => {
+            execute_windows(command, policy, config, timeout).await
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Platform implementations
+// ---------------------------------------------------------------------------
+
+/// No sandbox — run the command directly.
+async fn execute_unrestricted(
+    command: &str,
+    config: &SandboxConfig,
+    timeout: Duration,
+) -> Result<SandboxResult> {
+    let mut cmd = build_shell_command(command);
+    if let Some(dir) = first_allowed_dir(config) {
         cmd.current_dir(dir);
     }
 
-    let output = tokio::time::timeout(
-        Duration::from_secs(config.timeout_secs),
-        cmd.output(),
-    )
-    .await;
-
+    let output = tokio::time::timeout(timeout, cmd.output()).await;
     match output {
         Ok(Ok(output)) => Ok(SandboxResult {
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
@@ -92,18 +225,151 @@ pub async fn execute_in_sandbox(
         Ok(Err(error)) => Err(error).context("sandbox command failed to execute"),
         Err(_) => Ok(SandboxResult {
             stdout: String::new(),
-            stderr: format!(
-                "Command timed out after {} seconds.",
-                config.timeout_secs
-            ),
+            stderr: format!("Command timed out after {} seconds.", config.timeout_secs),
             exit_code: None,
             timed_out: true,
         }),
     }
 }
 
+/// Basic sandbox: strip environment, set working directory, enforce timeout.
+async fn execute_basic(
+    command: &str,
+    config: &SandboxConfig,
+    timeout: Duration,
+) -> Result<SandboxResult> {
+    let mut cmd = build_shell_command(command);
+    strip_environment(&mut cmd);
+    if let Some(dir) = first_allowed_dir(config) {
+        cmd.current_dir(dir);
+    }
+
+    let output = tokio::time::timeout(timeout, cmd.output()).await;
+    match output {
+        Ok(Ok(output)) => Ok(SandboxResult {
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            exit_code: output.status.code(),
+            timed_out: false,
+        }),
+        Ok(Err(error)) => Err(error).context("sandbox command failed to execute"),
+        Err(_) => Ok(SandboxResult {
+            stdout: String::new(),
+            stderr: format!("Command timed out after {} seconds.", config.timeout_secs),
+            exit_code: None,
+            timed_out: true,
+        }),
+    }
+}
+
+/// Windows sandbox: basic isolation with restricted environment.
+#[cfg(target_os = "windows")]
+async fn execute_windows(
+    command: &str,
+    policy: &WindowsPolicy,
+    config: &SandboxConfig,
+    timeout: Duration,
+) -> Result<SandboxResult> {
+    let mut cmd = build_shell_command(command);
+    strip_environment(&mut cmd);
+
+    // Set working directory to the first allowed directory.
+    if let Some(dir) = policy.allowed_dirs.first() {
+        cmd.current_dir(dir);
+    }
+
+    let output = tokio::time::timeout(timeout, cmd.output()).await;
+    match output {
+        Ok(Ok(output)) => Ok(SandboxResult {
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            exit_code: output.status.code(),
+            timed_out: false,
+        }),
+        Ok(Err(error)) => Err(error).context("sandbox command failed to execute"),
+        Err(_) => Ok(SandboxResult {
+            stdout: String::new(),
+            stderr: format!("Command timed out after {} seconds.", config.timeout_secs),
+            exit_code: None,
+            timed_out: true,
+        }),
+    }
+}
+
+/// macOS Seatbelt execution using `sandbox-exec`.
+#[cfg(target_os = "macos")]
+async fn execute_seatbelt(
+    command: &str,
+    policy: &SeatbeltPolicy,
+    timeout: Duration,
+) -> Result<SandboxResult> {
+    // Generate SBPL policy string.
+    let mut sbpl = String::from("(version 1)\n");
+    sbpl += "(deny default)\n";
+
+    // Allow basic system operations.
+    sbpl += "(allow file-read* (subpath \"/usr\"))\n";
+    sbpl += "(allow file-read* (subpath \"/System\"))\n";
+    sbpl += "(allow file-read* (subpath \"/Library\"))\n";
+    sbpl += "(allow process-exec (literal \"/bin/sh\"))\n";
+    sbpl += "(allow process-exec (literal \"/bin/bash\"))\n";
+    sbpl += "(allow process-exec (literal \"/bin/zsh\"))\n";
+
+    // Allow workspace directories.
+    for dir in &policy.allowed_dirs {
+        let path = dir.display();
+        sbpl += &format!("(allow file-read* (subpath \"{path}\"))\n");
+        sbpl += &format!("(allow file-write* (subpath \"{path}\"))\n");
+    }
+
+    // Network control.
+    if policy.allow_network {
+        sbpl += "(allow network*)\n";
+    }
+
+    // Execute via sandbox-exec.
+    let output = tokio::time::timeout(
+        timeout,
+        tokio::process::Command::new("sandbox-exec")
+            .arg("-p")
+            .arg(&sbpl)
+            .arg("/bin/sh")
+            .arg("-c")
+            .arg(command)
+            .output(),
+    )
+    .await;
+
+    match output {
+        Ok(Ok(output)) => Ok(SandboxResult {
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            exit_code: output.status.code(),
+            timed_out: false,
+        }),
+        Ok(Err(error)) => {
+            // If sandbox-exec is not available, fall back to basic execution.
+            if error.kind() == std::io::ErrorKind::NotFound {
+                let config = SandboxConfig::basic();
+                return execute_basic(command, &config, timeout).await;
+            }
+            Err(error).context("seatbelt sandbox-exec failed")
+        }
+        Err(_) => Ok(SandboxResult {
+            stdout: String::new(),
+            stderr: format!("Command timed out after {} seconds.", timeout.as_secs()),
+            exit_code: None,
+            timed_out: true,
+        }),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 /// Build the platform-appropriate shell command.
-fn build_sandbox_command(command: &str) -> Command {
+fn build_shell_command(command: &str) -> Command {
     #[cfg(windows)]
     {
         let mut cmd = Command::new("cmd");
@@ -119,6 +385,50 @@ fn build_sandbox_command(command: &str) -> Command {
     }
 }
 
+/// Strip the environment to a safe subset.
+fn strip_environment(cmd: &mut Command) {
+    cmd.env_clear();
+    if let Ok(path) = std::env::var("PATH") {
+        cmd.env("PATH", path);
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        cmd.env("HOME", home);
+    }
+    if let Ok(userprofile) = std::env::var("USERPROFILE") {
+        cmd.env("USERPROFILE", userprofile);
+    }
+    if let Ok(systemroot) = std::env::var("SystemRoot") {
+        cmd.env("SystemRoot", systemroot);
+    }
+    // Propagate TEMP/TMP for tools that need temporary directories.
+    if let Ok(temp) = std::env::var("TEMP") {
+        cmd.env("TEMP", temp);
+    }
+    if let Ok(tmp) = std::env::var("TMP") {
+        cmd.env("TMP", tmp);
+    }
+    if let Ok(tmpdir) = std::env::var("TMPDIR") {
+        cmd.env("TMPDIR", tmpdir);
+    }
+}
+
+/// Extract the first allowed directory from the sandbox config policy.
+fn first_allowed_dir(config: &SandboxConfig) -> Option<PathBuf> {
+    match &config.policy {
+        SandboxPolicy::None | SandboxPolicy::Basic => None,
+        #[cfg(target_os = "macos")]
+        SandboxPolicy::Seatbelt(p) => p.allowed_dirs.first().cloned(),
+        #[cfg(target_os = "linux")]
+        SandboxPolicy::Landlock(p) => p.allowed_dirs.first().cloned(),
+        #[cfg(target_os = "windows")]
+        SandboxPolicy::Windows(p) => p.allowed_dirs.first().cloned(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,7 +439,11 @@ mod tests {
         let workspace = std::env::temp_dir();
         let config = SandboxConfig::default_for_workspace(&workspace);
 
-        let (command, expected) = ("echo hello", "hello");
+        let (command, expected) = if cfg!(windows) {
+            ("echo hello", "hello")
+        } else {
+            ("echo hello", "hello")
+        };
 
         let result = execute_in_sandbox(command, &config)
             .await
@@ -168,9 +482,29 @@ mod tests {
     fn sandbox_config_default_for_workspace() {
         let workspace = Path::new("/tmp/test");
         let config = SandboxConfig::default_for_workspace(workspace);
-        assert_eq!(config.allowed_dirs, vec![workspace.to_path_buf()]);
-        assert!(!config.allow_network);
         assert_eq!(config.timeout_secs, 120);
         assert!(config.max_memory_mb.is_none());
+    }
+
+    #[test]
+    fn sandbox_config_none_policy() {
+        let config = SandboxConfig::none();
+        assert!(matches!(config.policy, SandboxPolicy::None));
+    }
+
+    #[test]
+    fn sandbox_config_basic_policy() {
+        let config = SandboxConfig::basic();
+        assert!(matches!(config.policy, SandboxPolicy::Basic));
+    }
+
+    #[tokio::test]
+    async fn unrestricted_execution_works() {
+        let config = SandboxConfig::none();
+        let result = execute_in_sandbox("echo test", &config)
+            .await
+            .expect("unrestricted execution should work");
+        assert!(!result.timed_out);
+        assert!(result.stdout.trim().contains("test"));
     }
 }

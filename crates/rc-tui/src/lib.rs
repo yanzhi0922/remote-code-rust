@@ -1,28 +1,29 @@
 //! Interactive TUI for Remote Code Rust.
 //!
-//! Uses a simple async stdin/stdout loop for maximum Windows compatibility,
-//! avoiding the complexity of ratatui/crossterm raw-mode TUI.
+//! Uses crossterm raw mode for true single-keystroke detection, enabling
+//! real Vim keybindings (ESC, Ctrl+C, etc.) without line-buffered workarounds.
 //!
-//! Supports basic Vim key bindings in the input loop:
+//! Supports Vim key bindings:
 //! - `h/j/k/l` — navigate message history (normal mode)
 //! - `i` — enter insert (input) mode
-//! - `Esc` — return to normal mode (type "esc" + Enter in line-buffered terminals)
+//! - `Esc` — return to normal mode (real ESC detection via raw mode)
 //! - `G` — jump to bottom of history
 //! - `gg` — jump to top of history
 //! - `:q` — quit
+//! - `Ctrl+C` — exit from insert mode
 
 use std::io::{self, Write};
+use std::sync::Arc;
 
 use anyhow::Result;
-use rc_config::RuntimeConfig;
-use rc_core::{ConversationEntry, ConversationRole, default_system_prompt};
+use rc_config::{ProviderConfig, RuntimeConfig};
+use rc_core::{ConversationEntry, ConversationRole, ProviderResponse, SubAgentCompletion, default_system_prompt};
 use rc_permissions::StaticPermissionBroker;
 use rc_provider::ProviderClient;
 use rc_provider::context::ContextWindowManager;
 use rc_provider::cost::CostTracker;
 use rc_session::SessionStore;
 use rc_tools::{ToolExecutionContext, builtin_tool_specs, execute_tool_call};
-use tokio::io::AsyncBufReadExt;
 
 /// Vim-like input mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +42,38 @@ enum SlashCommandAction {
     ResetScroll,
     /// Exit the interactive session.
     Quit,
+}
+
+// ---------------------------------------------------------------------------
+// Sub-agent completion provider
+// ---------------------------------------------------------------------------
+
+/// Wrapper around [`ProviderClient`] that implements [`SubAgentCompletion`].
+///
+/// This allows the agent tool to create sub-conversations and execute them
+/// using the same provider configuration as the main conversation.
+struct TuiSubAgent {
+    client: ProviderClient,
+    provider: ProviderConfig,
+}
+
+impl TuiSubAgent {
+    fn new(client: &ProviderClient, provider: &ProviderConfig) -> Self {
+        Self {
+            client: client.clone(),
+            provider: provider.clone(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl SubAgentCompletion for TuiSubAgent {
+    async fn complete(
+        &self,
+        conversation: &[ConversationEntry],
+    ) -> anyhow::Result<ProviderResponse> {
+        self.client.complete(&self.provider, conversation).await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +125,7 @@ pub fn run_dashboard(config: &RuntimeConfig, store: &SessionStore) -> Result<()>
     Ok(())
 }
 
-/// Run the interactive TUI application with a simple async input loop.
+/// Run the interactive TUI application with crossterm raw-mode input.
 ///
 /// This is the main interactive mode entry point, providing:
 /// - Multi-turn conversation with the provider
@@ -100,7 +133,8 @@ pub fn run_dashboard(config: &RuntimeConfig, store: &SessionStore) -> Result<()>
 /// - Context window compaction
 /// - Cost tracking across turns
 /// - Slash commands for session management
-/// - Graceful Ctrl+C handling during input
+/// - True Vim mode with raw key detection (ESC, Ctrl+C, etc.)
+#[allow(clippy::too_many_lines)]
 pub async fn run_tui_app(
     config: RuntimeConfig,
     store: &SessionStore,
@@ -113,185 +147,261 @@ pub async fn run_tui_app(
     let cost_tracker = CostTracker::new();
     let mut conversation = load_or_create_conversation(store, &config)?;
 
-    println!("Remote Code Rust — Interactive Mode");
-    println!("Session:  {}", config.session_id);
-    println!(
+    // Enter crossterm alternate screen and raw mode.
+    crossterm::terminal::enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen)?;
+
+    // Helper to print a line in raw mode (use \r\n for line endings).
+    let print_line = |text: &str| {
+        let _ = crossterm::execute!(io::stdout(), crossterm::style::Print(format!("{text}\r\n")));
+    };
+
+    print_line("Remote Code Rust — Interactive Mode");
+    print_line(&format!("Session:  {}", config.session_id));
+    print_line(&format!(
         "Provider: {} ({})",
         config.provider.name,
         config.provider.protocol.as_str()
-    );
-    println!(
+    ));
+    print_line(&format!(
         "Model:    {}",
         config.provider.model.as_deref().unwrap_or("(missing)")
-    );
-    println!("Type /help for commands, /quit to exit");
-    println!("Vim mode: Esc=normal, i=insert, j/k=scroll, G=bottom, gg=top, :q=quit");
-    println!();
-
-    let stdin = tokio::io::BufReader::new(tokio::io::stdin());
-    let mut lines = stdin.lines();
+    ));
+    print_line("Type /help for commands, /quit to exit");
+    print_line("Vim mode: Esc=normal, i=insert, j/k=scroll, G=bottom, gg=top, :q=quit");
+    print_line("");
 
     let mut vim_mode = VimMode::Insert;
-    let mut history_scroll: usize = 0; // offset from the end of conversation
-    let mut pending_g = false; // for 'gg' detection
+    let mut history_scroll: usize = 0;
+    let mut pending_g = false;
+    let mut input_buffer = String::new();
+    let mut command_buffer = String::new(); // for ':' commands in normal mode
 
     loop {
+        // Print prompt and current input buffer.
         let prompt = match vim_mode {
             VimMode::Insert => "> ",
             VimMode::Normal => "(n) ",
         };
-        print!("{prompt}");
-        io::stdout().flush()?;
+        let display = format!("{prompt}{input_buffer}");
+        let _ = crossterm::execute!(io::stdout(), crossterm::style::Print(&display));
+        let _ = io::stdout().flush();
 
-        // Use tokio::select! to handle Ctrl+C gracefully during input.
-        // During provider calls (inside run_conversation_turn), Ctrl+C will
-        // still terminate the process — this is standard CLI behavior.
-        let line_opt = tokio::select! {
-            result = lines.next_line() => {
-                match result {
-                    Ok(Some(line)) => Some(line),
-                    Ok(None) => None, // EOF
-                    Err(e) => return Err(e.into()),
-                }
+        // Poll for key events with a 100ms timeout.
+        if !crossterm::event::poll(std::time::Duration::from_millis(100))? {
+            continue;
+        }
+
+        let event = match crossterm::event::read()? {
+            crossterm::event::Event::Key(key) => key,
+            crossterm::event::Event::Resize(_, _) => {
+                // Redraw on resize — just continue the loop.
+                continue;
             }
-            _ = tokio::signal::ctrl_c() => {
-                println!("\nInterrupted. Goodbye!");
-                None
-            }
+            _ => continue,
         };
 
-        let line = match line_opt {
-            Some(line) => line,
-            None => break,
-        };
-
-        let input = line.trim();
+        // Clear the current prompt line before processing.
+        let _ = crossterm::execute!(
+            io::stdout(),
+            crossterm::cursor::MoveToColumn(0),
+            crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
+        );
 
         match vim_mode {
             VimMode::Normal => {
-                // Handle pending 'g' for 'gg' sequence
                 if pending_g {
                     pending_g = false;
-                    if input == "g" {
+                    if let crossterm::event::KeyCode::Char('g') = event.code {
                         // gg — jump to top
                         history_scroll = conversation.len();
-                        println!("  [top of history]");
-                        continue;
+                        print_line("  [top of history]");
                     }
-                    // Not 'gg', ignore the pending g
+                    continue;
                 }
 
-                match input {
-                    "i" | "a" => {
+                match event.code {
+                    crossterm::event::KeyCode::Char('i') | crossterm::event::KeyCode::Char('a') => {
                         vim_mode = VimMode::Insert;
-                        println!("  -- INSERT --");
+                        input_buffer.clear();
+                        print_line("  -- INSERT --");
                     }
-                    "j" => {
-                        // Scroll down (toward newer messages)
+                    crossterm::event::KeyCode::Char('j') => {
                         if history_scroll > 0 {
                             history_scroll -= 1;
                             let idx = conversation.len().saturating_sub(history_scroll + 1);
                             if let Some(entry) = conversation.get(idx) {
-                                print_entry(entry);
+                                print_entry_raw(&print_line, entry);
                             }
                         } else {
-                            println!("  [at bottom]");
+                            print_line("  [at bottom]");
                         }
                     }
-                    "k" => {
-                        // Scroll up (toward older messages)
+                    crossterm::event::KeyCode::Char('k') => {
                         if history_scroll < conversation.len() {
                             history_scroll += 1;
                             let idx = conversation.len().saturating_sub(history_scroll + 1);
                             if let Some(entry) = conversation.get(idx) {
-                                print_entry(entry);
+                                print_entry_raw(&print_line, entry);
                             }
                         } else {
-                            println!("  [at top]");
+                            print_line("  [at top]");
                         }
                     }
-                    "h" | "l" => {
-                        // h/l: no-op in this simplified mode (left/right)
-                    }
-                    "G" => {
-                        // Jump to bottom
+                    crossterm::event::KeyCode::Char('h') | crossterm::event::KeyCode::Char('l') => {}
+                    crossterm::event::KeyCode::Char('G') => {
                         history_scroll = 0;
                         if let Some(entry) = conversation.last() {
-                            print_entry(entry);
+                            print_entry_raw(&print_line, entry);
                         }
                     }
-                    "g" => {
-                        // Start 'gg' sequence
+                    crossterm::event::KeyCode::Char('g') => {
                         pending_g = true;
                     }
-                    ":q" | "q" => {
-                        println!("Goodbye!");
+                    crossterm::event::KeyCode::Char(':') => {
+                        command_buffer.clear();
+                        command_buffer.push(':');
+                    }
+                    crossterm::event::KeyCode::Char('q') => {
+                        print_line("Goodbye!");
                         break;
                     }
-                    "" => {
-                        // Empty input in normal mode, do nothing
+                    crossterm::event::KeyCode::Esc => {
+                        // Already in normal mode — ignore.
                     }
-                    _ => {
-                        println!("  Unknown normal-mode key: '{input}'. Press i for insert, :q to quit.");
+                    _ => {}
+                }
+
+                // Handle command buffer (e.g. ":q" entered char by char).
+                if command_buffer.starts_with(':') {
+                    match event.code {
+                        crossterm::event::KeyCode::Char(c) => {
+                            command_buffer.push(c);
+                        }
+                        crossterm::event::KeyCode::Enter => {
+                            let cmd = command_buffer.trim();
+                            if cmd == ":q" || cmd == ":quit" || cmd == ":exit" {
+                                print_line("Goodbye!");
+                                break;
+                            }
+                            command_buffer.clear();
+                        }
+                        crossterm::event::KeyCode::Esc => {
+                            command_buffer.clear();
+                        }
+                        _ => {}
                     }
                 }
                 continue;
             }
             VimMode::Insert => {
-                // In line-buffered mode, the terminal doesn't send raw escape
-                // sequences. Users can switch to normal mode by typing "esc",
-                // "ESC", or the literal escape character followed by Enter.
-                if input.eq_ignore_ascii_case("esc")
-                    || input == "\u{1b}"
-                    || input == "^["
-                {
-                    vim_mode = VimMode::Normal;
-                    println!("  -- NORMAL --");
-                    continue;
+                match event.code {
+                    crossterm::event::KeyCode::Esc => {
+                        vim_mode = VimMode::Normal;
+                        input_buffer.clear();
+                        print_line("  -- NORMAL --");
+                        continue;
+                    }
+                    crossterm::event::KeyCode::Enter => {
+                        let input = input_buffer.trim().to_owned();
+                        input_buffer.clear();
+
+                        // Temporarily leave raw mode for conversation turn output.
+                        crossterm::terminal::disable_raw_mode()?;
+                        crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen)?;
+
+                        if input.is_empty() {
+                            // Re-enter raw mode.
+                            crossterm::terminal::enable_raw_mode()?;
+                            crossterm::execute!(io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
+                            continue;
+                        }
+
+                        // Handle slash commands.
+                        if input.starts_with('/') {
+                            match handle_slash_command(
+                                &input,
+                                &config,
+                                store,
+                                &mut conversation,
+                                &context_manager,
+                                &cost_tracker,
+                            ) {
+                                SlashCommandAction::Quit => {
+                                    let cost = cost_tracker.total_cost_usd();
+                                    if cost > 0.0 {
+                                        println!();
+                                        print!("{}", cost_tracker.summary());
+                                    }
+                                    return Ok(());
+                                }
+                                SlashCommandAction::ResetScroll => history_scroll = 0,
+                                SlashCommandAction::Continue => {}
+                            }
+                            // Re-enter raw mode.
+                            crossterm::terminal::enable_raw_mode()?;
+                            crossterm::execute!(io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
+                            continue;
+                        }
+
+                        // Execute conversation turn (outside raw mode for normal output).
+                        if let Err(error) = run_conversation_turn(
+                            &provider,
+                            &config,
+                            store,
+                            &mut conversation,
+                            &context_manager,
+                            &broker,
+                            &cost_tracker,
+                            &input,
+                        )
+                        .await
+                        {
+                            eprintln!("Error: {error}");
+                            eprintln!("  (your message was saved; the conversation state may be inconsistent)");
+                        }
+
+                        // Re-enter raw mode.
+                        crossterm::terminal::enable_raw_mode()?;
+                        crossterm::execute!(io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
+                        continue;
+                    }
+                    crossterm::event::KeyCode::Char(c) => {
+                        // Handle Ctrl+C in insert mode.
+                        if c == 'c' && event.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
+                            print_line("Interrupted. Goodbye!");
+                            break;
+                        }
+                        input_buffer.push(c);
+                    }
+                    crossterm::event::KeyCode::Backspace => {
+                        input_buffer.pop();
+                    }
+                    crossterm::event::KeyCode::Up => {
+                        if history_scroll < conversation.len() {
+                            history_scroll += 1;
+                        }
+                    }
+                    crossterm::event::KeyCode::Down => {
+                        history_scroll = history_scroll.saturating_sub(1);
+                    }
+                    crossterm::event::KeyCode::Tab => {
+                        // Auto-completion placeholder — append two spaces.
+                        input_buffer.push_str("  ");
+                    }
+                    _ => {}
                 }
+                continue;
             }
-        }
-
-        if input.is_empty() {
-            continue;
-        }
-
-        // Handle slash commands
-        if input.starts_with('/') {
-            match handle_slash_command(
-                input,
-                &config,
-                store,
-                &mut conversation,
-                &context_manager,
-                &cost_tracker,
-            ) {
-                SlashCommandAction::Quit => break,
-                SlashCommandAction::ResetScroll => history_scroll = 0,
-                SlashCommandAction::Continue => {}
-            }
-            continue;
-        }
-
-        // Execute conversation turn
-        if let Err(error) = run_conversation_turn(
-            &provider,
-            &config,
-            store,
-            &mut conversation,
-            &context_manager,
-            &broker,
-            &cost_tracker,
-            input,
-        )
-        .await
-        {
-            eprintln!("Error: {error}");
-            eprintln!("  (your message was saved; the conversation state may be inconsistent)");
         }
     }
 
-    // Print cost summary on exit
+    // Restore terminal state.
+    crossterm::terminal::disable_raw_mode()?;
+    crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen)?;
+
+    // Print cost summary on exit.
     let cost = cost_tracker.total_cost_usd();
     if cost > 0.0 {
         println!();
@@ -359,6 +469,7 @@ async fn run_conversation_turn(
     let tool_context = ToolExecutionContext {
         cwd: config.cwd.clone(),
         timeout_ms: config.provider.timeout_ms,
+        sub_agent: Some(Arc::new(TuiSubAgent::new(provider, &config.provider))),
     };
 
     let model_name = config
@@ -467,8 +578,8 @@ async fn run_conversation_turn(
 // Display helpers
 // ---------------------------------------------------------------------------
 
-/// Print a conversation entry for Vim-mode history navigation.
-fn print_entry(entry: &ConversationEntry) {
+/// Print a conversation entry for Vim-mode history navigation (raw mode).
+fn print_entry_raw(print_line: &dyn Fn(&str), entry: &ConversationEntry) {
     let role = match entry.role {
         ConversationRole::System => "system",
         ConversationRole::User => "user",
@@ -477,7 +588,7 @@ fn print_entry(entry: &ConversationEntry) {
     };
     let text = entry.history_text();
     let preview: String = text.chars().take(200).collect();
-    println!("  [{role}] {preview}");
+    print_line(&format!("  [{role}] {preview}"));
 }
 
 /// Format and print a tool execution result.

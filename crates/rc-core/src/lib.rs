@@ -395,6 +395,24 @@ pub struct ToolResult {
     pub is_error: bool,
 }
 
+/// Trait for providing LLM completion capability to sub-agents.
+///
+/// This trait breaks the circular dependency between `rc-tools` and
+/// `rc-provider`: `rc-tools` defines the agent tool that needs LLM access,
+/// but cannot depend on `rc-provider` directly. Instead, the completion
+/// capability is injected via this trait at the TUI/application layer.
+#[async_trait::async_trait]
+pub trait SubAgentCompletion: Send + Sync {
+    /// Send a conversation to the LLM and return the response.
+    ///
+    /// The implementation is responsible for provider selection, retry logic,
+    /// and message formatting.
+    async fn complete(
+        &self,
+        conversation: &[ConversationEntry],
+    ) -> anyhow::Result<ProviderResponse>;
+}
+
 /// A persisted event in the session transcript.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredEvent {
