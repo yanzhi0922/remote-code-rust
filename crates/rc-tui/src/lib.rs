@@ -45,6 +45,86 @@ enum SlashCommandAction {
 }
 
 // ---------------------------------------------------------------------------
+// Theme system
+// ---------------------------------------------------------------------------
+
+/// Color theme for the TUI.
+#[derive(Debug, Clone)]
+struct Theme {
+    name: String,
+    prompt_color: crossterm::style::Color,
+    system_color: crossterm::style::Color,
+    assistant_color: crossterm::style::Color,
+    tool_color: crossterm::style::Color,
+    error_color: crossterm::style::Color,
+    info_color: crossterm::style::Color,
+}
+
+impl Theme {
+    fn dark() -> Self {
+        Theme {
+            name: "dark".to_owned(),
+            prompt_color: crossterm::style::Color::Green,
+            system_color: crossterm::style::Color::Magenta,
+            assistant_color: crossterm::style::Color::Cyan,
+            tool_color: crossterm::style::Color::Yellow,
+            error_color: crossterm::style::Color::Red,
+            info_color: crossterm::style::Color::DarkGrey,
+        }
+    }
+
+    fn light() -> Self {
+        Theme {
+            name: "light".to_owned(),
+            prompt_color: crossterm::style::Color::DarkGreen,
+            system_color: crossterm::style::Color::DarkMagenta,
+            assistant_color: crossterm::style::Color::DarkCyan,
+            tool_color: crossterm::style::Color::DarkYellow,
+            error_color: crossterm::style::Color::DarkRed,
+            info_color: crossterm::style::Color::Grey,
+        }
+    }
+
+    fn monokai() -> Self {
+        Theme {
+            name: "monokai".to_owned(),
+            prompt_color: crossterm::style::Color::Green,
+            system_color: crossterm::style::Color::Magenta,
+            assistant_color: crossterm::style::Color::Yellow,
+            tool_color: crossterm::style::Color::DarkCyan,
+            error_color: crossterm::style::Color::Red,
+            info_color: crossterm::style::Color::DarkGrey,
+        }
+    }
+
+    fn solarized() -> Self {
+        Theme {
+            name: "solarized".to_owned(),
+            prompt_color: crossterm::style::Color::Green,
+            system_color: crossterm::style::Color::Magenta,
+            assistant_color: crossterm::style::Color::Blue,
+            tool_color: crossterm::style::Color::Yellow,
+            error_color: crossterm::style::Color::Red,
+            info_color: crossterm::style::Color::DarkCyan,
+        }
+    }
+
+    fn by_name(name: &str) -> Option<Self> {
+        match name {
+            "dark" => Some(Self::dark()),
+            "light" => Some(Self::light()),
+            "monokai" => Some(Self::monokai()),
+            "solarized" => Some(Self::solarized()),
+            _ => None,
+        }
+    }
+
+    fn all_names() -> Vec<&'static str> {
+        vec!["dark", "light", "monokai", "solarized"]
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Sub-agent completion provider
 // ---------------------------------------------------------------------------
 
@@ -185,6 +265,7 @@ pub async fn run_tui_app(
     let mut search_query = String::new(); // Current search query
     let mut search_results: Vec<usize> = Vec::new(); // Matching history indices
     let mut search_result_index: usize = 0; // Current position in search results
+    let mut theme = Theme::dark(); // Current color theme
 
     // Enable mouse capture for scroll support.
     let _ = crossterm::execute!(io::stdout(), crossterm::event::EnableMouseCapture);
@@ -371,6 +452,7 @@ pub async fn run_tui_app(
                                 &mut conversation,
                                 &context_manager,
                                 &cost_tracker,
+                                &mut theme,
                             ) {
                                 SlashCommandAction::Quit => {
                                     // Disable mouse capture before exit.
@@ -819,6 +901,7 @@ fn handle_slash_command(
     conversation: &mut Vec<ConversationEntry>,
     context_manager: &ContextWindowManager,
     cost_tracker: &CostTracker,
+    theme: &mut Theme,
 ) -> SlashCommandAction {
     let trimmed = input.trim();
     let mut parts = trimmed.split_whitespace();
@@ -834,6 +917,7 @@ fn handle_slash_command(
             println!("  /tools     List available tools");
             println!("  /sessions  List recent sessions");
             println!("  /cost      Show accumulated cost summary");
+            println!("  /theme     Show or switch color theme (dark/light/monokai/solarized)");
             println!("  /clear     Clear conversation (keeps system prompt)");
             println!("  /quit      Exit the interactive session");
         }
@@ -937,6 +1021,24 @@ fn handle_slash_command(
             println!("Note: transcript history is still saved in the session file.");
             return SlashCommandAction::ResetScroll;
         }
+        "/theme" => {
+            let theme_name = parts.next();
+            match theme_name {
+                Some(name) => {
+                    if let Some(new_theme) = Theme::by_name(name) {
+                        *theme = new_theme;
+                        println!("Theme set to: {name}");
+                    } else {
+                        println!("Unknown theme '{name}'. Available: {}", Theme::all_names().join(", "));
+                    }
+                }
+                None => {
+                    println!("Current theme: {}", theme.name);
+                    println!("Available themes: {}", Theme::all_names().join(", "));
+                    println!("Usage: /theme <name>");
+                }
+            }
+        }
         "/quit" | "/exit" => return SlashCommandAction::Quit,
         _ => {
             println!("Unknown command `{trimmed}`. Type /help for a list of commands.");
@@ -949,7 +1051,7 @@ fn handle_slash_command(
 fn complete_slash_command(partial: &str) -> Vec<String> {
     let all_commands = [
         "/help", "/status", "/cost", "/compact", "/compact!",
-        "/clear", "/sessions", "/tools", "/doctor",
+        "/clear", "/sessions", "/tools", "/doctor", "/theme",
         "/quit", "/exit",
     ];
     all_commands

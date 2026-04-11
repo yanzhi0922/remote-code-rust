@@ -1082,12 +1082,13 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
             name: "voice_input".to_owned(),
             protocol_name: "VoiceInput".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "Capture voice input (placeholder — requires external tool support).".to_owned(),
+            description: "Capture voice input via microphone, record audio, and transcribe to text using whisper.".to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "duration_secs": {"type": "integer", "minimum": 1, "maximum": 60}
+                    "duration_secs": {"type": "integer", "minimum": 1, "maximum": 60, "description": "Recording duration in seconds (default 5)"},
+                    "language": {"type": "string", "description": "Language code for transcription (default 'en')"}
                 },
                 "additionalProperties": false,
             }),
@@ -3843,14 +3844,100 @@ fn skill_execute_tool(input: &Value, context: &ToolExecutionContext) -> Result<S
 
 fn voice_input_tool(input: &Value) -> Result<String> {
     let duration_secs = input.get("duration_secs").and_then(Value::as_u64).unwrap_or(5);
+    let language = input["language"].as_str().unwrap_or("en");
+
+    // Try to record audio using sox/rec/ffmpeg and transcribe with whisper.
+    let temp_dir = std::env::temp_dir();
+    let wav_path = temp_dir.join("remote-code-voice.wav");
+
+    // Attempt recording with sox (rec command) or ffmpeg.
+    let record_result = if cfg!(windows) {
+        // On Windows, try ffmpeg.
+        std::process::Command::new("ffmpeg")
+            .args([
+                "-y", "-f", "dshow", "-i", "audio=microphone",
+                "-t", &duration_secs.to_string(),
+                "-ar", "16000", "-ac", "1",
+                wav_path.to_str().unwrap_or(""),
+            ])
+            .output()
+    } else {
+        // On Unix, try rec (sox) first, then ffmpeg.
+        let sox_result = std::process::Command::new("rec")
+            .args([
+                "-r", "16000", "-c", "1",
+                wav_path.to_str().unwrap_or(""),
+                "trim", "0", &duration_secs.to_string(),
+            ])
+            .output();
+        match sox_result {
+            Ok(out) if out.status.success() => Ok(out),
+            _ => {
+                std::process::Command::new("ffmpeg")
+                    .args([
+                        "-y", "-f", "alsa", "-i", "default",
+                        "-t", &duration_secs.to_string(),
+                        "-ar", "16000", "-ac", "1",
+                        wav_path.to_str().unwrap_or(""),
+                    ])
+                    .output()
+            }
+        }
+    };
+
+    let recorded = match record_result {
+        Ok(out) if out.status.success() && wav_path.exists() => true,
+        _ => false,
+    };
+
+    if !recorded {
+        return Ok(json!({
+            "type": "voice_input",
+            "duration_secs": duration_secs,
+            "status": "recording_failed",
+            "message": "Voice recording failed. Install sox (rec) or ffmpeg with audio support.",
+            "hint": "Windows: install ffmpeg. macOS: brew install sox. Linux: apt install sox.",
+        }).to_string());
+    }
+
+    // Try to transcribe with whisper CLI.
+    let whisper_result = std::process::Command::new("whisper")
+        .args([
+            wav_path.to_str().unwrap_or(""),
+            "--model", "base",
+            "--language", language,
+            "--output_format", "txt",
+            "--output_dir", temp_dir.to_str().unwrap_or(""),
+        ])
+        .output();
+
+    let transcription = match whisper_result {
+        Ok(out) if out.status.success() => {
+            let txt_path = temp_dir.join("remote-code-voice.txt");
+            if txt_path.exists() {
+                std::fs::read_to_string(&txt_path).unwrap_or_default()
+            } else {
+                String::from("(transcription file not found)")
+            }
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            format!("(whisper error: {})", stderr.chars().take(200).collect::<String>())
+        }
+        Err(e) => format!("(whisper not available: {e})"),
+    };
+
+    // Clean up temp files.
+    let _ = std::fs::remove_file(&wav_path);
+    let _ = std::fs::remove_file(temp_dir.join("remote-code-voice.txt"));
 
     Ok(json!({
         "type": "voice_input",
         "duration_secs": duration_secs,
-        "message": "Voice input requires external tool support (e.g., Whisper, system microphone API).",
-        "note": "This is a placeholder. Actual voice capture needs a connected audio input device and transcription service."
-    })
-    .to_string())
+        "language": language,
+        "status": "success",
+        "transcription": transcription.trim(),
+    }).to_string())
 }
 
 fn daemon_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
