@@ -181,15 +181,23 @@ pub async fn run_tui_app(
     let mut input_history: Vec<String> = Vec::new(); // History of submitted inputs
     let mut history_index: usize = 0; // Current position in input history
     let mut saved_buffer: String = String::new(); // Saved buffer when navigating history
+    let mut search_mode = false; // Ctrl+R reverse search active
+    let mut search_query = String::new(); // Current search query
+    let mut search_results: Vec<usize> = Vec::new(); // Matching history indices
+    let mut search_result_index: usize = 0; // Current position in search results
 
     // Enable mouse capture for scroll support.
     let _ = crossterm::execute!(io::stdout(), crossterm::event::EnableMouseCapture);
 
     loop {
         // Print prompt and current input buffer.
-        let prompt = match vim_mode {
-            VimMode::Insert => "> ",
-            VimMode::Normal => "(n) ",
+        let prompt = if search_mode {
+            format!("(search)'{}'> ", search_query)
+        } else {
+            match vim_mode {
+                VimMode::Insert => "> ".to_owned(),
+                VimMode::Normal => "(n) ".to_owned(),
+            }
         };
         let display = format!("{prompt}{input_buffer}");
         let _ = crossterm::execute!(io::stdout(), crossterm::style::Print(&display));
@@ -305,6 +313,11 @@ pub async fn run_tui_app(
             VimMode::Insert => {
                 match event.code {
                     crossterm::event::KeyCode::Esc => {
+                        if search_mode {
+                            search_mode = false;
+                            search_query.clear();
+                            continue;
+                        }
                         vim_mode = VimMode::Normal;
                         input_buffer.clear();
                         cursor_pos = 0;
@@ -312,6 +325,12 @@ pub async fn run_tui_app(
                         continue;
                     }
                     crossterm::event::KeyCode::Enter => {
+                        // Exit search mode on Enter.
+                        if search_mode {
+                            search_mode = false;
+                            search_query.clear();
+                            continue;
+                        }
                         // Shift+Enter: insert newline for multi-line input.
                         if event.modifiers.contains(crossterm::event::KeyModifiers::SHIFT) {
                             input_buffer.insert(cursor_pos, '\n');
@@ -395,8 +414,32 @@ pub async fn run_tui_app(
                         continue;
                     }
                     crossterm::event::KeyCode::Char(c) => {
+                        // Handle Ctrl+R: toggle reverse search mode.
+                        if c == 'r' && event.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
+                            if search_mode {
+                                // Already in search mode: cycle to next result.
+                                if !search_results.is_empty() {
+                                    search_result_index = (search_result_index + 1) % search_results.len();
+                                    let idx = search_results[search_result_index];
+                                    input_buffer = input_history[idx].clone();
+                                    cursor_pos = input_buffer.len();
+                                }
+                            } else {
+                                // Enter search mode.
+                                search_mode = true;
+                                search_query.clear();
+                                search_results.clear();
+                                search_result_index = 0;
+                            }
+                            continue;
+                        }
                         // Handle Ctrl+C in insert mode.
                         if c == 'c' && event.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
+                            if search_mode {
+                                search_mode = false;
+                                search_query.clear();
+                                continue;
+                            }
                             if input_buffer.is_empty() {
                                 print_line("Interrupted. Goodbye!");
                                 break;
@@ -407,10 +450,31 @@ pub async fn run_tui_app(
                             print_line("  [input cleared — Ctrl+C again to exit]");
                             continue;
                         }
+                        // In search mode, add to query and filter.
+                        if search_mode {
+                            search_query.push(c);
+                            update_search_results(&input_history, &search_query, &mut search_results);
+                            search_result_index = 0;
+                            if let Some(&idx) = search_results.first() {
+                                input_buffer = input_history[idx].clone();
+                                cursor_pos = input_buffer.len();
+                            }
+                            continue;
+                        }
                         input_buffer.insert(cursor_pos, c);
                         cursor_pos += 1;
                     }
                     crossterm::event::KeyCode::Backspace => {
+                        if search_mode {
+                            search_query.pop();
+                            update_search_results(&input_history, &search_query, &mut search_results);
+                            search_result_index = 0;
+                            if let Some(&idx) = search_results.first() {
+                                input_buffer = input_history[idx].clone();
+                                cursor_pos = input_buffer.len();
+                            }
+                            continue;
+                        }
                         if cursor_pos > 0 && !input_buffer.is_empty() {
                             cursor_pos -= 1;
                             input_buffer.remove(cursor_pos);
@@ -465,17 +529,35 @@ pub async fn run_tui_app(
                         }
                     }
                     crossterm::event::KeyCode::Tab => {
-                        // Tab completion for slash commands.
-                        if input_buffer.starts_with('/') {
-                            let completions = complete_slash_command(&input_buffer);
-                            if completions.len() == 1 {
+                        // Tab completion for slash commands, tool names, and file paths.
+                        let completions = if input_buffer.starts_with('/') {
+                            complete_slash_command(&input_buffer)
+                        } else if input_buffer.is_empty() || input_buffer.ends_with(' ') {
+                            // Suggest tool names at start or after space.
+                            let tool_names = get_tool_completions("");
+                            tool_names.into_iter().map(|t| format!("{t} ")).collect()
+                        } else {
+                            // Try to complete the last word as a tool name or file path.
+                            let last_word = input_buffer.split_whitespace().last().unwrap_or("");
+                            let mut results = Vec::new();
+                            // Tool name completions.
+                            results.extend(get_tool_completions(last_word));
+                            // File path completions.
+                            results.extend(get_file_completions(last_word, &config.cwd));
+                            results
+                        };
+                        if completions.len() == 1 {
+                            // Replace the last word with the completion.
+                            if input_buffer.starts_with('/') {
                                 input_buffer = completions[0].clone();
-                                cursor_pos = input_buffer.len();
-                            } else if !completions.is_empty() {
-                                // Show available completions.
-                                let display = completions.join("  ");
-                                print_line(&format!("  {display}"));
+                            } else {
+                                let last_space = input_buffer.rfind(' ').map(|i| i + 1).unwrap_or(0);
+                                input_buffer.replace_range(last_space.., &completions[0]);
                             }
+                            cursor_pos = input_buffer.len();
+                        } else if !completions.is_empty() {
+                            let display = completions.join("  ");
+                            print_line(&format!("  {display}"));
                         }
                     }
                     _ => {}
@@ -866,12 +948,86 @@ fn handle_slash_command(
 /// Complete a partial slash command input.
 fn complete_slash_command(partial: &str) -> Vec<String> {
     let all_commands = [
-        "/help", "/status", "/cost", "/compact", "/clear",
-        "/sessions", "/doctor", "/quit", "/exit",
+        "/help", "/status", "/cost", "/compact", "/compact!",
+        "/clear", "/sessions", "/tools", "/doctor",
+        "/quit", "/exit",
     ];
     all_commands
         .iter()
         .filter(|cmd| cmd.starts_with(partial))
         .map(|cmd| cmd.to_string())
         .collect::<Vec<_>>()
+}
+
+/// Get tool name completions matching a prefix.
+fn get_tool_completions(prefix: &str) -> Vec<String> {
+    let specs = rc_tools::builtin_tool_specs();
+    specs
+        .iter()
+        .filter(|s| s.name.starts_with(prefix))
+        .map(|s| s.name.clone())
+        .collect()
+}
+
+/// Get file path completions for a partial path.
+fn get_file_completions(partial: &str, cwd: &std::path::Path) -> Vec<String> {
+    if partial.is_empty() {
+        return Vec::new();
+    }
+    let path = std::path::Path::new(partial);
+    let (dir, file_prefix) = if partial.ends_with('/') || partial.ends_with('\\') {
+        (cwd.join(partial), "")
+    } else if let Some(parent) = path.parent() {
+        if parent.as_os_str().is_empty() {
+            (cwd.to_path_buf(), path.file_name().and_then(|n| n.to_str()).unwrap_or(""))
+        } else {
+            (cwd.join(parent), path.file_name().and_then(|n| n.to_str()).unwrap_or(""))
+        }
+    } else {
+        (cwd.to_path_buf(), partial)
+    };
+
+    let mut results = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with(file_prefix) {
+                let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                let suffix = if is_dir { "/" } else { "" };
+                // Reconstruct the path relative to cwd.
+                let base = if partial.contains('/') || partial.contains('\\') {
+                    let parent_str = if let Some(p) = path.parent() {
+                        p.to_string_lossy().to_string()
+                    } else {
+                        String::new()
+                    };
+                    if parent_str.is_empty() {
+                        format!("{name}{suffix}")
+                    } else {
+                        format!("{parent_str}/{name}{suffix}")
+                    }
+                } else {
+                    format!("{name}{suffix}")
+                };
+                results.push(base);
+            }
+        }
+    }
+    results.sort();
+    results.truncate(20); // Limit results.
+    results
+}
+
+/// Update search results based on the current query.
+fn update_search_results(history: &[String], query: &str, results: &mut Vec<usize>) {
+    results.clear();
+    if query.is_empty() {
+        return;
+    }
+    // Search from newest to oldest.
+    for (i, entry) in history.iter().enumerate().rev() {
+        if entry.contains(query) {
+            results.push(i);
+        }
+    }
 }
