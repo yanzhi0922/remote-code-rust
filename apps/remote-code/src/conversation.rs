@@ -350,6 +350,7 @@ pub(crate) async fn run_prompt(
             history_text: response.history_text.clone(),
             content_blocks: response.content_blocks.clone(),
             tool_calls: response.tool_calls.clone(),
+            attachments: Vec::new(),
             tool_call_id: None,
             name: None,
             is_error: false,

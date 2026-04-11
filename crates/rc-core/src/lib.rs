@@ -250,6 +250,85 @@ pub struct ToolCall {
     pub input: Value,
 }
 
+/// Supported media types for multimodal attachments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AttachmentMediaType {
+    /// PNG image.
+    ImagePng,
+    /// JPEG image.
+    ImageJpeg,
+    /// GIF image.
+    ImageGif,
+    /// WebP image.
+    ImageWebp,
+    /// PDF document.
+    ApplicationPdf,
+}
+
+impl AttachmentMediaType {
+    /// Return the MIME type string (e.g. `"image/png"`).
+    #[must_use]
+    pub fn mime_type(self) -> &'static str {
+        match self {
+            Self::ImagePng => "image/png",
+            Self::ImageJpeg => "image/jpeg",
+            Self::ImageGif => "image/gif",
+            Self::ImageWebp => "image/webp",
+            Self::ApplicationPdf => "application/pdf",
+        }
+    }
+
+    /// Infer media type from a file extension.
+    pub fn from_extension(ext: &str) -> Option<Self> {
+        match ext.to_ascii_lowercase().as_str() {
+            "png" => Some(Self::ImagePng),
+            "jpg" | "jpeg" => Some(Self::ImageJpeg),
+            "gif" => Some(Self::ImageGif),
+            "webp" => Some(Self::ImageWebp),
+            "pdf" => Some(Self::ApplicationPdf),
+            _ => None,
+        }
+    }
+}
+
+/// A multimodal attachment (image or PDF) embedded in a conversation entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Attachment {
+    /// MIME type of the attachment.
+    pub media_type: AttachmentMediaType,
+    /// Base64-encoded content.
+    pub data: String,
+    /// Optional original filename.
+    #[serde(default)]
+    pub filename: Option<String>,
+}
+
+impl Attachment {
+    /// Create an attachment from raw bytes.
+    pub fn from_bytes(media_type: AttachmentMediaType, data: &[u8], filename: Option<String>) -> Self {
+        Self {
+            media_type,
+            data: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, data),
+            filename,
+        }
+    }
+
+    /// Read a file and create an attachment, inferring the media type from extension.
+    pub fn from_file(path: &std::path::Path) -> Result<Self, String> {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        let media_type = AttachmentMediaType::from_extension(ext)
+            .ok_or_else(|| format!("unsupported file type: .{ext}"))?;
+        let data = std::fs::read(path)
+            .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+        let filename = path.file_name().and_then(|n| n.to_str()).map(String::from);
+        Ok(Self::from_bytes(media_type, &data, filename))
+    }
+}
+
 /// Token usage statistics returned by the provider.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UsageSummary {
@@ -284,6 +363,9 @@ pub struct ConversationEntry {
     /// Tool calls embedded in an assistant message.
     #[serde(default)]
     pub tool_calls: Vec<ToolCall>,
+    /// Multimodal attachments (images, PDFs) for user-role entries.
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
     /// Tool-call ID this entry responds to (for tool-role entries).
     #[serde(default)]
     pub tool_call_id: Option<String>,
@@ -304,6 +386,7 @@ impl ConversationEntry {
             history_text: None,
             content_blocks: Vec::new(),
             tool_calls: Vec::new(),
+            attachments: Vec::new(),
             tool_call_id: None,
             name: None,
             is_error: false,
@@ -318,6 +401,22 @@ impl ConversationEntry {
             history_text: None,
             content_blocks: Vec::new(),
             tool_calls: Vec::new(),
+            attachments: Vec::new(),
+            tool_call_id: None,
+            name: None,
+            is_error: false,
+        }
+    }
+
+    /// Create a user-role entry with multimodal attachments.
+    pub fn user_with_attachments(text: impl Into<String>, attachments: Vec<Attachment>) -> Self {
+        Self {
+            role: ConversationRole::User,
+            text: text.into(),
+            history_text: None,
+            content_blocks: Vec::new(),
+            tool_calls: Vec::new(),
+            attachments,
             tool_call_id: None,
             name: None,
             is_error: false,
@@ -332,6 +431,7 @@ impl ConversationEntry {
             history_text: None,
             content_blocks: Vec::new(),
             tool_calls: Vec::new(),
+            attachments: Vec::new(),
             tool_call_id: None,
             name: None,
             is_error: false,
@@ -351,6 +451,7 @@ impl ConversationEntry {
             history_text: None,
             content_blocks: Vec::new(),
             tool_calls: Vec::new(),
+            attachments: Vec::new(),
             tool_call_id: Some(tool_call_id.into()),
             name: Some(name.into()),
             is_error,

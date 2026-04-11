@@ -635,10 +635,33 @@ fn to_openai_messages(conversation: &[ConversationEntry]) -> Vec<Value> {
     conversation
         .iter()
         .map(|entry| match entry.role {
-            ConversationRole::System | ConversationRole::User => json!({
+            ConversationRole::System => json!({
                 "role": role_name(&entry.role),
                 "content": entry.history_text(),
             }),
+            ConversationRole::User => {
+                if entry.attachments.is_empty() {
+                    json!({
+                        "role": "user",
+                        "content": entry.history_text(),
+                    })
+                } else {
+                    let mut parts = Vec::new();
+                    parts.push(json!({"type": "text", "text": entry.history_text()}));
+                    for att in &entry.attachments {
+                        parts.push(json!({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": format!("data:{};base64,{}", att.media_type.mime_type(), att.data),
+                            }
+                        }));
+                    }
+                    json!({
+                        "role": "user",
+                        "content": parts,
+                    })
+                }
+            }
             ConversationRole::Assistant => {
                 let mut message = json!({
                     "role": "assistant",
@@ -684,10 +707,23 @@ fn to_anthropic_messages(conversation: &[ConversationEntry]) -> (String, Vec<Val
         .iter()
         .filter(|entry| !matches!(entry.role, ConversationRole::System))
         .map(|entry| match entry.role {
-            ConversationRole::User => json!({
-                "role": "user",
-                "content": [{"type": "text", "text": entry.history_text()}],
-            }),
+            ConversationRole::User => {
+                let mut blocks = vec![json!({"type": "text", "text": entry.history_text()})];
+                for att in &entry.attachments {
+                    blocks.push(json!({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": att.media_type.mime_type(),
+                            "data": att.data,
+                        }
+                    }));
+                }
+                json!({
+                    "role": "user",
+                    "content": blocks,
+                })
+            }
             ConversationRole::Assistant => {
                 if entry.content_blocks.is_empty() {
                     let mut blocks = Vec::new();
