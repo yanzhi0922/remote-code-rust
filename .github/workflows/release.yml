@@ -16,10 +16,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Windows
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: remote-code-rust-x86_64-pc-windows-msvc
             ext: .zip
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact: remote-code-rust-aarch64-pc-windows-msvc
+            ext: .zip
+          # Linux GNU
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: remote-code-rust-x86_64-unknown-linux-gnu
@@ -28,6 +34,16 @@ jobs:
             target: aarch64-unknown-linux-gnu
             artifact: remote-code-rust-aarch64-unknown-linux-gnu
             ext: .tar.gz
+          # Linux MUSL (static)
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact: remote-code-rust-x86_64-unknown-linux-musl
+            ext: .tar.gz
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            artifact: remote-code-rust-aarch64-unknown-linux-musl
+            ext: .tar.gz
+          # macOS
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact: remote-code-rust-x86_64-apple-darwin
@@ -44,11 +60,26 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross-compilation tools
+      - name: Install cross-compilation tools (aarch64-linux-gnu)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Install cross-compilation tools (x86_64-musl)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Install cross-compilation tools (aarch64-musl)
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu
+          wget -q https://musl.cc/aarch64-linux-musl-cross.tgz
+          tar -xzf aarch64-linux-musl-cross.tgz
+          echo "$PWD/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -58,6 +89,7 @@ jobs:
         run: cargo build --workspace --release --target ${{ matrix.target }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-musl-gcc
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -78,15 +110,52 @@ jobs:
           find "target/${{ matrix.target }}/release" -maxdepth 1 -type f -executable ! -name '*.d' -exec cp {} "$artifact/" \;
           tar czf "$artifact.tar.gz" -C "$artifact" .
 
+      - name: Generate SHA256 checksum (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash -Algorithm SHA256 "${{ matrix.artifact }}.zip").Hash
+          "$hash  ${{ matrix.artifact }}.zip" | Out-File -Encoding utf8 -FilePath "${{ matrix.artifact }}.sha256"
+
+      - name: Generate SHA256 checksum (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          sha256sum "${{ matrix.artifact }}.tar.gz" > "${{ matrix.artifact }}.sha256"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}${{ matrix.ext }}
+          path: |
+            ${{ matrix.artifact }}${{ matrix.ext }}
+            ${{ matrix.artifact }}.sha256
+
+  checksums:
+    name: Aggregate Checksums
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Merge SHA256 checksums
+        run: |
+          cat artifacts/*/*.sha256 > SHA256SUMS.txt
+          sort -o SHA256SUMS.txt SHA256SUMS.txt
+          echo "=== SHA256SUMS.txt ==="
+          cat SHA256SUMS.txt
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: SHA256SUMS
+          path: SHA256SUMS.txt
 
   release:
     name: Create Release
-    needs: build
+    needs: [build, checksums]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -102,4 +171,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: artifacts/**/*
+          files: |
+            artifacts/**/*.zip
+            artifacts/**/*.tar.gz
+            artifacts/SHA256SUMS/SHA256SUMS.txt
