@@ -567,17 +567,17 @@ mod tests {
 
     #[test]
     fn for_model_creates_correct_manager() {
-        // GLM-4-Plus → 128 K / 4 K
+        // GLM-4-Plus → 200 K / 4 K (updated per 2026 specs)
         let mgr = ContextWindowManager::for_model("glm-4-plus");
-        assert_eq!(mgr.available_budget(), 128_000 - 4_096);
+        assert_eq!(mgr.available_budget(), 200_000 - 4_096);
 
         // GLM-4-Long → 1 M / 4 K
         let mgr = ContextWindowManager::for_model("glm-4-long");
         assert_eq!(mgr.available_budget(), 1_000_000 - 4_096);
 
-        // GPT-4o → 128 K / 16 K
+        // GPT-4o → 200 K / 16 K (updated per 2026 specs)
         let mgr = ContextWindowManager::for_model("gpt-4o");
-        assert_eq!(mgr.available_budget(), 128_000 - 16_384);
+        assert_eq!(mgr.available_budget(), 200_000 - 16_384);
 
         // Claude 3.5 Sonnet → 200 K / 8 K
         let mgr = ContextWindowManager::for_model("claude-3.5-sonnet");

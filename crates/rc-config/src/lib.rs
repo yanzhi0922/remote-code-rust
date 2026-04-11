@@ -501,20 +501,45 @@ fn read_env_first(keys: &[&str]) -> Option<String> {
 /// Checks for the following keys and creates a [`ProviderConfig`] for each one
 /// that is present:
 ///
+/// ## Standard API Providers
+///
 /// | Env var              | Provider name | Protocol  | Base URL                                              | Model          |
 /// |----------------------|---------------|-----------|-------------------------------------------------------|----------------|
 /// | `GLM_API_KEY`        | `glm`         | `openai`  | `https://open.bigmodel.cn/api/paas/v4`                | `glm-4-plus`   |
 /// | `ANTHROPIC_API_KEY`  | `anthropic`   | `anthropic`| *(default)*                                           | *(default)*    |
 /// | `OPENAI_API_KEY`     | `openai`      | `openai`  | *(default)*                                           | *(default)*    |
 ///
+/// ## Coding Plan Providers (Subscription-based AI Coding)
+///
+/// | Env var                          | Provider name         | Protocol   | Base URL                                                            | Model           |
+/// |----------------------------------|----------------------|------------|---------------------------------------------------------------------|-----------------|
+/// | `GLM_CODING_PLAN_API_KEY`        | `glm-coding`         | `anthropic`| `https://open.bigmodel.cn/api/anthropic`                            | `glm-5.1`       |
+/// | `MINIMAX_CODING_PLAN_API_KEY`    | `minimax-coding`     | `openai`   | `https://api.minimax.chat/v1`                                      | `MiniMax-M2.7`  |
+/// | `TENCENT_CODING_PLAN_API_KEY`    | `tencent-coding`     | `openai`   | `https://api.lkeap.cloud.tencent.com/coding/v3`                    | *(Coding Plan)* |
+/// | `QIANFAN_CODING_PLAN_API_KEY`    | `qianfan-coding`     | `openai`   | `https://qianfan.baidubce.com/v2/coding`                           | *(Coding Plan)* |
+/// | `KIMI_CODING_PLAN_API_KEY`       | `kimi-coding`        | `openai`   | `https://api.moonshot.cn/kimi-component/ai_coding`                 | *(Coding Plan)* |
+/// | `VOLCENGINE_CODING_PLAN_API_KEY` | `volcengine-coding`  | `openai`   | *(Volcano Engine Coding Plan base URL)*                            | *(Coding Plan)* |
+///
 /// The returned list only contains entries for keys that are actually set.
 /// This function is intended to be called **before** the main
 /// [`load_provider_config`] so that the discovered providers can be merged or
 /// offered as fallbacks.
+///
+/// # Coding Plan Notes
+///
+/// Coding Plans are subscription-based AI coding services that differ from standard APIs:
+/// - They use dedicated endpoints (not standard API endpoints)
+/// - They offer fixed monthly quotas instead of per-token billing
+/// - They are designed for AI coding tools (Claude Code, Cursor, etc.)
+/// - API keys from Coding Plans cannot be used with standard API endpoints
 pub fn discover_env_providers() -> Vec<ProviderConfig> {
     let mut providers = Vec::new();
 
-    // GLM / ZhipuAI — OpenAI-compatible endpoint
+    // ==========================================================================
+    // Standard API Providers
+    // ==========================================================================
+
+    // GLM / ZhipuAI — OpenAI-compatible endpoint (standard API)
     if let Some(api_key) = read_env_first(&["GLM_API_KEY"]) {
         let base_url = normalize_base_url(
             Some("https://open.bigmodel.cn/api/paas/v4".to_owned()),
@@ -624,6 +649,152 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             protocol: ProviderProtocol::Vertex,
             timeout_ms: 600_000,
             max_output_tokens: 4_096,
+            max_retries: default_provider_max_retries(),
+            retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+            retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+            respect_retry_after: default_provider_respect_retry_after(),
+            request_header_overrides: BTreeMap::new(),
+        });
+    }
+
+    // ==========================================================================
+    // Coding Plan Providers (Subscription-based AI Coding)
+    // ==========================================================================
+    //
+    // Coding Plans are different from standard APIs:
+    // - They use dedicated endpoints specific to each provider
+    // - They offer fixed monthly quotas (not per-token billing)
+    // - They are optimized for AI coding tools (Claude Code, Cursor, etc.)
+    // - Coding Plan API keys CANNOT be used with standard API endpoints
+
+    // GLM Coding Plan — Anthropic-compatible endpoint for coding tools
+    // Source: https://docs.bigmodel.cn/cn/coding-plan/overview
+    if let Some(api_key) = read_env_first(&["GLM_CODING_PLAN_API_KEY"]) {
+        let base_url = normalize_base_url(
+            Some("https://open.bigmodel.cn/api/anthropic".to_owned()),
+            ProviderProtocol::Anthropic,
+        );
+        providers.push(ProviderConfig {
+            name: "glm-coding".to_owned(),
+            base_url,
+            api_key: Some(api_key),
+            model: Some("glm-5.1".to_owned()),
+            protocol: ProviderProtocol::Anthropic,
+            timeout_ms: 600_000,
+            max_output_tokens: 8_192,
+            max_retries: default_provider_max_retries(),
+            retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+            retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+            respect_retry_after: default_provider_respect_retry_after(),
+            request_header_overrides: BTreeMap::new(),
+        });
+    }
+
+    // MiniMax Token Plan — OpenAI-compatible endpoint
+    // Source: https://platform.minimaxi.com/docs/token-plan/intro
+    if let Some(api_key) = read_env_first(&["MINIMAX_CODING_PLAN_API_KEY"]) {
+        let base_url = normalize_base_url(
+            Some("https://api.minimax.chat/v1".to_owned()),
+            ProviderProtocol::OpenAi,
+        );
+        providers.push(ProviderConfig {
+            name: "minimax-coding".to_owned(),
+            base_url,
+            api_key: Some(api_key),
+            model: Some("MiniMax-M2.7".to_owned()),
+            protocol: ProviderProtocol::OpenAi,
+            timeout_ms: 600_000,
+            max_output_tokens: 8_192,
+            max_retries: default_provider_max_retries(),
+            retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+            retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+            respect_retry_after: default_provider_respect_retry_after(),
+            request_header_overrides: BTreeMap::new(),
+        });
+    }
+
+    // Tencent Cloud Coding Plan — OpenAI-compatible endpoint
+    // Source: https://cloud.tencent.com/document/product/1823/130092
+    if let Some(api_key) = read_env_first(&["TENCENT_CODING_PLAN_API_KEY"]) {
+        let base_url = normalize_base_url(
+            Some("https://api.lkeap.cloud.tencent.com/coding/v3".to_owned()),
+            ProviderProtocol::OpenAi,
+        );
+        providers.push(ProviderConfig {
+            name: "tencent-coding".to_owned(),
+            base_url,
+            api_key: Some(api_key),
+            model: read_env_first(&["TENCENT_CODING_MODEL"]).or(Some("tc-code-latest".to_owned())),
+            protocol: ProviderProtocol::OpenAi,
+            timeout_ms: 600_000,
+            max_output_tokens: 8_192,
+            max_retries: default_provider_max_retries(),
+            retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+            retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+            respect_retry_after: default_provider_respect_retry_after(),
+            request_header_overrides: BTreeMap::new(),
+        });
+    }
+
+    // Baidu Qianfan Coding Plan — OpenAI-compatible endpoint
+    // Source: https://cloud.baidu.com/doc/qianfan/s/imlg0beiu
+    if let Some(api_key) = read_env_first(&["QIANFAN_CODING_PLAN_API_KEY"]) {
+        let base_url = normalize_base_url(
+            Some("https://qianfan.baidubce.com/v2/coding".to_owned()),
+            ProviderProtocol::OpenAi,
+        );
+        providers.push(ProviderConfig {
+            name: "qianfan-coding".to_owned(),
+            base_url,
+            api_key: Some(api_key),
+            model: read_env_first(&["QIANFAN_CODING_MODEL"]).or(Some("qianfan-code-latest".to_owned())),
+            protocol: ProviderProtocol::OpenAi,
+            timeout_ms: 600_000,
+            max_output_tokens: 8_192,
+            max_retries: default_provider_max_retries(),
+            retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+            retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+            respect_retry_after: default_provider_respect_retry_after(),
+            request_header_overrides: BTreeMap::new(),
+        });
+    }
+
+    // Kimi / Moonshot Coding Plan — OpenAI-compatible endpoint
+    // Source: Kimi Code Plan documentation
+    if let Some(api_key) = read_env_first(&["KIMI_CODING_PLAN_API_KEY"]) {
+        let base_url = normalize_base_url(
+            Some("https://api.moonshot.cn/kimi-component/ai_coding".to_owned()),
+            ProviderProtocol::OpenAi,
+        );
+        providers.push(ProviderConfig {
+            name: "kimi-coding".to_owned(),
+            base_url,
+            api_key: Some(api_key),
+            model: read_env_first(&["KIMI_CODING_MODEL"]).or(Some("kimi-k2.5".to_owned())),
+            protocol: ProviderProtocol::OpenAi,
+            timeout_ms: 600_000,
+            max_output_tokens: 8_192,
+            max_retries: default_provider_max_retries(),
+            retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+            retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+            respect_retry_after: default_provider_respect_retry_after(),
+            request_header_overrides: BTreeMap::new(),
+        });
+    }
+
+    // Volcano Engine (字节跳动) Coding Plan
+    // Source: https://www.volcengine.com/docs/82379/1925114
+    if let Some(api_key) = read_env_first(&["VOLCENGINE_CODING_PLAN_API_KEY"]) {
+        let base_url = read_env_first(&["VOLCENGINE_CODING_BASE_URL"])
+            .or_else(|| Some("https://ark.cn-beijing.volces.com/api/v3".to_owned()));
+        providers.push(ProviderConfig {
+            name: "volcengine-coding".to_owned(),
+            base_url: normalize_base_url(base_url, ProviderProtocol::OpenAi),
+            api_key: Some(api_key),
+            model: read_env_first(&["VOLCENGINE_CODING_MODEL"]).or(Some("doubao-seed-1-5".to_owned())),
+            protocol: ProviderProtocol::OpenAi,
+            timeout_ms: 600_000,
+            max_output_tokens: 8_192,
             max_retries: default_provider_max_retries(),
             retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),

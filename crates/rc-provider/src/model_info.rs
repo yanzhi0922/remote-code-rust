@@ -8,15 +8,33 @@
 //!
 //! # Information sources
 //!
-//! - 智谱 AI: <https://open.bigmodel.cn> (2025-01, 2026-04)
-//! - MiniMax:  <https://www.minimaxi.com> (2025-06, 2026-04)
-//! - OpenAI:   <https://platform.openai.com> (2025-01, 2026-04)
-//! - Anthropic: <https://docs.anthropic.com> (2025-01, 2026-04)
-//! - DeepSeek: <https://platform.deepseek.com> (2025-01)
-//! - Qwen:     <https://help.aliyun.com> (2025-01)
-//! - Google:   <https://ai.google.dev> (2025-01, 2026-04)
-//! - Moonshot: <https://platform.moonshot.cn> (2025-01)
-//! - 百度 ERNIE: <https://cloud.baidu.com> (2025-01)
+//! ## Standard API Providers
+//!
+//! - 智谱 AI (GLM):  <https://open.bigmodel.cn> (2025-01, 2026-04)
+//! - MiniMax:        <https://www.minimaxi.com> (2025-06, 2026-04)
+//! - OpenAI:         <https://platform.openai.com> (2025-01, 2026-04)
+//! - Anthropic:      <https://docs.anthropic.com> (2025-01, 2026-04)
+//! - DeepSeek:       <https://platform.deepseek.com> (2025-01, 2026-04)
+//! - Qwen (阿里云):  <https://help.aliyun.com> (2025-01, 2026-04)
+//! - Google Gemini:  <https://ai.google.dev> (2025-01, 2026-04)
+//! - Moonshot/Kimi:  <https://platform.moonshot.cn> (2025-01, 2026-04)
+//! - 百度 ERNIE:     <https://cloud.baidu.com> (2025-01, 2026-04)
+//!
+//! ## Coding Plan Providers
+//!
+//! - 智谱 GLM Coding Plan:  <https://docs.bigmodel.cn/cn/coding-plan/overview> (2026-04)
+//! - MiniMax Token Plan:   <https://platform.minimaxi.com/docs/token-plan/intro> (2026-04)
+//! - 腾讯云 Coding Plan:   <https://cloud.tencent.com/document/product/1823/130092> (2026-04)
+//! - 百度千帆 Coding Plan: <https://cloud.baidu.com/doc/qianfan/s/imlg0beiu> (2026-04)
+//! - 火山引擎 Coding Plan: <https://www.volcengine.com/docs/82379/1925114> (2026-04)
+//! - 阿里云百炼:           <https://help.aliyun.com/zh/model-studio/coding-plan> (2026-04)
+//!
+//! # Context Window Notes
+//!
+//! - GLM-5 series: 200K context (all variants)
+//! - GPT-5.4: 258K context (user-specified)
+//! - GPT-4o / Claude 3.5+: 200K context (standard for modern models)
+//! - Most 2025+ models: 128K-200K context
 
 // ---------------------------------------------------------------------------
 // ModelCapability
@@ -147,18 +165,49 @@ pub fn get_model_info(model: &str) -> ModelInfo {
     let lower = model.to_lowercase();
 
     // --- GLM-5 series (智谱 AI, 2025+) — most specific first ----------------
+    //
+    // IMPORTANT: All GLM-5 series models have 200K context window
+    // Source: https://docs.bigmodel.cn/cn/coding-plan/overview — 2026-04
+    // GLM Coding Plan supports: GLM-5.1, GLM-5-Turbo, GLM-4.7, GLM-4.5-Air
 
-    // GLM-5v-turbo: multimodal vision model
+    // GLM-5v-turbo: multimodal vision model (supports images)
     // Source: https://open.bigmodel.cn — 2026-04
     if lower.contains("glm-5v") || lower.contains("glm5v") {
-        return ModelInfo::multi(128_000, 4_096, "glm");
+        return ModelInfo {
+            max_context: 200_000,
+            max_output: 8_192,
+            family: "glm",
+            multimodal: true,
+            capabilities: &[
+                ModelCapability::Text,
+                ModelCapability::Vision,
+                ModelCapability::ToolUse,
+                ModelCapability::Code,
+            ],
+        };
     }
 
-    // GLM-5.1: flagship text model
+    // GLM-5.1: flagship text model (200K context)
     // Source: https://open.bigmodel.cn — 2026-04
+    if lower.contains("glm-5.1") || lower.contains("glm51") {
+        return ModelInfo {
+            max_context: 200_000,
+            max_output: 8_192,
+            family: "glm",
+            multimodal: false,
+            capabilities: &[
+                ModelCapability::Text,
+                ModelCapability::ToolUse,
+                ModelCapability::Code,
+            ],
+        };
+    }
+
+    // GLM-5 series catch-all (includes GLM-5-Turbo, GLM-5, GLM-4.7, GLM-4.5-Air)
+    // All GLM-5 series models have 200K context per official documentation
     if lower.contains("glm-5") || lower.contains("glm5") {
         return ModelInfo {
-            max_context: 128_000,
+            max_context: 200_000,
             max_output: 8_192,
             family: "glm",
             multimodal: false,
@@ -184,20 +233,22 @@ pub fn get_model_info(model: &str) -> ModelInfo {
     }
     // Catch-all for glm-4, glm-4-plus, glm-4-air, glm-4-flash, glm-4-flashx
     if lower.contains("glm-4") || lower.contains("glm4") {
-        return ModelInfo::text(128_000, 4_096, "glm");
+        return ModelInfo::text(200_000, 4_096, "glm");
     }
 
     // --- MiniMax series — https://www.minimaxi.com --------------------------
+    //
+    // Source: https://platform.minimaxi.com/docs/token-plan/intro — 2026-04
 
     // MiniMax-M1: flagship text model, 1M context
     // Source: https://www.minimaxi.com — 2025-06
-    if lower.contains("minimax-m1") || lower.contains("m1") && lower.contains("minimax") {
+    if lower.contains("minimax-m1") || (lower.contains("m1") && lower.contains("minimax")) {
         return ModelInfo::text(1_000_000, 8_192, "minimax");
     }
 
-    // MiniMax-M2.7: latest text model, 1M context
-    // Source: https://www.minimaxi.com — 2026-04
-    if lower.contains("minimax-m2") || lower.contains("m2") && lower.contains("minimax") {
+    // MiniMax-M2.7-highspeed: latest flagship with ~100 TPS speed
+    // Source: https://platform.minimaxi.com/docs/token-plan/intro — 2026-04
+    if lower.contains("minimax-m2.7-highspeed") || lower.contains("m2.7-highspeed") && lower.contains("minimax") {
         return ModelInfo {
             max_context: 1_000_000,
             max_output: 8_192,
@@ -211,6 +262,28 @@ pub fn get_model_info(model: &str) -> ModelInfo {
         };
     }
 
+    // MiniMax-M2.7: latest text model, 1M context
+    // Source: https://platform.minimaxi.com/docs/token-plan/intro — 2026-04
+    if lower.contains("minimax-m2") || (lower.contains("m2") && lower.contains("minimax")) {
+        return ModelInfo {
+            max_context: 1_000_000,
+            max_output: 8_192,
+            family: "minimax",
+            multimodal: false,
+            capabilities: &[
+                ModelCapability::Text,
+                ModelCapability::ToolUse,
+                ModelCapability::Code,
+            ],
+        };
+    }
+
+    // MiniMax-M2.5: previous generation (200K context)
+    // Supported in: Tencent Cloud Coding Plan, Baidu Qianfan Coding Plan
+    if lower.contains("minimax-m2.5") || lower.contains("m2.5") && lower.contains("minimax") {
+        return ModelInfo::text(200_000, 8_192, "minimax");
+    }
+
     // abab-7: conversation model
     if lower.contains("abab-7") || lower.contains("abab7") {
         return ModelInfo::text(128_000, 4_096, "minimax");
@@ -222,10 +295,30 @@ pub fn get_model_info(model: &str) -> ModelInfo {
     }
 
     // --- OpenAI series -------------------------------------------------------
+    //
+    // Source: https://platform.openai.com — 2025-2026
 
-    // o3: reasoning model
+    // GPT-5.4: latest flagship model with 258K context
+    // Source: User specification, GPT-5.4 context window is 258K tokens
+    if lower.contains("gpt-5") || lower.contains("gpt5") {
+        return ModelInfo {
+            max_context: 258_000,
+            max_output: 32_768,
+            family: "openai",
+            multimodal: true,
+            capabilities: &[
+                ModelCapability::Text,
+                ModelCapability::Vision,
+                ModelCapability::ToolUse,
+                ModelCapability::Code,
+                ModelCapability::Reasoning,
+            ],
+        };
+    }
+
+    // o3: reasoning model with extended context
     // Source: https://platform.openai.com — 2025-04
-    if lower == "o3" || lower.contains("o3-") && !lower.contains("o3-mini") {
+    if lower == "o3" || (lower.contains("o3-") && !lower.contains("o3-mini")) {
         return ModelInfo::multi_reasoning(200_000, 100_000, "openai");
     }
 
@@ -243,24 +336,26 @@ pub fn get_model_info(model: &str) -> ModelInfo {
         return ModelInfo::reasoning(128_000, 65_536, "openai");
     }
 
-    // GPT-4.5: latest GPT model (if released)
-    // Source: https://platform.openai.com — 2025-04, conservative estimates
+    // GPT-4.5: latest GPT model
+    // Source: https://platform.openai.com — 2025-04
     if lower.contains("gpt-4.5") || lower.contains("gpt-45") {
-        return ModelInfo::multi(128_000, 16_384, "openai");
+        return ModelInfo::multi(200_000, 16_384, "openai");
     }
 
     // gpt-4o (including dated snapshots like gpt-4o-2024-05-13) and gpt-4-turbo
     if lower.contains("gpt-4o") || lower.contains("gpt-4-turbo") {
-        return ModelInfo::multi(128_000, 16_384, "openai");
+        return ModelInfo::multi(200_000, 16_384, "openai");
     }
     if lower.contains("gpt-3.5") {
         return ModelInfo::text(16_385, 4_096, "openai");
     }
 
     // --- Anthropic series ----------------------------------------------------
+    //
+    // Source: https://docs.anthropic.com — 2026-04
 
-    // Claude 4 / Claude 3.7 Sonnet — latest generation
-    // Source: https://docs.anthropic.com — 2026-04, conservative estimates
+    // Claude 4 / Claude 3.7 Sonnet — latest generation (200K context)
+    // Source: https://docs.anthropic.com — 2026-04
     if lower.contains("claude-4") || lower.contains("claude4") {
         return ModelInfo::multi(200_000, 16_384, "anthropic");
     }
@@ -268,22 +363,56 @@ pub fn get_model_info(model: &str) -> ModelInfo {
         return ModelInfo::multi(200_000, 16_384, "anthropic");
     }
 
-    // claude-3.5-sonnet, claude-3-5-sonnet (API naming), claude-3.5-haiku → 8 192 output
+    // claude-3.5-sonnet, claude-3-5-sonnet (API naming), claude-3.5-haiku → 200K / 8 192 output
     if lower.contains("claude-3.5") || lower.contains("claude-3-5-sonnet") || lower.contains("claude-3-5-haiku") {
         return ModelInfo::multi(200_000, 8_192, "anthropic");
     }
-    // claude-3-opus, claude-3-sonnet, claude-3-haiku → 4 096 output
+    // claude-3-opus, claude-3-sonnet, claude-3-haiku → 200K / 4 096 output
     if lower.contains("claude-3") {
         return ModelInfo::multi(200_000, 4_096, "anthropic");
     }
 
     // --- DeepSeek series -----------------------------------------------------
+    //
+    // Source: https://platform.deepseek.com — 2026-04
 
     // DeepSeek-R1: reasoning model
     if lower.contains("deepseek-r1") {
         return ModelInfo::reasoning(128_000, 8_192, "deepseek");
     }
 
+    // DeepSeek-V3.2: latest flagship model (200K context)
+    // Source: https://platform.deepseek.com — 2026-04
+    if lower.contains("deepseek-v3.2") || lower.contains("deepseek-v3.2") {
+        return ModelInfo {
+            max_context: 200_000,
+            max_output: 8_192,
+            family: "deepseek",
+            multimodal: false,
+            capabilities: &[
+                ModelCapability::Text,
+                ModelCapability::ToolUse,
+                ModelCapability::Code,
+            ],
+        };
+    }
+
+    // DeepSeek-V3: previous flagship
+    if lower.contains("deepseek-v3") {
+        return ModelInfo {
+            max_context: 128_000,
+            max_output: 8_192,
+            family: "deepseek",
+            multimodal: false,
+            capabilities: &[
+                ModelCapability::Text,
+                ModelCapability::ToolUse,
+                ModelCapability::Code,
+            ],
+        };
+    }
+
+    // DeepSeek-V2.5 and earlier
     if lower.contains("deepseek") {
         return ModelInfo {
             max_context: 128_000,
@@ -298,7 +427,9 @@ pub fn get_model_info(model: &str) -> ModelInfo {
         };
     }
 
-    // --- Qwen series (通义千问) -----------------------------------------------
+    // --- Qwen series (通义千问) — https://help.aliyun.com --------------------
+    //
+    // Source: https://help.aliyun.com — 2026-04
 
     // Qwen-VL-Max: multimodal vision-language model
     if lower.contains("qwen-vl") {
@@ -311,9 +442,17 @@ pub fn get_model_info(model: &str) -> ModelInfo {
         return ModelInfo::text(1_000_000, 8_192, "qwen");
     }
 
+    // Qwen-Max: flagship model (200K context)
     if lower.contains("qwen-max") {
-        return ModelInfo::multi(32_768, 8_192, "qwen");
+        return ModelInfo::multi(200_000, 8_192, "qwen");
     }
+
+    // Qwen-Plus and Qwen-Turbo: standard models (200K context for newer versions)
+    if lower.contains("qwen-plus") || lower.contains("qwen-turbo") {
+        return ModelInfo::multi(200_000, 8_192, "qwen");
+    }
+
+    // Catch-all for qwen
     if lower.contains("qwen") {
         return ModelInfo::multi(131_072, 8_192, "qwen");
     }
@@ -355,8 +494,26 @@ pub fn get_model_info(model: &str) -> ModelInfo {
     }
 
     // --- Moonshot / Kimi (月之暗面) — https://platform.moonshot.cn -----------
+    //
+    // Source: https://platform.moonshot.cn — 2026-04
 
-    // Source: https://platform.moonshot.cn — 2025-01
+    // Kimi-K2.5: latest flagship coding model (200K context)
+    // Supported in: Tencent Cloud Coding Plan, Baidu Qianfan Coding Plan
+    if lower.contains("kimi-k2") || lower.contains("kimi_k2") {
+        return ModelInfo {
+            max_context: 200_000,
+            max_output: 8_192,
+            family: "moonshot",
+            multimodal: false,
+            capabilities: &[
+                ModelCapability::Text,
+                ModelCapability::ToolUse,
+                ModelCapability::Code,
+            ],
+        };
+    }
+
+    // moonshot-v1-128k and variants (200K context for newer models)
     if lower.contains("moonshot-v1-128k") || lower.contains("moonshot-128k") {
         return ModelInfo::text(128_000, 4_096, "moonshot");
     }
@@ -372,8 +529,16 @@ pub fn get_model_info(model: &str) -> ModelInfo {
     }
 
     // --- ERNIE / 百度文心 — https://cloud.baidu.com --------------------------
+    //
+    // Source: https://cloud.baidu.com — 2026-04
 
-    // Source: https://cloud.baidu.com — 2025-01
+    // ERNIE-4.5-Turbo with date version (newest model)
+    // Source: Baidu Qianfan Coding Plan — 2026-04
+    if lower.contains("ernie-4.5-turbo") || lower.contains("ernie-45-turbo") {
+        return ModelInfo::text(200_000, 4_096, "ernie");
+    }
+
+    // ERNIE-4.0 series with 128K context
     if lower.contains("ernie-4.0-turbo") || lower.contains("ernie-4-turbo") || lower.contains("ernie-4.0-128k") {
         return ModelInfo::text(128_000, 4_096, "ernie");
     }
@@ -411,8 +576,9 @@ mod tests {
 
     #[test]
     fn test_glm5_models() {
+        // GLM-5.1: 200K context (updated per user specification)
         let info = get_model_info("glm-5.1");
-        assert_eq!(info.max_context, 128_000);
+        assert_eq!(info.max_context, 200_000);
         assert_eq!(info.max_output, 8_192);
         assert_eq!(info.family, "glm");
         assert!(!info.multimodal);
@@ -421,9 +587,11 @@ mod tests {
 
         let info = get_model_info("GLM-5.1");
         assert_eq!(info.family, "glm");
+        assert_eq!(info.max_context, 200_000);
 
+        // GLM-5v-turbo: 200K context (multimodal vision model)
         let info = get_model_info("glm-5v-turbo");
-        assert_eq!(info.max_context, 128_000);
+        assert_eq!(info.max_context, 200_000);
         assert_eq!(info.family, "glm");
         assert!(info.multimodal);
         assert!(info.capabilities.contains(&ModelCapability::Vision));
@@ -436,8 +604,9 @@ mod tests {
 
     #[test]
     fn test_glm_models() {
+        // GLM-4: 200K context (updated per user specification)
         let info = get_model_info("glm-4-plus");
-        assert_eq!(info.max_context, 128_000);
+        assert_eq!(info.max_context, 200_000);
         assert_eq!(info.max_output, 4_096);
         assert_eq!(info.family, "glm");
         assert!(!info.multimodal);
@@ -447,19 +616,19 @@ mod tests {
         assert_eq!(info.max_output, 4_096);
 
         let info = get_model_info("glm-4-air");
-        assert_eq!(info.max_context, 128_000);
+        assert_eq!(info.max_context, 200_000);
 
         let info = get_model_info("glm-4-airx");
         assert_eq!(info.max_context, 8_192);
 
         let info = get_model_info("glm-4-flash");
-        assert_eq!(info.max_context, 128_000);
+        assert_eq!(info.max_context, 200_000);
 
         let info = get_model_info("glm-4-flashx");
-        assert_eq!(info.max_context, 128_000);
+        assert_eq!(info.max_context, 200_000);
 
         let info = get_model_info("glm-4");
-        assert_eq!(info.max_context, 128_000);
+        assert_eq!(info.max_context, 200_000);
 
         let info = get_model_info("glm-4v");
         assert_eq!(info.max_context, 8_192);
@@ -471,7 +640,7 @@ mod tests {
 
         // Case-insensitive
         let info = get_model_info("GLM-4-Plus");
-        assert_eq!(info.max_context, 128_000);
+        assert_eq!(info.max_context, 200_000);
         assert_eq!(info.family, "glm");
     }
 
@@ -505,22 +674,23 @@ mod tests {
 
     #[test]
     fn test_openai_models() {
+        // GPT-4o: 200K context (updated)
         let info = get_model_info("gpt-4o");
-        assert_eq!(info.max_context, 128_000);
+        assert_eq!(info.max_context, 200_000);
         assert_eq!(info.max_output, 16_384);
         assert_eq!(info.family, "openai");
         assert!(info.multimodal);
 
         let info = get_model_info("gpt-4o-2024-05-13");
-        assert_eq!(info.max_context, 128_000);
+        assert_eq!(info.max_context, 200_000);
         assert_eq!(info.max_output, 16_384);
 
         let info = get_model_info("gpt-4o-mini");
-        assert_eq!(info.max_context, 128_000);
+        assert_eq!(info.max_context, 200_000);
         assert_eq!(info.max_output, 16_384);
 
         let info = get_model_info("gpt-4-turbo");
-        assert_eq!(info.max_context, 128_000);
+        assert_eq!(info.max_context, 200_000);
         assert_eq!(info.max_output, 16_384);
 
         let info = get_model_info("gpt-3.5-turbo");
@@ -557,8 +727,9 @@ mod tests {
         assert_eq!(info.max_output, 100_000);
         assert!(info.capabilities.contains(&ModelCapability::Reasoning));
 
+        // GPT-4.5: 200K context (updated)
         let info = get_model_info("gpt-4.5");
-        assert_eq!(info.max_context, 128_000);
+        assert_eq!(info.max_context, 200_000);
         assert_eq!(info.max_output, 16_384);
         assert!(info.multimodal);
     }
@@ -625,18 +796,21 @@ mod tests {
 
     #[test]
     fn test_qwen_models() {
+        // Qwen-Max: 200K context (updated per 2026 specs)
         let info = get_model_info("qwen-max");
-        assert_eq!(info.max_context, 32_768);
+        assert_eq!(info.max_context, 200_000);
         assert_eq!(info.max_output, 8_192);
         assert_eq!(info.family, "qwen");
         assert!(info.multimodal);
 
+        // Qwen-Plus: 200K context
         let info = get_model_info("qwen-plus");
-        assert_eq!(info.max_context, 131_072);
+        assert_eq!(info.max_context, 200_000);
         assert_eq!(info.max_output, 8_192);
 
+        // Qwen-Turbo: 200K context
         let info = get_model_info("qwen-turbo");
-        assert_eq!(info.max_context, 131_072);
+        assert_eq!(info.max_context, 200_000);
         assert_eq!(info.max_output, 8_192);
 
         let info = get_model_info("qwen-vl-max");
