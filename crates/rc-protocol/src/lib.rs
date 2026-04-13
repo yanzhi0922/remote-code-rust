@@ -101,6 +101,125 @@ impl<W: Write> ProtocolEmitter<W> {
         }))
     }
 
+    /// Emit a normalized message delta event for remote consumers.
+    pub fn emit_message_delta(
+        &mut self,
+        role: &str,
+        delta: impl AsRef<str>,
+        message_id: Option<&str>,
+    ) -> Result<()> {
+        self.emit(json!({
+            "type": "message_delta",
+            "role": role,
+            "delta": delta.as_ref(),
+            "message_id": message_id,
+            "uuid": Uuid::new_v4(),
+            "session_id": self.session_id,
+        }))
+    }
+
+    /// Emit a normalized committed-message event for remote consumers.
+    pub fn emit_message_committed(
+        &mut self,
+        role: &str,
+        text: impl AsRef<str>,
+        message_id: Option<&str>,
+    ) -> Result<()> {
+        self.emit(json!({
+            "type": "message_committed",
+            "role": role,
+            "text": text.as_ref(),
+            "message_id": message_id,
+            "uuid": Uuid::new_v4(),
+            "session_id": self.session_id,
+        }))
+    }
+
+    /// Emit a tool-started event.
+    pub fn emit_tool_started(&mut self, tool_use_id: &str, tool_name: &str) -> Result<()> {
+        self.emit(json!({
+            "type": "tool_started",
+            "tool_use_id": tool_use_id,
+            "tool_name": tool_name,
+            "uuid": Uuid::new_v4(),
+            "session_id": self.session_id,
+        }))
+    }
+
+    /// Emit a structured subtask-started event.
+    pub fn emit_subtask_started(
+        &mut self,
+        task_id: &str,
+        parent_task_id: Option<&str>,
+        description: &str,
+        depth: u32,
+    ) -> Result<()> {
+        self.emit(json!({
+            "type": "subtask_started",
+            "task_id": task_id,
+            "parent_task_id": parent_task_id,
+            "description": description,
+            "depth": depth,
+            "uuid": Uuid::new_v4(),
+            "session_id": self.session_id,
+        }))
+    }
+
+    /// Emit a structured subtask-progress event.
+    pub fn emit_subtask_progress(
+        &mut self,
+        task_id: &str,
+        turn: u32,
+        max_turns: u32,
+        summary: &str,
+    ) -> Result<()> {
+        self.emit(json!({
+            "type": "subtask_progress",
+            "task_id": task_id,
+            "turn": turn,
+            "max_turns": max_turns,
+            "summary": summary,
+            "uuid": Uuid::new_v4(),
+            "session_id": self.session_id,
+        }))
+    }
+
+    /// Emit a structured subtask-completed event.
+    pub fn emit_subtask_completed(
+        &mut self,
+        task_id: &str,
+        success: bool,
+        output_preview: &str,
+        turns_used: u32,
+    ) -> Result<()> {
+        self.emit(json!({
+            "type": "subtask_completed",
+            "task_id": task_id,
+            "success": success,
+            "output_preview": output_preview,
+            "turns_used": turns_used,
+            "uuid": Uuid::new_v4(),
+            "session_id": self.session_id,
+        }))
+    }
+
+    /// Emit a structured batch-progress event.
+    pub fn emit_batch_progress(
+        &mut self,
+        total: usize,
+        completed: usize,
+        running: usize,
+    ) -> Result<()> {
+        self.emit(json!({
+            "type": "batch_progress",
+            "total": total,
+            "completed": completed,
+            "running": running,
+            "uuid": Uuid::new_v4(),
+            "session_id": self.session_id,
+        }))
+    }
+
     /// Emit a result event summarising the completed turn.
     pub fn emit_result(&mut self, payload: ResultPayload) -> Result<()> {
         let mut event = json!({
@@ -159,10 +278,51 @@ impl<W: Write> ProtocolEmitter<W> {
 
     /// Emit a tool progress heartbeat event.
     pub fn emit_tool_progress(&mut self, tool_name: &str, elapsed_time_seconds: u64) -> Result<()> {
+        self.emit_tool_progress_detail(ToolProgressPayload {
+            tool_use_id: None,
+            tool_name: Some(tool_name.to_owned()),
+            input_delta: None,
+            elapsed_time_seconds: Some(elapsed_time_seconds),
+        })
+    }
+
+    /// Emit a detailed tool progress update for remote consumers.
+    pub fn emit_tool_progress_detail(&mut self, payload: ToolProgressPayload) -> Result<()> {
         self.emit(json!({
             "type": "tool_progress",
+            "tool_use_id": payload.tool_use_id,
+            "tool_name": payload.tool_name,
+            "input_delta": payload.input_delta,
+            "elapsed_time_seconds": payload.elapsed_time_seconds,
+            "uuid": Uuid::new_v4(),
+            "session_id": self.session_id,
+        }))
+    }
+
+    /// Emit a tool-finished event.
+    pub fn emit_tool_finished(
+        &mut self,
+        tool_use_id: &str,
+        tool_name: &str,
+        is_error: bool,
+        summary: Option<&str>,
+    ) -> Result<()> {
+        self.emit(json!({
+            "type": "tool_finished",
+            "tool_use_id": tool_use_id,
             "tool_name": tool_name,
-            "elapsed_time_seconds": elapsed_time_seconds,
+            "is_error": is_error,
+            "summary": summary,
+            "uuid": Uuid::new_v4(),
+            "session_id": self.session_id,
+        }))
+    }
+
+    /// Emit a normalized runtime error event.
+    pub fn emit_runtime_error(&mut self, message: impl AsRef<str>) -> Result<()> {
+        self.emit(json!({
+            "type": "runtime_error",
+            "message": message.as_ref(),
             "uuid": Uuid::new_v4(),
             "session_id": self.session_id,
         }))
@@ -260,6 +420,19 @@ pub struct PermissionRequestPayload {
     pub permission_suggestions: Vec<Value>,
 }
 
+/// Payload for normalized tool progress events.
+#[derive(Debug, Clone, Default)]
+pub struct ToolProgressPayload {
+    /// Tool use identifier when available.
+    pub tool_use_id: Option<String>,
+    /// Tool name when available.
+    pub tool_name: Option<String>,
+    /// Incremental tool-input delta.
+    pub input_delta: Option<String>,
+    /// Tool execution elapsed seconds, if known.
+    pub elapsed_time_seconds: Option<u64>,
+}
+
 /// Parse a single line of JSON input from the external consumer.
 ///
 /// Returns `None` if the line cannot be parsed or is not a recognised event type.
@@ -309,5 +482,264 @@ pub fn parse_input_line(line: &str) -> Option<ProtocolInput> {
             }
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn test_session_id() -> Uuid {
+        Uuid::parse_str("00000000-0000-0000-0000-000000000001").expect("valid test UUID")
+    }
+
+    fn collect_lines(output: &[u8]) -> Vec<serde_json::Value> {
+        let s = String::from_utf8_lossy(output);
+        s.lines()
+            .filter(|l| !l.is_empty())
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .collect()
+    }
+
+    #[test]
+    fn emit_init_contains_required_fields() {
+        let mut buf = Cursor::new(Vec::new());
+        let mut emitter = ProtocolEmitter::new(&mut buf, test_session_id());
+        emitter
+            .emit_init(InitPayload {
+                api_key_source: "env".to_owned(),
+                version: "0.1.0".to_owned(),
+                cwd: "/tmp".to_owned(),
+                tools: vec!["bash".to_owned()],
+                mcp_servers: vec![],
+                model: Some("gpt-4".to_owned()),
+                permission_mode: "default".to_owned(),
+                slash_commands: vec![],
+                output_style: "text".to_owned(),
+                skills: vec![],
+                plugins: vec![],
+            })
+            .expect("emit_init should succeed");
+        let events = collect_lines(&buf.into_inner());
+        assert_eq!(events.len(), 1);
+        let e = &events[0];
+        assert_eq!(e["type"], "system");
+        assert_eq!(e["subtype"], "init");
+        assert_eq!(e["apiKeySource"], "env");
+        assert_eq!(e["remote_code_version"], "0.1.0");
+        assert_eq!(e["cwd"], "/tmp");
+        assert_eq!(e["model"], "gpt-4");
+        assert_eq!(e["session_id"], "00000000-0000-0000-0000-000000000001");
+    }
+
+    #[test]
+    fn emit_state_contains_session_state() {
+        let mut buf = Cursor::new(Vec::new());
+        let mut emitter = ProtocolEmitter::new(&mut buf, test_session_id());
+        emitter
+            .emit_state(SessionState::Running)
+            .expect("emit_state should succeed");
+        let events = collect_lines(&buf.into_inner());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["type"], "system");
+        assert_eq!(events[0]["subtype"], "session_state_changed");
+        assert_eq!(events[0]["state"], "running");
+    }
+
+    #[test]
+    fn emit_assistant_contains_message() {
+        let mut buf = Cursor::new(Vec::new());
+        let mut emitter = ProtocolEmitter::new(&mut buf, test_session_id());
+        emitter
+            .emit_assistant("Hello world")
+            .expect("emit_assistant should succeed");
+        let events = collect_lines(&buf.into_inner());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["type"], "assistant");
+        assert_eq!(events[0]["message"]["role"], "assistant");
+        assert_eq!(events[0]["message"]["content"][0]["text"], "Hello world");
+    }
+
+    #[test]
+    fn emit_normalized_message_events_for_remote_consumers() {
+        let mut buf = Cursor::new(Vec::new());
+        let mut emitter = ProtocolEmitter::new(&mut buf, test_session_id());
+        emitter
+            .emit_message_delta("assistant", "Hel", Some("msg-1"))
+            .expect("emit_message_delta should succeed");
+        emitter
+            .emit_message_committed("assistant", "Hello world", Some("msg-1"))
+            .expect("emit_message_committed should succeed");
+        let events = collect_lines(&buf.into_inner());
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["type"], "message_delta");
+        assert_eq!(events[0]["role"], "assistant");
+        assert_eq!(events[0]["delta"], "Hel");
+        assert_eq!(events[0]["message_id"], "msg-1");
+        assert_eq!(events[1]["type"], "message_committed");
+        assert_eq!(events[1]["text"], "Hello world");
+    }
+
+    #[test]
+    fn emit_normalized_tool_events_for_remote_consumers() {
+        let mut buf = Cursor::new(Vec::new());
+        let mut emitter = ProtocolEmitter::new(&mut buf, test_session_id());
+        emitter
+            .emit_tool_started("toolu-1", "bash_command")
+            .expect("emit_tool_started should succeed");
+        emitter
+            .emit_tool_progress_detail(ToolProgressPayload {
+                tool_use_id: Some("toolu-1".to_owned()),
+                tool_name: None,
+                input_delta: Some("{\"command\":\"ls\"}".to_owned()),
+                elapsed_time_seconds: Some(2),
+            })
+            .expect("emit_tool_progress_detail should succeed");
+        emitter
+            .emit_tool_finished("toolu-1", "bash_command", false, Some("command completed"))
+            .expect("emit_tool_finished should succeed");
+        emitter
+            .emit_runtime_error("simulated failure")
+            .expect("emit_runtime_error should succeed");
+        let events = collect_lines(&buf.into_inner());
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0]["type"], "tool_started");
+        assert_eq!(events[0]["tool_use_id"], "toolu-1");
+        assert_eq!(events[1]["type"], "tool_progress");
+        assert_eq!(events[1]["tool_use_id"], "toolu-1");
+        assert_eq!(events[1]["input_delta"], "{\"command\":\"ls\"}");
+        assert_eq!(events[1]["elapsed_time_seconds"], 2);
+        assert_eq!(events[2]["type"], "tool_finished");
+        assert_eq!(events[2]["summary"], "command completed");
+        assert_eq!(events[3]["type"], "runtime_error");
+        assert_eq!(events[3]["message"], "simulated failure");
+    }
+
+    #[test]
+    fn emit_subtask_events_for_remote_consumers() {
+        let mut buf = Cursor::new(Vec::new());
+        let mut emitter = ProtocolEmitter::new(&mut buf, test_session_id());
+        emitter
+            .emit_subtask_started("task-1", Some("root-1"), "Investigate bug", 1)
+            .expect("emit_subtask_started should succeed");
+        emitter
+            .emit_subtask_progress("task-1", 2, 5, "Called read_file")
+            .expect("emit_subtask_progress should succeed");
+        emitter
+            .emit_subtask_completed("task-1", true, "done", 3)
+            .expect("emit_subtask_completed should succeed");
+        emitter
+            .emit_batch_progress(4, 2, 2)
+            .expect("emit_batch_progress should succeed");
+        let events = collect_lines(&buf.into_inner());
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0]["type"], "subtask_started");
+        assert_eq!(events[0]["parent_task_id"], "root-1");
+        assert_eq!(events[1]["type"], "subtask_progress");
+        assert_eq!(events[1]["turn"], 2);
+        assert_eq!(events[2]["type"], "subtask_completed");
+        assert_eq!(events[2]["success"], true);
+        assert_eq!(events[3]["type"], "batch_progress");
+        assert_eq!(events[3]["completed"], 2);
+    }
+
+    #[test]
+    fn emit_result_summarizes_turn() {
+        let mut buf = Cursor::new(Vec::new());
+        let mut emitter = ProtocolEmitter::new(&mut buf, test_session_id());
+        emitter
+            .emit_result(ResultPayload {
+                is_error: false,
+                duration_ms: 1234,
+                duration_api_ms: 1000,
+                num_turns: 3,
+                result: "done".to_owned(),
+                stop_reason: "end_turn".to_owned(),
+                total_cost_usd: 0.005,
+                usage: UsagePayload {
+                    input_tokens: 100,
+                    output_tokens: 50,
+                },
+                model_usage: json!({}),
+                permission_denials: vec![],
+                errors: vec![],
+            })
+            .expect("emit_result should succeed");
+        let events = collect_lines(&buf.into_inner());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["type"], "result");
+        assert_eq!(events[0]["subtype"], "success");
+        assert_eq!(events[0]["duration_ms"], 1234);
+        assert_eq!(events[0]["num_turns"], 3);
+        assert_eq!(events[0]["usage"]["input_tokens"], 100);
+    }
+
+    #[test]
+    fn emit_permission_request_has_control_request_type() {
+        let mut buf = Cursor::new(Vec::new());
+        let mut emitter = ProtocolEmitter::new(&mut buf, test_session_id());
+        emitter
+            .emit_permission_request(PermissionRequestPayload {
+                request_id: "req-1".to_owned(),
+                tool_name: "bash_command".to_owned(),
+                tool_use_id: "tu-1".to_owned(),
+                title: "Run command".to_owned(),
+                description: "ls -la".to_owned(),
+                input: json!({"command": "ls -la"}),
+                blocked_path: None,
+                permission_suggestions: vec![],
+            })
+            .expect("emit_permission_request should succeed");
+        let events = collect_lines(&buf.into_inner());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["type"], "control_request");
+        assert_eq!(events[0]["request_id"], "req-1");
+        assert_eq!(events[0]["request"]["tool_name"], "bash_command");
+    }
+
+    #[test]
+    fn parse_input_line_user_message() {
+        let input = r#"{"type":"user","message":{"role":"user","content":"hello"}}"#;
+        let result = parse_input_line(input).expect("should parse user message");
+        match result {
+            ProtocolInput::User { content } => assert_eq!(content, "hello"),
+            _ => panic!("expected User variant"),
+        }
+    }
+
+    #[test]
+    fn parse_input_line_control_response_allow() {
+        let input = r#"{"type":"control_response","response":{"request_id":"req-1","response":{"behavior":"allow","message":"ok"}}}"#;
+        let result = parse_input_line(input).expect("should parse control response");
+        match result {
+            ProtocolInput::ControlResponse {
+                request_id,
+                allow,
+                message,
+            } => {
+                assert_eq!(request_id, "req-1");
+                assert!(allow);
+                assert_eq!(message.as_deref(), Some("ok"));
+            }
+            _ => panic!("expected ControlResponse variant"),
+        }
+    }
+
+    #[test]
+    fn parse_input_line_interrupt() {
+        let input = r#"{"type":"control_request","request":{"subtype":"interrupt"}}"#;
+        let result = parse_input_line(input).expect("should parse interrupt");
+        match result {
+            ProtocolInput::Interrupt => {}
+            _ => panic!("expected Interrupt variant"),
+        }
+    }
+
+    #[test]
+    fn parse_input_line_invalid_json_returns_none() {
+        assert!(parse_input_line("not json").is_none());
+        assert!(parse_input_line("{}").is_none());
+        assert!(parse_input_line(r#"{"type":"unknown"}"#).is_none());
     }
 }

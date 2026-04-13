@@ -3,12 +3,12 @@
 
 use std::process::Stdio;
 
-use anyhow::{Result, anyhow, Context};
+use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
-use super::{ToolExecutionContext, ToolRegistry, builtin_tool_specs};
+use super::{ToolExecutionContext, ToolRegistry, runtime_builtin_tool_specs};
 
 pub(crate) fn todo_write(input: &Value, context: &ToolExecutionContext) -> Result<String> {
     let todos = input
@@ -65,10 +65,10 @@ pub(crate) fn config_read(input: &Value, context: &ToolExecutionContext) -> Resu
             if !config_path.exists() {
                 return Ok(json!({key: null}).to_string());
             }
-            let content = std::fs::read_to_string(&config_path)
-                .context("failed to read config file")?;
-            let config: Value = serde_json::from_str(&content)
-                .context("failed to parse config file")?;
+            let content =
+                std::fs::read_to_string(&config_path).context("failed to read config file")?;
+            let config: Value =
+                serde_json::from_str(&content).context("failed to parse config file")?;
             let value = config.get(key).cloned().unwrap_or(Value::Null);
             Ok(json!({key: value}).to_string())
         }
@@ -111,10 +111,7 @@ pub(crate) fn snip_tool(input: &Value, context: &ToolExecutionContext) -> Result
         .ok_or_else(|| anyhow!("content is required"))?;
     let label = input["label"].as_str().unwrap_or("snippet");
 
-    let snippets_dir = context
-        .cwd
-        .join(".remote-code-rust")
-        .join("snippets");
+    let snippets_dir = context.cwd.join(".remote-code-rust").join("snippets");
     std::fs::create_dir_all(&snippets_dir)?;
 
     let timestamp = std::time::SystemTime::now()
@@ -148,7 +145,7 @@ pub(crate) fn tool_search_tool(input: &Value) -> Result<String> {
 
     if results.is_empty() {
         // Fallback: return all tools with a note
-        let specs = builtin_tool_specs();
+        let specs = runtime_builtin_tool_specs();
         let matches: Vec<Value> = specs
             .iter()
             .take(max_results)
@@ -222,7 +219,10 @@ pub(crate) fn verify_plan_tool(input: &Value) -> Result<String> {
     .to_string())
 }
 
-pub(crate) async fn terminal_capture_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
+pub(crate) async fn terminal_capture_tool(
+    input: &Value,
+    context: &ToolExecutionContext,
+) -> Result<String> {
     let command = input
         .get("command")
         .and_then(Value::as_str)
@@ -271,7 +271,10 @@ pub(crate) fn monitor_tool(input: &Value) -> Result<String> {
     let target = input["target"]
         .as_str()
         .ok_or_else(|| anyhow!("target is required (agents, tasks, or sessions)"))?;
-    let interval_ms = input.get("interval_ms").and_then(Value::as_u64).unwrap_or(1000);
+    let interval_ms = input
+        .get("interval_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(1000);
 
     let snapshot = match target {
         "agents" => json!({
@@ -324,7 +327,7 @@ pub(crate) fn ctx_inspect_tool(input: &Value) -> Result<String> {
         .as_str()
         .ok_or_else(|| anyhow!("action is required (tokens, messages, or tools)"))?;
 
-    let specs = builtin_tool_specs();
+    let specs = runtime_builtin_tool_specs();
     match action {
         "tokens" => Ok(json!({
             "estimated_tokens": "N/A (requires tokenizer)",
@@ -341,9 +344,7 @@ pub(crate) fn ctx_inspect_tool(input: &Value) -> Result<String> {
             "tools": specs.iter().map(|s| &s.name).collect::<Vec<_>>(),
         })
         .to_string()),
-        _ => Err(anyhow!(
-            "action must be 'tokens', 'messages', or 'tools'"
-        )),
+        _ => Err(anyhow!("action must be 'tokens', 'messages', or 'tools'")),
     }
 }
 

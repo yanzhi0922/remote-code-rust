@@ -1,0 +1,270 @@
+import { ChevronDown, Cpu, MessageSquareText, Send, Shield, Sparkles } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useAppStore } from '../../stores/useAppStore';
+
+const PERMISSION_MODES = [
+  { value: 'default', label: '默认', desc: '读取自动执行，写入和命令需确认' },
+  { value: 'acceptEdits', label: '自动编辑', desc: '文件编辑自动执行，命令仍需确认' },
+  { value: 'dontAsk', label: '不询问', desc: '仅自动放行低风险读取工具' },
+  { value: 'bypassPermissions', label: '全自动', desc: '跳过全部权限确认' },
+  { value: 'plan', label: '规划', desc: '只规划，不执行工具' },
+] as const;
+
+function Dropdown({
+  open,
+  onToggle,
+  trigger,
+  children,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  trigger: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="relative">
+      <div onClick={onToggle}>{trigger}</div>
+      {open && (
+        <>
+          <button
+            aria-label="关闭下拉菜单"
+            className="fixed inset-0 z-10 cursor-default"
+            onClick={onToggle}
+          />
+          <div className="absolute bottom-full left-0 z-20 mb-2 min-w-[220px] overflow-hidden rounded-2xl border border-[#dedad2] bg-white shadow-[0_18px_42px_rgba(24,29,33,0.16)]">
+            <div className="max-h-72 overflow-y-auto p-1.5">{children}</div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function DropdownItem({
+  title,
+  subtitle,
+  active,
+  onClick,
+}: {
+  title: string;
+  subtitle?: string;
+  active?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={`flex w-full items-start gap-2 rounded-xl px-3 py-2 text-left transition-colors ${
+        active ? 'bg-[#ece7dc] text-slate-900' : 'text-slate-700 hover:bg-[#f3efe7]'
+      }`}
+      onClick={onClick}
+    >
+      <div className="min-w-0">
+        <div className="truncate text-sm font-medium">{title}</div>
+        {subtitle && <div className="mt-0.5 text-xs text-slate-500">{subtitle}</div>}
+      </div>
+    </button>
+  );
+}
+
+export function ChatInput() {
+  const [input, setInput] = useState('');
+  const [modelDraft, setModelDraft] = useState('');
+  const [openMenu, setOpenMenu] = useState<'provider' | 'permission' | null>(null);
+  const textAreaRef = useRef<HTMLTextAreaElement>(null);
+
+  const sending = useAppStore((state) => state.sending);
+  const activeSessionId = useAppStore((state) => state.activeSessionId);
+  const sessions = useAppStore((state) => state.sessions);
+  const settings = useAppStore((state) => state.settings);
+  const provider = useAppStore((state) => state.provider);
+  const providerConfigs = useAppStore((state) => state.providerConfigs);
+  const sendMessage = useAppStore((state) => state.sendMessage);
+  const updateSettings = useAppStore((state) => state.updateSettings);
+  const setActiveProvider = useAppStore((state) => state.setActiveProvider);
+
+  useEffect(() => {
+    const element = textAreaRef.current;
+    if (!element) return;
+    element.style.height = '0px';
+    element.style.height = `${Math.min(element.scrollHeight, 240)}px`;
+  }, [input]);
+
+  const permissionLabel = useMemo(
+    () =>
+      PERMISSION_MODES.find((mode) => mode.value === settings?.permission_mode)?.label ?? '默认',
+    [settings?.permission_mode],
+  );
+
+  const activeProviderName = providerConfigs?.active_provider ?? provider?.name ?? '未配置';
+  const providerOptions = providerConfigs?.providers ?? [];
+  const activeSession = sessions.find((session) => session.id === activeSessionId) ?? null;
+  const currentSessionLabel = activeSession
+    ? `${activeSession.provider_name}${activeSession.model ? ` / ${activeSession.model}` : ''}`
+    : null;
+
+  useEffect(() => {
+    setModelDraft(settings?.provider_model ?? provider?.model ?? '');
+  }, [provider?.model, settings?.provider_model]);
+
+  const handleSend = async () => {
+    if (!input.trim() || sending) return;
+    const current = input;
+    setInput('');
+    await sendMessage(current);
+  };
+
+  const handleKeyDown = async (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      await handleSend();
+    }
+  };
+
+  const commitModelDraft = async () => {
+    await updateSettings({ provider_model: modelDraft.trim() });
+  };
+
+  return (
+    <div className="border-t border-[#ebe6dd] bg-[#f7f4ed] px-4 pb-4 pt-3 sm:px-6">
+      <div className="mx-auto w-full max-w-5xl">
+        <div className="rounded-[28px] border border-[#dfd9cd] bg-white shadow-[0_16px_40px_rgba(23,24,26,0.08)]">
+          <div className="border-b border-[#f1ece3] px-4 py-3">
+            {activeSession ? (
+              <div className="inline-flex max-w-full items-center gap-2 rounded-full border border-[#ddd6c8] bg-[#f3efe7] px-3 py-1.5 text-sm font-medium text-slate-700">
+                <MessageSquareText size={14} className="text-slate-500" />
+                <span className="truncate">当前会话 · {currentSessionLabel}</span>
+              </div>
+            ) : (
+              <div className="text-sm text-slate-500">选择 Provider、模型和权限后直接发送即可。</div>
+            )}
+          </div>
+
+          <div className="flex items-end gap-3 px-4 py-3">
+            <textarea
+              ref={textAreaRef}
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                void handleKeyDown(event);
+              }}
+              disabled={sending}
+              rows={1}
+              placeholder="输入需求，直接在 GUI 中运行、改代码、调用工具。Shift+Enter 换行。"
+              className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-1 text-[15px] leading-6 text-slate-800 outline-none placeholder:text-slate-400 disabled:cursor-not-allowed"
+            />
+
+            <button
+              onClick={() => {
+                void handleSend();
+              }}
+              disabled={sending || !input.trim()}
+              className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#17181a] text-white shadow-[0_8px_20px_rgba(23,24,26,0.22)] transition-colors hover:bg-[#2a2c2f] disabled:cursor-not-allowed disabled:bg-[#cfc8ba] disabled:text-white/70"
+            >
+              {sending ? (
+                <div className="h-5 w-5 animate-spin rounded-full border-2 border-white/25 border-t-white" />
+              ) : (
+                <Send size={17} />
+              )}
+            </button>
+          </div>
+
+          <div className="border-t border-[#f1ece3] px-4 pb-3 pt-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Dropdown
+                open={openMenu === 'provider'}
+                onToggle={() => setOpenMenu((state) => (state === 'provider' ? null : 'provider'))}
+                trigger={
+                  <button
+                    title="为下一次发送选择 Provider"
+                    className="inline-flex items-center gap-2 rounded-full border border-[#ddd6c8] bg-[#fcfaf5] px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-[#f6f1e8]"
+                  >
+                    <Cpu size={14} className="text-slate-500" />
+                    <span className="max-w-[240px] truncate">{activeProviderName}</span>
+                    <ChevronDown size={14} className="text-slate-400" />
+                  </button>
+                }
+              >
+                {providerOptions.length > 0 ? (
+                  providerOptions.map((providerOption) => (
+                    <DropdownItem
+                      key={providerOption.name}
+                      title={providerOption.name}
+                      subtitle={[
+                        providerOption.model ?? '未设置默认模型',
+                        providerOption.protocol,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                      active={providerConfigs?.active_provider === providerOption.name}
+                      onClick={async () => {
+                        setOpenMenu(null);
+                        await setActiveProvider(providerOption.name);
+                      }}
+                    />
+                  ))
+                ) : (
+                  <DropdownItem
+                    title={provider?.name ?? '未配置 Provider'}
+                    subtitle="去设置面板添加或导入 Provider"
+                    onClick={() => setOpenMenu(null)}
+                  />
+                )}
+              </Dropdown>
+
+              <div className="inline-flex min-w-0 items-center gap-2 rounded-full border border-[#ddd6c8] bg-[#fcfaf5] px-3 py-1.5 text-sm text-slate-700">
+                <Sparkles size={14} className="text-slate-500" />
+                <input
+                  value={modelDraft}
+                  onChange={(event) => setModelDraft(event.target.value)}
+                  onBlur={() => {
+                    void commitModelDraft();
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      void commitModelDraft();
+                    }
+                  }}
+                  className="w-[220px] min-w-0 bg-transparent outline-none placeholder:text-slate-400"
+                  placeholder="为下一次发送设置模型"
+                  title="为下一次发送设置模型"
+                />
+              </div>
+
+              <Dropdown
+                open={openMenu === 'permission'}
+                onToggle={() => setOpenMenu((state) => (state === 'permission' ? null : 'permission'))}
+                trigger={
+                  <button className="inline-flex items-center gap-2 rounded-full border border-[#ddd6c8] bg-[#fcfaf5] px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-[#f6f1e8]">
+                    <Shield size={14} className="text-slate-500" />
+                    <span>{permissionLabel}</span>
+                    <ChevronDown size={14} className="text-slate-400" />
+                  </button>
+                }
+              >
+                {PERMISSION_MODES.map((mode) => (
+                  <DropdownItem
+                    key={mode.value}
+                    title={mode.label}
+                    subtitle={mode.desc}
+                    active={settings?.permission_mode === mode.value}
+                    onClick={async () => {
+                      setOpenMenu(null);
+                      await updateSettings({ permission_mode: mode.value });
+                    }}
+                  />
+                ))}
+              </Dropdown>
+            </div>
+
+            <div className="mt-3 text-xs leading-5 text-slate-500">
+              {activeSession
+                ? '继续发送时会保留当前会话的工作目录，但 Provider、模型和权限模式以这里当前选择为准。'
+                : '当前选择会用于下一次发送和新建会话。'}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

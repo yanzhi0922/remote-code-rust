@@ -89,7 +89,10 @@ pub async fn run_check() -> Result<()> {
         Ok(result) => {
             let current = env!("CARGO_PKG_VERSION");
             if result.update_available {
-                println!("✨ Update available: {} (current: v{current})", result.latest_version);
+                println!(
+                    "✨ Update available: {} (current: v{current})",
+                    result.latest_version
+                );
                 println!("   Release notes: {}", result.release_url);
                 if let Some(url) = &result.download_url {
                     println!("   Download: {url}");
@@ -122,8 +125,7 @@ pub async fn run_update() -> Result<()> {
 
     let download_url = result
         .download_url
-        .context("no binary available for the current platform. Please download manually from:")?
-        ;
+        .context("no binary available for the current platform. Please download manually from:")?;
 
     println!("Downloading {}...", result.latest_version);
 
@@ -147,7 +149,8 @@ pub async fn run_update() -> Result<()> {
         .context("failed to read download response")?;
 
     // Determine the current executable path.
-    let current_exe = std::env::current_exe().context("failed to determine current executable path")?;
+    let current_exe =
+        std::env::current_exe().context("failed to determine current executable path")?;
 
     // Write the new binary to a temporary file next to the current one.
     let temp_path = current_exe.with_extension("new");
@@ -168,18 +171,15 @@ pub async fn run_update() -> Result<()> {
     #[cfg(windows)]
     {
         let old_path = current_exe.with_extension("old");
-        std::fs::rename(&current_exe, &old_path)
-            .context("failed to rename current executable")?;
-        std::fs::rename(&temp_path, &current_exe)
-            .context("failed to install new version")?;
+        std::fs::rename(&current_exe, &old_path).context("failed to rename current executable")?;
+        std::fs::rename(&temp_path, &current_exe).context("failed to install new version")?;
         // Clean up the old file (best effort).
         let _ = std::fs::remove_file(&old_path);
     }
 
     #[cfg(not(windows))]
     {
-        std::fs::rename(&temp_path, &current_exe)
-            .context("failed to install new version")?;
+        std::fs::rename(&temp_path, &current_exe).context("failed to install new version")?;
     }
 
     println!("✅ Updated to {} successfully!", result.latest_version);
@@ -188,11 +188,8 @@ pub async fn run_update() -> Result<()> {
 
 /// Compare version strings. Returns true if `latest` > `current`.
 fn is_newer_version(latest: &str, current: &str) -> bool {
-    let parse_parts = |v: &str| -> Vec<u32> {
-        v.split('.')
-            .filter_map(|s| s.parse().ok())
-            .collect()
-    };
+    let parse_parts =
+        |v: &str| -> Vec<u32> { v.split('.').filter_map(|s| s.parse().ok()).collect() };
 
     let latest_parts = parse_parts(latest);
     let current_parts = parse_parts(current);
@@ -260,9 +257,7 @@ mod tests {
         let suffix = platform_asset_suffix();
         // Should contain either windows, macos, or linux.
         assert!(
-            suffix.contains("windows")
-                || suffix.contains("macos")
-                || suffix.contains("linux"),
+            suffix.contains("windows") || suffix.contains("macos") || suffix.contains("linux"),
             "unexpected suffix: {suffix}"
         );
     }

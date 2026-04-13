@@ -17,6 +17,8 @@ use walkdir::WalkDir;
 
 /// File name used for skill definitions.
 pub const SKILL_FILE_NAME: &str = "SKILL.md";
+/// Default lock file name for installed skills.
+pub const DEFAULT_SKILL_LOCK_FILE: &str = ".skill-lock.json";
 
 /// Metadata extracted from a SKILL.md file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

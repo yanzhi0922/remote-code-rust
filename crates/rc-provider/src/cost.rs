@@ -115,7 +115,11 @@ impl CostTracker {
         if !inner.per_model.is_empty() {
             let _ = writeln!(out, "\nPer-model breakdown:");
             let mut models: Vec<_> = inner.per_model.iter().collect();
-            models.sort_by(|a, b| b.1.cost_usd.partial_cmp(&a.1.cost_usd).unwrap_or(std::cmp::Ordering::Equal));
+            models.sort_by(|a, b| {
+                b.1.cost_usd
+                    .partial_cmp(&a.1.cost_usd)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             for (model, cost) in models {
                 let _ = writeln!(
                     out,
@@ -421,109 +425,73 @@ mod tests {
     #[test]
     fn estimate_cost_gpt4o() {
         let cost = estimate_cost("gpt-4o", 1_000_000, 1_000_000);
-        assert!(
-            (cost - 12.50).abs() < 0.01,
-            "expected ~12.50, got {cost}"
-        );
+        assert!((cost - 12.50).abs() < 0.01, "expected ~12.50, got {cost}");
     }
 
     #[test]
     fn estimate_cost_claude_sonnet() {
         let cost = estimate_cost("claude-3-5-sonnet-20241022", 1_000_000, 1_000_000);
-        assert!(
-            (cost - 18.00).abs() < 0.01,
-            "expected ~18.00, got {cost}"
-        );
+        assert!((cost - 18.00).abs() < 0.01, "expected ~18.00, got {cost}");
     }
 
     #[test]
     fn estimate_cost_unknown_model_uses_default() {
         let cost = estimate_cost("unknown-model", 1_000_000, 1_000_000);
-        assert!(
-            (cost - 0.75).abs() < 0.01,
-            "expected ~0.75, got {cost}"
-        );
+        assert!((cost - 0.75).abs() < 0.01, "expected ~0.75, got {cost}");
     }
 
     #[test]
     fn estimate_cost_deepseek_v3() {
         let cost = estimate_cost("deepseek-v3", 1_000_000, 1_000_000);
-        assert!(
-            (cost - 1.37).abs() < 0.01,
-            "expected ~1.37, got {cost}"
-        );
+        assert!((cost - 1.37).abs() < 0.01, "expected ~1.37, got {cost}");
     }
 
     #[test]
     fn estimate_cost_deepseek_r1() {
         let cost = estimate_cost("deepseek-r1", 1_000_000, 1_000_000);
-        assert!(
-            (cost - 2.74).abs() < 0.01,
-            "expected ~2.74, got {cost}"
-        );
+        assert!((cost - 2.74).abs() < 0.01, "expected ~2.74, got {cost}");
     }
 
     #[test]
     fn estimate_cost_gemini_flash() {
         let cost = estimate_cost("gemini-2.0-flash", 1_000_000, 1_000_000);
-        assert!(
-            (cost - 0.50).abs() < 0.01,
-            "expected ~0.50, got {cost}"
-        );
+        assert!((cost - 0.50).abs() < 0.01, "expected ~0.50, got {cost}");
     }
 
     #[test]
     fn estimate_cost_moonshot() {
         let cost = estimate_cost("moonshot-v1-128k", 1_000_000, 1_000_000);
-        assert!(
-            (cost - 3.36).abs() < 0.01,
-            "expected ~3.36, got {cost}"
-        );
+        assert!((cost - 3.36).abs() < 0.01, "expected ~3.36, got {cost}");
     }
 
     #[test]
     fn estimate_cost_minimax_m1() {
         let cost = estimate_cost("minimax-m1", 1_000_000, 1_000_000);
-        assert!(
-            (cost - 2.80).abs() < 0.01,
-            "expected ~2.80, got {cost}"
-        );
+        assert!((cost - 2.80).abs() < 0.01, "expected ~2.80, got {cost}");
     }
 
     #[test]
     fn estimate_cost_glm5() {
         let cost = estimate_cost("glm-5.1", 1_000_000, 1_000_000);
-        assert!(
-            (cost - 14.00).abs() < 0.01,
-            "expected ~14.00, got {cost}"
-        );
+        assert!((cost - 14.00).abs() < 0.01, "expected ~14.00, got {cost}");
     }
 
     #[test]
     fn estimate_cost_ernie_4() {
         let cost = estimate_cost("ernie-4.0-8k", 1_000_000, 1_000_000);
-        assert!(
-            (cost - 33.60).abs() < 0.01,
-            "expected ~33.60, got {cost}"
-        );
+        assert!((cost - 33.60).abs() < 0.01, "expected ~33.60, got {cost}");
     }
 
     #[test]
     fn estimate_cost_o3() {
         let cost = estimate_cost("o3", 1_000_000, 1_000_000);
-        assert!(
-            (cost - 10.00).abs() < 0.01,
-            "expected ~10.00, got {cost}"
-        );
+        assert!((cost - 10.00).abs() < 0.01, "expected ~10.00, got {cost}");
     }
 
     #[test]
     fn estimate_cost_o4_mini() {
         let cost = estimate_cost("o4-mini", 1_000_000, 1_000_000);
-        assert!(
-            (cost - 5.50).abs() < 0.01,
-            "expected ~5.50, got {cost}"
-        );
+        assert!((cost - 5.50).abs() < 0.01, "expected ~5.50, got {cost}");
     }
 
     #[test]

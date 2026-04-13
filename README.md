@@ -25,9 +25,10 @@
 
 ## 架构
 
-4 个应用 + 15 个库 crate：
+5 个应用 + 15 个库 crate：
 
 - `remote-code` — 主 CLI（交互式/无头/远程模式）
+- `remote-code-gui` — 桌面 GUI（Tauri v2 + React 19）
 - `remote-code-control-plane` — 控制平面服务器
 - `remote-code-runner` — Runner 代理
 - `remote-code-migrate` — 数据迁移工具
@@ -69,8 +70,11 @@ export GLM_API_KEY=your_key_here
 # 编译
 cargo build --release
 
-# 交互式模式
+# 交互式 TUI 模式
 cargo run --bin remote-code -- tui
+
+# 桌面 GUI 模式
+cd apps/remote-code-gui && npm install && npm run tauri dev
 
 # 无头模式
 echo "请帮我分析这个项目" | cargo run --bin remote-code -- headless

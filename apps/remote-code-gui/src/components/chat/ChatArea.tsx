@@ -1,0 +1,306 @@
+import { lazy, Suspense, useEffect, useMemo, useRef } from 'react';
+import type { ConversationEntry, ToolCallInfo } from '../../lib/types';
+import { truncateMiddle } from '../../lib/utils';
+import { useAppStore } from '../../stores/useAppStore';
+import CollapsibleBlock from './CollapsibleBlock';
+
+const LazyMarkdownRenderer = lazy(() => import('./MarkdownRenderer'));
+
+function formatToolInput(input: unknown): string {
+  try {
+    const normalized = typeof input === 'string' ? JSON.parse(input) : input;
+    return JSON.stringify(normalized, null, 2);
+  } catch {
+    return typeof input === 'string' ? input : JSON.stringify(input, null, 2);
+  }
+}
+
+function summarizeToolInput(toolCall: ToolCallInfo): string {
+  try {
+    const normalized = typeof toolCall.input === 'string' ? JSON.parse(toolCall.input) : toolCall.input;
+    if (normalized && typeof normalized === 'object') {
+      const objectValue = normalized as Record<string, unknown>;
+      const preview =
+        objectValue.path ??
+        objectValue.file_path ??
+        objectValue.command ??
+        objectValue.query ??
+        objectValue.prompt ??
+        Object.values(objectValue)[0];
+      if (typeof preview === 'string') {
+        return truncateMiddle(preview, 84);
+      }
+    }
+  } catch {
+    // Ignore summary parsing failures.
+  }
+  return toolCall.name;
+}
+
+function summarizeToolOutput(text: string): string {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  return compact ? truncateMiddle(compact, 84) : '展开查看完整输出';
+}
+
+function extractThinkingBlocks(entry: ConversationEntry): string[] {
+  return entry.content_blocks
+    .filter((block): block is Record<string, unknown> => !!block && typeof block === 'object')
+    .filter((block) => block.type === 'thinking' && typeof block.thinking === 'string')
+    .map((block) => block.thinking as string);
+}
+
+function EmptyState({
+  title,
+  description,
+}: {
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="flex h-full min-h-[320px] items-center justify-center px-6 py-10">
+      <div className="max-w-xl space-y-3 text-center">
+        <h2 className="text-xl font-semibold text-slate-800">{title}</h2>
+        <p className="text-sm leading-6 text-slate-500">{description}</p>
+      </div>
+    </div>
+  );
+}
+
+function AssistantToolCalls({ toolCalls }: { toolCalls: ToolCallInfo[] }) {
+  if (toolCalls.length === 0) return null;
+
+  return (
+    <div className="mt-4 space-y-2">
+      {toolCalls.map((toolCall) => (
+        <CollapsibleBlock
+          key={toolCall.id}
+          summary={
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
+                Tool
+              </span>
+              <span className="font-medium text-emerald-700">{toolCall.name}</span>
+              <span className="truncate text-sm text-slate-500">{summarizeToolInput(toolCall)}</span>
+            </div>
+          }
+          iconColor="text-emerald-600"
+        >
+          <pre className="overflow-x-auto whitespace-pre-wrap rounded-xl bg-[#f7f5ef] p-3 text-xs text-slate-700">
+            {formatToolInput(toolCall.input)}
+          </pre>
+        </CollapsibleBlock>
+      ))}
+    </div>
+  );
+}
+
+function ToolMessage({ entry }: { entry: ConversationEntry }) {
+  const label = entry.name ?? 'tool';
+
+  return (
+    <CollapsibleBlock
+      summary={
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+            {entry.is_error ? 'Tool Error' : 'Tool Result'}
+          </span>
+          <span
+            className={`rounded-full px-2 py-0.5 text-[11px] ${
+              entry.is_error ? 'bg-[#fff1f0] text-[#9c2f2f]' : 'bg-[#eee7dc] text-slate-600'
+            }`}
+          >
+            {label}
+          </span>
+          <span className="truncate text-sm text-slate-600">{summarizeToolOutput(entry.text)}</span>
+        </div>
+      }
+      iconColor={entry.is_error ? 'text-rose-500' : 'text-slate-500'}
+    >
+      <pre
+        className={`overflow-x-auto whitespace-pre-wrap rounded-xl p-3 text-xs leading-6 ${
+          entry.is_error ? 'bg-[#fff1f0] text-[#9c2f2f]' : 'bg-[#f7f5ef] text-slate-700'
+        }`}
+      >
+        {entry.text}
+      </pre>
+    </CollapsibleBlock>
+  );
+}
+
+function AssistantThinking({ blocks }: { blocks: string[] }) {
+  if (blocks.length === 0) return null;
+
+  return (
+    <div className="mb-4 space-y-2">
+      {blocks.map((block, index) => (
+        <CollapsibleBlock
+          key={`${index}-${block.slice(0, 20)}`}
+          summary={
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
+                Thinking
+              </span>
+              <span className="truncate text-sm text-slate-600">{summarizeToolOutput(block)}</span>
+            </div>
+          }
+          iconColor="text-amber-600"
+        >
+          <div className="whitespace-pre-wrap text-sm leading-7 text-slate-700">{block}</div>
+        </CollapsibleBlock>
+      ))}
+    </div>
+  );
+}
+
+function AssistantMessage({ entry }: { entry: ConversationEntry }) {
+  const thinkingBlocks = extractThinkingBlocks(entry);
+
+  return (
+    <div className="rounded-[24px] border border-[#e8e2d8] bg-white px-5 py-4 shadow-[0_10px_28px_rgba(23,24,26,0.05)]">
+      <div className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">
+        Assistant
+      </div>
+
+      <AssistantThinking blocks={thinkingBlocks} />
+
+      {entry.text ? (
+        <div className="prose prose-slate max-w-none">
+          <Suspense fallback={<div className="text-sm text-slate-500">正在渲染回复…</div>}>
+            <LazyMarkdownRenderer content={entry.text} />
+          </Suspense>
+        </div>
+      ) : (
+        <div className="text-sm text-slate-500">模型请求了工具调用。</div>
+      )}
+
+      <AssistantToolCalls toolCalls={entry.tool_calls} />
+    </div>
+  );
+}
+
+function MessageCard({ entry }: { entry: ConversationEntry }) {
+  if (entry.role === 'system') return null;
+
+  if (entry.role === 'tool') {
+    return <ToolMessage entry={entry} />;
+  }
+
+  if (entry.role === 'user') {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-3xl rounded-[24px] bg-[#17181a] px-5 py-4 text-[15px] leading-7 text-white shadow-[0_14px_32px_rgba(23,24,26,0.16)]">
+          <div className="whitespace-pre-wrap break-words">{entry.text}</div>
+        </div>
+      </div>
+    );
+  }
+
+  return <AssistantMessage entry={entry} />;
+}
+
+export function ChatArea() {
+  const activeSessionId = useAppStore((state) => state.activeSessionId);
+  const conversation = useAppStore((state) => state.conversation);
+  const conversationLoading = useAppStore((state) => state.conversationLoading);
+  const sending = useAppStore((state) => state.sending);
+  const sendError = useAppStore((state) => state.sendError);
+  const liveToolProgress = useAppStore((state) => state.liveToolProgress);
+  const liveToolResults = useAppStore((state) => state.liveToolResults);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  const compactProgress = useMemo(() => liveToolProgress.slice(-6), [liveToolProgress]);
+  const compactResults = useMemo(() => liveToolResults.slice(-4), [liveToolResults]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [conversation, sending, liveToolProgress, liveToolResults]);
+
+  if (!activeSessionId) {
+    return (
+      <div className="flex-1 overflow-y-auto bg-[#f7f4ed]">
+        <EmptyState
+          title="选择一个项目或会话"
+          description="左侧现在按项目、会话、子任务三层组织。选中后，右侧会渲染完整对话、公式、工具调用和折叠详情。"
+        />
+      </div>
+    );
+  }
+
+  if (conversationLoading) {
+    return (
+      <div className="flex-1 overflow-y-auto bg-[#f7f4ed]">
+        <EmptyState title="正在加载会话" description="正在读取本地会话历史与工具调用记录。" />
+      </div>
+    );
+  }
+
+  if (conversation.length === 0) {
+    return (
+      <div className="flex-1 overflow-y-auto bg-[#f7f4ed]">
+        <EmptyState
+          title="会话已创建"
+          description="直接在下方输入框中发送需求。公式会渲染，工具调用、代码块和工具输出会默认折叠。"
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 overflow-y-auto bg-[#f7f4ed] px-4 py-5 sm:px-6">
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
+        {conversation.map((entry, index) => (
+          <MessageCard key={`${entry.role}-${entry.tool_call_id ?? entry.name ?? index}`} entry={entry} />
+        ))}
+
+        {sending && (
+          <div className="rounded-2xl border border-[#e3ddd2] bg-white px-5 py-4 text-sm text-slate-600 shadow-[0_10px_24px_rgba(23,24,26,0.05)]">
+            <div className="flex items-center gap-3">
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
+              <span>正在处理当前请求…</span>
+            </div>
+
+            {compactProgress.length > 0 && (
+              <div className="mt-4 space-y-2">
+                {compactProgress.map((progress, index) => (
+                  <div
+                    key={`${progress.tool_name}-${progress.tool_call_id}-${index}`}
+                    className="rounded-xl bg-[#f7f5ef] px-3 py-2 text-xs text-slate-600"
+                  >
+                    <span className="font-medium text-slate-800">{progress.tool_name || 'tool'}</span>
+                    <span className="mx-2 text-slate-400">·</span>
+                    <span>{truncateMiddle(progress.message, 120)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {compactResults.length > 0 && (
+              <div className="mt-4 space-y-2">
+                {compactResults.map((result, index) => (
+                  <div
+                    key={`${result.tool_name}-${result.tool_call_id}-${index}`}
+                    className={`rounded-xl px-3 py-2 text-xs ${
+                      result.is_error ? 'bg-[#fff1f0] text-[#9c2f2f]' : 'bg-[#edf7ef] text-[#25653b]'
+                    }`}
+                  >
+                    <span className="font-medium">{result.tool_name}</span>
+                    <span className="mx-2 opacity-60">·</span>
+                    <span>{truncateMiddle(result.output, 110)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {sendError && (
+          <div className="rounded-2xl border border-[#f3cbc6] bg-[#fff6f4] px-5 py-4 text-sm text-[#9c2f2f]">
+            {sendError}
+          </div>
+        )}
+
+        <div ref={bottomRef} />
+      </div>
+    </div>
+  );
+}

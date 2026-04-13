@@ -264,6 +264,17 @@ pub enum McpConfigError {
     AmbiguousTransport { name: String },
     #[error("MCP server `{name}` uses unsupported url scheme `{scheme}`")]
     UnsupportedUrlScheme { name: String, scheme: String },
+    #[error("failed to serialize MCP config")]
+    Serialize {
+        #[source]
+        source: toml::ser::Error,
+    },
+    #[error("failed to write MCP config at `{path}`")]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -332,13 +343,13 @@ pub enum McpRuntimeError {
     },
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 struct RawMcpConfig {
     #[serde(default, rename = "mcp_servers")]
     servers: BTreeMap<String, RawMcpServer>,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 struct RawMcpServer {
     command: Option<String>,
     #[serde(default)]
@@ -358,7 +369,7 @@ struct RawMcpServer {
     metadata: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct RawMcpCapabilities {
     #[serde(default, alias = "tools")]
     supports_tools: bool,
@@ -537,6 +548,93 @@ impl McpConfig {
         }
 
         Ok(Self { servers })
+    }
+
+    pub fn to_toml_string(&self) -> Result<String, McpConfigError> {
+        toml::to_string_pretty(&RawMcpConfig::from(self)).map_err(|source| {
+            McpConfigError::Serialize { source }
+        })
+    }
+
+    pub fn save(&self, path: impl AsRef<Path>) -> Result<(), McpConfigError> {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|source| McpConfigError::Write {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+        let contents = self.to_toml_string()?;
+        fs::write(path, contents).map_err(|source| McpConfigError::Write {
+            path: path.to_path_buf(),
+            source,
+        })
+    }
+}
+
+impl From<&McpConfig> for RawMcpConfig {
+    fn from(value: &McpConfig) -> Self {
+        let servers = value
+            .servers
+            .iter()
+            .map(|(name, server)| {
+                let (command, args, cwd, env, url, http_headers) = match &server.transport {
+                    McpTransportConfig::Stdio {
+                        command,
+                        args,
+                        cwd,
+                        env,
+                    } => (
+                        Some(command.clone()),
+                        args.clone(),
+                        cwd.clone(),
+                        env.clone(),
+                        None,
+                        BTreeMap::new(),
+                    ),
+                    McpTransportConfig::Http { url, headers } => (
+                        None,
+                        Vec::new(),
+                        None,
+                        BTreeMap::new(),
+                        Some(url.clone()),
+                        headers.clone(),
+                    ),
+                    McpTransportConfig::WebSocket { url, headers } => (
+                        None,
+                        Vec::new(),
+                        None,
+                        BTreeMap::new(),
+                        Some(url.clone()),
+                        headers.clone(),
+                    ),
+                };
+
+                (
+                    name.clone(),
+                    RawMcpServer {
+                        command,
+                        args,
+                        cwd,
+                        env,
+                        url,
+                        http_headers,
+                        enabled: Some(server.enabled),
+                        startup_timeout_secs: server.startup_timeout_secs,
+                        request_timeout_secs: server.request_timeout_secs,
+                        capabilities: RawMcpCapabilities {
+                            supports_tools: server.capabilities.supports_tools,
+                            supports_prompts: server.capabilities.supports_prompts,
+                            supports_resources: server.capabilities.supports_resources,
+                            supports_sampling: server.capabilities.supports_sampling,
+                            supports_roots: server.capabilities.supports_roots,
+                        },
+                        metadata: server.metadata.clone(),
+                    },
+                )
+            })
+            .collect();
+        Self { servers }
     }
 }
 
@@ -1025,6 +1123,62 @@ mod tests {
                 .iter()
                 .any(|entry| entry.config.servers.contains_key("two"))
         );
+    }
+
+    #[test]
+    fn saves_config_in_round_trip_format() {
+        let temp = ok(tempdir());
+        let path = temp.path().join(DEFAULT_MCP_CONFIG_FILE);
+        let config = McpConfig {
+            servers: BTreeMap::from([
+                (
+                    "demo".to_owned(),
+                    McpServerConfig {
+                        name: "demo".to_owned(),
+                        enabled: true,
+                        transport: McpTransportConfig::Stdio {
+                            command: "python".to_owned(),
+                            args: vec!["server.py".to_owned()],
+                            cwd: Some(temp.path().join("demo")),
+                            env: BTreeMap::from([("TOKEN".to_owned(), "secret".to_owned())]),
+                        },
+                        capabilities: McpCapabilityMatrix {
+                            supports_tools: true,
+                            ..McpCapabilityMatrix::default()
+                        },
+                        startup_timeout_secs: Some(3),
+                        request_timeout_secs: Some(5),
+                        metadata: BTreeMap::from([("scope".to_owned(), "local".to_owned())]),
+                    },
+                ),
+                (
+                    "remote".to_owned(),
+                    McpServerConfig {
+                        name: "remote".to_owned(),
+                        enabled: false,
+                        transport: McpTransportConfig::Http {
+                            url: "https://example.com/mcp".to_owned(),
+                            headers: BTreeMap::from([(
+                                "Authorization".to_owned(),
+                                "Bearer token".to_owned(),
+                            )]),
+                        },
+                        capabilities: McpCapabilityMatrix::default(),
+                        startup_timeout_secs: None,
+                        request_timeout_secs: None,
+                        metadata: BTreeMap::new(),
+                    },
+                ),
+            ]),
+        };
+
+        config
+            .save(&path)
+            .unwrap_or_else(|error| panic!("save failed: {error}"));
+        let loaded = McpConfig::load(&path).unwrap_or_else(|error| panic!("load failed: {error}"));
+        assert_eq!(loaded.servers.len(), 2);
+        assert_eq!(loaded.servers["demo"].transport.kind(), McpTransport::Stdio);
+        assert_eq!(loaded.servers["remote"].transport.kind(), McpTransport::Http);
     }
 
     #[tokio::test]

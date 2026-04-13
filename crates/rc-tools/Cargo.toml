@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+async-trait.workspace = true
 directories = "5"
 glob = "0.3"
 globset.workspace = true
@@ -31,6 +32,7 @@ rc-mcp = { path = "../rc-mcp" }
 rc-permissions = { path = "../rc-permissions" }
 rc-session = { path = "../rc-session" }
 rc-skills = { path = "../rc-skills" }
+rc-ui-bridge = { path = "../rc-ui-bridge" }
 
 [dev-dependencies]
 tempfile.workspace = true

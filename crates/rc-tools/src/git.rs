@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use super::ToolExecutionContext;
 
-pub(crate) fn suggest_pr_tool(context: &ToolExecutionContext) -> Result<String> {
+pub fn suggest_pr_tool(context: &ToolExecutionContext) -> Result<String> {
     // Run git diff --stat and git log to suggest a PR.
     let diff_output = std::process::Command::new("git")
         .args(["diff", "--stat"])
@@ -43,7 +43,7 @@ pub(crate) fn suggest_pr_tool(context: &ToolExecutionContext) -> Result<String> 
     .to_string())
 }
 
-pub(crate) fn enter_worktree_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
+pub fn enter_worktree_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
     let branch = input["branch"]
         .as_str()
         .ok_or_else(|| anyhow!("branch is required"))?;
@@ -90,7 +90,8 @@ pub(crate) fn enter_worktree_tool(input: &Value, context: &ToolExecutionContext)
                     "path": worktree_dir,
                     "output": stderr,
                     "note": "This worktree already exists. You can work in that directory."
-                }).to_string())
+                })
+                .to_string())
             } else {
                 // Fall back to command suggestion.
                 Ok(json!({
@@ -99,7 +100,8 @@ pub(crate) fn enter_worktree_tool(input: &Value, context: &ToolExecutionContext)
                     "branch": branch,
                     "error": stderr,
                     "note": "Could not auto-create worktree. Run the command above manually."
-                }).to_string())
+                })
+                .to_string())
             }
         }
         Err(_) => {
@@ -109,12 +111,13 @@ pub(crate) fn enter_worktree_tool(input: &Value, context: &ToolExecutionContext)
                 "command": format!("git worktree add {worktree_dir} {branch}"),
                 "branch": branch,
                 "note": "Run the command above to create a new worktree for this branch."
-            }).to_string())
+            })
+            .to_string())
         }
     }
 }
 
-pub(crate) fn exit_worktree_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
+pub fn exit_worktree_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
     let branch = input["branch"]
         .as_str()
         .ok_or_else(|| anyhow!("branch is required"))?;
@@ -139,7 +142,8 @@ pub(crate) fn exit_worktree_tool(input: &Value, context: &ToolExecutionContext) 
                 "path": worktree_dir,
                 "output": stdout,
                 "note": format!("Worktree at {worktree_dir} has been removed.")
-            }).to_string())
+            })
+            .to_string())
         }
         Ok(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -150,20 +154,20 @@ pub(crate) fn exit_worktree_tool(input: &Value, context: &ToolExecutionContext) 
                 "branch": branch,
                 "error": stderr,
                 "note": "Could not auto-remove worktree. Run the command above manually."
-            }).to_string())
+            })
+            .to_string())
         }
-        Err(_) => {
-            Ok(json!({
-                "status": "manual",
-                "command": format!("git worktree remove {worktree_dir}"),
-                "branch": branch,
-                "note": "Run the command above to remove the worktree for this branch."
-            }).to_string())
-        }
+        Err(_) => Ok(json!({
+            "status": "manual",
+            "command": format!("git worktree remove {worktree_dir}"),
+            "branch": branch,
+            "note": "Run the command above to remove the worktree for this branch."
+        })
+        .to_string()),
     }
 }
 
-pub(crate) fn list_worktrees_tool(context: &ToolExecutionContext) -> Result<String> {
+pub fn list_worktrees_tool(context: &ToolExecutionContext) -> Result<String> {
     let output = std::process::Command::new("git")
         .args(["worktree", "list", "--porcelain"])
         .current_dir(&context.cwd)
@@ -198,15 +202,18 @@ pub(crate) fn list_worktrees_tool(context: &ToolExecutionContext) -> Result<Stri
             Ok(json!({
                 "worktrees": worktrees,
                 "count": worktrees.len(),
-            }).to_string())
+            })
+            .to_string())
         }
         Ok(_) => Ok(json!({
             "worktrees": [],
             "note": "Not in a git repository or git worktree not supported."
-        }).to_string()),
+        })
+        .to_string()),
         Err(_) => Ok(json!({
             "worktrees": [],
             "note": "git is not available."
-        }).to_string()),
+        })
+        .to_string()),
     }
 }

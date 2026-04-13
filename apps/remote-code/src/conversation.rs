@@ -1,18 +1,31 @@
 use std::collections::BTreeSet;
 use std::env;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Result, anyhow};
-use rc_config::{RuntimeConfig, import_legacy_profile, normalize_base_url, validate_provider_config};
-use rc_core::{ConversationEntry, ConversationRole, PermissionMode, default_system_prompt};
-use rc_permissions::{PermissionBroker, StaticPermissionBroker};
+use rc_config::{
+    RuntimeConfig, import_legacy_profile, normalize_base_url, validate_provider_config,
+};
+use rc_core::{
+    ConversationEntry, ConversationRole, PermissionMode, ProviderResponse, SubAgentCompletion,
+    default_system_prompt,
+};
+use rc_permissions::{
+    LayeredPermissionBroker, PermissionBroker, StaticPermissionBroker, load_layered_rules,
+    rules::summarize_rule_sources,
+};
 use rc_protocol::UsagePayload;
-use rc_provider::ProviderClient;
 use rc_provider::context::ContextWindowManager;
+use rc_provider::{ProviderClient, StreamingCallbacks};
 use rc_session::SessionStore;
+use rc_session::resume_state::{PendingToolCall, ResumeState};
 use rc_skills::SkillDocument;
-use rc_tools::{ToolExecutionContext, builtin_tool_specs, execute_tool_call};
+use rc_tools::{
+    ToolExecutionContext, builtin_tool_specs, execute_tool_call,
+    agent::{DelegateProgressEvent, parse_delegate_progress_event},
+};
 
 use crate::cli::Cli;
 use crate::hooks::{
@@ -57,6 +70,80 @@ pub(crate) struct PromptRunOutcome {
     pub(crate) permission_denials: Vec<serde_json::Value>,
 }
 
+pub(crate) type PromptEventSink = Arc<dyn Fn(PromptStreamEvent) + Send + Sync>;
+
+#[derive(Debug, Clone)]
+pub(crate) enum PromptStreamEvent {
+    MessageDelta {
+        delta: String,
+    },
+    MessageCommitted {
+        text: String,
+    },
+    ToolStarted {
+        tool_call_id: String,
+        tool_name: String,
+    },
+    ToolProgress {
+        tool_call_id: Option<String>,
+        delta: Option<String>,
+        elapsed_time_seconds: Option<u64>,
+    },
+    ToolFinished {
+        tool_call_id: String,
+        tool_name: String,
+        is_error: bool,
+        summary: Option<String>,
+    },
+    SubtaskStarted {
+        task_id: String,
+        parent_task_id: Option<String>,
+        description: String,
+        depth: u32,
+    },
+    SubtaskProgress {
+        task_id: String,
+        turn: u32,
+        max_turns: u32,
+        summary: String,
+    },
+    SubtaskCompleted {
+        task_id: String,
+        success: bool,
+        output_preview: String,
+        turns_used: u32,
+    },
+    BatchProgress {
+        total: usize,
+        completed: usize,
+        running: usize,
+    },
+}
+
+struct ConversationSubAgent {
+    client: Arc<ProviderClient>,
+    provider: rc_config::ProviderConfig,
+}
+
+impl ConversationSubAgent {
+    fn new(client: Arc<ProviderClient>, provider: &rc_config::ProviderConfig) -> Self {
+        Self {
+            client,
+            provider: provider.clone(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl SubAgentCompletion for ConversationSubAgent {
+    async fn complete(
+        &self,
+        conversation: &[ConversationEntry],
+    ) -> anyhow::Result<ProviderResponse> {
+        self.client.complete(&self.provider, conversation).await
+    }
+}
+
 pub(crate) fn truncate_preview(value: &str, max_chars: usize) -> String {
     let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut preview = collapsed.chars().take(max_chars).collect::<String>();
@@ -64,6 +151,47 @@ pub(crate) fn truncate_preview(value: &str, max_chars: usize) -> String {
         preview.push_str("...");
     }
     preview
+}
+
+fn build_streaming_callbacks(
+    include_partial_messages: bool,
+    event_sink: PromptEventSink,
+) -> StreamingCallbacks {
+    let text_sink = event_sink.clone();
+    let start_sink = event_sink.clone();
+    let progress_sink = event_sink;
+    StreamingCallbacks {
+        on_text_delta: include_partial_messages.then(|| {
+            Box::new(move |delta: &str| {
+                if delta.is_empty() {
+                    return;
+                }
+                text_sink(PromptStreamEvent::MessageDelta {
+                    delta: delta.to_owned(),
+                });
+            }) as Box<dyn Fn(&str) + Send + Sync>
+        }),
+        on_tool_call_start: Some(Box::new(move |tool_call_id: &str, tool_name: &str| {
+            if tool_call_id.is_empty() || tool_name.is_empty() {
+                return;
+            }
+            start_sink(PromptStreamEvent::ToolStarted {
+                tool_call_id: tool_call_id.to_owned(),
+                tool_name: tool_name.to_owned(),
+            });
+        })),
+        on_tool_call_delta: Some(Box::new(move |tool_call_id: &str, delta: &str| {
+            if tool_call_id.is_empty() || delta.is_empty() {
+                return;
+            }
+            progress_sink(PromptStreamEvent::ToolProgress {
+                tool_call_id: Some(tool_call_id.to_owned()),
+                delta: Some(delta.to_owned()),
+                elapsed_time_seconds: None,
+            });
+        })),
+        on_usage: None,
+    }
 }
 
 pub(crate) fn persist_session_context(store: &SessionStore, config: &RuntimeConfig) -> Result<()> {
@@ -262,7 +390,11 @@ pub(crate) fn initialize_conversation(
     config: &RuntimeConfig,
     title_hint: Option<&str>,
 ) -> Result<Vec<ConversationEntry>> {
-    let title_hint = title_hint.or(config.provider.model.as_deref());
+    let title_hint = config
+        .session_name
+        .as_deref()
+        .or(title_hint)
+        .or(config.provider.model.as_deref());
     store.ensure_session(
         config.session_id,
         &config.cwd,
@@ -287,8 +419,9 @@ pub(crate) fn initialize_conversation(
 pub(crate) async fn run_prompt(
     config: &RuntimeConfig,
     store: &SessionStore,
-    provider: &ProviderClient,
+    provider: &Arc<ProviderClient>,
     broker: &dyn PermissionBroker,
+    event_sink: Option<PromptEventSink>,
     discovery: &RuntimeHookDiscovery,
     hook_state: &mut HookRunState,
     conversation: &mut Vec<ConversationEntry>,
@@ -305,7 +438,7 @@ pub(crate) async fn run_prompt(
         &config.cwd,
         &config.provider.name,
         config.provider.model.as_deref(),
-        Some(prompt),
+        config.session_name.as_deref().or(Some(prompt)),
     )?;
     store.append_named_event(
         config.session_id,
@@ -321,10 +454,70 @@ pub(crate) async fn run_prompt(
     store.append_conversation_entry(config.session_id, &user_entry)?;
     conversation.push(user_entry);
 
+    let progress_cb = event_sink.as_ref().map(|event_sink| {
+        let event_sink = event_sink.clone();
+        Arc::new(move |message: &str| {
+            let Some(event) = parse_delegate_progress_event(message) else {
+                return;
+            };
+            match event {
+                DelegateProgressEvent::SubtaskStarted {
+                    task_id,
+                    parent_task_id,
+                    description,
+                    depth,
+                } => event_sink(PromptStreamEvent::SubtaskStarted {
+                    task_id,
+                    parent_task_id,
+                    description,
+                    depth,
+                }),
+                DelegateProgressEvent::SubtaskProgress {
+                    task_id,
+                    turn,
+                    max_turns,
+                    summary,
+                } => event_sink(PromptStreamEvent::SubtaskProgress {
+                    task_id,
+                    turn,
+                    max_turns,
+                    summary,
+                }),
+                DelegateProgressEvent::SubtaskCompleted {
+                    task_id,
+                    success,
+                    output_preview,
+                    turns_used,
+                } => event_sink(PromptStreamEvent::SubtaskCompleted {
+                    task_id,
+                    success,
+                    output_preview,
+                    turns_used,
+                }),
+                DelegateProgressEvent::BatchProgress {
+                    total,
+                    completed,
+                    running,
+                } => event_sink(PromptStreamEvent::BatchProgress {
+                    total,
+                    completed,
+                    running,
+                }),
+            }
+        }) as Arc<dyn Fn(&str) + Send + Sync>
+    });
+
     let tool_context = ToolExecutionContext {
         cwd: config.cwd.clone(),
         timeout_ms: config.provider.timeout_ms,
-        sub_agent: None,
+        sub_agent: Some(Arc::new(ConversationSubAgent::new(
+            Arc::clone(provider),
+            &config.provider,
+        ))),
+        progress_cb,
+        task_stack: std::sync::Arc::new(std::sync::Mutex::new(
+            rc_core::task_stack::TaskStack::default(),
+        )),
     };
     let mut usage = UsagePayload::default();
     let mut num_turns = 0u32;
@@ -340,7 +533,20 @@ pub(crate) async fn run_prompt(
             *conversation = context_manager.compact(conversation);
         }
 
-        let response = provider.complete(&config.provider, conversation).await?;
+        let response = if let Some(event_sink) = event_sink.clone() {
+            provider
+                .complete_streaming_with_callbacks(
+                    &config.provider,
+                    conversation,
+                    Some(build_streaming_callbacks(
+                        config.include_partial_messages,
+                        event_sink,
+                    )),
+                )
+                .await?
+        } else {
+            provider.complete(&config.provider, conversation).await?
+        };
         usage.input_tokens += response.usage.input_tokens;
         usage.output_tokens += response.usage.output_tokens;
         total_tool_calls += response.tool_calls.len();
@@ -371,8 +577,16 @@ pub(crate) async fn run_prompt(
                 "text_preview": truncate_preview(&response.text, 160),
             }),
         )?;
+        if let Some(event_sink) = event_sink.as_ref()
+            && !response.text.trim().is_empty()
+        {
+            event_sink(PromptStreamEvent::MessageCommitted {
+                text: response.text.clone(),
+            });
+        }
 
         if response.tool_calls.is_empty() {
+            store.clear_resume_state(config.session_id)?;
             #[allow(clippy::cast_possible_truncation)]
             let duration_ms = started.elapsed().as_millis() as u64;
             let outcome = PromptRunOutcome {
@@ -409,6 +623,20 @@ pub(crate) async fn run_prompt(
             return Ok(outcome);
         }
 
+        let pending_tool_calls = response
+            .tool_calls
+            .iter()
+            .map(|tool_call| PendingToolCall {
+                id: tool_call.id.clone(),
+                name: tool_call.name.clone(),
+                input: tool_call.input.clone(),
+            })
+            .collect::<Vec<_>>();
+        store.save_resume_state(
+            config.session_id,
+            &ResumeState::from_pending_calls(pending_tool_calls),
+        )?;
+
         for tool_call in &response.tool_calls {
             let _ = builtin_tool_specs()
                 .into_iter()
@@ -426,14 +654,50 @@ pub(crate) async fn run_prompt(
             .await?;
 
             let effective_tool_call = prepared.call;
+            let audit_count_before = broker.audit_records().len();
             let tool_result = if let Some(blocked_reason) = &prepared.blocked_reason {
                 rc_core::ToolResult {
                     content: blocked_reason.clone(),
                     is_error: true,
                 }
             } else {
-                execute_tool_call(&effective_tool_call, &tool_context, broker).await?
+                // Capture tool execution errors as error tool results instead of
+                // propagating, to keep conversation state consistent for the next
+                // provider call.  This matches the TUI error-recovery pattern.
+                match execute_tool_call(&effective_tool_call, &tool_context, broker).await {
+                    Ok(result) => result,
+                    Err(error) => {
+                        let tool_name = effective_tool_call.name.clone();
+                        let tool_id = effective_tool_call.id.clone();
+                        tracing::warn!("tool execution error for {tool_name}: {error}");
+                        store.append_named_event(
+                            config.session_id,
+                            "tool_error",
+                            serde_json::json!({
+                                "tool_name": tool_name,
+                                "tool_use_id": tool_id,
+                                "error": format!("{error:#}"),
+                            }),
+                        )?;
+                        rc_core::ToolResult {
+                            content: format!("Tool execution error: {error}"),
+                            is_error: true,
+                        }
+                    }
+                }
             };
+            let new_audits = broker
+                .audit_records()
+                .into_iter()
+                .skip(audit_count_before)
+                .collect::<Vec<_>>();
+            for audit in new_audits {
+                store.append_named_event(
+                    config.session_id,
+                    "permission_decision",
+                    serde_json::to_value(&audit)?,
+                )?;
+            }
             let is_permission_denied = tool_result.is_error
                 && tool_result
                     .content
@@ -447,7 +711,16 @@ pub(crate) async fn run_prompt(
                 }));
             }
             let tool_preview = truncate_preview(&tool_result.content, 160);
-            let truncated_content = context_manager.truncate_tool_output_default(&tool_result.content);
+            if let Some(event_sink) = event_sink.as_ref() {
+                event_sink(PromptStreamEvent::ToolFinished {
+                    tool_call_id: effective_tool_call.id.clone(),
+                    tool_name: effective_tool_call.name.clone(),
+                    is_error: tool_result.is_error,
+                    summary: Some(tool_preview.clone()),
+                });
+            }
+            let truncated_content =
+                context_manager.truncate_tool_output_default(&tool_result.content);
             let tool_entry = ConversationEntry::tool(
                 effective_tool_call.id.clone(),
                 effective_tool_call.name.clone(),
@@ -478,6 +751,7 @@ pub(crate) async fn run_prompt(
             )
             .await?;
         }
+        store.clear_resume_state(config.session_id)?;
     }
     let error = anyhow!(
         "Maximum turn budget reached ({}) without a final assistant reply.",
@@ -508,8 +782,11 @@ pub(crate) async fn run_oneshot_text(
     store: &SessionStore,
     prompt: String,
 ) -> Result<()> {
-    let provider = ProviderClient::new()?;
-    let broker = StaticPermissionBroker::new(config.permission_mode);
+    let provider = Arc::new(ProviderClient::new()?);
+    let broker = LayeredPermissionBroker::new(
+        StaticPermissionBroker::new(config.permission_mode),
+        load_layered_rules(&config.cwd, &config.paths.profile_dir, &config.settings_files)?,
+    );
     let discovery = discover_runtime_hooks(config, &[]);
     let mut hook_state = HookRunState::load(store, config.session_id)?;
     let mut conversation = initialize_conversation(store, config, Some(&prompt))?;
@@ -526,6 +803,7 @@ pub(crate) async fn run_oneshot_text(
         store,
         &provider,
         &broker,
+        None,
         &discovery,
         &mut hook_state,
         &mut conversation,
@@ -540,6 +818,8 @@ pub(crate) fn run_doctor(config: &RuntimeConfig) -> Result<()> {
     let report = validate_provider_config(&config.provider);
     let discovery = discover_runtime_extensions(config);
     let hooks = crate::runtime_hooks::HookRuntime::discover(config);
+    let layered_rules =
+        load_layered_rules(&config.cwd, &config.paths.profile_dir, &config.settings_files)?;
     let api_key_state = if config.provider.api_key.is_some() {
         "present"
     } else {
@@ -547,7 +827,7 @@ pub(crate) fn run_doctor(config: &RuntimeConfig) -> Result<()> {
     };
 
     // Gather additional diagnostic information.
-    let tool_count = rc_tools::builtin_tool_specs().len();
+    let tool_count = rc_tools::runtime_builtin_tool_specs().len();
     let model_info = rc_provider::model_info::get_model_info(
         config.provider.model.as_deref().unwrap_or("unknown"),
     );
@@ -561,6 +841,10 @@ pub(crate) fn run_doctor(config: &RuntimeConfig) -> Result<()> {
         format!("  cwd:            {}", config.cwd.display()),
         format!("  profile dir:    {profile_dir}"),
         format!("  session id:     {}", config.session_id),
+        format!(
+            "  session name:   {}",
+            config.session_name.as_deref().unwrap_or("(auto)")
+        ),
         format!("  permission mode: {:?}", config.permission_mode),
         String::new(),
         "[Provider]".to_owned(),
@@ -576,38 +860,82 @@ pub(crate) fn run_doctor(config: &RuntimeConfig) -> Result<()> {
         ),
         format!("  api key:        {api_key_state}"),
         format!(
+            "  auth source:    {}",
+            config.auth_source.as_deref().unwrap_or("(missing)")
+        ),
+        format!(
             "  context window: {} tokens (output reserve: {})",
             model_info.max_context, model_info.max_output
         ),
         format!(
             "  capabilities:   multimodal={}, reasoning={}",
             model_info.multimodal,
-            model_info.capabilities.contains(&rc_provider::model_info::ModelCapability::Reasoning)
+            model_info
+                .capabilities
+                .contains(&rc_provider::model_info::ModelCapability::Reasoning)
         ),
         String::new(),
         "[Tools]".to_owned(),
         format!("  builtin tools:  {tool_count}"),
+        format!(
+            "  allow-list:     {}",
+            if config.allowed_tools.is_empty() {
+                "(all)".to_owned()
+            } else {
+                config.allowed_tools.join(", ")
+            }
+        ),
+        format!(
+            "  deny-list:      {}",
+            if config.disallowed_tools.is_empty() {
+                "(none)".to_owned()
+            } else {
+                config.disallowed_tools.join(", ")
+            }
+        ),
         format!("  input format:   {:?}", config.input_format),
         format!("  output format:  {:?}", config.output_format),
+        String::new(),
+        "[Permissions]".to_owned(),
+        format!("  layered rules:  {}", layered_rules.len()),
+        format!(
+            "  settings files: {}",
+            if config.settings_files.is_empty() {
+                "(auto discovery only)".to_owned()
+            } else {
+                config
+                    .settings_files
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
+        ),
         String::new(),
         "[Extensions]".to_owned(),
         format!("  skills:         {}", discovery.skills.len()),
         format!("  plugins:        {}", discovery.plugins.len()),
-        format!(
-            "  plugin runtimes: {}",
-            discovery.plugin_runtimes.len()
-        ),
+        format!("  plugin runtimes: {}", discovery.plugin_runtimes.len()),
         format!("  mcp servers:    {}", discovery.mcp_servers.len()),
         format!("  hooks:          {}", hooks.list(None).len()),
         String::new(),
         "[Readiness]".to_owned(),
         format!(
             "  status:         {}",
-            if report.ok { "✓ READY" } else { "✗ NOT READY" }
+            if report.ok {
+                "✓ READY"
+            } else {
+                "✗ NOT READY"
+            }
         ),
     ];
     for line in lines {
         println!("{line}");
+    }
+    if !layered_rules.is_empty() {
+        for (source, count) in summarize_rule_sources(&layered_rules) {
+            println!("  - {}: {} rule(s)", source.as_str(), count);
+        }
     }
     if !report.issues.is_empty() {
         println!();
@@ -656,7 +984,6 @@ pub(crate) fn run_migrate(
 /// 3. Model selection (with sensible defaults per provider)
 /// 4. Saves the configuration to `settings.json`
 pub(crate) fn run_first_run_wizard(config: &mut RuntimeConfig) -> Result<()> {
-
     let settings_path = config.paths.profile_dir.join("settings.json");
     let has_settings = settings_path.exists();
     let has_api_key = config.provider.api_key.is_some();
@@ -697,9 +1024,7 @@ pub(crate) fn run_first_run_wizard(config: &mut RuntimeConfig) -> Result<()> {
     println!();
     let provider_choice = read_line_prompt("Enter choice [1-7]: ")?;
 
-    let (provider_name, protocol, default_base_url, default_model) = match provider_choice
-        .trim()
-    {
+    let (provider_name, protocol, default_base_url, default_model) = match provider_choice.trim() {
         "1" => (
             "anthropic",
             rc_core::ProviderProtocol::Anthropic,
@@ -722,7 +1047,7 @@ pub(crate) fn run_first_run_wizard(config: &mut RuntimeConfig) -> Result<()> {
             "glm",
             rc_core::ProviderProtocol::OpenAi,
             "https://open.bigmodel.cn/api/paas",
-            "glm-5-plus",
+            "glm-5.1",
         ),
         "5" => (
             "minimax",
@@ -730,26 +1055,11 @@ pub(crate) fn run_first_run_wizard(config: &mut RuntimeConfig) -> Result<()> {
             "https://api.minimax.chat",
             "MiniMax-M1",
         ),
-        "6" => (
-            "custom",
-            rc_core::ProviderProtocol::OpenAi,
-            "",
-            "",
-        ),
-        "7" => (
-            "custom",
-            rc_core::ProviderProtocol::Anthropic,
-            "",
-            "",
-        ),
+        "6" => ("custom", rc_core::ProviderProtocol::OpenAi, "", ""),
+        "7" => ("custom", rc_core::ProviderProtocol::Anthropic, "", ""),
         _ => {
             println!("  → Using default: OpenAI-compatible");
-            (
-                "custom",
-                rc_core::ProviderProtocol::OpenAi,
-                "",
-                "",
-            )
+            ("custom", rc_core::ProviderProtocol::OpenAi, "", "")
         }
     };
 
@@ -789,7 +1099,11 @@ pub(crate) fn run_first_run_wizard(config: &mut RuntimeConfig) -> Result<()> {
     let model = if default_model.is_empty() {
         let input = read_line_prompt("Enter model name: ")?;
         let trimmed = input.trim().to_owned();
-        if trimmed.is_empty() { None } else { Some(trimmed) }
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
     } else {
         let input = read_line_prompt(&format!("Model [{default_model}]: "))?;
         let trimmed = input.trim().to_owned();
@@ -826,7 +1140,6 @@ pub(crate) fn run_first_run_wizard(config: &mut RuntimeConfig) -> Result<()> {
     if let Some(m) = &model {
         config.provider.model = Some(m.clone());
     }
-
 
     println!("  ✓ Provider: {provider_name}");
     if let Some(m) = &model {

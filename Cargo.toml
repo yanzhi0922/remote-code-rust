@@ -1,5 +1,6 @@
 [workspace]
-members = ["apps/*", "crates/*"]
+members = ["apps/*", "crates/*", "apps/remote-code-gui/src-tauri"]
+exclude = ["apps/remote-code-gui"]
 resolver = "2"
 
 [workspace.package]

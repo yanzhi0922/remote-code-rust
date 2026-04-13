@@ -13,22 +13,30 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use axum::Router;
+use axum::extract::{Request, State};
+use axum::middleware::{self, Next};
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
+use axum::Router;
 use rc_config::AppPaths;
+use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::Row;
 use tokio::sync::RwLock;
+use uuid::Uuid;
 
 use handlers::{
-    apply_approval_decision, create_approval, create_artifact, create_session, download_artifact,
-    get_approval, get_artifact, get_health, get_meta, get_runner, get_session, list_approvals,
-    list_artifacts, list_recent_events, list_runner_approvals, list_runner_artifacts,
-    list_runner_events, list_runner_sessions, list_runners, list_session_approvals,
-    list_session_artifacts, list_session_events, list_sessions, register_runner,
+    accept_pairing_offer, apply_approval_decision, claim_bootstrap_device, create_approval,
+    create_artifact, create_pairing_offer, create_session,
+    create_session_runtime_event, download_artifact, get_approval, get_artifact, get_health, get_meta,
+    get_runner, get_session, list_approvals, list_artifacts, list_devices, list_recent_events,
+    list_runner_approvals, list_runner_artifacts, list_runner_events, list_runner_sessions,
+    list_runners, list_session_approvals, list_session_artifacts, list_session_events,
+    list_sessions, pull_runner_commands, post_session_command, register_runner,
     subscribe_approvals, subscribe_events, subscribe_runner_approvals, subscribe_runner_events,
     subscribe_session_approvals, subscribe_session_events, update_runner_heartbeat,
     update_session_state,
 };
-use registry::{Registry, TimelineStore};
+use registry::{Registry, TimelineSnapshot, TimelineStore};
 use types::{
     DEFAULT_BIND, DEFAULT_EVENT_HISTORY_LIMIT, DEFAULT_RUNNER_LEASE_TTL_SECS, EVENT_STREAM_BUFFER,
     PHASE, TimelineEventDraft,
@@ -39,11 +47,16 @@ use types::{
 // ---------------------------------------------------------------------------
 
 pub use types::{
-    ArtifactCreateRequest, ArtifactRecord, ControlPlaneConfig, ControlPlaneConfigOverrides,
-    ControlPlaneHealth, ControlPlaneMeta, ControlPlaneStatus, CreateSessionRequest,
-    RunnerRegistrationResponse, SessionRecord, SessionState, SessionStateUpdateRequest,
-    TimelineEvent, TimelineEventDetail,
+    ArtifactCreateRequest, ArtifactRecord, BootstrapClaimRequest, BootstrapClaimResponse,
+    ControlPlaneConfig, ControlPlaneConfigOverrides, ControlPlaneHealth, ControlPlaneMeta,
+    ControlPlaneStatus, CreateSessionRequest, DaemonPresenceState, DeviceKind, MessageRole,
+    PairingAcceptRequest, PairingAcceptResponse, PairingOfferCreateRequest,
+    PairingOfferCreateResponse, RunnerCommandPullResponse, RunnerQueuedCommand,
+    RunnerQueuedCommandBody, RunnerRegistrationResponse, RuntimeEventCreateRequest,
+    RuntimeEventDetail, SessionRecord, SessionState, SessionStateUpdateRequest,
+    TimelineEvent, TimelineEventDetail, TrustedDeviceRecord,
 };
+pub use rc_runner::{RunnerSessionCommandRequest, RunnerSessionCommandResponse};
 
 // ---------------------------------------------------------------------------
 // ControlPlaneService
@@ -53,15 +66,49 @@ pub use types::{
 pub struct ControlPlaneService {
     meta: ControlPlaneMeta,
     runner_lease_ttl_secs: u64,
+    state_db_path: PathBuf,
     artifact_root_dir: PathBuf,
+    auth_token: Option<String>,
+    bootstrap_secret_hash: Option<String>,
     registry: Arc<RwLock<Registry>>,
     timeline: TimelineStore,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum AuthPrincipal {
+    SharedToken,
+    Device(TrustedDeviceRecord),
+}
+
+impl AuthPrincipal {
+    pub(crate) fn created_by_device_id(&self) -> Option<Uuid> {
+        match self {
+            Self::SharedToken => None,
+            Self::Device(device) => Some(device.device_id),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct PersistedControlPlaneState {
+    registry: Registry,
+    timeline: TimelineSnapshot,
 }
 
 impl ControlPlaneService {
     pub fn new(config: ControlPlaneConfig, version: impl Into<String>) -> Self {
         let service_name = config.service_name.clone();
+        let state_db_path = config.state_db_path.clone();
         let artifact_root_dir = config.artifact_root_dir.clone();
+        let auth_token = config.auth_token.clone();
+        let bootstrap_secret_hash = config
+            .bootstrap_secret
+            .as_deref()
+            .map(hash_secret_value);
+        let (registry, timeline) = load_persisted_state(&state_db_path)
+            .unwrap_or_else(|_| (Registry::default(), TimelineStore::new(DEFAULT_EVENT_HISTORY_LIMIT, EVENT_STREAM_BUFFER)));
+        let auth_required =
+            auth_token.is_some() || bootstrap_secret_hash.is_some() || registry.owner_claimed();
         Self {
             meta: ControlPlaneMeta {
                 service: service_name,
@@ -71,12 +118,18 @@ impl ControlPlaneService {
                 public_base_url: config.public_base_url,
                 runner_lease_ttl_secs: config.runner_lease_ttl_secs,
                 profile_dir: config.profile_dir.display().to_string(),
+                state_db_path: state_db_path.display().to_string(),
                 artifact_root_dir: artifact_root_dir.display().to_string(),
+                auth_required,
+                bootstrap_secret_configured: bootstrap_secret_hash.is_some(),
             },
             runner_lease_ttl_secs: config.runner_lease_ttl_secs,
+            state_db_path,
             artifact_root_dir,
-            registry: Arc::new(RwLock::new(Registry::default())),
-            timeline: TimelineStore::new(DEFAULT_EVENT_HISTORY_LIMIT, EVENT_STREAM_BUFFER),
+            auth_token,
+            bootstrap_secret_hash,
+            registry: Arc::new(RwLock::new(registry)),
+            timeline,
         }
     }
 
@@ -85,13 +138,19 @@ impl ControlPlaneService {
         &self.meta
     }
 
+    pub(crate) async fn auth_required(&self) -> bool {
+        if self.auth_token.is_some() || self.bootstrap_secret_hash.is_some() {
+            return true;
+        }
+        self.registry.read().await.owner_claimed()
+    }
+
     pub fn router(self) -> Router {
-        Router::new()
-            .route("/healthz", get(get_health))
+        let protected = Router::new()
             .route("/v1/meta", get(get_meta))
+            .route("/v1/devices", get(list_devices))
             .route("/v1/events", get(list_recent_events))
             .route("/v1/events/stream", get(subscribe_events))
-            .route("/v1/sessions/{session_id}/events", get(list_session_events))
             .route(
                 "/v1/sessions/{session_id}/events/stream",
                 get(subscribe_session_events),
@@ -137,11 +196,24 @@ impl ControlPlaneService {
                 "/v1/runners/{runner_id}/heartbeat",
                 post(update_runner_heartbeat),
             )
+            .route(
+                "/v1/runners/{runner_id}/commands/pull",
+                post(pull_runner_commands),
+            )
+            .route("/v1/pairing/offers", post(create_pairing_offer))
             .route("/v1/sessions", get(list_sessions).post(create_session))
             .route("/v1/sessions/{session_id}", get(get_session))
             .route(
                 "/v1/sessions/{session_id}/state",
                 post(update_session_state),
+            )
+            .route(
+                "/v1/sessions/{session_id}/commands",
+                post(post_session_command),
+            )
+            .route(
+                "/v1/sessions/{session_id}/events",
+                get(list_session_events).post(create_session_runtime_event),
             )
             .route(
                 "/v1/sessions/{session_id}/approvals",
@@ -155,11 +227,35 @@ impl ControlPlaneService {
                 "/v1/sessions/{session_id}/artifacts",
                 get(list_session_artifacts).post(create_artifact),
             )
+            .route_layer(middleware::from_fn_with_state(
+                self.clone(),
+                require_api_auth,
+            ));
+
+        Router::new()
+            .route("/healthz", get(get_health))
+            .route("/v1/bootstrap/claim", post(claim_bootstrap_device))
+            .route("/v1/pairing/accept", post(accept_pairing_offer))
+            .merge(protected)
             .with_state(self)
     }
 
     async fn publish_event(&self, draft: TimelineEventDraft) -> types::TimelineEvent {
-        self.timeline.publish(draft).await
+        let event = self.timeline.publish(draft).await;
+        let _ = self.persist_state().await;
+        event
+    }
+
+    pub(crate) async fn persist_state(&self) -> Result<()> {
+        let snapshot = PersistedControlPlaneState {
+            registry: self.registry.read().await.clone(),
+            timeline: self.timeline.snapshot().await,
+        };
+        let state_db_path = self.state_db_path.clone();
+        tokio::task::spawn_blocking(move || persist_state_snapshot(&state_db_path, &snapshot))
+            .await
+            .context("control-plane snapshot task failed to join")??;
+        Ok(())
     }
 }
 
@@ -192,6 +288,14 @@ pub fn load_control_plane_config(
     let profile_dir = overrides
         .profile_dir
         .or_else(|| helpers::read_env("REMOTE_CODE_PROFILE_DIR").map(PathBuf::from));
+    let auth_token = overrides
+        .auth_token
+        .or_else(|| helpers::read_env("REMOTE_CODE_CONTROL_PLANE_AUTH_TOKEN"));
+    let bootstrap_secret = overrides
+        .bootstrap_secret
+        .or_else(|| helpers::read_env("REMOTE_CODE_CONTROL_PLANE_BOOTSTRAP_SECRET"))
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
     let paths = AppPaths::discover(profile_dir)?;
     paths.ensure_exists()?;
     let artifact_root_dir = paths.artifacts_dir.join("control-plane");
@@ -204,7 +308,10 @@ pub fn load_control_plane_config(
         service_name,
         runner_lease_ttl_secs,
         profile_dir: paths.profile_dir,
+        state_db_path: paths.state_db_path,
         artifact_root_dir,
+        auth_token,
+        bootstrap_secret,
     })
 }
 
@@ -217,9 +324,183 @@ pub fn describe_status(config: &ControlPlaneConfig) -> ControlPlaneStatus {
         service_name: config.service_name.clone(),
         runner_lease_ttl_secs: config.runner_lease_ttl_secs,
         profile_dir: config.profile_dir.display().to_string(),
+        state_db_path: config.state_db_path.display().to_string(),
         artifact_root_dir: config.artifact_root_dir.display().to_string(),
+        auth_required: config.auth_token.is_some() || config.bootstrap_secret.is_some(),
+        bootstrap_secret_configured: config.bootstrap_secret.is_some(),
         phase: PHASE,
     }
+}
+
+fn hash_secret_value(raw: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(raw.as_bytes());
+    let digest = hasher.finalize();
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        #[allow(clippy::format_push_string)]
+        encoded.push_str(&format!("{byte:02x}"));
+    }
+    encoded
+}
+
+async fn require_api_auth(
+    State(service): State<ControlPlaneService>,
+    mut request: Request,
+    next: Next,
+) -> axum::response::Response {
+    if !service.auth_required().await {
+        return next.run(request).await;
+    }
+
+    let Some(provided) = extract_request_auth_token(&request) else {
+        return types::ApiError::unauthorized(
+            "missing or invalid control plane bearer token".to_owned(),
+        )
+        .into_response();
+    };
+
+    if service.auth_token.as_deref() == Some(provided.as_str()) {
+        request.extensions_mut().insert(AuthPrincipal::SharedToken);
+        return next.run(request).await;
+    }
+
+    let authenticated_device = {
+        let mut registry = service.registry.write().await;
+        registry.authenticate_device_token(&provided)
+    };
+    if let Some(device) = authenticated_device {
+        request
+            .extensions_mut()
+            .insert(AuthPrincipal::Device(device));
+        return next.run(request).await;
+    }
+
+    return types::ApiError::unauthorized(
+        "missing or invalid control plane bearer token".to_owned(),
+    )
+    .into_response();
+}
+
+fn extract_request_auth_token(request: &Request) -> Option<String> {
+    let bearer = request
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    if bearer.is_some() {
+        return bearer;
+    }
+    request
+        .uri()
+        .query()
+        .and_then(extract_auth_token_from_query)
+}
+
+fn extract_auth_token_from_query(query: &str) -> Option<String> {
+    for pair in query.split('&') {
+        let mut parts = pair.splitn(2, '=');
+        let key = parts.next()?.trim();
+        let value = parts.next().unwrap_or_default().trim();
+        if matches!(key, "token" | "access_token") && !value.is_empty() {
+            return Some(percent_decode_query_value(value));
+        }
+    }
+    None
+}
+
+fn percent_decode_query_value(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < bytes.len() => {
+                let high = bytes[index + 1] as char;
+                let low = bytes[index + 2] as char;
+                if let (Some(high), Some(low)) = (high.to_digit(16), low.to_digit(16)) {
+                    decoded.push(((high << 4) | low) as u8);
+                    index += 3;
+                } else {
+                    decoded.push(bytes[index]);
+                    index += 1;
+                }
+            }
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+fn load_persisted_state(state_db_path: &std::path::Path) -> Result<(Registry, TimelineStore)> {
+    let connection = open_state_connection(state_db_path)?;
+    let payload = connection
+        .query_row(
+            "SELECT payload FROM control_plane_snapshot WHERE id = 1",
+            [],
+            |row: &Row<'_>| row.get::<_, String>(0),
+        )
+        .optional()
+        .with_context(|| format!("failed to read {}", state_db_path.display()))?;
+    let Some(payload) = payload else {
+        return Ok((
+            Registry::default(),
+            TimelineStore::new(DEFAULT_EVENT_HISTORY_LIMIT, EVENT_STREAM_BUFFER),
+        ));
+    };
+    let snapshot: PersistedControlPlaneState = serde_json::from_str(&payload)
+        .with_context(|| format!("failed to decode {}", state_db_path.display()))?;
+    Ok((
+        snapshot.registry,
+        TimelineStore::from_snapshot(
+            DEFAULT_EVENT_HISTORY_LIMIT,
+            EVENT_STREAM_BUFFER,
+            snapshot.timeline,
+        ),
+    ))
+}
+
+fn persist_state_snapshot(
+    state_db_path: &std::path::Path,
+    snapshot: &PersistedControlPlaneState,
+) -> Result<()> {
+    let connection = open_state_connection(state_db_path)?;
+    let payload = serde_json::to_string(snapshot)
+        .with_context(|| format!("failed to encode {}", state_db_path.display()))?;
+    connection
+        .execute(
+            "INSERT INTO control_plane_snapshot (id, payload, updated_at)
+             VALUES (1, ?1, CURRENT_TIMESTAMP)
+             ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = CURRENT_TIMESTAMP",
+            params![payload],
+        )
+        .with_context(|| format!("failed to persist {}", state_db_path.display()))?;
+    Ok(())
+}
+
+fn open_state_connection(state_db_path: &std::path::Path) -> Result<Connection> {
+    let connection = Connection::open(state_db_path)
+        .with_context(|| format!("failed to open {}", state_db_path.display()))?;
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS control_plane_snapshot (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            payload TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );",
+    )?;
+    Ok(connection)
 }
 #[cfg(test)]
 mod tests {
@@ -232,7 +513,7 @@ mod tests {
         body::{Body, to_bytes},
         http::Request,
         http::StatusCode,
-        http::header::CONTENT_TYPE,
+        http::header::{AUTHORIZATION, CONTENT_TYPE},
     };
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use chrono::Utc;
@@ -240,8 +521,8 @@ mod tests {
     use rc_runner::{
         ApprovalRequestRecord, ApprovalState, ListResponse, RunnerApi, RunnerCapabilities,
         RunnerConfigOverrides, RunnerHeartbeat, RunnerPlatform, RunnerRegistrationRequest,
-        RunnerSnapshot, RunnerState, RunnerWorkspace, SessionState as RunnerSessionState,
-        load_runner_config,
+        RunnerSessionCommandRequest, RunnerSessionCommandResponse, RunnerSnapshot, RunnerState,
+        RunnerWorkspace, SessionState as RunnerSessionState, load_runner_config,
     };
     use reqwest::Client;
     use serde::de::DeserializeOwned;
@@ -251,6 +532,7 @@ mod tests {
     use tokio::time::{Duration as TokioDuration, timeout};
     use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as TungsteniteMessage};
     use tower::ServiceExt;
+    use uuid::Uuid;
 
     struct SpawnedRunner {
         api: RunnerApi,
@@ -265,6 +547,14 @@ mod tests {
         }
     }
 
+    fn isolated_test_overrides() -> ControlPlaneConfigOverrides {
+        let profile = tempdir().expect("tempdir should exist");
+        ControlPlaneConfigOverrides {
+            profile_dir: Some(profile.keep().join("profile")),
+            ..ControlPlaneConfigOverrides::default()
+        }
+    }
+
     #[test]
     fn control_plane_config_uses_overrides() {
         let profile = tempdir().expect("tempdir should exist");
@@ -274,6 +564,8 @@ mod tests {
             service_name: Some("rc-control".to_owned()),
             runner_lease_ttl_secs: Some(45),
             profile_dir: Some(profile.path().join("profile")),
+            auth_token: None,
+            bootstrap_secret: None,
         })
         .expect("config should load");
 
@@ -284,11 +576,227 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn control_plane_requires_auth_for_http_and_accepts_query_token_for_websocket() {
+        let profile = tempdir().expect("tempdir should exist");
+        let service = ControlPlaneService::new(
+            load_control_plane_config(ControlPlaneConfigOverrides {
+                profile_dir: Some(profile.path().join("profile")),
+                auth_token: Some("test-secret".to_owned()),
+                ..ControlPlaneConfigOverrides::default()
+            })
+            .expect("config should load"),
+            "0.1.0",
+        );
+        let app = service.router();
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/meta")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should complete");
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let authorized = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/meta")
+                    .header(AUTHORIZATION, "Bearer test-secret")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should complete");
+        assert_eq!(authorized.status(), StatusCode::OK);
+
+        let service = ControlPlaneService::new(
+            load_control_plane_config(ControlPlaneConfigOverrides {
+                profile_dir: Some(profile.path().join("profile-ws")),
+                auth_token: Some("test-secret".to_owned()),
+                ..ControlPlaneConfigOverrides::default()
+            })
+            .expect("config should load"),
+            "0.1.0",
+        );
+        let (base_url, server_handle) = spawn_control_plane_server(service).await;
+        let ws_url =
+            base_url.replacen("http://", "ws://", 1) + "/v1/events/stream?access_token=test-secret";
+
+        let (mut socket, _) = connect_async(&ws_url)
+            .await
+            .expect("authenticated websocket should connect");
+
+        let client = Client::new();
+        let response = client
+            .post(format!("{base_url}/v1/runners/register"))
+            .bearer_auth("test-secret")
+            .json(&runner_registration(
+                "runner-auth-stream",
+                "default",
+                "C:/workspace/auth-stream",
+            ))
+            .send()
+            .await
+            .expect("registration should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let message = timeout(TokioDuration::from_secs(5), socket.next())
+            .await
+            .expect("event should arrive before timeout")
+            .expect("event stream should stay open")
+            .expect("websocket frame should parse");
+        let text = match message {
+            TungsteniteMessage::Text(text) => text,
+            other => panic!("expected text frame, received {other:?}"),
+        };
+        let event: TimelineEvent =
+            serde_json::from_str(&text).expect("event payload should deserialize");
+        assert_eq!(event.runner_id.as_deref(), Some("runner-auth-stream"));
+
+        server_handle.abort();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn control_plane_persists_sessions_and_runner_pull_commands() {
+        let profile = tempdir().expect("tempdir should exist");
+        let profile_dir = profile.path().join("profile");
+
+        let service = ControlPlaneService::new(
+            load_control_plane_config(ControlPlaneConfigOverrides {
+                profile_dir: Some(profile_dir.clone()),
+                ..ControlPlaneConfigOverrides::default()
+            })
+            .expect("config should load"),
+            "0.1.0",
+        );
+        let app = service.router();
+
+        let register_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/runners/register")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&RunnerRegistrationRequest {
+                            public_base_url: None,
+                            ..runner_registration("runner-pull", "default", "C:/workspace/pull")
+                        })
+                        .expect("request should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("register request should succeed");
+        assert_eq!(register_response.status(), StatusCode::OK);
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/sessions")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&CreateSessionRequest {
+                            session_id: Some(Uuid::nil()),
+                            workspace_id: "default".to_owned(),
+                            preferred_runner_id: Some("runner-pull".to_owned()),
+                            metadata: BTreeMap::new(),
+                        })
+                        .expect("request should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("create request should succeed");
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+        let session: SessionRecord = read_json(create_response).await;
+        assert_eq!(session.owner_runner_id.as_deref(), Some("runner-pull"));
+
+        let command_response = app
+            .clone()
+            .oneshot(
+                Request::post(format!("/v1/sessions/{}/commands", session.session_id))
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&RunnerSessionCommandRequest::SendPrompt {
+                            content: "queued over pull".to_owned(),
+                        })
+                        .expect("request should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("command request should succeed");
+        assert_eq!(command_response.status(), StatusCode::OK);
+
+        drop(app);
+
+        let restored = ControlPlaneService::new(
+            load_control_plane_config(ControlPlaneConfigOverrides {
+                profile_dir: Some(profile_dir),
+                ..ControlPlaneConfigOverrides::default()
+            })
+            .expect("config should load"),
+            "0.1.0",
+        );
+        let restored_app = restored.router();
+
+        let restored_session_response = restored_app
+            .clone()
+            .oneshot(
+                Request::get(format!("/v1/sessions/{}", session.session_id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("session request should succeed");
+        assert_eq!(restored_session_response.status(), StatusCode::OK);
+        let restored_session: SessionRecord = read_json(restored_session_response).await;
+        assert_eq!(restored_session.session_id, session.session_id);
+
+        let pull_response = restored_app
+            .clone()
+            .oneshot(
+                Request::post("/v1/runners/runner-pull/commands/pull?limit=10")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("pull request should succeed");
+        assert_eq!(pull_response.status(), StatusCode::OK);
+        let pulled: RunnerCommandPullResponse = read_json(pull_response).await;
+        assert_eq!(pulled.commands.len(), 2);
+        assert!(pulled.commands.iter().any(|command| matches!(
+            command.body,
+            RunnerQueuedCommandBody::CreateSession { .. }
+        )));
+        assert!(pulled.commands.iter().any(|command| matches!(
+            command.body,
+            RunnerQueuedCommandBody::SessionCommand { .. }
+        )));
+
+        let second_pull = restored_app
+            .oneshot(
+                Request::post("/v1/runners/runner-pull/commands/pull?limit=10")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("second pull request should succeed");
+        assert_eq!(second_pull.status(), StatusCode::OK);
+        let second_pulled: RunnerCommandPullResponse = read_json(second_pull).await;
+        assert!(second_pulled.commands.is_empty());
+    }
+
+    #[tokio::test]
     async fn control_plane_registers_runner_and_assigns_session() {
         let service = ControlPlaneService::new(
             load_control_plane_config(ControlPlaneConfigOverrides {
                 service_name: Some("control".to_owned()),
-                ..ControlPlaneConfigOverrides::default()
+                ..isolated_test_overrides()
             })
             .expect("config should load"),
             "0.1.0",
@@ -347,7 +855,7 @@ mod tests {
     #[tokio::test]
     async fn control_plane_rejects_session_when_runner_dispatch_fails() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(ControlPlaneConfigOverrides::default())
+            load_control_plane_config(isolated_test_overrides())
                 .expect("config should load"),
             "0.1.0",
         );
@@ -398,7 +906,7 @@ mod tests {
     #[tokio::test]
     async fn registering_runner_dispatches_existing_pending_sessions() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(ControlPlaneConfigOverrides::default())
+            load_control_plane_config(isolated_test_overrides())
                 .expect("config should load"),
             "0.1.0",
         );
@@ -503,7 +1011,7 @@ mod tests {
     #[tokio::test]
     async fn heartbeat_dispatches_pending_sessions_when_runner_recovers() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(ControlPlaneConfigOverrides::default())
+            load_control_plane_config(isolated_test_overrides())
                 .expect("config should load"),
             "0.1.0",
         );
@@ -616,7 +1124,7 @@ mod tests {
     #[tokio::test]
     async fn capacity_limited_runner_leaves_additional_sessions_pending() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(ControlPlaneConfigOverrides::default())
+            load_control_plane_config(isolated_test_overrides())
                 .expect("config should load"),
             "0.1.0",
         );
@@ -817,7 +1325,7 @@ mod tests {
     #[tokio::test]
     async fn heartbeat_updates_runner_state() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(ControlPlaneConfigOverrides::default())
+            load_control_plane_config(isolated_test_overrides())
                 .expect("config should load"),
             "0.1.0",
         );
@@ -875,7 +1383,7 @@ mod tests {
     #[tokio::test]
     async fn recent_events_endpoint_lists_emitted_timeline_entries() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(ControlPlaneConfigOverrides::default())
+            load_control_plane_config(isolated_test_overrides())
                 .expect("config should load"),
             "0.1.0",
         );
@@ -962,7 +1470,7 @@ mod tests {
     #[tokio::test]
     async fn approval_relay_updates_session_state_and_timeline() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(ControlPlaneConfigOverrides::default())
+            load_control_plane_config(isolated_test_overrides())
                 .expect("config should load"),
             "0.1.0",
         );
@@ -1239,7 +1747,7 @@ mod tests {
     #[tokio::test]
     async fn failed_approval_relay_does_not_mutate_control_plane_state() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(ControlPlaneConfigOverrides::default())
+            load_control_plane_config(isolated_test_overrides())
                 .expect("config should load"),
             "0.1.0",
         );
@@ -1339,8 +1847,7 @@ mod tests {
     #[tokio::test]
     async fn session_state_updates_relay_to_runner_and_refresh_counts() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(ControlPlaneConfigOverrides::default())
-                .expect("config should load"),
+            load_control_plane_config(isolated_test_overrides()).expect("config should load"),
             "0.1.0",
         );
         let app = service.router();
@@ -1687,7 +2194,7 @@ mod tests {
     #[tokio::test]
     async fn runner_approval_listing_filters_by_runner() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(ControlPlaneConfigOverrides::default())
+            load_control_plane_config(isolated_test_overrides())
                 .expect("config should load"),
             "0.1.0",
         );
@@ -1773,7 +2280,7 @@ mod tests {
     #[tokio::test]
     async fn runner_artifact_listing_filters_by_runner() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(ControlPlaneConfigOverrides::default())
+            load_control_plane_config(isolated_test_overrides())
                 .expect("config should load"),
             "0.1.0",
         );
@@ -1868,7 +2375,7 @@ mod tests {
     #[tokio::test]
     async fn runner_event_listing_filters_by_runner() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(ControlPlaneConfigOverrides::default())
+            load_control_plane_config(isolated_test_overrides())
                 .expect("config should load"),
             "0.1.0",
         );
@@ -1973,7 +2480,7 @@ mod tests {
     #[tokio::test]
     async fn runner_approval_stream_only_emits_matching_approval_events() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(ControlPlaneConfigOverrides::default())
+            load_control_plane_config(isolated_test_overrides())
                 .expect("config should load"),
             "0.1.0",
         );
@@ -2082,7 +2589,7 @@ mod tests {
     #[tokio::test]
     async fn runner_event_stream_replays_backlog_for_matching_runner() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(ControlPlaneConfigOverrides::default())
+            load_control_plane_config(isolated_test_overrides())
                 .expect("config should load"),
             "0.1.0",
         );
@@ -2151,7 +2658,7 @@ mod tests {
     #[tokio::test]
     async fn approval_stream_replays_backlog_after_query() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(ControlPlaneConfigOverrides::default())
+            load_control_plane_config(isolated_test_overrides())
                 .expect("config should load"),
             "0.1.0",
         );
@@ -2257,8 +2764,7 @@ mod tests {
     #[tokio::test]
     async fn session_approval_stream_replays_only_matching_session_approvals() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(ControlPlaneConfigOverrides::default())
-                .expect("config should load"),
+            load_control_plane_config(isolated_test_overrides()).expect("config should load"),
             "0.1.0",
         );
         let (base_url, server_handle) = spawn_control_plane_server(service).await;
@@ -2477,8 +2983,7 @@ mod tests {
     #[tokio::test]
     async fn websocket_stream_receives_live_runner_events() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(ControlPlaneConfigOverrides::default())
-                .expect("config should load"),
+            load_control_plane_config(isolated_test_overrides()).expect("config should load"),
             "0.1.0",
         );
         let (base_url, server_handle) = spawn_control_plane_server(service).await;
@@ -2523,8 +3028,7 @@ mod tests {
     #[tokio::test]
     async fn websocket_stream_replays_backlog_before_live_runner_events() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(ControlPlaneConfigOverrides::default())
-                .expect("config should load"),
+            load_control_plane_config(isolated_test_overrides()).expect("config should load"),
             "0.1.0",
         );
         let (base_url, server_handle) = spawn_control_plane_server(service).await;
@@ -2731,6 +3235,119 @@ mod tests {
 
         server_handle.abort();
         let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn session_command_endpoint_relays_to_runner() {
+        let service = ControlPlaneService::new(
+            load_control_plane_config(isolated_test_overrides())
+                .expect("config should load"),
+            "0.1.0",
+        );
+        let app = service.router();
+
+        let profile = tempdir().expect("tempdir should exist");
+        let workspace_root = profile.path().join("workspace");
+        std::fs::create_dir_all(&workspace_root).expect("workspace dir should exist");
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("address should be readable");
+        let config = load_runner_config(
+            Some(profile.path().join("profile")),
+            RunnerConfigOverrides {
+                runner_id: Some("runner-command".to_owned()),
+                public_base_url: Some(format!("http://{address}")),
+                workspaces: Some(vec![RunnerWorkspace {
+                    workspace_id: "default".to_owned(),
+                    root_dir: workspace_root,
+                    writable: true,
+                }]),
+                ..RunnerConfigOverrides::default()
+            },
+        )
+        .expect("config should load");
+        let registration = config.registration_request();
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let runner_api = RunnerApi::new(config, "remote-code-runner", "0.1.0")
+            .with_event_channel(event_tx);
+        let runner_server = {
+            let app = runner_api.router();
+            tokio::spawn(async move {
+                axum::serve(listener, app).await.expect("server should run");
+            })
+        };
+
+        let register_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/runners/register")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&registration).expect("request should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("register request should succeed");
+        assert_eq!(register_response.status(), StatusCode::OK);
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/sessions")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&CreateSessionRequest {
+                            session_id: Some(Uuid::nil()),
+                            workspace_id: "default".to_owned(),
+                            preferred_runner_id: Some("runner-command".to_owned()),
+                            metadata: BTreeMap::new(),
+                        })
+                        .expect("request should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("create request should succeed");
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+        let session: SessionRecord = read_json(create_response).await;
+        let _ = event_rx.recv().await.expect("session event should arrive");
+
+        let command_response = app
+            .oneshot(
+                Request::post(format!("/v1/sessions/{}/commands", session.session_id))
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&RunnerSessionCommandRequest::SendPrompt {
+                            content: "hello over relay".to_owned(),
+                        })
+                        .expect("request should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("command request should succeed");
+        assert_eq!(command_response.status(), StatusCode::OK);
+        let response: RunnerSessionCommandResponse = read_json(command_response).await;
+        assert!(response.accepted);
+        assert_eq!(response.session_id, session.session_id);
+
+        match event_rx.recv().await.expect("runner command event should arrive") {
+            rc_runner::RunnerApiEvent::SessionCommand { session_id, command } => {
+                assert_eq!(session_id, session.session_id);
+                assert_eq!(
+                    command,
+                    RunnerSessionCommandRequest::SendPrompt {
+                        content: "hello over relay".to_owned()
+                    }
+                );
+            }
+            other => panic!("unexpected runner event: {other:?}"),
+        }
+
+        runner_server.abort();
+        let _ = runner_server.await;
     }
 
     async fn spawn_runner_server(runner_id: &str, workspace_id: &str) -> SpawnedRunner {

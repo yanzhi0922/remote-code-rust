@@ -8,10 +8,7 @@ use serde_json::Value;
 use super::ToolExecutionContext;
 
 pub(crate) fn memory_read_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
-    let scope = input
-        .get("scope")
-        .and_then(Value::as_str)
-        .unwrap_or("all");
+    let scope = input.get("scope").and_then(Value::as_str).unwrap_or("all");
     let home = dirs_home()?;
     let mgr = rc_session::memory::MemoryManager::new(&home, Some(&context.cwd));
     let content = match scope {

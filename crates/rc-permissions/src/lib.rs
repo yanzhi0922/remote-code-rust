@@ -4,11 +4,23 @@
 //! - [`StaticPermissionBroker`] — blanket allow/deny.
 //! - [`RuleBasedPermissionBroker`] — pattern-matched rules with wildcard support.
 
+pub mod audit;
+pub mod denial_tracking;
+pub mod rule_parser;
+pub mod rules;
+pub mod shell_rules;
+
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use rc_core::PermissionMode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::{Arc, Mutex};
+
+use audit::PermissionAuditRecord;
+use denial_tracking::DenialTracker;
+use rule_parser::{discover_permission_rule_files, load_permission_rules_from_file};
+use rules::{LayeredRuleEngine, RuleAction, SourceAwarePermissionRule};
 
 /// Classification of a tool by its risk level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +84,28 @@ pub trait PermissionBroker: Send + Sync {
     /// Return the current permission mode.
     fn mode(&self) -> PermissionMode;
 
+    /// Return the currently loaded layered rules, if the broker exposes them.
+    #[must_use]
+    fn layered_rules(&self) -> Vec<SourceAwarePermissionRule> {
+        Vec::new()
+    }
+
+    /// Return recorded permission decisions for the current process/session.
+    #[must_use]
+    fn audit_records(&self) -> Vec<PermissionAuditRecord> {
+        Vec::new()
+    }
+
+    /// Add a session-scoped layered rule.
+    fn add_session_rule(&self, _action: RuleAction, _tool_pattern: String) -> Result<()> {
+        Err(anyhow!("session rule mutation is not supported by this broker"))
+    }
+
+    /// Clear all session-scoped layered rules, returning the number removed.
+    fn clear_session_rules(&self) -> Result<usize> {
+        Err(anyhow!("session rule mutation is not supported by this broker"))
+    }
+
     /// Decide whether to allow or deny the given request.
     async fn decide(&self, request: PermissionRequest) -> PermissionDecision;
 }
@@ -97,6 +131,17 @@ impl PermissionBroker for StaticPermissionBroker {
     }
 
     async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
+        if let Some(allowed) = yolo_classify(self.mode, &request.tool_name, &request.input) {
+            return if allowed {
+                PermissionDecision::allow()
+            } else {
+                PermissionDecision::deny(format!(
+                    "Permission mode {} denied {}.",
+                    self.mode.as_legacy_str(),
+                    request.tool_name
+                ))
+            };
+        }
         if auto_allows(self.mode, classify_tool(&request.tool_name)) {
             PermissionDecision::allow()
         } else {
@@ -107,6 +152,200 @@ impl PermissionBroker for StaticPermissionBroker {
             ))
         }
     }
+}
+
+/// A broker wrapper that applies layered allow/ask/deny rules before falling
+/// back to another broker implementation.
+#[derive(Clone)]
+pub struct LayeredPermissionBroker<B> {
+    fallback: B,
+    base_rules: Vec<SourceAwarePermissionRule>,
+    session_rules: Arc<Mutex<Vec<SourceAwarePermissionRule>>>,
+    denial_tracker: Arc<Mutex<DenialTracker>>,
+    audit_log: Arc<Mutex<Vec<PermissionAuditRecord>>>,
+}
+
+impl<B> LayeredPermissionBroker<B> {
+    #[must_use]
+    pub fn new(fallback: B, rules: Vec<SourceAwarePermissionRule>) -> Self {
+        Self {
+            fallback,
+            base_rules: rules,
+            session_rules: Arc::new(Mutex::new(Vec::new())),
+            denial_tracker: Arc::new(Mutex::new(DenialTracker::default())),
+            audit_log: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    #[must_use]
+    pub fn rules(&self) -> Vec<SourceAwarePermissionRule> {
+        let mut rules = self.base_rules.clone();
+        rules.extend(
+            self.session_rules
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone(),
+        );
+        LayeredRuleEngine::new(rules).rules().to_vec()
+    }
+
+    #[must_use]
+    pub fn audit_records(&self) -> Vec<PermissionAuditRecord> {
+        self.audit_log
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn push_audit(&self, record: PermissionAuditRecord) {
+        self.audit_log
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(record);
+    }
+
+    fn rule_match(&self, request: &PermissionRequest) -> Option<crate::rules::RuleMatch> {
+        LayeredRuleEngine::new(self.rules()).check(request)
+    }
+}
+
+#[async_trait]
+impl<B> PermissionBroker for LayeredPermissionBroker<B>
+where
+    B: PermissionBroker + Send + Sync,
+{
+    fn mode(&self) -> PermissionMode {
+        self.fallback.mode()
+    }
+
+    fn layered_rules(&self) -> Vec<SourceAwarePermissionRule> {
+        self.rules()
+    }
+
+    fn audit_records(&self) -> Vec<PermissionAuditRecord> {
+        LayeredPermissionBroker::audit_records(self)
+    }
+
+    fn add_session_rule(&self, action: RuleAction, tool_pattern: String) -> Result<()> {
+        let mut session_rules = self
+            .session_rules
+            .lock()
+            .map_err(|_| anyhow!("session rule lock poisoned"))?;
+        session_rules.push(SourceAwarePermissionRule {
+            tool_pattern,
+            action,
+            source: crate::rules::RuleSource::Session,
+        });
+        Ok(())
+    }
+
+    fn clear_session_rules(&self) -> Result<usize> {
+        let mut session_rules = self
+            .session_rules
+            .lock()
+            .map_err(|_| anyhow!("session rule lock poisoned"))?;
+        let removed = session_rules.len();
+        session_rules.clear();
+        Ok(removed)
+    }
+
+    async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
+        if let Some(rule_match) = self.rule_match(&request) {
+            match rule_match.rule.action {
+                RuleAction::Allow => {
+                    let decision = PermissionDecision::allow();
+                    self.push_audit(PermissionAuditRecord {
+                        tool_name: request.tool_name,
+                        tool_use_id: request.tool_use_id,
+                        source: Some(rule_match.rule.source),
+                        matched_pattern: Some(rule_match.rule.tool_pattern),
+                        action: RuleAction::Allow,
+                        final_allowed: true,
+                        reason: None,
+                    });
+                    return decision;
+                }
+                RuleAction::Deny => {
+                    let denial_count = self
+                        .denial_tracker
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .record(format!("{}:{}", request.tool_name, request.input));
+                    let message = if denial_count > 1 {
+                        format!(
+                            "Permission denied for {} by layered rule (repeated {} times).",
+                            request.tool_name, denial_count
+                        )
+                    } else {
+                        format!("Permission denied for {} by layered rule.", request.tool_name)
+                    };
+                    self.push_audit(PermissionAuditRecord {
+                        tool_name: request.tool_name,
+                        tool_use_id: request.tool_use_id,
+                        source: Some(rule_match.rule.source),
+                        matched_pattern: Some(rule_match.rule.tool_pattern),
+                        action: RuleAction::Deny,
+                        final_allowed: false,
+                        reason: Some(message.clone()),
+                    });
+                    return PermissionDecision::deny(message);
+                }
+                RuleAction::Ask => {
+                    let decision = self.fallback.decide(request.clone()).await;
+                    if !decision.allowed {
+                        self.denial_tracker
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .record(format!("{}:{}", request.tool_name, request.input));
+                    }
+                    self.push_audit(PermissionAuditRecord {
+                        tool_name: request.tool_name,
+                        tool_use_id: request.tool_use_id,
+                        source: Some(rule_match.rule.source),
+                        matched_pattern: Some(rule_match.rule.tool_pattern),
+                        action: RuleAction::Ask,
+                        final_allowed: decision.allowed,
+                        reason: decision.message.clone(),
+                    });
+                    return decision;
+                }
+            }
+        }
+
+        let decision = self.fallback.decide(request.clone()).await;
+        if !decision.allowed {
+            self.denial_tracker
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .record(format!("{}:{}", request.tool_name, request.input));
+        }
+        self.push_audit(PermissionAuditRecord {
+            tool_name: request.tool_name,
+            tool_use_id: request.tool_use_id,
+            source: None,
+            matched_pattern: None,
+            action: RuleAction::Ask,
+            final_allowed: decision.allowed,
+            reason: decision.message.clone(),
+        });
+        decision
+    }
+}
+
+/// Load layered permission rules from CLI, project, and user settings files.
+///
+/// # Errors
+/// Returns an error if an existing rule file cannot be parsed.
+pub fn load_layered_rules(
+    cwd: &std::path::Path,
+    profile_dir: &std::path::Path,
+    settings_files: &[std::path::PathBuf],
+) -> Result<Vec<SourceAwarePermissionRule>> {
+    let mut rules = Vec::new();
+    for (path, source) in discover_permission_rule_files(cwd, profile_dir, settings_files) {
+        rules.extend(load_permission_rules_from_file(&path, source)?);
+    }
+    Ok(rules)
 }
 
 // ── Fine-grained permission rules ──────────────────────────────────────────
@@ -158,10 +397,7 @@ impl RuleEngine {
     /// - `"ToolName"` — matches any call to that tool.
     /// - `"ToolName(pattern)"` — matches calls where the tool input contains
     ///   a string matching `pattern` (wildcard `*` supported).
-    pub fn parse_rule(
-        rule_str: &str,
-        decision: PermissionDecision,
-    ) -> Result<PermissionRule> {
+    pub fn parse_rule(rule_str: &str, decision: PermissionDecision) -> Result<PermissionRule> {
         let trimmed = rule_str.trim();
         if trimmed.is_empty() {
             return Err(anyhow!("rule string must not be empty"));
@@ -293,11 +529,10 @@ impl PermissionBroker for RuleBasedPermissionBroker {
 pub fn classify_tool(name: &str) -> PermissionClass {
     match name {
         // Read-only tools
-        "list_directory" | "read_file" | "search_text" | "glob" | "grep"
-        | "config_read" | "tool_search" | "skill_discover" | "list_peers"
-        | "ctx_inspect" | "team_status" | "memory_read" | "list_mcp_resources"
-        | "read_mcp_resource" | "verify_plan" | "brief" | "monitor"
-        | "terminal_capture" | "lsp" | "suggest_pr" => PermissionClass::Read,
+        "list_directory" | "read_file" | "search_text" | "glob" | "grep" | "config_read"
+        | "tool_search" | "skill_discover" | "list_peers" | "ctx_inspect" | "team_status"
+        | "memory_read" | "list_mcp_resources" | "read_mcp_resource" | "verify_plan" | "brief"
+        | "monitor" | "terminal_capture" | "lsp" | "suggest_pr" => PermissionClass::Read,
 
         // File editing tools
         "write_file" | "replace_in_file" | "edit_file" | "notebook_edit" | "snip" => {
@@ -355,16 +590,13 @@ pub enum RiskLevel {
 pub fn classify_risk(tool_name: &str, input: &Value) -> RiskLevel {
     match tool_name {
         // Read-only tools are always safe.
-        "list_directory" | "read_file" | "search_text" | "glob" | "grep"
-        | "config_read" | "tool_search" | "skill_discover" | "list_peers"
-        | "ctx_inspect" | "team_status" | "memory_read" | "list_mcp_resources"
-        | "read_mcp_resource" | "verify_plan" | "brief" | "monitor"
-        | "terminal_capture" | "lsp" | "suggest_pr" => RiskLevel::Safe,
+        "list_directory" | "read_file" | "search_text" | "glob" | "grep" | "config_read"
+        | "tool_search" | "skill_discover" | "list_peers" | "ctx_inspect" | "team_status"
+        | "memory_read" | "list_mcp_resources" | "read_mcp_resource" | "verify_plan" | "brief"
+        | "monitor" | "terminal_capture" | "lsp" | "suggest_pr" => RiskLevel::Safe,
 
         // File edits are low risk if within workspace.
-        "write_file" | "replace_in_file" | "edit_file" | "notebook_edit" | "snip" => {
-            RiskLevel::Low
-        }
+        "write_file" | "replace_in_file" | "edit_file" | "notebook_edit" | "snip" => RiskLevel::Low,
 
         // Task management is low risk.
         "todo_write" | "task_create" | "task_get" | "task_list" | "task_stop" | "task_update" => {
@@ -414,10 +646,7 @@ pub fn classify_risk(tool_name: &str, input: &Value) -> RiskLevel {
 
 /// Classify the risk of a shell command based on its content.
 fn classify_command_risk(input: &Value) -> RiskLevel {
-    let command = input
-        .get("command")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let command = input.get("command").and_then(Value::as_str).unwrap_or("");
 
     let command_lower = command.to_ascii_lowercase();
     let command_trimmed = command_lower.trim();
@@ -430,41 +659,133 @@ fn classify_command_risk(input: &Value) -> RiskLevel {
     // --- Safe read-only commands ---
     let safe_prefixes = [
         // File listing/viewing
-        "ls", "dir", "cat", "head", "tail", "less", "more", "file",
-        "grep", "egrep", "rg", "ag", "ack", "find", "locate",
-        "wc", "sort", "uniq", "cut", "tr", "tee", "xargs",
-        "echo", "printf", "pwd", "whoami", "hostname", "uname",
-        "which", "where", "type", "command -v", "env", "printenv",
-        "stat", "file", "du", "df", "free", "top", "ps", "lsof",
+        "ls",
+        "dir",
+        "cat",
+        "head",
+        "tail",
+        "less",
+        "more",
+        "file",
+        "grep",
+        "egrep",
+        "rg",
+        "ag",
+        "ack",
+        "find",
+        "locate",
+        "wc",
+        "sort",
+        "uniq",
+        "cut",
+        "tr",
+        "tee",
+        "xargs",
+        "echo",
+        "printf",
+        "pwd",
+        "whoami",
+        "hostname",
+        "uname",
+        "which",
+        "where",
+        "type",
+        "command -v",
+        "env",
+        "printenv",
+        "stat",
+        "file",
+        "du",
+        "df",
+        "free",
+        "top",
+        "ps",
+        "lsof",
         // Git read-only
-        "git status", "git log", "git diff", "git branch", "git tag",
-        "git remote", "git show", "git stash list", "git blame",
-        "git reflog", "git shortlog", "git describe", "git rev-parse",
-        "git ls-files", "git ls-tree", "git ls-remote",
-        "git config --get", "git config --list",
+        "git status",
+        "git log",
+        "git diff",
+        "git branch",
+        "git tag",
+        "git remote",
+        "git show",
+        "git stash list",
+        "git blame",
+        "git reflog",
+        "git shortlog",
+        "git describe",
+        "git rev-parse",
+        "git ls-files",
+        "git ls-tree",
+        "git ls-remote",
+        "git config --get",
+        "git config --list",
         // Cargo read-only
-        "cargo check", "cargo build", "cargo test", "cargo clippy",
-        "cargo fmt", "cargo doc", "cargo tree", "cargo metadata",
-        "cargo locate-project", "cargo pkgid", "cargo --version",
-        "cargo search", "cargo info",
+        "cargo check",
+        "cargo build",
+        "cargo test",
+        "cargo clippy",
+        "cargo fmt",
+        "cargo doc",
+        "cargo tree",
+        "cargo metadata",
+        "cargo locate-project",
+        "cargo pkgid",
+        "cargo --version",
+        "cargo search",
+        "cargo info",
         // npm/node read-only
-        "npm list", "npm view", "npm info", "npm show", "npm outdated",
-        "npm pack --dry-run", "npm --version", "node --version",
-        "npx --version", "npx which",
+        "npm list",
+        "npm view",
+        "npm info",
+        "npm show",
+        "npm outdated",
+        "npm pack --dry-run",
+        "npm --version",
+        "node --version",
+        "npx --version",
+        "npx which",
         // Python read-only
-        "python --version", "python3 --version", "pip list", "pip show",
-        "pip freeze", "pip check", "python -c \"import", "python3 -c \"import",
-        "rustc --version", "rustup show", "rustup toolchain list",
+        "python --version",
+        "python3 --version",
+        "pip list",
+        "pip show",
+        "pip freeze",
+        "pip check",
+        "python -c \"import",
+        "python3 -c \"import",
+        "rustc --version",
+        "rustup show",
+        "rustup toolchain list",
         // Go read-only
-        "go version", "go list", "go vet", "go doc",
+        "go version",
+        "go list",
+        "go vet",
+        "go doc",
         // Docker read-only
-        "docker ps", "docker images", "docker version", "docker info",
-        "docker logs", "docker inspect", "docker stats",
+        "docker ps",
+        "docker images",
+        "docker version",
+        "docker info",
+        "docker logs",
+        "docker inspect",
+        "docker stats",
         // Kubernetes read-only
-        "kubectl get", "kubectl describe", "kubectl logs", "kubectl version",
+        "kubectl get",
+        "kubectl describe",
+        "kubectl logs",
+        "kubectl version",
         // Misc safe
-        "date", "cal", "uptime", "arch", "nproc", "lscpu",
-        "gh repo view", "gh pr list", "gh issue list", "gh api",
+        "date",
+        "cal",
+        "uptime",
+        "arch",
+        "nproc",
+        "lscpu",
+        "gh repo view",
+        "gh pr list",
+        "gh issue list",
+        "gh api",
     ];
 
     for prefix in &safe_prefixes {
@@ -476,25 +797,60 @@ fn classify_command_risk(input: &Value) -> RiskLevel {
     // --- Low risk: common development commands ---
     let low_risk_prefixes = [
         // Git mutating (but normal workflow)
-        "git add", "git commit", "git checkout", "git switch",
-        "git stash", "git merge", "git rebase", "git cherry-pick",
-        "git pull", "git fetch", "git push", "git reset --soft",
-        "git restore", "git rm --cached", "git mv",
+        "git add",
+        "git commit",
+        "git checkout",
+        "git switch",
+        "git stash",
+        "git merge",
+        "git rebase",
+        "git cherry-pick",
+        "git pull",
+        "git fetch",
+        "git push",
+        "git reset --soft",
+        "git restore",
+        "git rm --cached",
+        "git mv",
         // Cargo mutating
-        "cargo add", "cargo run", "cargo update", "cargo install",
-        "cargo publish --dry-run", "cargo clean",
+        "cargo add",
+        "cargo run",
+        "cargo update",
+        "cargo install",
+        "cargo publish --dry-run",
+        "cargo clean",
         // npm/node mutating
-        "npm install", "npm run", "npm test", "npm start",
-        "npm build", "npm ci", "npm uninstall",
+        "npm install",
+        "npm run",
+        "npm test",
+        "npm start",
+        "npm build",
+        "npm ci",
+        "npm uninstall",
         // Python mutating
-        "pip install", "python -m pip", "python3 -m pip",
+        "pip install",
+        "python -m pip",
+        "python3 -m pip",
         // Go mutating
-        "go build", "go test", "go run", "go mod tidy", "go mod download",
+        "go build",
+        "go test",
+        "go run",
+        "go mod tidy",
+        "go mod download",
         // Docker build/run
-        "docker build", "docker compose up", "docker compose build",
+        "docker build",
+        "docker compose up",
+        "docker compose build",
         // File operations (non-destructive)
-        "mkdir", "touch", "cp", "mv", "ln -s", "chmod +x",
-        "tar ", "unzip ", "7z ",
+        "mkdir",
+        "touch",
+        "cp",
+        "mv",
+        "ln -s",
+        "chmod +x",
+        "tar ",
+        "unzip ",
+        "7z ",
     ];
 
     for prefix in &low_risk_prefixes {
@@ -506,26 +862,54 @@ fn classify_command_risk(input: &Value) -> RiskLevel {
     // --- High risk: destructive or dangerous commands ---
     let high_risk_patterns = [
         // System-destructive
-        "rm -rf /", "rm -rf /*", "del /s /q c:", "format ",
-        "shutdown", "reboot", "halt", "poweroff",
-        "> /etc/", "chmod 777", "chown ",
-        "dd if=", "mkfs.", ":(){ :|:& };:",
-        "sudo rm", "sudo del", "sudo shutdown",
+        "rm -rf /",
+        "rm -rf /*",
+        "del /s /q c:",
+        "format ",
+        "shutdown",
+        "reboot",
+        "halt",
+        "poweroff",
+        "> /etc/",
+        "chmod 777",
+        "chown ",
+        "dd if=",
+        "mkfs.",
+        ":(){ :|:& };:",
+        "sudo rm",
+        "sudo del",
+        "sudo shutdown",
         // Download and execute
-        "curl ", "wget ",
-        "| sh", "| bash", "| zsh", "| fish",
+        "curl ",
+        "wget ",
+        "| sh",
+        "| bash",
+        "| zsh",
+        "| fish",
         "| sudo ",
         // Credential/environment leaks
-        "export ", "setenv ", "aws ", "gcloud ", "az ",
+        "export ",
+        "setenv ",
+        "aws ",
+        "gcloud ",
+        "az ",
         // Package manager global operations
-        "npm install -g", "pip install --user",
+        "npm install -g",
+        "pip install --user",
         // Force operations
-        "rm -rf", "git push --force", "git push -f",
-        "git clean -fdx", "git reset --hard",
+        "rm -rf",
+        "git push --force",
+        "git push -f",
+        "git clean -fdx",
+        "git reset --hard",
         // Network listeners
-        "nc -l", "ncat -l", "socat ",
+        "nc -l",
+        "ncat -l",
+        "socat ",
         // Fork bombs and resource exhaustion
-        "fork ", "bomb", "while true",
+        "fork ",
+        "bomb",
+        "while true",
     ];
 
     for pattern in &high_risk_patterns {
@@ -670,8 +1054,10 @@ pub fn load_settings_rules(settings: &Value) -> (Vec<PermissionRule>, Vec<Permis
         if let Some(deny_list) = permissions.get("deny").and_then(Value::as_array) {
             for item in deny_list {
                 if let Some(pattern) = item.as_str()
-                    && let Ok(rule) =
-                        RuleEngine::parse_rule(pattern, PermissionDecision::deny("denied by settings"))
+                    && let Ok(rule) = RuleEngine::parse_rule(
+                        pattern,
+                        PermissionDecision::deny("denied by settings"),
+                    )
                 {
                     denies.push(rule);
                 }
@@ -731,13 +1117,17 @@ mod tests {
             decision: PermissionDecision::allow(),
         }]);
         // Should match: command starts with "git "
-        assert!(engine
-            .check("Bash", &json!({"command": "git status"}))
-            .is_some());
+        assert!(
+            engine
+                .check("Bash", &json!({"command": "git status"}))
+                .is_some()
+        );
         // Should not match: command doesn't match "git *"
-        assert!(engine
-            .check("Bash", &json!({"command": "npm install"}))
-            .is_none());
+        assert!(
+            engine
+                .check("Bash", &json!({"command": "npm install"}))
+                .is_none()
+        );
     }
 
     #[test]
@@ -812,37 +1202,63 @@ mod tests {
     #[test]
     fn yolo_classify_safe_tools_auto_approved() {
         let input = json!({"path": "/some/file"});
-        assert_eq!(super::yolo_classify(PermissionMode::Default, "read_file", &input), Some(true));
-        assert_eq!(super::yolo_classify(PermissionMode::Default, "glob", &input), Some(true));
-        assert_eq!(super::yolo_classify(PermissionMode::Default, "grep", &input), Some(true));
+        assert_eq!(
+            super::yolo_classify(PermissionMode::Default, "read_file", &input),
+            Some(true)
+        );
+        assert_eq!(
+            super::yolo_classify(PermissionMode::Default, "glob", &input),
+            Some(true)
+        );
+        assert_eq!(
+            super::yolo_classify(PermissionMode::Default, "grep", &input),
+            Some(true)
+        );
     }
 
     #[test]
     fn yolo_classify_edit_tools_need_permission_in_default() {
         let input = json!({"path": "/some/file"});
-        assert_eq!(super::yolo_classify(PermissionMode::Default, "write_file", &input), None);
+        assert_eq!(
+            super::yolo_classify(PermissionMode::Default, "write_file", &input),
+            None
+        );
     }
 
     #[test]
     fn yolo_classify_edit_tools_auto_approved_in_accept_edits() {
         let input = json!({"path": "/some/file"});
-        assert_eq!(super::yolo_classify(PermissionMode::AcceptEdits, "write_file", &input), Some(true));
+        assert_eq!(
+            super::yolo_classify(PermissionMode::AcceptEdits, "write_file", &input),
+            Some(true)
+        );
     }
 
     #[test]
     fn yolo_classify_bypass_allows_everything() {
         let input = json!({"command": "rm -rf /"});
-        assert_eq!(super::yolo_classify(PermissionMode::BypassPermissions, "bash_command", &input), Some(true));
+        assert_eq!(
+            super::yolo_classify(PermissionMode::BypassPermissions, "bash_command", &input),
+            Some(true)
+        );
     }
 
     #[test]
     fn yolo_classify_safe_git_commands() {
         assert_eq!(
-            super::yolo_classify(PermissionMode::Default, "bash_command", &json!({"command": "git status"})),
+            super::yolo_classify(
+                PermissionMode::Default,
+                "bash_command",
+                &json!({"command": "git status"})
+            ),
             Some(true)
         );
         assert_eq!(
-            super::yolo_classify(PermissionMode::Default, "bash_command", &json!({"command": "git log --oneline"})),
+            super::yolo_classify(
+                PermissionMode::Default,
+                "bash_command",
+                &json!({"command": "git log --oneline"})
+            ),
             Some(true)
         );
     }
@@ -870,13 +1286,19 @@ mod tests {
     #[test]
     fn yolo_classify_dont_ask_denies_medium_and_high() {
         let input = json!({"command": "something unknown"});
-        assert_eq!(super::yolo_classify(PermissionMode::DontAsk, "bash_command", &input), Some(false));
+        assert_eq!(
+            super::yolo_classify(PermissionMode::DontAsk, "bash_command", &input),
+            Some(false)
+        );
     }
 
     #[test]
     fn yolo_classify_plan_mode_denies_edits() {
         let input = json!({"path": "/some/file"});
-        assert_eq!(super::yolo_classify(PermissionMode::Plan, "write_file", &input), Some(false));
+        assert_eq!(
+            super::yolo_classify(PermissionMode::Plan, "write_file", &input),
+            Some(false)
+        );
     }
 
     // ── Permission cache tests ────────────────────────────────────────
@@ -907,8 +1329,14 @@ mod tests {
         cache.insert("bash_command", &json!({"command": "ls"}), true);
         cache.insert("bash_command", &json!({"command": "rm"}), false);
 
-        assert_eq!(cache.get("bash_command", &json!({"command": "ls"})), Some(true));
-        assert_eq!(cache.get("bash_command", &json!({"command": "rm"})), Some(false));
+        assert_eq!(
+            cache.get("bash_command", &json!({"command": "ls"})),
+            Some(true)
+        );
+        assert_eq!(
+            cache.get("bash_command", &json!({"command": "rm"})),
+            Some(false)
+        );
     }
 
     // ── Settings rule loader tests ────────────────────────────────────
@@ -952,5 +1380,84 @@ mod tests {
         use super::RiskLevel;
         assert!(std::cmp::PartialEq::eq(&RiskLevel::Safe, &RiskLevel::Safe));
         assert!(!std::cmp::PartialEq::eq(&RiskLevel::Safe, &RiskLevel::High));
+    }
+
+    #[tokio::test]
+    async fn layered_broker_denies_by_rule_source() {
+        let broker = LayeredPermissionBroker::new(
+            StaticPermissionBroker::new(PermissionMode::BypassPermissions),
+            vec![SourceAwarePermissionRule {
+                tool_pattern: "Bash(git reset --hard *)".to_owned(),
+                action: RuleAction::Deny,
+                source: crate::rules::RuleSource::Cli,
+            }],
+        );
+        let decision = broker
+            .decide(PermissionRequest {
+                tool_name: "bash_command".to_owned(),
+                tool_use_id: "1".to_owned(),
+                title: "Bash".to_owned(),
+                description: String::new(),
+                input: json!({"command": "git reset --hard HEAD"}),
+                blocked_path: None,
+            })
+            .await;
+        assert!(!decision.allowed);
+        assert_eq!(broker.audit_records().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn layered_broker_ask_falls_back_to_broker() {
+        let broker = LayeredPermissionBroker::new(
+            StaticPermissionBroker::new(PermissionMode::AcceptEdits),
+            vec![SourceAwarePermissionRule {
+                tool_pattern: "Edit".to_owned(),
+                action: RuleAction::Ask,
+                source: crate::rules::RuleSource::Project,
+            }],
+        );
+        let decision = broker
+            .decide(PermissionRequest {
+                tool_name: "write_file".to_owned(),
+                tool_use_id: "1".to_owned(),
+                title: "Write".to_owned(),
+                description: String::new(),
+                input: json!({"path":"foo.txt"}),
+                blocked_path: Some("foo.txt".to_owned()),
+            })
+            .await;
+        assert!(decision.allowed);
+    }
+
+    #[tokio::test]
+    async fn layered_broker_supports_session_rule_mutation() {
+        let broker = LayeredPermissionBroker::new(
+            StaticPermissionBroker::new(PermissionMode::BypassPermissions),
+            vec![],
+        );
+        broker
+            .add_session_rule(RuleAction::Deny, "Bash(cargo test)".to_owned())
+            .expect("session rule should be added");
+
+        let decision = broker
+            .decide(PermissionRequest {
+                tool_name: "bash_command".to_owned(),
+                tool_use_id: "1".to_owned(),
+                title: "Bash".to_owned(),
+                description: String::new(),
+                input: json!({"command":"cargo test"}),
+                blocked_path: None,
+            })
+            .await;
+        assert!(!decision.allowed);
+        assert_eq!(
+            broker
+                .layered_rules()
+                .into_iter()
+                .filter(|rule| rule.source == crate::rules::RuleSource::Session)
+                .count(),
+            1
+        );
+        assert_eq!(broker.clear_session_rules().expect("clear rules"), 1);
     }
 }

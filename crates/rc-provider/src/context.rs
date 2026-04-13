@@ -68,10 +68,7 @@ impl TokenEstimator {
     #[must_use]
     pub fn estimate_entry(&self, entry: &ConversationEntry) -> u64 {
         let text_tokens = self.estimate(&entry.text);
-        let history_tokens = entry
-            .history_text
-            .as_ref()
-            .map_or(0, |h| self.estimate(h));
+        let history_tokens = entry.history_text.as_ref().map_or(0, |h| self.estimate(h));
         let tool_tokens: u64 = entry
             .tool_calls
             .iter()
@@ -245,8 +242,11 @@ impl ContextWindowManager {
         }
 
         // Generate a summary for older entries.
-        let older: Vec<&ConversationEntry> =
-            non_system.iter().take(cutoff_idx).map(|(_, e)| *e).collect();
+        let older: Vec<&ConversationEntry> = non_system
+            .iter()
+            .take(cutoff_idx)
+            .map(|(_, e)| *e)
+            .collect();
 
         if !older.is_empty() {
             let summary = build_summary(&older);
@@ -331,8 +331,11 @@ impl ContextWindowManager {
         }
 
         // Generate summary for older entries.
-        let older: Vec<&ConversationEntry> =
-            non_system.iter().take(cutoff_idx).map(|(_, e)| *e).collect();
+        let older: Vec<&ConversationEntry> = non_system
+            .iter()
+            .take(cutoff_idx)
+            .map(|(_, e)| *e)
+            .collect();
         if !older.is_empty() {
             let summary = build_summary(&older);
             result.push(ConversationEntry::system(format!(
@@ -384,7 +387,11 @@ impl ContextWindowManager {
                 "[context-collapse] Full conversation summary:\n{summary}"
             )));
             // Keep only the very last user message if available.
-            if let Some(last_user) = non_system.iter().rev().find(|e| matches!(e.role, ConversationRole::User)) {
+            if let Some(last_user) = non_system
+                .iter()
+                .rev()
+                .find(|e| matches!(e.role, ConversationRole::User))
+            {
                 result.push((*last_user).clone());
             }
         }
@@ -466,7 +473,10 @@ impl ContextWindowManager {
     ///
     /// Returns `Some(compacted)` if compaction was performed, `None` if the conversation
     /// is already too short to compact further.
-    pub fn compact_on_error(&self, conversation: &[ConversationEntry]) -> Option<Vec<ConversationEntry>> {
+    pub fn compact_on_error(
+        &self,
+        conversation: &[ConversationEntry],
+    ) -> Option<Vec<ConversationEntry>> {
         if conversation.len() <= 3 {
             // Can't compact further — system + 1 user + 1 assistant is the minimum.
             return None;
@@ -496,7 +506,10 @@ impl ContextWindowManager {
     ///
     /// Each "window" of N entries is summarized into a single entry, reducing
     /// token usage while preserving chronological context.
-    pub fn sliding_window_compact(&self, conversation: &[ConversationEntry]) -> Vec<ConversationEntry> {
+    pub fn sliding_window_compact(
+        &self,
+        conversation: &[ConversationEntry],
+    ) -> Vec<ConversationEntry> {
         if conversation.is_empty() {
             return Vec::new();
         }
@@ -593,7 +606,9 @@ impl ContextWindowManager {
                 }
 
                 // Assistant entries with substantial content.
-                if matches!(entry.role, ConversationRole::Assistant) && entry.text.chars().count() > 100 {
+                if matches!(entry.role, ConversationRole::Assistant)
+                    && entry.text.chars().count() > 100
+                {
                     score += 20;
                 }
 
@@ -670,7 +685,10 @@ impl ContextWindowManager {
     ///
     /// This preserves the logical structure of the conversation better than
     /// simple windowing.
-    pub fn semantic_chunk_compact(&self, conversation: &[ConversationEntry]) -> Vec<ConversationEntry> {
+    pub fn semantic_chunk_compact(
+        &self,
+        conversation: &[ConversationEntry],
+    ) -> Vec<ConversationEntry> {
         if conversation.is_empty() {
             return Vec::new();
         }
@@ -708,12 +726,7 @@ impl ContextWindowManager {
         // Calculate token cost for each chunk.
         let chunk_tokens: Vec<u64> = chunks
             .iter()
-            .map(|chunk| {
-                chunk
-                    .iter()
-                    .map(|e| self.estimator.estimate_entry(e))
-                    .sum()
-            })
+            .map(|chunk| chunk.iter().map(|e| self.estimator.estimate_entry(e)).sum())
             .collect();
 
         let budget = self.available_budget();
@@ -736,7 +749,10 @@ impl ContextWindowManager {
         // Summarize older chunks.
         let older_chunks = &chunks[..chunks.len() - keep_chunks];
         if !older_chunks.is_empty() {
-            let older_entries: Vec<&ConversationEntry> = older_chunks.iter().flat_map(|c| c.iter().copied()).collect();
+            let older_entries: Vec<&ConversationEntry> = older_chunks
+                .iter()
+                .flat_map(|c| c.iter().copied())
+                .collect();
             let summary = build_summary(&older_entries);
             result.push(ConversationEntry::system(format!(
                 "[semantic-chunk-compaction] Summarized {} earlier conversation turns:\n{summary}",
@@ -774,10 +790,17 @@ impl ContextWindowManager {
 
         // Strategy cascade: least → most disruptive.
         #[allow(clippy::type_complexity)]
-        let strategies: &[(&str, fn(&ContextWindowManager, &[ConversationEntry]) -> Vec<ConversationEntry>)] = &[
+        let strategies: &[(
+            &str,
+            fn(&ContextWindowManager, &[ConversationEntry]) -> Vec<ConversationEntry>,
+        )] = &[
             ("microcompact", |mgr, conv| mgr.microcompact(conv)),
-            ("sliding_window", |mgr, conv| mgr.sliding_window_compact(conv)),
-            ("semantic_chunk", |mgr, conv| mgr.semantic_chunk_compact(conv)),
+            ("sliding_window", |mgr, conv| {
+                mgr.sliding_window_compact(conv)
+            }),
+            ("semantic_chunk", |mgr, conv| {
+                mgr.semantic_chunk_compact(conv)
+            }),
             ("priority", |mgr, conv| mgr.priority_compact(conv)),
             ("standard", |mgr, conv| mgr.compact(conv)),
             ("reactive", |mgr, conv| mgr.reactive_compact(conv)),
@@ -953,7 +976,9 @@ mod tests {
             .filter(|e| matches!(e.role, ConversationRole::System))
             .collect();
         assert!(
-            system_entries.iter().any(|e| e.text.contains("IMPORTANT SYSTEM PROMPT")),
+            system_entries
+                .iter()
+                .any(|e| e.text.contains("IMPORTANT SYSTEM PROMPT")),
             "original system prompt must be preserved"
         );
     }
@@ -979,15 +1004,11 @@ mod tests {
 
         // Recent messages should be preserved verbatim.
         assert!(
-            compacted
-                .iter()
-                .any(|e| e.text.contains("recent msg 5")),
+            compacted.iter().any(|e| e.text.contains("recent msg 5")),
             "most recent user message must be preserved"
         );
         assert!(
-            compacted
-                .iter()
-                .any(|e| e.text.contains("recent reply 5")),
+            compacted.iter().any(|e| e.text.contains("recent reply 5")),
             "most recent assistant message must be preserved"
         );
     }

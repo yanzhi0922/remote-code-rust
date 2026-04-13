@@ -88,12 +88,7 @@ impl ToolSearchEngine {
     /// Add (or replace) a tool in the search index.
     pub fn add_tool(&mut self, name: &str, description: &str, tags: &[&str]) {
         // Build the document text: name + description + tags.
-        let combined = format!(
-            "{} {} {}",
-            name,
-            description,
-            tags.join(" ")
-        );
+        let combined = format!("{} {} {}", name, description, tags.join(" "));
         let tokens = Self::tokenize(&combined);
 
         // Compute term frequencies.
@@ -160,7 +155,11 @@ impl ToolSearchEngine {
             .collect();
 
         // Sort by descending score.
-        scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        scored.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         scored.truncate(max_results);
         scored
     }
@@ -192,11 +191,7 @@ impl ToolSearchEngine {
     /// Compute the BM25 score for a single document given query tokens.
     fn bm25_score(&self, doc: &SearchDocument, query_tokens: &[String]) -> f64 {
         let dl = doc.length as f64;
-        let avg_dl = if self.avg_dl > 0.0 {
-            self.avg_dl
-        } else {
-            1.0
-        };
+        let avg_dl = if self.avg_dl > 0.0 { self.avg_dl } else { 1.0 };
 
         let mut score = 0.0;
         for term in query_tokens {

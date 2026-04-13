@@ -6,11 +6,13 @@
 
 pub mod memory;
 pub mod replay;
+pub mod resume_state;
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
@@ -20,6 +22,8 @@ use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
+
+use crate::resume_state::ResumeState;
 
 /// Summary metadata for a single session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +44,8 @@ pub struct SessionSummary {
     pub updated_at: DateTime<Utc>,
     /// Path to the NDJSON transcript file.
     pub transcript_path: PathBuf,
+    /// Whether the session is archived and hidden from active views.
+    pub archived: bool,
 }
 
 /// Token usage aggregated across a session.
@@ -84,18 +90,36 @@ pub struct SessionBundle {
 }
 
 /// Persistent session store backed by SQLite and NDJSON files.
+///
+/// Uses a single persistent SQLite connection with WAL journal mode for
+/// improved write performance and concurrent read safety during long-running
+/// sessions.
 pub struct SessionStore {
     paths: AppPaths,
+    conn: Mutex<Connection>,
 }
 
 impl SessionStore {
     /// Open (or create) the session store at the given application paths.
     ///
+    /// Enables WAL journal mode, `synchronous=NORMAL`, and a 5-second busy
+    /// timeout for robustness during long-running sessions.
+    ///
     /// # Errors
     /// Returns an error if the database cannot be opened or the schema cannot be initialised.
     pub fn open(paths: AppPaths) -> Result<Self> {
         paths.ensure_exists()?;
-        let store = Self { paths };
+        let conn = Connection::open(&paths.state_db_path)
+            .with_context(|| format!("failed to open {}", paths.state_db_path.display()))?;
+        // Enable WAL mode for better write performance and concurrent reads.
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;",
+        )
+        .context("failed to set SQLite pragmas")?;
+        let store = Self {
+            paths,
+            conn: Mutex::new(conn),
+        };
         store.init_schema()?;
         Ok(store)
     }
@@ -137,10 +161,10 @@ impl SessionStore {
             }
         };
         let created_at = existing.as_ref().map_or(now, |summary| summary.created_at);
-        self.connection()?.execute(
+        self.conn()?.execute(
             "INSERT INTO sessions (
-                session_id, title, cwd, provider_name, model, created_at, updated_at, transcript_path
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                session_id, title, cwd, provider_name, model, created_at, updated_at, transcript_path, archived
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, COALESCE((SELECT archived FROM sessions WHERE session_id = ?1), 0))
             ON CONFLICT(session_id) DO UPDATE SET
                 title = excluded.title,
                 cwd = excluded.cwd,
@@ -210,24 +234,91 @@ impl SessionStore {
     /// # Errors
     /// Returns an error if the database query fails.
     pub fn list_sessions(&self) -> Result<Vec<SessionSummary>> {
-        let conn = self.connection()?;
-        let mut statement = conn.prepare(
-            "SELECT session_id, title, cwd, provider_name, model, created_at, updated_at, transcript_path
-             FROM sessions ORDER BY updated_at DESC",
+        self.list_sessions_by_archived(None)
+    }
+
+    /// List only active, non-archived sessions ordered by last-updated time.
+    ///
+    /// # Errors
+    /// Returns an error if the database query fails.
+    pub fn list_active_sessions(&self) -> Result<Vec<SessionSummary>> {
+        self.list_sessions_by_archived(Some(false))
+    }
+
+    /// List only archived sessions ordered by last-updated time.
+    ///
+    /// # Errors
+    /// Returns an error if the database query fails.
+    pub fn list_archived_sessions(&self) -> Result<Vec<SessionSummary>> {
+        self.list_sessions_by_archived(Some(true))
+    }
+
+    /// Return the most recently updated active session, if one exists.
+    ///
+    /// # Errors
+    /// Returns an error if the database query fails.
+    pub fn latest_active_session(&self) -> Result<Option<SessionSummary>> {
+        Ok(self.list_active_sessions()?.into_iter().next())
+    }
+
+    /// Mark a session as archived or restored.
+    ///
+    /// # Errors
+    /// Returns an error if the session does not exist or the database update fails.
+    pub fn set_archived(&self, session_id: Uuid, archived: bool) -> Result<()> {
+        let changed = self.conn()?.execute(
+            "UPDATE sessions SET archived = ?2 WHERE session_id = ?1",
+            params![session_id.to_string(), archived],
         )?;
-        let rows = statement.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, String>(7)?,
-            ))
-        })?;
-        let raw_rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        if changed == 0 {
+            return Err(anyhow!("session {session_id} does not exist"));
+        }
+        Ok(())
+    }
+
+    fn list_sessions_by_archived(&self, archived: Option<bool>) -> Result<Vec<SessionSummary>> {
+        let conn = self.conn()?;
+        let sql = if archived.is_some() {
+            "SELECT session_id, title, cwd, provider_name, model, created_at, updated_at, transcript_path, archived
+             FROM sessions WHERE archived = ?1 ORDER BY updated_at DESC"
+        } else {
+            "SELECT session_id, title, cwd, provider_name, model, created_at, updated_at, transcript_path, archived
+             FROM sessions ORDER BY updated_at DESC"
+        };
+        let mut statement = conn.prepare(sql)?;
+        let raw_rows = if let Some(archived) = archived {
+            statement
+                .query_map([archived], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, bool>(8)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        } else {
+            statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, bool>(8)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
         raw_rows.into_iter().map(raw_row_to_summary).collect()
     }
 
@@ -290,6 +381,42 @@ impl SessionStore {
             conversation,
             events,
         })
+    }
+
+    /// Persist a resume-state snapshot for interrupted-session recovery.
+    ///
+    /// # Errors
+    /// Returns an error if the state cannot be serialized or written.
+    pub fn save_resume_state(&self, session_id: Uuid, state: &ResumeState) -> Result<()> {
+        self.append_named_event(session_id, "resume_state", serde_json::to_value(state)?)
+    }
+
+    /// Clear any persisted resume-state snapshot for a session.
+    ///
+    /// # Errors
+    /// Returns an error if the cleared state cannot be written.
+    pub fn clear_resume_state(&self, session_id: Uuid) -> Result<()> {
+        self.save_resume_state(session_id, &ResumeState::empty())
+    }
+
+    /// Load the latest resume-state snapshot for a session.
+    ///
+    /// # Errors
+    /// Returns an error if the transcript cannot be read or the snapshot is invalid.
+    pub fn load_resume_state(&self, session_id: Uuid) -> Result<Option<ResumeState>> {
+        let state = self
+            .load_events(session_id)?
+            .into_iter()
+            .rev()
+            .find_map(|event| {
+                (event.event_type == "resume_state")
+                    .then_some(event.payload)
+                    .flatten()
+            });
+        state
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(Into::into)
     }
 
     /// Export the session transcript to an NDJSON file.
@@ -360,7 +487,7 @@ impl SessionStore {
     }
 
     fn touch(&self, session_id: Uuid) -> Result<()> {
-        self.connection()?.execute(
+        self.conn()?.execute(
             "UPDATE sessions SET updated_at = ?2 WHERE session_id = ?1",
             params![session_id.to_string(), Utc::now().to_rfc3339()],
         )?;
@@ -368,7 +495,7 @@ impl SessionStore {
     }
 
     fn init_schema(&self) -> Result<()> {
-        let conn = self.connection()?;
+        let conn = self.conn()?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS sessions (
                 session_id TEXT PRIMARY KEY,
@@ -378,21 +505,38 @@ impl SessionStore {
                 model TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                transcript_path TEXT NOT NULL
+                transcript_path TEXT NOT NULL,
+                archived INTEGER NOT NULL DEFAULT 0
             );",
         )?;
+        let has_archived = {
+            let mut statement = conn.prepare("PRAGMA table_info(sessions)")?;
+            let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+                .into_iter()
+                .any(|column| column == "archived")
+        };
+        if !has_archived {
+            conn.execute(
+                "ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
         Ok(())
     }
 
-    fn connection(&self) -> Result<Connection> {
-        Connection::open(&self.paths.state_db_path)
-            .with_context(|| format!("failed to open {}", self.paths.state_db_path.display()))
+    /// Obtain a locked reference to the persistent SQLite connection.
+    ///
+    /// Uses `unwrap_or_else` to recover from a poisoned mutex rather than
+    /// panicking, ensuring resilience during long-running sessions.
+    fn conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
+        Ok(self.conn.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     fn try_get_session_summary(&self, session_id: Uuid) -> Result<Option<SessionSummary>> {
-        let conn = self.connection()?;
+        let conn = self.conn()?;
         let mut statement = conn.prepare(
-            "SELECT session_id, title, cwd, provider_name, model, created_at, updated_at, transcript_path
+            "SELECT session_id, title, cwd, provider_name, model, created_at, updated_at, transcript_path, archived
              FROM sessions WHERE session_id = ?1 LIMIT 1",
         )?;
         let row = statement.query_row([session_id.to_string()], |row| {
@@ -405,6 +549,7 @@ impl SessionStore {
                 row.get::<_, String>(5)?,
                 row.get::<_, String>(6)?,
                 row.get::<_, String>(7)?,
+                row.get::<_, bool>(8)?,
             ))
         });
 
@@ -441,10 +586,20 @@ fn raw_row_to_summary(
         String,
         String,
         String,
+        bool,
     ),
 ) -> Result<SessionSummary> {
-    let (session_id, title, cwd, provider_name, model, created_at, updated_at, transcript_path) =
-        raw;
+    let (
+        session_id,
+        title,
+        cwd,
+        provider_name,
+        model,
+        created_at,
+        updated_at,
+        transcript_path,
+        archived,
+    ) = raw;
     Ok(SessionSummary {
         session_id: Uuid::parse_str(&session_id)?,
         title,
@@ -454,6 +609,7 @@ fn raw_row_to_summary(
         created_at: parse_timestamp(&created_at)?,
         updated_at: parse_timestamp(&updated_at)?,
         transcript_path: PathBuf::from(transcript_path),
+        archived,
     })
 }
 
@@ -516,6 +672,7 @@ fn build_session_stats(events: &[StoredEvent], conversation: &[ConversationEntry
 #[cfg(test)]
 mod tests {
     use super::SessionStore;
+    use crate::resume_state::{PendingToolCall, ResumeState};
     use rc_config::AppPaths;
     use rc_core::ConversationEntry;
     use serde_json::json;
@@ -577,5 +734,45 @@ mod tests {
         assert!(export.is_ok());
         let export = export.unwrap_or_else(|error| panic!("{error}"));
         assert!(export.exists());
+    }
+
+    #[test]
+    fn resume_state_round_trips() {
+        let tempdir = match tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("failed to create tempdir: {error}"),
+        };
+        let paths = AppPaths::discover(Some(tempdir.path().join(".remote-code-rust")));
+        let store = SessionStore::open(paths.unwrap_or_else(|error| panic!("{error}")))
+            .unwrap_or_else(|error| panic!("{error}"));
+
+        let session_id = Uuid::new_v4();
+        store
+            .ensure_session(session_id, tempdir.path(), "mock", None, None)
+            .unwrap_or_else(|error| panic!("{error}"));
+        let state = ResumeState::from_pending_calls(vec![PendingToolCall {
+            id: "tool-1".to_owned(),
+            name: "bash_command".to_owned(),
+            input: json!({"command": "pwd"}),
+        }]);
+        store
+            .save_resume_state(session_id, &state)
+            .unwrap_or_else(|error| panic!("{error}"));
+
+        let loaded = store
+            .load_resume_state(session_id)
+            .unwrap_or_else(|error| panic!("{error}"))
+            .unwrap_or_else(|| panic!("missing resume state"));
+        assert_eq!(loaded.pending_tool_calls.len(), 1);
+        assert_eq!(loaded.pending_tool_calls[0].name, "bash_command");
+
+        store
+            .clear_resume_state(session_id)
+            .unwrap_or_else(|error| panic!("{error}"));
+        let cleared = store
+            .load_resume_state(session_id)
+            .unwrap_or_else(|error| panic!("{error}"))
+            .unwrap_or_else(|| panic!("missing cleared state"));
+        assert!(cleared.pending_tool_calls.is_empty());
     }
 }

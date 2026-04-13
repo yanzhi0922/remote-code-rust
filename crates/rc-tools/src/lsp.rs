@@ -104,7 +104,10 @@ impl LspClient {
         };
 
         let mut results = Vec::new();
-        for entry in WalkDir::new(&search_root).into_iter().filter_map(Result::ok) {
+        for entry in WalkDir::new(&search_root)
+            .into_iter()
+            .filter_map(Result::ok)
+        {
             if !entry.file_type().is_file() {
                 continue;
             }
@@ -140,8 +143,7 @@ impl LspClient {
     pub fn find_references(&self, symbol: &str) -> Result<Vec<Location>> {
         let escaped = regex::escape(symbol);
         let pattern = format!(r"\b{escaped}\b");
-        let re = regex::Regex::new(&pattern)
-            .context("invalid symbol pattern for references")?;
+        let re = regex::Regex::new(&pattern).context("invalid symbol pattern for references")?;
 
         let mut results = Vec::new();
         let max_results = 100;
@@ -259,12 +261,7 @@ impl LspClient {
     ///
     /// Analyzes the file content around the given position and suggests
     /// symbols that appear elsewhere in the workspace.
-    pub fn completion(
-        &self,
-        file_path: &str,
-        _line: u32,
-        column: u32,
-    ) -> Result<Vec<String>> {
+    pub fn completion(&self, file_path: &str, line: u32, column: u32) -> Result<Vec<String>> {
         let target = self.workspace_root.join(file_path);
         if !target.exists() {
             return Ok(vec![]);
@@ -274,7 +271,8 @@ impl LspClient {
 
         // Extract the partial identifier at the cursor position.
         let col = column as usize;
-        let current_line = contents.lines().next().unwrap_or("");
+        let line_index = line.saturating_sub(1) as usize;
+        let current_line = contents.lines().nth(line_index).unwrap_or("");
         if col == 0 || col > current_line.len() {
             return Ok(vec![]);
         }
@@ -514,9 +512,8 @@ fn find_column(line: &str, symbol: &str) -> usize {
 
 /// Check if a path should be ignored during search.
 fn is_ignored_path(path: &Path) -> bool {
-    path.components().any(|component| {
-        IGNORED_DIRS.contains(&component.as_os_str().to_string_lossy().as_ref())
-    })
+    path.components()
+        .any(|component| IGNORED_DIRS.contains(&component.as_os_str().to_string_lossy().as_ref()))
 }
 
 // ---------------------------------------------------------------------------

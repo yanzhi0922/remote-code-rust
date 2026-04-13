@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand};
 use rc_control_plane::SessionState as RemoteSessionState;
 use rc_core::{InputFormat, OutputFormat, PermissionMode, ProviderProtocol};
-use rc_runner::ApprovalDecision;
+use rc_runner::{ApprovalDecision, RunnerSessionCommandResponse};
 use uuid::Uuid;
 
 use crate::hooks::HooksCommand;
@@ -36,6 +36,24 @@ pub struct Cli {
 
     #[arg(long)]
     pub session_id: Option<Uuid>,
+
+    #[arg(long = "continue")]
+    pub r#continue: bool,
+
+    #[arg(long)]
+    pub name: Option<String>,
+
+    #[arg(long = "settings")]
+    pub settings_files: Vec<PathBuf>,
+
+    #[arg(long = "setting-sources")]
+    pub setting_sources: bool,
+
+    #[arg(long, value_delimiter = ',')]
+    pub allowed_tools: Vec<String>,
+
+    #[arg(long, value_delimiter = ',')]
+    pub disallowed_tools: Vec<String>,
 
     #[arg(long)]
     pub provider: Option<String>,
@@ -100,6 +118,10 @@ pub enum Commands {
         #[command(subcommand)]
         command: McpCommand,
     },
+    Skills {
+        #[command(subcommand)]
+        command: SkillsCommand,
+    },
     Migrate {
         #[command(subcommand)]
         command: MigrateCommand,
@@ -131,6 +153,10 @@ pub enum SessionsCommand {
 #[derive(Subcommand, Debug)]
 pub enum RemoteCommand {
     Meta(RemoteMetaArgs),
+    Auth {
+        #[command(subcommand)]
+        command: RemoteAuthCommand,
+    },
     Runners {
         #[command(subcommand)]
         command: RemoteRunnersCommand,
@@ -157,6 +183,14 @@ pub enum RemoteRunnersCommand {
 }
 
 #[derive(Subcommand, Debug)]
+pub enum RemoteAuthCommand {
+    Devices(RemoteDevicesListArgs),
+    Bootstrap(RemoteBootstrapArgs),
+    PairOffer(RemotePairingOfferArgs),
+    PairAccept(RemotePairingAcceptArgs),
+}
+
+#[derive(Subcommand, Debug)]
 pub enum RemoteArtifactsCommand {
     List(RemoteArtifactsListArgs),
     Show(RemoteArtifactShowArgs),
@@ -178,6 +212,8 @@ pub enum RemoteSessionsCommand {
     Show(RemoteSessionShowArgs),
     Create(RemoteSessionCreateArgs),
     State(RemoteSessionStateArgs),
+    Prompt(RemoteSessionPromptArgs),
+    Interrupt(RemoteSessionInterruptArgs),
 }
 
 #[derive(Args, Debug)]
@@ -232,6 +268,71 @@ pub struct RemoteRunnerShowArgs {
     pub target: RemoteTargetArgs,
 
     pub runner_id: String,
+
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct RemoteDevicesListArgs {
+    #[command(flatten)]
+    pub target: RemoteTargetArgs,
+
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct RemoteBootstrapArgs {
+    #[command(flatten)]
+    pub target: RemoteTargetArgs,
+
+    #[arg(long)]
+    pub bootstrap_secret: String,
+
+    #[arg(long)]
+    pub device_name: String,
+
+    #[arg(long, value_enum, default_value_t = RemoteDeviceKindValue::Cli)]
+    pub device_kind: RemoteDeviceKindValue,
+
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct RemotePairingOfferArgs {
+    #[command(flatten)]
+    pub target: RemoteTargetArgs,
+
+    #[arg(long)]
+    pub device_name: String,
+
+    #[arg(long, value_enum, default_value_t = RemoteDeviceKindValue::Browser)]
+    pub device_kind: RemoteDeviceKindValue,
+
+    #[arg(long)]
+    pub expires_in_secs: Option<u64>,
+
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct RemotePairingAcceptArgs {
+    #[command(flatten)]
+    pub target: RemoteTargetArgs,
+
+    pub offer_id: Uuid,
+
+    #[arg(long)]
+    pub pairing_secret: String,
+
+    #[arg(long)]
+    pub device_name: Option<String>,
+
+    #[arg(long, value_enum)]
+    pub device_kind: Option<RemoteDeviceKindValue>,
 
     #[arg(long)]
     pub json: bool,
@@ -310,6 +411,13 @@ impl From<RemoteSessionStateValue> for RemoteSessionState {
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
+pub enum RemoteDeviceKindValue {
+    Runner,
+    Browser,
+    Cli,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
 pub enum RemoteEventKindValue {
     RunnerRegistered,
     RunnerHeartbeat,
@@ -318,6 +426,14 @@ pub enum RemoteEventKindValue {
     ApprovalRequested,
     ApprovalResolved,
     ArtifactCreated,
+    MessageDelta,
+    MessageCommitted,
+    ToolStarted,
+    ToolProgress,
+    ToolFinished,
+    ArtifactManifest,
+    RuntimeError,
+    DaemonPresenceChanged,
 }
 
 impl RemoteEventKindValue {
@@ -330,6 +446,14 @@ impl RemoteEventKindValue {
             Self::ApprovalRequested => "approval_requested",
             Self::ApprovalResolved => "approval_resolved",
             Self::ArtifactCreated => "artifact_created",
+            Self::MessageDelta => "message_delta",
+            Self::MessageCommitted => "message_committed",
+            Self::ToolStarted => "tool_started",
+            Self::ToolProgress => "tool_progress",
+            Self::ToolFinished => "tool_finished",
+            Self::ArtifactManifest => "artifact_manifest",
+            Self::RuntimeError => "runtime_error",
+            Self::DaemonPresenceChanged => "daemon_presence_changed",
         }
     }
 }
@@ -350,6 +474,32 @@ pub struct RemoteSessionStateArgs {
     #[arg(long)]
     pub json: bool,
 }
+
+#[derive(Args, Debug)]
+pub struct RemoteSessionPromptArgs {
+    #[command(flatten)]
+    pub target: RemoteTargetArgs,
+
+    pub session_id: Uuid,
+
+    pub prompt: Vec<String>,
+
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct RemoteSessionInterruptArgs {
+    #[command(flatten)]
+    pub target: RemoteTargetArgs,
+
+    pub session_id: Uuid,
+
+    #[arg(long)]
+    pub json: bool,
+}
+
+pub type RemoteSessionCommandResponseValue = RunnerSessionCommandResponse;
 
 #[derive(Args, Debug)]
 pub struct RemoteArtifactsListArgs {
@@ -561,6 +711,9 @@ pub enum AgentsCommand {
 #[derive(Subcommand, Debug)]
 pub enum McpCommand {
     List(McpListArgs),
+    Get(McpGetArgs),
+    Add(McpAddArgs),
+    Remove(McpRemoveArgs),
     Call(McpCallArgs),
 }
 
@@ -569,6 +722,16 @@ pub enum PluginsCommand {
     List(PluginsListArgs),
     Inspect(PluginsInspectArgs),
     Invoke(PluginsInvokeArgs),
+    Validate(PluginsValidateArgs),
+    Install(PluginsInstallArgs),
+    Remove(PluginsRemoveArgs),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SkillsCommand {
+    List(SkillsListArgs),
+    Show(SkillsShowArgs),
+    Lock(SkillsLockArgs),
 }
 
 #[derive(Args, Debug)]
@@ -605,6 +768,82 @@ pub struct McpListArgs {
 
     #[arg(long = "config")]
     pub config_paths: Vec<PathBuf>,
+}
+
+#[derive(Args, Debug)]
+pub struct McpGetArgs {
+    #[arg(long)]
+    pub server: String,
+
+    #[arg(long)]
+    pub connect: bool,
+
+    #[arg(long)]
+    pub json: bool,
+
+    #[arg(long = "include-disabled")]
+    pub include_disabled: bool,
+
+    #[arg(long = "config")]
+    pub config_paths: Vec<PathBuf>,
+}
+
+#[derive(Args, Debug)]
+pub struct McpAddArgs {
+    pub name: String,
+
+    #[arg(long)]
+    pub command: Option<String>,
+
+    #[arg(long)]
+    pub url: Option<String>,
+
+    #[arg(long = "arg")]
+    pub args: Vec<String>,
+
+    #[arg(long)]
+    pub cwd: Option<PathBuf>,
+
+    #[arg(long = "env")]
+    pub env: Vec<String>,
+
+    #[arg(long)]
+    pub disabled: bool,
+
+    #[arg(long)]
+    pub startup_timeout_secs: Option<u64>,
+
+    #[arg(long)]
+    pub request_timeout_secs: Option<u64>,
+
+    #[arg(long = "meta")]
+    pub metadata: Vec<String>,
+
+    #[arg(long)]
+    pub json: bool,
+
+    #[arg(long = "config")]
+    pub config_path: Option<PathBuf>,
+
+    #[arg(long)]
+    pub project: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct McpRemoveArgs {
+    pub name: String,
+
+    #[arg(long)]
+    pub json: bool,
+
+    #[arg(long = "config")]
+    pub config_path: Option<PathBuf>,
+
+    #[arg(long)]
+    pub project: bool,
+
+    #[arg(long)]
+    pub if_exists: bool,
 }
 
 #[derive(Args, Debug)]
@@ -677,6 +916,72 @@ pub struct PluginsInvokeArgs {
 
     #[arg(long = "plugins-dir")]
     pub plugin_roots: Vec<PathBuf>,
+}
+
+#[derive(Args, Debug)]
+pub struct PluginsValidateArgs {
+    #[arg(long)]
+    pub plugin: Option<String>,
+
+    #[arg(long)]
+    pub path: Option<PathBuf>,
+
+    #[arg(long)]
+    pub json: bool,
+
+    #[arg(long = "plugins-dir")]
+    pub plugin_roots: Vec<PathBuf>,
+}
+
+#[derive(Args, Debug)]
+pub struct PluginsInstallArgs {
+    pub path: PathBuf,
+
+    #[arg(long)]
+    pub json: bool,
+
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct PluginsRemoveArgs {
+    pub plugin: String,
+
+    #[arg(long)]
+    pub json: bool,
+
+    #[arg(long)]
+    pub if_exists: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct SkillsListArgs {
+    #[arg(long)]
+    pub json: bool,
+
+    #[arg(long)]
+    pub no_plugins: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct SkillsShowArgs {
+    pub skill: String,
+
+    #[arg(long)]
+    pub json: bool,
+
+    #[arg(long)]
+    pub include_instructions: bool,
+
+    #[arg(long)]
+    pub no_plugins: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct SkillsLockArgs {
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args, Debug)]

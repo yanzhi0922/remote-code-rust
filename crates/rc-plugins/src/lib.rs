@@ -26,6 +26,8 @@ use walkdir::WalkDir;
 pub const PLUGIN_MANIFEST_FILE: &str = "plugin.json";
 /// Directory name for plugin manifests.
 pub const PLUGIN_MANIFEST_DIR: &str = ".codex-plugin";
+/// Marker file used to opt a plugin out of discovery without deleting it.
+pub const PLUGIN_DISABLED_MARKER: &str = ".remote-code-disabled";
 /// Default protocol version for plugin runtime communication.
 pub const DEFAULT_PLUGIN_RUNTIME_PROTOCOL_VERSION: &str = "2026-04-07";
 /// Default timeout for the runtime handshake in seconds.
@@ -197,6 +199,19 @@ pub struct PluginBundle {
     pub manifest: PluginManifest,
     pub manifest_path: PathBuf,
     pub root: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct PluginValidationReport {
+    pub plugin_name: String,
+    pub manifest_path: PathBuf,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+    #[serde(default)]
+    pub errors: Vec<String>,
+    pub bundled_skills: usize,
+    pub has_runtime: bool,
+    pub has_mcp: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -450,6 +465,116 @@ pub fn load_plugin(path: impl AsRef<Path>) -> Result<PluginBundle, PluginError> 
         manifest_path: path.to_path_buf(),
         root: resolve_plugin_root(path),
     })
+}
+
+pub fn load_plugin_from_root(root: impl AsRef<Path>) -> Result<PluginBundle, PluginError> {
+    let root = root.as_ref();
+    load_plugin(root.join(PLUGIN_MANIFEST_DIR).join(PLUGIN_MANIFEST_FILE))
+}
+
+pub fn validate_plugin_bundle(plugin: &PluginBundle) -> PluginValidationReport {
+    let mut report = PluginValidationReport {
+        plugin_name: plugin.manifest.name.clone(),
+        manifest_path: plugin.manifest_path.clone(),
+        has_runtime: plugin.runtime_config().is_some(),
+        has_mcp: plugin.mcp_config_path().is_some(),
+        ..PluginValidationReport::default()
+    };
+
+    if plugin.manifest.name.trim().is_empty() {
+        report.errors.push("plugin name must not be empty".to_owned());
+    }
+    if plugin.manifest.version.trim().is_empty() {
+        report
+            .errors
+            .push("plugin version must not be empty".to_owned());
+    }
+    if plugin.root.join(PLUGIN_DISABLED_MARKER).exists() {
+        report
+            .warnings
+            .push("plugin is currently disabled by marker file".to_owned());
+    }
+
+    if let Some(skills_root) = plugin.skills_root() {
+        if !skills_root.exists() {
+            report.errors.push(format!(
+                "skills directory {} does not exist",
+                skills_root.display()
+            ));
+        } else {
+            match plugin.discover_bundled_skills() {
+                Ok(skills) => {
+                    report.bundled_skills = skills.len();
+                    if skills.is_empty() {
+                        report
+                            .warnings
+                            .push("skills path exists but no SKILL.md files were found".to_owned());
+                    }
+                }
+                Err(error) => report
+                    .errors
+                    .push(format!("failed to discover bundled skills: {error}")),
+            }
+        }
+    }
+
+    if let Some(hooks_path) = plugin.hooks_config_path()
+        && !hooks_path.exists()
+    {
+        report
+            .errors
+            .push(format!("hooks config {} does not exist", hooks_path.display()));
+    }
+    if let Some(app_path) = plugin.app_manifest_path()
+        && !app_path.exists()
+    {
+        report
+            .errors
+            .push(format!("app manifest {} does not exist", app_path.display()));
+    }
+    if let Some(mcp_path) = plugin.mcp_config_path() {
+        if !mcp_path.exists() {
+            report
+                .errors
+                .push(format!("MCP config {} does not exist", mcp_path.display()));
+        } else if let Err(error) = plugin.load_mcp_config() {
+            report
+                .errors
+                .push(format!("failed to parse MCP config: {error}"));
+        }
+    }
+
+    if let Some(runtime) = plugin.runtime_config() {
+        if runtime.command.trim().is_empty() {
+            report
+                .errors
+                .push("runtime command must not be empty".to_owned());
+        }
+        if !runtime.cwd.exists() {
+            report.errors.push(format!(
+                "runtime cwd {} does not exist",
+                runtime.cwd.display()
+            ));
+        } else if !runtime.cwd.is_dir() {
+            report.errors.push(format!(
+                "runtime cwd {} is not a directory",
+                runtime.cwd.display()
+            ));
+        }
+    }
+
+    if plugin.skills_root().is_none()
+        && plugin.hooks_config_path().is_none()
+        && plugin.app_manifest_path().is_none()
+        && plugin.mcp_config_path().is_none()
+        && plugin.runtime_config().is_none()
+    {
+        report.warnings.push(
+            "plugin does not expose runtime, skills, hooks, apps, or MCP surfaces".to_owned(),
+        );
+    }
+
+    report
 }
 
 pub async fn inspect_runtime(
@@ -1024,6 +1149,34 @@ mod tests {
             root.join(PLUGIN_MANIFEST_DIR).join(PLUGIN_MANIFEST_FILE),
         ));
         assert!(plugin.runtime_config().is_none());
+    }
+
+    #[test]
+    fn loads_plugin_from_root_and_validates_bundle() {
+        let temp = ok(tempdir());
+        let root = temp.path().join("bundle");
+        ok(fs::create_dir_all(root.join(PLUGIN_MANIFEST_DIR)));
+        ok(fs::create_dir_all(root.join("skills").join("demo")));
+        ok(fs::write(
+            root.join(PLUGIN_MANIFEST_DIR).join(PLUGIN_MANIFEST_FILE),
+            r#"{
+                "name":"bundle",
+                "version":"0.1.0",
+                "skills":"./skills",
+                "runtime":{"command":"python","cwd":"."}
+            }"#,
+        ));
+        ok(fs::write(
+            root.join("skills").join("demo").join("SKILL.md"),
+            "# Demo\n\nHello.\n",
+        ));
+
+        let plugin = ok(load_plugin_from_root(&root));
+        let report = validate_plugin_bundle(&plugin);
+        assert_eq!(plugin.manifest.name, "bundle");
+        assert!(report.errors.is_empty(), "validation errors: {:?}", report.errors);
+        assert_eq!(report.bundled_skills, 1);
+        assert!(report.has_runtime);
     }
 
     #[tokio::test]

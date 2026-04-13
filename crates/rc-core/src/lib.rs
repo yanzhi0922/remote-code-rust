@@ -4,6 +4,8 @@
 //! permission modes, provider protocols, conversation entries, tool calls,
 //! usage summaries, hook definitions, and session events.
 
+pub mod task_stack;
+
 use chrono::{DateTime, Utc};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
@@ -306,7 +308,11 @@ pub struct Attachment {
 
 impl Attachment {
     /// Create an attachment from raw bytes.
-    pub fn from_bytes(media_type: AttachmentMediaType, data: &[u8], filename: Option<String>) -> Self {
+    pub fn from_bytes(
+        media_type: AttachmentMediaType,
+        data: &[u8],
+        filename: Option<String>,
+    ) -> Self {
         Self {
             media_type,
             data: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, data),
@@ -316,14 +322,11 @@ impl Attachment {
 
     /// Read a file and create an attachment, inferring the media type from extension.
     pub fn from_file(path: &std::path::Path) -> Result<Self, String> {
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         let media_type = AttachmentMediaType::from_extension(ext)
             .ok_or_else(|| format!("unsupported file type: .{ext}"))?;
-        let data = std::fs::read(path)
-            .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+        let data =
+            std::fs::read(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
         let filename = path.file_name().and_then(|n| n.to_str()).map(String::from);
         Ok(Self::from_bytes(media_type, &data, filename))
     }
@@ -468,7 +471,7 @@ impl ConversationEntry {
 }
 
 /// Parsed response from the LLM provider.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProviderResponse {
     /// Primary text content of the response.
     pub text: String,

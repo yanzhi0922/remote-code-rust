@@ -272,7 +272,10 @@ impl Histogram {
 
     /// Record a value observation.
     pub fn observe(&self, value: u64) {
-        self.buckets.lock().unwrap_or_else(|e| e.into_inner()).push(value);
+        self.buckets
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(value);
     }
 
     /// Get the number of observations.
@@ -284,7 +287,11 @@ impl Histogram {
     /// Get the sum of all observations.
     #[must_use]
     pub fn sum(&self) -> u64 {
-        self.buckets.lock().unwrap_or_else(|e| e.into_inner()).iter().sum()
+        self.buckets
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .sum()
     }
 
     /// Get the average of all observations (0 if empty).
@@ -381,30 +388,17 @@ impl TelemetryHub {
             "provider_latency_ms".to_owned(),
             HashMap::new(),
         ));
-        let tool_latency = Arc::new(Histogram::new(
-            "tool_latency_ms".to_owned(),
-            HashMap::new(),
-        ));
-        let token_input_total = Arc::new(Counter::new(
-            "token_input_total".to_owned(),
-            HashMap::new(),
-        ));
+        let tool_latency = Arc::new(Histogram::new("tool_latency_ms".to_owned(), HashMap::new()));
+        let token_input_total =
+            Arc::new(Counter::new("token_input_total".to_owned(), HashMap::new()));
         let token_output_total = Arc::new(Counter::new(
             "token_output_total".to_owned(),
             HashMap::new(),
         ));
-        let active_sessions = Arc::new(Gauge::new(
-            "active_sessions".to_owned(),
-            HashMap::new(),
-        ));
-        let compaction_count = Arc::new(Counter::new(
-            "compaction_count".to_owned(),
-            HashMap::new(),
-        ));
-        let error_count = Arc::new(Counter::new(
-            "error_count".to_owned(),
-            HashMap::new(),
-        ));
+        let active_sessions = Arc::new(Gauge::new("active_sessions".to_owned(), HashMap::new()));
+        let compaction_count =
+            Arc::new(Counter::new("compaction_count".to_owned(), HashMap::new()));
+        let error_count = Arc::new(Counter::new("error_count".to_owned(), HashMap::new()));
 
         Arc::new(Self {
             service_name: service_name.to_owned(),
@@ -476,8 +470,7 @@ impl TelemetryHub {
     pub fn span_attr(&self, span_id: SpanId, key: &str, value: &str) {
         let mut guard = self.active_spans.write().unwrap_or_else(|e| e.into_inner());
         if let Some(span) = guard.get_mut(&span_id.0) {
-            span.attributes
-                .insert(key.to_owned(), value.to_owned());
+            span.attributes.insert(key.to_owned(), value.to_owned());
         }
     }
 
@@ -525,12 +518,7 @@ impl TelemetryHub {
     // ── Event recording ──────────────────────────────────────────────────
 
     /// Record a structured telemetry event.
-    pub fn record_event(
-        &self,
-        severity: Severity,
-        category: &str,
-        message: &str,
-    ) {
+    pub fn record_event(&self, severity: Severity, category: &str, message: &str) {
         self.record_event_with_attrs(severity, category, message, HashMap::new());
     }
 
@@ -662,11 +650,7 @@ impl TelemetryHub {
                 .read()
                 .unwrap_or_else(|e| e.into_inner())
                 .len(),
-            event_count: self
-                .events
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .len(),
+            event_count: self.events.lock().unwrap_or_else(|e| e.into_inner()).len(),
         }
     }
 
@@ -675,20 +659,62 @@ impl TelemetryHub {
     pub fn export_metrics(&self) -> HashMap<String, serde_json::Value> {
         let snap = self.metrics_snapshot();
         let mut map = HashMap::new();
-        map.insert("uptime_secs".to_owned(), serde_json::json!(snap.uptime.as_secs()));
-        map.insert("total_input_tokens".to_owned(), serde_json::json!(snap.total_input_tokens));
-        map.insert("total_output_tokens".to_owned(), serde_json::json!(snap.total_output_tokens));
-        map.insert("total_cost_usd".to_owned(), serde_json::json!(snap.total_cost_usd));
-        map.insert("active_sessions".to_owned(), serde_json::json!(snap.active_sessions));
-        map.insert("provider_latency_p50_ms".to_owned(), serde_json::json!(snap.provider_latency_p50_ms));
-        map.insert("provider_latency_p99_ms".to_owned(), serde_json::json!(snap.provider_latency_p99_ms));
-        map.insert("tool_latency_p50_ms".to_owned(), serde_json::json!(snap.tool_latency_p50_ms));
-        map.insert("tool_latency_p99_ms".to_owned(), serde_json::json!(snap.tool_latency_p99_ms));
-        map.insert("compaction_count".to_owned(), serde_json::json!(snap.compaction_count));
-        map.insert("error_count".to_owned(), serde_json::json!(snap.error_count));
-        map.insert("completed_spans".to_owned(), serde_json::json!(snap.completed_spans));
-        map.insert("active_spans".to_owned(), serde_json::json!(snap.active_spans));
-        map.insert("event_count".to_owned(), serde_json::json!(snap.event_count));
+        map.insert(
+            "uptime_secs".to_owned(),
+            serde_json::json!(snap.uptime.as_secs()),
+        );
+        map.insert(
+            "total_input_tokens".to_owned(),
+            serde_json::json!(snap.total_input_tokens),
+        );
+        map.insert(
+            "total_output_tokens".to_owned(),
+            serde_json::json!(snap.total_output_tokens),
+        );
+        map.insert(
+            "total_cost_usd".to_owned(),
+            serde_json::json!(snap.total_cost_usd),
+        );
+        map.insert(
+            "active_sessions".to_owned(),
+            serde_json::json!(snap.active_sessions),
+        );
+        map.insert(
+            "provider_latency_p50_ms".to_owned(),
+            serde_json::json!(snap.provider_latency_p50_ms),
+        );
+        map.insert(
+            "provider_latency_p99_ms".to_owned(),
+            serde_json::json!(snap.provider_latency_p99_ms),
+        );
+        map.insert(
+            "tool_latency_p50_ms".to_owned(),
+            serde_json::json!(snap.tool_latency_p50_ms),
+        );
+        map.insert(
+            "tool_latency_p99_ms".to_owned(),
+            serde_json::json!(snap.tool_latency_p99_ms),
+        );
+        map.insert(
+            "compaction_count".to_owned(),
+            serde_json::json!(snap.compaction_count),
+        );
+        map.insert(
+            "error_count".to_owned(),
+            serde_json::json!(snap.error_count),
+        );
+        map.insert(
+            "completed_spans".to_owned(),
+            serde_json::json!(snap.completed_spans),
+        );
+        map.insert(
+            "active_spans".to_owned(),
+            serde_json::json!(snap.active_spans),
+        );
+        map.insert(
+            "event_count".to_owned(),
+            serde_json::json!(snap.event_count),
+        );
         map
     }
 
@@ -702,7 +728,10 @@ impl TelemetryHub {
     /// Get recent completed spans (last N).
     #[must_use]
     pub fn recent_spans(&self, limit: usize) -> Vec<CompletedSpan> {
-        let guard = self.completed_spans.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = self
+            .completed_spans
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         guard.iter().rev().take(limit).cloned().collect()
     }
 }

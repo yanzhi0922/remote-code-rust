@@ -31,3 +31,6 @@ C*app-warnings*
 remaining-warnings.txt
 fix_pedantic.py
 key_for_test.txt
+
+# Node.js (GUI sub-project)
+node_modules/

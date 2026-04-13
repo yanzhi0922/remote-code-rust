@@ -169,10 +169,7 @@ pub struct SandboxResult {
 /// Execute a command inside a sandbox with the given configuration.
 ///
 /// Dispatches to the platform-specific implementation based on the active policy.
-pub async fn execute_in_sandbox(
-    command: &str,
-    config: &SandboxConfig,
-) -> Result<SandboxResult> {
+pub async fn execute_in_sandbox(command: &str, config: &SandboxConfig) -> Result<SandboxResult> {
     let timeout = Duration::from_secs(config.timeout_secs);
 
     match &config.policy {
@@ -180,9 +177,7 @@ pub async fn execute_in_sandbox(
         SandboxPolicy::Basic => execute_basic(command, config, timeout).await,
 
         #[cfg(target_os = "macos")]
-        SandboxPolicy::Seatbelt(policy) => {
-            execute_seatbelt(command, policy, timeout).await
-        }
+        SandboxPolicy::Seatbelt(policy) => execute_seatbelt(command, policy, timeout).await,
 
         #[cfg(target_os = "linux")]
         SandboxPolicy::Landlock(policy) => {
@@ -193,9 +188,7 @@ pub async fn execute_in_sandbox(
         }
 
         #[cfg(target_os = "windows")]
-        SandboxPolicy::Windows(policy) => {
-            execute_windows(command, policy, config, timeout).await
-        }
+        SandboxPolicy::Windows(policy) => execute_windows(command, policy, config, timeout).await,
     }
 }
 

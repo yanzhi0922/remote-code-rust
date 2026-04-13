@@ -3,36 +3,41 @@
 use std::collections::BTreeSet;
 
 use axum::Json;
-use axum::extract::{Path as AxumPath, Query, State, WebSocketUpgrade};
+use axum::extract::{Extension, Path as AxumPath, Query, State, WebSocketUpgrade};
 use axum::http::StatusCode;
 use axum::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
 use axum::response::{IntoResponse, Response};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use chrono::Utc;
 use rc_runner::{
-    ApprovalCreateRequest, ApprovalDecision, ApprovalDecisionRequest, ApprovalState,
-    ListResponse, RunnerHeartbeat, RunnerRegistrationRequest, RunnerSessionCreateRequest,
+    ApprovalCreateRequest, ApprovalDecision, ApprovalDecisionRequest, ApprovalState, ListResponse,
+    RunnerHeartbeat, RunnerRegistrationRequest, RunnerSessionCommandRequest,
+    RunnerSessionCommandResponse, RunnerSessionCreateRequest, RunnerSessionRecord,
     RunnerSessionStateUpdateRequest, RunnerSnapshot,
 };
 use uuid::Uuid;
 
+use crate::{AuthPrincipal, ControlPlaneService};
 use crate::helpers::{
-    artifact_file_path, approval_event_matches, dispatch_session_to_runner,
-    event_matches_kind, relay_approval_decision_to_runner, relay_approval_to_runner,
-    runner_is_available, session_state_from_runner, session_state_to_runner,
-    update_runner_session_state,
+    approval_event_matches, artifact_file_path, dispatch_session_command_to_runner,
+    dispatch_session_to_runner, event_matches_kind, relay_approval_decision_to_runner,
+    relay_approval_to_runner, runner_is_available, session_state_from_runner,
+    session_state_to_runner, update_runner_session_state, runner_uses_pull_commands,
 };
 use crate::streams::{
     serve_approval_stream, serve_event_stream, serve_runner_approval_stream,
     serve_runner_event_stream, serve_session_approval_stream, serve_session_event_stream,
 };
 use crate::types::{
-    ApiError, ArtifactCreateRequest, ArtifactRecord, ControlPlaneHealth, ControlPlaneMeta,
-    CreateSessionRequest, EventStreamQuery, ListSessionsQuery, RecentEventsQuery,
-    RunnerRegistrationResponse, SessionRecord, SessionStateUpdateRequest,
-    TimelineEvent, TimelineEventDetail, TimelineEventDraft,
+    ApiError, ArtifactCreateRequest, ArtifactRecord, BootstrapClaimRequest,
+    BootstrapClaimResponse, ControlPlaneHealth, ControlPlaneMeta, CreateSessionRequest,
+    EventStreamQuery, ListSessionsQuery, PairingAcceptRequest, PairingAcceptResponse,
+    PairingOfferCreateRequest, PairingOfferCreateResponse, RecentEventsQuery,
+    RunnerCommandPullQuery, RunnerCommandPullResponse, RunnerQueuedCommandBody,
+    RunnerRegistrationResponse, RuntimeEventCreateRequest, RuntimeEventDetail, SessionRecord,
+    SessionStateUpdateRequest, TimelineEvent, TimelineEventDetail, TimelineEventDraft,
+    TrustedDeviceRecord,
 };
-use crate::ControlPlaneService;
 
 // ---------------------------------------------------------------------------
 // Health / meta
@@ -41,6 +46,7 @@ use crate::ControlPlaneService;
 pub(crate) async fn get_health(
     State(service): State<ControlPlaneService>,
 ) -> Json<ControlPlaneHealth> {
+    let auth_required = service.auth_required().await;
     let registry = service.registry.read().await;
     let available_runner_count = registry
         .runners
@@ -56,13 +62,95 @@ pub(crate) async fn get_health(
         available_runner_count,
         session_count: registry.sessions.len(),
         artifact_count: registry.artifacts.len(),
+        queued_runner_command_count: registry.queued_runner_command_count(),
+        auth_required,
+        bootstrap_secret_configured: service.bootstrap_secret_hash.is_some(),
+        owner_claimed: registry.owner_claimed(),
+        device_count: registry.trusted_device_count(),
     })
 }
 
-pub(crate) async fn get_meta(
-    State(service): State<ControlPlaneService>,
-) -> Json<ControlPlaneMeta> {
+pub(crate) async fn get_meta(State(service): State<ControlPlaneService>) -> Json<ControlPlaneMeta> {
     Json(service.meta.clone())
+}
+
+fn build_pairing_url(base: &str, offer_id: Uuid, pairing_secret: &str) -> Option<String> {
+    let mut url = reqwest::Url::parse(base).ok()?;
+    url.query_pairs_mut()
+        .append_pair("mode", "remote")
+        .append_pair("pairing_offer", &offer_id.to_string())
+        .append_pair("pairing_secret", pairing_secret);
+    Some(url.to_string())
+}
+
+pub(crate) async fn claim_bootstrap_device(
+    State(service): State<ControlPlaneService>,
+    Json(request): Json<BootstrapClaimRequest>,
+) -> Result<(StatusCode, Json<BootstrapClaimResponse>), ApiError> {
+    let response = {
+        let mut registry = service.registry.write().await;
+        let (device, access_token) =
+            registry.bootstrap_claim(service.bootstrap_secret_hash.as_deref(), request)?;
+        BootstrapClaimResponse {
+            device,
+            access_token,
+        }
+    };
+    let _ = service.persist_state().await;
+    Ok((StatusCode::CREATED, Json(response)))
+}
+
+pub(crate) async fn list_devices(
+    State(service): State<ControlPlaneService>,
+) -> Json<ListResponse<TrustedDeviceRecord>> {
+    let registry = service.registry.read().await;
+    Json(ListResponse {
+        items: registry.list_trusted_devices(),
+        latest_sequence: None,
+    })
+}
+
+pub(crate) async fn create_pairing_offer(
+    State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
+    Json(request): Json<PairingOfferCreateRequest>,
+) -> Result<(StatusCode, Json<PairingOfferCreateResponse>), ApiError> {
+    let (offer, pairing_secret) = {
+        let mut registry = service.registry.write().await;
+        registry.create_pairing_offer(principal.created_by_device_id(), request)?
+    };
+    let pairing_url = service
+        .meta
+        .public_base_url
+        .as_deref()
+        .and_then(|base| build_pairing_url(base, offer.offer_id, &pairing_secret));
+    let response = PairingOfferCreateResponse {
+        offer_id: offer.offer_id,
+        device_name: offer.device_name,
+        device_kind: offer.device_kind,
+        created_at: offer.created_at,
+        expires_at: offer.expires_at,
+        pairing_secret,
+        pairing_url,
+    };
+    let _ = service.persist_state().await;
+    Ok((StatusCode::CREATED, Json(response)))
+}
+
+pub(crate) async fn accept_pairing_offer(
+    State(service): State<ControlPlaneService>,
+    Json(request): Json<PairingAcceptRequest>,
+) -> Result<(StatusCode, Json<PairingAcceptResponse>), ApiError> {
+    let response = {
+        let mut registry = service.registry.write().await;
+        let (device, access_token) = registry.accept_pairing_offer(request)?;
+        PairingAcceptResponse {
+            device,
+            access_token,
+        }
+    };
+    let _ = service.persist_state().await;
+    Ok((StatusCode::CREATED, Json(response)))
 }
 
 // ---------------------------------------------------------------------------
@@ -411,6 +499,21 @@ pub(crate) async fn update_runner_heartbeat(
     Ok(Json(snapshot))
 }
 
+pub(crate) async fn pull_runner_commands(
+    State(service): State<ControlPlaneService>,
+    AxumPath(runner_id): AxumPath<String>,
+    Query(query): Query<RunnerCommandPullQuery>,
+) -> Result<Json<RunnerCommandPullResponse>, ApiError> {
+    let commands = {
+        let mut registry = service.registry.write().await;
+        registry.pull_runner_commands(&runner_id, query.limit.unwrap_or(16).clamp(1, 64))?
+    };
+    if !commands.is_empty() {
+        let _ = service.persist_state().await;
+    }
+    Ok(Json(RunnerCommandPullResponse { commands }))
+}
+
 // ---------------------------------------------------------------------------
 // Session handlers
 // ---------------------------------------------------------------------------
@@ -476,24 +579,41 @@ pub(crate) async fn update_session_state(
     let metadata = request.metadata.clone();
 
     let runner_update = if let Some(runner_id) = existing.owner_runner_id.as_deref() {
-        let runner =
+        let runner = {
+            let registry = service.registry.read().await;
+            registry.runners.get(runner_id).cloned().ok_or_else(|| {
+                ApiError::not_found(format!("runner `{runner_id}` was not found"))
+            })?
+        };
+        if runner_uses_pull_commands(&runner) {
             {
-                let registry = service.registry.read().await;
-                registry.runners.get(runner_id).cloned().ok_or_else(|| {
-                    ApiError::not_found(format!("runner `{runner_id}` was not found"))
-                })?
-            };
-        Some(
-            update_runner_session_state(
-                &runner,
-                session_id,
-                &RunnerSessionStateUpdateRequest {
-                    state: session_state_to_runner(requested_state),
-                    metadata: metadata.clone(),
-                },
+                let mut registry = service.registry.write().await;
+                registry.enqueue_runner_command(
+                    runner_id,
+                    RunnerQueuedCommandBody::UpdateSessionState {
+                        session_id,
+                        request: RunnerSessionStateUpdateRequest {
+                            state: session_state_to_runner(requested_state),
+                            metadata: metadata.clone(),
+                        },
+                    },
+                )?;
+            }
+            let _ = service.persist_state().await;
+            None
+        } else {
+            Some(
+                update_runner_session_state(
+                    &runner,
+                    session_id,
+                    &RunnerSessionStateUpdateRequest {
+                        state: session_state_to_runner(requested_state),
+                        metadata: metadata.clone(),
+                    },
+                )
+                .await?,
             )
-            .await?,
-        )
+        }
     } else {
         None
     };
@@ -526,6 +646,52 @@ pub(crate) async fn update_session_state(
         })
         .await;
     Ok(Json(updated))
+}
+
+pub(crate) async fn post_session_command(
+    State(service): State<ControlPlaneService>,
+    AxumPath(session_id): AxumPath<Uuid>,
+    Json(request): Json<RunnerSessionCommandRequest>,
+) -> Result<Json<RunnerSessionCommandResponse>, ApiError> {
+    let session = {
+        let registry = service.registry.read().await;
+        registry.get_session(session_id)?
+    };
+    let Some(owner_runner_id) = session.owner_runner_id.as_deref() else {
+        return Err(ApiError::service_unavailable(format!(
+            "session `{session_id}` is not assigned to a runner"
+        )));
+    };
+    let runner = {
+        let registry = service.registry.read().await;
+        registry.runners.get(owner_runner_id).cloned().ok_or_else(|| {
+            ApiError::not_found(format!("runner `{owner_runner_id}` was not found"))
+        })?
+    };
+    if runner_uses_pull_commands(&runner) {
+        {
+            let mut registry = service.registry.write().await;
+            registry.enqueue_runner_command(
+                owner_runner_id,
+                RunnerQueuedCommandBody::SessionCommand {
+                    session_id,
+                    request: request.clone(),
+                },
+            )?;
+        }
+        let _ = service.persist_state().await;
+        let message = match request {
+            RunnerSessionCommandRequest::SendPrompt { .. } => "prompt queued for runner delivery",
+            RunnerSessionCommandRequest::Interrupt => "interrupt queued for runner delivery",
+        };
+        return Ok(Json(RunnerSessionCommandResponse {
+            session_id,
+            accepted: true,
+            message: message.to_owned(),
+        }));
+    }
+    let response = dispatch_session_command_to_runner(&runner, session_id, &request).await?;
+    Ok(Json(response))
 }
 
 pub(crate) async fn list_session_approvals(
@@ -569,17 +735,24 @@ pub(crate) async fn create_session(
     let mut record = planned.record;
 
     if let Some(owner_runner) = planned.owner_runner {
-        let dispatched = dispatch_session_to_runner(
-            &owner_runner,
-            &RunnerSessionCreateRequest {
-                session_id: Some(record.session_id),
-                workspace_id: record.workspace_id.clone(),
-                metadata: record.metadata.clone(),
-            },
-        )
-        .await?;
-        record.state = session_state_from_runner(dispatched.state);
-        record.updated_at = dispatched.updated_at;
+        let dispatch_request = RunnerSessionCreateRequest {
+            session_id: Some(record.session_id),
+            workspace_id: record.workspace_id.clone(),
+            metadata: record.metadata.clone(),
+        };
+        if runner_uses_pull_commands(&owner_runner) {
+            let mut registry = service.registry.write().await;
+            registry.enqueue_runner_command(
+                &owner_runner.registration.runner_id,
+                RunnerQueuedCommandBody::CreateSession {
+                    request: dispatch_request,
+                },
+            )?;
+        } else {
+            let dispatched = dispatch_session_to_runner(&owner_runner, &dispatch_request).await?;
+            record.state = session_state_from_runner(dispatched.state);
+            record.updated_at = dispatched.updated_at;
+        }
     }
 
     let record = {
@@ -598,6 +771,27 @@ pub(crate) async fn create_session(
         })
         .await;
     Ok((StatusCode::CREATED, Json(record)))
+}
+
+pub(crate) async fn create_session_runtime_event(
+    State(service): State<ControlPlaneService>,
+    AxumPath(session_id): AxumPath<Uuid>,
+    Json(request): Json<RuntimeEventCreateRequest>,
+) -> Result<(StatusCode, Json<TimelineEvent>), ApiError> {
+    let session = {
+        let registry = service.registry.read().await;
+        let session = registry.get_session(session_id)?;
+        validate_runtime_event_request(&registry, session_id, &request.detail)?;
+        session
+    };
+    let event = service
+        .publish_event(TimelineEventDraft {
+            runner_id: session.owner_runner_id,
+            session_id: Some(session_id),
+            detail: request.detail.into(),
+        })
+        .await;
+    Ok((StatusCode::CREATED, Json(event)))
 }
 
 // ---------------------------------------------------------------------------
@@ -723,7 +917,9 @@ pub(crate) async fn create_approval(
         let registry = service.registry.read().await;
         registry.plan_approval(session_id, request)?
     };
-    if let Some(runner) = planned.owner_runner.as_ref() {
+    if let Some(runner) = planned.owner_runner.as_ref()
+        && !runner_uses_pull_commands(runner)
+    {
         let relay_request = ApprovalCreateRequest {
             approval_id: Some(planned.approval.approval_id),
             title: planned.approval.title.clone(),
@@ -771,6 +967,32 @@ pub(crate) async fn create_approval(
             })
             .await;
     }
+    if !approval.runner_id.is_empty() {
+        let runner = {
+            let registry = service.registry.read().await;
+            registry.runners.get(&approval.runner_id).cloned()
+        };
+        if let Some(runner) = runner
+            && runner_uses_pull_commands(&runner)
+        {
+            {
+                let mut registry = service.registry.write().await;
+                registry.enqueue_runner_command(
+                    &approval.runner_id,
+                    RunnerQueuedCommandBody::CreateApproval {
+                        session_id,
+                        request: ApprovalCreateRequest {
+                            approval_id: Some(approval.approval_id),
+                            title: approval.title.clone(),
+                            description: approval.description.clone(),
+                            metadata: approval.metadata.clone(),
+                        },
+                    },
+                )?;
+            }
+            let _ = service.persist_state().await;
+        }
+    }
     Ok((StatusCode::CREATED, Json(approval)))
 }
 
@@ -783,7 +1005,13 @@ pub(crate) async fn apply_approval_decision(
         let registry = service.registry.read().await;
         registry.plan_approval_decision(approval_id, request)?
     };
-    if let Some(runner) = planned.owner_runner.as_ref() {
+    let queue_for_runner = planned
+        .owner_runner
+        .as_ref()
+        .is_some_and(runner_uses_pull_commands);
+    if let Some(runner) = planned.owner_runner.as_ref()
+        && !queue_for_runner
+    {
         let relay_request = ApprovalDecisionRequest {
             decision: match planned.approval.state {
                 ApprovalState::Approved => ApprovalDecision::Approved,
@@ -844,6 +1072,32 @@ pub(crate) async fn apply_approval_decision(
             })
             .await;
     }
+    if queue_for_runner {
+        {
+            let mut registry = service.registry.write().await;
+            registry.enqueue_runner_command(
+                &approval.runner_id,
+                RunnerQueuedCommandBody::ApplyApprovalDecision {
+                    approval_id: approval.approval_id,
+                    request: ApprovalDecisionRequest {
+                        decision: match approval.state {
+                            ApprovalState::Approved => ApprovalDecision::Approved,
+                            ApprovalState::Denied => ApprovalDecision::Denied,
+                            ApprovalState::Cancelled => ApprovalDecision::Cancelled,
+                            ApprovalState::Pending => {
+                                return Err(ApiError::internal(format!(
+                                    "approval `{approval_id}` remained pending after commit"
+                                )));
+                            }
+                        },
+                        responder: approval.responder.clone(),
+                        note: approval.note.clone(),
+                    },
+                },
+            )?;
+        }
+        let _ = service.persist_state().await;
+    }
     Ok(Json(approval))
 }
 
@@ -875,13 +1129,59 @@ async fn dispatch_pending_sessions_for_runner(service: &ControlPlaneService, run
             workspace_id: planned.workspace_id.clone(),
             metadata: planned.metadata.clone(),
         };
-        let dispatched =
-            if let Ok(dispatched) = dispatch_session_to_runner(&planned.runner, &request).await {
-                dispatched
-            } else {
+        let dispatched = if runner_uses_pull_commands(&planned.runner) {
+            let committed = {
+                let mut registry = service.registry.write().await;
+                if registry
+                    .enqueue_runner_command(
+                        &planned.runner.registration.runner_id,
+                        RunnerQueuedCommandBody::CreateSession {
+                            request: request.clone(),
+                        },
+                    )
+                    .is_err()
+                {
+                    None
+                } else {
+                    registry
+                        .commit_pending_session_dispatch(
+                            planned.session_id,
+                            &planned.runner.registration.runner_id,
+                            &RunnerSessionRecord {
+                                session_id: planned.session_id,
+                                runner_id: planned.runner.registration.runner_id.clone(),
+                                workspace_id: planned.workspace_id.clone(),
+                                state: rc_runner::SessionState::Pending,
+                                metadata: planned.metadata.clone(),
+                                created_at: Utc::now(),
+                                updated_at: Utc::now(),
+                            },
+                        )
+                        .ok()
+                }
+            };
+            let Some((record, previous_state)) = committed else {
                 skipped_session_ids.insert(planned.session_id);
                 continue;
             };
+            let _ = service.persist_state().await;
+            let _ = service
+                .publish_event(TimelineEventDraft {
+                    runner_id: record.owner_runner_id.clone(),
+                    session_id: Some(record.session_id),
+                    detail: TimelineEventDetail::SessionStateChanged {
+                        previous_state,
+                        state: record.state,
+                    },
+                })
+                .await;
+            continue;
+        } else if let Ok(dispatched) = dispatch_session_to_runner(&planned.runner, &request).await {
+            dispatched
+        } else {
+            skipped_session_ids.insert(planned.session_id);
+            continue;
+        };
 
         let committed = {
             let mut registry = service.registry.write().await;
@@ -909,4 +1209,82 @@ async fn dispatch_pending_sessions_for_runner(service: &ControlPlaneService, run
             })
             .await;
     }
+}
+
+fn validate_runtime_event_request(
+    registry: &crate::registry::Registry,
+    session_id: Uuid,
+    detail: &RuntimeEventDetail,
+) -> Result<(), ApiError> {
+    match detail {
+        RuntimeEventDetail::MessageDelta { delta, .. } => {
+            require_non_empty_runtime_field("delta", delta)?;
+        }
+        RuntimeEventDetail::MessageCommitted { text, .. } => {
+            require_non_empty_runtime_field("text", text)?;
+        }
+        RuntimeEventDetail::ToolStarted {
+            tool_call_id,
+            tool_name,
+        } => {
+            require_non_empty_runtime_field("tool_call_id", tool_call_id)?;
+            require_non_empty_runtime_field("tool_name", tool_name)?;
+        }
+        RuntimeEventDetail::ToolProgress {
+            tool_call_id,
+            tool_name,
+            delta,
+            elapsed_time_seconds,
+        } => {
+            if tool_call_id.as_deref().is_none_or(str::is_empty)
+                && tool_name.as_deref().is_none_or(str::is_empty)
+            {
+                return Err(ApiError::bad_request(
+                    "runtime tool_progress events require tool_call_id or tool_name".to_owned(),
+                ));
+            }
+            if delta.as_deref().is_none_or(str::is_empty) && elapsed_time_seconds.is_none() {
+                return Err(ApiError::bad_request(
+                    "runtime tool_progress events require delta or elapsed_time_seconds".to_owned(),
+                ));
+            }
+        }
+        RuntimeEventDetail::ToolFinished {
+            tool_call_id,
+            tool_name,
+            ..
+        } => {
+            require_non_empty_runtime_field("tool_call_id", tool_call_id)?;
+            require_non_empty_runtime_field("tool_name", tool_name)?;
+        }
+        RuntimeEventDetail::ArtifactManifest { artifact_ids } => {
+            if artifact_ids.is_empty() {
+                return Err(ApiError::bad_request(
+                    "runtime artifact_manifest events require at least one artifact_id".to_owned(),
+                ));
+            }
+            for artifact_id in artifact_ids {
+                let artifact = registry.get_artifact(*artifact_id)?;
+                if artifact.session_id != session_id {
+                    return Err(ApiError::conflict(format!(
+                        "artifact `{artifact_id}` does not belong to session `{session_id}`"
+                    )));
+                }
+            }
+        }
+        RuntimeEventDetail::RuntimeError { message } => {
+            require_non_empty_runtime_field("message", message)?;
+        }
+        RuntimeEventDetail::DaemonPresenceChanged { .. } => {}
+    }
+    Ok(())
+}
+
+fn require_non_empty_runtime_field(field: &str, value: &str) -> Result<(), ApiError> {
+    if value.trim().is_empty() {
+        return Err(ApiError::bad_request(format!(
+            "runtime event field `{field}` cannot be empty"
+        )));
+    }
+    Ok(())
 }

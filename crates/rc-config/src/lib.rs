@@ -4,6 +4,11 @@
 //! environment variables and TOML settings files, failover configuration, and
 //! legacy profile import.
 
+pub mod settings_layers;
+pub mod tool_filters;
+
+pub use crate::settings_layers::RuntimeOverrides;
+
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
@@ -18,6 +23,9 @@ use rc_core::{
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use crate::settings_layers::{ResolvedRuntimeSettings, load_runtime_settings};
+use crate::tool_filters::merge_tool_filters;
 
 pub const RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -40,7 +48,7 @@ const RESERVED_PROVIDER_HEADER_NAMES: &[&str] = &[
 ];
 
 const fn default_provider_max_retries() -> u32 {
-    2
+    10
 }
 
 const fn default_provider_retry_initial_backoff_ms() -> u64 {
@@ -229,6 +237,22 @@ pub struct RuntimeConfig {
     pub include_partial_messages: bool,
     /// Maximum number of conversation turns per session.
     pub max_turns: usize,
+    /// Optional human-friendly display name for the session.
+    pub session_name: Option<String>,
+    /// Explanation of which settings layers were applied.
+    pub setting_sources: Vec<String>,
+    /// Concrete settings files loaded for this runtime.
+    pub settings_files: Vec<PathBuf>,
+    /// Tool allow-list applied to the current process.
+    pub allowed_tools: Vec<String>,
+    /// Tool deny-list applied to the current process.
+    pub disallowed_tools: Vec<String>,
+    /// Requested reasoning effort level, if configured.
+    pub effort: Option<String>,
+    /// Fallback model used when no explicit primary model is configured.
+    pub fallback_model: Option<String>,
+    /// Explanation of where the active auth token came from.
+    pub auth_source: Option<String>,
     /// Active provider configuration.
     pub provider: ProviderConfig,
     /// Application paths.
@@ -261,6 +285,7 @@ pub fn load_runtime_config(
     include_partial_messages: bool,
     max_turns: usize,
     overrides: ProviderOverrides,
+    runtime_overrides: RuntimeOverrides,
 ) -> Result<RuntimeConfig> {
     let cwd = match cwd_override {
         Some(cwd) => cwd,
@@ -269,7 +294,47 @@ pub fn load_runtime_config(
     let paths = AppPaths::discover(profile_dir_override)?;
     paths.ensure_exists()?;
 
-    let provider = load_provider_config(overrides, session_id_override)?;
+    let settings = load_runtime_settings(&runtime_overrides.settings_files)?;
+    let provider_overrides = overrides.clone();
+    let mut provider = load_provider_config(overrides, session_id_override, &settings)?;
+    let effort = runtime_overrides
+        .effort
+        .clone()
+        .or_else(|| read_env_first(&["REMOTE_CODE_EFFORT"]))
+        .or(settings.effort.clone());
+    let fallback_model = runtime_overrides
+        .fallback_model
+        .clone()
+        .or_else(|| read_env_first(&["REMOTE_CODE_FALLBACK_MODEL"]))
+        .or(settings.fallback_model.clone());
+    if provider.model.is_none() {
+        provider.model = fallback_model.clone();
+    }
+    if provider.thinking_budget.is_none()
+        && let Some(budget) = effort.as_deref().and_then(effort_to_thinking_budget)
+    {
+        provider.thinking_budget = Some(budget);
+    }
+    let mut setting_sources = settings.setting_sources.clone();
+    setting_sources.extend(cli_setting_sources(
+        &runtime_overrides,
+        &provider,
+        &provider_overrides,
+    ));
+    setting_sources.extend(env_setting_sources());
+    if setting_sources.is_empty() {
+        setting_sources.push("defaults".to_owned());
+    }
+    let allowed_tools =
+        merge_tool_filters(&settings.allowed_tools, &runtime_overrides.allowed_tools);
+    let disallowed_tools = merge_tool_filters(
+        &settings.disallowed_tools,
+        &runtime_overrides.disallowed_tools,
+    );
+    let session_name = runtime_overrides
+        .session_name
+        .clone()
+        .or(settings.session_name.clone());
     Ok(RuntimeConfig {
         cwd,
         session_id: session_id_override.unwrap_or_else(Uuid::new_v4),
@@ -281,6 +346,14 @@ pub fn load_runtime_config(
         replay_user_messages,
         include_partial_messages,
         max_turns: max_turns.max(1),
+        session_name,
+        setting_sources,
+        settings_files: runtime_overrides.settings_files.clone(),
+        allowed_tools,
+        disallowed_tools,
+        effort,
+        fallback_model,
+        auth_source: resolve_auth_source(&provider_overrides, &settings),
         provider,
         paths,
     })
@@ -291,37 +364,47 @@ pub fn load_runtime_config(
 pub fn load_provider_config(
     overrides: ProviderOverrides,
     session_id: Option<Uuid>,
+    settings: &ResolvedRuntimeSettings,
 ) -> Result<ProviderConfig> {
     let provider_name = overrides
         .provider
         .or_else(|| read_env_first(&["REMOTE_CODE_PROVIDER"]))
+        .or_else(|| settings.provider_name.clone())
         .unwrap_or_else(|| "custom".to_owned());
-    let base_url = overrides.base_url.or_else(|| {
-        read_env_first(&[
-            "REMOTE_CODE_BASE_URL",
-            "OPENAI_BASE_URL",
-            "ANTHROPIC_BASE_URL",
-        ])
-    });
-    let explicit_protocol = overrides.protocol.or_else(|| {
-        read_env_first(&["REMOTE_CODE_PROTOCOL", "REMOTE_CODE_PROVIDER_PROTOCOL"]).and_then(|raw| {
-            match raw.to_ascii_lowercase().as_str() {
-                "openai" => Some(ProviderProtocol::OpenAi),
-                "anthropic" => Some(ProviderProtocol::Anthropic),
-                "bedrock" => Some(ProviderProtocol::Bedrock),
-                "vertex" => Some(ProviderProtocol::Vertex),
-                _ => None,
-            }
+    let base_url = overrides
+        .base_url
+        .or_else(|| {
+            read_env_first(&[
+                "REMOTE_CODE_BASE_URL",
+                "OPENAI_BASE_URL",
+                "ANTHROPIC_BASE_URL",
+            ])
         })
-    });
+        .or_else(|| settings.base_url.clone());
+    let explicit_protocol = overrides
+        .protocol
+        .or_else(|| {
+            read_env_first(&["REMOTE_CODE_PROTOCOL", "REMOTE_CODE_PROVIDER_PROTOCOL"]).and_then(
+                |raw| match raw.to_ascii_lowercase().as_str() {
+                    "openai" => Some(ProviderProtocol::OpenAi),
+                    "anthropic" => Some(ProviderProtocol::Anthropic),
+                    "bedrock" => Some(ProviderProtocol::Bedrock),
+                    "vertex" => Some(ProviderProtocol::Vertex),
+                    _ => None,
+                },
+            )
+        })
+        .or(settings.protocol);
     let protocol = normalize_protocol(base_url.as_deref(), explicit_protocol);
     let normalized_base_url = normalize_base_url(base_url, protocol);
     let timeout_ms = read_env_first(&["REMOTE_CODE_API_TIMEOUT_MS", "API_TIMEOUT_MS"])
         .and_then(|value| value.parse::<u64>().ok())
+        .or(settings.timeout_ms)
         .unwrap_or(600_000)
         .max(1_000);
     let max_output_tokens = read_env_first(&["REMOTE_CODE_MAX_OUTPUT_TOKENS"])
         .and_then(|value| value.parse::<u32>().ok())
+        .or(settings.max_output_tokens)
         .unwrap_or(4_096)
         .max(256);
     let max_retries = read_env_first(&["REMOTE_CODE_PROVIDER_MAX_RETRIES"])
@@ -345,12 +428,14 @@ pub fn load_provider_config(
     Ok(ProviderConfig {
         name: provider_name,
         base_url: normalized_base_url,
-        api_key: overrides.api_key.or_else(|| {
-            read_env_first(&["REMOTE_CODE_API_KEY", "OPENAI_API_KEY"])
-        }),
+        api_key: overrides
+            .api_key
+            .or_else(|| read_env_first(&["REMOTE_CODE_API_KEY", "OPENAI_API_KEY"]))
+            .or_else(|| settings.api_key.clone()),
         model: overrides
             .model
-            .or_else(|| read_env_first(&["REMOTE_CODE_MODEL", "OPENAI_MODEL"])),
+            .or_else(|| read_env_first(&["REMOTE_CODE_MODEL", "OPENAI_MODEL"]))
+            .or_else(|| settings.model.clone()),
         protocol,
         timeout_ms,
         max_output_tokens,
@@ -359,7 +444,7 @@ pub fn load_provider_config(
         retry_max_backoff_ms,
         respect_retry_after,
         request_header_overrides,
-        thinking_budget: None,
+        thinking_budget: settings.thinking_budget,
     })
 }
 
@@ -502,6 +587,100 @@ fn read_env_first(keys: &[&str]) -> Option<String> {
     })
 }
 
+fn cli_setting_sources(
+    runtime_overrides: &RuntimeOverrides,
+    provider: &ProviderConfig,
+    overrides: &ProviderOverrides,
+) -> Vec<String> {
+    let mut sources = Vec::new();
+    if overrides.provider.is_some() {
+        sources.push("cli:provider".to_owned());
+    }
+    if overrides.base_url.is_some() {
+        sources.push("cli:base-url".to_owned());
+    }
+    if overrides.api_key.is_some() {
+        sources.push("cli:api-key".to_owned());
+    }
+    if overrides.model.is_some() {
+        sources.push("cli:model".to_owned());
+    }
+    if overrides.protocol.is_some() {
+        sources.push("cli:protocol".to_owned());
+    }
+    if runtime_overrides.session_name.is_some() {
+        sources.push("cli:name".to_owned());
+    }
+    if !runtime_overrides.allowed_tools.is_empty() {
+        sources.push("cli:allowed-tools".to_owned());
+    }
+    if !runtime_overrides.disallowed_tools.is_empty() {
+        sources.push("cli:disallowed-tools".to_owned());
+    }
+    if runtime_overrides.effort.is_some() {
+        sources.push("cli:effort".to_owned());
+    }
+    if runtime_overrides.fallback_model.is_some() {
+        sources.push("cli:fallback-model".to_owned());
+    }
+    if runtime_overrides.show_setting_sources && provider.api_key.is_some() {
+        sources.push("cli:setting-sources".to_owned());
+    }
+    sources
+}
+
+fn env_setting_sources() -> Vec<String> {
+    const ENV_KEYS: &[(&str, &str)] = &[
+        ("REMOTE_CODE_PROVIDER", "env:REMOTE_CODE_PROVIDER"),
+        ("REMOTE_CODE_BASE_URL", "env:REMOTE_CODE_BASE_URL"),
+        ("OPENAI_BASE_URL", "env:OPENAI_BASE_URL"),
+        ("ANTHROPIC_BASE_URL", "env:ANTHROPIC_BASE_URL"),
+        ("REMOTE_CODE_API_KEY", "env:REMOTE_CODE_API_KEY"),
+        ("OPENAI_API_KEY", "env:OPENAI_API_KEY"),
+        ("REMOTE_CODE_MODEL", "env:REMOTE_CODE_MODEL"),
+        ("OPENAI_MODEL", "env:OPENAI_MODEL"),
+        ("REMOTE_CODE_PROTOCOL", "env:REMOTE_CODE_PROTOCOL"),
+        (
+            "REMOTE_CODE_PROVIDER_PROTOCOL",
+            "env:REMOTE_CODE_PROVIDER_PROTOCOL",
+        ),
+        ("REMOTE_CODE_EFFORT", "env:REMOTE_CODE_EFFORT"),
+        (
+            "REMOTE_CODE_FALLBACK_MODEL",
+            "env:REMOTE_CODE_FALLBACK_MODEL",
+        ),
+    ];
+    ENV_KEYS
+        .iter()
+        .filter_map(|(key, label)| env::var(key).ok().map(|_| (*label).to_owned()))
+        .collect()
+}
+
+fn resolve_auth_source(
+    overrides: &ProviderOverrides,
+    settings: &ResolvedRuntimeSettings,
+) -> Option<String> {
+    if overrides.api_key.is_some() {
+        return Some("cli:api-key".to_owned());
+    }
+    if env::var("REMOTE_CODE_API_KEY").is_ok() {
+        return Some("env:REMOTE_CODE_API_KEY".to_owned());
+    }
+    if env::var("OPENAI_API_KEY").is_ok() {
+        return Some("env:OPENAI_API_KEY".to_owned());
+    }
+    settings.auth_source.clone()
+}
+
+fn effort_to_thinking_budget(effort: &str) -> Option<u32> {
+    match effort.trim().to_ascii_lowercase().as_str() {
+        "low" => Some(2_048),
+        "medium" => Some(8_192),
+        "high" => Some(16_384),
+        _ => None,
+    }
+}
+
 /// Discover provider configurations from well-known environment variables.
 ///
 /// Checks for the following keys and creates a [`ProviderConfig`] for each one
@@ -511,7 +690,7 @@ fn read_env_first(keys: &[&str]) -> Option<String> {
 ///
 /// | Env var                        | Provider name | Protocol  | Base URL                                              | Model          |
 /// |--------------------------------|---------------|-----------|-------------------------------------------------------|----------------|
-/// | `GLM_API_KEY`                  | `glm`         | `openai`  | `https://open.bigmodel.cn/api/paas/v4`                | `glm-4-plus`   |
+/// | `GLM_API_KEY`                  | `glm`         | `openai`  | `https://open.bigmodel.cn/api/paas/v4`                | `glm-5.1`      |
 /// | `REMOTE_CODE_API_KEY`          | `anthropic`   | `anthropic`| *(default)*                                           | *(default)*    |
 /// | `OPENAI_API_KEY`               | `openai`      | `openai`  | *(default)*                                           | *(default)*    |
 ///
@@ -522,14 +701,19 @@ fn read_env_first(keys: &[&str]) -> Option<String> {
 ///
 /// ## Coding Plan Providers (Subscription-based AI Coding)
 ///
-/// | Env var                          | Provider name         | Protocol   | Base URL                                                            | Model           |
-/// |----------------------------------|----------------------|------------|---------------------------------------------------------------------|-----------------|
-/// | `GLM_CODING_PLAN_API_KEY`        | `glm-coding`         | `anthropic`| `https://open.bigmodel.cn/api/anthropic`                            | `glm-5.1`       |
-/// | `MINIMAX_CODING_PLAN_API_KEY`    | `minimax-coding`     | `openai`   | `https://api.minimax.chat/v1`                                      | `MiniMax-M2.7`  |
-/// | `TENCENT_CODING_PLAN_API_KEY`    | `tencent-coding`     | `openai`   | `https://api.lkeap.cloud.tencent.com/coding/v3`                    | *(Coding Plan)* |
-/// | `QIANFAN_CODING_PLAN_API_KEY`    | `qianfan-coding`     | `openai`   | `https://qianfan.baidubce.com/v2/coding`                           | *(Coding Plan)* |
-/// | `KIMI_CODING_PLAN_API_KEY`       | `kimi-coding`        | `openai`   | `https://api.moonshot.cn/kimi-component/ai_coding`                 | *(Coding Plan)* |
-/// | `VOLCENGINE_CODING_PLAN_API_KEY` | `volcengine-coding`  | `openai`   | *(Volcano Engine Coding Plan base URL)*                            | *(Coding Plan)* |
+/// Providers that support the **Anthropic** wire protocol are configured with
+/// it by default so that our Claude Code–style request headers result in
+/// priority treatment from the upstream.
+///
+/// | Env var                          | Provider name         | Protocol    | Base URL                                                              | Model              |
+/// |----------------------------------|----------------------|-------------|-----------------------------------------------------------------------|--------------------|
+/// | `GLM_CODING_PLAN_API_KEY`        | `glm-coding`         | `anthropic` | `https://open.bigmodel.cn/api/anthropic`                              | `glm-5.1`          |
+/// | `ALIYUN_CODING_PLAN_API_KEY`     | `aliyun-coding`      | `anthropic` | `https://coding.dashscope.aliyuncs.com/apps/anthropic`                | `qwen3.6-plus`     |
+/// | `TENCENT_CODING_PLAN_API_KEY`    | `tencent-coding`     | `anthropic` | `https://api.lkeap.cloud.tencent.com/coding/anthropic`                | `tc-code-latest`   |
+/// | `QIANFAN_CODING_PLAN_API_KEY`    | `qianfan-coding`     | `anthropic` | `https://qianfan.baidubce.com/anthropic/coding`                       | `qianfan-code-latest` |
+/// | `MINIMAX_CODING_PLAN_API_KEY`    | `minimax-coding`     | `openai`    | `https://api.minimax.chat/v1`                                         | `MiniMax-M2.7`     |
+/// | `KIMI_CODING_PLAN_API_KEY`       | `kimi-coding`        | `openai`    | `https://api.moonshot.cn/kimi-component/ai_coding`                    | `kimi-k2.5`        |
+/// | `VOLCENGINE_CODING_PLAN_API_KEY` | `volcengine-coding`  | `openai`    | `https://ark.cn-beijing.volces.com/api/v3`                            | `doubao-seed-1-5`  |
 ///
 /// The returned list only contains entries for keys that are actually set.
 /// This function is intended to be called **before** the main
@@ -543,6 +727,8 @@ fn read_env_first(keys: &[&str]) -> Option<String> {
 /// - They offer fixed monthly quotas instead of per-token billing
 /// - They are designed for AI coding tools (Claude Code, Cursor, etc.)
 /// - API keys from Coding Plans cannot be used with standard API endpoints
+/// - Providers that support the Anthropic protocol receive Claude Code–style
+///   request headers for priority treatment
 pub fn discover_env_providers() -> Vec<ProviderConfig> {
     let mut providers = Vec::new();
 
@@ -560,7 +746,7 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             name: "glm".to_owned(),
             base_url,
             api_key: Some(api_key),
-            model: Some("glm-4-plus".to_owned()),
+            model: Some("glm-5.1".to_owned()),
             protocol: ProviderProtocol::OpenAi,
             timeout_ms: 600_000,
             max_output_tokens: 4_096,
@@ -623,11 +809,8 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
     if read_env_first(&["AWS_ACCESS_KEY_ID"]).is_some()
         && read_env_first(&["AWS_SECRET_ACCESS_KEY"]).is_some()
     {
-        let region =
-            read_env_first(&["AWS_REGION"]).unwrap_or_else(|| "us-east-1".to_owned());
-        let base_url = Some(format!(
-            "https://bedrock-runtime.{region}.amazonaws.com"
-        ));
+        let region = read_env_first(&["AWS_REGION"]).unwrap_or_else(|| "us-east-1".to_owned());
+        let base_url = Some(format!("https://bedrock-runtime.{region}.amazonaws.com"));
         providers.push(ProviderConfig {
             name: "bedrock".to_owned(),
             base_url,
@@ -649,10 +832,8 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
     if read_env_first(&["GOOGLE_APPLICATION_CREDENTIALS"]).is_some()
         || read_env_first(&["VERTEX_PROJECT"]).is_some()
     {
-        let project =
-            read_env_first(&["VERTEX_PROJECT"]).unwrap_or_else(|| "default".to_owned());
-        let region =
-            read_env_first(&["VERTEX_REGION"]).unwrap_or_else(|| "us-central1".to_owned());
+        let project = read_env_first(&["VERTEX_PROJECT"]).unwrap_or_else(|| "default".to_owned());
+        let region = read_env_first(&["VERTEX_REGION"]).unwrap_or_else(|| "us-central1".to_owned());
         let base_url = Some(format!(
             "https://{region}-aiplatform.googleapis.com/v1/projects/{project}/locations/{region}/endpoints/openapi"
         ));
@@ -731,19 +912,20 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
         });
     }
 
-    // Tencent Cloud Coding Plan — OpenAI-compatible endpoint
-    // Source: https://cloud.tencent.com/document/product/1823/130092
-    if let Some(api_key) = read_env_first(&["TENCENT_CODING_PLAN_API_KEY"]) {
+    // Aliyun Bailian (阿里云百炼) Coding Plan — Anthropic-compatible endpoint
+    // Source: https://help.aliyun.com/zh/model-studio/coding-plan
+    // Supports: qwen3.6-plus, kimi-k2.5, glm-5, MiniMax-M2.5, qwen3.5-plus, etc.
+    if let Some(api_key) = read_env_first(&["ALIYUN_CODING_PLAN_API_KEY"]) {
         let base_url = normalize_base_url(
-            Some("https://api.lkeap.cloud.tencent.com/coding/v3".to_owned()),
-            ProviderProtocol::OpenAi,
+            Some("https://coding.dashscope.aliyuncs.com/apps/anthropic".to_owned()),
+            ProviderProtocol::Anthropic,
         );
         providers.push(ProviderConfig {
-            name: "tencent-coding".to_owned(),
+            name: "aliyun-coding".to_owned(),
             base_url,
             api_key: Some(api_key),
-            model: read_env_first(&["TENCENT_CODING_MODEL"]).or(Some("tc-code-latest".to_owned())),
-            protocol: ProviderProtocol::OpenAi,
+            model: read_env_first(&["ALIYUN_CODING_MODEL"]).or(Some("qwen3.6-plus".to_owned())),
+            protocol: ProviderProtocol::Anthropic,
             timeout_ms: 600_000,
             max_output_tokens: 8_192,
             max_retries: default_provider_max_retries(),
@@ -755,19 +937,47 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
         });
     }
 
-    // Baidu Qianfan Coding Plan — OpenAI-compatible endpoint
+    // Tencent Cloud Coding Plan — Anthropic-compatible endpoint
+    // Source: https://cloud.tencent.com/document/product/1823/130092
+    // Supports: tc-code-latest (Auto), hunyuan-2.0-instruct, hunyuan-2.0-thinking,
+    //           minimax-m2.5, kimi-k2.5, glm-5
+    if let Some(api_key) = read_env_first(&["TENCENT_CODING_PLAN_API_KEY"]) {
+        let base_url = normalize_base_url(
+            Some("https://api.lkeap.cloud.tencent.com/coding/anthropic".to_owned()),
+            ProviderProtocol::Anthropic,
+        );
+        providers.push(ProviderConfig {
+            name: "tencent-coding".to_owned(),
+            base_url,
+            api_key: Some(api_key),
+            model: read_env_first(&["TENCENT_CODING_MODEL"]).or(Some("tc-code-latest".to_owned())),
+            protocol: ProviderProtocol::Anthropic,
+            timeout_ms: 600_000,
+            max_output_tokens: 8_192,
+            max_retries: default_provider_max_retries(),
+            retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+            retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+            respect_retry_after: default_provider_respect_retry_after(),
+            request_header_overrides: BTreeMap::new(),
+            thinking_budget: None,
+        });
+    }
+
+    // Baidu Qianfan Coding Plan — Anthropic-compatible endpoint
     // Source: https://cloud.baidu.com/doc/qianfan/s/imlg0beiu
+    // Supports: kimi-k2.5, deepseek-v3.2, glm-5, minimax-m2.5, ernie-4.5-turbo
     if let Some(api_key) = read_env_first(&["QIANFAN_CODING_PLAN_API_KEY"]) {
         let base_url = normalize_base_url(
-            Some("https://qianfan.baidubce.com/v2/coding".to_owned()),
-            ProviderProtocol::OpenAi,
+            Some("https://qianfan.baidubce.com/anthropic/coding".to_owned()),
+            ProviderProtocol::Anthropic,
         );
         providers.push(ProviderConfig {
             name: "qianfan-coding".to_owned(),
             base_url,
             api_key: Some(api_key),
-            model: read_env_first(&["QIANFAN_CODING_MODEL"]).or(Some("qianfan-code-latest".to_owned())),
-            protocol: ProviderProtocol::OpenAi,
+            model: read_env_first(&["QIANFAN_CODING_MODEL"])
+                .or(Some("qianfan-code-latest".to_owned())),
+            protocol: ProviderProtocol::Anthropic,
             timeout_ms: 600_000,
             max_output_tokens: 8_192,
             max_retries: default_provider_max_retries(),
@@ -812,7 +1022,8 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             name: "volcengine-coding".to_owned(),
             base_url: normalize_base_url(base_url, ProviderProtocol::OpenAi),
             api_key: Some(api_key),
-            model: read_env_first(&["VOLCENGINE_CODING_MODEL"]).or(Some("doubao-seed-1-5".to_owned())),
+            model: read_env_first(&["VOLCENGINE_CODING_MODEL"])
+                .or(Some("doubao-seed-1-5".to_owned())),
             protocol: ProviderProtocol::OpenAi,
             timeout_ms: 600_000,
             max_output_tokens: 8_192,

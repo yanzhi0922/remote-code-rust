@@ -128,8 +128,7 @@ impl MemoryManager {
 /// Read a file if it exists; return empty string otherwise.
 fn read_file_if_exists(path: &Path) -> Result<String> {
     if path.exists() {
-        fs::read_to_string(path)
-            .with_context(|| format!("failed to read {}", path.display()))
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))
     } else {
         Ok(String::new())
     }

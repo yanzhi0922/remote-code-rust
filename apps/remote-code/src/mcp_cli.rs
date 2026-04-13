@@ -1,10 +1,10 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 use rc_config::{RUNTIME_VERSION, RuntimeConfig};
 
-use crate::cli::{McpCallArgs, McpCommand, McpListArgs};
+use crate::cli::{McpAddArgs, McpCallArgs, McpCommand, McpGetArgs, McpListArgs, McpRemoveArgs};
 
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeMcpServerEntry {
@@ -108,6 +108,9 @@ pub(crate) struct McpCallServerRecord {
 pub(crate) async fn run_mcp(config: &RuntimeConfig, command: McpCommand) -> Result<()> {
     match command {
         McpCommand::List(args) => run_mcp_list(config, args).await,
+        McpCommand::Get(args) => run_mcp_get(config, args).await,
+        McpCommand::Add(args) => run_mcp_add(config, args),
+        McpCommand::Remove(args) => run_mcp_remove(config, args),
         McpCommand::Call(args) => run_mcp_call(config, args).await,
     }
 }
@@ -180,6 +183,146 @@ async fn run_mcp_list(config: &RuntimeConfig, args: McpListArgs) -> Result<()> {
                 }
             }
         }
+    }
+    Ok(())
+}
+
+async fn run_mcp_get(config: &RuntimeConfig, args: McpGetArgs) -> Result<()> {
+    let output = build_mcp_list_output(
+        config,
+        &McpListArgs {
+            connect: args.connect,
+            json: args.json,
+            servers: vec![args.server.clone()],
+            include_disabled: args.include_disabled,
+            config_paths: args.config_paths.clone(),
+        },
+    )
+    .await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        return Ok(());
+    }
+
+    let Some(server) = output.servers.first() else {
+        return Err(anyhow!("No MCP server named `{}` was found", args.server));
+    };
+    for warning in &output.warnings {
+        println!("warning: {warning}");
+    }
+    println!("server: {}", server.name);
+    println!("enabled: {}", server.enabled);
+    println!("transport: {}", format_mcp_transport(server.transport));
+    println!("source: {}", format_mcp_source(server));
+    if let Some(live) = &server.live {
+        println!("connect: {}", live.status);
+        if let Some(error) = &live.error {
+            println!("connect detail: {error}");
+        }
+        if !live.tools.is_empty() {
+            println!("tools:");
+            for tool in &live.tools {
+                println!("  - {}", tool.name);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn run_mcp_add(config: &RuntimeConfig, args: McpAddArgs) -> Result<()> {
+    let config_path = managed_mcp_config_path(config, args.config_path.as_ref(), args.project);
+    let mut mcp_config = load_managed_mcp_config(&config_path)?;
+    let existed = mcp_config.servers.contains_key(&args.name);
+    let transport = match (&args.command, &args.url) {
+        (Some(command), None) => rc_mcp::McpTransportConfig::Stdio {
+            command: command.clone(),
+            args: args.args.clone(),
+            cwd: args.cwd.clone(),
+            env: parse_string_map("--env", &args.env)?,
+        },
+        (None, Some(url)) => {
+            let headers = parse_string_map("--meta", &args.metadata)?;
+            if url.starts_with("ws://") || url.starts_with("wss://") {
+                rc_mcp::McpTransportConfig::WebSocket {
+                    url: url.clone(),
+                    headers,
+                }
+            } else {
+                rc_mcp::McpTransportConfig::Http {
+                    url: url.clone(),
+                    headers,
+                }
+            }
+        }
+        (Some(_), Some(_)) => {
+            return Err(anyhow!("Pass either --command or --url, not both"));
+        }
+        (None, None) => {
+            return Err(anyhow!("Either --command or --url is required"));
+        }
+    };
+
+        let metadata = if matches!(transport, rc_mcp::McpTransportConfig::Stdio { .. }) {
+            parse_string_map("--meta", &args.metadata)?
+        } else {
+            BTreeMap::new()
+        };
+    mcp_config.servers.insert(
+        args.name.clone(),
+        rc_mcp::McpServerConfig {
+            name: args.name.clone(),
+            enabled: !args.disabled,
+            transport,
+            capabilities: rc_mcp::McpCapabilityMatrix::default(),
+            startup_timeout_secs: args.startup_timeout_secs,
+            request_timeout_secs: args.request_timeout_secs,
+            metadata,
+        },
+    );
+    mcp_config.save(&config_path)?;
+
+    let output = serde_json::json!({
+        "status": if existed { "updated" } else { "created" },
+        "name": args.name,
+        "config_path": config_path,
+    });
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!(
+            "MCP server {} at {}.",
+            output["status"].as_str().unwrap_or("saved"),
+            output["config_path"].as_str().unwrap_or_default()
+        );
+    }
+    Ok(())
+}
+
+fn run_mcp_remove(config: &RuntimeConfig, args: McpRemoveArgs) -> Result<()> {
+    let config_path = managed_mcp_config_path(config, args.config_path.as_ref(), args.project);
+    let mut mcp_config = load_managed_mcp_config(&config_path)?;
+    let removed = mcp_config.servers.remove(&args.name);
+    if removed.is_none() && !args.if_exists {
+        return Err(anyhow!(
+            "No MCP server named `{}` exists in {}",
+            args.name,
+            config_path.display()
+        ));
+    }
+    mcp_config.save(&config_path)?;
+    let output = serde_json::json!({
+        "status": if removed.is_some() { "removed" } else { "noop" },
+        "name": args.name,
+        "config_path": config_path,
+    });
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!(
+            "MCP server {} in {}.",
+            output["status"].as_str().unwrap_or("saved"),
+            output["config_path"].as_str().unwrap_or_default()
+        );
     }
     Ok(())
 }
@@ -369,6 +512,48 @@ pub(crate) fn parse_named_json_object_args(
     }
 
     Ok(serde_json::Value::Object(object))
+}
+
+fn parse_string_map(flag_name: &str, entries: &[String]) -> Result<std::collections::BTreeMap<String, String>> {
+    let mut map = std::collections::BTreeMap::new();
+    for entry in entries {
+        let (key, value) = entry
+            .split_once('=')
+            .ok_or_else(|| anyhow!("invalid {flag_name} `{entry}`; expected key=value"))?;
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(anyhow!("invalid {flag_name} `{entry}`; key cannot be empty"));
+        }
+        map.insert(key.to_owned(), value.trim().to_owned());
+    }
+    Ok(map)
+}
+
+fn managed_mcp_config_path(
+    config: &RuntimeConfig,
+    override_path: Option<&PathBuf>,
+    project: bool,
+) -> PathBuf {
+    override_path
+        .cloned()
+        .unwrap_or_else(|| {
+            if project {
+                config.cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE)
+            } else {
+                config
+                    .paths
+                    .profile_dir
+                    .join(rc_mcp::DEFAULT_MCP_CONFIG_FILE)
+            }
+        })
+}
+
+fn load_managed_mcp_config(path: &Path) -> Result<rc_mcp::McpConfig> {
+    if path.exists() {
+        Ok(rc_mcp::McpConfig::load(path)?)
+    } else {
+        Ok(rc_mcp::McpConfig::default())
+    }
 }
 
 pub(crate) fn resolve_runtime_mcp_server(
@@ -569,5 +754,90 @@ pub(crate) fn format_mcp_call_source(server: &McpCallServerRecord) -> String {
             server.config_path.display()
         ),
         _ => format!("{} ({})", server.origin_kind, server.config_path.display()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
+    use tempfile::tempdir;
+
+    use super::{load_managed_mcp_config, managed_mcp_config_path, parse_string_map, run_mcp_add, run_mcp_remove};
+    use crate::cli::{McpAddArgs, McpRemoveArgs};
+
+    fn test_config() -> (tempfile::TempDir, rc_config::RuntimeConfig) {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        fs::create_dir_all(&cwd).expect("cwd");
+        fs::create_dir_all(&profile).expect("profile");
+        let config = load_runtime_config(
+            Some(cwd),
+            Some(profile),
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+            RuntimeOverrides::default(),
+        )
+        .expect("config");
+        (tempdir, config)
+    }
+
+    #[test]
+    fn parse_string_map_requires_key_value_shape() {
+        let parsed = parse_string_map("--env", &["FOO=bar".to_owned()]).expect("parse");
+        assert_eq!(parsed.get("FOO").map(String::as_str), Some("bar"));
+        assert!(parse_string_map("--env", &["oops".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn managed_mcp_add_and_remove_round_trip() {
+        let (_tempdir, config) = test_config();
+        run_mcp_add(
+            &config,
+            McpAddArgs {
+                name: "demo".to_owned(),
+                command: Some("python".to_owned()),
+                url: None,
+                args: vec!["server.py".to_owned()],
+                cwd: None,
+                env: vec!["TOKEN=secret".to_owned()],
+                disabled: false,
+                startup_timeout_secs: Some(3),
+                request_timeout_secs: Some(5),
+                metadata: vec!["scope=local".to_owned()],
+                json: false,
+                config_path: None,
+                project: false,
+            },
+        )
+        .expect("add mcp");
+
+        let path = managed_mcp_config_path(&config, None, false);
+        let loaded = load_managed_mcp_config(&path).expect("load config");
+        assert!(loaded.servers.contains_key("demo"));
+
+        run_mcp_remove(
+            &config,
+            McpRemoveArgs {
+                name: "demo".to_owned(),
+                json: false,
+                config_path: None,
+                project: false,
+                if_exists: false,
+            },
+        )
+        .expect("remove mcp");
+        let loaded = load_managed_mcp_config(&path).expect("reload config");
+        assert!(!loaded.servers.contains_key("demo"));
     }
 }

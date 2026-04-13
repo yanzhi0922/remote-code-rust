@@ -9,8 +9,10 @@
 use anyhow::{Context, Result, anyhow};
 use futures::StreamExt;
 use rc_config::ProviderConfig;
-use rc_core::{ConversationEntry, ConversationRole, ProviderProtocol, ProviderResponse, ToolCall, UsageSummary};
-use rc_tools::builtin_tool_specs;
+use rc_core::{
+    ConversationEntry, ConversationRole, ProviderProtocol, ProviderResponse, ToolCall, UsageSummary,
+};
+use rc_tools::runtime_builtin_tool_specs;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -22,13 +24,13 @@ use crate::{ProviderClient, build_headers, to_anthropic_messages, to_openai_mess
 // ---------------------------------------------------------------------------
 
 /// Type alias for a single-argument streaming callback.
-type TextCallback = Box<dyn Fn(&str) + Send>;
+type TextCallback = Box<dyn Fn(&str) + Send + Sync>;
 
 /// Type alias for a two-argument streaming callback (id, name/delta).
-type PairCallback = Box<dyn Fn(&str, &str) + Send>;
+type PairCallback = Box<dyn Fn(&str, &str) + Send + Sync>;
 
 /// Type alias for a usage callback (input tokens, output tokens).
-type UsageCallback = Box<dyn Fn(u64, u64) + Send>;
+type UsageCallback = Box<dyn Fn(u64, u64) + Send + Sync>;
 
 /// Optional callbacks for observing streaming events in real time.
 ///
@@ -65,8 +67,11 @@ impl ProviderClient {
 
     /// Streaming completion with optional real-time callbacks.
     ///
+    /// If the streaming connection fails mid-request, automatically falls back
+    /// to a non-streaming completion for resilience during long-running sessions.
+    ///
     /// # Errors
-    /// Returns an error if the provider API request fails.
+    /// Returns an error if both streaming and non-streaming attempts fail.
     pub async fn complete_streaming_with_callbacks(
         &self,
         provider: &ProviderConfig,
@@ -80,7 +85,7 @@ impl ProviderClient {
             return Ok(crate::mock_response(conversation));
         }
 
-        match provider.protocol {
+        let result = match provider.protocol {
             ProviderProtocol::OpenAi => {
                 self.complete_streaming_openai(provider, conversation, callbacks.as_ref())
                     .await
@@ -101,6 +106,31 @@ impl ProviderClient {
                     self.complete(provider, conversation).await
                 }
             }
+        };
+
+        // If streaming failed, fall back to non-streaming completion.
+        // This handles mid-stream disconnects, SSE parsing errors, and
+        // other transient streaming failures common in long-running sessions.
+        match result {
+            Ok(response) => Ok(response),
+            Err(streaming_error) => {
+                let err_str = format!("{streaming_error:#}");
+                let is_streaming_error = err_str.contains("streaming")
+                    || err_str.contains("chunk")
+                    || err_str.contains("connection")
+                    || err_str.contains("broken pipe")
+                    || err_str.contains("reset")
+                    || err_str.contains("unexpected eof");
+
+                if is_streaming_error {
+                    tracing::warn!(
+                        "Streaming failed, falling back to non-streaming: {streaming_error:#}"
+                    );
+                    self.complete(provider, conversation).await
+                } else {
+                    Err(streaming_error)
+                }
+            }
         }
     }
 
@@ -114,7 +144,7 @@ impl ProviderClient {
         let body = json!({
             "model": provider.model,
             "messages": to_openai_messages(conversation),
-            "tools": builtin_tool_specs()
+            "tools": runtime_builtin_tool_specs()
                 .into_iter()
                 .map(|tool| tool.to_openai_schema())
                 .collect::<Vec<_>>(),
@@ -179,9 +209,8 @@ impl ProviderClient {
                             delta.and_then(|d| d.get("content")).and_then(Value::as_str)
                         {
                             // Fire on_text_delta callback.
-                            if let Some(cb) = callbacks
-                                .as_ref()
-                                .and_then(|c| c.on_text_delta.as_ref())
+                            if let Some(cb) =
+                                callbacks.as_ref().and_then(|c| c.on_text_delta.as_ref())
                             {
                                 cb(content);
                             }
@@ -240,9 +269,7 @@ impl ProviderClient {
                         usage.input_tokens = inp;
                         usage.output_tokens = out;
                         // Fire on_usage callback.
-                        if let Some(cb) =
-                            callbacks.as_ref().and_then(|c| c.on_usage.as_ref())
-                        {
+                        if let Some(cb) = callbacks.as_ref().and_then(|c| c.on_usage.as_ref()) {
                             cb(inp, out);
                         }
                     }
@@ -286,7 +313,7 @@ impl ProviderClient {
             "model": provider.model,
             "system": system,
             "messages": messages,
-            "tools": builtin_tool_specs()
+            "tools": runtime_builtin_tool_specs()
                 .into_iter()
                 .map(|tool| tool.to_anthropic_schema())
                 .collect::<Vec<_>>(),
@@ -412,8 +439,9 @@ impl ProviderClient {
                                         .unwrap_or("")
                                         .to_owned();
                                     // Fire on_tool_call_start callback.
-                                    if let Some(cb) =
-                                        callbacks.as_ref().and_then(|c| c.on_tool_call_start.as_ref())
+                                    if let Some(cb) = callbacks
+                                        .as_ref()
+                                        .and_then(|c| c.on_tool_call_start.as_ref())
                                     {
                                         cb(&id, &name);
                                     }
@@ -442,8 +470,9 @@ impl ProviderClient {
                             });
 
                             if delta_type == "thinking_delta"
-                                && let Some(thinking) =
-                                    delta.and_then(|d| d.get("thinking")).and_then(Value::as_str)
+                                && let Some(thinking) = delta
+                                    .and_then(|d| d.get("thinking"))
+                                    .and_then(Value::as_str)
                             {
                                 thinking_parts.push(thinking.to_owned());
                             } else if (delta_type == "text_delta"
@@ -468,8 +497,9 @@ impl ProviderClient {
                                 && let Some(acc) = tool_use_accumulators.get_mut(&index)
                             {
                                 // Fire on_tool_call_delta callback.
-                                if let Some(cb) =
-                                    callbacks.as_ref().and_then(|c| c.on_tool_call_delta.as_ref())
+                                if let Some(cb) = callbacks
+                                    .as_ref()
+                                    .and_then(|c| c.on_tool_call_delta.as_ref())
                                 {
                                     cb(&acc.id, partial);
                                 }

@@ -12,6 +12,7 @@
 //! - `:q` — quit
 //! - `Ctrl+C` — exit from insert mode
 
+mod commands;
 mod completion;
 mod slash_commands;
 mod theme;
@@ -21,15 +22,24 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use rc_config::{ProviderConfig, RuntimeConfig};
-use rc_core::{ConversationEntry, ConversationRole, ProviderResponse, SubAgentCompletion, default_system_prompt};
-use rc_permissions::StaticPermissionBroker;
+use rc_core::{
+    ConversationEntry, ConversationRole, ProviderResponse, SubAgentCompletion,
+    default_system_prompt,
+};
+use rc_permissions::{LayeredPermissionBroker, PermissionBroker, StaticPermissionBroker, load_layered_rules};
 use rc_provider::ProviderClient;
 use rc_provider::context::ContextWindowManager;
 use rc_provider::cost::CostTracker;
 use rc_session::SessionStore;
-use rc_tools::{ToolExecutionContext, execute_tool_call};
+use rc_session::resume_state::{PendingToolCall, ResumeState};
+use rc_tools::{
+    ToolExecutionContext, execute_tool_call,
+    agent::{parse_delegate_progress_event, render_delegate_progress_event},
+};
 
-use completion::{complete_slash_command, get_file_completions, get_tool_completions, update_search_results};
+use completion::{
+    complete_slash_command, get_file_completions, get_tool_completions, update_search_results,
+};
 use slash_commands::{SlashCommandAction, handle_slash_command};
 use theme::Theme;
 
@@ -50,15 +60,17 @@ enum VimMode {
 ///
 /// This allows the agent tool to create sub-conversations and execute them
 /// using the same provider configuration as the main conversation.
+/// Uses `Arc<ProviderClient>` to share the client (including its circuit
+/// breaker state) across the main loop and sub-agent tasks.
 struct TuiSubAgent {
-    client: ProviderClient,
+    client: Arc<ProviderClient>,
     provider: ProviderConfig,
 }
 
 impl TuiSubAgent {
-    fn new(client: &ProviderClient, provider: &ProviderConfig) -> Self {
+    fn new(client: Arc<ProviderClient>, provider: &ProviderConfig) -> Self {
         Self {
-            client: client.clone(),
+            client,
             provider: provider.clone(),
         }
     }
@@ -85,7 +97,11 @@ pub fn run_dashboard(config: &RuntimeConfig, store: &SessionStore) -> Result<()>
     println!("Remote Code Rust — Dashboard");
     println!();
     println!("Profile:  {}", config.paths.profile_dir.display());
-    println!("Provider: {} ({})", config.provider.name, config.provider.protocol.as_str());
+    println!(
+        "Provider: {} ({})",
+        config.provider.name,
+        config.provider.protocol.as_str()
+    );
     println!(
         "Model:    {}",
         config.provider.model.as_deref().unwrap_or("(missing)")
@@ -133,12 +149,12 @@ pub fn run_dashboard(config: &RuntimeConfig, store: &SessionStore) -> Result<()>
 /// - Slash commands for session management
 /// - True Vim mode with raw key detection (ESC, Ctrl+C, etc.)
 #[allow(clippy::too_many_lines)]
-pub async fn run_tui_app(
-    config: RuntimeConfig,
-    store: &SessionStore,
-) -> Result<()> {
-    let provider = ProviderClient::new()?;
-    let broker = StaticPermissionBroker::new(config.permission_mode);
+pub async fn run_tui_app(config: RuntimeConfig, store: &SessionStore) -> Result<()> {
+    let provider = Arc::new(ProviderClient::new()?);
+    let broker = LayeredPermissionBroker::new(
+        StaticPermissionBroker::new(config.permission_mode),
+        load_layered_rules(&config.cwd, &config.paths.profile_dir, &config.settings_files)?,
+    );
 
     let model_name = config.provider.model.as_deref().unwrap_or("unknown");
     let context_manager = ContextWindowManager::for_model(model_name);
@@ -263,7 +279,8 @@ pub async fn run_tui_app(
                             print_line("  [at top]");
                         }
                     }
-                    crossterm::event::KeyCode::Char('h') | crossterm::event::KeyCode::Char('l') => {}
+                    crossterm::event::KeyCode::Char('h') | crossterm::event::KeyCode::Char('l') => {
+                    }
                     crossterm::event::KeyCode::Char('G') => {
                         history_scroll = 0;
                         if let Some(entry) = conversation.last() {
@@ -331,7 +348,10 @@ pub async fn run_tui_app(
                             continue;
                         }
                         // Shift+Enter: insert newline for multi-line input.
-                        if event.modifiers.contains(crossterm::event::KeyModifiers::SHIFT) {
+                        if event
+                            .modifiers
+                            .contains(crossterm::event::KeyModifiers::SHIFT)
+                        {
                             input_buffer.insert(cursor_pos, '\n');
                             cursor_pos += 1;
                             continue;
@@ -341,10 +361,14 @@ pub async fn run_tui_app(
                         input_buffer.clear();
                         cursor_pos = 0;
 
-                        // Save to input history (deduplicate).
+                        // Save to input history (deduplicate, bounded to prevent unbounded growth).
+                        const MAX_INPUT_HISTORY: usize = 1000;
                         if !input.is_empty() {
                             if input_history.last() != Some(&input) {
                                 input_history.push(input.clone());
+                                if input_history.len() > MAX_INPUT_HISTORY {
+                                    input_history.remove(0);
+                                }
                             }
                             history_index = input_history.len();
                             saved_buffer.clear();
@@ -352,12 +376,18 @@ pub async fn run_tui_app(
 
                         // Temporarily leave raw mode for conversation turn output.
                         crossterm::terminal::disable_raw_mode()?;
-                        crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen)?;
+                        crossterm::execute!(
+                            io::stdout(),
+                            crossterm::terminal::LeaveAlternateScreen
+                        )?;
 
                         if input.is_empty() {
                             // Re-enter raw mode.
                             crossterm::terminal::enable_raw_mode()?;
-                            crossterm::execute!(io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
+                            crossterm::execute!(
+                                io::stdout(),
+                                crossterm::terminal::EnterAlternateScreen
+                            )?;
                             continue;
                         }
 
@@ -370,11 +400,15 @@ pub async fn run_tui_app(
                                 &mut conversation,
                                 &context_manager,
                                 &cost_tracker,
+                                &broker,
                                 &mut theme,
                             ) {
                                 SlashCommandAction::Quit => {
                                     // Disable mouse capture before exit.
-                                    let _ = crossterm::execute!(io::stdout(), crossterm::event::DisableMouseCapture);
+                                    let _ = crossterm::execute!(
+                                        io::stdout(),
+                                        crossterm::event::DisableMouseCapture
+                                    );
                                     let cost = cost_tracker.total_cost_usd();
                                     if cost > 0.0 {
                                         println!();
@@ -387,7 +421,10 @@ pub async fn run_tui_app(
                             }
                             // Re-enter raw mode.
                             crossterm::terminal::enable_raw_mode()?;
-                            crossterm::execute!(io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
+                            crossterm::execute!(
+                                io::stdout(),
+                                crossterm::terminal::EnterAlternateScreen
+                            )?;
                             continue;
                         }
 
@@ -404,22 +441,46 @@ pub async fn run_tui_app(
                         )
                         .await
                         {
-                            eprintln!("Error: {error}");
-                            eprintln!("  (your message was saved; the conversation state may be inconsistent)");
+                            let err_str = format!("{error:#}");
+                            let is_transient = err_str.contains("timeout")
+                                || err_str.contains("429")
+                                || err_str.contains("rate limit")
+                                || err_str.contains("503")
+                                || err_str.contains("500")
+                                || err_str.contains("connection");
+                            if is_transient {
+                                eprintln!("⚠ Transient error (recovered): {err_str}");
+                                eprintln!(
+                                    "  Your session is preserved. The next request will retry automatically."
+                                );
+                            } else {
+                                eprintln!("⚠ Error: {err_str}");
+                                eprintln!(
+                                    "  Your message was saved. Type to continue or /help for options."
+                                );
+                            }
                         }
 
                         // Re-enter raw mode.
                         crossterm::terminal::enable_raw_mode()?;
-                        crossterm::execute!(io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
+                        crossterm::execute!(
+                            io::stdout(),
+                            crossterm::terminal::EnterAlternateScreen
+                        )?;
                         continue;
                     }
                     crossterm::event::KeyCode::Char(c) => {
                         // Handle Ctrl+R: toggle reverse search mode.
-                        if c == 'r' && event.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
+                        if c == 'r'
+                            && event
+                                .modifiers
+                                .contains(crossterm::event::KeyModifiers::CONTROL)
+                        {
                             if search_mode {
                                 // Already in search mode: cycle to next result.
                                 if !search_results.is_empty() {
-                                    search_result_index = (search_result_index + 1) % search_results.len();
+                                    search_result_index =
+                                        (search_result_index + 1) % search_results.len();
                                     let idx = search_results[search_result_index];
                                     input_buffer = input_history[idx].clone();
                                     cursor_pos = input_buffer.len();
@@ -434,7 +495,11 @@ pub async fn run_tui_app(
                             continue;
                         }
                         // Handle Ctrl+C in insert mode.
-                        if c == 'c' && event.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
+                        if c == 'c'
+                            && event
+                                .modifiers
+                                .contains(crossterm::event::KeyModifiers::CONTROL)
+                        {
                             if search_mode {
                                 search_mode = false;
                                 search_query.clear();
@@ -453,7 +518,11 @@ pub async fn run_tui_app(
                         // In search mode, add to query and filter.
                         if search_mode {
                             search_query.push(c);
-                            update_search_results(&input_history, &search_query, &mut search_results);
+                            update_search_results(
+                                &input_history,
+                                &search_query,
+                                &mut search_results,
+                            );
                             search_result_index = 0;
                             if let Some(&idx) = search_results.first() {
                                 input_buffer = input_history[idx].clone();
@@ -467,7 +536,11 @@ pub async fn run_tui_app(
                     crossterm::event::KeyCode::Backspace => {
                         if search_mode {
                             search_query.pop();
-                            update_search_results(&input_history, &search_query, &mut search_results);
+                            update_search_results(
+                                &input_history,
+                                &search_query,
+                                &mut search_results,
+                            );
                             search_result_index = 0;
                             if let Some(&idx) = search_results.first() {
                                 input_buffer = input_history[idx].clone();
@@ -549,7 +622,8 @@ pub async fn run_tui_app(
                             if input_buffer.starts_with('/') {
                                 input_buffer = completions[0].clone();
                             } else {
-                                let last_space = input_buffer.rfind(' ').map(|i| i + 1).unwrap_or(0);
+                                let last_space =
+                                    input_buffer.rfind(' ').map(|i| i + 1).unwrap_or(0);
                                 input_buffer.replace_range(last_space.., &completions[0]);
                             }
                             cursor_pos = input_buffer.len();
@@ -594,10 +668,12 @@ fn load_or_create_conversation(
         &config.cwd,
         &config.provider.name,
         config.provider.model.as_deref(),
-        None, // title_hint: let the store generate a default title
+        config.session_name.as_deref(),
     )?;
 
-    let mut conversation = store.load_conversation(config.session_id).unwrap_or_default();
+    let mut conversation = store
+        .load_conversation(config.session_id)
+        .unwrap_or_default();
 
     if conversation.is_empty() {
         let system = ConversationEntry::system(default_system_prompt(&config.cwd));
@@ -621,12 +697,12 @@ fn load_or_create_conversation(
 /// the next provider call.
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 async fn run_conversation_turn(
-    provider: &ProviderClient,
+    provider: &Arc<ProviderClient>,
     config: &RuntimeConfig,
     store: &SessionStore,
     conversation: &mut Vec<ConversationEntry>,
     context_manager: &ContextWindowManager,
-    broker: &StaticPermissionBroker,
+    broker: &dyn PermissionBroker,
     cost_tracker: &CostTracker,
     prompt: &str,
 ) -> Result<()> {
@@ -638,14 +714,23 @@ async fn run_conversation_turn(
     let tool_context = ToolExecutionContext {
         cwd: config.cwd.clone(),
         timeout_ms: config.provider.timeout_ms,
-        sub_agent: Some(Arc::new(TuiSubAgent::new(provider, &config.provider))),
+        sub_agent: Some(Arc::new(TuiSubAgent::new(
+            Arc::clone(provider),
+            &config.provider,
+        ))),
+        progress_cb: Some(Arc::new(|msg: &str| {
+            if let Some(event) = parse_delegate_progress_event(msg) {
+                println!("{}", render_delegate_progress_event(&event));
+            } else {
+                println!("{msg}");
+            }
+        })),
+        task_stack: std::sync::Arc::new(std::sync::Mutex::new(
+            rc_core::task_stack::TaskStack::default(),
+        )),
     };
 
-    let model_name = config
-        .provider
-        .model
-        .as_deref()
-        .unwrap_or("unknown");
+    let model_name = config.provider.model.as_deref().unwrap_or("unknown");
 
     let mut total_input_tokens = 0u64;
     let mut total_output_tokens = 0u64;
@@ -667,7 +752,11 @@ async fn run_conversation_turn(
         total_output_tokens += response.usage.output_tokens;
 
         // Record usage in cost tracker
-        cost_tracker.record(model_name, response.usage.input_tokens, response.usage.output_tokens);
+        cost_tracker.record(
+            model_name,
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+        );
 
         // Build and persist assistant entry
         let assistant_entry = ConversationEntry {
@@ -686,6 +775,7 @@ async fn run_conversation_turn(
 
         // If no tool calls, display the response and finish
         if response.tool_calls.is_empty() {
+            store.clear_resume_state(config.session_id)?;
             println!();
             println!("{}", response.text);
             println!(
@@ -698,6 +788,20 @@ async fn run_conversation_turn(
             return Ok(());
         }
 
+        let pending_tool_calls = response
+            .tool_calls
+            .iter()
+            .map(|tool_call| PendingToolCall {
+                id: tool_call.id.clone(),
+                name: tool_call.name.clone(),
+                input: tool_call.input.clone(),
+            })
+            .collect::<Vec<_>>();
+        store.save_resume_state(
+            config.session_id,
+            &ResumeState::from_pending_calls(pending_tool_calls),
+        )?;
+
         // Execute tool calls
         println!();
         if !response.text.is_empty() {
@@ -707,6 +811,7 @@ async fn run_conversation_turn(
         for tool_call in &response.tool_calls {
             let tool_start = std::time::Instant::now();
             println!("  ⏳ [tool] {} — running...", tool_call.name);
+            let audit_count_before = broker.audit_records().len();
 
             // Capture tool execution errors as error tool results instead of
             // propagating, to keep conversation state consistent for the next
@@ -726,6 +831,18 @@ async fn run_conversation_turn(
                     }
                 }
             };
+            let new_audits = broker
+                .audit_records()
+                .into_iter()
+                .skip(audit_count_before)
+                .collect::<Vec<_>>();
+            for audit in new_audits {
+                store.append_named_event(
+                    config.session_id,
+                    "permission_decision",
+                    serde_json::to_value(&audit)?,
+                )?;
+            }
             let elapsed = tool_start.elapsed();
             let status = if tool_result.is_error { "✗" } else { "✓" };
             println!(
@@ -735,7 +852,8 @@ async fn run_conversation_turn(
             );
 
             // Truncate tool output for context management
-            let truncated_output = context_manager.truncate_tool_output_default(&tool_result.content);
+            let truncated_output =
+                context_manager.truncate_tool_output_default(&tool_result.content);
 
             print_tool_result(&tool_call.name, &tool_result, &truncated_output);
 
@@ -748,6 +866,7 @@ async fn run_conversation_turn(
             store.append_conversation_entry(config.session_id, &tool_entry)?;
             conversation.push(tool_entry);
         }
+        store.clear_resume_state(config.session_id)?;
     }
 
     eprintln!(
@@ -777,7 +896,10 @@ fn print_entry_raw(print_line: &dyn Fn(&str), entry: &ConversationEntry) {
 /// Format and print a tool execution result.
 fn print_tool_result(tool_name: &str, result: &rc_core::ToolResult, display_text: &str) {
     if result.is_error {
-        println!("  [tool] {tool_name} — ERROR: {}", truncate_display(display_text, 200));
+        println!(
+            "  [tool] {tool_name} — ERROR: {}",
+            truncate_display(display_text, 200)
+        );
     } else {
         println!("  [tool] {tool_name} — OK");
         // Show first few lines of output

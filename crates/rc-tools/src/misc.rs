@@ -4,7 +4,7 @@
 
 use std::process::Stdio;
 
-use anyhow::{Result, anyhow, Context};
+use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
@@ -211,10 +211,7 @@ pub(crate) fn team_create_tool(input: &Value) -> Result<String> {
         .get("objective")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("objective is required"))?;
-    let lead = input
-        .get("lead")
-        .and_then(Value::as_str)
-        .unwrap_or("lead");
+    let lead = input.get("lead").and_then(Value::as_str).unwrap_or("lead");
     let mut scheduler = rc_agents::AgentScheduler::new(lead, objective);
     if let Some(agents) = input.get("agents").and_then(Value::as_array) {
         for agent_def in agents {
@@ -349,7 +346,9 @@ pub(crate) async fn tungsten_tool(input: &Value, context: &ToolExecutionContext)
     process.stdout(Stdio::piped());
     process.stderr(Stdio::piped());
 
-    let mut child = process.spawn().context("failed to spawn tungsten command")?;
+    let mut child = process
+        .spawn()
+        .context("failed to spawn tungsten command")?;
     let future = async {
         let mut stdout = String::new();
         let mut stderr = String::new();
@@ -385,9 +384,9 @@ pub(crate) async fn tungsten_tool(input: &Value, context: &ToolExecutionContext)
 }
 
 pub(crate) fn overflow_test_tool(input: &Value) -> Result<String> {
-    let scenario = input["scenario"]
-        .as_str()
-        .ok_or_else(|| anyhow!("scenario is required (large_output, many_messages, or deep_recursion)"))?;
+    let scenario = input["scenario"].as_str().ok_or_else(|| {
+        anyhow!("scenario is required (large_output, many_messages, or deep_recursion)")
+    })?;
 
     match scenario {
         "large_output" => {
@@ -470,19 +469,27 @@ pub(crate) fn synthetic_output_tool(input: &Value) -> Result<String> {
             md.push_str("| id | name | value | active |\n");
             md.push_str("|----|------|-------|--------|\n");
             for i in 0..rows {
-                md.push_str(&format!("| {i} | item_{i} | {} | {} |\n", i * 10, i % 2 == 0));
+                md.push_str(&format!(
+                    "| {i} | item_{i} | {} | {} |\n",
+                    i * 10,
+                    i % 2 == 0
+                ));
             }
             Ok(md)
         }
         "text" => {
             let lines: Vec<String> = (0..rows)
-                .map(|i| format!("Row {i}: name=item_{i}, value={}, active={}", i * 10, i % 2 == 0))
+                .map(|i| {
+                    format!(
+                        "Row {i}: name=item_{i}, value={}, active={}",
+                        i * 10,
+                        i % 2 == 0
+                    )
+                })
                 .collect();
             Ok(lines.join("\n"))
         }
-        _ => Err(anyhow!(
-            "type must be 'json', 'csv', 'markdown', or 'text'"
-        )),
+        _ => Err(anyhow!("type must be 'json', 'csv', 'markdown', or 'text'")),
     }
 }
 
@@ -512,15 +519,12 @@ pub(crate) fn skill_execute_tool(input: &Value, context: &ToolExecutionContext) 
                     let summary = skill.metadata.summary.as_deref().unwrap_or("(no summary)");
                     let mut output = format!(
                         "# Skill: {} ({})\n\n{}\n\n",
-                        skill.metadata.title,
-                        skill.metadata.slug,
-                        summary
+                        skill.metadata.title, skill.metadata.slug, summary
                     );
                     if !skill.instructions.is_empty() {
                         output.push_str(&skill.instructions);
                     }
-                    if !arguments.is_null() && !arguments.as_object().is_none_or(|o| o.is_empty())
-                    {
+                    if !arguments.is_null() && !arguments.as_object().is_none_or(|o| o.is_empty()) {
                         output.push_str(&format!(
                             "\n\n## Arguments\n```json\n{}\n```",
                             serde_json::to_string_pretty(&arguments)?
@@ -538,7 +542,10 @@ pub(crate) fn skill_execute_tool(input: &Value, context: &ToolExecutionContext) 
 }
 
 pub(crate) fn voice_input_tool(input: &Value) -> Result<String> {
-    let duration_secs = input.get("duration_secs").and_then(Value::as_u64).unwrap_or(5);
+    let duration_secs = input
+        .get("duration_secs")
+        .and_then(Value::as_u64)
+        .unwrap_or(5);
     let language = input["language"].as_str().unwrap_or("en");
 
     // Try to record audio using sox/rec/ffmpeg and transcribe with whisper.
@@ -550,9 +557,17 @@ pub(crate) fn voice_input_tool(input: &Value) -> Result<String> {
         // On Windows, try ffmpeg.
         std::process::Command::new("ffmpeg")
             .args([
-                "-y", "-f", "dshow", "-i", "audio=microphone",
-                "-t", &duration_secs.to_string(),
-                "-ar", "16000", "-ac", "1",
+                "-y",
+                "-f",
+                "dshow",
+                "-i",
+                "audio=microphone",
+                "-t",
+                &duration_secs.to_string(),
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
                 wav_path.to_str().unwrap_or(""),
             ])
             .output()
@@ -560,23 +575,34 @@ pub(crate) fn voice_input_tool(input: &Value) -> Result<String> {
         // On Unix, try rec (sox) first, then ffmpeg.
         let sox_result = std::process::Command::new("rec")
             .args([
-                "-r", "16000", "-c", "1",
+                "-r",
+                "16000",
+                "-c",
+                "1",
                 wav_path.to_str().unwrap_or(""),
-                "trim", "0", &duration_secs.to_string(),
+                "trim",
+                "0",
+                &duration_secs.to_string(),
             ])
             .output();
         match sox_result {
             Ok(out) if out.status.success() => Ok(out),
-            _ => {
-                std::process::Command::new("ffmpeg")
-                    .args([
-                        "-y", "-f", "alsa", "-i", "default",
-                        "-t", &duration_secs.to_string(),
-                        "-ar", "16000", "-ac", "1",
-                        wav_path.to_str().unwrap_or(""),
-                    ])
-                    .output()
-            }
+            _ => std::process::Command::new("ffmpeg")
+                .args([
+                    "-y",
+                    "-f",
+                    "alsa",
+                    "-i",
+                    "default",
+                    "-t",
+                    &duration_secs.to_string(),
+                    "-ar",
+                    "16000",
+                    "-ac",
+                    "1",
+                    wav_path.to_str().unwrap_or(""),
+                ])
+                .output(),
         }
     };
 
@@ -589,17 +615,22 @@ pub(crate) fn voice_input_tool(input: &Value) -> Result<String> {
             "status": "recording_failed",
             "message": "Voice recording failed. Install sox (rec) or ffmpeg with audio support.",
             "hint": "Windows: install ffmpeg. macOS: brew install sox. Linux: apt install sox.",
-        }).to_string());
+        })
+        .to_string());
     }
 
     // Try to transcribe with whisper CLI.
     let whisper_result = std::process::Command::new("whisper")
         .args([
             wav_path.to_str().unwrap_or(""),
-            "--model", "base",
-            "--language", language,
-            "--output_format", "txt",
-            "--output_dir", temp_dir.to_str().unwrap_or(""),
+            "--model",
+            "base",
+            "--language",
+            language,
+            "--output_format",
+            "txt",
+            "--output_dir",
+            temp_dir.to_str().unwrap_or(""),
         ])
         .output();
 
@@ -614,7 +645,10 @@ pub(crate) fn voice_input_tool(input: &Value) -> Result<String> {
         }
         Ok(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-            format!("(whisper error: {})", stderr.chars().take(200).collect::<String>())
+            format!(
+                "(whisper error: {})",
+                stderr.chars().take(200).collect::<String>()
+            )
         }
         Err(e) => format!("(whisper not available: {e})"),
     };
@@ -629,5 +663,6 @@ pub(crate) fn voice_input_tool(input: &Value) -> Result<String> {
         "language": language,
         "status": "success",
         "transcription": transcription.trim(),
-    }).to_string())
+    })
+    .to_string())
 }

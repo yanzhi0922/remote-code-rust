@@ -3,14 +3,14 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, anyhow, Context};
+use anyhow::{Context, Result, anyhow};
 use globset::GlobBuilder;
 use ignore::WalkBuilder;
 use regex::Regex;
 use serde_json::Value;
 use walkdir::WalkDir;
 
-use super::{ToolExecutionContext, IGNORED_DIRS};
+use super::{IGNORED_DIRS, ToolExecutionContext};
 
 pub(crate) fn resolve_workspace_path(cwd: &Path, maybe_relative: Option<&str>) -> Result<PathBuf> {
     let candidate = match maybe_relative {
@@ -268,10 +268,7 @@ pub(crate) fn glob_files(input: &Value, context: &ToolExecutionContext) -> Resul
         .get("pattern")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("glob requires a pattern"))?;
-    let base = resolve_workspace_path(
-        &context.cwd,
-        input.get("path").and_then(Value::as_str),
-    )?;
+    let base = resolve_workspace_path(&context.cwd, input.get("path").and_then(Value::as_str))?;
     let full_pattern = format!("{}/{}", base.display(), pattern).replace('\\', "/");
     let mut results = Vec::new();
     let entries = glob::glob(&full_pattern).context("invalid glob pattern")?;
@@ -283,9 +280,7 @@ pub(crate) fn glob_files(input: &Value, context: &ToolExecutionContext) -> Resul
         if path.is_dir() {
             continue;
         }
-        let canonical_path = path
-            .canonicalize()
-            .unwrap_or_else(|_| path.clone());
+        let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
         let canonical_cwd = context
             .cwd
             .canonicalize()
@@ -308,10 +303,7 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
         .get("pattern")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("grep requires a pattern"))?;
-    let target = resolve_workspace_path(
-        &context.cwd,
-        input.get("path").and_then(Value::as_str),
-    )?;
+    let target = resolve_workspace_path(&context.cwd, input.get("path").and_then(Value::as_str))?;
     let file_pattern = input.get("file_pattern").and_then(Value::as_str);
     let max_matches = input
         .get("max_matches")

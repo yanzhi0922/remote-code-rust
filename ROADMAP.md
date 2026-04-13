@@ -102,7 +102,7 @@ Exit criteria:
 - ✅ remote session creation, approval, reconnect, and export paths work end to end
 - ✅ runner failures and reconnects are observable and recoverable
 
-## Phase 4: Beyond Parity — ✅ COMPLETE
+## Phase 4: Beyond Parity — ✅ COMPLETE (348 tests)
 
 Objective: deliver improvements that are difficult or unsafe in the current architecture.
 
@@ -176,6 +176,34 @@ Exit criteria:
 - profile context compaction overhead
 - measure tool search latency
 - track memory usage across long sessions
+
+## Phase 6: Desktop GUI — 🔄 IN PROGRESS
+
+Objective: provide a native desktop GUI for users who prefer graphical interfaces over the CLI/TUI.
+
+Deliverables:
+
+- ✅ Tauri v2 + React 19 + TypeScript + Vite + Tailwind CSS scaffold
+- ✅ Multi-project sidebar with folder picker and collapsible sessions
+- ✅ Chat interface with Markdown rendering (KaTeX math, code highlighting, GFM)
+- ✅ Collapsible tool calls, thinking blocks, and subtask expansion
+- ✅ Multi-Provider management (add/edit/delete/switch providers)
+- ✅ Settings panel with Provider, Model, Permissions, and Advanced tabs
+- ✅ Permission modal for tool execution approval
+- ✅ Quick selectors for Provider/model/permission mode below chat input
+- ✅ Project path normalization (Windows UNC prefix handling)
+- ✅ Session persistence and conversation history
+- ✅ CI frontend job (tsc + vite build)
+- 🔄 GUI CLI feature parity (doctor, export, MCP management)
+- 🔄 Frontend test infrastructure (vitest)
+- ⬜ Headless browser integration for web_browser screenshot tool
+
+Exit criteria:
+
+- GUI builds and runs on Windows, macOS, and Linux
+- All core workflows (chat, settings, project management) work without CLI
+- CI covers both Rust and frontend code paths
+- Frontend has baseline test coverage
 
 ## Future Considerations
 

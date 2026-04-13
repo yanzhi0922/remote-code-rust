@@ -10,35 +10,39 @@ mod remote;
 #[allow(dead_code)]
 mod runtime_hooks;
 mod sessions;
+mod skills_cli;
 mod updater;
 
 use anyhow::Result;
-use rc_config::{ProviderOverrides, load_runtime_config};
+use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
 use rc_session::SessionStore;
 use rc_telemetry::install_tracing;
+use rc_tools::{ToolRuntimePolicy, configure_tool_runtime_policy};
+use rc_tools::shell::ShellExecutionPolicy;
+use uuid::Uuid;
 
+use agents::run_agents;
 use clap::Parser;
 use cli::{Cli, Commands};
-use conversation::{reapply_cli_overrides, restore_session_context, run_doctor,
-    run_first_run_wizard, run_migrate, run_oneshot_text};
+use conversation::{
+    reapply_cli_overrides, restore_session_context, run_doctor, run_first_run_wizard, run_migrate,
+    run_oneshot_text,
+};
 use headless::{run_headless, should_run_headless};
 use hooks::run_hooks;
 use interactive::run_interactive_shell;
+use mcp_cli::run_mcp;
+use plugins::run_plugins;
 use remote::run_remote;
 use sessions::{run_export, run_sessions};
-use agents::run_agents;
-use plugins::run_plugins;
-use mcp_cli::run_mcp;
+use skills_cli::run_skills;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     install_tracing("remote_code_rust", false)?;
     let cli = Cli::parse();
 
-    let resume_session = match &cli.command {
-        Some(Commands::Resume(args)) => Some(args.session_id),
-        _ => cli.session_id,
-    };
+    let resume_session = resolve_resume_session(&cli)?;
     let overrides = ProviderOverrides {
         provider: cli.provider.clone(),
         base_url: cli.base_url.clone(),
@@ -59,16 +63,31 @@ async fn main() -> Result<()> {
         cli.include_partial_messages,
         cli.max_turns,
         overrides,
+        RuntimeOverrides {
+            session_name: cli.name.clone(),
+            settings_files: cli.settings_files.clone(),
+            show_setting_sources: cli.setting_sources,
+            allowed_tools: cli.allowed_tools.clone(),
+            disallowed_tools: cli.disallowed_tools.clone(),
+            effort: None,
+            fallback_model: None,
+        },
     )?;
     let store = SessionStore::open(config.paths.clone())?;
     if resume_session.is_some() {
         restore_session_context(&store, &mut config)?;
         reapply_cli_overrides(&cli, &mut config);
     }
+    configure_runtime_policy(&config)?;
+    if cli.setting_sources && !should_run_headless(&config) {
+        print_setting_sources(&config);
+    }
 
     // Launch the first-run wizard if no API key or settings are detected.
     // Only runs for interactive sessions (no subcommand or Resume without prompt).
-    if !cli.print_mode && cli.command.is_none() || matches!(&cli.command, Some(Commands::Resume(_)) if cli.prompt.is_empty()) {
+    if !cli.print_mode && cli.command.is_none()
+        || matches!(&cli.command, Some(Commands::Resume(_)) if cli.prompt.is_empty())
+    {
         run_first_run_wizard(&mut config)?;
     }
 
@@ -81,6 +100,7 @@ async fn main() -> Result<()> {
         Some(Commands::Agents { command }) => run_agents(&config, command),
         Some(Commands::Plugins { command }) => run_plugins(&config, command).await,
         Some(Commands::Mcp { command }) => run_mcp(&config, command).await,
+        Some(Commands::Skills { command }) => run_skills(&config, command),
         Some(Commands::Migrate { command }) => run_migrate(&config, command),
         Some(Commands::Resume(args)) => {
             let prompt = join_prompt(args.prompt);
@@ -111,6 +131,81 @@ async fn main() -> Result<()> {
                 run_interactive_shell(config.clone(), &store).await
             }
         }
+    }
+}
+
+fn resolve_resume_session(cli: &Cli) -> Result<Option<Uuid>> {
+    match &cli.command {
+        Some(Commands::Resume(args)) => Ok(Some(args.session_id)),
+        _ => {
+            if let Some(session_id) = cli.session_id {
+                return Ok(Some(session_id));
+            }
+            if !cli.r#continue {
+                return Ok(None);
+            }
+            let config = load_runtime_config(
+                cli.cwd.clone(),
+                cli.profile_dir.clone(),
+                None,
+                cli.permission_mode,
+                cli.input_format,
+                cli.output_format,
+                cli.print_mode,
+                cli.verbose,
+                cli.replay_user_messages,
+                cli.include_partial_messages,
+                cli.max_turns,
+                ProviderOverrides::default(),
+                RuntimeOverrides {
+                    session_name: None,
+                    settings_files: cli.settings_files.clone(),
+                    show_setting_sources: false,
+                    allowed_tools: Vec::new(),
+                    disallowed_tools: Vec::new(),
+                    effort: None,
+                    fallback_model: None,
+                },
+            )?;
+            let store = SessionStore::open(config.paths.clone())?;
+            Ok(store
+                .latest_active_session()?
+                .map(|summary| summary.session_id))
+        }
+    }
+}
+
+fn configure_runtime_policy(config: &rc_config::RuntimeConfig) -> Result<()> {
+    configure_tool_runtime_policy(ToolRuntimePolicy {
+        allowed_tools: config.allowed_tools.clone(),
+        disallowed_tools: config.disallowed_tools.clone(),
+        task_output_dir: Some(
+            config
+                .paths
+                .artifacts_dir
+                .join("tasks")
+                .join(config.session_id.to_string()),
+        ),
+        shell_policy: ShellExecutionPolicy {
+            block_inline_cwd: true,
+            allow_background: true,
+            block_destructive_git: true,
+            max_capture_chars: 16_000,
+            output_dir: Some(
+                config
+                    .paths
+                    .artifacts_dir
+                    .join("shell")
+                    .join(config.session_id.to_string()),
+            ),
+        },
+    })
+}
+
+fn print_setting_sources(config: &rc_config::RuntimeConfig) {
+    println!("Setting sources:");
+    for source in &config.setting_sources {
+        println!("  {source}");
     }
 }
 
@@ -248,7 +343,8 @@ mod tests {
         parse_repeated_key_value_args, remote_approval_path, remote_approvals_path,
         remote_approvals_stream_path, remote_artifact_download_path, remote_artifacts_path,
         remote_events_path, remote_events_stream_path, remote_get_bytes, remote_get_json,
-        remote_post_json, remote_runner_path, remote_session_state_path, remote_sessions_path,
+        remote_post_json, remote_runner_path, remote_session_commands_path,
+        remote_session_state_path, remote_sessions_path,
     };
 
     use axum::{
@@ -262,7 +358,7 @@ mod tests {
     };
     use chrono::{DateTime, Utc};
     use futures::SinkExt;
-    use rc_config::{ProviderOverrides, load_runtime_config};
+    use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
     use std::{
         collections::BTreeSet,
         fs,
@@ -317,6 +413,7 @@ mod tests {
             false,
             4,
             ProviderOverrides::default(),
+            RuntimeOverrides::default(),
         )
         .unwrap_or_else(|error| panic!("config load failed: {error}"));
         let default_task = default_task_for_objective("Ship the next slice", &config);
@@ -444,6 +541,14 @@ mod tests {
         assert_eq!(
             remote_session_state_path(Uuid::nil()),
             format!("/v1/sessions/{}/state", Uuid::nil())
+        );
+    }
+
+    #[test]
+    fn remote_session_commands_path_targets_session_command_endpoint() {
+        assert_eq!(
+            remote_session_commands_path(Uuid::nil()),
+            format!("/v1/sessions/{}/commands", Uuid::nil())
         );
     }
 
@@ -713,6 +818,7 @@ mod tests {
             false,
             4,
             ProviderOverrides::default(),
+            RuntimeOverrides::default(),
         )
         .unwrap_or_else(|error| panic!("config load failed: {error}"));
 
@@ -763,6 +869,7 @@ mod tests {
             false,
             4,
             ProviderOverrides::default(),
+            RuntimeOverrides::default(),
         )
         .unwrap_or_else(|error| panic!("config load failed: {error}"));
 
@@ -804,6 +911,7 @@ mod tests {
             false,
             4,
             ProviderOverrides::default(),
+            RuntimeOverrides::default(),
         )
         .unwrap_or_else(|error| panic!("config load failed: {error}"));
 
@@ -895,6 +1003,7 @@ mod tests {
             false,
             4,
             ProviderOverrides::default(),
+            RuntimeOverrides::default(),
         )
         .unwrap_or_else(|error| panic!("config load failed: {error}"));
 
@@ -951,6 +1060,7 @@ mod tests {
             false,
             4,
             ProviderOverrides::default(),
+            RuntimeOverrides::default(),
         )
         .unwrap_or_else(|error| panic!("config load failed: {error}"));
 
@@ -1051,7 +1161,10 @@ mod tests {
                         "public_base_url": "http://127.0.0.1:7001",
                         "runner_lease_ttl_secs": 30,
                         "profile_dir": "C:/Users/test/.remote-code-rust",
-                        "artifact_root_dir": "C:/Users/test/.remote-code-rust/artifacts"
+                        "state_db_path": "C:/Users/test/.remote-code-rust/state.sqlite3",
+                        "artifact_root_dir": "C:/Users/test/.remote-code-rust/artifacts",
+                        "auth_required": false,
+                        "bootstrap_secret_configured": false
                     })
                 } else if request_text.starts_with("GET /v1/runners ") {
                     serde_json::json!({
@@ -1434,17 +1547,16 @@ mod tests {
         assert_eq!(created.workspace_id, "default");
         assert_eq!(created.owner_runner_id.as_deref(), Some("runner-a"));
 
-        let filtered_sessions: RemoteListResponse<RemoteSessionRecord> =
-            remote_get_json(
-                &base_url,
-                &remote_sessions_path(
-                    Some("runner-a"),
-                    Some("default"),
-                    Some(RemoteSessionState::Running),
-                ),
-            )
-            .await
-            .unwrap_or_else(|error| panic!("remote filtered sessions get failed: {error}"));
+        let filtered_sessions: RemoteListResponse<RemoteSessionRecord> = remote_get_json(
+            &base_url,
+            &remote_sessions_path(
+                Some("runner-a"),
+                Some("default"),
+                Some(RemoteSessionState::Running),
+            ),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("remote filtered sessions get failed: {error}"));
         assert_eq!(filtered_sessions.items.len(), 1);
         assert_eq!(filtered_sessions.items[0].state.label(), "running");
 
@@ -1523,14 +1635,13 @@ mod tests {
             other => panic!("unexpected runner event detail: {other:?}"),
         }
 
-        let runner_artifacts: RemoteListResponse<ArtifactRecord> =
-            remote_get_json(
-                &base_url,
-                &remote_artifacts_path(None, Some("runner-a"))
-                    .unwrap_or_else(|error| panic!("{error}")),
-            )
-            .await
-            .unwrap_or_else(|error| panic!("remote runner artifacts get failed: {error}"));
+        let runner_artifacts: RemoteListResponse<ArtifactRecord> = remote_get_json(
+            &base_url,
+            &remote_artifacts_path(None, Some("runner-a"))
+                .unwrap_or_else(|error| panic!("{error}")),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("remote runner artifacts get failed: {error}"));
         assert_eq!(runner_artifacts.items.len(), 1);
         assert_eq!(runner_artifacts.items[0].file_name, "runner-log.txt");
 
@@ -1541,13 +1652,12 @@ mod tests {
         assert_eq!(artifacts.items.len(), 1);
         assert_eq!(artifacts.items[0].file_name, "transcript.json");
 
-        let session_artifacts: RemoteListResponse<ArtifactRecord> =
-            remote_get_json(
-                &base_url,
-                &format!("/v1/sessions/{}/artifacts", Uuid::nil()),
-            )
-            .await
-            .unwrap_or_else(|error| panic!("remote session artifacts get failed: {error}"));
+        let session_artifacts: RemoteListResponse<ArtifactRecord> = remote_get_json(
+            &base_url,
+            &format!("/v1/sessions/{}/artifacts", Uuid::nil()),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("remote session artifacts get failed: {error}"));
         assert_eq!(session_artifacts.items.len(), 1);
 
         let artifact: ArtifactRecord =

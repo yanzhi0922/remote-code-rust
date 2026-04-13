@@ -120,9 +120,8 @@ pub fn sign(
         .join(";");
 
     // Step 3: Build canonical request.
-    let canonical_request = format!(
-        "{method}\n{path}\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
-    );
+    let canonical_request =
+        format!("{method}\n{path}\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}");
 
     // Step 4: Build credential scope.
     let credential_scope = format!("{date}/{}/{service}/aws4_request", credentials.region);
@@ -239,7 +238,11 @@ mod tests {
         );
         assert!(signed.authorization.starts_with("AWS4-HMAC-SHA256 "));
         assert!(signed.authorization.contains("AKIAIOSFODNN7EXAMPLE/"));
-        assert!(signed.authorization.contains("/us-east-1/bedrock/aws4_request"));
+        assert!(
+            signed
+                .authorization
+                .contains("/us-east-1/bedrock/aws4_request")
+        );
         assert!(signed.x_amz_date.len() == 16); // YYYYMMDDTHHMMSSZ
         assert!(signed.x_amz_security_token.is_none());
     }

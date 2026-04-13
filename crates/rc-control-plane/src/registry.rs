@@ -3,12 +3,13 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use rc_runner::{
-    ApprovalCreateRequest, ApprovalDecisionRequest, ApprovalRequestRecord,
-    ApprovalState, RunnerHeartbeat, RunnerRegistrationRequest,
-    RunnerSessionRecord, RunnerSnapshot, RunnerState,
+    ApprovalCreateRequest, ApprovalDecisionRequest, ApprovalRequestRecord, ApprovalState,
+    RunnerHeartbeat, RunnerRegistrationRequest, RunnerSessionRecord, RunnerSnapshot, RunnerState,
 };
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, broadcast};
 use uuid::Uuid;
 
@@ -17,21 +18,69 @@ use crate::helpers::{
     session_state_from_runner,
 };
 use crate::types::{
-    ApiError, ArtifactCreateRequest, ArtifactRecord, CreateSessionRequest, ListSessionsQuery,
-    SessionRecord, SessionState, SessionStateTransition, TimelineEvent, TimelineEventDraft,
-    DEFAULT_EVENT_LIST_LIMIT, MAX_EVENT_LIST_LIMIT,
+    ApiError, ArtifactCreateRequest, ArtifactRecord, BootstrapClaimRequest, CreateSessionRequest,
+    DEFAULT_EVENT_LIST_LIMIT, DEFAULT_PAIRING_TTL_SECS, DeviceKind, ListSessionsQuery,
+    MAX_EVENT_LIST_LIMIT, MAX_PAIRING_TTL_SECS, PairingAcceptRequest,
+    PairingOfferCreateRequest, SessionRecord, SessionState, SessionStateTransition,
+    TimelineEvent, TimelineEventDraft, TrustedDeviceRecord, RunnerQueuedCommand,
+    RunnerQueuedCommandBody,
 };
 
 // ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub(crate) struct Registry {
     pub(crate) runners: BTreeMap<String, RunnerSnapshot>,
     pub(crate) sessions: BTreeMap<Uuid, SessionRecord>,
     pub(crate) approvals: BTreeMap<Uuid, ApprovalRequestRecord>,
     pub(crate) artifacts: BTreeMap<Uuid, ArtifactRecord>,
+    #[serde(default)]
+    pub(crate) trusted_devices: BTreeMap<Uuid, StoredTrustedDevice>,
+    #[serde(default)]
+    pub(crate) pairing_offers: BTreeMap<Uuid, StoredPairingOffer>,
+    #[serde(default)]
+    pub(crate) owner_device_id: Option<Uuid>,
+    #[serde(default)]
+    pub(crate) queued_runner_commands: BTreeMap<String, VecDeque<RunnerQueuedCommand>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StoredTrustedDevice {
+    pub(crate) device_id: Uuid,
+    pub(crate) name: String,
+    pub(crate) kind: DeviceKind,
+    pub(crate) owner: bool,
+    pub(crate) created_by_device_id: Option<Uuid>,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) last_seen_at: DateTime<Utc>,
+    pub(crate) token_hash: String,
+}
+
+impl StoredTrustedDevice {
+    fn public_record(&self) -> TrustedDeviceRecord {
+        TrustedDeviceRecord {
+            device_id: self.device_id,
+            name: self.name.clone(),
+            kind: self.kind,
+            owner: self.owner,
+            created_by_device_id: self.created_by_device_id,
+            created_at: self.created_at,
+            last_seen_at: self.last_seen_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StoredPairingOffer {
+    pub(crate) offer_id: Uuid,
+    pub(crate) created_by_device_id: Option<Uuid>,
+    pub(crate) device_name: String,
+    pub(crate) device_kind: DeviceKind,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) expires_at: DateTime<Utc>,
+    pub(crate) pairing_secret_hash: String,
 }
 
 #[derive(Debug, Clone)]
@@ -72,11 +121,11 @@ pub(crate) struct PlannedApprovalDecision {
 pub(crate) struct TimelineStore {
     history_limit: usize,
     tx: broadcast::Sender<TimelineEvent>,
-    inner: Arc<Mutex<TimelineState>>,
+    inner: Arc<Mutex<TimelineSnapshot>>,
 }
 
-#[derive(Debug)]
-struct TimelineState {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct TimelineSnapshot {
     next_sequence: u64,
     history: VecDeque<TimelineEvent>,
 }
@@ -87,11 +136,28 @@ impl TimelineStore {
         Self {
             history_limit: history_limit.max(1),
             tx,
-            inner: Arc::new(Mutex::new(TimelineState {
+            inner: Arc::new(Mutex::new(TimelineSnapshot {
                 next_sequence: 1,
                 history: VecDeque::with_capacity(history_limit.max(1)),
             })),
         }
+    }
+
+    pub(crate) fn from_snapshot(
+        history_limit: usize,
+        buffer: usize,
+        snapshot: TimelineSnapshot,
+    ) -> Self {
+        let (tx, _) = broadcast::channel(buffer.max(1));
+        Self {
+            history_limit: history_limit.max(1),
+            tx,
+            inner: Arc::new(Mutex::new(snapshot)),
+        }
+    }
+
+    pub(crate) async fn snapshot(&self) -> TimelineSnapshot {
+        self.inner.lock().await.clone()
     }
 
     pub(crate) async fn publish(&self, draft: TimelineEventDraft) -> TimelineEvent {
@@ -141,7 +207,11 @@ impl TimelineStore {
         events
     }
 
-    pub(crate) async fn replay_filtered<F>(&self, after: Option<u64>, filter: F) -> Vec<TimelineEvent>
+    pub(crate) async fn replay_filtered<F>(
+        &self,
+        after: Option<u64>,
+        filter: F,
+    ) -> Vec<TimelineEvent>
     where
         F: Fn(&TimelineEvent) -> bool,
     {
@@ -173,11 +243,206 @@ impl TimelineStore {
     }
 }
 
+fn sha256_hex(raw: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(raw.as_bytes());
+    let digest = hasher.finalize();
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        #[allow(clippy::format_push_string)]
+        encoded.push_str(&format!("{byte:02x}"));
+    }
+    encoded
+}
+
+fn mint_secret(prefix: &str) -> String {
+    format!(
+        "{prefix}_{}{}",
+        Uuid::new_v4().simple(),
+        Uuid::new_v4().simple()
+    )
+}
+
+fn normalize_device_name(raw: &str) -> Result<String, ApiError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(ApiError::bad_request(
+            "device name cannot be empty".to_owned(),
+        ));
+    }
+    let normalized = trimmed.chars().take(128).collect::<String>();
+    if normalized.is_empty() {
+        return Err(ApiError::bad_request(
+            "device name cannot be empty".to_owned(),
+        ));
+    }
+    Ok(normalized)
+}
+
 // ---------------------------------------------------------------------------
 // Registry impl
 // ---------------------------------------------------------------------------
 
 impl Registry {
+    pub(crate) fn owner_claimed(&self) -> bool {
+        self.owner_device_id.is_some()
+    }
+
+    pub(crate) fn trusted_device_count(&self) -> usize {
+        self.trusted_devices.len()
+    }
+
+    pub(crate) fn list_trusted_devices(&self) -> Vec<TrustedDeviceRecord> {
+        self.trusted_devices
+            .values()
+            .map(StoredTrustedDevice::public_record)
+            .collect()
+    }
+
+    pub(crate) fn authenticate_device_token(
+        &mut self,
+        access_token: &str,
+    ) -> Option<TrustedDeviceRecord> {
+        let token_hash = sha256_hex(access_token);
+        let device_id = self
+            .trusted_devices
+            .values()
+            .find(|device| device.token_hash == token_hash)
+            .map(|device| device.device_id)?;
+        let now = Utc::now();
+        let device = self.trusted_devices.get_mut(&device_id)?;
+        device.last_seen_at = now;
+        Some(device.public_record())
+    }
+
+    pub(crate) fn bootstrap_claim(
+        &mut self,
+        expected_secret_hash: Option<&str>,
+        request: BootstrapClaimRequest,
+    ) -> Result<(TrustedDeviceRecord, String), ApiError> {
+        if self.owner_claimed() {
+            return Err(ApiError::conflict(
+                "the control plane owner device has already been claimed".to_owned(),
+            ));
+        }
+        let Some(expected_secret_hash) = expected_secret_hash else {
+            return Err(ApiError::service_unavailable(
+                "bootstrap claiming is disabled because no bootstrap secret is configured"
+                    .to_owned(),
+            ));
+        };
+        if sha256_hex(request.bootstrap_secret.trim()) != expected_secret_hash {
+            return Err(ApiError::unauthorized(
+                "bootstrap secret is missing or invalid".to_owned(),
+            ));
+        }
+
+        let now = Utc::now();
+        let access_token = mint_secret("rcdt");
+        let device_id = Uuid::new_v4();
+        let record = StoredTrustedDevice {
+            device_id,
+            name: normalize_device_name(&request.device_name)?,
+            kind: request.device_kind,
+            owner: true,
+            created_by_device_id: None,
+            created_at: now,
+            last_seen_at: now,
+            token_hash: sha256_hex(&access_token),
+        };
+        self.owner_device_id = Some(device_id);
+        self.trusted_devices.insert(device_id, record.clone());
+        Ok((record.public_record(), access_token))
+    }
+
+    pub(crate) fn create_pairing_offer(
+        &mut self,
+        created_by_device_id: Option<Uuid>,
+        request: PairingOfferCreateRequest,
+    ) -> Result<(StoredPairingOffer, String), ApiError> {
+        if !self.owner_claimed() {
+            return Err(ApiError::conflict(
+                "claim the owner device before creating pairing offers".to_owned(),
+            ));
+        }
+        self.prune_expired_pairing_offers();
+
+        let expires_in_secs = request
+            .expires_in_secs
+            .unwrap_or(DEFAULT_PAIRING_TTL_SECS)
+            .clamp(60, MAX_PAIRING_TTL_SECS);
+        let created_at = Utc::now();
+        let pairing_secret = mint_secret("rcpo");
+        let offer = StoredPairingOffer {
+            offer_id: Uuid::new_v4(),
+            created_by_device_id,
+            device_name: normalize_device_name(&request.device_name)?,
+            device_kind: request.device_kind,
+            created_at,
+            expires_at: created_at + Duration::seconds(expires_in_secs as i64),
+            pairing_secret_hash: sha256_hex(&pairing_secret),
+        };
+        self.pairing_offers.insert(offer.offer_id, offer.clone());
+        Ok((offer, pairing_secret))
+    }
+
+    pub(crate) fn accept_pairing_offer(
+        &mut self,
+        request: PairingAcceptRequest,
+    ) -> Result<(TrustedDeviceRecord, String), ApiError> {
+        self.prune_expired_pairing_offers();
+
+        let offer = self
+            .pairing_offers
+            .remove(&request.offer_id)
+            .ok_or_else(|| ApiError::not_found(format!("pairing offer `{}` was not found", request.offer_id)))?;
+        if offer.expires_at < Utc::now() {
+            return Err(ApiError::conflict(format!(
+                "pairing offer `{}` has expired",
+                request.offer_id
+            )));
+        }
+        if sha256_hex(request.pairing_secret.trim()) != offer.pairing_secret_hash {
+            return Err(ApiError::unauthorized(
+                "pairing secret is missing or invalid".to_owned(),
+            ));
+        }
+
+        let now = Utc::now();
+        let access_token = mint_secret("rcdt");
+        let record = StoredTrustedDevice {
+            device_id: Uuid::new_v4(),
+            name: normalize_device_name(
+                request
+                    .device_name
+                    .as_deref()
+                    .unwrap_or(offer.device_name.as_str()),
+            )?,
+            kind: request.device_kind.unwrap_or(offer.device_kind),
+            owner: false,
+            created_by_device_id: offer.created_by_device_id,
+            created_at: now,
+            last_seen_at: now,
+            token_hash: sha256_hex(&access_token),
+        };
+        let public_record = record.public_record();
+        self.trusted_devices.insert(record.device_id, record);
+        Ok((public_record, access_token))
+    }
+
+    fn prune_expired_pairing_offers(&mut self) {
+        let now = Utc::now();
+        self.pairing_offers
+            .retain(|_, offer| offer.expires_at >= now);
+    }
+
+    pub(crate) fn queued_runner_command_count(&self) -> usize {
+        self.queued_runner_commands
+            .values()
+            .map(VecDeque::len)
+            .sum::<usize>()
+    }
+
     pub(crate) fn register_runner(
         &mut self,
         request: RunnerRegistrationRequest,
@@ -259,7 +524,10 @@ impl Registry {
         })
     }
 
-    pub(crate) fn commit_session(&mut self, record: SessionRecord) -> Result<SessionRecord, ApiError> {
+    pub(crate) fn commit_session(
+        &mut self,
+        record: SessionRecord,
+    ) -> Result<SessionRecord, ApiError> {
         if self.sessions.contains_key(&record.session_id) {
             return Err(ApiError::conflict(format!(
                 "session `{}` already exists",
@@ -330,7 +598,11 @@ impl Registry {
         Ok((updated, previous_state))
     }
 
-    pub(crate) fn refresh_runner_session_counts(&mut self, runner_id: &str, timestamp: DateTime<Utc>) {
+    pub(crate) fn refresh_runner_session_counts(
+        &mut self,
+        runner_id: &str,
+        timestamp: DateTime<Utc>,
+    ) {
         let (active_sessions, queued_sessions) = self
             .sessions
             .values()
@@ -389,7 +661,10 @@ impl Registry {
             .collect())
     }
 
-    pub(crate) fn list_runner_artifacts(&self, runner_id: &str) -> Result<Vec<ArtifactRecord>, ApiError> {
+    pub(crate) fn list_runner_artifacts(
+        &self,
+        runner_id: &str,
+    ) -> Result<Vec<ArtifactRecord>, ApiError> {
         if !self.runners.contains_key(runner_id) {
             return Err(ApiError::not_found(format!(
                 "runner `{runner_id}` was not found"
@@ -410,7 +685,10 @@ impl Registry {
             .ok_or_else(|| ApiError::not_found(format!("artifact `{artifact_id}` was not found")))
     }
 
-    pub(crate) fn get_approval(&self, approval_id: Uuid) -> Result<ApprovalRequestRecord, ApiError> {
+    pub(crate) fn get_approval(
+        &self,
+        approval_id: Uuid,
+    ) -> Result<ApprovalRequestRecord, ApiError> {
         self.approvals
             .get(&approval_id)
             .cloned()
@@ -434,7 +712,10 @@ impl Registry {
             .collect())
     }
 
-    pub(crate) fn list_session_artifacts(&self, session_id: Uuid) -> Result<Vec<ArtifactRecord>, ApiError> {
+    pub(crate) fn list_session_artifacts(
+        &self,
+        session_id: Uuid,
+    ) -> Result<Vec<ArtifactRecord>, ApiError> {
         if !self.sessions.contains_key(&session_id) {
             return Err(ApiError::not_found(format!(
                 "session `{session_id}` was not found"
@@ -752,5 +1033,55 @@ impl Registry {
             })
             .map(|snapshot| snapshot.registration.runner_id.clone());
         Ok(selected)
+    }
+
+    pub(crate) fn enqueue_runner_command(
+        &mut self,
+        runner_id: &str,
+        body: RunnerQueuedCommandBody,
+    ) -> Result<RunnerQueuedCommand, ApiError> {
+        if !self.runners.contains_key(runner_id) {
+            return Err(ApiError::not_found(format!(
+                "runner `{runner_id}` was not found"
+            )));
+        }
+        let command = RunnerQueuedCommand {
+            command_id: Uuid::new_v4(),
+            runner_id: runner_id.to_owned(),
+            created_at: Utc::now(),
+            body,
+        };
+        self.queued_runner_commands
+            .entry(runner_id.to_owned())
+            .or_default()
+            .push_back(command.clone());
+        Ok(command)
+    }
+
+    pub(crate) fn pull_runner_commands(
+        &mut self,
+        runner_id: &str,
+        limit: usize,
+    ) -> Result<Vec<RunnerQueuedCommand>, ApiError> {
+        if !self.runners.contains_key(runner_id) {
+            return Err(ApiError::not_found(format!(
+                "runner `{runner_id}` was not found"
+            )));
+        }
+        let queue = self
+            .queued_runner_commands
+            .entry(runner_id.to_owned())
+            .or_default();
+        let mut commands = Vec::new();
+        for _ in 0..limit.max(1) {
+            let Some(command) = queue.pop_front() else {
+                break;
+            };
+            commands.push(command);
+        }
+        if queue.is_empty() {
+            self.queued_runner_commands.remove(runner_id);
+        }
+        Ok(commands)
     }
 }

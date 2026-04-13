@@ -51,9 +51,7 @@ pub(crate) fn mcp_auth_tool(input: &Value, context: &ToolExecutionContext) -> Re
                 .to_string())
             }
         }
-        _ => Err(anyhow!(
-            "action must be 'login', 'logout', or 'status'"
-        )),
+        _ => Err(anyhow!("action must be 'login', 'logout', or 'status'")),
     }
 }
 
@@ -137,7 +135,10 @@ pub(crate) async fn mcp_call_tool(input: &Value, context: &ToolExecutionContext)
             .iter()
             .filter_map(|c| {
                 if c.kind == "text" {
-                    c.fields.get("text").and_then(|v| v.as_str()).map(String::from)
+                    c.fields
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
                 } else {
                     None
                 }

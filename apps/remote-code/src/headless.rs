@@ -9,20 +9,26 @@ use std::time::Instant;
 use anyhow::Result;
 use rc_config::{RUNTIME_VERSION, RuntimeConfig};
 use rc_core::{InputFormat, OutputFormat, PermissionMode, SessionState};
-use rc_permissions::{PermissionBroker, PermissionDecision, PermissionRequest};
+use rc_permissions::{
+    LayeredPermissionBroker, PermissionBroker, PermissionDecision, PermissionRequest,
+    load_layered_rules,
+};
 use rc_protocol::{
     InitPayload, PermissionRequestPayload, ProtocolEmitter, ProtocolInput, ResultPayload,
-    UsagePayload, parse_input_line,
+    ToolProgressPayload, UsagePayload, parse_input_line,
 };
 use rc_provider::ProviderClient;
 use rc_session::SessionStore;
-use rc_tools::builtin_tool_specs;
+use rc_tools::runtime_builtin_tool_specs;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::conversation::{discover_runtime_extensions, initialize_conversation, run_prompt};
+use crate::conversation::{
+    PromptEventSink, PromptStreamEvent, discover_runtime_extensions, initialize_conversation,
+    run_prompt,
+};
 use crate::hooks::{HookRunState, discover_runtime_hooks, ensure_session_start_hooks};
 
 #[allow(clippy::too_many_lines)]
@@ -45,7 +51,7 @@ pub(crate) async fn run_headless(
             },
             version: RUNTIME_VERSION.to_owned(),
             cwd: config.cwd.display().to_string(),
-            tools: builtin_tool_specs()
+            tools: runtime_builtin_tool_specs()
                 .into_iter()
                 .map(|tool| tool.protocol_name)
                 .collect(),
@@ -65,12 +71,16 @@ pub(crate) async fn run_headless(
         oneshot::Sender<PermissionDecision>,
     >::new()));
     let interrupted = Arc::new(AtomicBool::new(false));
-    let broker = Arc::new(ChannelPermissionBroker {
-        mode: config.permission_mode,
-        emitter: emitter.clone(),
-        pending_permissions: pending_permissions.clone(),
-    });
+    let broker = Arc::new(LayeredPermissionBroker::new(
+        ChannelPermissionBroker {
+            mode: config.permission_mode,
+            emitter: emitter.clone(),
+            pending_permissions: pending_permissions.clone(),
+        },
+        load_layered_rules(&config.cwd, &config.paths.profile_dir, &config.settings_files)?,
+    ));
     let (prompt_tx, mut prompt_rx) = mpsc::channel::<String>(8);
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<PromptStreamEvent>();
 
     if let Some(prompt) = inline_prompt {
         prompt_tx.send(prompt).await?;
@@ -81,11 +91,102 @@ pub(crate) async fn run_headless(
     let processor_broker = broker.clone();
     let processor_emitter = emitter.clone();
     let processor_interrupted = interrupted.clone();
+    let event_emitter = emitter.clone();
+    let event_forwarder = tokio::spawn(async move {
+        while let Some(event) = event_rx.recv().await {
+            let mut emitter = event_emitter.lock().await;
+            match event {
+                PromptStreamEvent::MessageDelta { delta } => {
+                    emitter.emit_message_delta("assistant", delta, None)?;
+                }
+                PromptStreamEvent::MessageCommitted { text } => {
+                    emitter.emit_message_committed("assistant", text, None)?;
+                }
+                PromptStreamEvent::ToolStarted {
+                    tool_call_id,
+                    tool_name,
+                } => {
+                    emitter.emit_tool_started(&tool_call_id, &tool_name)?;
+                }
+                PromptStreamEvent::ToolProgress {
+                    tool_call_id,
+                    delta,
+                    elapsed_time_seconds,
+                } => {
+                    emitter.emit_tool_progress_detail(ToolProgressPayload {
+                        tool_use_id: tool_call_id,
+                        tool_name: None,
+                        input_delta: delta,
+                        elapsed_time_seconds,
+                    })?;
+                }
+                PromptStreamEvent::ToolFinished {
+                    tool_call_id,
+                    tool_name,
+                    is_error,
+                    summary,
+                } => {
+                    emitter.emit_tool_finished(
+                        &tool_call_id,
+                        &tool_name,
+                        is_error,
+                        summary.as_deref(),
+                    )?;
+                }
+                PromptStreamEvent::SubtaskStarted {
+                    task_id,
+                    parent_task_id,
+                    description,
+                    depth,
+                } => {
+                    emitter.emit_subtask_started(
+                        &task_id,
+                        parent_task_id.as_deref(),
+                        &description,
+                        depth,
+                    )?;
+                }
+                PromptStreamEvent::SubtaskProgress {
+                    task_id,
+                    turn,
+                    max_turns,
+                    summary,
+                } => {
+                    emitter.emit_subtask_progress(&task_id, turn, max_turns, &summary)?;
+                }
+                PromptStreamEvent::SubtaskCompleted {
+                    task_id,
+                    success,
+                    output_preview,
+                    turns_used,
+                } => {
+                    emitter.emit_subtask_completed(
+                        &task_id,
+                        success,
+                        &output_preview,
+                        turns_used,
+                    )?;
+                }
+                PromptStreamEvent::BatchProgress {
+                    total,
+                    completed,
+                    running,
+                } => {
+                    emitter.emit_batch_progress(total, completed, running)?;
+                }
+            }
+        }
+        Ok::<(), anyhow::Error>(())
+    });
+    let processor_event_tx = event_tx.clone();
     let processor = tokio::spawn(async move {
-        let provider = ProviderClient::new()?;
+        let provider = Arc::new(ProviderClient::new()?);
         let discovery = discover_runtime_hooks(&processor_config, &[]);
         let mut hook_state = HookRunState::load(&processor_store, processor_config.session_id)?;
         let mut conversation = initialize_conversation(&processor_store, &processor_config, None)?;
+        let event_sink: PromptEventSink = Arc::new(move |event| {
+            let _ = processor_event_tx.send(event);
+        });
         ensure_session_start_hooks(
             &discovery,
             &processor_config,
@@ -109,6 +210,7 @@ pub(crate) async fn run_headless(
                 &processor_store,
                 &provider,
                 processor_broker.as_ref(),
+                Some(event_sink.clone()),
                 &discovery,
                 &mut hook_state,
                 &mut conversation,
@@ -136,6 +238,7 @@ pub(crate) async fn run_headless(
                 Err(error) => {
                     #[allow(clippy::cast_possible_truncation)]
                     let duration_ms = started.elapsed().as_millis() as u64;
+                    emitter.emit_runtime_error(error.to_string())?;
                     emitter.emit_result(ResultPayload {
                         is_error: true,
                         duration_ms,
@@ -197,6 +300,8 @@ pub(crate) async fn run_headless(
     }
     drop(prompt_tx);
     processor.await??;
+    drop(event_tx);
+    event_forwarder.await??;
     Ok(())
 }
 

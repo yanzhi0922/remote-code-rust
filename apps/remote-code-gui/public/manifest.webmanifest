@@ -1,0 +1,17 @@
+{
+  "name": "remote-code",
+  "short_name": "remote-code",
+  "start_url": "/?mode=remote",
+  "display": "standalone",
+  "background_color": "#f4efe4",
+  "theme_color": "#17181a",
+  "description": "Self-hosted remote shell for remote-code sessions, approvals, and artifacts.",
+  "icons": [
+    {
+      "src": "/pwa-icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

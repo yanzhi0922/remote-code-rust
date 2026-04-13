@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use rc_config::{ProviderOverrides, import_legacy_profile, load_runtime_config};
+use rc_config::{ProviderOverrides, RuntimeOverrides, import_legacy_profile, load_runtime_config};
 use rc_core::{InputFormat, OutputFormat, PermissionMode};
 use rc_session::SessionStore;
 use rc_telemetry::install_tracing;
@@ -45,6 +45,7 @@ fn main() -> Result<()> {
         false,
         1,
         ProviderOverrides::default(),
+        RuntimeOverrides::default(),
     )?;
     let store = SessionStore::open(config.paths.clone())?;
     match cli.command {

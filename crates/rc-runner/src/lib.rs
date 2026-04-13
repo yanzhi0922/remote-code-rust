@@ -23,7 +23,7 @@ use chrono::{DateTime, Utc};
 use rc_config::AppPaths;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, mpsc};
 use uuid::Uuid;
 
 const DEFAULT_RUNNER_BIND: &str = "127.0.0.1:8788";
@@ -248,6 +248,20 @@ pub struct RunnerSessionStateUpdateRequest {
     pub metadata: BTreeMap<String, String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RunnerSessionCommandRequest {
+    SendPrompt { content: String },
+    Interrupt,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RunnerSessionCommandResponse {
+    pub session_id: Uuid,
+    pub accepted: bool,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalState {
@@ -322,10 +336,21 @@ pub struct ListResponse<T> {
 }
 
 #[derive(Debug, Clone)]
+pub enum RunnerApiEvent {
+    SessionCreated(RunnerSessionRecord),
+    ApprovalResolved(ApprovalRequestRecord),
+    SessionCommand {
+        session_id: Uuid,
+        command: RunnerSessionCommandRequest,
+    },
+}
+
+#[derive(Debug, Clone)]
 pub struct RunnerApi {
     meta: RunnerMeta,
     sessions: Arc<RwLock<BTreeMap<Uuid, RunnerSessionRecord>>>,
     approvals: Arc<RwLock<BTreeMap<Uuid, ApprovalRequestRecord>>>,
+    event_tx: Option<mpsc::UnboundedSender<RunnerApiEvent>>,
 }
 
 impl RunnerApi {
@@ -344,7 +369,14 @@ impl RunnerApi {
             },
             sessions: Arc::new(RwLock::new(BTreeMap::new())),
             approvals: Arc::new(RwLock::new(BTreeMap::new())),
+            event_tx: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_event_channel(mut self, event_tx: mpsc::UnboundedSender<RunnerApiEvent>) -> Self {
+        self.event_tx = Some(event_tx);
+        self
     }
 
     #[must_use]
@@ -360,6 +392,179 @@ impl RunnerApi {
     pub async fn list_approvals(&self) -> Vec<ApprovalRequestRecord> {
         let approvals = self.approvals.read().await;
         approvals.values().cloned().collect()
+    }
+
+    pub async fn get_session(&self, session_id: Uuid) -> Option<RunnerSessionRecord> {
+        let sessions = self.sessions.read().await;
+        sessions.get(&session_id).cloned()
+    }
+
+    pub async fn create_session_direct(
+        &self,
+        request: RunnerSessionCreateRequest,
+    ) -> Result<RunnerSessionRecord> {
+        let workspace = self
+            .meta
+            .snapshot
+            .registration
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.workspace_id == request.workspace_id)
+            .ok_or_else(|| anyhow!("workspace `{}` is not owned by this runner", request.workspace_id))?;
+
+        let mut sessions = self.sessions.write().await;
+        let session_id = request.session_id.unwrap_or_else(Uuid::new_v4);
+        if let Some(existing) = sessions.get(&session_id) {
+            return Ok(existing.clone());
+        }
+
+        let (active_sessions, queued_sessions) = session_counts(&sessions);
+        let max_parallel_sessions = usize::from(
+            self.meta
+                .snapshot
+                .registration
+                .capabilities
+                .max_parallel_sessions,
+        );
+        if active_sessions + queued_sessions >= max_parallel_sessions {
+            return Err(anyhow!(
+                "runner `{}` is at session capacity ({max_parallel_sessions})",
+                self.meta.snapshot.registration.runner_id
+            ));
+        }
+
+        let now = Utc::now();
+        let record = RunnerSessionRecord {
+            session_id,
+            runner_id: self.meta.snapshot.registration.runner_id.clone(),
+            workspace_id: workspace.workspace_id.clone(),
+            state: SessionState::Pending,
+            metadata: request.metadata,
+            created_at: now,
+            updated_at: now,
+        };
+        sessions.insert(record.session_id, record.clone());
+        self.emit_event(RunnerApiEvent::SessionCreated(record.clone()));
+        Ok(record)
+    }
+
+    pub async fn apply_session_state_update_direct(
+        &self,
+        session_id: Uuid,
+        request: RunnerSessionStateUpdateRequest,
+    ) -> Result<RunnerSessionRecord> {
+        let mut sessions = self.sessions.write().await;
+        let session = sessions
+            .get_mut(&session_id)
+            .ok_or_else(|| anyhow!("session `{session_id}` was not found"))?;
+        session.state = request.state;
+        session.metadata.extend(request.metadata);
+        session.updated_at = Utc::now();
+        Ok(session.clone())
+    }
+
+    pub async fn post_session_command_direct(
+        &self,
+        session_id: Uuid,
+        command: RunnerSessionCommandRequest,
+    ) -> Result<RunnerSessionCommandResponse> {
+        let sessions = self.sessions.read().await;
+        if !sessions.contains_key(&session_id) {
+            return Err(anyhow!("session `{session_id}` was not found"));
+        }
+        drop(sessions);
+
+        let message = match &command {
+            RunnerSessionCommandRequest::SendPrompt { .. } => "prompt forwarded",
+            RunnerSessionCommandRequest::Interrupt => "interrupt forwarded",
+        };
+        self.emit_event(RunnerApiEvent::SessionCommand {
+            session_id,
+            command,
+        });
+        Ok(RunnerSessionCommandResponse {
+            session_id,
+            accepted: true,
+            message: message.to_owned(),
+        })
+    }
+
+    pub async fn create_approval_direct(
+        &self,
+        session_id: Uuid,
+        request: ApprovalCreateRequest,
+    ) -> Result<ApprovalRequestRecord> {
+        if let Some(approval_id) = request.approval_id
+            && let Some(existing) = self.approvals.read().await.get(&approval_id).cloned()
+        {
+            return Ok(existing);
+        }
+
+        let mut sessions = self.sessions.write().await;
+        let session = sessions
+            .get_mut(&session_id)
+            .ok_or_else(|| anyhow!("session `{session_id}` was not found"))?;
+        let now = Utc::now();
+        session.state = SessionState::WaitingApproval;
+        session.updated_at = now;
+
+        let approval = ApprovalRequestRecord {
+            approval_id: request.approval_id.unwrap_or_else(Uuid::new_v4),
+            session_id,
+            runner_id: self.meta.snapshot.registration.runner_id.clone(),
+            state: ApprovalState::Pending,
+            title: request.title,
+            description: request.description,
+            metadata: request.metadata,
+            created_at: now,
+            updated_at: now,
+            responded_at: None,
+            responder: None,
+            note: None,
+        };
+        drop(sessions);
+
+        let mut approvals = self.approvals.write().await;
+        approvals.insert(approval.approval_id, approval.clone());
+        Ok(approval)
+    }
+
+    pub async fn apply_approval_decision_direct(
+        &self,
+        approval_id: Uuid,
+        request: ApprovalDecisionRequest,
+    ) -> Result<ApprovalRequestRecord> {
+        let decision = request.decision;
+        let mut approvals = self.approvals.write().await;
+        let approval = approvals
+            .get_mut(&approval_id)
+            .ok_or_else(|| anyhow!("approval `{approval_id}` was not found"))?;
+        if !matches!(approval.state, ApprovalState::Pending) {
+            return Ok(approval.clone());
+        }
+
+        let now = Utc::now();
+        approval.state = decision.into();
+        approval.updated_at = now;
+        approval.responded_at = Some(now);
+        approval.responder = request.responder;
+        approval.note = request.note;
+        let updated = approval.clone();
+        let has_pending_approvals = approvals.values().any(|candidate| {
+            candidate.session_id == updated.session_id
+                && candidate.approval_id != updated.approval_id
+                && matches!(candidate.state, ApprovalState::Pending)
+        });
+        drop(approvals);
+
+        let mut sessions = self.sessions.write().await;
+        if let Some(session) = sessions.get_mut(&updated.session_id) {
+            session.state = session_state_after_approval(decision, has_pending_approvals);
+            session.updated_at = now;
+        }
+
+        self.emit_event(RunnerApiEvent::ApprovalResolved(updated.clone()));
+        Ok(updated)
     }
 
     pub async fn heartbeat(&self) -> RunnerHeartbeat {
@@ -395,10 +600,22 @@ impl RunnerApi {
                 axum::routing::post(update_session_state),
             )
             .route(
+                "/v1/sessions/{session_id}/commands",
+                axum::routing::post(post_session_command),
+            )
+            .route(
                 "/v1/sessions/{session_id}/approvals",
                 get(list_session_approvals).post(create_approval),
             )
             .with_state(self)
+    }
+}
+
+impl RunnerApi {
+    fn emit_event(&self, event: RunnerApiEvent) {
+        if let Some(event_tx) = &self.event_tx {
+            let _ = event_tx.send(event);
+        }
     }
 }
 
@@ -607,11 +824,12 @@ pub async fn register_with_control_plane(
     registration: &RunnerRegistrationRequest,
 ) -> Result<RunnerRegistrationLease> {
     let client = Client::new();
-    let response = client
-        .post(control_plane_endpoint(
+    let response = authorize_control_plane_request(
+        client.post(control_plane_endpoint(
             control_plane_url,
             "/v1/runners/register",
-        )?)
+        )?),
+    )
         .json(registration)
         .send()
         .await
@@ -633,8 +851,9 @@ pub async fn send_heartbeat(
         "/v1/runners/{}/heartbeat",
         encode_path_segment(&heartbeat.runner_id)
     );
-    let response = client
-        .post(control_plane_endpoint(control_plane_url, &path)?)
+    let response = authorize_control_plane_request(
+        client.post(control_plane_endpoint(control_plane_url, &path)?),
+    )
         .json(heartbeat)
         .send()
         .await
@@ -653,6 +872,21 @@ fn control_plane_endpoint(base_url: &str, path: &str) -> Result<String> {
         return Err(anyhow!("control plane URL is empty"));
     }
     Ok(format!("{base_url}{path}"))
+}
+
+fn authorize_control_plane_request(builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    if let Some(token) = control_plane_auth_token() {
+        builder.bearer_auth(token)
+    } else {
+        builder
+    }
+}
+
+fn control_plane_auth_token() -> Option<String> {
+    env::var("REMOTE_CODE_CONTROL_PLANE_AUTH_TOKEN")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 fn encode_path_segment(raw: &str) -> String {
@@ -832,6 +1066,7 @@ async fn create_session(
     };
 
     sessions.insert(record.session_id, record.clone());
+    api.emit_event(RunnerApiEvent::SessionCreated(record.clone()));
     Ok((StatusCode::CREATED, Json(record)))
 }
 
@@ -848,6 +1083,34 @@ async fn update_session_state(
     session.metadata.extend(request.metadata);
     session.updated_at = Utc::now();
     Ok(Json(session.clone()))
+}
+
+async fn post_session_command(
+    State(api): State<RunnerApi>,
+    AxumPath(session_id): AxumPath<Uuid>,
+    Json(command): Json<RunnerSessionCommandRequest>,
+) -> Result<Json<RunnerSessionCommandResponse>, ApiError> {
+    let sessions = api.sessions.read().await;
+    if !sessions.contains_key(&session_id) {
+        return Err(ApiError::not_found(format!(
+            "session `{session_id}` was not found"
+        )));
+    }
+    drop(sessions);
+
+    let message = match &command {
+        RunnerSessionCommandRequest::SendPrompt { .. } => "prompt forwarded",
+        RunnerSessionCommandRequest::Interrupt => "interrupt forwarded",
+    };
+    api.emit_event(RunnerApiEvent::SessionCommand {
+        session_id,
+        command,
+    });
+    Ok(Json(RunnerSessionCommandResponse {
+        session_id,
+        accepted: true,
+        message: message.to_owned(),
+    }))
 }
 
 async fn create_approval(
@@ -919,6 +1182,8 @@ async fn apply_approval_decision(
         session.state = session_state_after_approval(decision, has_pending_approvals);
         session.updated_at = now;
     }
+
+    api.emit_event(RunnerApiEvent::ApprovalResolved(updated.clone()));
 
     Ok(Json(updated))
 }
@@ -1110,6 +1375,79 @@ mod tests {
             loaded.metadata.get("kind").map(String::as_str),
             Some("smoke")
         );
+    }
+
+    #[tokio::test]
+    async fn runner_router_emits_session_command_events() {
+        let profile_dir = tempdir().expect("tempdir should exist");
+        let config = load_runner_config(
+            Some(profile_dir.path().join("profile")),
+            RunnerConfigOverrides {
+                runner_id: Some("runner-command".to_owned()),
+                workspaces: Some(vec![RunnerWorkspace {
+                    workspace_id: "default".to_owned(),
+                    root_dir: profile_dir.path().join("workspace"),
+                    writable: true,
+                }]),
+                ..RunnerConfigOverrides::default()
+            },
+        )
+        .expect("config should load");
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let app = RunnerApi::new(config, "remote-code-runner", "0.1.0")
+            .with_event_channel(event_tx)
+            .router();
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "session_id": Uuid::nil(),
+                            "workspace_id": "default",
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("session create should succeed");
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+        let _ = event_rx.recv().await.expect("session create event should arrive");
+
+        let command_response = app
+            .oneshot(
+                Request::post(format!("/v1/sessions/{}/commands", Uuid::nil()))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&RunnerSessionCommandRequest::SendPrompt {
+                            content: "hello remote".to_owned(),
+                        })
+                        .expect("request should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("command request should succeed");
+        assert_eq!(command_response.status(), StatusCode::OK);
+        let response: RunnerSessionCommandResponse = read_json(command_response).await;
+        assert!(response.accepted);
+        assert_eq!(response.session_id, Uuid::nil());
+
+        match event_rx.recv().await.expect("command event should arrive") {
+            RunnerApiEvent::SessionCommand { session_id, command } => {
+                assert_eq!(session_id, Uuid::nil());
+                assert_eq!(
+                    command,
+                    RunnerSessionCommandRequest::SendPrompt {
+                        content: "hello remote".to_owned()
+                    }
+                );
+            }
+            other => panic!("unexpected runner event: {other:?}"),
+        }
     }
 
     #[tokio::test]

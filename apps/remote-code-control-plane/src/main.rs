@@ -30,6 +30,12 @@ struct Cli {
     #[arg(long, env = "REMOTE_CODE_PROFILE_DIR")]
     profile_dir: Option<PathBuf>,
 
+    #[arg(long, env = "REMOTE_CODE_CONTROL_PLANE_AUTH_TOKEN")]
+    auth_token: Option<String>,
+
+    #[arg(long, env = "REMOTE_CODE_CONTROL_PLANE_BOOTSTRAP_SECRET")]
+    bootstrap_secret: Option<String>,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -50,6 +56,8 @@ async fn main() -> Result<()> {
         service_name: cli.service_name,
         runner_lease_ttl_secs: cli.runner_lease_ttl_secs,
         profile_dir: cli.profile_dir,
+        auth_token: cli.auth_token,
+        bootstrap_secret: cli.bootstrap_secret,
     })?;
 
     match cli.command.unwrap_or(Command::Serve) {

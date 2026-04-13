@@ -1,10 +1,14 @@
 use std::collections::BTreeSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 use rc_config::{RUNTIME_VERSION, RuntimeConfig};
 
-use crate::cli::{PluginsCommand, PluginsInspectArgs, PluginsInvokeArgs, PluginsListArgs};
+use crate::cli::{
+    PluginsCommand, PluginsInspectArgs, PluginsInstallArgs, PluginsInvokeArgs, PluginsListArgs,
+    PluginsRemoveArgs, PluginsValidateArgs,
+};
 use crate::mcp_cli::parse_named_json_object_args;
 
 pub(crate) async fn run_plugins(config: &RuntimeConfig, command: PluginsCommand) -> Result<()> {
@@ -12,6 +16,9 @@ pub(crate) async fn run_plugins(config: &RuntimeConfig, command: PluginsCommand)
         PluginsCommand::List(args) => run_plugins_list(config, args).await,
         PluginsCommand::Inspect(args) => run_plugins_inspect(config, args).await,
         PluginsCommand::Invoke(args) => run_plugins_invoke(config, args).await,
+        PluginsCommand::Validate(args) => run_plugins_validate(config, args).await,
+        PluginsCommand::Install(args) => run_plugins_install(config, args),
+        PluginsCommand::Remove(args) => run_plugins_remove(config, args),
     }
 }
 
@@ -186,6 +193,133 @@ async fn run_plugins_invoke(config: &RuntimeConfig, args: PluginsInvokeArgs) -> 
         "{}",
         serde_json::to_string_pretty(&output.response.result.output)?
     );
+    Ok(())
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct PluginValidateOutput {
+    warnings: Vec<String>,
+    reports: Vec<rc_plugins::PluginValidationReport>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct PluginInstallOutput {
+    status: String,
+    plugin: String,
+    destination: PathBuf,
+    validation: rc_plugins::PluginValidationReport,
+}
+
+async fn run_plugins_validate(config: &RuntimeConfig, args: PluginsValidateArgs) -> Result<()> {
+    let output = build_plugins_validate_output(config, &args)?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        return Ok(());
+    }
+
+    for warning in &output.warnings {
+        println!("warning: {warning}");
+    }
+    if output.reports.is_empty() {
+        println!("No plugins matched the validation request.");
+        return Ok(());
+    }
+    for report in &output.reports {
+        println!(
+            "{}  errors={} warnings={} skills={} runtime={} mcp={}",
+            report.plugin_name,
+            report.errors.len(),
+            report.warnings.len(),
+            report.bundled_skills,
+            report.has_runtime,
+            report.has_mcp
+        );
+        for error in &report.errors {
+            println!("  error: {error}");
+        }
+        for warning in &report.warnings {
+            println!("  warning: {warning}");
+        }
+    }
+    Ok(())
+}
+
+fn run_plugins_install(config: &RuntimeConfig, args: PluginsInstallArgs) -> Result<()> {
+    let plugin = rc_plugins::load_plugin_from_root(&args.path)?;
+    let validation = rc_plugins::validate_plugin_bundle(&plugin);
+    if !validation.errors.is_empty() {
+        return Err(anyhow!(
+            "Plugin validation failed: {}",
+            validation.errors.join("; ")
+        ));
+    }
+
+    let destination = config.paths.plugins_dir.join(&plugin.manifest.name);
+    if destination.exists() {
+        if !args.force {
+            return Err(anyhow!(
+                "Plugin destination {} already exists; pass --force to replace it",
+                destination.display()
+            ));
+        }
+        if !destination.starts_with(&config.paths.plugins_dir) {
+            return Err(anyhow!(
+                "Refusing to replace plugin outside {}",
+                config.paths.plugins_dir.display()
+            ));
+        }
+        fs::remove_dir_all(&destination)?;
+    }
+
+    copy_dir_recursive(&plugin.root, &destination)?;
+    let output = PluginInstallOutput {
+        status: if args.force { "reinstalled" } else { "installed" }.to_owned(),
+        plugin: plugin.manifest.name,
+        destination,
+        validation,
+    };
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!(
+            "Plugin {} at {}.",
+            output.status,
+            output.destination.display()
+        );
+    }
+    Ok(())
+}
+
+fn run_plugins_remove(config: &RuntimeConfig, args: PluginsRemoveArgs) -> Result<()> {
+    let destination = config.paths.plugins_dir.join(&args.plugin);
+    if !destination.exists() {
+        if args.if_exists {
+            println!("Plugin {} already absent.", args.plugin);
+            return Ok(());
+        }
+        return Err(anyhow!(
+            "Plugin {} is not installed in {}",
+            args.plugin,
+            config.paths.plugins_dir.display()
+        ));
+    }
+    if !destination.starts_with(&config.paths.plugins_dir) {
+        return Err(anyhow!(
+            "Refusing to remove plugin outside {}",
+            config.paths.plugins_dir.display()
+        ));
+    }
+    fs::remove_dir_all(&destination)?;
+    let output = serde_json::json!({
+        "status": "removed",
+        "plugin": args.plugin,
+        "destination": destination,
+    });
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!("Plugin removed from {}.", output["destination"].as_str().unwrap_or_default());
+    }
     Ok(())
 }
 
@@ -544,4 +678,51 @@ pub(crate) fn format_plugin_source(plugin: &PluginRecord) -> String {
             plugin.manifest_path.display()
         ),
     }
+}
+
+fn build_plugins_validate_output(
+    config: &RuntimeConfig,
+    args: &PluginsValidateArgs,
+) -> Result<PluginValidateOutput> {
+    let mut warnings = Vec::new();
+    let mut reports = Vec::new();
+
+    if let Some(path) = &args.path {
+        let plugin = rc_plugins::load_plugin_from_root(path)?;
+        reports.push(rc_plugins::validate_plugin_bundle(&plugin));
+        return Ok(PluginValidateOutput { warnings, reports });
+    }
+
+    if let Some(plugin_name) = &args.plugin {
+        let resolution = resolve_runtime_plugin(config, plugin_name, &args.plugin_roots)?;
+        warnings.extend(resolution.warnings);
+        reports.push(rc_plugins::validate_plugin_bundle(&resolution.entry.bundle));
+        return Ok(PluginValidateOutput { warnings, reports });
+    }
+
+    let discovery = discover_runtime_plugins(config, &args.plugin_roots);
+    warnings.extend(discovery.warnings.clone());
+    reports.extend(
+        discovery
+            .plugins
+            .iter()
+            .map(|entry| rc_plugins::validate_plugin_bundle(&entry.bundle)),
+    );
+    Ok(PluginValidateOutput { warnings, reports })
+}
+
+fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            copy_dir_recursive(&source_path, &destination_path)?;
+        } else if file_type.is_file() {
+            fs::copy(&source_path, &destination_path)?;
+        }
+    }
+    Ok(())
 }

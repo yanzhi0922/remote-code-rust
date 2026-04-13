@@ -2,7 +2,7 @@
 
 use std::process::Stdio;
 
-use anyhow::{Result, anyhow, Context};
+use anyhow::{Context, Result, anyhow};
 use rc_core::HookShell;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;

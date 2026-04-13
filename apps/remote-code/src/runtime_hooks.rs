@@ -730,7 +730,7 @@ mod tests {
         HookDecision, HookRuntime, append_hook_context_entries, condition_matches, matcher_matches,
         wildcard_match,
     };
-    use rc_config::{ProviderOverrides, load_runtime_config};
+    use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
     use rc_core::{ConversationRole, HookEvent};
     use serde_json::json;
     use tempfile::tempdir;
@@ -823,6 +823,7 @@ mod tests {
             false,
             1,
             ProviderOverrides::default(),
+            RuntimeOverrides::default(),
         )
         .expect("runtime config should load");
 

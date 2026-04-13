@@ -10,13 +10,16 @@
 //! upstream Claude Code's `categorizeRetryableAPIError`. Each variant carries
 //! enough context for the caller to decide whether to retry, compact, or abort.
 
+pub mod circuit_breaker;
 pub mod context;
 pub mod cost;
+pub mod credential_pool;
 pub mod failover;
 pub mod model_info;
 pub mod sigv4;
 pub mod streaming;
 
+pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
 pub use streaming::StreamingCallbacks;
 
 use anyhow::{Context, Result, anyhow};
@@ -24,19 +27,27 @@ use rc_config::ProviderConfig;
 use rc_core::{
     ConversationEntry, ConversationRole, ProviderProtocol, ProviderResponse, ToolCall, UsageSummary,
 };
-use rc_tools::builtin_tool_specs;
+use rc_tools::runtime_builtin_tool_specs;
 use reqwest::Client;
 use reqwest::header::{
     ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, RETRY_AFTER,
     USER_AGENT,
 };
 use serde_json::{Value, json};
+use std::sync::Mutex;
 use std::time::Duration;
 
 /// HTTP client for communicating with LLM provider APIs.
-#[derive(Debug, Clone)]
+///
+/// Includes an optional circuit breaker per provider name to prevent wasting
+/// time on providers that are known to be down, and an optional credential
+/// pool for round-robin API key rotation.
 pub struct ProviderClient {
     http: Client,
+    /// Circuit breakers keyed by provider name.
+    breakers: Mutex<Vec<(String, CircuitBreaker)>>,
+    /// Optional credential pool for round-robin API key rotation.
+    credential_pool: Option<credential_pool::CredentialPool>,
 }
 
 impl ProviderClient {
@@ -48,7 +59,88 @@ impl ProviderClient {
         let http = Client::builder()
             .build()
             .context("failed to build the provider HTTP client")?;
-        Ok(Self { http })
+        Ok(Self {
+            http,
+            breakers: Mutex::new(Vec::new()),
+            credential_pool: None,
+        })
+    }
+
+    /// Create a new provider client with a credential pool for API key rotation.
+    ///
+    /// When a credential pool is set, each request will use the next credential
+    /// in the round-robin rotation, overriding the API key from the provider config.
+    pub fn with_credential_pool(http: Client, pool: credential_pool::CredentialPool) -> Self {
+        Self {
+            http,
+            breakers: Mutex::new(Vec::new()),
+            credential_pool: Some(pool),
+        }
+    }
+
+    /// Set the credential pool for API key rotation.
+    pub fn set_credential_pool(&mut self, pool: credential_pool::CredentialPool) {
+        self.credential_pool = Some(pool);
+    }
+
+    /// Resolve the effective API key for a request.
+    ///
+    /// If a credential pool is available, uses round-robin rotation.
+    /// Otherwise, falls back to the provider config's API key.
+    fn resolve_api_key(&self, provider: &ProviderConfig) -> Option<String> {
+        if let Some(ref pool) = self.credential_pool
+            && let Some(cred) = pool.next()
+        {
+            return Some(cred.api_key.clone());
+        }
+        provider.api_key.clone()
+    }
+
+    /// Get the circuit breaker configuration for the given provider name.
+    ///
+    /// Currently returns the default configuration for all providers.
+    /// Per-provider configuration can be added by looking up the provider
+    /// name in a configuration map.
+    fn breaker_config_for(_provider_name: &str) -> CircuitBreakerConfig {
+        CircuitBreakerConfig::default()
+    }
+
+    /// Check the circuit breaker for the given provider.
+    ///
+    /// Returns `Ok(())` if requests are allowed, or an error describing
+    /// why the request was rejected.
+    fn check_circuit(&self, provider_name: &str) -> Result<()> {
+        let breakers = self.breakers.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((_, breaker)) = breakers.iter().find(|(name, _)| name == provider_name) {
+            breaker.allow_request().map_err(|state| {
+                anyhow!("provider {provider_name} circuit breaker is {state:?} — skipping request")
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Record a successful provider call in the circuit breaker.
+    fn record_success(&self, provider_name: &str) {
+        let mut breakers = self.breakers.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((_, breaker)) = breakers.iter_mut().find(|(name, _)| name == provider_name) {
+            breaker.record_success();
+        }
+    }
+
+    /// Record a failed provider call in the circuit breaker.
+    ///
+    /// Lazily creates a breaker for the provider if one does not yet exist.
+    fn record_failure(&self, provider_name: &str) {
+        let mut breakers = self.breakers.lock().unwrap_or_else(|e| e.into_inner());
+        match breakers.iter_mut().find(|(name, _)| name == provider_name) {
+            Some((_, breaker)) => breaker.record_failure(),
+            None => {
+                let config = Self::breaker_config_for(provider_name);
+                let breaker = CircuitBreaker::new(config);
+                breaker.record_failure();
+                breakers.push((provider_name.to_owned(), breaker));
+            }
+        }
     }
 
     /// Send a completion request to the configured provider.
@@ -70,12 +162,42 @@ impl ProviderClient {
             return Ok(mock_response(conversation));
         }
 
-        match provider.protocol {
-            ProviderProtocol::OpenAi => self.complete_openai(provider, conversation).await,
-            ProviderProtocol::Anthropic => self.complete_anthropic(provider, conversation).await,
-            ProviderProtocol::Bedrock => self.complete_bedrock(provider, conversation).await,
-            ProviderProtocol::Vertex => self.complete_vertex(provider, conversation).await,
+        // Check circuit breaker before making the request.
+        self.check_circuit(&provider.name)?;
+
+        // Resolve API key: use credential pool rotation if available.
+        let effective_provider = if self.credential_pool.is_some() {
+            let mut p = provider.clone();
+            p.api_key = self.resolve_api_key(provider);
+            p
+        } else {
+            provider.clone()
+        };
+
+        let result = match effective_provider.protocol {
+            ProviderProtocol::OpenAi => {
+                self.complete_openai(&effective_provider, conversation)
+                    .await
+            }
+            ProviderProtocol::Anthropic => {
+                self.complete_anthropic(&effective_provider, conversation)
+                    .await
+            }
+            ProviderProtocol::Bedrock => {
+                self.complete_bedrock(&effective_provider, conversation)
+                    .await
+            }
+            ProviderProtocol::Vertex => {
+                self.complete_vertex(&effective_provider, conversation)
+                    .await
+            }
+        };
+
+        match &result {
+            Ok(_) => self.record_success(&provider.name),
+            Err(_) => self.record_failure(&provider.name),
         }
+        result
     }
 
     /// Complete a conversation with automatic context compaction on context_length_exceeded errors.
@@ -140,7 +262,7 @@ impl ProviderClient {
             json!({
                 "model": provider.model,
                 "messages": to_openai_messages(conversation),
-                "tools": builtin_tool_specs()
+                "tools": runtime_builtin_tool_specs()
                     .into_iter()
                     .map(|tool| tool.to_openai_schema())
                     .collect::<Vec<_>>(),
@@ -152,7 +274,7 @@ impl ProviderClient {
             json!({
                 "model": provider.model,
                 "messages": to_openai_messages(conversation),
-                "tools": builtin_tool_specs()
+                "tools": runtime_builtin_tool_specs()
                     .into_iter()
                     .map(|tool| tool.to_openai_schema())
                     .collect::<Vec<_>>(),
@@ -164,9 +286,7 @@ impl ProviderClient {
         };
 
         // If thinking_budget is set and the model supports it, add reasoning_effort.
-        if is_reasoning_model
-            && let Some(budget) = provider.thinking_budget
-        {
+        if is_reasoning_model && let Some(budget) = provider.thinking_budget {
             // Map budget to reasoning_effort: low/medium/high.
             let effort = if budget <= 5000 {
                 "low"
@@ -197,7 +317,7 @@ impl ProviderClient {
             "model": provider.model,
             "system": system,
             "messages": messages,
-            "tools": builtin_tool_specs()
+            "tools": runtime_builtin_tool_specs()
                 .into_iter()
                 .map(|tool| tool.to_anthropic_schema())
                 .collect::<Vec<_>>(),
@@ -263,14 +383,14 @@ impl ProviderClient {
             "anthropic_version": "bedrock-2023-05-31",
             "system": system,
             "messages": messages,
-            "tools": builtin_tool_specs()
+            "tools": runtime_builtin_tool_specs()
                 .into_iter()
                 .map(|tool| tool.to_anthropic_schema())
                 .collect::<Vec<_>>(),
             "max_tokens": provider.max_output_tokens,
         });
-        let payload = serde_json::to_vec(&body)
-            .context("failed to serialise Bedrock request body")?;
+        let payload =
+            serde_json::to_vec(&body).context("failed to serialise Bedrock request body")?;
 
         // Construct Bedrock InvokeModel URL.
         let host = format!("bedrock-runtime.{}.amazonaws.com", credentials.region);
@@ -319,10 +439,7 @@ impl ProviderClient {
                 HeaderName::from_static("x-amz-content-sha256"),
                 HeaderValue::from_str(&signed.x_amz_content_sha256)?,
             );
-            headers.insert(
-                AUTHORIZATION,
-                HeaderValue::from_str(&signed.authorization)?,
-            );
+            headers.insert(AUTHORIZATION, HeaderValue::from_str(&signed.authorization)?);
             if let Some(ref token) = signed.x_amz_security_token {
                 headers.insert(
                     HeaderName::from_static("x-amz-security-token"),
@@ -387,14 +504,15 @@ impl ProviderClient {
             }
         };
 
-        let model = provider
-            .model
-            .as_deref()
-            .ok_or_else(|| anyhow!("Vertex AI provider requires a model ID (e.g. claude-sonnet-4@20250514)"))?;
+        let model = provider.model.as_deref().ok_or_else(|| {
+            anyhow!("Vertex AI provider requires a model ID (e.g. claude-sonnet-4@20250514)")
+        })?;
 
         let project = std::env::var("GOOGLE_CLOUD_PROJECT")
             .or_else(|_| std::env::var("GCLOUD_PROJECT"))
-            .map_err(|_| anyhow!("Vertex AI requires GOOGLE_CLOUD_PROJECT or GCLOUD_PROJECT env var"))?;
+            .map_err(|_| {
+                anyhow!("Vertex AI requires GOOGLE_CLOUD_PROJECT or GCLOUD_PROJECT env var")
+            })?;
 
         let region = std::env::var("GOOGLE_CLOUD_REGION")
             .or_else(|_| std::env::var("CLOUD_ML_REGION"))
@@ -406,7 +524,7 @@ impl ProviderClient {
             "anthropic_version": "vertex-2023-10-16",
             "system": system,
             "messages": messages,
-            "tools": builtin_tool_specs()
+            "tools": runtime_builtin_tool_specs()
                 .into_iter()
                 .map(|tool| tool.to_anthropic_schema())
                 .collect::<Vec<_>>(),
@@ -548,10 +666,25 @@ fn compute_retry_delay(
         return retry_after;
     }
     let multiplier = 2u64.saturating_pow(attempt.min(16));
-    let delay_ms = provider
+    let base_ms = provider
         .retry_initial_backoff_ms
         .saturating_mul(multiplier)
-        .min(provider.retry_max_backoff_ms);
+        .min(provider.retry_max_backoff_ms)
+        .max(1);
+    // Add ±25% jitter to avoid thundering herd under concurrent retries.
+    // Uses a simple deterministic hash based on attempt + base_ms to avoid
+    // needing a full RNG while still providing sufficient variance.
+    let jitter_range = base_ms / 4;
+    let jitter_offset = if jitter_range > 0 {
+        // Deterministic pseudo-random: mix attempt counter with base delay.
+        let hash = (attempt as u64).wrapping_mul(2654435761) ^ base_ms;
+        hash % (2 * jitter_range)
+    } else {
+        0
+    };
+    let delay_ms = base_ms
+        .saturating_sub(jitter_range)
+        .saturating_add(jitter_offset);
     Duration::from_millis(delay_ms.max(1))
 }
 
@@ -601,10 +734,35 @@ fn build_headers(provider: &ProviderConfig) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
-    headers.insert(
-        USER_AGENT,
-        HeaderValue::from_str(&format!("remote-code-rust/{}", env!("CARGO_PKG_VERSION")))?,
-    );
+
+    if matches!(provider.protocol, ProviderProtocol::Anthropic) {
+        // ── Claude Code disguise mode ──────────────────────────────────
+        //
+        // Coding Plan providers (智谱/阿里云/腾讯云/百度千帆) prioritise
+        // requests that look like they come from Claude Code.  We mimic the
+        // key identifying headers so our traffic receives the same
+        // preferential treatment.
+        //
+        // This is the same approach used by OpenCode, OpenClaw, Cline, and
+        // other open-source coding agents that consume Coding Plan quotas.
+
+        headers.insert(USER_AGENT, HeaderValue::from_static("claude-code/1.0.18"));
+        headers.insert(
+            HeaderName::from_static("anthropic-version"),
+            HeaderValue::from_static("2023-06-01"),
+        );
+        // Claude Code typically sends these beta features.
+        headers.insert(
+            HeaderName::from_static("anthropic-beta"),
+            HeaderValue::from_static("prompt-caching-2024-07-31,pdfs-2024-09-25"),
+        );
+    } else {
+        headers.insert(
+            USER_AGENT,
+            HeaderValue::from_str(&format!("remote-code-rust/{}", env!("CARGO_PKG_VERSION")))?,
+        );
+    }
+
     if let Some(api_key) = &provider.api_key {
         headers.insert(
             AUTHORIZATION,
@@ -615,12 +773,9 @@ fn build_headers(provider: &ProviderConfig) -> Result<HeaderMap> {
             HeaderValue::from_str(api_key)?,
         );
     }
-    if matches!(provider.protocol, ProviderProtocol::Anthropic) {
-        headers.insert(
-            HeaderName::from_static("anthropic-version"),
-            HeaderValue::from_static("2023-06-01"),
-        );
-    }
+
+    // Apply user-supplied header overrides last so they can override
+    // any of the defaults above (including the Claude Code disguise).
     for (name, value) in &provider.request_header_overrides {
         let header_name = HeaderName::from_bytes(name.as_bytes())
             .with_context(|| format!("invalid header name {name}"))?;
@@ -806,7 +961,12 @@ fn parse_openai_response(status: u16, raw_text: String) -> Result<ProviderRespon
         .get("reasoning_content")
         .and_then(Value::as_str)
         .map(String::from)
-        .or_else(|| choice.get("reasoning").and_then(Value::as_str).map(String::from));
+        .or_else(|| {
+            choice
+                .get("reasoning")
+                .and_then(Value::as_str)
+                .map(String::from)
+        });
 
     Ok(ProviderResponse {
         text: strip_reasoning_tags(&raw_assistant_text),
@@ -986,7 +1146,7 @@ fn mock_response(conversation: &[ConversationEntry]) -> ProviderResponse {
         {
             vec![ToolCall {
                 id: "mock-tool-call-1".to_owned(),
-                name: builtin_tool_specs()
+                name: runtime_builtin_tool_specs()
                     .first()
                     .map_or_else(|| "list_directory".to_owned(), |tool| tool.name.clone()),
                 input: json!({"path": ".", "recursive": false, "max_entries": 32}),
@@ -1174,14 +1334,20 @@ pub fn classify_provider_error(
         401 | 403 => (ErrorCategory::Authentication, RecoveryAction::FixConfig),
         402 => (ErrorCategory::QuotaExceeded, RecoveryAction::Failover),
         404 => (ErrorCategory::ModelNotFound, RecoveryAction::FixConfig),
-        413 => (ErrorCategory::PromptTooLong, RecoveryAction::CompactAndRetry),
+        413 => (
+            ErrorCategory::PromptTooLong,
+            RecoveryAction::CompactAndRetry,
+        ),
         400 => {
             // Check if it's a prompt-too-long error disguised as 400.
             if message.contains("prompt is too long")
                 || message.contains("context_length_exceeded")
                 || message.contains("maximum context length")
             {
-                (ErrorCategory::PromptTooLong, RecoveryAction::CompactAndRetry)
+                (
+                    ErrorCategory::PromptTooLong,
+                    RecoveryAction::CompactAndRetry,
+                )
             } else {
                 (ErrorCategory::InvalidRequest, RecoveryAction::Abort)
             }
@@ -1206,8 +1372,11 @@ pub fn classify_network_error(error: &str, provider_name: &str) -> ProviderError
         (ErrorCategory::Timeout, RecoveryAction::Retry)
     } else if error.contains("connection refused") || error.contains("couldn't connect") {
         (ErrorCategory::Network, RecoveryAction::Retry)
-    } else if error.contains("tls") || error.contains("certificate") || error.contains("ssl")
-        || error.contains("dns") || error.contains("resolve")
+    } else if error.contains("tls")
+        || error.contains("certificate")
+        || error.contains("ssl")
+        || error.contains("dns")
+        || error.contains("resolve")
     {
         (ErrorCategory::Network, RecoveryAction::FixConfig)
     } else {
@@ -1430,11 +1599,7 @@ mod tests {
 
     #[test]
     fn classify_400_context_length_exceeded() {
-        let err = super::classify_provider_error(
-            400,
-            "context_length_exceeded",
-            "test-provider",
-        );
+        let err = super::classify_provider_error(400, "context_length_exceeded", "test-provider");
         assert_eq!(err.category, super::ErrorCategory::PromptTooLong);
         assert!(super::is_prompt_too_long(&err));
     }

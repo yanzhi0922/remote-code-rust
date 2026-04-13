@@ -1,0 +1,21 @@
+[Unit]
+Description=remote-code control plane
+After=network.target
+
+[Service]
+Type=simple
+User=remote-code
+Group=remote-code
+WorkingDirectory=/opt/remote-code
+EnvironmentFile=/etc/remote-code/control-plane.env
+ExecStart=/opt/remote-code/bin/remote-code-control-plane serve
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/remote-code
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,6 @@
 //! Web-related tools: web_fetch, web_search, web_browser.
 
-use anyhow::{Result, anyhow, Context};
+use anyhow::{Context, Result, anyhow};
 use regex::Regex;
 use serde_json::{Value, json};
 
@@ -75,12 +75,7 @@ pub(crate) async fn web_search(input: &Value, _context: &ToolExecutionContext) -
             .map(|topics| {
                 topics
                     .iter()
-                    .filter_map(|topic| {
-                        topic
-                            .get("Text")
-                            .and_then(Value::as_str)
-                            .map(String::from)
-                    })
+                    .filter_map(|topic| topic.get("Text").and_then(Value::as_str).map(String::from))
                     .collect()
             })
             .unwrap_or_default();
@@ -100,7 +95,10 @@ pub(crate) async fn web_search(input: &Value, _context: &ToolExecutionContext) -
     }
 }
 
-pub(crate) async fn web_browser_tool(input: &Value, _context: &ToolExecutionContext) -> Result<String> {
+pub(crate) async fn web_browser_tool(
+    input: &Value,
+    _context: &ToolExecutionContext,
+) -> Result<String> {
     let url = input
         .get("url")
         .and_then(Value::as_str)
@@ -111,9 +109,7 @@ pub(crate) async fn web_browser_tool(input: &Value, _context: &ToolExecutionCont
         .unwrap_or("fetch");
     match action {
         "fetch" => {
-            let response = reqwest::get(url)
-                .await
-                .context("failed to fetch URL")?;
+            let response = reqwest::get(url).await.context("failed to fetch URL")?;
             let status = response.status();
             if !status.is_success() {
                 return Err(anyhow!("HTTP {} for {}", status, url));
@@ -127,12 +123,71 @@ pub(crate) async fn web_browser_tool(input: &Value, _context: &ToolExecutionCont
             Ok(truncated)
         }
         "screenshot" => {
-            // Screenshot requires a real browser – simplified placeholder
+            // Structural page snapshot: fetch HTML and extract metadata.
+            let response = reqwest::get(url)
+                .await
+                .context("failed to fetch URL for screenshot")?;
+            let status = response.status();
+            if !status.is_success() {
+                return Err(anyhow!("HTTP {} for {}", status, url));
+            }
+            let text = response
+                .text()
+                .await
+                .context("failed to read response body")?;
+
+            // Extract <title>.
+            let title_re = Regex::new(r"(?i)<title[^>]*>(.*?)</title>").expect("valid title regex");
+            let title = title_re
+                .captures(&text)
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().trim().to_owned())
+                .unwrap_or_default();
+
+            // Extract headings (h1–h6).
+            let heading_re =
+                Regex::new(r"(?i)<h[1-6][^>]*>(.*?)</h[1-6]>").expect("valid heading regex");
+            let headings: Vec<String> = heading_re
+                .captures_iter(&text)
+                .filter_map(|c| c.get(1).map(|m| m.as_str().trim().to_owned()))
+                .take(20)
+                .collect();
+
+            // Count images and links.
+            let img_count = Regex::new(r"(?i)<img")
+                .expect("valid img regex")
+                .find_iter(&text)
+                .count();
+            let link_count = Regex::new(r"(?i)<a ")
+                .expect("valid link regex")
+                .find_iter(&text)
+                .count();
+
+            // Extract meta description.
+            let meta_re = Regex::new(r#"(?i)<meta\s+name="description"\s+content="([^"]*)""#)
+                .expect("valid meta regex");
+            let description = meta_re
+                .captures(&text)
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().to_owned())
+                .unwrap_or_default();
+
+            // Plain-text preview.
+            let strip_re = Regex::new(r"<[^>]+>").expect("valid html-stripping regex");
+            let plain = strip_re.replace_all(&text, " ");
+            let collapsed: String = plain.split_whitespace().collect::<Vec<_>>().join(" ");
+            let preview: String = collapsed.chars().take(3000).collect();
+
             Ok(json!({
-                "type": "screenshot",
+                "type": "page_snapshot",
                 "url": url,
-                "message": "Screenshot mode requires a headed browser. Falling back to fetch.",
-                "note": "Use action=fetch for HTTP content retrieval."
+                "title": title,
+                "description": description,
+                "headings": headings,
+                "image_count": img_count,
+                "link_count": link_count,
+                "text_preview": preview,
+                "note": "Structural snapshot extracted from HTML. For visual screenshots, use a headed browser."
             })
             .to_string())
         }
@@ -177,10 +232,7 @@ pub(crate) async fn web_browser_tool(input: &Value, _context: &ToolExecutionCont
             let re = Regex::new(r"<[^>]+>").expect("valid html-stripping regex");
             let plain = re.replace_all(&text, " ");
             // Collapse whitespace.
-            let collapsed: String = plain
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ");
+            let collapsed: String = plain.split_whitespace().collect::<Vec<_>>().join(" ");
             let truncated: String = collapsed.chars().take(50_000).collect();
             Ok(truncated)
         }

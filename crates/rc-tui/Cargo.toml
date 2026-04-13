@@ -16,9 +16,13 @@ anyhow.workspace = true
 async-trait.workspace = true
 crossterm.workspace = true
 tokio.workspace = true
+serde_json.workspace = true
 rc-core = { path = "../rc-core" }
 rc-config = { path = "../rc-config" }
 rc-session = { path = "../rc-session" }
 rc-provider = { path = "../rc-provider" }
 rc-tools = { path = "../rc-tools" }
 rc-permissions = { path = "../rc-permissions" }
+rc-mcp = { path = "../rc-mcp" }
+rc-plugins = { path = "../rc-plugins" }
+rc-skills = { path = "../rc-skills" }

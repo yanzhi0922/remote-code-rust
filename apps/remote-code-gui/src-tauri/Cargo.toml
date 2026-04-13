@@ -1,0 +1,37 @@
+[package]
+name = "remote-code-gui"
+version = "0.1.0"
+description = "Remote Code GUI - Tauri Desktop Application"
+authors = ["Yanzh"]
+edition = "2021"
+
+[lib]
+name = "remote_code_gui_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+directories = { workspace = true }
+keyring = "2"
+rc-core = { path = "../../../crates/rc-core" }
+rc-config = { path = "../../../crates/rc-config" }
+rc-tools = { path = "../../../crates/rc-tools" }
+rc-provider = { path = "../../../crates/rc-provider" }
+rc-session = { path = "../../../crates/rc-session" }
+rc-ui-bridge = { path = "../../../crates/rc-ui-bridge" }
+rc-permissions = { path = "../../../crates/rc-permissions" }
+
+[lints]
+workspace = true

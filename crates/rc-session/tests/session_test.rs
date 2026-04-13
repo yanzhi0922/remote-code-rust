@@ -65,7 +65,13 @@ fn get_session_summary_returns_correct_data() {
     let work = fresh_tempdir();
     let session_id = Uuid::new_v4();
     store
-        .ensure_session(session_id, work.path(), "test-provider", Some("gpt-4"), Some("my session"))
+        .ensure_session(
+            session_id,
+            work.path(),
+            "test-provider",
+            Some("gpt-4"),
+            Some("my session"),
+        )
         .expect("ensure");
     let summary = store.get_session_summary(session_id).expect("summary");
     assert_eq!(summary.session_id, session_id);
@@ -191,10 +197,7 @@ fn load_session_bundle_includes_stats() {
     assert_eq!(bundle.stats.conversation_entries, 2);
     assert_eq!(bundle.stats.usage.input_tokens, 10);
     assert_eq!(bundle.stats.usage.output_tokens, 5);
-    assert_eq!(
-        bundle.stats.last_stop_reason.as_deref(),
-        Some("end_turn")
-    );
+    assert_eq!(bundle.stats.last_stop_reason.as_deref(), Some("end_turn"));
 }
 
 #[test]
@@ -203,4 +206,31 @@ fn paths_returns_app_paths() {
     let paths = store.paths();
     assert!(paths.profile_dir.exists());
     assert!(paths.sessions_dir.exists());
+}
+
+#[test]
+fn archive_and_restore_session_updates_visibility_lists() {
+    let (_guard, store) = open_test_store();
+    let work = fresh_tempdir();
+    let session_id = Uuid::new_v4();
+    store
+        .ensure_session(session_id, work.path(), "mock", None, Some("archive me"))
+        .expect("ensure");
+
+    assert_eq!(store.list_active_sessions().expect("active").len(), 1);
+    assert_eq!(store.list_archived_sessions().expect("archived").len(), 0);
+
+    store.set_archived(session_id, true).expect("archive");
+
+    let summary = store.get_session_summary(session_id).expect("summary");
+    assert!(summary.archived);
+    assert_eq!(store.list_active_sessions().expect("active").len(), 0);
+    assert_eq!(store.list_archived_sessions().expect("archived").len(), 1);
+
+    store.set_archived(session_id, false).expect("restore");
+
+    let summary = store.get_session_summary(session_id).expect("summary");
+    assert!(!summary.archived);
+    assert_eq!(store.list_active_sessions().expect("active").len(), 1);
+    assert_eq!(store.list_archived_sessions().expect("archived").len(), 0);
 }

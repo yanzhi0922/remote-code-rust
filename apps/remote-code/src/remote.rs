@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::env;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -7,10 +8,17 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use futures::StreamExt;
 use rc_control_plane::{
     ArtifactCreateRequest as RemoteArtifactCreateRequest, ArtifactRecord as RemoteArtifactRecord,
-    ControlPlaneMeta as RemoteControlPlaneMeta, CreateSessionRequest as RemoteCreateSessionRequest,
+    BootstrapClaimRequest as RemoteBootstrapClaimRequest,
+    BootstrapClaimResponse as RemoteBootstrapClaimResponse, ControlPlaneMeta as RemoteControlPlaneMeta,
+    CreateSessionRequest as RemoteCreateSessionRequest, DeviceKind as RemoteDeviceKind,
+    PairingAcceptRequest as RemotePairingAcceptRequest,
+    PairingAcceptResponse as RemotePairingAcceptResponse,
+    PairingOfferCreateRequest as RemotePairingOfferCreateRequest,
+    PairingOfferCreateResponse as RemotePairingOfferCreateResponse,
     SessionRecord as RemoteSessionRecord, SessionState as RemoteSessionState,
     SessionStateUpdateRequest as RemoteSessionStateUpdateRequest,
     TimelineEvent as RemoteTimelineEvent, TimelineEventDetail as RemoteTimelineEventDetail,
+    TrustedDeviceRecord as RemoteTrustedDeviceRecord,
 };
 use rc_runner::{
     ApprovalCreateRequest as SharedApprovalCreateRequest,
@@ -26,11 +34,14 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::cli::{
-    RemoteApprovalCreateArgs, RemoteApprovalRespondArgs, RemoteApprovalShowArgs,
-    RemoteApprovalsCommand, RemoteApprovalsListArgs, RemoteArtifactDownloadArgs,
-    RemoteArtifactShowArgs, RemoteArtifactUploadArgs, RemoteArtifactsCommand,
-    RemoteArtifactsListArgs, RemoteCommand, RemoteEventKindValue, RemoteEventsArgs, RemoteMetaArgs,
-    RemoteRunnerShowArgs, RemoteRunnersCommand, RemoteRunnersListArgs, RemoteSessionCreateArgs,
+    RemoteApprovalCreateArgs, RemoteApprovalRespondArgs, RemoteApprovalShowArgs, RemoteApprovalsCommand,
+    RemoteApprovalsListArgs, RemoteArtifactDownloadArgs, RemoteArtifactShowArgs,
+    RemoteArtifactUploadArgs, RemoteArtifactsCommand, RemoteArtifactsListArgs,
+    RemoteAuthCommand, RemoteBootstrapArgs, RemoteCommand, RemoteDeviceKindValue,
+    RemoteDevicesListArgs, RemoteEventKindValue, RemoteEventsArgs, RemoteMetaArgs,
+    RemotePairingAcceptArgs, RemotePairingOfferArgs, RemoteRunnerShowArgs,
+    RemoteRunnersCommand, RemoteRunnersListArgs, RemoteSessionCommandResponseValue,
+    RemoteSessionCreateArgs, RemoteSessionInterruptArgs, RemoteSessionPromptArgs,
     RemoteSessionShowArgs, RemoteSessionStateArgs, RemoteSessionsCommand, RemoteSessionsListArgs,
     RemoteTargetArgs,
 };
@@ -87,6 +98,26 @@ impl StateLabel for RemoteApprovalState {
     }
 }
 
+impl StateLabel for RemoteDeviceKind {
+    fn label(&self) -> &'static str {
+        match self {
+            RemoteDeviceKind::Runner => "runner",
+            RemoteDeviceKind::Browser => "browser",
+            RemoteDeviceKind::Cli => "cli",
+        }
+    }
+}
+
+impl From<RemoteDeviceKindValue> for RemoteDeviceKind {
+    fn from(value: RemoteDeviceKindValue) -> Self {
+        match value {
+            RemoteDeviceKindValue::Runner => Self::Runner,
+            RemoteDeviceKindValue::Browser => Self::Browser,
+            RemoteDeviceKindValue::Cli => Self::Cli,
+        }
+    }
+}
+
 pub(crate) fn require_control_plane_url(target: &RemoteTargetArgs) -> Result<String> {
     target
         .control_plane_url
@@ -138,21 +169,22 @@ pub(crate) fn build_remote_http_url(base_url: &str, path: &str) -> Result<String
 
 pub(crate) fn build_remote_ws_url(base_url: &str, path: &str) -> Result<String> {
     let base = normalize_remote_base_url(base_url)?;
-    if let Some(rest) = base.strip_prefix("http://") {
-        return Ok(format!(
-            "ws://{rest}{}",
-            normalize_remote_request_path(path)
+    let mut url = if let Some(rest) = base.strip_prefix("http://") {
+        format!("ws://{rest}{}", normalize_remote_request_path(path))
+    } else if let Some(rest) = base.strip_prefix("https://") {
+        format!("wss://{rest}{}", normalize_remote_request_path(path))
+    } else {
+        return Err(anyhow!(
+            "control plane URL must start with http:// or https://"
         ));
+    };
+    if let Some(token) = remote_control_plane_auth_token() {
+        let separator = if url.contains('?') { '&' } else { '?' };
+        url.push(separator);
+        url.push_str("access_token=");
+        url.push_str(&encode_remote_path_segment(&token));
     }
-    if let Some(rest) = base.strip_prefix("https://") {
-        return Ok(format!(
-            "wss://{rest}{}",
-            normalize_remote_request_path(path)
-        ));
-    }
-    Err(anyhow!(
-        "control plane URL must start with http:// or https://"
-    ))
+    Ok(url)
 }
 
 pub(crate) async fn remote_get_json<T>(base_url: &str, path: &str) -> Result<T>
@@ -160,8 +192,9 @@ where
     T: serde::de::DeserializeOwned,
 {
     let client = Client::new();
-    let response = client
-        .get(build_remote_http_url(base_url, path)?)
+    let response = authorize_remote_request(
+        client.get(build_remote_http_url(base_url, path)?),
+    )
         .send()
         .await?;
     decode_remote_json_response(response).await
@@ -169,8 +202,9 @@ where
 
 pub(crate) async fn remote_get_bytes(base_url: &str, path: &str) -> Result<Vec<u8>> {
     let client = Client::new();
-    let response = client
-        .get(build_remote_http_url(base_url, path)?)
+    let response = authorize_remote_request(
+        client.get(build_remote_http_url(base_url, path)?),
+    )
         .send()
         .await?;
     let status = response.status();
@@ -200,8 +234,9 @@ where
     O: serde::de::DeserializeOwned,
 {
     let client = Client::new();
-    let response = client
-        .post(build_remote_http_url(base_url, path)?)
+    let response = authorize_remote_request(
+        client.post(build_remote_http_url(base_url, path)?),
+    )
         .json(input)
         .send()
         .await?;
@@ -239,6 +274,21 @@ fn normalize_remote_request_path(path: &str) -> String {
     } else {
         format!("/{path}")
     }
+}
+
+fn authorize_remote_request(builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    if let Some(token) = remote_control_plane_auth_token() {
+        builder.bearer_auth(token)
+    } else {
+        builder
+    }
+}
+
+fn remote_control_plane_auth_token() -> Option<String> {
+    env::var("REMOTE_CODE_CONTROL_PLANE_AUTH_TOKEN")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 pub(crate) fn encode_remote_path_segment(raw: &str) -> String {
@@ -286,6 +336,38 @@ fn print_remote_meta(meta: &RemoteControlPlaneMeta) {
     println!("- runner lease TTL: {}s", meta.runner_lease_ttl_secs);
     println!("- profile dir: {}", meta.profile_dir);
     println!("- artifact root dir: {}", meta.artifact_root_dir);
+}
+
+fn print_remote_device_summary(device: &RemoteTrustedDeviceRecord) {
+    println!("Trusted device {}", device.device_id);
+    println!("- name: {}", device.name);
+    println!("- kind: {}", device.kind.label());
+    println!("- owner: {}", if device.owner { "yes" } else { "no" });
+    println!("- created: {}", device.created_at);
+    println!("- last seen: {}", device.last_seen_at);
+    if let Some(created_by_device_id) = device.created_by_device_id {
+        println!("- created by: {created_by_device_id}");
+    }
+}
+
+fn print_remote_access_token_help(access_token: &str) {
+    println!("Access token");
+    println!("{access_token}");
+    println!(
+        "Set REMOTE_CODE_CONTROL_PLANE_AUTH_TOKEN to this value before using protected remote commands."
+    );
+}
+
+fn print_remote_pairing_offer(offer: &RemotePairingOfferCreateResponse) {
+    println!("Pairing offer {}", offer.offer_id);
+    println!("- target name: {}", offer.device_name);
+    println!("- target kind: {}", offer.device_kind.label());
+    println!("- created: {}", offer.created_at);
+    println!("- expires: {}", offer.expires_at);
+    println!("- pairing secret: {}", offer.pairing_secret);
+    if let Some(pairing_url) = &offer.pairing_url {
+        println!("- pairing URL: {pairing_url}");
+    }
 }
 
 fn print_remote_runner_summary(runner: &RemoteRunnerSnapshot) {
@@ -463,6 +545,10 @@ pub(crate) fn remote_session_state_path(session_id: Uuid) -> String {
     format!("/v1/sessions/{session_id}/state")
 }
 
+pub(crate) fn remote_session_commands_path(session_id: Uuid) -> String {
+    format!("/v1/sessions/{session_id}/commands")
+}
+
 pub(crate) fn remote_approvals_stream_path(
     session_id: Option<Uuid>,
     runner_id: Option<&str>,
@@ -604,6 +690,14 @@ fn remote_event_kind(detail: &RemoteTimelineEventDetail) -> &'static str {
         RemoteTimelineEventDetail::ApprovalRequested { .. } => "approval_requested",
         RemoteTimelineEventDetail::ApprovalResolved { .. } => "approval_resolved",
         RemoteTimelineEventDetail::ArtifactCreated { .. } => "artifact_created",
+        RemoteTimelineEventDetail::MessageDelta { .. } => "message_delta",
+        RemoteTimelineEventDetail::MessageCommitted { .. } => "message_committed",
+        RemoteTimelineEventDetail::ToolStarted { .. } => "tool_started",
+        RemoteTimelineEventDetail::ToolProgress { .. } => "tool_progress",
+        RemoteTimelineEventDetail::ToolFinished { .. } => "tool_finished",
+        RemoteTimelineEventDetail::ArtifactManifest { .. } => "artifact_manifest",
+        RemoteTimelineEventDetail::RuntimeError { .. } => "runtime_error",
+        RemoteTimelineEventDetail::DaemonPresenceChanged { .. } => "daemon_presence_changed",
     }
 }
 
@@ -663,17 +757,94 @@ fn remote_event_summary(detail: &RemoteTimelineEventDetail) -> String {
             size_bytes,
             ..
         } => format!("file={file_name} media_type={media_type} size={size_bytes}B"),
+        RemoteTimelineEventDetail::MessageDelta {
+            role,
+            delta,
+            message_id,
+        } => format!(
+            "role={role:?} message_id={} delta={}",
+            message_id.as_deref().unwrap_or("(none)"),
+            truncate_remote_preview(delta, 80)
+        ),
+        RemoteTimelineEventDetail::MessageCommitted {
+            role,
+            text,
+            message_id,
+        } => format!(
+            "role={role:?} message_id={} text={}",
+            message_id.as_deref().unwrap_or("(none)"),
+            truncate_remote_preview(text, 80)
+        ),
+        RemoteTimelineEventDetail::ToolStarted {
+            tool_call_id,
+            tool_name,
+        } => format!("tool_call_id={tool_call_id} tool_name={tool_name}"),
+        RemoteTimelineEventDetail::ToolProgress {
+            tool_call_id,
+            tool_name,
+            delta,
+            elapsed_time_seconds,
+        } => format!(
+            "tool_call_id={} tool_name={} delta={} elapsed={}s",
+            tool_call_id.as_deref().unwrap_or("(none)"),
+            tool_name.as_deref().unwrap_or("(none)"),
+            delta
+                .as_deref()
+                .map(|value| truncate_remote_preview(value, 80))
+                .unwrap_or_else(|| "(none)".to_owned()),
+            elapsed_time_seconds.map_or_else(|| "(none)".to_owned(), |value| value.to_string())
+        ),
+        RemoteTimelineEventDetail::ToolFinished {
+            tool_call_id,
+            tool_name,
+            is_error,
+            summary,
+        } => format!(
+            "tool_call_id={tool_call_id} tool_name={tool_name} is_error={is_error} summary={}",
+            summary
+                .as_deref()
+                .map(|value| truncate_remote_preview(value, 80))
+                .unwrap_or_else(|| "(none)".to_owned())
+        ),
+        RemoteTimelineEventDetail::ArtifactManifest { artifact_ids } => {
+            format!("artifact_ids={}", artifact_ids.len())
+        }
+        RemoteTimelineEventDetail::RuntimeError { message } => {
+            format!("message={}", truncate_remote_preview(message, 80))
+        }
+        RemoteTimelineEventDetail::DaemonPresenceChanged { state } => {
+            format!("state={state:?}")
+        }
     }
+}
+
+fn truncate_remote_preview(value: &str, max_chars: usize) -> String {
+    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut preview = collapsed.chars().take(max_chars).collect::<String>();
+    if collapsed.chars().count() > max_chars {
+        preview.push_str("...");
+    }
+    preview
 }
 
 pub async fn run_remote(command: RemoteCommand) -> Result<()> {
     match command {
         RemoteCommand::Meta(args) => run_remote_meta(args).await,
+        RemoteCommand::Auth { command } => run_remote_auth(command).await,
         RemoteCommand::Runners { command } => run_remote_runners(command).await,
         RemoteCommand::Artifacts { command } => run_remote_artifacts(command).await,
         RemoteCommand::Approvals { command } => run_remote_approvals(command).await,
         RemoteCommand::Events(args) => run_remote_events(args).await,
         RemoteCommand::Sessions { command } => run_remote_sessions(command).await,
+    }
+}
+
+async fn run_remote_auth(command: RemoteAuthCommand) -> Result<()> {
+    match command {
+        RemoteAuthCommand::Devices(args) => run_remote_devices_list(args).await,
+        RemoteAuthCommand::Bootstrap(args) => run_remote_auth_bootstrap(args).await,
+        RemoteAuthCommand::PairOffer(args) => run_remote_auth_pair_offer(args).await,
+        RemoteAuthCommand::PairAccept(args) => run_remote_auth_pair_accept(args).await,
     }
 }
 
@@ -685,6 +856,85 @@ async fn run_remote_meta(args: RemoteMetaArgs) -> Result<()> {
         return Ok(());
     }
     print_remote_meta(&meta);
+    Ok(())
+}
+
+async fn run_remote_devices_list(args: RemoteDevicesListArgs) -> Result<()> {
+    let control_plane_url = require_control_plane_url(&args.target)?;
+    let devices: RemoteListResponse<RemoteTrustedDeviceRecord> =
+        remote_get_json(&control_plane_url, "/v1/devices").await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&devices)?);
+    } else if devices.items.is_empty() {
+        println!("No trusted devices found.");
+    } else {
+        for device in &devices.items {
+            print_remote_device_summary(device);
+        }
+    }
+    Ok(())
+}
+
+async fn run_remote_auth_bootstrap(args: RemoteBootstrapArgs) -> Result<()> {
+    let control_plane_url = require_control_plane_url(&args.target)?;
+    let response: RemoteBootstrapClaimResponse = remote_post_json(
+        &control_plane_url,
+        "/v1/bootstrap/claim",
+        &RemoteBootstrapClaimRequest {
+            bootstrap_secret: args.bootstrap_secret,
+            device_name: args.device_name,
+            device_kind: args.device_kind.into(),
+        },
+    )
+    .await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+    } else {
+        print_remote_device_summary(&response.device);
+        print_remote_access_token_help(&response.access_token);
+    }
+    Ok(())
+}
+
+async fn run_remote_auth_pair_offer(args: RemotePairingOfferArgs) -> Result<()> {
+    let control_plane_url = require_control_plane_url(&args.target)?;
+    let response: RemotePairingOfferCreateResponse = remote_post_json(
+        &control_plane_url,
+        "/v1/pairing/offers",
+        &RemotePairingOfferCreateRequest {
+            device_name: args.device_name,
+            device_kind: args.device_kind.into(),
+            expires_in_secs: args.expires_in_secs,
+        },
+    )
+    .await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+    } else {
+        print_remote_pairing_offer(&response);
+    }
+    Ok(())
+}
+
+async fn run_remote_auth_pair_accept(args: RemotePairingAcceptArgs) -> Result<()> {
+    let control_plane_url = require_control_plane_url(&args.target)?;
+    let response: RemotePairingAcceptResponse = remote_post_json(
+        &control_plane_url,
+        "/v1/pairing/accept",
+        &RemotePairingAcceptRequest {
+            offer_id: args.offer_id,
+            pairing_secret: args.pairing_secret,
+            device_name: args.device_name,
+            device_kind: args.device_kind.map(Into::into),
+        },
+    )
+    .await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+    } else {
+        print_remote_device_summary(&response.device);
+        print_remote_access_token_help(&response.access_token);
+    }
     Ok(())
 }
 
@@ -710,6 +960,8 @@ async fn run_remote_sessions(command: RemoteSessionsCommand) -> Result<()> {
         RemoteSessionsCommand::Show(args) => run_remote_sessions_show(args).await,
         RemoteSessionsCommand::Create(args) => run_remote_sessions_create(args).await,
         RemoteSessionsCommand::State(args) => run_remote_sessions_state(args).await,
+        RemoteSessionsCommand::Prompt(args) => run_remote_sessions_prompt(args).await,
+        RemoteSessionsCommand::Interrupt(args) => run_remote_sessions_interrupt(args).await,
     }
 }
 
@@ -932,6 +1184,48 @@ async fn run_remote_sessions_state(args: RemoteSessionStateArgs) -> Result<()> {
         return Ok(());
     }
     print_remote_session_summary(&session);
+    Ok(())
+}
+
+async fn run_remote_sessions_prompt(args: RemoteSessionPromptArgs) -> Result<()> {
+    let control_plane_url = require_control_plane_url(&args.target)?;
+    let prompt = args.prompt.join(" ").trim().to_owned();
+    if prompt.is_empty() {
+        return Err(anyhow!("prompt cannot be empty"));
+    }
+    let response: RemoteSessionCommandResponseValue = remote_post_json(
+        &control_plane_url,
+        &remote_session_commands_path(args.session_id),
+        &rc_control_plane::RunnerSessionCommandRequest::SendPrompt { content: prompt },
+    )
+    .await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        return Ok(());
+    }
+    println!(
+        "Remote session {} accepted prompt: {}",
+        response.session_id, response.message
+    );
+    Ok(())
+}
+
+async fn run_remote_sessions_interrupt(args: RemoteSessionInterruptArgs) -> Result<()> {
+    let control_plane_url = require_control_plane_url(&args.target)?;
+    let response: RemoteSessionCommandResponseValue = remote_post_json(
+        &control_plane_url,
+        &remote_session_commands_path(args.session_id),
+        &rc_control_plane::RunnerSessionCommandRequest::Interrupt,
+    )
+    .await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        return Ok(());
+    }
+    println!(
+        "Remote session {} accepted interrupt: {}",
+        response.session_id, response.message
+    );
     Ok(())
 }
 

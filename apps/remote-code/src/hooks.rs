@@ -234,7 +234,11 @@ impl HookShell {
             Self::Sh => ("sh", vec!["-lc".to_owned(), command.to_owned()]),
             Self::Bash => ("bash", vec!["-lc".to_owned(), command.to_owned()]),
             Self::PowerShell => {
-                let program = if cfg!(windows) { "powershell.exe" } else { "pwsh" };
+                let program = if cfg!(windows) {
+                    "powershell.exe"
+                } else {
+                    "pwsh"
+                };
                 (
                     program,
                     vec![
@@ -340,7 +344,10 @@ pub fn print_hooks_overview(config: &RuntimeConfig) -> Result<()> {
     Ok(())
 }
 
-pub fn discover_runtime_hooks(config: &RuntimeConfig, plugin_roots: &[PathBuf]) -> RuntimeHookDiscovery {
+pub fn discover_runtime_hooks(
+    config: &RuntimeConfig,
+    plugin_roots: &[PathBuf],
+) -> RuntimeHookDiscovery {
     let mut discovery = RuntimeHookDiscovery::default();
     let mut sources = Vec::new();
 
@@ -407,9 +414,10 @@ pub fn discover_runtime_hooks(config: &RuntimeConfig, plugin_roots: &[PathBuf]) 
                     }
                 }
             }
-            Err(error) => discovery
-                .warnings
-                .push(format!("Failed to discover plugins in {}: {error}", root.display())),
+            Err(error) => discovery.warnings.push(format!(
+                "Failed to discover plugins in {}: {error}",
+                root.display()
+            )),
         }
     }
 
@@ -425,7 +433,10 @@ pub fn discover_runtime_hooks(config: &RuntimeConfig, plugin_roots: &[PathBuf]) 
     discovery
 }
 
-pub fn build_hooks_list_output(config: &RuntimeConfig, args: &HooksListArgs) -> Result<HooksListOutput> {
+pub fn build_hooks_list_output(
+    config: &RuntimeConfig,
+    args: &HooksListArgs,
+) -> Result<HooksListOutput> {
     let discovery = discover_runtime_hooks(config, &args.plugin_roots);
     let source_filters = args
         .sources
@@ -590,7 +601,10 @@ pub async fn apply_pre_tool_use_hooks(
                 config.session_id,
                 conversation,
                 HookEventName::PreToolUse,
-                &[format!("A hook adjusted the input for `{}` before execution.", call.name)],
+                &[format!(
+                    "A hook adjusted the input for `{}` before execution.",
+                    call.name
+                )],
             )?;
         }
     }
@@ -644,7 +658,13 @@ pub async fn apply_post_tool_hooks(
         false,
     )
     .await?;
-    append_contexts(store, config.session_id, conversation, event, &effects.additional_contexts)?;
+    append_contexts(
+        store,
+        config.session_id,
+        conversation,
+        event,
+        &effects.additional_contexts,
+    )?;
     Ok(())
 }
 
@@ -753,9 +773,12 @@ fn load_hooks_from_source(source: &HookSourceDescriptor) -> Result<Vec<HookRecor
         .with_context(|| format!("failed to read {}", source.source_path.display()))?;
     let value: Value = serde_json::from_str(&raw)
         .with_context(|| format!("failed to parse {}", source.source_path.display()))?;
-    let object = value
-        .as_object()
-        .ok_or_else(|| anyhow!("{} did not contain a JSON object", source.source_path.display()))?;
+    let object = value.as_object().ok_or_else(|| {
+        anyhow!(
+            "{} did not contain a JSON object",
+            source.source_path.display()
+        )
+    })?;
     let hooks_object = object
         .get("hooks")
         .and_then(Value::as_object)
@@ -977,7 +1000,8 @@ async fn run_event_hooks(
         .iter()
         .filter(|hook| hook.supported && hook.event == event)
     {
-        if !matches_hook_subject(hook.matcher.as_deref(), &subject) || state.should_skip_once(hook) {
+        if !matches_hook_subject(hook.matcher.as_deref(), &subject) || state.should_skip_once(hook)
+        {
             continue;
         }
         let outcome = execute_command_hook(hook, config, input, blocking).await;
@@ -1024,7 +1048,8 @@ async fn execute_command_hook(
     let Some(shell) = HookShell::parse(hook.shell.as_deref()) else {
         return ExecutedHookOutcome {
             status: "error",
-            blocked_reason: blocking.then(|| "Hook configuration used an unsupported shell.".to_owned()),
+            blocked_reason: blocking
+                .then(|| "Hook configuration used an unsupported shell.".to_owned()),
             updated_input: None,
             additional_context: None,
             exit_code: None,
@@ -1057,9 +1082,8 @@ async fn execute_command_hook(
         Err(error) => {
             return ExecutedHookOutcome {
                 status: "error",
-                blocked_reason: blocking.then(|| {
-                    format!("Failed to spawn hook `{}`: {error}", hook.display)
-                }),
+                blocked_reason: blocking
+                    .then(|| format!("Failed to spawn hook `{}`: {error}", hook.display)),
                 updated_input: None,
                 additional_context: None,
                 exit_code: None,
@@ -1087,9 +1111,8 @@ async fn execute_command_hook(
         Ok(Err(error)) => {
             return ExecutedHookOutcome {
                 status: "error",
-                blocked_reason: blocking.then(|| {
-                    format!("Hook `{}` failed to complete: {error}", hook.display)
-                }),
+                blocked_reason: blocking
+                    .then(|| format!("Hook `{}` failed to complete: {error}", hook.display)),
                 updated_input: None,
                 additional_context: None,
                 exit_code: None,
@@ -1102,7 +1125,10 @@ async fn execute_command_hook(
             return ExecutedHookOutcome {
                 status: "timeout",
                 blocked_reason: blocking.then(|| {
-                    format!("Hook `{}` timed out after {}s.", hook.display, hook.timeout_secs)
+                    format!(
+                        "Hook `{}` timed out after {}s.",
+                        hook.display, hook.timeout_secs
+                    )
                 }),
                 updated_input: None,
                 additional_context: None,
@@ -1117,16 +1143,9 @@ async fn execute_command_hook(
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
     let parsed = parse_hook_response(&stdout);
-    let updated_input = parsed
-        .as_ref()
-        .and_then(normalized_updated_input);
-    let additional_context = parsed
-        .as_ref()
-        .and_then(normalized_additional_context);
-    let blocked_reason = if parsed
-        .as_ref()
-        .is_some_and(hook_response_blocks)
-    {
+    let updated_input = parsed.as_ref().and_then(normalized_updated_input);
+    let additional_context = parsed.as_ref().and_then(normalized_additional_context);
+    let blocked_reason = if parsed.as_ref().is_some_and(hook_response_blocks) {
         Some(
             parsed
                 .as_ref()
@@ -1227,7 +1246,8 @@ fn append_contexts(
     contexts: &[String],
 ) -> Result<()> {
     for context in contexts {
-        let entry = ConversationEntry::system(format!("Hook context ({}):\n{}", event.as_str(), context));
+        let entry =
+            ConversationEntry::system(format!("Hook context ({}):\n{}", event.as_str(), context));
         store.append_conversation_entry(session_id, &entry)?;
         conversation.push(entry);
         store.append_named_event(
@@ -1260,7 +1280,7 @@ fn format_source(hook: &HookRecord) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rc_config::{ProviderOverrides, load_runtime_config};
+    use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
     use tempfile::tempdir;
 
     fn json_emitting_hook(json_body: &str) -> (String, String) {
@@ -1302,6 +1322,7 @@ mod tests {
             false,
             4,
             ProviderOverrides::default(),
+            RuntimeOverrides::default(),
         )
         .unwrap_or_else(|error| panic!("config load failed: {error}"));
         let store = SessionStore::open(config.paths.clone())
@@ -1371,7 +1392,13 @@ mod tests {
         .unwrap_or_else(|error| panic!("hooks write failed: {error}"));
 
         store
-            .ensure_session(config.session_id, &config.cwd, "mock", Some("test"), Some("hooks"))
+            .ensure_session(
+                config.session_id,
+                &config.cwd,
+                "mock",
+                Some("test"),
+                Some("hooks"),
+            )
             .unwrap_or_else(|error| panic!("ensure session failed: {error}"));
         let discovery = discover_runtime_hooks(&config, &[]);
         let mut state = HookRunState::load(&store, config.session_id)
@@ -1435,7 +1462,13 @@ mod tests {
         .unwrap_or_else(|error| panic!("hooks write failed: {error}"));
 
         store
-            .ensure_session(config.session_id, &config.cwd, "mock", Some("test"), Some("hooks"))
+            .ensure_session(
+                config.session_id,
+                &config.cwd,
+                "mock",
+                Some("test"),
+                Some("hooks"),
+            )
             .unwrap_or_else(|error| panic!("ensure session failed: {error}"));
         let discovery = discover_runtime_hooks(&config, &[]);
         let mut state = HookRunState::load(&store, config.session_id)

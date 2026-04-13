@@ -49,6 +49,39 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UiTaskStatus {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+    Stopped,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UiTaskKind {
+    Background,
+    Delegation,
+    Batch,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiTaskNode {
+    pub id: String,
+    pub parent_task_id: Option<String>,
+    pub title: String,
+    pub status: UiTaskStatus,
+    pub kind: UiTaskKind,
+    pub depth: u32,
+    pub summary: String,
+    pub turns_used: Option<u32>,
+    pub output_path: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 // ---------------------------------------------------------------------------
 // UI Events — the universal language between core and frontends
 // ---------------------------------------------------------------------------
@@ -222,6 +255,55 @@ pub enum UiEvent {
         summary: String,
     },
 
+    // ── Subtask delegation ────────────────────────────────────────────
+    /// A subtask delegation started.
+    SubtaskStarted {
+        /// Unique task identifier.
+        task_id: String,
+        /// Parent task identifier when this task is nested.
+        parent_task_id: Option<String>,
+        /// Task description.
+        description: String,
+        /// Current delegation depth.
+        depth: u32,
+    },
+    /// A subtask made progress (completed a turn).
+    SubtaskProgress {
+        /// Task identifier.
+        task_id: String,
+        /// Current turn number.
+        turn: u32,
+        /// Maximum turns allowed.
+        max_turns: u32,
+        /// Short summary of what happened this turn.
+        summary: String,
+    },
+    /// A subtask completed.
+    SubtaskCompleted {
+        /// Task identifier.
+        task_id: String,
+        /// Whether the subtask succeeded.
+        success: bool,
+        /// Preview of the output (truncated).
+        output_preview: String,
+        /// Number of turns used.
+        turns_used: u32,
+    },
+    /// Batch delegation progress update.
+    BatchProgress {
+        /// Total tasks in the batch.
+        total: usize,
+        /// Number of completed tasks.
+        completed: usize,
+        /// Number of currently running tasks.
+        running: usize,
+    },
+    /// Snapshot of the current task tree.
+    TaskSnapshot {
+        /// Current known tasks.
+        tasks: Vec<UiTaskNode>,
+    },
+
     // ── Streaming ────────────────────────────────────────────────────
     /// Streaming started.
     StreamStart {
@@ -296,11 +378,7 @@ pub trait UiFrontend: Send + Sync {
     ///
     /// # Errors
     /// Returns an error if the permission request fails.
-    async fn request_permission(
-        &self,
-        tool_name: &str,
-        description: &str,
-    ) -> Result<bool>;
+    async fn request_permission(&self, tool_name: &str, description: &str) -> Result<bool>;
 
     /// Check if the frontend supports a specific feature.
     fn supports_feature(&self, feature: UiFeature) -> bool;
@@ -386,11 +464,7 @@ impl UiFrontend for NullFrontend {
         Ok(String::new())
     }
 
-    async fn request_permission(
-        &self,
-        _tool_name: &str,
-        _description: &str,
-    ) -> Result<bool> {
+    async fn request_permission(&self, _tool_name: &str, _description: &str) -> Result<bool> {
         Ok(true)
     }
 
@@ -424,7 +498,10 @@ impl CollectingFrontend {
     /// Get all collected events.
     #[must_use]
     pub fn events(&self) -> Vec<UiEvent> {
-        self.events.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Check if any collected event matches a predicate.
@@ -457,11 +534,7 @@ impl UiFrontend for CollectingFrontend {
         Ok("test input".to_owned())
     }
 
-    async fn request_permission(
-        &self,
-        _tool_name: &str,
-        _description: &str,
-    ) -> Result<bool> {
+    async fn request_permission(&self, _tool_name: &str, _description: &str) -> Result<bool> {
         Ok(true)
     }
 
@@ -519,9 +592,11 @@ mod tests {
     #[tokio::test]
     async fn null_frontend_discards_events() {
         let fe = NullFrontend;
-        let result = fe.render_event(&UiEvent::Status {
-            message: "test".to_owned(),
-        }).await;
+        let result = fe
+            .render_event(&UiEvent::Status {
+                message: "test".to_owned(),
+            })
+            .await;
         assert!(result.is_ok());
         assert_eq!(fe.frontend_name(), "null");
         assert!(!fe.supports_feature(UiFeature::RichText));
@@ -532,10 +607,14 @@ mod tests {
         let fe = CollectingFrontend::new();
         fe.render_event(&UiEvent::UserMessage {
             text: "hello".to_owned(),
-        }).await.expect("render should not fail");
+        })
+        .await
+        .expect("render should not fail");
         fe.render_event(&UiEvent::AssistantText {
             text: "world".to_owned(),
-        }).await.expect("render should not fail");
+        })
+        .await
+        .expect("render should not fail");
 
         let events = fe.events();
         assert_eq!(events.len(), 2);

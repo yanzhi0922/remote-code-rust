@@ -21,6 +21,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 rc-config = { path = "../rc-config" }
 rc-core = { path = "../rc-core" }
 rc-tools = { path = "../rc-tools" }

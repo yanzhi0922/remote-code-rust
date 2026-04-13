@@ -9,15 +9,14 @@ use anyhow::{Context, Result};
 use chrono::{Duration, Utc};
 use rc_runner::{
     ApprovalCreateRequest, ApprovalDecision, ApprovalDecisionRequest, ApprovalRequestRecord,
-    RunnerSessionCreateRequest, RunnerSessionRecord, RunnerSessionStateUpdateRequest, RunnerSnapshot,
-    RunnerState, SessionState as RunnerSessionState,
+    RunnerSessionCommandRequest, RunnerSessionCommandResponse, RunnerSessionCreateRequest,
+    RunnerSessionRecord, RunnerSessionStateUpdateRequest, RunnerSnapshot, RunnerState,
+    SessionState as RunnerSessionState,
 };
 use reqwest::Client;
 use uuid::Uuid;
 
-use crate::types::{
-    ApiError, SessionState, TimelineEvent, TimelineEventDetail, TimelineEventKind,
-};
+use crate::types::{ApiError, SessionState, TimelineEvent, TimelineEventDetail, TimelineEventKind};
 
 // ---------------------------------------------------------------------------
 // Event matching helpers
@@ -32,6 +31,16 @@ pub(crate) fn event_kind(detail: &TimelineEventDetail) -> TimelineEventKind {
         TimelineEventDetail::ApprovalRequested { .. } => TimelineEventKind::ApprovalRequested,
         TimelineEventDetail::ApprovalResolved { .. } => TimelineEventKind::ApprovalResolved,
         TimelineEventDetail::ArtifactCreated { .. } => TimelineEventKind::ArtifactCreated,
+        TimelineEventDetail::MessageDelta { .. } => TimelineEventKind::MessageDelta,
+        TimelineEventDetail::MessageCommitted { .. } => TimelineEventKind::MessageCommitted,
+        TimelineEventDetail::ToolStarted { .. } => TimelineEventKind::ToolStarted,
+        TimelineEventDetail::ToolProgress { .. } => TimelineEventKind::ToolProgress,
+        TimelineEventDetail::ToolFinished { .. } => TimelineEventKind::ToolFinished,
+        TimelineEventDetail::ArtifactManifest { .. } => TimelineEventKind::ArtifactManifest,
+        TimelineEventDetail::RuntimeError { .. } => TimelineEventKind::RuntimeError,
+        TimelineEventDetail::DaemonPresenceChanged { .. } => {
+            TimelineEventKind::DaemonPresenceChanged
+        }
     }
 }
 
@@ -39,7 +48,10 @@ pub(crate) fn event_matches_kind(event: &TimelineEvent, kind: Option<TimelineEve
     kind.is_none_or(|kind| event_kind(&event.detail) == kind)
 }
 
-pub(crate) fn approval_event_matches(event: &TimelineEvent, kind: Option<TimelineEventKind>) -> bool {
+pub(crate) fn approval_event_matches(
+    event: &TimelineEvent,
+    kind: Option<TimelineEventKind>,
+) -> bool {
     is_approval_event(event) && event_matches_kind(event, kind)
 }
 
@@ -84,7 +96,11 @@ pub(crate) fn sanitize_artifact_component(raw: &str, fallback: &str) -> String {
 // Runner helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) fn runner_can_host(snapshot: &RunnerSnapshot, workspace_id: &str, lease_ttl_secs: u64) -> bool {
+pub(crate) fn runner_can_host(
+    snapshot: &RunnerSnapshot,
+    workspace_id: &str,
+    lease_ttl_secs: u64,
+) -> bool {
     runner_is_available(snapshot, lease_ttl_secs)
         && runner_has_capacity(snapshot)
         && snapshot
@@ -176,6 +192,14 @@ pub(crate) fn runner_public_base_url(runner: &RunnerSnapshot) -> Result<&str, Ap
                 runner.registration.runner_id
             ))
         })
+}
+
+pub(crate) fn runner_uses_pull_commands(runner: &RunnerSnapshot) -> bool {
+    runner
+        .registration
+        .public_base_url
+        .as_deref()
+        .is_none_or(|value| value.trim().is_empty())
 }
 
 pub(crate) async fn dispatch_session_to_runner(
@@ -325,6 +349,45 @@ pub(crate) async fn relay_approval_decision_to_runner(
         .map_err(|error| {
             ApiError::bad_gateway(format!(
                 "failed to decode approval decision response from runner `{}`: {error}",
+                runner.registration.runner_id
+            ))
+        })
+}
+
+pub(crate) async fn dispatch_session_command_to_runner(
+    runner: &RunnerSnapshot,
+    session_id: Uuid,
+    request: &RunnerSessionCommandRequest,
+) -> Result<RunnerSessionCommandResponse, ApiError> {
+    let base_url = runner_public_base_url(runner)?;
+    let client = Client::new();
+    let response = client
+        .post(format!(
+            "{}/v1/sessions/{session_id}/commands",
+            base_url.trim_end_matches('/')
+        ))
+        .json(request)
+        .send()
+        .await
+        .map_err(|error| {
+            ApiError::bad_gateway(format!(
+                "failed to relay session command for `{session_id}` to runner `{}`: {error}",
+                runner.registration.runner_id
+            ))
+        })?
+        .error_for_status()
+        .map_err(|error| {
+            ApiError::bad_gateway(format!(
+                "runner `{}` rejected session command for `{session_id}`: {error}",
+                runner.registration.runner_id
+            ))
+        })?;
+    response
+        .json::<RunnerSessionCommandResponse>()
+        .await
+        .map_err(|error| {
+            ApiError::bad_gateway(format!(
+                "failed to decode session command response from runner `{}`: {error}",
                 runner.registration.runner_id
             ))
         })

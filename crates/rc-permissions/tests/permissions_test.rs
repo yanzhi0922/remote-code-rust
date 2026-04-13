@@ -1,5 +1,8 @@
 use rc_core::PermissionMode;
-use rc_permissions::{PermissionBroker, PermissionClass, PermissionDecision, StaticPermissionBroker, auto_allows, classify_tool};
+use rc_permissions::{
+    PermissionBroker, PermissionClass, PermissionDecision, StaticPermissionBroker, auto_allows,
+    classify_tool,
+};
 
 #[test]
 fn classify_tool_returns_read_for_list_directory() {

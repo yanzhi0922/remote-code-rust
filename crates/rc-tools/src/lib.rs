@@ -6,6 +6,7 @@
 
 pub mod agent;
 pub mod command;
+pub mod delegate;
 pub mod file_ops;
 pub mod git;
 pub mod hooks;
@@ -15,16 +16,20 @@ pub mod memory_tools;
 pub mod misc;
 pub mod sandbox;
 pub mod search;
+pub mod shell;
 pub mod specs;
 pub mod system;
+pub mod task_output;
 pub mod tasks;
 pub mod web;
 pub mod workflow;
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow};
+use once_cell::sync::Lazy;
+use rc_core::task_stack::TaskStack;
 use rc_core::{HookEvent, HookShell, SubAgentCompletion, ToolCall, ToolResult};
 use rc_permissions::{PermissionBroker, PermissionRequest, auto_allows, classify_tool};
 use serde::{Deserialize, Serialize};
@@ -45,6 +50,51 @@ const IGNORED_DIRS: &[&str] = &[
     "coverage",
     ".next",
 ];
+
+static TOOL_RUNTIME_POLICY: Lazy<Mutex<ToolRuntimePolicy>> =
+    Lazy::new(|| Mutex::new(ToolRuntimePolicy::default()));
+
+/// Process-scoped runtime policy for tool exposure and task artifacts.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ToolRuntimePolicy {
+    pub allowed_tools: Vec<String>,
+    pub disallowed_tools: Vec<String>,
+    pub task_output_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub shell_policy: shell::ShellExecutionPolicy,
+}
+
+/// Configure the current process-wide tool policy.
+///
+/// # Errors
+/// Returns an error if task-output persistence cannot be configured.
+pub fn configure_tool_runtime_policy(policy: ToolRuntimePolicy) -> Result<()> {
+    tasks::configure_task_output_dir(policy.task_output_dir.clone())?;
+    let mut current = TOOL_RUNTIME_POLICY
+        .lock()
+        .map_err(|_| anyhow!("tool runtime policy lock poisoned"))?;
+    *current = normalize_tool_runtime_policy(policy);
+    Ok(())
+}
+
+/// Return the active process-wide tool policy.
+#[must_use]
+pub fn current_tool_runtime_policy() -> ToolRuntimePolicy {
+    TOOL_RUNTIME_POLICY
+        .lock()
+        .map(|policy| policy.clone())
+        .unwrap_or_default()
+}
+
+/// Return the built-in tool specs visible under the active runtime policy.
+#[must_use]
+pub fn runtime_builtin_tool_specs() -> Vec<ToolSpec> {
+    let policy = current_tool_runtime_policy();
+    builtin_tool_specs()
+        .into_iter()
+        .filter(|spec| tool_allowed_by_policy(&spec.name, &policy))
+        .collect()
+}
 
 /// Specification for a single built-in tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,6 +138,11 @@ impl ToolSpec {
     }
 }
 
+/// Callback type for subtask progress events.
+///
+/// Receives a human-readable status string that frontends can display.
+pub type ProgressCallback = dyn Fn(&str) + Send + Sync;
+
 /// Execution context passed to every tool implementation.
 #[derive(Clone)]
 pub struct ToolExecutionContext {
@@ -98,6 +153,24 @@ pub struct ToolExecutionContext {
     /// Optional sub-agent completion provider for the agent tool.
     /// When `None`, the agent tool falls back to returning a delegation JSON.
     pub sub_agent: Option<Arc<dyn SubAgentCompletion>>,
+    /// Optional progress callback for subtask delegation events.
+    /// Frontends (TUI, GUI) provide this to render subtask progress.
+    pub progress_cb: Option<Arc<ProgressCallback>>,
+    /// Task stack for tracking nested subtask delegation depth.
+    /// Shared across tool executions within the same conversation loop.
+    pub task_stack: Arc<std::sync::Mutex<TaskStack>>,
+}
+
+impl Default for ToolExecutionContext {
+    fn default() -> Self {
+        Self {
+            cwd: PathBuf::new(),
+            timeout_ms: 30_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Arc::new(std::sync::Mutex::new(TaskStack::default())),
+        }
+    }
 }
 
 /// Request to execute a command hook.
@@ -167,7 +240,7 @@ impl ToolRegistry {
     /// Create a new registry populated with all built-in tools.
     #[must_use]
     pub fn new() -> Self {
-        let all = builtin_tool_specs();
+        let all = runtime_builtin_tool_specs();
         let mut eager = Vec::new();
         let mut lazy = Vec::new();
         let mut engine = search::ToolSearchEngine::new();
@@ -240,6 +313,16 @@ pub async fn execute_tool_call(
         .into_iter()
         .find(|spec| spec.name == call.name)
         .ok_or_else(|| anyhow!("unknown tool {}", call.name))?;
+
+    if !tool_allowed_by_runtime(&spec.name) {
+        return Ok(ToolResult {
+            content: format!(
+                "Tool {} is disallowed by the current runtime policy.",
+                spec.name
+            ),
+            is_error: true,
+        });
+    }
 
     if spec.requires_permission && !auto_allows(broker.mode(), classify_tool(&spec.name)) {
         let decision = broker
@@ -344,6 +427,40 @@ pub async fn execute_tool_call(
     }
 }
 
+fn normalize_tool_runtime_policy(mut policy: ToolRuntimePolicy) -> ToolRuntimePolicy {
+    policy.allowed_tools = policy
+        .allowed_tools
+        .into_iter()
+        .map(|tool| tool.trim().to_ascii_lowercase())
+        .filter(|tool| !tool.is_empty())
+        .collect::<Vec<_>>();
+    policy.allowed_tools.sort();
+    policy.allowed_tools.dedup();
+
+    policy.disallowed_tools = policy
+        .disallowed_tools
+        .into_iter()
+        .map(|tool| tool.trim().to_ascii_lowercase())
+        .filter(|tool| !tool.is_empty())
+        .collect::<Vec<_>>();
+    policy.disallowed_tools.sort();
+    policy.disallowed_tools.dedup();
+    policy
+}
+
+fn tool_allowed_by_runtime(tool_name: &str) -> bool {
+    let policy = current_tool_runtime_policy();
+    tool_allowed_by_policy(tool_name, &policy)
+}
+
+fn tool_allowed_by_policy(tool_name: &str, policy: &ToolRuntimePolicy) -> bool {
+    let normalized_name = tool_name.trim().to_ascii_lowercase();
+    if !policy.allowed_tools.is_empty() && !policy.allowed_tools.contains(&normalized_name) {
+        return false;
+    }
+    !policy.disallowed_tools.contains(&normalized_name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -369,6 +486,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -445,18 +564,17 @@ mod tests {
             Ok(dir) => dir,
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
-        std::fs::write(tempdir.path().join("foo.rs"), "fn main() {}")
-            .expect("write should work");
-        std::fs::write(tempdir.path().join("bar.txt"), "hello")
-            .expect("write should work");
+        std::fs::write(tempdir.path().join("foo.rs"), "fn main() {}").expect("write should work");
+        std::fs::write(tempdir.path().join("bar.txt"), "hello").expect("write should work");
         std::fs::create_dir(tempdir.path().join("src")).expect("mkdir should work");
-        std::fs::write(tempdir.path().join("src/mod.rs"), "mod foo;")
-            .expect("write should work");
+        std::fs::write(tempdir.path().join("src/mod.rs"), "mod foo;").expect("write should work");
 
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -499,6 +617,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -519,10 +639,7 @@ mod tests {
         .expect("grep should work");
 
         assert!(!result.is_error, "grep error: {}", result.content);
-        assert!(
-            result.content.contains("code.rs"),
-            "should find code.rs"
-        );
+        assert!(result.content.contains("code.rs"), "should find code.rs");
         assert!(
             result.content.contains("fn hello"),
             "should show matching line"
@@ -543,6 +660,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -571,6 +690,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -609,6 +730,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -636,8 +759,7 @@ mod tests {
         // Verify the file was persisted
         let todos_path = tempdir.path().join(".remote-code-rust").join("todos.json");
         assert!(todos_path.exists(), "todos.json should exist");
-        let content =
-            std::fs::read_to_string(&todos_path).expect("should read todos.json");
+        let content = std::fs::read_to_string(&todos_path).expect("should read todos.json");
         let todos: Vec<serde_json::Value> =
             serde_json::from_str(&content).expect("should parse JSON");
         assert_eq!(todos.len(), 3);
@@ -657,6 +779,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -704,8 +828,8 @@ mod tests {
             "config get error: {}",
             get_result.content
         );
-        let parsed: serde_json::Value = serde_json::from_str(&get_result.content)
-            .expect("should be valid JSON");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&get_result.content).expect("should be valid JSON");
         assert_eq!(parsed["test_key"], "test_value");
     }
 
@@ -727,6 +851,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -769,6 +895,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -811,6 +939,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -847,6 +977,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -883,6 +1015,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -1027,6 +1161,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -1047,17 +1183,12 @@ mod tests {
         .await
         .expect("notebook_edit should work");
 
-        assert!(
-            !result.is_error,
-            "notebook_edit error: {}",
-            result.content
-        );
+        assert!(!result.is_error, "notebook_edit error: {}", result.content);
 
         // Verify the notebook was modified
-        let updated: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(&nb_path).expect("read notebook"),
-        )
-        .expect("parse notebook");
+        let updated: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&nb_path).expect("read notebook"))
+                .expect("parse notebook");
         assert_eq!(
             updated["cells"][0]["source"],
             json!("print('world')"),
@@ -1075,6 +1206,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -1093,11 +1226,7 @@ mod tests {
         .await
         .expect("send_message should work");
 
-        assert!(
-            !result.is_error,
-            "send_message error: {}",
-            result.content
-        );
+        assert!(!result.is_error, "send_message error: {}", result.content);
         let parsed: serde_json::Value =
             serde_json::from_str(&result.content).expect("should be valid JSON");
         assert_eq!(parsed["type"], "agent_message");
@@ -1114,6 +1243,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -1171,6 +1302,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -1203,6 +1336,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -1254,6 +1389,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -1269,11 +1406,7 @@ mod tests {
         .await
         .expect("skill_discover should work");
 
-        assert!(
-            !result.is_error,
-            "skill_discover error: {}",
-            result.content
-        );
+        assert!(!result.is_error, "skill_discover error: {}", result.content);
         // Empty workspace should return "No skills found"
         assert!(
             result.content.contains("No skills found"),
@@ -1292,10 +1425,7 @@ mod tests {
             names.contains(&"task_create"),
             "task_create should be registered"
         );
-        assert!(
-            names.contains(&"task_get"),
-            "task_get should be registered"
-        );
+        assert!(names.contains(&"task_get"), "task_get should be registered");
         assert!(
             names.contains(&"task_list"),
             "task_list should be registered"
@@ -1344,6 +1474,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -1384,6 +1516,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -1414,6 +1548,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -1445,6 +1581,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -1479,6 +1617,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -1511,6 +1651,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -1572,6 +1714,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -1603,6 +1747,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -1661,6 +1807,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -1697,6 +1845,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -1728,6 +1878,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -1756,12 +1908,17 @@ mod tests {
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         // Create a Cargo.toml to trigger Rust detection.
-        std::fs::write(tempdir.path().join("Cargo.toml"), "[package]\nname = \"test\"\n")
-            .expect("write should work");
+        std::fs::write(
+            tempdir.path().join("Cargo.toml"),
+            "[package]\nname = \"test\"\n",
+        )
+        .expect("write should work");
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -1791,6 +1948,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -1822,6 +1981,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -1837,8 +1998,15 @@ mod tests {
         .await
         .expect("synthetic_output should work");
 
-        assert!(!result.is_error, "synthetic_output error: {}", result.content);
-        assert!(result.content.contains("id,name,value,active"), "should have CSV header");
+        assert!(
+            !result.is_error,
+            "synthetic_output error: {}",
+            result.content
+        );
+        assert!(
+            result.content.contains("id,name,value,active"),
+            "should have CSV header"
+        );
         assert!(result.content.contains("item_0"), "should have data rows");
     }
 
@@ -1852,6 +2020,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -1905,6 +2075,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -1920,7 +2092,11 @@ mod tests {
         .await
         .expect("list_mcp_resources should work");
 
-        assert!(!result.is_error, "list_mcp_resources error: {}", result.content);
+        assert!(
+            !result.is_error,
+            "list_mcp_resources error: {}",
+            result.content
+        );
     }
 
     #[tokio::test]
@@ -1933,6 +2109,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -1948,7 +2126,11 @@ mod tests {
         .await
         .expect("read_mcp_resource should work");
 
-        assert!(!result.is_error, "read_mcp_resource error: {}", result.content);
+        assert!(
+            !result.is_error,
+            "read_mcp_resource error: {}",
+            result.content
+        );
     }
 
     #[tokio::test]
@@ -1961,6 +2143,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -1993,6 +2177,8 @@ mod tests {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
             sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
 
@@ -2060,25 +2246,64 @@ mod tests {
         let specs = builtin_tool_specs();
         let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
 
-        assert!(names.contains(&"powershell"), "powershell should be registered");
+        assert!(
+            names.contains(&"powershell"),
+            "powershell should be registered"
+        );
         assert!(names.contains(&"repl"), "repl should be registered");
         assert!(names.contains(&"monitor"), "monitor should be registered");
-        assert!(names.contains(&"schedule_cron"), "schedule_cron should be registered");
-        assert!(names.contains(&"remote_trigger"), "remote_trigger should be registered");
+        assert!(
+            names.contains(&"schedule_cron"),
+            "schedule_cron should be registered"
+        );
+        assert!(
+            names.contains(&"remote_trigger"),
+            "remote_trigger should be registered"
+        );
         assert!(names.contains(&"workflow"), "workflow should be registered");
-        assert!(names.contains(&"suggest_pr"), "suggest_pr should be registered");
-        assert!(names.contains(&"enter_worktree"), "enter_worktree should be registered");
-        assert!(names.contains(&"exit_worktree"), "exit_worktree should be registered");
+        assert!(
+            names.contains(&"suggest_pr"),
+            "suggest_pr should be registered"
+        );
+        assert!(
+            names.contains(&"enter_worktree"),
+            "enter_worktree should be registered"
+        );
+        assert!(
+            names.contains(&"exit_worktree"),
+            "exit_worktree should be registered"
+        );
         assert!(names.contains(&"brief"), "brief should be registered");
-        assert!(names.contains(&"ctx_inspect"), "ctx_inspect should be registered");
-        assert!(names.contains(&"list_peers"), "list_peers should be registered");
+        assert!(
+            names.contains(&"ctx_inspect"),
+            "ctx_inspect should be registered"
+        );
+        assert!(
+            names.contains(&"list_peers"),
+            "list_peers should be registered"
+        );
         assert!(names.contains(&"tungsten"), "tungsten should be registered");
-        assert!(names.contains(&"overflow_test"), "overflow_test should be registered");
-        assert!(names.contains(&"synthetic_output"), "synthetic_output should be registered");
+        assert!(
+            names.contains(&"overflow_test"),
+            "overflow_test should be registered"
+        );
+        assert!(
+            names.contains(&"synthetic_output"),
+            "synthetic_output should be registered"
+        );
         assert!(names.contains(&"mcp_auth"), "mcp_auth should be registered");
-        assert!(names.contains(&"list_mcp_resources"), "list_mcp_resources should be registered");
-        assert!(names.contains(&"read_mcp_resource"), "read_mcp_resource should be registered");
-        assert!(names.contains(&"voice_input"), "voice_input should be registered");
+        assert!(
+            names.contains(&"list_mcp_resources"),
+            "list_mcp_resources should be registered"
+        );
+        assert!(
+            names.contains(&"read_mcp_resource"),
+            "read_mcp_resource should be registered"
+        );
+        assert!(
+            names.contains(&"voice_input"),
+            "voice_input should be registered"
+        );
         assert!(names.contains(&"daemon"), "daemon should be registered");
     }
 }

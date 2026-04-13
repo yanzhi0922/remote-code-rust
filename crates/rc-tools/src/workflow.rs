@@ -44,17 +44,13 @@ pub(crate) fn schedule_cron_tool(input: &Value, context: &ToolExecutionContext) 
             let content = serde_json::to_string_pretty(&crons)?;
             std::fs::write(&crons_path, content)?;
 
-            Ok(format!(
-                "Cron job saved: '{}' → {}",
-                schedule, command
-            ))
+            Ok(format!("Cron job saved: '{}' → {}", schedule, command))
         }
-        "list" => {
-            Ok(json!({
-                "crons": crons,
-                "count": crons.len(),
-            }).to_string())
-        }
+        "list" => Ok(json!({
+            "crons": crons,
+            "count": crons.len(),
+        })
+        .to_string()),
         "delete" | "remove" => {
             let id = input["id"]
                 .as_str()
@@ -62,9 +58,7 @@ pub(crate) fn schedule_cron_tool(input: &Value, context: &ToolExecutionContext) 
                 .ok_or_else(|| anyhow!("id or schedule is required for delete"))?;
 
             let before = crons.len();
-            crons.retain(|c| {
-                c["id"].as_str() != Some(id) && c["schedule"].as_str() != Some(id)
-            });
+            crons.retain(|c| c["id"].as_str() != Some(id) && c["schedule"].as_str() != Some(id));
 
             if crons.len() < before {
                 let content = serde_json::to_string_pretty(&crons)?;
@@ -122,7 +116,10 @@ pub(crate) fn workflow_tool(input: &Value, context: &ToolExecutionContext) -> Re
             workflows.push(entry);
             let content = serde_json::to_string_pretty(&workflows)?;
             std::fs::write(&wf_path, content)?;
-            Ok(format!("Workflow '{name}' created with {} steps.", steps.len()))
+            Ok(format!(
+                "Workflow '{name}' created with {} steps.",
+                steps.len()
+            ))
         }
         "run" => {
             let wf = workflows
@@ -144,11 +141,12 @@ pub(crate) fn workflow_tool(input: &Value, context: &ToolExecutionContext) -> Re
                     let mut results = Vec::new();
                     let mut all_success = true;
                     for (i, step) in steps.iter().enumerate() {
-                        let output = std::process::Command::new(if cfg!(windows) { "cmd" } else { "sh" })
-                            .arg(if cfg!(windows) { "/C" } else { "-c" })
-                            .arg(step)
-                            .current_dir(&context.cwd)
-                            .output();
+                        let output =
+                            std::process::Command::new(if cfg!(windows) { "cmd" } else { "sh" })
+                                .arg(if cfg!(windows) { "/C" } else { "-c" })
+                                .arg(step)
+                                .current_dir(&context.cwd)
+                                .output();
 
                         let result = match output {
                             Ok(out) => {
@@ -184,11 +182,17 @@ pub(crate) fn workflow_tool(input: &Value, context: &ToolExecutionContext) -> Re
                         .iter_mut()
                         .find(|w| w["name"].as_str() == Some(name));
                     if let Some(w) = wf_mut {
-                        w["status"] = if all_success { json!("completed") } else { json!("failed") };
-                        w["last_run"] = json!(std::time::SystemTime::now()
-                            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                            .map(|d| d.as_secs())
-                            .unwrap_or(0));
+                        w["status"] = if all_success {
+                            json!("completed")
+                        } else {
+                            json!("failed")
+                        };
+                        w["last_run"] = json!(
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                                .map(|d| d.as_secs())
+                                .unwrap_or(0)
+                        );
                         let content = serde_json::to_string_pretty(&workflows)?;
                         std::fs::write(&wf_path, content)?;
                     }
@@ -198,7 +202,8 @@ pub(crate) fn workflow_tool(input: &Value, context: &ToolExecutionContext) -> Re
                         "status": if all_success { "completed" } else { "failed" },
                         "steps_executed": results.len(),
                         "results": results,
-                    }).to_string())
+                    })
+                    .to_string())
                 }
                 None => Err(anyhow!("workflow '{name}' not found")),
             }
@@ -218,16 +223,19 @@ pub(crate) fn workflow_tool(input: &Value, context: &ToolExecutionContext) -> Re
         "list" => {
             let names: Vec<Value> = workflows
                 .iter()
-                .map(|w| json!({
-                    "name": w["name"],
-                    "status": w["status"],
-                    "steps": w["steps"].as_array().map(|a| a.len()).unwrap_or(0),
-                }))
+                .map(|w| {
+                    json!({
+                        "name": w["name"],
+                        "status": w["status"],
+                        "steps": w["steps"].as_array().map(|a| a.len()).unwrap_or(0),
+                    })
+                })
                 .collect();
             Ok(json!({
                 "workflows": names,
                 "count": names.len(),
-            }).to_string())
+            })
+            .to_string())
         }
         "delete" => {
             let before = workflows.len();
@@ -240,14 +248,16 @@ pub(crate) fn workflow_tool(input: &Value, context: &ToolExecutionContext) -> Re
                 Ok(format!("Workflow '{name}' not found."))
             }
         }
-        _ => Err(anyhow!("action must be 'create', 'run', 'status', 'list', or 'delete'")),
+        _ => Err(anyhow!(
+            "action must be 'create', 'run', 'status', 'list', or 'delete'"
+        )),
     }
 }
 
 pub(crate) fn daemon_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
-    let action = input["action"]
-        .as_str()
-        .ok_or_else(|| anyhow!("action is required (start, stop, status, list, restart, or logs)"))?;
+    let action = input["action"].as_str().ok_or_else(|| {
+        anyhow!("action is required (start, stop, status, list, restart, or logs)")
+    })?;
 
     let daemon_dir = context.cwd.join(".remote-code-rust");
     std::fs::create_dir_all(&daemon_dir)?;
@@ -335,9 +345,7 @@ pub(crate) fn daemon_tool(input: &Value, context: &ToolExecutionContext) -> Resu
                 };
 
                 // Try to kill the process if we have a PID.
-                if should_remove
-                    && let Some(pid) = d["pid"].as_u64()
-                {
+                if should_remove && let Some(pid) = d["pid"].as_u64() {
                     let _ = kill_process(pid as u32);
                 }
                 !should_remove
@@ -369,41 +377,47 @@ pub(crate) fn daemon_tool(input: &Value, context: &ToolExecutionContext) -> Resu
                         None => Ok(json!({
                             "id": id_val,
                             "status": "not_found",
-                        }).to_string()),
+                        })
+                        .to_string()),
                     }
                 }
                 None => Ok(serde_json::to_string_pretty(&daemons)?),
             }
         }
         "list" => {
-            let summary: Vec<Value> = daemons.iter().map(|d| {
-                let mut s = json!({
-                    "id": d["id"],
-                    "command": d["command"],
-                    "status": d["status"],
-                    "pid": d["pid"],
-                });
-                // Check liveness.
-                if let Some(pid) = d["pid"].as_u64()
-                    && !is_process_alive(pid as u32)
-                {
-                    s["status"] = json!("stopped");
-                }
-                s
-            }).collect();
+            let summary: Vec<Value> = daemons
+                .iter()
+                .map(|d| {
+                    let mut s = json!({
+                        "id": d["id"],
+                        "command": d["command"],
+                        "status": d["status"],
+                        "pid": d["pid"],
+                    });
+                    // Check liveness.
+                    if let Some(pid) = d["pid"].as_u64()
+                        && !is_process_alive(pid as u32)
+                    {
+                        s["status"] = json!("stopped");
+                    }
+                    s
+                })
+                .collect();
             Ok(json!({
                 "daemons": summary,
                 "count": summary.len(),
-            }).to_string())
+            })
+            .to_string())
         }
         "restart" => {
             let id = input["id"]
                 .as_str()
                 .ok_or_else(|| anyhow!("id is required for restart action"))?;
 
-            let daemon = daemons.iter().find(|d| {
-                d["id"].as_str() == Some(id) || d["command"].as_str() == Some(id)
-            }).cloned();
+            let daemon = daemons
+                .iter()
+                .find(|d| d["id"].as_str() == Some(id) || d["command"].as_str() == Some(id))
+                .cloned();
 
             match daemon {
                 Some(d) => {
@@ -433,9 +447,9 @@ pub(crate) fn daemon_tool(input: &Value, context: &ToolExecutionContext) -> Resu
                 .ok_or_else(|| anyhow!("id is required for logs action"))?;
             let lines = input["lines"].as_u64().unwrap_or(50) as usize;
 
-            let daemon = daemons.iter().find(|d| {
-                d["id"].as_str() == Some(id) || d["command"].as_str() == Some(id)
-            });
+            let daemon = daemons
+                .iter()
+                .find(|d| d["id"].as_str() == Some(id) || d["command"].as_str() == Some(id));
 
             match daemon {
                 Some(d) => {
@@ -457,12 +471,15 @@ pub(crate) fn daemon_tool(input: &Value, context: &ToolExecutionContext) -> Resu
                         "id": id,
                         "stdout": stdout_content,
                         "stderr": stderr_content,
-                    }).to_string())
+                    })
+                    .to_string())
                 }
                 None => Err(anyhow!("daemon '{id}' not found")),
             }
         }
-        _ => Err(anyhow!("action must be 'start', 'stop', 'status', 'list', 'restart', or 'logs'")),
+        _ => Err(anyhow!(
+            "action must be 'start', 'stop', 'status', 'list', 'restart', or 'logs'"
+        )),
     }
 }
 
