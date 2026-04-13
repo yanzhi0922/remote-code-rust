@@ -41,9 +41,9 @@ use crate::cli::{
     RemoteDeviceKindValue, RemoteDevicesListArgs, RemoteEventKindValue, RemoteEventsArgs,
     RemoteMetaArgs, RemotePairingAcceptArgs, RemotePairingOfferArgs, RemoteRunnerShowArgs,
     RemoteRunnersCommand, RemoteRunnersListArgs, RemoteSessionCommandResponseValue,
-    RemoteSessionCreateArgs, RemoteSessionInterruptArgs, RemoteSessionPromptArgs,
-    RemoteSessionShowArgs, RemoteSessionStateArgs, RemoteSessionsCommand, RemoteSessionsListArgs,
-    RemoteTargetArgs,
+    RemoteSessionCreateArgs, RemoteSessionFollowArgs, RemoteSessionInterruptArgs,
+    RemoteSessionPromptArgs, RemoteSessionShowArgs, RemoteSessionStateArgs, RemoteSessionsCommand,
+    RemoteSessionsListArgs, RemoteTargetArgs,
 };
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -953,6 +953,7 @@ async fn run_remote_sessions(command: RemoteSessionsCommand) -> Result<()> {
         RemoteSessionsCommand::List(args) => run_remote_sessions_list(args).await,
         RemoteSessionsCommand::Show(args) => run_remote_sessions_show(args).await,
         RemoteSessionsCommand::Create(args) => run_remote_sessions_create(args).await,
+        RemoteSessionsCommand::Follow(args) => run_remote_sessions_follow(args).await,
         RemoteSessionsCommand::State(args) => run_remote_sessions_state(args).await,
         RemoteSessionsCommand::Prompt(args) => run_remote_sessions_prompt(args).await,
         RemoteSessionsCommand::Interrupt(args) => run_remote_sessions_interrupt(args).await,
@@ -1159,6 +1160,65 @@ async fn run_remote_sessions_show(args: RemoteSessionShowArgs) -> Result<()> {
     }
     print_remote_session_summary(&session);
     Ok(())
+}
+
+async fn run_remote_sessions_follow(args: RemoteSessionFollowArgs) -> Result<()> {
+    let control_plane_url = require_control_plane_url(&args.target)?;
+    let path = format!("/v1/sessions/{}", args.session_id);
+    let session: RemoteSessionRecord = remote_get_json(&control_plane_url, &path).await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&session)?);
+    } else {
+        print_remote_session_summary(&session);
+    }
+
+    let history_path =
+        remote_events_path(Some(args.session_id), None, args.after, args.limit, None)?;
+    let response: RemoteListResponse<RemoteTimelineEvent> =
+        remote_get_json(&control_plane_url, &history_path).await?;
+    if args.json {
+        for event in &response.items {
+            println!("{}", serde_json::to_string(event)?);
+        }
+    } else {
+        print_remote_events(&response.items);
+    }
+
+    if args.stop_on_terminal && is_terminal_remote_session_state(session.state) {
+        return Ok(());
+    }
+
+    let follow_after = merge_follow_sequence(
+        merge_follow_sequence(
+            response.items.last().map(|event| event.sequence),
+            response.latest_sequence,
+        ),
+        args.after,
+    )
+    .or(Some(0));
+    let json = args.json;
+    let stop_on_terminal = args.stop_on_terminal;
+    follow_remote_timeline_stream(
+        &control_plane_url,
+        follow_after,
+        Duration::from_secs(args.reconnect_delay_secs.max(1)),
+        move |after| remote_events_stream_path(Some(args.session_id), None, after, None),
+        move |event| {
+            let should_stop =
+                stop_on_terminal && remote_event_reaches_terminal_session_state(&event);
+            if json {
+                println!("{}", serde_json::to_string(&event)?);
+            } else {
+                print_remote_events(std::slice::from_ref(&event));
+            }
+            if should_stop {
+                Ok(RemoteFollowControl::Stop)
+            } else {
+                Ok(RemoteFollowControl::Continue)
+            }
+        },
+    )
+    .await
 }
 
 async fn run_remote_sessions_state(args: RemoteSessionStateArgs) -> Result<()> {
@@ -1454,6 +1514,23 @@ pub(crate) fn merge_follow_sequence(left: Option<u64>, right: Option<u64>) -> Op
         (Some(left), None) => Some(left),
         (None, Some(right)) => Some(right),
         (None, None) => None,
+    }
+}
+
+pub(crate) fn is_terminal_remote_session_state(state: RemoteSessionState) -> bool {
+    matches!(
+        state,
+        RemoteSessionState::Completed | RemoteSessionState::Failed | RemoteSessionState::Cancelled
+    )
+}
+
+pub(crate) fn remote_event_reaches_terminal_session_state(event: &RemoteTimelineEvent) -> bool {
+    match &event.detail {
+        RemoteTimelineEventDetail::SessionCreated { state, .. }
+        | RemoteTimelineEventDetail::SessionStateChanged { state, .. } => {
+            is_terminal_remote_session_state(*state)
+        }
+        _ => false,
     }
 }
 

@@ -30,6 +30,7 @@ use crate::conversation::{
     run_prompt,
 };
 use crate::hooks::{HookRunState, discover_runtime_hooks, ensure_session_start_hooks};
+use crate::status::build_runtime_status_snapshot;
 
 #[allow(clippy::too_many_lines)]
 pub(crate) async fn run_headless(
@@ -64,6 +65,7 @@ pub(crate) async fn run_headless(
             plugins: discovery.plugins,
         })?;
         emitter_guard.emit_state(SessionState::Idle)?;
+        emitter_guard.emit_status_snapshot(&build_runtime_status_snapshot(config))?;
     }
 
     let pending_permissions = Arc::new(Mutex::new(HashMap::<

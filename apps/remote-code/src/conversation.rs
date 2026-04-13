@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -183,7 +183,7 @@ fn session_task_dir(config: &RuntimeConfig) -> PathBuf {
         .join(config.session_id.to_string())
 }
 
-fn emit_task_snapshot_if_available(event_sink: &PromptEventSink, task_dir: &PathBuf) {
+fn emit_task_snapshot_if_available(event_sink: &PromptEventSink, task_dir: &Path) {
     if let Ok(tasks) = load_persisted_ui_task_snapshots(task_dir) {
         event_sink(PromptStreamEvent::TaskSnapshot { tasks });
     }
@@ -928,6 +928,7 @@ pub(crate) async fn run_oneshot_text(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub(crate) fn run_doctor(config: &RuntimeConfig) -> Result<()> {
     let report = validate_provider_config(&config.provider);
     let discovery = discover_runtime_extensions(config);

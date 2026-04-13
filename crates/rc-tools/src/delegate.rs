@@ -414,8 +414,9 @@ impl DelegationEngine {
             let semaphore = semaphore.clone();
             let progress_cb = progress_cb.clone();
             let mut tool_context = tool_context.clone();
-            tool_context.task_stack =
-                Arc::new(std::sync::Mutex::new(rc_core::task_stack::TaskStack::default()));
+            tool_context.task_stack = Arc::new(std::sync::Mutex::new(
+                rc_core::task_stack::TaskStack::default(),
+            ));
             let broker = broker.clone();
             let parent_task_id = parent_task_id.clone();
             let config = DelegationConfig {
@@ -565,8 +566,10 @@ impl DelegationEngine {
             });
         }
 
-        let task_id =
-            stack.push_child(context.parent_conversation.clone(), context.allowed_tools.clone())?;
+        let task_id = stack.push_child(
+            context.parent_conversation.clone(),
+            context.allowed_tools.clone(),
+        )?;
         let frame = stack.current().cloned().expect("child frame should exist");
         Ok(ActiveDelegationTask {
             task_id,
@@ -576,7 +579,12 @@ impl DelegationEngine {
         })
     }
 
-    fn complete_task(&self, context: &DelegationContext, task: &ActiveDelegationTask, success: bool) {
+    fn complete_task(
+        &self,
+        context: &DelegationContext,
+        task: &ActiveDelegationTask,
+        success: bool,
+    ) {
         let mut stack = context
             .tool_context
             .task_stack

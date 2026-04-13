@@ -8,8 +8,8 @@ pub enum ShellKind {
 pub fn is_read_only_command(kind: ShellKind, command: &str) -> bool {
     let normalized = normalize(command);
     let safe_prefixes = match kind {
-        ShellKind::Bash => &BASH_READ_ONLY_PREFIXES[..],
-        ShellKind::PowerShell => &POWERSHELL_READ_ONLY_PREFIXES[..],
+        ShellKind::Bash => BASH_READ_ONLY_PREFIXES,
+        ShellKind::PowerShell => POWERSHELL_READ_ONLY_PREFIXES,
     };
     safe_prefixes
         .iter()

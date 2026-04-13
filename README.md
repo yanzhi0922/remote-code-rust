@@ -22,6 +22,7 @@
 - 🎯 **延迟工具加载** — 急切/延迟分离，优化上下文窗口
 - 📡 **SSH 模式** — 远程主机执行
 - ⌨️ **Vim 模式** — Normal/Insert 键绑定
+- 🖥️ **桌面运维面板** — GUI 内置 provider/model/runtime status、doctor、session export、MCP 管理
 
 ## 架构
 
@@ -81,6 +82,9 @@ echo "请帮我分析这个项目" | cargo run --bin remote-code -- headless
 
 # Doctor 检查
 cargo run --bin remote-code -- doctor
+
+# 运行时状态快照
+cargo run --bin remote-code -- status
 ```
 
 ## 许可证

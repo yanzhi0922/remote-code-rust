@@ -1,6 +1,7 @@
 mod agents;
 mod cli;
 mod conversation;
+mod doctor;
 mod headless;
 mod hooks;
 mod interactive;
@@ -12,6 +13,7 @@ mod review_cli;
 mod runtime_hooks;
 mod sessions;
 mod skills_cli;
+mod status;
 mod tasks_cli;
 mod updater;
 mod worktree_cli;
@@ -28,9 +30,10 @@ use agents::run_agents;
 use clap::Parser;
 use cli::{Cli, Commands};
 use conversation::{
-    reapply_cli_overrides, restore_session_context, run_doctor, run_first_run_wizard, run_migrate,
+    reapply_cli_overrides, restore_session_context, run_first_run_wizard, run_migrate,
     run_oneshot_text,
 };
+use doctor::run_doctor;
 use headless::{run_headless, should_run_headless};
 use hooks::run_hooks;
 use interactive::run_interactive_shell;
@@ -40,6 +43,7 @@ use remote::run_remote;
 use review_cli::run_review;
 use sessions::{run_export, run_sessions};
 use skills_cli::run_skills;
+use status::run_status;
 use tasks_cli::run_tasks;
 use worktree_cli::run_worktree;
 
@@ -98,7 +102,8 @@ async fn main() -> Result<()> {
     }
 
     match cli.command {
-        Some(Commands::Doctor) => run_doctor(&config),
+        Some(Commands::Doctor(args)) => run_doctor(&config, args).await,
+        Some(Commands::Status(args)) => run_status(&config, &store, args),
         Some(Commands::Hooks { command }) => run_hooks(&config, command).await,
         Some(Commands::Remote { command }) => run_remote(command).await,
         Some(Commands::Sessions { command }) => run_sessions(&store, command),
@@ -348,12 +353,13 @@ mod tests {
     use crate::remote::{
         RemoteFollowControl, StateLabel, build_remote_http_url, build_remote_ws_url,
         default_artifact_file_name, default_artifact_name, encode_remote_path_segment,
-        follow_remote_timeline_stream, merge_follow_sequence, normalize_remote_base_url,
-        parse_repeated_key_value_args, remote_approval_path, remote_approvals_path,
-        remote_approvals_stream_path, remote_artifact_download_path, remote_artifacts_path,
-        remote_events_path, remote_events_stream_path, remote_get_bytes, remote_get_json,
-        remote_post_json, remote_runner_path, remote_session_commands_path,
-        remote_session_state_path, remote_sessions_path,
+        follow_remote_timeline_stream, is_terminal_remote_session_state, merge_follow_sequence,
+        normalize_remote_base_url, parse_repeated_key_value_args, remote_approval_path,
+        remote_approvals_path, remote_approvals_stream_path, remote_artifact_download_path,
+        remote_artifacts_path, remote_event_reaches_terminal_session_state, remote_events_path,
+        remote_events_stream_path, remote_get_bytes, remote_get_json, remote_post_json,
+        remote_runner_path, remote_session_commands_path, remote_session_state_path,
+        remote_sessions_path,
     };
 
     use axum::{
@@ -653,6 +659,53 @@ mod tests {
         assert_eq!(merge_follow_sequence(Some(4), None), Some(4));
         assert_eq!(merge_follow_sequence(None, Some(6)), Some(6));
         assert_eq!(merge_follow_sequence(Some(4), Some(6)), Some(6));
+    }
+
+    #[test]
+    fn terminal_remote_session_states_are_classified_correctly() {
+        assert!(!is_terminal_remote_session_state(
+            RemoteSessionState::Running
+        ));
+        assert!(is_terminal_remote_session_state(
+            RemoteSessionState::Completed
+        ));
+        assert!(is_terminal_remote_session_state(RemoteSessionState::Failed));
+        assert!(is_terminal_remote_session_state(
+            RemoteSessionState::Cancelled
+        ));
+    }
+
+    #[test]
+    fn remote_events_detect_terminal_session_transitions() {
+        let running_event = RemoteTimelineEvent {
+            sequence: 1,
+            recorded_at: DateTime::parse_from_rfc3339("2026-04-08T00:00:01Z")
+                .unwrap_or_else(|error| panic!("time parse failed: {error}"))
+                .with_timezone(&Utc),
+            runner_id: Some("runner-a".to_owned()),
+            session_id: Some(Uuid::nil()),
+            detail: RemoteTimelineEventDetail::SessionStateChanged {
+                previous_state: RemoteSessionState::Assigned,
+                state: RemoteSessionState::Running,
+            },
+        };
+        assert!(!remote_event_reaches_terminal_session_state(&running_event));
+
+        let completed_event = RemoteTimelineEvent {
+            sequence: 2,
+            recorded_at: DateTime::parse_from_rfc3339("2026-04-08T00:00:02Z")
+                .unwrap_or_else(|error| panic!("time parse failed: {error}"))
+                .with_timezone(&Utc),
+            runner_id: Some("runner-a".to_owned()),
+            session_id: Some(Uuid::nil()),
+            detail: RemoteTimelineEventDetail::SessionStateChanged {
+                previous_state: RemoteSessionState::Running,
+                state: RemoteSessionState::Completed,
+            },
+        };
+        assert!(remote_event_reaches_terminal_session_state(
+            &completed_event
+        ));
     }
 
     #[tokio::test]

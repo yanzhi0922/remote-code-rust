@@ -17,7 +17,9 @@ use tokio::process::Command;
 use crate::ToolExecutionContext;
 use crate::tasks;
 
-use self::output::{ShellOutputSummary, format_shell_result, persist_shell_output, truncate_output};
+use self::output::{
+    ShellOutputSummary, format_shell_result, persist_shell_output, truncate_output,
+};
 use self::path_validation::resolve_working_dir;
 use self::readonly::ShellKind;
 use self::semantics::{ShellCommandSemantic, analyze_command};
@@ -86,10 +88,7 @@ pub async fn execute_shell_command(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned),
-        cwd: resolve_working_dir(
-            &context.cwd,
-            input.get("cwd").and_then(Value::as_str),
-        )?,
+        cwd: resolve_working_dir(&context.cwd, input.get("cwd").and_then(Value::as_str))?,
         timeout_ms: input
             .get("timeout_ms")
             .and_then(Value::as_u64)
@@ -151,11 +150,8 @@ async fn execute_foreground(
         &stdout,
         &stderr,
     );
-    let artifact_path = persist_shell_output(
-        policy.output_dir.as_deref(),
-        &file_stem,
-        &artifact_contents,
-    )?;
+    let artifact_path =
+        persist_shell_output(policy.output_dir.as_deref(), &file_stem, &artifact_contents)?;
     let summary = ShellOutputSummary {
         exit_code: outcome.exit_code,
         stdout,
@@ -230,13 +226,10 @@ async fn execute_background(
                     &stdout,
                     &stderr,
                 );
-                let artifact_path = persist_shell_output(
-                    output_dir.as_deref(),
-                    &file_stem,
-                    &artifact_contents,
-                )
-                .ok()
-                .flatten();
+                let artifact_path =
+                    persist_shell_output(output_dir.as_deref(), &file_stem, &artifact_contents)
+                        .ok()
+                        .flatten();
                 let summary = ShellOutputSummary {
                     exit_code: outcome.exit_code,
                     stdout,

@@ -32,6 +32,13 @@ rc-provider = { path = "../../../crates/rc-provider" }
 rc-session = { path = "../../../crates/rc-session" }
 rc-ui-bridge = { path = "../../../crates/rc-ui-bridge" }
 rc-permissions = { path = "../../../crates/rc-permissions" }
+rc-mcp = { path = "../../../crates/rc-mcp" }
+rc-plugins = { path = "../../../crates/rc-plugins" }
+rc-skills = { path = "../../../crates/rc-skills" }
+reqwest = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

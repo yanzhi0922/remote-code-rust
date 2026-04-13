@@ -48,7 +48,9 @@ fn extract_shell_command(input: &Value) -> Option<&str> {
 fn wildcard_match_values(pattern: &str, value: &Value) -> bool {
     match value {
         Value::String(s) => wildcard_match(pattern, s),
-        Value::Array(values) => values.iter().any(|value| wildcard_match_values(pattern, value)),
+        Value::Array(values) => values
+            .iter()
+            .any(|value| wildcard_match_values(pattern, value)),
         Value::Object(object) => object
             .values()
             .any(|value| wildcard_match_values(pattern, value)),
@@ -105,7 +107,10 @@ mod tests {
 
     #[test]
     fn read_class_rule_matches_read_tools() {
-        assert!(rule_matches_request("Read", &request("read_file", json!({"path":"a"}))));
+        assert!(rule_matches_request(
+            "Read",
+            &request("read_file", json!({"path":"a"}))
+        ));
     }
 
     #[test]

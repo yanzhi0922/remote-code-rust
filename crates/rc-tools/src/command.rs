@@ -7,8 +7,8 @@ use serde_json::Value;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
-use super::{ToolExecutionContext, current_tool_runtime_policy};
 use super::shell::readonly::ShellKind;
+use super::{ToolExecutionContext, current_tool_runtime_policy};
 
 pub(crate) async fn bash_command(input: &Value, context: &ToolExecutionContext) -> Result<String> {
     let policy = current_tool_runtime_policy().shell_policy;
@@ -33,7 +33,9 @@ pub(crate) async fn powershell_tool(
 pub(crate) fn which_powershell() -> String {
     let pwsh_candidates = ["pwsh", "pwsh.exe"];
     for candidate in &pwsh_candidates {
-        if let Ok(output) = std::process::Command::new(candidate).arg("-Version").output()
+        if let Ok(output) = std::process::Command::new(candidate)
+            .arg("-Version")
+            .output()
             && output.status.success()
         {
             return candidate.to_string();

@@ -7,7 +7,7 @@ use std::io::Write;
 
 use anyhow::Result;
 use rc_core::SessionState;
-use rc_ui_bridge::UiTaskNode;
+use rc_ui_bridge::{UiRuntimeStatusSnapshot, UiTaskNode};
 use serde::Serialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -216,6 +216,16 @@ impl<W: Write> ProtocolEmitter<W> {
             "total": total,
             "completed": completed,
             "running": running,
+            "uuid": Uuid::new_v4(),
+            "session_id": self.session_id,
+        }))
+    }
+
+    /// Emit a shared runtime status snapshot for statuslines and GUI consumers.
+    pub fn emit_status_snapshot(&mut self, snapshot: &UiRuntimeStatusSnapshot) -> Result<()> {
+        self.emit(json!({
+            "type": "status_snapshot",
+            "snapshot": snapshot,
             "uuid": Uuid::new_v4(),
             "session_id": self.session_id,
         }))
@@ -747,6 +757,36 @@ mod tests {
         assert_eq!(events[2]["entries_removed"], 6);
         assert_eq!(events[3]["type"], "task_snapshot");
         assert_eq!(events[3]["tasks"][0]["id"], "task-1");
+    }
+
+    #[test]
+    fn emit_status_snapshot_for_shared_status_surfaces() {
+        let mut buf = Cursor::new(Vec::new());
+        let mut emitter = ProtocolEmitter::new(&mut buf, test_session_id());
+        emitter
+            .emit_status_snapshot(&rc_ui_bridge::UiRuntimeStatusSnapshot {
+                session_name: Some("Parity".to_owned()),
+                provider: rc_ui_bridge::UiProviderStatusSnapshot {
+                    name: "glm-coding".to_owned(),
+                    model: Some("glm-5.1".to_owned()),
+                    protocol: "anthropic".to_owned(),
+                    base_url: Some("https://open.bigmodel.cn/api/anthropic/v1/messages".to_owned()),
+                    auth_source: Some("env:REMOTE_CODE_API_KEY".to_owned()),
+                    effort: Some("medium".to_owned()),
+                    fallback_model: Some("glm-5-turbo".to_owned()),
+                },
+                permission_mode: "default".to_owned(),
+                setting_sources: vec!["env:REMOTE_CODE_MODEL".to_owned()],
+                allowed_tools: vec!["read_file".to_owned()],
+                disallowed_tools: vec!["bash_command".to_owned()],
+            })
+            .expect("emit_status_snapshot should succeed");
+
+        let events = collect_lines(&buf.into_inner());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["type"], "status_snapshot");
+        assert_eq!(events[0]["snapshot"]["provider"]["name"], "glm-coding");
+        assert_eq!(events[0]["snapshot"]["permission_mode"], "default");
     }
 
     #[test]

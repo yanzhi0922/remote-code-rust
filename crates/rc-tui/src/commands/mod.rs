@@ -122,8 +122,8 @@ pub const SLASH_COMMANDS: &[SlashCommandSpec] = &[
     },
     SlashCommandSpec {
         name: "/sessions",
-        summary: "List recent sessions",
-        usage: "/sessions",
+        summary: "List recent sessions or session stats",
+        usage: "/sessions [stats]",
     },
     SlashCommandSpec {
         name: "/cost",
@@ -233,20 +233,51 @@ pub fn dispatch(input: &str, context: SlashCommandContext<'_>) -> SlashCommandAc
             }
             println!("  (* = requires permission)");
         }
-        "/sessions" => match context.store.list_sessions() {
-            Ok(sessions) => {
-                if sessions.is_empty() {
-                    println!("No sessions found.");
-                } else {
-                    for session in sessions.iter().take(10) {
-                        println!(
-                            "  {}  {}  {}",
-                            session.session_id, session.updated_at, session.title
-                        );
+        "/sessions" => match parts.next() {
+            Some("stats") => match context.store.list_sessions() {
+                Ok(sessions) => {
+                    if sessions.is_empty() {
+                        println!("No sessions found.");
+                    } else {
+                        for session in sessions.iter().take(5) {
+                            match context.store.load_session_bundle(session.session_id) {
+                                Ok(bundle) => println!(
+                                    "  {}  {}  in={} out={} tools={} err={} stop={}",
+                                    bundle.summary.session_id,
+                                    bundle.summary.title,
+                                    bundle.stats.usage.input_tokens,
+                                    bundle.stats.usage.output_tokens,
+                                    bundle.stats.tool_call_count,
+                                    bundle.stats.error_count,
+                                    bundle.stats.last_stop_reason.as_deref().unwrap_or("(none)")
+                                ),
+                                Err(error) => {
+                                    eprintln!(
+                                        "Error loading session {}: {error}",
+                                        session.session_id
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
-            }
-            Err(error) => eprintln!("Error listing sessions: {error}"),
+                Err(error) => eprintln!("Error listing sessions: {error}"),
+            },
+            _ => match context.store.list_sessions() {
+                Ok(sessions) => {
+                    if sessions.is_empty() {
+                        println!("No sessions found.");
+                    } else {
+                        for session in sessions.iter().take(10) {
+                            println!(
+                                "  {}  {}  {}",
+                                session.session_id, session.updated_at, session.title
+                            );
+                        }
+                    }
+                }
+                Err(error) => eprintln!("Error listing sessions: {error}"),
+            },
         },
         "/cost" => {
             print!("{}", context.cost_tracker.summary());

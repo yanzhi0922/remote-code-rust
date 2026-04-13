@@ -17,27 +17,26 @@ use rc_runner::{
 };
 use uuid::Uuid;
 
-use crate::{AuthPrincipal, ControlPlaneService};
 use crate::helpers::{
     approval_event_matches, artifact_file_path, dispatch_session_command_to_runner,
     dispatch_session_to_runner, event_matches_kind, relay_approval_decision_to_runner,
-    relay_approval_to_runner, runner_is_available, session_state_from_runner,
-    session_state_to_runner, update_runner_session_state, runner_uses_pull_commands,
+    relay_approval_to_runner, runner_is_available, runner_uses_pull_commands,
+    session_state_from_runner, session_state_to_runner, update_runner_session_state,
 };
 use crate::streams::{
     serve_approval_stream, serve_event_stream, serve_runner_approval_stream,
     serve_runner_event_stream, serve_session_approval_stream, serve_session_event_stream,
 };
 use crate::types::{
-    ApiError, ArtifactCreateRequest, ArtifactRecord, BootstrapClaimRequest,
-    BootstrapClaimResponse, ControlPlaneHealth, ControlPlaneMeta, CreateSessionRequest,
-    EventStreamQuery, ListSessionsQuery, PairingAcceptRequest, PairingAcceptResponse,
-    PairingOfferCreateRequest, PairingOfferCreateResponse, RecentEventsQuery,
-    RunnerCommandPullQuery, RunnerCommandPullResponse, RunnerQueuedCommandBody,
-    RunnerRegistrationResponse, RuntimeEventCreateRequest, RuntimeEventDetail, SessionRecord,
-    SessionStateUpdateRequest, TimelineEvent, TimelineEventDetail, TimelineEventDraft,
-    TrustedDeviceRecord,
+    ApiError, ArtifactCreateRequest, ArtifactRecord, BootstrapClaimRequest, BootstrapClaimResponse,
+    ControlPlaneHealth, ControlPlaneMeta, CreateSessionRequest, EventStreamQuery,
+    ListSessionsQuery, PairingAcceptRequest, PairingAcceptResponse, PairingOfferCreateRequest,
+    PairingOfferCreateResponse, RecentEventsQuery, RunnerCommandPullQuery,
+    RunnerCommandPullResponse, RunnerQueuedCommandBody, RunnerRegistrationResponse,
+    RuntimeEventCreateRequest, RuntimeEventDetail, SessionRecord, SessionStateUpdateRequest,
+    TimelineEvent, TimelineEventDetail, TimelineEventDraft, TrustedDeviceRecord,
 };
+use crate::{AuthPrincipal, ControlPlaneService};
 
 // ---------------------------------------------------------------------------
 // Health / meta
@@ -579,12 +578,13 @@ pub(crate) async fn update_session_state(
     let metadata = request.metadata.clone();
 
     let runner_update = if let Some(runner_id) = existing.owner_runner_id.as_deref() {
-        let runner = {
-            let registry = service.registry.read().await;
-            registry.runners.get(runner_id).cloned().ok_or_else(|| {
-                ApiError::not_found(format!("runner `{runner_id}` was not found"))
-            })?
-        };
+        let runner =
+            {
+                let registry = service.registry.read().await;
+                registry.runners.get(runner_id).cloned().ok_or_else(|| {
+                    ApiError::not_found(format!("runner `{runner_id}` was not found"))
+                })?
+            };
         if runner_uses_pull_commands(&runner) {
             {
                 let mut registry = service.registry.write().await;
@@ -664,9 +664,13 @@ pub(crate) async fn post_session_command(
     };
     let runner = {
         let registry = service.registry.read().await;
-        registry.runners.get(owner_runner_id).cloned().ok_or_else(|| {
-            ApiError::not_found(format!("runner `{owner_runner_id}` was not found"))
-        })?
+        registry
+            .runners
+            .get(owner_runner_id)
+            .cloned()
+            .ok_or_else(|| {
+                ApiError::not_found(format!("runner `{owner_runner_id}` was not found"))
+            })?
     };
     if runner_uses_pull_commands(&runner) {
         {

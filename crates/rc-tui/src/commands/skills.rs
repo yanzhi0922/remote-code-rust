@@ -43,7 +43,7 @@ pub fn render(config: &RuntimeConfig) {
         left.metadata
             .slug
             .cmp(&right.metadata.slug)
-            .then_with(|| left.origin_kind.cmp(&right.origin_kind))
+            .then_with(|| left.origin_kind.cmp(right.origin_kind))
             .then_with(|| left.origin_name.cmp(&right.origin_name))
     });
 

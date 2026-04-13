@@ -42,10 +42,16 @@ pub fn resolve_working_dir(base: &Path, override_cwd: Option<&str>) -> Result<Pa
         None => base.to_path_buf(),
     };
     if !path.exists() {
-        return Err(anyhow!("working directory {} does not exist", path.display()));
+        return Err(anyhow!(
+            "working directory {} does not exist",
+            path.display()
+        ));
     }
     if !path.is_dir() {
-        return Err(anyhow!("working directory {} is not a directory", path.display()));
+        return Err(anyhow!(
+            "working directory {} is not a directory",
+            path.display()
+        ));
     }
     Ok(path)
 }
@@ -59,7 +65,10 @@ mod tests {
 
     #[test]
     fn detects_inline_cwd_changes() {
-        assert!(command_changes_directory(ShellKind::Bash, "cd src && cargo test"));
+        assert!(command_changes_directory(
+            ShellKind::Bash,
+            "cd src && cargo test"
+        ));
         assert!(command_changes_directory(
             ShellKind::PowerShell,
             "Set-Location src; cargo test"

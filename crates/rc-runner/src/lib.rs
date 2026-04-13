@@ -410,7 +410,12 @@ impl RunnerApi {
             .workspaces
             .iter()
             .find(|workspace| workspace.workspace_id == request.workspace_id)
-            .ok_or_else(|| anyhow!("workspace `{}` is not owned by this runner", request.workspace_id))?;
+            .ok_or_else(|| {
+                anyhow!(
+                    "workspace `{}` is not owned by this runner",
+                    request.workspace_id
+                )
+            })?;
 
         let mut sessions = self.sessions.write().await;
         let session_id = request.session_id.unwrap_or_else(Uuid::new_v4);
@@ -824,18 +829,16 @@ pub async fn register_with_control_plane(
     registration: &RunnerRegistrationRequest,
 ) -> Result<RunnerRegistrationLease> {
     let client = Client::new();
-    let response = authorize_control_plane_request(
-        client.post(control_plane_endpoint(
-            control_plane_url,
-            "/v1/runners/register",
-        )?),
-    )
-        .json(registration)
-        .send()
-        .await
-        .context("runner registration request failed")?
-        .error_for_status()
-        .context("runner registration was rejected by the control plane")?;
+    let response = authorize_control_plane_request(client.post(control_plane_endpoint(
+        control_plane_url,
+        "/v1/runners/register",
+    )?))
+    .json(registration)
+    .send()
+    .await
+    .context("runner registration request failed")?
+    .error_for_status()
+    .context("runner registration was rejected by the control plane")?;
     response
         .json::<RunnerRegistrationLease>()
         .await
@@ -854,12 +857,12 @@ pub async fn send_heartbeat(
     let response = authorize_control_plane_request(
         client.post(control_plane_endpoint(control_plane_url, &path)?),
     )
-        .json(heartbeat)
-        .send()
-        .await
-        .context("runner heartbeat request failed")?
-        .error_for_status()
-        .context("runner heartbeat was rejected by the control plane")?;
+    .json(heartbeat)
+    .send()
+    .await
+    .context("runner heartbeat request failed")?
+    .error_for_status()
+    .context("runner heartbeat was rejected by the control plane")?;
     response
         .json::<RunnerSnapshot>()
         .await
@@ -1415,7 +1418,10 @@ mod tests {
             .await
             .expect("session create should succeed");
         assert_eq!(create_response.status(), StatusCode::CREATED);
-        let _ = event_rx.recv().await.expect("session create event should arrive");
+        let _ = event_rx
+            .recv()
+            .await
+            .expect("session create event should arrive");
 
         let command_response = app
             .oneshot(
@@ -1437,7 +1443,10 @@ mod tests {
         assert_eq!(response.session_id, Uuid::nil());
 
         match event_rx.recv().await.expect("command event should arrive") {
-            RunnerApiEvent::SessionCommand { session_id, command } => {
+            RunnerApiEvent::SessionCommand {
+                session_id,
+                command,
+            } => {
                 assert_eq!(session_id, Uuid::nil());
                 assert_eq!(
                     command,

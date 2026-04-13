@@ -149,9 +149,10 @@ impl HostedSessionManager {
             RunnerApiEvent::ApprovalResolved(approval) => {
                 self.forward_approval_resolution(approval).await
             }
-            RunnerApiEvent::SessionCommand { session_id, command } => {
-                self.forward_session_command(session_id, command).await
-            }
+            RunnerApiEvent::SessionCommand {
+                session_id,
+                command,
+            } => self.forward_session_command(session_id, command).await,
         }
     }
 
@@ -256,7 +257,10 @@ impl HostedSessionManager {
         let manager = self.clone();
         tokio::spawn(async move {
             let exit = child.wait().await;
-            if let Err(error) = manager.handle_hosted_session_exit(session.session_id, exit).await {
+            if let Err(error) = manager
+                .handle_hosted_session_exit(session.session_id, exit)
+                .await
+            {
                 warn!(
                     "hosted session `{}` exit handling failed: {error:#}",
                     session.session_id
@@ -279,7 +283,8 @@ impl HostedSessionManager {
     ) -> Result<()> {
         let mut lines = BufReader::new(stdout).lines();
         while let Some(line) = lines.next_line().await? {
-            self.handle_protocol_line(session_id, &line, &handle).await?;
+            self.handle_protocol_line(session_id, &line, &handle)
+                .await?;
         }
         Ok(())
     }
@@ -350,7 +355,8 @@ impl HostedSessionManager {
                 }
             }
             "control_request" => {
-                self.handle_control_request(session_id, &value, handle).await?;
+                self.handle_control_request(session_id, &value, handle)
+                    .await?;
             }
             "control_cancel_request" => {
                 if let Some(request_id) =
@@ -365,7 +371,11 @@ impl HostedSessionManager {
         Ok(())
     }
 
-    async fn apply_runtime_session_state(&self, session_id: Uuid, runtime_state: &str) -> Result<()> {
+    async fn apply_runtime_session_state(
+        &self,
+        session_id: Uuid,
+        runtime_state: &str,
+    ) -> Result<()> {
         let Some((runner_state, control_state)) = map_runtime_session_state(runtime_state) else {
             return Ok(());
         };
@@ -487,7 +497,13 @@ impl HostedSessionManager {
     }
 
     async fn forward_approval_resolution(&self, approval: ApprovalRequestRecord) -> Result<()> {
-        let Some(handle) = self.sessions.lock().await.get(&approval.session_id).cloned() else {
+        let Some(handle) = self
+            .sessions
+            .lock()
+            .await
+            .get(&approval.session_id)
+            .cloned()
+        else {
             return Ok(());
         };
         let request_id = handle
@@ -505,12 +521,15 @@ impl HostedSessionManager {
             rc_runner::ApprovalState::Denied | rc_runner::ApprovalState::Cancelled => "deny",
             rc_runner::ApprovalState::Pending => return Ok(()),
         };
-        let note = approval.note.clone().unwrap_or_else(|| match approval.state {
-            rc_runner::ApprovalState::Approved => "Approved remotely.".to_owned(),
-            rc_runner::ApprovalState::Denied => "Denied remotely.".to_owned(),
-            rc_runner::ApprovalState::Cancelled => "Cancelled remotely.".to_owned(),
-            rc_runner::ApprovalState::Pending => String::new(),
-        });
+        let note = approval
+            .note
+            .clone()
+            .unwrap_or_else(|| match approval.state {
+                rc_runner::ApprovalState::Approved => "Approved remotely.".to_owned(),
+                rc_runner::ApprovalState::Denied => "Denied remotely.".to_owned(),
+                rc_runner::ApprovalState::Cancelled => "Cancelled remotely.".to_owned(),
+                rc_runner::ApprovalState::Pending => String::new(),
+            });
         let payload = serde_json::json!({
             "type": "control_response",
             "response": {
@@ -634,11 +653,7 @@ impl HostedSessionManager {
         Ok(())
     }
 
-    async fn post_runtime_event(
-        &self,
-        session_id: Uuid,
-        detail: RuntimeEventDetail,
-    ) -> Result<()> {
+    async fn post_runtime_event(&self, session_id: Uuid, detail: RuntimeEventDetail) -> Result<()> {
         let response = self
             .control_plane_post(format!(
                 "{}/v1/sessions/{session_id}/events",
@@ -722,7 +737,10 @@ fn map_runtime_session_state(
     runtime_state: &str,
 ) -> Option<(RunnerSessionState, ControlPlaneSessionState)> {
     match runtime_state {
-        "running" | "idle" => Some((RunnerSessionState::Running, ControlPlaneSessionState::Running)),
+        "running" | "idle" => Some((
+            RunnerSessionState::Running,
+            ControlPlaneSessionState::Running,
+        )),
         "requires_action" => None,
         _ => None,
     }
@@ -912,20 +930,33 @@ async fn apply_pulled_runner_commands(
             RunnerQueuedCommandBody::CreateSession { request } => {
                 let _ = api.create_session_direct(request).await?;
             }
-            RunnerQueuedCommandBody::UpdateSessionState { session_id, request } => {
-                let _ = api.apply_session_state_update_direct(session_id, request).await?;
+            RunnerQueuedCommandBody::UpdateSessionState {
+                session_id,
+                request,
+            } => {
+                let _ = api
+                    .apply_session_state_update_direct(session_id, request)
+                    .await?;
             }
-            RunnerQueuedCommandBody::SessionCommand { session_id, request } => {
+            RunnerQueuedCommandBody::SessionCommand {
+                session_id,
+                request,
+            } => {
                 let _ = api.post_session_command_direct(session_id, request).await?;
             }
-            RunnerQueuedCommandBody::CreateApproval { session_id, request } => {
+            RunnerQueuedCommandBody::CreateApproval {
+                session_id,
+                request,
+            } => {
                 let _ = api.create_approval_direct(session_id, request).await?;
             }
             RunnerQueuedCommandBody::ApplyApprovalDecision {
                 approval_id,
                 request,
             } => {
-                let _ = api.apply_approval_decision_direct(approval_id, request).await?;
+                let _ = api
+                    .apply_approval_decision_direct(approval_id, request)
+                    .await?;
             }
         }
     }
@@ -1080,9 +1111,8 @@ mod tests {
     };
     use chrono::Utc;
     use rc_runner::{
-        ApprovalRequestRecord, RunnerHeartbeat, RunnerRegistrationLease,
-        RunnerRegistrationRequest, RunnerSessionCreateRequest, RunnerSnapshot, RunnerState,
-        RunnerWorkspace,
+        ApprovalRequestRecord, RunnerHeartbeat, RunnerRegistrationLease, RunnerRegistrationRequest,
+        RunnerSessionCreateRequest, RunnerSnapshot, RunnerState, RunnerWorkspace,
     };
     use tempfile::tempdir;
     use tokio::net::TcpListener;
@@ -1147,8 +1177,8 @@ mod tests {
         )
         .expect("config should load");
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-        let api = RunnerApi::new(config, "remote-code-runner", "0.1.0")
-            .with_event_channel(event_tx);
+        let api =
+            RunnerApi::new(config, "remote-code-runner", "0.1.0").with_event_channel(event_tx);
 
         let session = api
             .create_session_direct(RunnerSessionCreateRequest {
@@ -1158,7 +1188,10 @@ mod tests {
             })
             .await
             .expect("session should be created");
-        let _ = event_rx.recv().await.expect("session created event should arrive");
+        let _ = event_rx
+            .recv()
+            .await
+            .expect("session created event should arrive");
 
         let approval = api
             .create_approval_direct(
@@ -1207,8 +1240,15 @@ mod tests {
         .await
         .expect("pulled commands should apply");
 
-        match event_rx.recv().await.expect("session command event should arrive") {
-            RunnerApiEvent::SessionCommand { session_id, command } => {
+        match event_rx
+            .recv()
+            .await
+            .expect("session command event should arrive")
+        {
+            RunnerApiEvent::SessionCommand {
+                session_id,
+                command,
+            } => {
                 assert_eq!(session_id, session.session_id);
                 assert_eq!(
                     command,
@@ -1220,7 +1260,11 @@ mod tests {
             other => panic!("unexpected event after pull command: {other:?}"),
         }
 
-        match event_rx.recv().await.expect("approval resolved event should arrive") {
+        match event_rx
+            .recv()
+            .await
+            .expect("approval resolved event should arrive")
+        {
             RunnerApiEvent::ApprovalResolved(record) => {
                 assert_eq!(record.approval_id, approval.approval_id);
                 assert_eq!(record.state, rc_runner::ApprovalState::Approved);
@@ -1363,10 +1407,22 @@ mod tests {
         let control_plane_server_state = control_plane_state.clone();
         let control_plane_server = tokio::spawn(async move {
             let app = Router::new()
-                .route("/v1/sessions/{session_id}/events", post(hosted_runtime_event))
-                .route("/v1/sessions/{session_id}/state", post(hosted_session_state_update))
-                .route("/v1/sessions/{session_id}/approvals", post(hosted_create_approval))
-                .route("/v1/approvals/{approval_id}/decision", post(hosted_approval_decision))
+                .route(
+                    "/v1/sessions/{session_id}/events",
+                    post(hosted_runtime_event),
+                )
+                .route(
+                    "/v1/sessions/{session_id}/state",
+                    post(hosted_session_state_update),
+                )
+                .route(
+                    "/v1/sessions/{session_id}/approvals",
+                    post(hosted_create_approval),
+                )
+                .route(
+                    "/v1/approvals/{approval_id}/decision",
+                    post(hosted_approval_decision),
+                )
                 .with_state(control_plane_server_state);
             axum::serve(control_plane_listener, app)
                 .await
@@ -1438,7 +1494,9 @@ mod tests {
         );
 
         client
-            .post(format!("{runner_base_url}/v1/sessions/{session_id}/commands"))
+            .post(format!(
+                "{runner_base_url}/v1/sessions/{session_id}/commands"
+            ))
             .json(&RunnerSessionCommandRequest::SendPrompt {
                 content: "follow up".to_owned(),
             })
@@ -1448,7 +1506,9 @@ mod tests {
             .error_for_status()
             .expect("prompt command should succeed");
         client
-            .post(format!("{runner_base_url}/v1/sessions/{session_id}/commands"))
+            .post(format!(
+                "{runner_base_url}/v1/sessions/{session_id}/commands"
+            ))
             .json(&RunnerSessionCommandRequest::Interrupt)
             .send()
             .await
@@ -1475,9 +1535,10 @@ mod tests {
         let completion_wait = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 let state_updates = control_plane_state.state_updates.read().await;
-                if state_updates.iter().any(|(_, update)| {
-                    matches!(update.state, ControlPlaneSessionState::Completed)
-                }) {
+                if state_updates
+                    .iter()
+                    .any(|(_, update)| matches!(update.state, ControlPlaneSessionState::Completed))
+                {
                     break;
                 }
                 drop(state_updates);
@@ -1510,26 +1571,32 @@ mod tests {
                 state: rc_control_plane::DaemonPresenceState::Online
             }
         )));
-        assert!(events.iter().any(|(_, event)| matches!(
-            event.detail,
-            RuntimeEventDetail::MessageDelta { .. }
-        )));
-        assert!(events.iter().any(|(_, event)| matches!(
-            event.detail,
-            RuntimeEventDetail::MessageCommitted { .. }
-        )));
-        assert!(events.iter().any(|(_, event)| matches!(
-            event.detail,
-            RuntimeEventDetail::ToolStarted { .. }
-        )));
-        assert!(events.iter().any(|(_, event)| matches!(
-            event.detail,
-            RuntimeEventDetail::ToolProgress { .. }
-        )));
-        assert!(events.iter().any(|(_, event)| matches!(
-            event.detail,
-            RuntimeEventDetail::ToolFinished { .. }
-        )));
+        assert!(
+            events
+                .iter()
+                .any(|(_, event)| matches!(event.detail, RuntimeEventDetail::MessageDelta { .. }))
+        );
+        assert!(
+            events.iter().any(|(_, event)| matches!(
+                event.detail,
+                RuntimeEventDetail::MessageCommitted { .. }
+            ))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|(_, event)| matches!(event.detail, RuntimeEventDetail::ToolStarted { .. }))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|(_, event)| matches!(event.detail, RuntimeEventDetail::ToolProgress { .. }))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|(_, event)| matches!(event.detail, RuntimeEventDetail::ToolFinished { .. }))
+        );
         assert!(events.iter().any(|(_, event)| matches!(
             event.detail,
             RuntimeEventDetail::ArtifactManifest { ref artifact_ids }
@@ -1543,12 +1610,16 @@ mod tests {
         )));
 
         let state_updates = control_plane_state.state_updates.read().await.clone();
-        assert!(state_updates.iter().any(|(_, update)| {
-            matches!(update.state, ControlPlaneSessionState::Running)
-        }));
-        assert!(state_updates.iter().any(|(_, update)| {
-            matches!(update.state, ControlPlaneSessionState::Completed)
-        }));
+        assert!(
+            state_updates
+                .iter()
+                .any(|(_, update)| { matches!(update.state, ControlPlaneSessionState::Running) })
+        );
+        assert!(
+            state_updates
+                .iter()
+                .any(|(_, update)| { matches!(update.state, ControlPlaneSessionState::Completed) })
+        );
 
         let approval_decisions = control_plane_state.approval_decisions.read().await.clone();
         assert_eq!(approval_decisions.len(), 1);
@@ -1625,7 +1696,11 @@ mod tests {
         AxumPath(session_id): AxumPath<Uuid>,
         Json(request): Json<RuntimeEventCreateRequest>,
     ) -> (StatusCode, Json<rc_control_plane::TimelineEvent>) {
-        state.events.write().await.push((session_id, request.clone()));
+        state
+            .events
+            .write()
+            .await
+            .push((session_id, request.clone()));
         let sequence = state.next_sequence.fetch_add(1, Ordering::SeqCst) as u64 + 1;
         (
             StatusCode::CREATED,
@@ -1644,7 +1719,11 @@ mod tests {
         AxumPath(session_id): AxumPath<Uuid>,
         Json(request): Json<SessionStateUpdateRequest>,
     ) -> Json<serde_json::Value> {
-        state.state_updates.write().await.push((session_id, request));
+        state
+            .state_updates
+            .write()
+            .await
+            .push((session_id, request));
         Json(serde_json::json!({ "ok": true }))
     }
 
@@ -1660,7 +1739,10 @@ mod tests {
             .push((session_id, request.clone()));
         let response = state
             .client
-            .post(format!("{}/v1/sessions/{session_id}/approvals", state.runner_base_url))
+            .post(format!(
+                "{}/v1/sessions/{session_id}/approvals",
+                state.runner_base_url
+            ))
             .json(&request)
             .send()
             .await

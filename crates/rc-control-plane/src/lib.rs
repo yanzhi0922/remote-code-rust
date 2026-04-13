@@ -13,26 +13,26 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use axum::Router;
 use axum::extract::{Request, State};
 use axum::middleware::{self, Next};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
-use axum::Router;
 use rc_config::AppPaths;
-use rusqlite::{Connection, OptionalExtension, params};
 use rusqlite::Row;
+use rusqlite::{Connection, OptionalExtension, params};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use handlers::{
     accept_pairing_offer, apply_approval_decision, claim_bootstrap_device, create_approval,
-    create_artifact, create_pairing_offer, create_session,
-    create_session_runtime_event, download_artifact, get_approval, get_artifact, get_health, get_meta,
-    get_runner, get_session, list_approvals, list_artifacts, list_devices, list_recent_events,
-    list_runner_approvals, list_runner_artifacts, list_runner_events, list_runner_sessions,
-    list_runners, list_session_approvals, list_session_artifacts, list_session_events,
-    list_sessions, pull_runner_commands, post_session_command, register_runner,
-    subscribe_approvals, subscribe_events, subscribe_runner_approvals, subscribe_runner_events,
+    create_artifact, create_pairing_offer, create_session, create_session_runtime_event,
+    download_artifact, get_approval, get_artifact, get_health, get_meta, get_runner, get_session,
+    list_approvals, list_artifacts, list_devices, list_recent_events, list_runner_approvals,
+    list_runner_artifacts, list_runner_events, list_runner_sessions, list_runners,
+    list_session_approvals, list_session_artifacts, list_session_events, list_sessions,
+    post_session_command, pull_runner_commands, register_runner, subscribe_approvals,
+    subscribe_events, subscribe_runner_approvals, subscribe_runner_events,
     subscribe_session_approvals, subscribe_session_events, update_runner_heartbeat,
     update_session_state,
 };
@@ -46,6 +46,7 @@ use types::{
 // Public API re-exports
 // ---------------------------------------------------------------------------
 
+pub use rc_runner::{RunnerSessionCommandRequest, RunnerSessionCommandResponse};
 pub use types::{
     ArtifactCreateRequest, ArtifactRecord, BootstrapClaimRequest, BootstrapClaimResponse,
     ControlPlaneConfig, ControlPlaneConfigOverrides, ControlPlaneHealth, ControlPlaneMeta,
@@ -53,10 +54,9 @@ pub use types::{
     PairingAcceptRequest, PairingAcceptResponse, PairingOfferCreateRequest,
     PairingOfferCreateResponse, RunnerCommandPullResponse, RunnerQueuedCommand,
     RunnerQueuedCommandBody, RunnerRegistrationResponse, RuntimeEventCreateRequest,
-    RuntimeEventDetail, SessionRecord, SessionState, SessionStateUpdateRequest,
-    TimelineEvent, TimelineEventDetail, TrustedDeviceRecord,
+    RuntimeEventDetail, SessionRecord, SessionState, SessionStateUpdateRequest, TimelineEvent,
+    TimelineEventDetail, TrustedDeviceRecord,
 };
-pub use rc_runner::{RunnerSessionCommandRequest, RunnerSessionCommandResponse};
 
 // ---------------------------------------------------------------------------
 // ControlPlaneService
@@ -101,12 +101,13 @@ impl ControlPlaneService {
         let state_db_path = config.state_db_path.clone();
         let artifact_root_dir = config.artifact_root_dir.clone();
         let auth_token = config.auth_token.clone();
-        let bootstrap_secret_hash = config
-            .bootstrap_secret
-            .as_deref()
-            .map(hash_secret_value);
-        let (registry, timeline) = load_persisted_state(&state_db_path)
-            .unwrap_or_else(|_| (Registry::default(), TimelineStore::new(DEFAULT_EVENT_HISTORY_LIMIT, EVENT_STREAM_BUFFER)));
+        let bootstrap_secret_hash = config.bootstrap_secret.as_deref().map(hash_secret_value);
+        let (registry, timeline) = load_persisted_state(&state_db_path).unwrap_or_else(|_| {
+            (
+                Registry::default(),
+                TimelineStore::new(DEFAULT_EVENT_HISTORY_LIMIT, EVENT_STREAM_BUFFER),
+            )
+        });
         let auth_required =
             auth_token.is_some() || bootstrap_secret_hash.is_some() || registry.owner_claimed();
         Self {
@@ -378,10 +379,8 @@ async fn require_api_auth(
         return next.run(request).await;
     }
 
-    return types::ApiError::unauthorized(
-        "missing or invalid control plane bearer token".to_owned(),
-    )
-    .into_response();
+    types::ApiError::unauthorized("missing or invalid control plane bearer token".to_owned())
+        .into_response()
 }
 
 fn extract_request_auth_token(request: &Request) -> Option<String> {
@@ -769,14 +768,18 @@ mod tests {
         assert_eq!(pull_response.status(), StatusCode::OK);
         let pulled: RunnerCommandPullResponse = read_json(pull_response).await;
         assert_eq!(pulled.commands.len(), 2);
-        assert!(pulled.commands.iter().any(|command| matches!(
-            command.body,
-            RunnerQueuedCommandBody::CreateSession { .. }
-        )));
-        assert!(pulled.commands.iter().any(|command| matches!(
-            command.body,
-            RunnerQueuedCommandBody::SessionCommand { .. }
-        )));
+        assert!(
+            pulled.commands.iter().any(|command| matches!(
+                command.body,
+                RunnerQueuedCommandBody::CreateSession { .. }
+            ))
+        );
+        assert!(
+            pulled.commands.iter().any(|command| matches!(
+                command.body,
+                RunnerQueuedCommandBody::SessionCommand { .. }
+            ))
+        );
 
         let second_pull = restored_app
             .oneshot(
@@ -855,8 +858,7 @@ mod tests {
     #[tokio::test]
     async fn control_plane_rejects_session_when_runner_dispatch_fails() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(isolated_test_overrides())
-                .expect("config should load"),
+            load_control_plane_config(isolated_test_overrides()).expect("config should load"),
             "0.1.0",
         );
         let app = service.router();
@@ -906,8 +908,7 @@ mod tests {
     #[tokio::test]
     async fn registering_runner_dispatches_existing_pending_sessions() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(isolated_test_overrides())
-                .expect("config should load"),
+            load_control_plane_config(isolated_test_overrides()).expect("config should load"),
             "0.1.0",
         );
         let app = service.router();
@@ -1011,8 +1012,7 @@ mod tests {
     #[tokio::test]
     async fn heartbeat_dispatches_pending_sessions_when_runner_recovers() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(isolated_test_overrides())
-                .expect("config should load"),
+            load_control_plane_config(isolated_test_overrides()).expect("config should load"),
             "0.1.0",
         );
         let app = service.router();
@@ -1124,8 +1124,7 @@ mod tests {
     #[tokio::test]
     async fn capacity_limited_runner_leaves_additional_sessions_pending() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(isolated_test_overrides())
-                .expect("config should load"),
+            load_control_plane_config(isolated_test_overrides()).expect("config should load"),
             "0.1.0",
         );
         let app = service.router();
@@ -1325,8 +1324,7 @@ mod tests {
     #[tokio::test]
     async fn heartbeat_updates_runner_state() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(isolated_test_overrides())
-                .expect("config should load"),
+            load_control_plane_config(isolated_test_overrides()).expect("config should load"),
             "0.1.0",
         );
         let app = service.router();
@@ -1383,8 +1381,7 @@ mod tests {
     #[tokio::test]
     async fn recent_events_endpoint_lists_emitted_timeline_entries() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(isolated_test_overrides())
-                .expect("config should load"),
+            load_control_plane_config(isolated_test_overrides()).expect("config should load"),
             "0.1.0",
         );
         let app = service.router();
@@ -1470,8 +1467,7 @@ mod tests {
     #[tokio::test]
     async fn approval_relay_updates_session_state_and_timeline() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(isolated_test_overrides())
-                .expect("config should load"),
+            load_control_plane_config(isolated_test_overrides()).expect("config should load"),
             "0.1.0",
         );
         let app = service.router();
@@ -1747,8 +1743,7 @@ mod tests {
     #[tokio::test]
     async fn failed_approval_relay_does_not_mutate_control_plane_state() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(isolated_test_overrides())
-                .expect("config should load"),
+            load_control_plane_config(isolated_test_overrides()).expect("config should load"),
             "0.1.0",
         );
         let app = service.clone().router();
@@ -2194,8 +2189,7 @@ mod tests {
     #[tokio::test]
     async fn runner_approval_listing_filters_by_runner() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(isolated_test_overrides())
-                .expect("config should load"),
+            load_control_plane_config(isolated_test_overrides()).expect("config should load"),
             "0.1.0",
         );
         let app = service.router();
@@ -2280,8 +2274,7 @@ mod tests {
     #[tokio::test]
     async fn runner_artifact_listing_filters_by_runner() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(isolated_test_overrides())
-                .expect("config should load"),
+            load_control_plane_config(isolated_test_overrides()).expect("config should load"),
             "0.1.0",
         );
         let app = service.router();
@@ -2375,8 +2368,7 @@ mod tests {
     #[tokio::test]
     async fn runner_event_listing_filters_by_runner() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(isolated_test_overrides())
-                .expect("config should load"),
+            load_control_plane_config(isolated_test_overrides()).expect("config should load"),
             "0.1.0",
         );
         let app = service.router();
@@ -2480,8 +2472,7 @@ mod tests {
     #[tokio::test]
     async fn runner_approval_stream_only_emits_matching_approval_events() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(isolated_test_overrides())
-                .expect("config should load"),
+            load_control_plane_config(isolated_test_overrides()).expect("config should load"),
             "0.1.0",
         );
         let (base_url, server_handle) = spawn_control_plane_server(service).await;
@@ -2589,8 +2580,7 @@ mod tests {
     #[tokio::test]
     async fn runner_event_stream_replays_backlog_for_matching_runner() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(isolated_test_overrides())
-                .expect("config should load"),
+            load_control_plane_config(isolated_test_overrides()).expect("config should load"),
             "0.1.0",
         );
         let (base_url, server_handle) = spawn_control_plane_server(service).await;
@@ -2658,8 +2648,7 @@ mod tests {
     #[tokio::test]
     async fn approval_stream_replays_backlog_after_query() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(isolated_test_overrides())
-                .expect("config should load"),
+            load_control_plane_config(isolated_test_overrides()).expect("config should load"),
             "0.1.0",
         );
         let (base_url, server_handle) = spawn_control_plane_server(service).await;
@@ -3240,8 +3229,7 @@ mod tests {
     #[tokio::test]
     async fn session_command_endpoint_relays_to_runner() {
         let service = ControlPlaneService::new(
-            load_control_plane_config(isolated_test_overrides())
-                .expect("config should load"),
+            load_control_plane_config(isolated_test_overrides()).expect("config should load"),
             "0.1.0",
         );
         let app = service.router();
@@ -3269,8 +3257,8 @@ mod tests {
         .expect("config should load");
         let registration = config.registration_request();
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
-        let runner_api = RunnerApi::new(config, "remote-code-runner", "0.1.0")
-            .with_event_channel(event_tx);
+        let runner_api =
+            RunnerApi::new(config, "remote-code-runner", "0.1.0").with_event_channel(event_tx);
         let runner_server = {
             let app = runner_api.router();
             tokio::spawn(async move {
@@ -3333,8 +3321,15 @@ mod tests {
         assert!(response.accepted);
         assert_eq!(response.session_id, session.session_id);
 
-        match event_rx.recv().await.expect("runner command event should arrive") {
-            rc_runner::RunnerApiEvent::SessionCommand { session_id, command } => {
+        match event_rx
+            .recv()
+            .await
+            .expect("runner command event should arrive")
+        {
+            rc_runner::RunnerApiEvent::SessionCommand {
+                session_id,
+                command,
+            } => {
                 assert_eq!(session_id, session.session_id);
                 assert_eq!(
                     command,

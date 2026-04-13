@@ -20,10 +20,9 @@ use crate::helpers::{
 use crate::types::{
     ApiError, ArtifactCreateRequest, ArtifactRecord, BootstrapClaimRequest, CreateSessionRequest,
     DEFAULT_EVENT_LIST_LIMIT, DEFAULT_PAIRING_TTL_SECS, DeviceKind, ListSessionsQuery,
-    MAX_EVENT_LIST_LIMIT, MAX_PAIRING_TTL_SECS, PairingAcceptRequest,
-    PairingOfferCreateRequest, SessionRecord, SessionState, SessionStateTransition,
-    TimelineEvent, TimelineEventDraft, TrustedDeviceRecord, RunnerQueuedCommand,
-    RunnerQueuedCommandBody,
+    MAX_EVENT_LIST_LIMIT, MAX_PAIRING_TTL_SECS, PairingAcceptRequest, PairingOfferCreateRequest,
+    RunnerQueuedCommand, RunnerQueuedCommandBody, SessionRecord, SessionState,
+    SessionStateTransition, TimelineEvent, TimelineEventDraft, TrustedDeviceRecord,
 };
 
 // ---------------------------------------------------------------------------
@@ -395,7 +394,12 @@ impl Registry {
         let offer = self
             .pairing_offers
             .remove(&request.offer_id)
-            .ok_or_else(|| ApiError::not_found(format!("pairing offer `{}` was not found", request.offer_id)))?;
+            .ok_or_else(|| {
+                ApiError::not_found(format!(
+                    "pairing offer `{}` was not found",
+                    request.offer_id
+                ))
+            })?;
         if offer.expires_at < Utc::now() {
             return Err(ApiError::conflict(format!(
                 "pairing offer `{}` has expired",

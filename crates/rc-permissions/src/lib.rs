@@ -98,12 +98,16 @@ pub trait PermissionBroker: Send + Sync {
 
     /// Add a session-scoped layered rule.
     fn add_session_rule(&self, _action: RuleAction, _tool_pattern: String) -> Result<()> {
-        Err(anyhow!("session rule mutation is not supported by this broker"))
+        Err(anyhow!(
+            "session rule mutation is not supported by this broker"
+        ))
     }
 
     /// Clear all session-scoped layered rules, returning the number removed.
     fn clear_session_rules(&self) -> Result<usize> {
-        Err(anyhow!("session rule mutation is not supported by this broker"))
+        Err(anyhow!(
+            "session rule mutation is not supported by this broker"
+        ))
     }
 
     /// Decide whether to allow or deny the given request.
@@ -277,7 +281,10 @@ where
                             request.tool_name, denial_count
                         )
                     } else {
-                        format!("Permission denied for {} by layered rule.", request.tool_name)
+                        format!(
+                            "Permission denied for {} by layered rule.",
+                            request.tool_name
+                        )
                     };
                     self.push_audit(PermissionAuditRecord {
                         tool_name: request.tool_name,

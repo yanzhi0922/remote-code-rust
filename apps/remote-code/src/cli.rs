@@ -90,7 +90,8 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    Doctor,
+    Doctor(DoctorArgs),
+    Status(StatusArgs),
     Hooks {
         #[command(subcommand)]
         command: HooksCommand,
@@ -157,6 +158,7 @@ pub enum UpdateCommand {
 pub enum SessionsCommand {
     List,
     Show(ShowArgs),
+    Stats(SessionsStatsArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -233,15 +235,37 @@ pub enum RemoteSessionsCommand {
     List(RemoteSessionsListArgs),
     Show(RemoteSessionShowArgs),
     Create(RemoteSessionCreateArgs),
+    Follow(RemoteSessionFollowArgs),
     State(RemoteSessionStateArgs),
     Prompt(RemoteSessionPromptArgs),
     Interrupt(RemoteSessionInterruptArgs),
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct DoctorArgs {
+    #[arg(long)]
+    pub json: bool,
+
+    #[arg(long)]
+    pub probe_network: bool,
+
+    #[arg(long)]
+    pub probe_provider: bool,
+
+    #[arg(long)]
+    pub include_env_providers: bool,
 }
 
 #[derive(Args, Debug)]
 pub struct ResumeArgs {
     pub session_id: Uuid,
     pub prompt: Vec<String>,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct StatusArgs {
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args, Debug)]
@@ -256,6 +280,15 @@ pub struct ExportArgs {
 #[derive(Args, Debug)]
 pub struct ShowArgs {
     pub session_id: Uuid,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct SessionsStatsArgs {
+    pub session_id: Option<Uuid>,
+    #[arg(long, default_value_t = 10)]
+    pub limit: usize,
     #[arg(long)]
     pub json: bool,
 }
@@ -1099,6 +1132,29 @@ pub struct PluginsToggleArgs {
 #[derive(Args, Debug)]
 pub struct PluginsUpdateArgs {
     pub path: PathBuf,
+
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct RemoteSessionFollowArgs {
+    #[command(flatten)]
+    pub target: RemoteTargetArgs,
+
+    pub session_id: Uuid,
+
+    #[arg(long)]
+    pub after: Option<u64>,
+
+    #[arg(long, default_value_t = 20)]
+    pub limit: usize,
+
+    #[arg(long, default_value_t = 2)]
+    pub reconnect_delay_secs: u64,
+
+    #[arg(long)]
+    pub stop_on_terminal: bool,
 
     #[arg(long)]
     pub json: bool,

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -7,21 +7,29 @@ use std::time::Instant;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use rc_config::{
-    load_runtime_config, normalize_base_url, validate_provider_config, AppPaths,
-    ProviderConfig as RuntimeProviderConfig, ProviderOverrides, RuntimeConfig, RuntimeOverrides,
+    discover_env_providers, load_runtime_config, normalize_base_url, validate_provider_config,
+    AppPaths, ProviderConfig as RuntimeProviderConfig, ProviderOverrides, RuntimeConfig,
+    RuntimeOverrides,
 };
 use rc_core::{
     default_system_prompt, ConversationEntry, ConversationRole, PermissionMode, ProviderProtocol,
     ProviderResponse, SubAgentCompletion, ToolCall, UsageSummary,
 };
-use rc_permissions::{
-    auto_allows, classify_tool, load_layered_rules, LayeredPermissionBroker, PermissionBroker,
-    PermissionDecision, PermissionRequest,
+use rc_mcp::{
+    inspect_server, McpClientInfo, McpConfig, McpServerConfig, McpServerInspection, McpTransport,
+    McpTransportConfig, DEFAULT_MCP_CONFIG_FILE,
 };
+use rc_permissions::{
+    auto_allows, classify_tool, load_layered_rules, rules::summarize_rule_sources,
+    LayeredPermissionBroker, PermissionBroker, PermissionDecision, PermissionRequest,
+};
+use rc_plugins::{discover_plugins, PluginBundle, PLUGIN_DISABLED_MARKER};
 use rc_provider::context::ContextWindowManager;
+use rc_provider::model_info::{get_model_info, ModelCapability};
 use rc_provider::streaming::StreamingCallbacks;
 use rc_provider::ProviderClient;
 use rc_session::{SessionStore, SessionSummary};
+use rc_skills::discover_skills;
 use rc_tools::shell::ShellExecutionPolicy;
 use rc_tools::{
     agent::{parse_delegate_progress_event, DelegateProgressEvent},
@@ -29,6 +37,7 @@ use rc_tools::{
     tasks::load_persisted_ui_task_snapshots,
     ToolExecutionContext, ToolRuntimePolicy,
 };
+use rc_ui_bridge::{UiProviderStatusSnapshot, UiRuntimeStatusSnapshot};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_dialog::DialogExt;
@@ -51,6 +60,7 @@ const APP_EVENT_TASK_SNAPSHOT: &str = "gui://task-snapshot";
 const APP_EVENT_CONTEXT_USAGE: &str = "gui://context-usage";
 const APP_EVENT_CONTEXT_OVERFLOW: &str = "gui://context-overflow";
 const APP_EVENT_CONTEXT_COMPACTED: &str = "gui://context-compacted";
+const APP_EVENT_RUNTIME_STATUS: &str = "gui://runtime-status";
 const PROJECTS_FILE_NAME: &str = "gui-projects.json";
 const PROVIDERS_FILE_NAME: &str = "gui-providers.json";
 const SETTINGS_FILE_NAME: &str = "gui-settings.json";
@@ -435,6 +445,227 @@ struct ContextCompactedDto {
     usage_ratio: f64,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ConfigScopeDto {
+    Profile,
+    Project,
+}
+
+impl ConfigScopeDto {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Profile => "profile",
+            Self::Project => "project",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SessionExportFormatDto {
+    Json,
+    Ndjson,
+}
+
+impl SessionExportFormatDto {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Json => "json",
+            Self::Ndjson => "ndjson",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SessionExportResultDto {
+    session_id: String,
+    format: String,
+    path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct GuiDoctorReportDto {
+    ok: bool,
+    runtime: GuiDoctorRuntimeDto,
+    provider: GuiDoctorProviderDto,
+    tools: GuiDoctorToolsDto,
+    permissions: GuiDoctorPermissionsDto,
+    extensions: GuiDoctorExtensionsDto,
+    network: Vec<GuiDoctorProbeDto>,
+    env_providers: Vec<GuiDoctorEnvProviderDto>,
+    issues: Vec<String>,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct GuiDoctorRuntimeDto {
+    version: String,
+    cwd: String,
+    profile_dir: String,
+    session_id: String,
+    session_name: Option<String>,
+    permission_mode: String,
+    setting_sources: Vec<String>,
+    settings_files: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct GuiDoctorProviderDto {
+    name: String,
+    protocol: String,
+    base_url: Option<String>,
+    model: Option<String>,
+    api_key_present: bool,
+    auth_source: Option<String>,
+    effort: Option<String>,
+    fallback_model: Option<String>,
+    context_window_tokens: u64,
+    output_reserve_tokens: u64,
+    multimodal: bool,
+    reasoning: bool,
+    validation_ok: bool,
+    validation_issues: Vec<String>,
+    probe: Option<GuiDoctorProbeDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct GuiDoctorToolsDto {
+    builtin_tools: usize,
+    allowed_tools: Vec<String>,
+    disallowed_tools: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct GuiDoctorRuleSourceDto {
+    source: String,
+    count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct GuiDoctorPermissionsDto {
+    layered_rules: usize,
+    rule_sources: Vec<GuiDoctorRuleSourceDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct GuiDoctorExtensionsDto {
+    skills: usize,
+    plugins: usize,
+    disabled_plugins: usize,
+    managed_mcp_servers: usize,
+    plugin_mcp_servers: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct GuiDoctorEnvProviderDto {
+    name: String,
+    protocol: String,
+    base_url: Option<String>,
+    model: Option<String>,
+    api_key_present: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum GuiDoctorProbeOutcomeDto {
+    Reachable,
+    AuthRejected,
+    RateLimited,
+    ServerError,
+    TransportError,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct GuiDoctorProbeDto {
+    label: String,
+    url: String,
+    outcome: GuiDoctorProbeOutcomeDto,
+    status_code: Option<u16>,
+    latency_ms: u128,
+    detail: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct McpServerListDto {
+    scope: String,
+    config_path: String,
+    warnings: Vec<String>,
+    servers: Vec<McpServerDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct McpServerDto {
+    name: String,
+    enabled: bool,
+    transport: String,
+    config_path: String,
+    command: Option<String>,
+    url: Option<String>,
+    args: Vec<String>,
+    cwd: Option<String>,
+    env_keys: Vec<String>,
+    metadata_keys: Vec<String>,
+    startup_timeout_secs: Option<u64>,
+    request_timeout_secs: Option<u64>,
+    live: Option<McpServerLiveDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct McpServerLiveDto {
+    status: String,
+    protocol_version: Option<String>,
+    peer_name: Option<String>,
+    peer_version: Option<String>,
+    tool_count: usize,
+    tools: Vec<McpToolInfoDto>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct McpToolInfoDto {
+    name: String,
+    description: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct McpServerUpsertRequestDto {
+    scope: ConfigScopeDto,
+    #[serde(default)]
+    project_path: Option<String>,
+    name: String,
+    transport: String,
+    #[serde(default)]
+    command: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    env: BTreeMap<String, String>,
+    #[serde(default)]
+    headers: BTreeMap<String, String>,
+    #[serde(default)]
+    metadata: BTreeMap<String, String>,
+    #[serde(default)]
+    disabled: bool,
+    #[serde(default)]
+    startup_timeout_secs: Option<u64>,
+    #[serde(default)]
+    request_timeout_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct McpMutationResultDto {
+    status: String,
+    scope: String,
+    config_path: String,
+    name: Option<String>,
+    enabled: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedProviderContext {
     name: String,
@@ -718,6 +949,735 @@ fn provider_info_from_runtime(provider: &RuntimeProviderConfig) -> ProviderInfoD
         protocol: provider.protocol.as_str().to_owned(),
         base_url: provider.base_url.clone(),
     }
+}
+
+fn runtime_status_snapshot_from_config(config: &RuntimeConfig) -> UiRuntimeStatusSnapshot {
+    UiRuntimeStatusSnapshot {
+        session_name: config.session_name.clone(),
+        provider: UiProviderStatusSnapshot {
+            name: config.provider.name.clone(),
+            model: config.provider.model.clone(),
+            protocol: config.provider.protocol.as_str().to_owned(),
+            base_url: config.provider.base_url.clone(),
+            auth_source: config.auth_source.clone(),
+            effort: config.effort.clone(),
+            fallback_model: config.fallback_model.clone(),
+        },
+        permission_mode: config.permission_mode.as_legacy_str().to_owned(),
+        setting_sources: config.setting_sources.clone(),
+        allowed_tools: config.allowed_tools.clone(),
+        disallowed_tools: config.disallowed_tools.clone(),
+    }
+}
+
+fn emit_runtime_status(app: &AppHandle, config: &RuntimeConfig) {
+    let _ = app.emit(
+        APP_EVENT_RUNTIME_STATUS,
+        runtime_status_snapshot_from_config(config),
+    );
+}
+
+fn repository_slug() -> Option<String> {
+    let repository = env!("CARGO_PKG_REPOSITORY").trim();
+    let repository = repository
+        .strip_suffix(".git")
+        .unwrap_or(repository)
+        .trim_end_matches('/');
+    if let Some(stripped) = repository.strip_prefix("https://github.com/") {
+        return Some(stripped.to_owned());
+    }
+    if let Some(stripped) = repository.strip_prefix("http://github.com/") {
+        return Some(stripped.to_owned());
+    }
+    repository
+        .strip_prefix("git@github.com:")
+        .map(ToOwned::to_owned)
+}
+
+fn provider_endpoint_url(provider: &RuntimeProviderConfig) -> Option<String> {
+    provider
+        .base_url
+        .clone()
+        .or_else(|| match provider.protocol {
+            ProviderProtocol::Anthropic => Some("https://api.anthropic.com/v1/messages".to_owned()),
+            ProviderProtocol::OpenAi => {
+                Some("https://api.openai.com/v1/chat/completions".to_owned())
+            }
+            ProviderProtocol::Bedrock | ProviderProtocol::Vertex => None,
+        })
+}
+
+fn classify_probe_status(status: reqwest::StatusCode) -> (GuiDoctorProbeOutcomeDto, String) {
+    let code = status.as_u16();
+    if status.is_success() {
+        return (
+            GuiDoctorProbeOutcomeDto::Reachable,
+            format!("HTTP {code} confirms the endpoint is reachable"),
+        );
+    }
+
+    match code {
+        400 | 404 | 405 | 406 | 409 | 415 | 422 => (
+            GuiDoctorProbeOutcomeDto::Reachable,
+            format!("HTTP {code} confirms the endpoint is reachable"),
+        ),
+        401 | 403 => (
+            GuiDoctorProbeOutcomeDto::AuthRejected,
+            format!("HTTP {code} indicates the endpoint rejected the supplied credentials"),
+        ),
+        429 => (
+            GuiDoctorProbeOutcomeDto::RateLimited,
+            "HTTP 429 indicates the endpoint is reachable but currently rate limited".to_owned(),
+        ),
+        500..=599 => (
+            GuiDoctorProbeOutcomeDto::ServerError,
+            format!("HTTP {code} indicates an upstream server failure"),
+        ),
+        _ => (
+            GuiDoctorProbeOutcomeDto::Reachable,
+            format!("HTTP {code} returned from the endpoint"),
+        ),
+    }
+}
+
+fn probe_is_issue(probe: &GuiDoctorProbeDto) -> bool {
+    matches!(
+        probe.outcome,
+        GuiDoctorProbeOutcomeDto::AuthRejected
+            | GuiDoctorProbeOutcomeDto::ServerError
+            | GuiDoctorProbeOutcomeDto::TransportError
+    )
+}
+
+fn probe_is_warning(probe: &GuiDoctorProbeDto) -> bool {
+    matches!(probe.outcome, GuiDoctorProbeOutcomeDto::RateLimited)
+}
+
+async fn run_doctor_probe(
+    label: impl Into<String>,
+    url: impl Into<String>,
+    headers: &BTreeMap<String, String>,
+) -> GuiDoctorProbeDto {
+    let label = label.into();
+    let url = url.into();
+    let client = match reqwest::Client::builder()
+        .user_agent("remote-code-gui-doctor")
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => {
+            return GuiDoctorProbeDto {
+                label,
+                url,
+                outcome: GuiDoctorProbeOutcomeDto::TransportError,
+                status_code: None,
+                latency_ms: 0,
+                detail: format!("failed to build HTTP client: {error}"),
+            };
+        }
+    };
+
+    let started = Instant::now();
+    let mut request = client.get(&url);
+    for (name, value) in headers {
+        request = request.header(name, value);
+    }
+
+    match request.send().await {
+        Ok(response) => {
+            let (outcome, detail) = classify_probe_status(response.status());
+            GuiDoctorProbeDto {
+                label,
+                url,
+                outcome,
+                status_code: Some(response.status().as_u16()),
+                latency_ms: started.elapsed().as_millis(),
+                detail,
+            }
+        }
+        Err(error) => GuiDoctorProbeDto {
+            label,
+            url,
+            outcome: GuiDoctorProbeOutcomeDto::TransportError,
+            status_code: None,
+            latency_ms: started.elapsed().as_millis(),
+            detail: error.to_string(),
+        },
+    }
+}
+
+fn count_managed_mcp_servers(path: &Path, warnings: &mut Vec<String>) -> usize {
+    if !path.exists() {
+        return 0;
+    }
+    match McpConfig::load(path) {
+        Ok(config) => config.servers.len(),
+        Err(error) => {
+            warnings.push(format!(
+                "Failed to load MCP config {}: {error}",
+                path.display()
+            ));
+            0
+        }
+    }
+}
+
+fn count_plugin_mcp_servers(plugins: &[PluginBundle], warnings: &mut Vec<String>) -> usize {
+    let mut count = 0usize;
+    for plugin in plugins {
+        let Some(path) = plugin.mcp_config_path() else {
+            continue;
+        };
+        match McpConfig::load(&path) {
+            Ok(config) => count += config.servers.len(),
+            Err(error) => warnings.push(format!(
+                "Failed to load plugin MCP config for {}: {error}",
+                plugin.manifest.name
+            )),
+        }
+    }
+    count
+}
+
+async fn build_gui_doctor_report(
+    config: &RuntimeConfig,
+    probe_network: bool,
+    probe_provider: bool,
+    include_env_providers: bool,
+) -> Result<GuiDoctorReportDto> {
+    let validation = validate_provider_config(&config.provider);
+    let model_info = get_model_info(config.provider.model.as_deref().unwrap_or("unknown"));
+    let layered_rules = load_layered_rules(
+        &config.cwd,
+        &config.paths.profile_dir,
+        &config.settings_files,
+    )?;
+
+    let mut warnings = Vec::new();
+    let mut issues = validation.issues.clone();
+
+    let skills = match discover_skills(&config.paths.skills_dir) {
+        Ok(skills) => skills,
+        Err(error) => {
+            warnings.push(format!("Failed to discover skills: {error}"));
+            Vec::new()
+        }
+    };
+    let plugins = match discover_plugins(&config.paths.plugins_dir) {
+        Ok(plugins) => plugins,
+        Err(error) => {
+            warnings.push(format!("Failed to discover plugins: {error}"));
+            Vec::new()
+        }
+    };
+    let disabled_plugins = plugins
+        .iter()
+        .filter(|plugin| plugin.root.join(PLUGIN_DISABLED_MARKER).exists())
+        .count();
+    let managed_mcp_servers =
+        count_managed_mcp_servers(
+            &config.paths.profile_dir.join(DEFAULT_MCP_CONFIG_FILE),
+            &mut warnings,
+        ) + count_managed_mcp_servers(&config.cwd.join(DEFAULT_MCP_CONFIG_FILE), &mut warnings);
+    let plugin_mcp_servers = count_plugin_mcp_servers(&plugins, &mut warnings);
+
+    let provider_probe = if probe_provider {
+        if let Some(url) = provider_endpoint_url(&config.provider) {
+            let mut headers = config.provider.request_header_overrides.clone();
+            match config.provider.protocol {
+                ProviderProtocol::Anthropic => {
+                    headers.insert("anthropic-version".to_owned(), "2023-06-01".to_owned());
+                    if let Some(api_key) = &config.provider.api_key {
+                        headers.insert("x-api-key".to_owned(), api_key.clone());
+                    }
+                }
+                ProviderProtocol::OpenAi => {
+                    if let Some(api_key) = &config.provider.api_key {
+                        headers.insert("authorization".to_owned(), format!("Bearer {api_key}"));
+                    }
+                }
+                ProviderProtocol::Bedrock | ProviderProtocol::Vertex => {}
+            }
+            let probe =
+                run_doctor_probe(format!("provider:{}", config.provider.name), url, &headers).await;
+            if probe_is_issue(&probe) {
+                issues.push(format!("Provider probe failed: {}", probe.detail));
+            } else if probe_is_warning(&probe) {
+                warnings.push(format!("Provider probe warning: {}", probe.detail));
+            }
+            Some(probe)
+        } else {
+            warnings.push(
+                "Provider probe skipped: no probeable endpoint for the active protocol.".to_owned(),
+            );
+            None
+        }
+    } else {
+        None
+    };
+
+    let mut network = Vec::new();
+    if probe_network {
+        if let Some(slug) = repository_slug() {
+            let github_probe = run_doctor_probe(
+                "github:releases",
+                format!("https://api.github.com/repos/{slug}/releases/latest"),
+                &BTreeMap::new(),
+            )
+            .await;
+            if probe_is_warning(&github_probe) || probe_is_issue(&github_probe) {
+                warnings.push(format!("Network probe warning: {}", github_probe.detail));
+            }
+            network.push(github_probe);
+        }
+        if !probe_provider {
+            if let Some(url) = provider_endpoint_url(&config.provider) {
+                let provider_network_probe =
+                    run_doctor_probe("provider:network", url, &BTreeMap::new()).await;
+                if probe_is_warning(&provider_network_probe)
+                    || probe_is_issue(&provider_network_probe)
+                {
+                    warnings.push(format!(
+                        "Network probe warning: {}",
+                        provider_network_probe.detail
+                    ));
+                }
+                network.push(provider_network_probe);
+            }
+        }
+    }
+
+    let env_providers = if include_env_providers {
+        discover_env_providers()
+            .into_iter()
+            .map(|provider| GuiDoctorEnvProviderDto {
+                name: provider.name,
+                protocol: provider.protocol.as_str().to_owned(),
+                base_url: provider.base_url,
+                model: provider.model,
+                api_key_present: provider.api_key.is_some(),
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    Ok(GuiDoctorReportDto {
+        ok: issues.is_empty(),
+        runtime: GuiDoctorRuntimeDto {
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            cwd: config.cwd.display().to_string(),
+            profile_dir: config.paths.profile_dir.display().to_string(),
+            session_id: config.session_id.to_string(),
+            session_name: config.session_name.clone(),
+            permission_mode: config.permission_mode.as_legacy_str().to_owned(),
+            setting_sources: config.setting_sources.clone(),
+            settings_files: config
+                .settings_files
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect(),
+        },
+        provider: GuiDoctorProviderDto {
+            name: config.provider.name.clone(),
+            protocol: config.provider.protocol.as_str().to_owned(),
+            base_url: config.provider.base_url.clone(),
+            model: config.provider.model.clone(),
+            api_key_present: config.provider.api_key.is_some(),
+            auth_source: config.auth_source.clone(),
+            effort: config.effort.clone(),
+            fallback_model: config.fallback_model.clone(),
+            context_window_tokens: model_info.max_context,
+            output_reserve_tokens: model_info.max_output,
+            multimodal: model_info.multimodal,
+            reasoning: model_info
+                .capabilities
+                .contains(&ModelCapability::Reasoning),
+            validation_ok: validation.ok,
+            validation_issues: validation.issues,
+            probe: provider_probe,
+        },
+        tools: GuiDoctorToolsDto {
+            builtin_tools: rc_tools::runtime_builtin_tool_specs().len(),
+            allowed_tools: config.allowed_tools.clone(),
+            disallowed_tools: config.disallowed_tools.clone(),
+        },
+        permissions: GuiDoctorPermissionsDto {
+            layered_rules: layered_rules.len(),
+            rule_sources: summarize_rule_sources(&layered_rules)
+                .into_iter()
+                .map(|(source, count)| GuiDoctorRuleSourceDto {
+                    source: source.as_str().to_owned(),
+                    count,
+                })
+                .collect(),
+        },
+        extensions: GuiDoctorExtensionsDto {
+            skills: skills.len(),
+            plugins: plugins.len(),
+            disabled_plugins,
+            managed_mcp_servers,
+            plugin_mcp_servers,
+        },
+        network,
+        env_providers,
+        issues,
+        warnings,
+    })
+}
+
+fn mcp_config_path_for_scope(
+    config: &RuntimeConfig,
+    scope: ConfigScopeDto,
+    project_path: Option<&str>,
+) -> Result<PathBuf> {
+    match scope {
+        ConfigScopeDto::Profile => Ok(config.paths.profile_dir.join(DEFAULT_MCP_CONFIG_FILE)),
+        ConfigScopeDto::Project => {
+            let project_path = project_path.ok_or_else(|| {
+                anyhow!("project path is required for project-scope MCP management")
+            })?;
+            let project_root = normalize_existing_path(Path::new(project_path))?;
+            Ok(project_root.join(DEFAULT_MCP_CONFIG_FILE))
+        }
+    }
+}
+
+fn load_managed_mcp_config_or_default(path: &Path) -> Result<McpConfig> {
+    if path.exists() {
+        Ok(McpConfig::load(path)?)
+    } else {
+        Ok(McpConfig::default())
+    }
+}
+
+fn mcp_live_to_dto(inspection: McpServerInspection) -> McpServerLiveDto {
+    McpServerLiveDto {
+        status: "ok".to_owned(),
+        protocol_version: Some(inspection.protocol_version),
+        peer_name: inspection
+            .server_info
+            .as_ref()
+            .map(|info| info.name.clone()),
+        peer_version: inspection
+            .server_info
+            .as_ref()
+            .and_then(|info| info.version.clone()),
+        tool_count: inspection.tools.len(),
+        tools: inspection
+            .tools
+            .into_iter()
+            .map(|tool| McpToolInfoDto {
+                name: tool.name,
+                description: tool.description,
+            })
+            .collect(),
+        error: None,
+    }
+}
+
+fn mcp_server_to_dto(
+    config_path: &Path,
+    server: McpServerConfig,
+    live: Option<McpServerLiveDto>,
+) -> McpServerDto {
+    let (command, url, args, cwd, env_keys) = match &server.transport {
+        McpTransportConfig::Stdio {
+            command,
+            args,
+            cwd,
+            env,
+        } => {
+            let mut env_keys = env.keys().cloned().collect::<Vec<_>>();
+            env_keys.sort();
+            (
+                Some(command.clone()),
+                None,
+                args.clone(),
+                cwd.as_ref().map(|path| path.display().to_string()),
+                env_keys,
+            )
+        }
+        McpTransportConfig::Http { url, headers }
+        | McpTransportConfig::WebSocket { url, headers } => {
+            let mut env_keys = headers.keys().cloned().collect::<Vec<_>>();
+            env_keys.sort();
+            (None, Some(url.clone()), Vec::new(), None, env_keys)
+        }
+    };
+    let mut metadata_keys = server.metadata.keys().cloned().collect::<Vec<_>>();
+    metadata_keys.sort();
+    McpServerDto {
+        name: server.name,
+        enabled: server.enabled,
+        transport: match server.transport.kind() {
+            McpTransport::Stdio => "stdio",
+            McpTransport::Http => "http",
+            McpTransport::WebSocket => "websocket",
+        }
+        .to_owned(),
+        config_path: config_path.display().to_string(),
+        command,
+        url,
+        args,
+        cwd,
+        env_keys,
+        metadata_keys,
+        startup_timeout_secs: server.startup_timeout_secs,
+        request_timeout_secs: server.request_timeout_secs,
+        live,
+    }
+}
+
+async fn build_mcp_server_list(
+    config: &RuntimeConfig,
+    scope: ConfigScopeDto,
+    project_path: Option<&str>,
+    connect: bool,
+    include_disabled: bool,
+) -> Result<McpServerListDto> {
+    let config_path = mcp_config_path_for_scope(config, scope, project_path)?;
+    let mcp_config = load_managed_mcp_config_or_default(&config_path)?;
+    let mut warnings = Vec::new();
+    let mut servers = Vec::new();
+
+    for server in mcp_config.servers.into_values() {
+        if !server.enabled && !include_disabled {
+            continue;
+        }
+        let live = if connect {
+            match inspect_server(
+                &server,
+                &McpClientInfo::new("remote-code-gui", env!("CARGO_PKG_VERSION")),
+            )
+            .await
+            {
+                Ok(inspection) => Some(mcp_live_to_dto(inspection)),
+                Err(error) => Some(McpServerLiveDto {
+                    status: "error".to_owned(),
+                    protocol_version: None,
+                    peer_name: None,
+                    peer_version: None,
+                    tool_count: 0,
+                    tools: Vec::new(),
+                    error: Some(error.to_string()),
+                }),
+            }
+        } else {
+            None
+        };
+        servers.push(mcp_server_to_dto(&config_path, server, live));
+    }
+
+    servers.sort_by(|left, right| left.name.cmp(&right.name));
+    if !config_path.exists() {
+        warnings.push(format!(
+            "Managed MCP config does not exist yet at {}",
+            config_path.display()
+        ));
+    }
+
+    Ok(McpServerListDto {
+        scope: scope.label().to_owned(),
+        config_path: config_path.display().to_string(),
+        warnings,
+        servers,
+    })
+}
+
+fn build_mcp_transport(request: &McpServerUpsertRequestDto) -> Result<McpTransportConfig> {
+    match request.transport.trim().to_ascii_lowercase().as_str() {
+        "stdio" => {
+            let command = request
+                .command
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| anyhow!("stdio MCP servers require a command"))?;
+            Ok(McpTransportConfig::Stdio {
+                command: command.to_owned(),
+                args: request.args.clone(),
+                cwd: request.cwd.as_deref().map(PathBuf::from),
+                env: request.env.clone(),
+            })
+        }
+        "http" => {
+            let url = request
+                .url
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| anyhow!("http MCP servers require a url"))?;
+            Ok(McpTransportConfig::Http {
+                url: url.to_owned(),
+                headers: request.headers.clone(),
+            })
+        }
+        "websocket" | "ws" => {
+            let url = request
+                .url
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| anyhow!("websocket MCP servers require a url"))?;
+            Ok(McpTransportConfig::WebSocket {
+                url: url.to_owned(),
+                headers: request.headers.clone(),
+            })
+        }
+        other => Err(anyhow!("unsupported MCP transport: {other}")),
+    }
+}
+
+fn save_managed_mcp_server_at_path(
+    config_path: &Path,
+    scope: ConfigScopeDto,
+    request: &McpServerUpsertRequestDto,
+) -> Result<McpMutationResultDto> {
+    let mut mcp_config = load_managed_mcp_config_or_default(config_path)?;
+    let name = request.name.trim();
+    if name.is_empty() {
+        return Err(anyhow!("MCP server name cannot be empty."));
+    }
+    let existed = mcp_config.servers.contains_key(name);
+    let transport = build_mcp_transport(request)?;
+    mcp_config.servers.insert(
+        name.to_owned(),
+        McpServerConfig {
+            name: name.to_owned(),
+            enabled: !request.disabled,
+            transport,
+            capabilities: rc_mcp::McpCapabilityMatrix::default(),
+            startup_timeout_secs: request.startup_timeout_secs,
+            request_timeout_secs: request.request_timeout_secs,
+            metadata: request.metadata.clone(),
+        },
+    );
+    mcp_config.save(config_path)?;
+    Ok(McpMutationResultDto {
+        status: if existed { "updated" } else { "created" }.to_owned(),
+        scope: scope.label().to_owned(),
+        config_path: config_path.display().to_string(),
+        name: Some(name.to_owned()),
+        enabled: Some(!request.disabled),
+    })
+}
+
+fn toggle_managed_mcp_server_at_path(
+    config_path: &Path,
+    scope: ConfigScopeDto,
+    name: &str,
+    enabled: bool,
+    if_exists: bool,
+) -> Result<McpMutationResultDto> {
+    let mut mcp_config = load_managed_mcp_config_or_default(config_path)?;
+    let name = name.trim().to_owned();
+    let Some(server) = mcp_config.servers.get_mut(&name) else {
+        if if_exists {
+            return Ok(McpMutationResultDto {
+                status: "noop".to_owned(),
+                scope: scope.label().to_owned(),
+                config_path: config_path.display().to_string(),
+                name: Some(name),
+                enabled: Some(enabled),
+            });
+        }
+        return Err(anyhow!(
+            "No MCP server named `{}` exists in {}",
+            name,
+            config_path.display()
+        ));
+    };
+
+    let status = if server.enabled == enabled {
+        "noop"
+    } else {
+        server.enabled = enabled;
+        mcp_config.save(config_path)?;
+        if enabled {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    };
+
+    Ok(McpMutationResultDto {
+        status: status.to_owned(),
+        scope: scope.label().to_owned(),
+        config_path: config_path.display().to_string(),
+        name: Some(name),
+        enabled: Some(enabled),
+    })
+}
+
+fn remove_managed_mcp_server_at_path(
+    config_path: &Path,
+    scope: ConfigScopeDto,
+    name: &str,
+    if_exists: bool,
+) -> Result<McpMutationResultDto> {
+    let mut mcp_config = load_managed_mcp_config_or_default(config_path)?;
+    let name = name.trim().to_owned();
+    let removed = mcp_config.servers.remove(&name);
+    if removed.is_none() && !if_exists {
+        return Err(anyhow!(
+            "No MCP server named `{}` exists in {}",
+            name,
+            config_path.display()
+        ));
+    }
+    mcp_config.save(config_path)?;
+    Ok(McpMutationResultDto {
+        status: if removed.is_some() { "removed" } else { "noop" }.to_owned(),
+        scope: scope.label().to_owned(),
+        config_path: config_path.display().to_string(),
+        name: Some(name),
+        enabled: None,
+    })
+}
+
+fn reset_managed_mcp_config_at_path(
+    config_path: &Path,
+    scope: ConfigScopeDto,
+    if_exists: bool,
+) -> Result<McpMutationResultDto> {
+    let status = if config_path.exists() {
+        std::fs::remove_file(config_path)?;
+        "reset"
+    } else if if_exists {
+        "noop"
+    } else {
+        return Err(anyhow!(
+            "Managed MCP config {} does not exist",
+            config_path.display()
+        ));
+    };
+
+    Ok(McpMutationResultDto {
+        status: status.to_owned(),
+        scope: scope.label().to_owned(),
+        config_path: config_path.display().to_string(),
+        name: None,
+        enabled: None,
+    })
+}
+
+fn export_session_bundle_for_store(
+    store: &SessionStore,
+    session_id: Uuid,
+    format: SessionExportFormatDto,
+) -> Result<SessionExportResultDto> {
+    let path = match format {
+        SessionExportFormatDto::Json => store.export_session_bundle_json(session_id, None),
+        SessionExportFormatDto::Ndjson => store.export_session(session_id, None),
+    }?;
+
+    Ok(SessionExportResultDto {
+        session_id: session_id.to_string(),
+        format: format.label().to_owned(),
+        path: path.display().to_string(),
+    })
 }
 
 fn usage_to_dto(usage: &UsageSummary) -> UsageDto {
@@ -1689,8 +2649,12 @@ fn as_error<T>(result: Result<T>) -> std::result::Result<T, String> {
 }
 
 #[tauri::command]
-async fn init_app(state: State<'_, AppState>) -> std::result::Result<InitResultDto, String> {
+async fn init_app(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> std::result::Result<InitResultDto, String> {
     let runtime = state.runtime.lock().await;
+    emit_runtime_status(&app, &runtime.config);
     let sessions_count = runtime
         .session_store
         .list_active_sessions()
@@ -1923,6 +2887,125 @@ async fn get_provider_info(
 }
 
 #[tauri::command]
+async fn get_runtime_status(
+    state: State<'_, AppState>,
+) -> std::result::Result<UiRuntimeStatusSnapshot, String> {
+    let runtime = state.runtime.lock().await;
+    Ok(runtime_status_snapshot_from_config(&runtime.config))
+}
+
+#[tauri::command]
+async fn run_doctor_report(
+    state: State<'_, AppState>,
+    probe_network: bool,
+    probe_provider: bool,
+    include_env_providers: bool,
+) -> std::result::Result<GuiDoctorReportDto, String> {
+    let runtime = state.runtime.lock().await;
+    build_gui_doctor_report(
+        &runtime.config,
+        probe_network,
+        probe_provider,
+        include_env_providers,
+    )
+    .await
+    .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+async fn export_session_bundle(
+    state: State<'_, AppState>,
+    session_id: String,
+    format: SessionExportFormatDto,
+) -> std::result::Result<SessionExportResultDto, String> {
+    let runtime = state.runtime.lock().await;
+    let session_id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
+    export_session_bundle_for_store(&runtime.session_store, session_id, format)
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+async fn list_mcp_servers(
+    state: State<'_, AppState>,
+    scope: ConfigScopeDto,
+    project_path: Option<String>,
+    connect: bool,
+    include_disabled: bool,
+) -> std::result::Result<McpServerListDto, String> {
+    let runtime = state.runtime.lock().await;
+    build_mcp_server_list(
+        &runtime.config,
+        scope,
+        project_path.as_deref(),
+        connect,
+        include_disabled,
+    )
+    .await
+    .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+async fn save_mcp_server(
+    state: State<'_, AppState>,
+    request: McpServerUpsertRequestDto,
+) -> std::result::Result<McpMutationResultDto, String> {
+    let runtime = state.runtime.lock().await;
+    let config_path = mcp_config_path_for_scope(
+        &runtime.config,
+        request.scope,
+        request.project_path.as_deref(),
+    )
+    .map_err(|error| format!("{error:#}"))?;
+    save_managed_mcp_server_at_path(&config_path, request.scope, &request)
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+async fn toggle_mcp_server(
+    state: State<'_, AppState>,
+    scope: ConfigScopeDto,
+    project_path: Option<String>,
+    name: String,
+    enabled: bool,
+    if_exists: bool,
+) -> std::result::Result<McpMutationResultDto, String> {
+    let runtime = state.runtime.lock().await;
+    let config_path = mcp_config_path_for_scope(&runtime.config, scope, project_path.as_deref())
+        .map_err(|error| format!("{error:#}"))?;
+    toggle_managed_mcp_server_at_path(&config_path, scope, &name, enabled, if_exists)
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+async fn remove_mcp_server(
+    state: State<'_, AppState>,
+    scope: ConfigScopeDto,
+    project_path: Option<String>,
+    name: String,
+    if_exists: bool,
+) -> std::result::Result<McpMutationResultDto, String> {
+    let runtime = state.runtime.lock().await;
+    let config_path = mcp_config_path_for_scope(&runtime.config, scope, project_path.as_deref())
+        .map_err(|error| format!("{error:#}"))?;
+    remove_managed_mcp_server_at_path(&config_path, scope, &name, if_exists)
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+async fn reset_mcp_servers(
+    state: State<'_, AppState>,
+    scope: ConfigScopeDto,
+    project_path: Option<String>,
+    if_exists: bool,
+) -> std::result::Result<McpMutationResultDto, String> {
+    let runtime = state.runtime.lock().await;
+    let config_path = mcp_config_path_for_scope(&runtime.config, scope, project_path.as_deref())
+        .map_err(|error| format!("{error:#}"))?;
+    reset_managed_mcp_config_at_path(&config_path, scope, if_exists)
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
 async fn get_settings(state: State<'_, AppState>) -> std::result::Result<FullSettingsDto, String> {
     let runtime = state.runtime.lock().await;
     Ok(full_settings_from_runtime(
@@ -1933,6 +3016,7 @@ async fn get_settings(state: State<'_, AppState>) -> std::result::Result<FullSet
 
 #[tauri::command]
 async fn update_provider(
+    app: AppHandle,
     state: State<'_, AppState>,
     request: UpdateProviderRequest,
 ) -> std::result::Result<(), String> {
@@ -2031,6 +3115,7 @@ async fn update_provider(
     let selected_provider = runtime.config.provider.clone();
     store_provider_selection(&mut runtime, &selected_provider);
     persist_runtime_files(&runtime).map_err(|error| format!("{error:#}"))?;
+    emit_runtime_status(&app, &runtime.config);
     Ok(())
 }
 
@@ -2176,6 +3261,7 @@ async fn list_provider_configs(
 
 #[tauri::command]
 async fn save_provider_config(
+    app: AppHandle,
     state: State<'_, AppState>,
     config: ProviderConfig,
     set_active: bool,
@@ -2215,11 +3301,13 @@ async fn save_provider_config(
     }
 
     persist_runtime_files(&runtime).map_err(|error| format!("{error:#}"))?;
+    emit_runtime_status(&app, &runtime.config);
     Ok(())
 }
 
 #[tauri::command]
 async fn delete_provider_config(
+    app: AppHandle,
     state: State<'_, AppState>,
     name: String,
 ) -> std::result::Result<(), String> {
@@ -2258,11 +3346,13 @@ async fn delete_provider_config(
     }
 
     persist_runtime_files(&runtime).map_err(|error| format!("{error:#}"))?;
+    emit_runtime_status(&app, &runtime.config);
     Ok(())
 }
 
 #[tauri::command]
 async fn set_active_provider(
+    app: AppHandle,
     state: State<'_, AppState>,
     name: String,
 ) -> std::result::Result<(), String> {
@@ -2281,11 +3371,13 @@ async fn set_active_provider(
     let selected_provider = runtime.config.provider.clone();
     store_provider_selection(&mut runtime, &selected_provider);
     persist_runtime_files(&runtime).map_err(|error| format!("{error:#}"))?;
+    emit_runtime_status(&app, &runtime.config);
     Ok(())
 }
 
 #[tauri::command]
 async fn switch_profile(
+    app: AppHandle,
     state: State<'_, AppState>,
     provider_name: String,
     profile_name: Option<String>,
@@ -2319,6 +3411,7 @@ async fn switch_profile(
     }
 
     persist_runtime_files(&runtime).map_err(|error| format!("{error:#}"))?;
+    emit_runtime_status(&app, &runtime.config);
     Ok(())
 }
 
@@ -2373,6 +3466,14 @@ pub fn run() {
             send_prompt,
             cancel_prompt,
             get_provider_info,
+            get_runtime_status,
+            run_doctor_report,
+            export_session_bundle,
+            list_mcp_servers,
+            save_mcp_server,
+            toggle_mcp_server,
+            remove_mcp_server,
+            reset_mcp_servers,
             create_session,
             get_settings,
             update_provider,
@@ -2398,7 +3499,61 @@ pub fn run() {
 mod tests {
     use super::*;
     use chrono::Utc;
+    use serde_json::json;
+    use std::collections::BTreeMap;
+    use std::fs;
+    use tempfile::tempdir;
     use uuid::Uuid;
+
+    fn test_runtime_config(project_dir: &Path, profile_dir: &Path) -> RuntimeConfig {
+        load_runtime_config(
+            Some(project_dir.to_path_buf()),
+            Some(profile_dir.to_path_buf()),
+            None,
+            PermissionMode::AcceptEdits,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            8,
+            ProviderOverrides {
+                provider: Some("glm-coding".to_owned()),
+                base_url: Some("https://open.bigmodel.cn/api/anthropic".to_owned()),
+                api_key: Some("secret".to_owned()),
+                model: Some("glm-5.1".to_owned()),
+                protocol: Some(ProviderProtocol::Anthropic),
+            },
+            RuntimeOverrides {
+                session_name: Some("Parity".to_owned()),
+                settings_files: Vec::new(),
+                show_setting_sources: true,
+                allowed_tools: vec!["read_file".to_owned()],
+                disallowed_tools: vec!["bash_command".to_owned()],
+                effort: Some("medium".to_owned()),
+                fallback_model: Some("glm-5-turbo".to_owned()),
+            },
+        )
+        .expect("config should load")
+    }
+
+    fn sample_stdio_mcp_server(name: &str, enabled: bool, command: &str) -> McpServerConfig {
+        McpServerConfig {
+            name: name.to_owned(),
+            enabled,
+            transport: McpTransportConfig::Stdio {
+                command: command.to_owned(),
+                args: vec!["--serve".to_owned()],
+                cwd: None,
+                env: BTreeMap::new(),
+            },
+            capabilities: rc_mcp::McpCapabilityMatrix::default(),
+            startup_timeout_secs: Some(5),
+            request_timeout_secs: Some(30),
+            metadata: BTreeMap::new(),
+        }
+    }
 
     #[test]
     fn anthropic_base_url_is_normalized_from_gui_input() {
@@ -2457,6 +3612,172 @@ mod tests {
         assert_eq!(config.name, "minimax");
         assert_eq!(config.api_key.as_deref(), Some("token"));
         assert_eq!(config.model.as_deref(), Some("minimax-m2.7"));
+    }
+
+    #[test]
+    fn runtime_status_snapshot_includes_auth_and_tool_filters() {
+        let temp = std::env::temp_dir().join(format!("remote-code-gui-status-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).expect("temp dir should work");
+        let config = test_runtime_config(&temp, &temp.join(".remote-code-rust"));
+
+        let snapshot = runtime_status_snapshot_from_config(&config);
+        assert_eq!(snapshot.provider.name, "glm-coding");
+        assert_eq!(snapshot.provider.effort.as_deref(), Some("medium"));
+        assert_eq!(snapshot.permission_mode, "acceptEdits");
+        assert_eq!(snapshot.allowed_tools, vec!["read_file"]);
+        assert_eq!(snapshot.disallowed_tools, vec!["bash_command"]);
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn build_gui_doctor_report_counts_managed_mcp_servers() {
+        let temp = tempdir().expect("tempdir should work");
+        let project_dir = temp.path().join("project");
+        let profile_dir = temp.path().join(".remote-code-rust");
+        fs::create_dir_all(&project_dir).expect("project dir should exist");
+
+        let config = test_runtime_config(&project_dir, &profile_dir);
+
+        let mut profile_mcp = McpConfig::default();
+        profile_mcp.servers.insert(
+            "profile-demo".to_owned(),
+            sample_stdio_mcp_server("profile-demo", true, "profile-cmd"),
+        );
+        profile_mcp
+            .save(profile_dir.join(DEFAULT_MCP_CONFIG_FILE))
+            .expect("profile MCP config should save");
+
+        let mut project_mcp = McpConfig::default();
+        project_mcp.servers.insert(
+            "project-demo".to_owned(),
+            sample_stdio_mcp_server("project-demo", true, "project-cmd"),
+        );
+        project_mcp
+            .save(project_dir.join(DEFAULT_MCP_CONFIG_FILE))
+            .expect("project MCP config should save");
+
+        let report = build_gui_doctor_report(&config, false, false, false)
+            .await
+            .expect("doctor report should build");
+
+        assert!(report.ok);
+        assert_eq!(report.extensions.managed_mcp_servers, 2);
+        assert_eq!(report.extensions.plugin_mcp_servers, 0);
+        assert!(report.network.is_empty());
+        assert!(report.env_providers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn managed_mcp_helpers_round_trip_and_reset() {
+        let temp = tempdir().expect("tempdir should work");
+        let project_dir = temp.path().join("project");
+        let profile_dir = temp.path().join(".remote-code-rust");
+        fs::create_dir_all(&project_dir).expect("project dir should exist");
+
+        let config = test_runtime_config(&project_dir, &profile_dir);
+        let config_path =
+            mcp_config_path_for_scope(&config, ConfigScopeDto::Profile, None).expect("path");
+
+        let request = McpServerUpsertRequestDto {
+            scope: ConfigScopeDto::Profile,
+            project_path: None,
+            name: "demo".to_owned(),
+            transport: "stdio".to_owned(),
+            command: Some("demo-mcp".to_owned()),
+            url: None,
+            args: vec!["serve".to_owned()],
+            cwd: Some(project_dir.display().to_string()),
+            env: BTreeMap::from([("TOKEN".to_owned(), "secret".to_owned())]),
+            headers: BTreeMap::new(),
+            metadata: BTreeMap::from([("team".to_owned(), "gui".to_owned())]),
+            disabled: false,
+            startup_timeout_secs: Some(10),
+            request_timeout_secs: Some(20),
+        };
+
+        let saved =
+            save_managed_mcp_server_at_path(&config_path, ConfigScopeDto::Profile, &request)
+                .expect("save should succeed");
+        assert_eq!(saved.status, "created");
+        assert_eq!(saved.enabled, Some(true));
+
+        let listed = build_mcp_server_list(&config, ConfigScopeDto::Profile, None, false, true)
+            .await
+            .expect("list should succeed");
+        assert_eq!(listed.servers.len(), 1);
+        assert_eq!(listed.servers[0].name, "demo");
+        assert_eq!(listed.servers[0].command.as_deref(), Some("demo-mcp"));
+        assert_eq!(listed.servers[0].env_keys, vec!["TOKEN"]);
+        assert_eq!(listed.servers[0].metadata_keys, vec!["team"]);
+
+        let toggled = toggle_managed_mcp_server_at_path(
+            &config_path,
+            ConfigScopeDto::Profile,
+            "demo",
+            false,
+            false,
+        )
+        .expect("toggle should succeed");
+        assert_eq!(toggled.status, "disabled");
+        assert_eq!(toggled.enabled, Some(false));
+
+        let enabled_only =
+            build_mcp_server_list(&config, ConfigScopeDto::Profile, None, false, false)
+                .await
+                .expect("filtered list should succeed");
+        assert!(enabled_only.servers.is_empty());
+
+        let removed =
+            remove_managed_mcp_server_at_path(&config_path, ConfigScopeDto::Profile, "demo", false)
+                .expect("remove should succeed");
+        assert_eq!(removed.status, "removed");
+
+        save_managed_mcp_server_at_path(&config_path, ConfigScopeDto::Profile, &request)
+            .expect("save after remove should succeed");
+        let reset = reset_managed_mcp_config_at_path(&config_path, ConfigScopeDto::Profile, false)
+            .expect("reset should succeed");
+        assert_eq!(reset.status, "reset");
+        assert!(!config_path.exists());
+    }
+
+    #[test]
+    fn export_session_bundle_helper_writes_requested_formats() {
+        let temp = tempdir().expect("tempdir should work");
+        let paths = AppPaths::discover(Some(temp.path().join(".remote-code-rust"))).expect("paths");
+        let store = SessionStore::open(paths).expect("store should open");
+        let session_id = Uuid::new_v4();
+        store
+            .ensure_session(
+                session_id,
+                temp.path(),
+                "glm-coding",
+                Some("glm-5.1"),
+                Some("Export parity"),
+            )
+            .expect("session should be created");
+        store
+            .append_named_event(
+                session_id,
+                "result",
+                json!({
+                    "is_error": false,
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 5, "output_tokens": 8}
+                }),
+            )
+            .expect("event should append");
+
+        let json_export =
+            export_session_bundle_for_store(&store, session_id, SessionExportFormatDto::Json)
+                .expect("json export should succeed");
+        assert!(Path::new(&json_export.path).exists());
+        assert!(json_export.path.ends_with(".json"));
+
+        let ndjson_export =
+            export_session_bundle_for_store(&store, session_id, SessionExportFormatDto::Ndjson)
+                .expect("ndjson export should succeed");
+        assert!(Path::new(&ndjson_export.path).exists());
+        assert!(ndjson_export.path.ends_with(".ndjson"));
     }
 
     #[test]

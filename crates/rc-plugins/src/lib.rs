@@ -482,7 +482,9 @@ pub fn validate_plugin_bundle(plugin: &PluginBundle) -> PluginValidationReport {
     };
 
     if plugin.manifest.name.trim().is_empty() {
-        report.errors.push("plugin name must not be empty".to_owned());
+        report
+            .errors
+            .push("plugin name must not be empty".to_owned());
     }
     if plugin.manifest.version.trim().is_empty() {
         report
@@ -521,16 +523,18 @@ pub fn validate_plugin_bundle(plugin: &PluginBundle) -> PluginValidationReport {
     if let Some(hooks_path) = plugin.hooks_config_path()
         && !hooks_path.exists()
     {
-        report
-            .errors
-            .push(format!("hooks config {} does not exist", hooks_path.display()));
+        report.errors.push(format!(
+            "hooks config {} does not exist",
+            hooks_path.display()
+        ));
     }
     if let Some(app_path) = plugin.app_manifest_path()
         && !app_path.exists()
     {
-        report
-            .errors
-            .push(format!("app manifest {} does not exist", app_path.display()));
+        report.errors.push(format!(
+            "app manifest {} does not exist",
+            app_path.display()
+        ));
     }
     if let Some(mcp_path) = plugin.mcp_config_path() {
         if !mcp_path.exists() {
@@ -1174,7 +1178,11 @@ mod tests {
         let plugin = ok(load_plugin_from_root(&root));
         let report = validate_plugin_bundle(&plugin);
         assert_eq!(plugin.manifest.name, "bundle");
-        assert!(report.errors.is_empty(), "validation errors: {:?}", report.errors);
+        assert!(
+            report.errors.is_empty(),
+            "validation errors: {:?}",
+            report.errors
+        );
         assert_eq!(report.bundled_skills, 1);
         assert!(report.has_runtime);
     }

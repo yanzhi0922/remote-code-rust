@@ -551,9 +551,8 @@ impl McpConfig {
     }
 
     pub fn to_toml_string(&self) -> Result<String, McpConfigError> {
-        toml::to_string_pretty(&RawMcpConfig::from(self)).map_err(|source| {
-            McpConfigError::Serialize { source }
-        })
+        toml::to_string_pretty(&RawMcpConfig::from(self))
+            .map_err(|source| McpConfigError::Serialize { source })
     }
 
     pub fn save(&self, path: impl AsRef<Path>) -> Result<(), McpConfigError> {
@@ -1178,7 +1177,10 @@ mod tests {
         let loaded = McpConfig::load(&path).unwrap_or_else(|error| panic!("load failed: {error}"));
         assert_eq!(loaded.servers.len(), 2);
         assert_eq!(loaded.servers["demo"].transport.kind(), McpTransport::Stdio);
-        assert_eq!(loaded.servers["remote"].transport.kind(), McpTransport::Http);
+        assert_eq!(
+            loaded.servers["remote"].transport.kind(),
+            McpTransport::Http
+        );
     }
 
     #[tokio::test]

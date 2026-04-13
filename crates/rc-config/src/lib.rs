@@ -711,6 +711,7 @@ fn effort_to_thinking_budget(effort: &str) -> Option<u32> {
 /// | `ALIYUN_CODING_PLAN_API_KEY`     | `aliyun-coding`      | `anthropic` | `https://coding.dashscope.aliyuncs.com/apps/anthropic`                | `qwen3.6-plus`     |
 /// | `TENCENT_CODING_PLAN_API_KEY`    | `tencent-coding`     | `anthropic` | `https://api.lkeap.cloud.tencent.com/coding/anthropic`                | `tc-code-latest`   |
 /// | `QIANFAN_CODING_PLAN_API_KEY`    | `qianfan-coding`     | `anthropic` | `https://qianfan.baidubce.com/anthropic/coding`                       | `qianfan-code-latest` |
+/// | `MINIMAX_TOKEN_PLAN_API_KEY`     | `minimax-token-plan` | `anthropic` | `https://api.minimaxi.com/anthropic`                                  | `minimax-m2.7`     |
 /// | `MINIMAX_CODING_PLAN_API_KEY`    | `minimax-coding`     | `openai`    | `https://api.minimax.chat/v1`                                         | `MiniMax-M2.7`     |
 /// | `KIMI_CODING_PLAN_API_KEY`       | `kimi-coding`        | `openai`    | `https://api.moonshot.cn/kimi-component/ai_coding`                    | `kimi-k2.5`        |
 /// | `VOLCENGINE_CODING_PLAN_API_KEY` | `volcengine-coding`  | `openai`    | `https://ark.cn-beijing.volces.com/api/v3`                            | `doubao-seed-1-5`  |
@@ -888,6 +889,13 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
         });
     }
 
+    // MiniMax Token Plan — Anthropic-compatible endpoint
+    // Current endpoint/provider shape used by the hosted Token Plan product.
+    let mut lookup = |keys: &[&str]| read_env_first(keys);
+    if let Some(provider) = discover_minimax_token_plan_provider(&mut lookup) {
+        providers.push(provider);
+    }
+
     // MiniMax Token Plan — OpenAI-compatible endpoint
     // Source: https://platform.minimaxi.com/docs/token-plan/intro
     if let Some(api_key) = read_env_first(&["MINIMAX_CODING_PLAN_API_KEY"]) {
@@ -1039,6 +1047,33 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
     providers
 }
 
+fn discover_minimax_token_plan_provider<F>(lookup: &mut F) -> Option<ProviderConfig>
+where
+    F: FnMut(&[&str]) -> Option<String>,
+{
+    let api_key = lookup(&["MINIMAX_TOKEN_PLAN_API_KEY"])?;
+    let base_url = normalize_base_url(
+        lookup(&["MINIMAX_TOKEN_PLAN_BASE_URL"])
+            .or_else(|| Some("https://api.minimaxi.com/anthropic".to_owned())),
+        ProviderProtocol::Anthropic,
+    );
+    Some(ProviderConfig {
+        name: "minimax-token-plan".to_owned(),
+        base_url,
+        api_key: Some(api_key),
+        model: lookup(&["MINIMAX_TOKEN_PLAN_MODEL"]).or(Some("minimax-m2.7".to_owned())),
+        protocol: ProviderProtocol::Anthropic,
+        timeout_ms: 600_000,
+        max_output_tokens: 8_192,
+        max_retries: default_provider_max_retries(),
+        retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+        retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+        respect_retry_after: default_provider_respect_retry_after(),
+        request_header_overrides: BTreeMap::new(),
+        thinking_budget: None,
+    })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LegacyImportSummary {
     pub source_dir: PathBuf,
@@ -1169,9 +1204,13 @@ fn copy_directory(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::collections::HashMap;
     use std::fs;
 
-    use super::{load_hooks_file, load_settings_hooks, normalize_base_url, normalize_protocol};
+    use super::{
+        discover_minimax_token_plan_provider, load_hooks_file, load_settings_hooks,
+        normalize_base_url, normalize_protocol,
+    };
     use rc_core::HookEvent;
     use rc_core::ProviderProtocol;
     use tempfile::tempdir;
@@ -1274,5 +1313,27 @@ mod tests {
 
         let hooks = load_settings_hooks(&path).expect("settings hooks should load");
         assert_eq!(hooks, BTreeMap::new());
+    }
+
+    #[test]
+    fn minimax_token_plan_env_provider_is_discovered_as_anthropic() {
+        let values = HashMap::from([
+            ("MINIMAX_TOKEN_PLAN_API_KEY", "secret".to_owned()),
+            (
+                "MINIMAX_TOKEN_PLAN_BASE_URL",
+                "https://api.minimaxi.com/anthropic".to_owned(),
+            ),
+            ("MINIMAX_TOKEN_PLAN_MODEL", "minimax-m2.7".to_owned()),
+        ]);
+        let provider = discover_minimax_token_plan_provider(&mut |keys| {
+            keys.iter().find_map(|key| values.get(*key).cloned())
+        })
+        .expect("minimax token plan provider should be discovered");
+        assert_eq!(provider.protocol, ProviderProtocol::Anthropic);
+        assert_eq!(
+            provider.base_url.as_deref(),
+            Some("https://api.minimaxi.com/anthropic/v1/messages")
+        );
+        assert_eq!(provider.model.as_deref(), Some("minimax-m2.7"));
     }
 }

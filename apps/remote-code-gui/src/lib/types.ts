@@ -5,6 +5,187 @@ export interface ProviderInfo {
   base_url: string | null;
 }
 
+export interface RuntimeProviderStatus {
+  name: string;
+  model: string | null;
+  protocol: string;
+  base_url: string | null;
+  auth_source: string | null;
+  effort: string | null;
+  fallback_model: string | null;
+}
+
+export interface RuntimeStatusInfo {
+  session_name: string | null;
+  provider: RuntimeProviderStatus;
+  permission_mode: string;
+  setting_sources: string[];
+  allowed_tools: string[];
+  disallowed_tools: string[];
+}
+
+export type ConfigScope = 'profile' | 'project';
+export type SessionExportFormat = 'json' | 'ndjson';
+
+export interface SessionExportResult {
+  session_id: string;
+  format: SessionExportFormat;
+  path: string;
+}
+
+export type DoctorProbeOutcome =
+  | 'reachable'
+  | 'auth_rejected'
+  | 'rate_limited'
+  | 'server_error'
+  | 'transport_error';
+
+export interface DoctorProbeInfo {
+  label: string;
+  url: string;
+  outcome: DoctorProbeOutcome;
+  status_code: number | null;
+  latency_ms: number;
+  detail: string;
+}
+
+export interface DoctorRuntimeInfo {
+  version: string;
+  cwd: string;
+  profile_dir: string;
+  session_id: string;
+  session_name: string | null;
+  permission_mode: string;
+  setting_sources: string[];
+  settings_files: string[];
+}
+
+export interface DoctorProviderInfo {
+  name: string;
+  protocol: string;
+  base_url: string | null;
+  model: string | null;
+  api_key_present: boolean;
+  auth_source: string | null;
+  effort: string | null;
+  fallback_model: string | null;
+  context_window_tokens: number;
+  output_reserve_tokens: number;
+  multimodal: boolean;
+  reasoning: boolean;
+  validation_ok: boolean;
+  validation_issues: string[];
+  probe: DoctorProbeInfo | null;
+}
+
+export interface DoctorToolsInfo {
+  builtin_tools: number;
+  allowed_tools: string[];
+  disallowed_tools: string[];
+}
+
+export interface DoctorRuleSourceInfo {
+  source: string;
+  count: number;
+}
+
+export interface DoctorPermissionsInfo {
+  layered_rules: number;
+  rule_sources: DoctorRuleSourceInfo[];
+}
+
+export interface DoctorExtensionsInfo {
+  skills: number;
+  plugins: number;
+  disabled_plugins: number;
+  managed_mcp_servers: number;
+  plugin_mcp_servers: number;
+}
+
+export interface DoctorEnvProviderInfo {
+  name: string;
+  protocol: string;
+  base_url: string | null;
+  model: string | null;
+  api_key_present: boolean;
+}
+
+export interface DoctorReportInfo {
+  ok: boolean;
+  runtime: DoctorRuntimeInfo;
+  provider: DoctorProviderInfo;
+  tools: DoctorToolsInfo;
+  permissions: DoctorPermissionsInfo;
+  extensions: DoctorExtensionsInfo;
+  network: DoctorProbeInfo[];
+  env_providers: DoctorEnvProviderInfo[];
+  issues: string[];
+  warnings: string[];
+}
+
+export interface McpToolInfo {
+  name: string;
+  description: string | null;
+}
+
+export interface McpServerLiveInfo {
+  status: string;
+  protocol_version: string | null;
+  peer_name: string | null;
+  peer_version: string | null;
+  tool_count: number;
+  tools: McpToolInfo[];
+  error: string | null;
+}
+
+export interface McpServerInfo {
+  name: string;
+  enabled: boolean;
+  transport: string;
+  config_path: string;
+  command: string | null;
+  url: string | null;
+  args: string[];
+  cwd: string | null;
+  env_keys: string[];
+  metadata_keys: string[];
+  startup_timeout_secs: number | null;
+  request_timeout_secs: number | null;
+  live: McpServerLiveInfo | null;
+}
+
+export interface McpServerListInfo {
+  scope: ConfigScope;
+  config_path: string;
+  warnings: string[];
+  servers: McpServerInfo[];
+}
+
+export interface McpMutationResult {
+  status: string;
+  scope: ConfigScope;
+  config_path: string;
+  name: string | null;
+  enabled: boolean | null;
+}
+
+export interface McpServerDraft {
+  scope: ConfigScope;
+  project_path?: string | null;
+  name: string;
+  transport: 'stdio' | 'http' | 'websocket';
+  command?: string | null;
+  url?: string | null;
+  args?: string[];
+  cwd?: string | null;
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+  metadata?: Record<string, string>;
+  disabled?: boolean;
+  startup_timeout_secs?: number | null;
+  request_timeout_secs?: number | null;
+}
+
 export interface SessionSummary {
   id: string;
   title: string;

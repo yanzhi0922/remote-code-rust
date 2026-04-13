@@ -2,8 +2,8 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header::AUTHORIZATION};
 use rc_control_plane::{
     BootstrapClaimRequest, BootstrapClaimResponse, ControlPlaneConfig, ControlPlaneHealth,
-    ControlPlaneService, PairingAcceptRequest, PairingAcceptResponse,
-    PairingOfferCreateRequest, PairingOfferCreateResponse, TrustedDeviceRecord,
+    ControlPlaneService, PairingAcceptRequest, PairingAcceptResponse, PairingOfferCreateRequest,
+    PairingOfferCreateResponse, TrustedDeviceRecord,
 };
 use rc_runner::ListResponse;
 use serde::de::DeserializeOwned;
@@ -151,10 +151,12 @@ async fn pairing_offer_accept_adds_second_device_and_persists_across_restart() {
     assert_eq!(offer_response.status(), StatusCode::CREATED);
     let offer: PairingOfferCreateResponse = read_json(offer_response).await;
     assert_eq!(offer.device_name, "iPhone");
-    assert!(offer
-        .pairing_url
-        .as_deref()
-        .is_some_and(|url| url.contains("pairing_offer=")));
+    assert!(
+        offer
+            .pairing_url
+            .as_deref()
+            .is_some_and(|url| url.contains("pairing_offer="))
+    );
 
     let accept_response = app
         .clone()
@@ -193,5 +195,10 @@ async fn pairing_offer_accept_adds_second_device_and_persists_across_restart() {
     let devices: ListResponse<TrustedDeviceRecord> = read_json(devices_response).await;
     assert_eq!(devices.items.len(), 2);
     assert!(devices.items.iter().any(|device| device.owner));
-    assert!(devices.items.iter().any(|device| device.name == "Travel phone"));
+    assert!(
+        devices
+            .items
+            .iter()
+            .any(|device| device.name == "Travel phone")
+    );
 }

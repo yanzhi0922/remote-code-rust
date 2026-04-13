@@ -2,17 +2,21 @@ import { ArchiveRestore, Check, Eye, EyeOff, Pencil, Plus, Power, Trash2, X } fr
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FullSettings, ModelProfile, ProviderConfig, SessionSummary } from '../../lib/types';
 import { useAppStore } from '../../stores/useAppStore';
+import { McpTab } from './McpTab';
+import { OperationsTab } from './OperationsTab';
 
 interface SettingsPanelProps {
   open: boolean;
   onClose: () => void;
 }
 
-type SettingsTab = 'provider' | 'runtime' | 'archive';
+type SettingsTab = 'provider' | 'runtime' | 'mcp' | 'operations' | 'archive';
 
 const TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: 'provider', label: 'Provider' },
   { key: 'runtime', label: '运行参数' },
+  { key: 'mcp', label: 'MCP' },
+  { key: 'operations', label: '操作面' },
   { key: 'archive', label: '归档' },
 ];
 
@@ -138,6 +142,10 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               <div className="py-10 text-sm text-slate-500">正在加载设置…</div>
             ) : activeTab === 'provider' ? (
               <ProviderTab />
+            ) : activeTab === 'mcp' ? (
+              <McpTab />
+            ) : activeTab === 'operations' ? (
+              <OperationsTab />
             ) : activeTab === 'archive' ? (
               <ArchiveTab />
             ) : (

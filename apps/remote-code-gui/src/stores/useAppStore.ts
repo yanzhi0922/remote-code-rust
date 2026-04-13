@@ -12,6 +12,7 @@ import type {
   ProviderConfig,
   ProviderConfigList,
   ProviderInfo,
+  RuntimeStatusInfo,
   SessionSubtask,
   SessionSummary,
   SubtaskCompletedInfo,
@@ -115,6 +116,7 @@ interface AppState {
   listenersRegistered: boolean;
 
   provider: ProviderInfo | null;
+  runtimeStatus: RuntimeStatusInfo | null;
 
   projects: ProjectInfo[];
   activeProjectPath: string | null;
@@ -157,6 +159,7 @@ interface AppState {
   sendMessage: (text: string) => Promise<void>;
   cancelPrompt: (sessionId: string) => Promise<void>;
   refreshProviderInfo: () => Promise<void>;
+  refreshRuntimeStatus: () => Promise<void>;
   refreshProjects: () => Promise<void>;
   addProject: (path: string) => Promise<void>;
   removeProject: (path: string) => Promise<void>;
@@ -352,6 +355,9 @@ async function registerEventListeners() {
         },
       }));
     }),
+    tauri.onRuntimeStatus((event) => {
+      useAppStore.setState({ runtimeStatus: event.payload });
+    }),
   ]);
 }
 
@@ -360,6 +366,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   initError: null,
   listenersRegistered: false,
   provider: null,
+  runtimeStatus: null,
   projects: [],
   activeProjectPath: null,
   sessions: [],
@@ -405,6 +412,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         get().loadArchivedSessions(),
         get().loadSettings(),
         get().loadProviderConfigs(),
+        get().refreshRuntimeStatus(),
       ]);
 
       if (get().activeSessionId) {
@@ -588,6 +596,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  refreshRuntimeStatus: async () => {
+    try {
+      const runtimeStatus = await tauri.getRuntimeStatus();
+      set({ runtimeStatus });
+    } catch {
+      // Ignore non-fatal runtime status refresh failures.
+    }
+  },
+
   refreshProjects: async () => {
     try {
       const projects = await tauri.listProjects();
@@ -638,6 +655,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     await Promise.all([
       get().loadSettings(),
       get().refreshProviderInfo(),
+      get().refreshRuntimeStatus(),
       get().loadProviderConfigs(),
     ]);
   },
@@ -663,6 +681,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     await Promise.all([
       get().loadProviderConfigs(),
       get().refreshProviderInfo(),
+      get().refreshRuntimeStatus(),
       get().loadSettings(),
     ]);
   },
@@ -672,6 +691,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     await Promise.all([
       get().loadProviderConfigs(),
       get().refreshProviderInfo(),
+      get().refreshRuntimeStatus(),
       get().loadSettings(),
     ]);
   },
@@ -681,6 +701,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     await Promise.all([
       get().loadProviderConfigs(),
       get().refreshProviderInfo(),
+      get().refreshRuntimeStatus(),
       get().loadSettings(),
     ]);
   },
@@ -690,6 +711,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     await Promise.all([
       get().loadProviderConfigs(),
       get().refreshProviderInfo(),
+      get().refreshRuntimeStatus(),
       get().loadSettings(),
     ]);
   },

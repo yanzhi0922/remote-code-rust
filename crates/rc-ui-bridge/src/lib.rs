@@ -82,6 +82,27 @@ pub struct UiTaskNode {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UiProviderStatusSnapshot {
+    pub name: String,
+    pub model: Option<String>,
+    pub protocol: String,
+    pub base_url: Option<String>,
+    pub auth_source: Option<String>,
+    pub effort: Option<String>,
+    pub fallback_model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UiRuntimeStatusSnapshot {
+    pub session_name: Option<String>,
+    pub provider: UiProviderStatusSnapshot,
+    pub permission_mode: String,
+    pub setting_sources: Vec<String>,
+    pub allowed_tools: Vec<String>,
+    pub disallowed_tools: Vec<String>,
+}
+
 // ---------------------------------------------------------------------------
 // UI Events — the universal language between core and frontends
 // ---------------------------------------------------------------------------
@@ -230,6 +251,11 @@ pub enum UiEvent {
     Status {
         /// Status message text.
         message: String,
+    },
+    /// Snapshot of the active runtime/provider/permission status.
+    StatusSnapshot {
+        /// Shared status surface used by CLI, GUI, and remote consumers.
+        snapshot: UiRuntimeStatusSnapshot,
     },
     /// Provider is thinking / processing.
     Thinking {
@@ -579,6 +605,38 @@ mod tests {
             assert!((turn_cost_usd - 0.003).abs() < 0.0001);
         } else {
             panic!("Expected CostUpdate variant");
+        }
+    }
+
+    #[test]
+    fn status_snapshot_event_round_trips() {
+        let event = UiEvent::StatusSnapshot {
+            snapshot: UiRuntimeStatusSnapshot {
+                session_name: Some("Investigate parity".to_owned()),
+                provider: UiProviderStatusSnapshot {
+                    name: "glm-coding".to_owned(),
+                    model: Some("glm-5.1".to_owned()),
+                    protocol: "anthropic".to_owned(),
+                    base_url: Some("https://open.bigmodel.cn/api/anthropic/v1/messages".to_owned()),
+                    auth_source: Some("env:REMOTE_CODE_API_KEY".to_owned()),
+                    effort: Some("medium".to_owned()),
+                    fallback_model: Some("glm-5-turbo".to_owned()),
+                },
+                permission_mode: "default".to_owned(),
+                setting_sources: vec!["env:REMOTE_CODE_MODEL".to_owned()],
+                allowed_tools: vec!["read_file".to_owned()],
+                disallowed_tools: vec!["bash_command".to_owned()],
+            },
+        };
+        let json = serde_json::to_string(&event).expect("serialize should not fail");
+        let parsed: UiEvent = serde_json::from_str(&json).expect("deserialize should not fail");
+        match parsed {
+            UiEvent::StatusSnapshot { snapshot } => {
+                assert_eq!(snapshot.provider.name, "glm-coding");
+                assert_eq!(snapshot.allowed_tools, vec!["read_file"]);
+                assert_eq!(snapshot.disallowed_tools, vec!["bash_command"]);
+            }
+            _ => panic!("Expected StatusSnapshot variant"),
         }
     }
 

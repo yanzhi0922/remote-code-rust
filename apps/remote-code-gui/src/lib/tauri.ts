@@ -2,12 +2,17 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type EventCallback, type UnlistenFn } from '@tauri-apps/api/event';
 import type {
   BatchProgressInfo,
+  ConfigScope,
   ConversationEntry,
   ContextCompactedInfo,
   ContextOverflowInfo,
   ContextUsageInfo,
+  DoctorReportInfo,
   FullSettings,
   InitResult,
+  McpMutationResult,
+  McpServerDraft,
+  McpServerListInfo,
   PermissionDecisionInfo,
   PermissionRequestInfo,
   ProjectInfo,
@@ -15,6 +20,9 @@ import type {
   ProviderConfig,
   ProviderConfigList,
   ProviderInfo,
+  RuntimeStatusInfo,
+  SessionExportFormat,
+  SessionExportResult,
   SessionSummary,
   SessionSubtask,
   SubtaskCompletedInfo,
@@ -56,6 +64,89 @@ export function createSession(title?: string, projectPath?: string): Promise<str
 
 export function getProviderInfo(): Promise<ProviderInfo | null> {
   return invoke<ProviderInfo | null>('get_provider_info');
+}
+
+export function getRuntimeStatus(): Promise<RuntimeStatusInfo> {
+  return invoke<RuntimeStatusInfo>('get_runtime_status');
+}
+
+export function runDoctorReport(
+  probeNetwork = false,
+  probeProvider = false,
+  includeEnvProviders = false,
+): Promise<DoctorReportInfo> {
+  return invoke<DoctorReportInfo>('run_doctor_report', {
+    probeNetwork,
+    probeProvider,
+    includeEnvProviders,
+  });
+}
+
+export function exportSessionBundle(
+  sessionId: string,
+  format: SessionExportFormat,
+): Promise<SessionExportResult> {
+  return invoke<SessionExportResult>('export_session_bundle', { sessionId, format });
+}
+
+export function listMcpServers(
+  scope: ConfigScope,
+  projectPath: string | null,
+  connect = false,
+  includeDisabled = true,
+): Promise<McpServerListInfo> {
+  return invoke<McpServerListInfo>('list_mcp_servers', {
+    scope,
+    projectPath: projectPath ?? null,
+    connect,
+    includeDisabled,
+  });
+}
+
+export function saveMcpServer(request: McpServerDraft): Promise<McpMutationResult> {
+  return invoke<McpMutationResult>('save_mcp_server', { request });
+}
+
+export function toggleMcpServer(
+  scope: ConfigScope,
+  projectPath: string | null,
+  name: string,
+  enabled: boolean,
+  ifExists = true,
+): Promise<McpMutationResult> {
+  return invoke<McpMutationResult>('toggle_mcp_server', {
+    scope,
+    projectPath: projectPath ?? null,
+    name,
+    enabled,
+    ifExists,
+  });
+}
+
+export function removeMcpServer(
+  scope: ConfigScope,
+  projectPath: string | null,
+  name: string,
+  ifExists = true,
+): Promise<McpMutationResult> {
+  return invoke<McpMutationResult>('remove_mcp_server', {
+    scope,
+    projectPath: projectPath ?? null,
+    name,
+    ifExists,
+  });
+}
+
+export function resetMcpServers(
+  scope: ConfigScope,
+  projectPath: string | null,
+  ifExists = true,
+): Promise<McpMutationResult> {
+  return invoke<McpMutationResult>('reset_mcp_servers', {
+    scope,
+    projectPath: projectPath ?? null,
+    ifExists,
+  });
 }
 
 export function sendPrompt(prompt: string, sessionId?: string): Promise<string> {
@@ -211,4 +302,10 @@ export function onContextCompacted(
   callback: EventCallback<ContextCompactedInfo>,
 ): Promise<UnlistenFn> {
   return listen<ContextCompactedInfo>('gui://context-compacted', callback);
+}
+
+export function onRuntimeStatus(
+  callback: EventCallback<RuntimeStatusInfo>,
+): Promise<UnlistenFn> {
+  return listen<RuntimeStatusInfo>('gui://runtime-status', callback);
 }

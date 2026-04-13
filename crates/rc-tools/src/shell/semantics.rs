@@ -25,7 +25,11 @@ pub struct ShellCommandAnalysis {
 }
 
 #[must_use]
-pub fn analyze_command(kind: ShellKind, command: &str, explicit_background: bool) -> ShellCommandAnalysis {
+pub fn analyze_command(
+    kind: ShellKind,
+    command: &str,
+    explicit_background: bool,
+) -> ShellCommandAnalysis {
     let normalized = command.trim().to_ascii_lowercase();
     let background = requested_background(explicit_background, kind, command);
     let read_only = is_read_only_command(kind, command);

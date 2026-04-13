@@ -80,9 +80,8 @@ impl LayeredRuleEngine {
     #[must_use]
     pub fn check(&self, request: &PermissionRequest) -> Option<RuleMatch> {
         self.rules.iter().find_map(|rule| {
-            rule_matches_request(&rule.tool_pattern, request).then(|| RuleMatch {
-                rule: rule.clone(),
-            })
+            rule_matches_request(&rule.tool_pattern, request)
+                .then(|| RuleMatch { rule: rule.clone() })
         })
     }
 }

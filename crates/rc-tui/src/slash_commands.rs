@@ -13,6 +13,7 @@ use crate::theme::Theme;
 pub use crate::commands::SlashCommandAction;
 
 /// Handle slash commands via the modular command registry.
+#[allow(clippy::too_many_arguments)]
 pub fn handle_slash_command(
     input: &str,
     config: &RuntimeConfig,

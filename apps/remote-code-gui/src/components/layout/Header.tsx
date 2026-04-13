@@ -5,6 +5,7 @@ import { useAppStore } from '../../stores/useAppStore';
 
 export function Header() {
   const provider = useAppStore((state) => state.provider);
+  const runtimeStatus = useAppStore((state) => state.runtimeStatus);
   const settings = useAppStore((state) => state.settings);
   const sessions = useAppStore((state) => state.sessions);
   const activeSessionId = useAppStore((state) => state.activeSessionId);
@@ -69,16 +70,51 @@ export function Header() {
           <div className="rounded-full border border-[#e2dbcf] bg-[#fbfaf7] px-3 py-1.5 text-slate-600">
             {activeSession
               ? `${activeSession.provider_name}${activeSession.model ? ` / ${activeSession.model}` : ''}`
+              : runtimeStatus
+                ? `${runtimeStatus.provider.name}${runtimeStatus.provider.model ? ` / ${runtimeStatus.provider.model}` : ''}`
+                : provider
+                  ? `${provider.name}${provider.model ? ` / ${provider.model}` : ''}`
+                  : '未连接'}
+          </div>
+          <div className="rounded-full border border-[#e2dbcf] bg-[#fbfaf7] px-3 py-1.5 text-slate-600">
+            {runtimeStatus
+              ? `${runtimeStatus.provider.protocol}${runtimeStatus.provider.effort ? ` · ${runtimeStatus.provider.effort}` : ''}`
               : provider
-                ? `${provider.name}${provider.model ? ` / ${provider.model}` : ''}`
+                ? provider.protocol
                 : '未连接'}
           </div>
           <div className="rounded-full border border-[#e2dbcf] bg-[#fbfaf7] px-3 py-1.5 text-slate-600">
             <span className="inline-flex items-center gap-1.5">
               <ShieldCheck size={14} />
-              {settings?.permission_mode ?? 'default'}
+              {runtimeStatus?.permission_mode ?? settings?.permission_mode ?? 'default'}
             </span>
           </div>
+          {runtimeStatus?.provider.auth_source && (
+            <div className="rounded-full border border-[#e2dbcf] bg-[#fbfaf7] px-3 py-1.5 text-xs text-slate-500">
+              auth {runtimeStatus.provider.auth_source.replace(/^env:/, '').replace(/^settings:/, 'settings')}
+            </div>
+          )}
+          {runtimeStatus?.provider.fallback_model && (
+            <div
+              className="rounded-full border border-[#e2dbcf] bg-[#fbfaf7] px-3 py-1.5 text-xs text-slate-500"
+              title={`Fallback model: ${runtimeStatus.provider.fallback_model}`}
+            >
+              fallback {runtimeStatus.provider.fallback_model}
+            </div>
+          )}
+          {runtimeStatus && runtimeStatus.setting_sources.length > 0 && (
+            <div
+              className="rounded-full border border-[#e2dbcf] bg-[#fbfaf7] px-3 py-1.5 text-xs text-slate-500"
+              title={runtimeStatus.setting_sources.join('\n')}
+            >
+              settings {runtimeStatus.setting_sources.length}
+            </div>
+          )}
+          {runtimeStatus && (runtimeStatus.allowed_tools.length > 0 || runtimeStatus.disallowed_tools.length > 0) && (
+            <div className="rounded-full border border-[#e2dbcf] bg-[#fbfaf7] px-3 py-1.5 text-xs text-slate-500">
+              tools +{runtimeStatus.allowed_tools.length} / -{runtimeStatus.disallowed_tools.length}
+            </div>
+          )}
           {lastPromptResult && (
             <div className="rounded-full border border-[#e2dbcf] bg-[#fbfaf7] px-3 py-1.5 font-mono text-xs text-slate-600">
               in {lastPromptResult.usage.input_tokens} / out {lastPromptResult.usage.output_tokens}

@@ -194,8 +194,8 @@ Deliverables:
 - ✅ Project path normalization (Windows UNC prefix handling)
 - ✅ Session persistence and conversation history
 - ✅ CI frontend job (tsc + vite build)
-- 🔄 GUI CLI feature parity (doctor, export, MCP management)
-- 🔄 Frontend test infrastructure (vitest)
+- ✅ GUI CLI feature parity (doctor, export, MCP management, runtime status)
+- ✅ Frontend test infrastructure (vitest + React Testing Library baseline)
 - ⬜ Headless browser integration for web_browser screenshot tool
 
 Exit criteria:
