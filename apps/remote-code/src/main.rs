@@ -11,6 +11,7 @@ mod remote;
 mod runtime_hooks;
 mod sessions;
 mod skills_cli;
+mod tasks_cli;
 mod updater;
 
 use anyhow::Result;
@@ -36,6 +37,7 @@ use plugins::run_plugins;
 use remote::run_remote;
 use sessions::{run_export, run_sessions};
 use skills_cli::run_skills;
+use tasks_cli::run_tasks;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -96,6 +98,7 @@ async fn main() -> Result<()> {
         Some(Commands::Hooks { command }) => run_hooks(&config, command).await,
         Some(Commands::Remote { command }) => run_remote(command).await,
         Some(Commands::Sessions { command }) => run_sessions(&store, command),
+        Some(Commands::Tasks { command }) => run_tasks(&config, command),
         Some(Commands::Export(args)) => run_export(&store, args),
         Some(Commands::Agents { command }) => run_agents(&config, command),
         Some(Commands::Plugins { command }) => run_plugins(&config, command).await,

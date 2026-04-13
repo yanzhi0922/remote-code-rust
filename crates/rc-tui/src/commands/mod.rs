@@ -68,7 +68,7 @@ pub const SLASH_COMMANDS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "/tasks",
         summary: "List tracked background tasks and outputs",
-        usage: "/tasks",
+        usage: "/tasks [show <task-id>|output <task-id>]",
     },
     SlashCommandSpec {
         name: "/mcp",
@@ -187,7 +187,7 @@ pub fn dispatch(input: &str, context: SlashCommandContext<'_>) -> SlashCommandAc
         "/provider" => provider::render(context.config),
         "/model" => model::render(context.config),
         "/permissions" => permissions::dispatch(trimmed, context.config, context.broker),
-        "/tasks" => tasks::render(),
+        "/tasks" => tasks::dispatch(trimmed, context.config),
         "/mcp" => mcp::dispatch(trimmed, context.config),
         "/plugins" => plugins::dispatch(trimmed, context.config),
         "/skills" => skills::dispatch(trimmed, context.config),

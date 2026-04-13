@@ -103,6 +103,10 @@ pub enum Commands {
         #[command(subcommand)]
         command: Option<SessionsCommand>,
     },
+    Tasks {
+        #[command(subcommand)]
+        command: Option<TasksCommand>,
+    },
     Resume(ResumeArgs),
     Export(ExportArgs),
     Tui,
@@ -148,6 +152,12 @@ pub enum UpdateCommand {
 pub enum SessionsCommand {
     List,
     Show(ShowArgs),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum TasksCommand {
+    List(TasksListArgs),
+    Show(TaskShowArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -236,6 +246,25 @@ pub struct ShowArgs {
     pub session_id: Uuid,
     #[arg(long)]
     pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct TasksListArgs {
+    #[arg(long)]
+    pub session_id: Option<Uuid>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct TaskShowArgs {
+    pub task_id: String,
+    #[arg(long)]
+    pub session_id: Option<Uuid>,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub output: bool,
 }
 
 #[derive(Args, Debug, Clone)]
