@@ -188,7 +188,29 @@ export interface BatchProgressInfo {
   running: number;
 }
 
-export type SubtaskStatus = 'running' | 'completed' | 'failed';
+export interface ContextUsageInfo {
+  session_id: string;
+  estimated_tokens: number;
+  max_input_tokens: number;
+  threshold_tokens: number;
+  ratio: number;
+}
+
+export interface ContextOverflowInfo {
+  session_id: string;
+  estimated_tokens: number;
+  max_input_tokens: number;
+  threshold_tokens: number;
+  ratio: number;
+}
+
+export interface ContextCompactedInfo {
+  session_id: string;
+  entries_removed: number;
+  usage_ratio: number;
+}
+
+export type SubtaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'stopped';
 
 export interface SessionSubtask {
   session_id: string;
@@ -200,4 +222,13 @@ export interface SessionSubtask {
   summary: string;
   output_preview: string | null;
   turns_used: number | null;
+  kind?: 'background' | 'delegation' | 'batch';
+  output_path?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface TaskSnapshotInfo {
+  session_id: string;
+  tasks: SessionSubtask[];
 }

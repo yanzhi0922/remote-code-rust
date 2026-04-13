@@ -7,19 +7,21 @@ mod interactive;
 mod mcp_cli;
 mod plugins;
 mod remote;
+mod review_cli;
 #[allow(dead_code)]
 mod runtime_hooks;
 mod sessions;
 mod skills_cli;
 mod tasks_cli;
 mod updater;
+mod worktree_cli;
 
 use anyhow::Result;
 use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
 use rc_session::SessionStore;
 use rc_telemetry::install_tracing;
-use rc_tools::{ToolRuntimePolicy, configure_tool_runtime_policy};
 use rc_tools::shell::ShellExecutionPolicy;
+use rc_tools::{ToolRuntimePolicy, configure_tool_runtime_policy};
 use uuid::Uuid;
 
 use agents::run_agents;
@@ -35,9 +37,11 @@ use interactive::run_interactive_shell;
 use mcp_cli::run_mcp;
 use plugins::run_plugins;
 use remote::run_remote;
+use review_cli::run_review;
 use sessions::{run_export, run_sessions};
 use skills_cli::run_skills;
 use tasks_cli::run_tasks;
+use worktree_cli::run_worktree;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -98,6 +102,8 @@ async fn main() -> Result<()> {
         Some(Commands::Hooks { command }) => run_hooks(&config, command).await,
         Some(Commands::Remote { command }) => run_remote(command).await,
         Some(Commands::Sessions { command }) => run_sessions(&store, command),
+        Some(Commands::Review(args)) => run_review(&config, args),
+        Some(Commands::Worktree { command }) => run_worktree(&config, command),
         Some(Commands::Tasks { command }) => run_tasks(&config, command),
         Some(Commands::Export(args)) => run_export(&store, args),
         Some(Commands::Agents { command }) => run_agents(&config, command),

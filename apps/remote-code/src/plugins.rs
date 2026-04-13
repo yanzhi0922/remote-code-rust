@@ -7,7 +7,7 @@ use rc_config::{RUNTIME_VERSION, RuntimeConfig};
 
 use crate::cli::{
     PluginsCommand, PluginsInspectArgs, PluginsInstallArgs, PluginsInvokeArgs, PluginsListArgs,
-    PluginsRemoveArgs, PluginsValidateArgs,
+    PluginsRemoveArgs, PluginsToggleArgs, PluginsUpdateArgs, PluginsValidateArgs,
 };
 use crate::mcp_cli::parse_named_json_object_args;
 
@@ -19,6 +19,9 @@ pub(crate) async fn run_plugins(config: &RuntimeConfig, command: PluginsCommand)
         PluginsCommand::Validate(args) => run_plugins_validate(config, args).await,
         PluginsCommand::Install(args) => run_plugins_install(config, args),
         PluginsCommand::Remove(args) => run_plugins_remove(config, args),
+        PluginsCommand::Enable(args) => run_plugins_toggle(config, args, true),
+        PluginsCommand::Disable(args) => run_plugins_toggle(config, args, false),
+        PluginsCommand::Update(args) => run_plugins_update(config, args),
     }
 }
 
@@ -42,12 +45,13 @@ async fn run_plugins_list(config: &RuntimeConfig, args: PluginsListArgs) -> Resu
     }
     for plugin in &output.plugins {
         println!(
-            "{}  {}  runtime={}  skills={}  mcp={}  {}",
+            "{}  {}  runtime={}  skills={}  mcp={}  disabled={}  {}",
             plugin.name,
             plugin.version,
             if plugin.has_runtime { "yes" } else { "no" },
             if plugin.has_skills { "yes" } else { "no" },
             if plugin.has_mcp { "yes" } else { "no" },
+            if plugin.disabled { "yes" } else { "no" },
             format_plugin_source(plugin)
         );
         if let Some(live) = &plugin.live {
@@ -109,7 +113,7 @@ async fn run_plugins_inspect(config: &RuntimeConfig, args: PluginsInspectArgs) -
         format_plugin_source(&output.plugin)
     );
     println!(
-        "features: runtime={}  skills={}  mcp={}",
+        "features: runtime={}  skills={}  mcp={}  disabled={}",
         if output.plugin.has_runtime {
             "yes"
         } else {
@@ -120,7 +124,8 @@ async fn run_plugins_inspect(config: &RuntimeConfig, args: PluginsInspectArgs) -
         } else {
             "no"
         },
-        if output.plugin.has_mcp { "yes" } else { "no" }
+        if output.plugin.has_mcp { "yes" } else { "no" },
+        if output.plugin.disabled { "yes" } else { "no" }
     );
     match &output.plugin.live {
         Some(live) if live.status == "ok" => {
@@ -210,6 +215,24 @@ struct PluginInstallOutput {
     validation: rc_plugins::PluginValidationReport,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+struct PluginToggleOutput {
+    status: String,
+    plugin: String,
+    enabled: bool,
+    destination: PathBuf,
+    marker_path: PathBuf,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct PluginUpdateOutput {
+    status: String,
+    plugin: String,
+    destination: PathBuf,
+    preserved_disabled: bool,
+    validation: rc_plugins::PluginValidationReport,
+}
+
 async fn run_plugins_validate(config: &RuntimeConfig, args: PluginsValidateArgs) -> Result<()> {
     let output = build_plugins_validate_output(config, &args)?;
     if args.json {
@@ -273,7 +296,12 @@ fn run_plugins_install(config: &RuntimeConfig, args: PluginsInstallArgs) -> Resu
 
     copy_dir_recursive(&plugin.root, &destination)?;
     let output = PluginInstallOutput {
-        status: if args.force { "reinstalled" } else { "installed" }.to_owned(),
+        status: if args.force {
+            "reinstalled"
+        } else {
+            "installed"
+        }
+        .to_owned(),
         plugin: plugin.manifest.name,
         destination,
         validation,
@@ -318,7 +346,144 @@ fn run_plugins_remove(config: &RuntimeConfig, args: PluginsRemoveArgs) -> Result
     if args.json {
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
-        println!("Plugin removed from {}.", output["destination"].as_str().unwrap_or_default());
+        println!(
+            "Plugin removed from {}.",
+            output["destination"].as_str().unwrap_or_default()
+        );
+    }
+    Ok(())
+}
+
+fn run_plugins_toggle(
+    config: &RuntimeConfig,
+    args: PluginsToggleArgs,
+    enabled: bool,
+) -> Result<()> {
+    let destination = config.paths.plugins_dir.join(&args.plugin);
+    if !destination.exists() {
+        if args.if_exists {
+            let output = PluginToggleOutput {
+                status: "noop".to_owned(),
+                plugin: args.plugin,
+                enabled,
+                marker_path: destination.join(rc_plugins::PLUGIN_DISABLED_MARKER),
+                destination,
+            };
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&output)?);
+            } else {
+                println!("Plugin {} already absent.", output.plugin);
+            }
+            return Ok(());
+        }
+        return Err(anyhow!(
+            "Plugin {} is not installed in {}",
+            args.plugin,
+            config.paths.plugins_dir.display()
+        ));
+    }
+    if !destination.starts_with(&config.paths.plugins_dir) {
+        return Err(anyhow!(
+            "Refusing to mutate plugin outside {}",
+            config.paths.plugins_dir.display()
+        ));
+    }
+
+    let marker_path = destination.join(rc_plugins::PLUGIN_DISABLED_MARKER);
+    let status = if enabled {
+        if marker_path.exists() {
+            fs::remove_file(&marker_path)?;
+            "enabled"
+        } else {
+            "noop"
+        }
+    } else if marker_path.exists() {
+        "noop"
+    } else {
+        fs::write(&marker_path, b"disabled\n")?;
+        "disabled"
+    };
+
+    let output = PluginToggleOutput {
+        status: status.to_owned(),
+        plugin: args.plugin,
+        enabled,
+        destination,
+        marker_path,
+    };
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else if output.status == "noop" {
+        println!(
+            "Plugin {} already {}.",
+            output.plugin,
+            if enabled { "enabled" } else { "disabled" }
+        );
+    } else {
+        println!(
+            "Plugin {} {} at {}.",
+            output.plugin,
+            output.status,
+            output.destination.display()
+        );
+    }
+    Ok(())
+}
+
+fn run_plugins_update(config: &RuntimeConfig, args: PluginsUpdateArgs) -> Result<()> {
+    let plugin = rc_plugins::load_plugin_from_root(&args.path)?;
+    let validation = rc_plugins::validate_plugin_bundle(&plugin);
+    if !validation.errors.is_empty() {
+        return Err(anyhow!(
+            "Plugin validation failed: {}",
+            validation.errors.join("; ")
+        ));
+    }
+
+    let destination = config.paths.plugins_dir.join(&plugin.manifest.name);
+    if !destination.exists() {
+        return Err(anyhow!(
+            "Plugin {} is not installed in {}; use `plugins install` first",
+            plugin.manifest.name,
+            config.paths.plugins_dir.display()
+        ));
+    }
+    if !destination.starts_with(&config.paths.plugins_dir) {
+        return Err(anyhow!(
+            "Refusing to update plugin outside {}",
+            config.paths.plugins_dir.display()
+        ));
+    }
+
+    let marker_path = destination.join(rc_plugins::PLUGIN_DISABLED_MARKER);
+    let preserved_disabled = marker_path.exists();
+    fs::remove_dir_all(&destination)?;
+    copy_dir_recursive(&plugin.root, &destination)?;
+    if preserved_disabled {
+        fs::write(&marker_path, b"disabled\n")?;
+    } else if marker_path.exists() {
+        fs::remove_file(&marker_path)?;
+    }
+
+    let output = PluginUpdateOutput {
+        status: "updated".to_owned(),
+        plugin: plugin.manifest.name,
+        destination,
+        preserved_disabled,
+        validation,
+    };
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!(
+            "Plugin updated at {}{}.",
+            output.destination.display(),
+            if output.preserved_disabled {
+                " (disabled state preserved)"
+            } else {
+                ""
+            }
+        );
     }
     Ok(())
 }
@@ -355,6 +520,7 @@ pub(crate) struct PluginRecord {
     pub(crate) has_runtime: bool,
     pub(crate) has_skills: bool,
     pub(crate) has_mcp: bool,
+    pub(crate) disabled: bool,
     pub(crate) origin_kind: String,
     pub(crate) origin_name: String,
     pub(crate) root: PathBuf,
@@ -657,6 +823,11 @@ fn plugin_record_from_entry(
         has_runtime,
         has_skills: entry.bundle.skills_root().is_some(),
         has_mcp: entry.bundle.mcp_config_path().is_some(),
+        disabled: entry
+            .bundle
+            .root
+            .join(rc_plugins::PLUGIN_DISABLED_MARKER)
+            .exists(),
         origin_kind: entry.origin_kind.to_owned(),
         origin_name: entry.origin_name.clone(),
         root: entry.bundle.root.clone(),
@@ -725,4 +896,158 @@ fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::Path;
+
+    use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
+    use tempfile::tempdir;
+
+    use super::{build_plugins_list_output, run_plugins_toggle, run_plugins_update};
+    use crate::cli::{PluginsListArgs, PluginsToggleArgs, PluginsUpdateArgs};
+
+    fn test_config() -> (tempfile::TempDir, rc_config::RuntimeConfig) {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        fs::create_dir_all(&cwd).expect("cwd");
+        fs::create_dir_all(profile.join("plugins")).expect("plugins");
+        let config = load_runtime_config(
+            Some(cwd),
+            Some(profile),
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+            RuntimeOverrides::default(),
+        )
+        .expect("config");
+        (tempdir, config)
+    }
+
+    fn write_plugin(root: &Path, version: &str, extra_files: &[(&str, &str)]) {
+        fs::create_dir_all(root.join(rc_plugins::PLUGIN_MANIFEST_DIR)).expect("manifest dir");
+        fs::write(
+            root.join(rc_plugins::PLUGIN_MANIFEST_DIR)
+                .join(rc_plugins::PLUGIN_MANIFEST_FILE),
+            format!(r#"{{"name":"demo","version":"{version}"}}"#),
+        )
+        .expect("manifest");
+        for (relative, content) in extra_files {
+            let path = root.join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("parent");
+            }
+            fs::write(path, content).expect("file");
+        }
+    }
+
+    #[test]
+    fn plugin_toggle_writes_and_clears_disabled_marker() {
+        let (_tempdir, config) = test_config();
+        let plugin_root = config.paths.plugins_dir.join("demo");
+        write_plugin(&plugin_root, "0.1.0", &[]);
+
+        run_plugins_toggle(
+            &config,
+            PluginsToggleArgs {
+                plugin: "demo".to_owned(),
+                json: false,
+                if_exists: false,
+            },
+            false,
+        )
+        .expect("disable plugin");
+        assert!(
+            plugin_root
+                .join(rc_plugins::PLUGIN_DISABLED_MARKER)
+                .exists()
+        );
+
+        run_plugins_toggle(
+            &config,
+            PluginsToggleArgs {
+                plugin: "demo".to_owned(),
+                json: false,
+                if_exists: false,
+            },
+            true,
+        )
+        .expect("enable plugin");
+        assert!(
+            !plugin_root
+                .join(rc_plugins::PLUGIN_DISABLED_MARKER)
+                .exists()
+        );
+    }
+
+    #[test]
+    fn plugin_update_preserves_disabled_state() {
+        let (_tempdir, config) = test_config();
+        let installed_root = config.paths.plugins_dir.join("demo");
+        write_plugin(&installed_root, "0.1.0", &[("data.txt", "old")]);
+        fs::write(
+            installed_root.join(rc_plugins::PLUGIN_DISABLED_MARKER),
+            b"disabled\n",
+        )
+        .expect("disabled marker");
+
+        let source_root = config.cwd.join("source-demo");
+        write_plugin(&source_root, "0.2.0", &[("data.txt", "new")]);
+
+        run_plugins_update(
+            &config,
+            PluginsUpdateArgs {
+                path: source_root,
+                json: false,
+            },
+        )
+        .expect("update plugin");
+
+        assert_eq!(
+            fs::read_to_string(installed_root.join("data.txt")).expect("updated data"),
+            "new"
+        );
+        assert!(
+            installed_root
+                .join(rc_plugins::PLUGIN_DISABLED_MARKER)
+                .exists()
+        );
+    }
+
+    #[tokio::test]
+    async fn plugin_list_output_reports_disabled_state() {
+        let (_tempdir, config) = test_config();
+        let plugin_root = config.paths.plugins_dir.join("demo");
+        write_plugin(&plugin_root, "0.1.0", &[]);
+        fs::write(
+            plugin_root.join(rc_plugins::PLUGIN_DISABLED_MARKER),
+            b"disabled\n",
+        )
+        .expect("disabled marker");
+
+        let output = build_plugins_list_output(
+            &config,
+            &PluginsListArgs {
+                connect: false,
+                json: false,
+                plugins: Vec::new(),
+                plugin_roots: Vec::new(),
+            },
+        )
+        .await
+        .expect("list output");
+
+        assert_eq!(output.plugins.len(), 1);
+        assert!(output.plugins[0].disabled);
+    }
 }

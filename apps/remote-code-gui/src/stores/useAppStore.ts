@@ -2,6 +2,9 @@ import { create } from 'zustand';
 import type {
   BatchProgressInfo,
   ConversationEntry,
+  ContextCompactedInfo,
+  ContextOverflowInfo,
+  ContextUsageInfo,
   FullSettings,
   PermissionRequestInfo,
   ProjectInfo,
@@ -98,6 +101,14 @@ function applySubtaskCompleted(tasks: SessionSubtask[], payload: SubtaskComplete
   );
 }
 
+function sortTasks(tasks: SessionSubtask[]): SessionSubtask[] {
+  return [...tasks].sort((left, right) => {
+    const leftUpdated = left.updated_at ?? '';
+    const rightUpdated = right.updated_at ?? '';
+    return rightUpdated.localeCompare(leftUpdated);
+  });
+}
+
 interface AppState {
   initialised: boolean;
   initError: string | null;
@@ -123,6 +134,9 @@ interface AppState {
   liveToolResults: ToolResultInfo[];
   sessionTasks: Record<string, SessionSubtask[]>;
   batchProgressBySession: Record<string, BatchProgressInfo>;
+  contextUsageBySession: Record<string, ContextUsageInfo>;
+  contextOverflowBySession: Record<string, ContextOverflowInfo>;
+  contextCompactionBySession: Record<string, ContextCompactedInfo>;
   streamingText: string;
   runningSessionIds: Set<string>;
 
@@ -259,6 +273,20 @@ async function registerEventListeners() {
         });
       }
 
+      void tauri
+        .getSessionTasks(session_id)
+        .then((tasks) => {
+          useAppStore.setState((state) => ({
+            sessionTasks: {
+              ...state.sessionTasks,
+              [session_id]: sortTasks(tasks),
+            },
+          }));
+        })
+        .catch(() => {
+          // Ignore task refresh failures after prompt completion.
+        });
+
       // Refresh session lists.
       void useAppStore.getState().refreshSessions();
       void useAppStore.getState().refreshProviderInfo();
@@ -292,6 +320,38 @@ async function registerEventListeners() {
         },
       }));
     }),
+    tauri.onTaskSnapshot((event) => {
+      useAppStore.setState((state) => ({
+        sessionTasks: {
+          ...state.sessionTasks,
+          [event.payload.session_id]: sortTasks(event.payload.tasks),
+        },
+      }));
+    }),
+    tauri.onContextUsage((event) => {
+      useAppStore.setState((state) => ({
+        contextUsageBySession: {
+          ...state.contextUsageBySession,
+          [event.payload.session_id]: event.payload,
+        },
+      }));
+    }),
+    tauri.onContextOverflow((event) => {
+      useAppStore.setState((state) => ({
+        contextOverflowBySession: {
+          ...state.contextOverflowBySession,
+          [event.payload.session_id]: event.payload,
+        },
+      }));
+    }),
+    tauri.onContextCompacted((event) => {
+      useAppStore.setState((state) => ({
+        contextCompactionBySession: {
+          ...state.contextCompactionBySession,
+          [event.payload.session_id]: event.payload,
+        },
+      }));
+    }),
   ]);
 }
 
@@ -315,6 +375,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   liveToolResults: [],
   sessionTasks: {},
   batchProgressBySession: {},
+  contextUsageBySession: {},
+  contextOverflowBySession: {},
+  contextCompactionBySession: {},
   streamingText: '',
   runningSessionIds: new Set<string>(),
   settings: null,
@@ -391,8 +454,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       conversationLoading: true,
     });
     try {
-      const conversation = await tauri.getSessionConversation(sessionId);
-      set({ conversation, conversationLoading: false });
+      const [conversation, tasks] = await Promise.all([
+        tauri.getSessionConversation(sessionId),
+        tauri.getSessionTasks(sessionId).catch(() => [] as SessionSubtask[]),
+      ]);
+      set((state) => ({
+        conversation,
+        conversationLoading: false,
+        sessionTasks: {
+          ...state.sessionTasks,
+          [sessionId]: sortTasks(tasks),
+        },
+      }));
     } catch {
       set({ conversationLoading: false });
     }
@@ -409,6 +482,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       activeProjectPath: effectiveProjectPath,
       conversation: [],
     });
+    try {
+      const tasks = await tauri.getSessionTasks(sessionId);
+      set((state) => ({
+        sessionTasks: {
+          ...state.sessionTasks,
+          [sessionId]: sortTasks(tasks),
+        },
+      }));
+    } catch {
+      // Ignore empty task state for a new session.
+    }
     await Promise.all([get().refreshSessions(), get().refreshProjects()]);
     return sessionId;
   },

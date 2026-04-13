@@ -22,18 +22,39 @@ pub fn dispatch(input: &str, config: &RuntimeConfig) {
         return;
     }
 
-    let mut parts = remainder.split_whitespace();
-    match parts.next().unwrap_or_default() {
+    let tokens = remainder.split_whitespace().collect::<Vec<_>>();
+    match tokens.first().copied().unwrap_or_default() {
         "show" | "get" => {
-            let Some(name) = parts.next() else {
-                println!("Usage: /mcp [list|show <server>]");
+            let Some(name) = tokens.get(1).copied() else {
+                println!(
+                    "Usage: /mcp [list|show <server>|enable <server> [project]|disable <server> [project]|reset [project]]"
+                );
                 return;
             };
             render_server(config, name);
         }
+        "enable" | "disable" => {
+            let Some(name) = tokens.get(1).copied() else {
+                println!(
+                    "Usage: /mcp {} <server> [project]",
+                    tokens.first().copied().unwrap_or("enable")
+                );
+                return;
+            };
+            let scope_token = tokens.get(2).copied();
+            set_server_enabled(
+                config,
+                name,
+                scope_token == Some("project"),
+                tokens[0] == "enable",
+            );
+        }
+        "reset" => reset_managed_config(config, tokens.get(1).copied() == Some("project")),
         other => {
             println!("Unknown /mcp subcommand '{other}'.");
-            println!("Usage: /mcp [list|show <server>]");
+            println!(
+                "Usage: /mcp [list|show <server>|enable <server> [project]|disable <server> [project]|reset [project]]"
+            );
         }
     }
 }
@@ -63,7 +84,11 @@ pub fn render(config: &RuntimeConfig) {
         println!(
             "  {}  {}  {}  {}",
             server.name,
-            if server.enabled { "enabled" } else { "disabled" },
+            if server.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            },
             transport_label(server.transport),
             source_label(server.origin_kind, &server.origin_name, &server.config_path)
         );
@@ -126,6 +151,56 @@ fn render_server(config: &RuntimeConfig, server_name: &str) {
     }
 }
 
+fn set_server_enabled(config: &RuntimeConfig, server_name: &str, project: bool, enabled: bool) {
+    let path = managed_mcp_config_path(config, project);
+    let mut mcp_config = match load_managed_mcp_config(&path) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("Failed to load MCP config {}: {error}", path.display());
+            return;
+        }
+    };
+    let Some(server) = mcp_config.servers.get_mut(server_name) else {
+        println!(
+            "No managed MCP server named `{server_name}` exists in {}.",
+            path.display()
+        );
+        return;
+    };
+    if server.enabled == enabled {
+        println!(
+            "MCP server {} already {} in {}.",
+            server_name,
+            if enabled { "enabled" } else { "disabled" },
+            path.display()
+        );
+        return;
+    }
+    server.enabled = enabled;
+    if let Err(error) = mcp_config.save(&path) {
+        eprintln!("Failed to save MCP config {}: {error}", path.display());
+        return;
+    }
+    println!(
+        "MCP server {} {} in {}.",
+        server_name,
+        if enabled { "enabled" } else { "disabled" },
+        path.display()
+    );
+}
+
+fn reset_managed_config(config: &RuntimeConfig, project: bool) {
+    let path = managed_mcp_config_path(config, project);
+    if !path.exists() {
+        println!("Managed MCP config already absent at {}.", path.display());
+        return;
+    }
+    match std::fs::remove_file(&path) {
+        Ok(()) => println!("Managed MCP config reset at {}.", path.display()),
+        Err(error) => eprintln!("Failed to reset MCP config {}: {error}", path.display()),
+    }
+}
+
 fn discover_mcp_servers(config: &RuntimeConfig) -> (Vec<String>, Vec<McpServerView>) {
     let mut warnings = Vec::new();
     let mut servers = Vec::new();
@@ -142,7 +217,10 @@ fn discover_mcp_servers(config: &RuntimeConfig) -> (Vec<String>, Vec<McpServerVi
         &mut servers,
         "profile",
         &config.paths.profile_dir.display().to_string(),
-        &config.paths.profile_dir.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+        &config
+            .paths
+            .profile_dir
+            .join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
     );
 
     if config.paths.plugins_dir.exists() {
@@ -202,7 +280,29 @@ fn load_mcp_servers_from_path(
                 });
             }
         }
-        Err(error) => warnings.push(format!("Failed to load MCP config {}: {error}", path.display())),
+        Err(error) => warnings.push(format!(
+            "Failed to load MCP config {}: {error}",
+            path.display()
+        )),
+    }
+}
+
+fn managed_mcp_config_path(config: &RuntimeConfig, project: bool) -> PathBuf {
+    if project {
+        config.cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE)
+    } else {
+        config
+            .paths
+            .profile_dir
+            .join(rc_mcp::DEFAULT_MCP_CONFIG_FILE)
+    }
+}
+
+fn load_managed_mcp_config(path: &Path) -> anyhow::Result<rc_mcp::McpConfig> {
+    if path.exists() {
+        Ok(rc_mcp::McpConfig::load(path)?)
+    } else {
+        Ok(rc_mcp::McpConfig::default())
     }
 }
 

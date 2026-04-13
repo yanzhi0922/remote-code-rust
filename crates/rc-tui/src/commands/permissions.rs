@@ -73,12 +73,12 @@ pub fn render(config: &RuntimeConfig, broker: &dyn PermissionBroker) {
         println!("  layered:    {} rules loaded", layered_rules.len());
         for (source, count) in summarize_rule_sources(&layered_rules) {
             println!("    {}: {} rule(s)", source.as_str(), count);
-            for rule in layered_rules.iter().filter(|rule| rule.source == source).take(3) {
-                println!(
-                    "      - {} {}",
-                    rule.action.as_str(),
-                    rule.tool_pattern
-                );
+            for rule in layered_rules
+                .iter()
+                .filter(|rule| rule.source == source)
+                .take(3)
+            {
+                println!("      - {} {}", rule.action.as_str(), rule.tool_pattern);
             }
             let extra = layered_rules
                 .iter()
@@ -97,7 +97,10 @@ pub fn render(config: &RuntimeConfig, broker: &dyn PermissionBroker) {
     } else {
         println!("  recent:     {} decision(s)", audits.len());
         for audit in audits.iter().rev().take(5) {
-            let source = audit.source.map(|value| value.as_str()).unwrap_or("fallback");
+            let source = audit
+                .source
+                .map(|value| value.as_str())
+                .unwrap_or("fallback");
             let pattern = audit
                 .matched_pattern
                 .as_deref()
@@ -106,7 +109,11 @@ pub fn render(config: &RuntimeConfig, broker: &dyn PermissionBroker) {
                 "    - {} {} => {} [{}]",
                 audit.action.as_str(),
                 audit.tool_name,
-                if audit.final_allowed { "allowed" } else { "denied" },
+                if audit.final_allowed {
+                    "allowed"
+                } else {
+                    "denied"
+                },
                 source
             );
             println!("      pattern: {pattern}");

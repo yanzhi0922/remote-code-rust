@@ -174,16 +174,16 @@ pub fn load_persisted_tasks(base_dir: &Path) -> Result<Vec<BackgroundTask>> {
     }
 
     let mut tasks = Vec::new();
-    for entry in fs::read_dir(base_dir)
-        .with_context(|| format!("failed to read {}", base_dir.display()))?
+    for entry in
+        fs::read_dir(base_dir).with_context(|| format!("failed to read {}", base_dir.display()))?
     {
         let entry = entry?;
         let path = entry.path();
         if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
             continue;
         }
-        let contents =
-            fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+        let contents = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
         let record: PersistedTaskRecord = serde_json::from_str(&contents)
             .with_context(|| format!("failed to parse {}", path.display()))?;
         let output = match &record.output_path {
@@ -219,21 +219,32 @@ pub fn load_persisted_task(base_dir: &Path, task_id: &str) -> Result<Option<Back
 #[must_use]
 pub fn ui_task_snapshots() -> Vec<UiTaskNode> {
     task_snapshots()
-        .into_iter()
-        .map(|task| UiTaskNode {
-            id: task.id,
-            parent_task_id: task.parent_task_id,
-            title: task.title,
-            status: task.status.to_ui_status(),
-            kind: task.kind.to_ui_kind(),
-            depth: task.depth,
-            summary: task.summary,
-            turns_used: task.turns_used,
-            output_path: task.output_path,
-            created_at: task.created_at,
-            updated_at: task.updated_at,
-        })
+        .iter()
+        .map(background_task_to_ui_node)
         .collect()
+}
+
+pub fn load_persisted_ui_task_snapshots(base_dir: &Path) -> Result<Vec<UiTaskNode>> {
+    Ok(load_persisted_tasks(base_dir)?
+        .iter()
+        .map(background_task_to_ui_node)
+        .collect())
+}
+
+fn background_task_to_ui_node(task: &BackgroundTask) -> UiTaskNode {
+    UiTaskNode {
+        id: task.id.clone(),
+        parent_task_id: task.parent_task_id.clone(),
+        title: task.title.clone(),
+        status: task.status.to_ui_status(),
+        kind: task.kind.to_ui_kind(),
+        depth: task.depth,
+        summary: task.summary.clone(),
+        turns_used: task.turns_used,
+        output_path: task.output_path.clone(),
+        created_at: task.created_at.clone(),
+        updated_at: task.updated_at.clone(),
+    }
 }
 
 pub fn create_background_task(title: &str) -> Result<BackgroundTask> {
@@ -272,20 +283,22 @@ pub fn start_tracked_task(
     let mut store = TASK_STORE
         .lock()
         .map_err(|_| anyhow!("task store lock poisoned"))?;
-    let task = store.entry(task_id.clone()).or_insert_with(|| BackgroundTask {
-        id: task_id.clone(),
-        parent_task_id: parent_task_id.clone(),
-        depth,
-        kind: kind.clone(),
-        title: title.to_owned(),
-        status: TaskStatus::Running,
-        summary: summary.unwrap_or_default().to_owned(),
-        output: String::new(),
-        output_path: None,
-        turns_used: None,
-        created_at: now.clone(),
-        updated_at: now.clone(),
-    });
+    let task = store
+        .entry(task_id.clone())
+        .or_insert_with(|| BackgroundTask {
+            id: task_id.clone(),
+            parent_task_id: parent_task_id.clone(),
+            depth,
+            kind: kind.clone(),
+            title: title.to_owned(),
+            status: TaskStatus::Running,
+            summary: summary.unwrap_or_default().to_owned(),
+            output: String::new(),
+            output_path: None,
+            turns_used: None,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+        });
     task.parent_task_id = parent_task_id;
     task.depth = depth;
     task.kind = kind;
@@ -640,33 +653,68 @@ mod tests {
     #[test]
     fn load_persisted_tasks_reads_metadata_and_output() {
         let tempdir = tempfile::tempdir().expect("tempdir");
-        configure_task_output_dir(Some(tempdir.path().to_path_buf())).expect("configure output");
-
-        let task = start_tracked_task(
-            "persisted-task".to_owned(),
-            "Persisted task",
-            None,
-            0,
-            TaskKind::Delegation,
-            Some("working"),
+        let task_id = allocate_task_id();
+        crate::task_output::persist_task(
+            tempdir.path(),
+            &BackgroundTask {
+                id: task_id.clone(),
+                parent_task_id: None,
+                depth: 0,
+                kind: TaskKind::Delegation,
+                title: "Persisted task".to_owned(),
+                status: TaskStatus::Completed,
+                summary: "done".to_owned(),
+                output: "captured output".to_owned(),
+                output_path: None,
+                turns_used: Some(2),
+                created_at: "1".to_owned(),
+                updated_at: "2".to_owned(),
+            },
         )
-        .expect("tracked task");
-        finish_tracked_task(
-            &task.id,
-            TaskStatus::Completed,
-            Some("done"),
-            "captured output",
-            Some(2),
-        )
-        .expect("finish task");
+        .expect("persist task");
 
         let loaded = load_persisted_tasks(tempdir.path()).expect("load persisted tasks");
         let loaded_task = loaded
             .into_iter()
-            .find(|candidate| candidate.id == task.id)
+            .find(|candidate| candidate.id == task_id)
             .expect("persisted task should exist");
         assert_eq!(loaded_task.summary, "done");
         assert_eq!(loaded_task.output, "captured output");
+    }
+
+    #[test]
+    fn load_persisted_ui_task_snapshots_projects_task_tree() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let task_id = allocate_task_id();
+        crate::task_output::persist_task(
+            tempdir.path(),
+            &BackgroundTask {
+                id: task_id.clone(),
+                parent_task_id: Some("parent-task".to_owned()),
+                depth: 2,
+                kind: TaskKind::Batch,
+                title: "UI task".to_owned(),
+                status: TaskStatus::Completed,
+                summary: "done".to_owned(),
+                output: "batch output".to_owned(),
+                output_path: None,
+                turns_used: Some(4),
+                created_at: "1".to_owned(),
+                updated_at: "2".to_owned(),
+            },
+        )
+        .expect("persist task");
+
+        let snapshots =
+            load_persisted_ui_task_snapshots(tempdir.path()).expect("load persisted ui snapshots");
+        let snapshot = snapshots
+            .into_iter()
+            .find(|candidate| candidate.id == task_id)
+            .expect("persisted UI task should exist");
+        assert_eq!(snapshot.parent_task_id.as_deref(), Some("parent-task"));
+        assert_eq!(snapshot.depth, 2);
+        assert_eq!(snapshot.summary, "done");
+        assert_eq!(snapshot.turns_used, Some(4));
     }
 }
 

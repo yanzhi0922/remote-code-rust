@@ -1,7 +1,11 @@
 use rc_config::RuntimeConfig;
 
 pub fn dispatch(input: &str, config: &RuntimeConfig) {
-    let remainder = input.trim().strip_prefix("/skills").unwrap_or_default().trim();
+    let remainder = input
+        .trim()
+        .strip_prefix("/skills")
+        .unwrap_or_default()
+        .trim();
     if remainder.is_empty() || remainder == "list" {
         render(config);
         return;
@@ -11,15 +15,16 @@ pub fn dispatch(input: &str, config: &RuntimeConfig) {
     match parts.next().unwrap_or_default() {
         "show" => {
             let Some(slug) = parts.next() else {
-                println!("Usage: /skills [list|show <slug>|lock]");
+                println!("Usage: /skills [list|show <slug>|lock|index]");
                 return;
             };
             render_skill(config, slug);
         }
         "lock" => render_lock(config),
+        "index" => render_index(config),
         other => {
             println!("Unknown /skills subcommand '{other}'.");
-            println!("Usage: /skills [list|show <slug>|lock]");
+            println!("Usage: /skills [list|show <slug>|lock|index]");
         }
     }
 }
@@ -99,6 +104,9 @@ fn render_skill(config: &RuntimeConfig, slug: &str) {
     if !skill.metadata.tools.is_empty() {
         println!("  tools: {}", skill.metadata.tools.join(", "));
     }
+    println!("  references: {}", skill.metadata.references.len());
+    println!("  scripts: {}", skill.metadata.scripts.len());
+    println!("  assets: {}", skill.metadata.assets.len());
     if !warnings.is_empty() {
         for warning in warnings {
             println!("  warning: {warning}");
@@ -107,7 +115,10 @@ fn render_skill(config: &RuntimeConfig, slug: &str) {
 }
 
 fn render_lock(config: &RuntimeConfig) {
-    let path = config.paths.profile_dir.join(rc_skills::DEFAULT_SKILL_LOCK_FILE);
+    let path = config
+        .paths
+        .profile_dir
+        .join(rc_skills::DEFAULT_SKILL_LOCK_FILE);
     if !path.exists() {
         println!("Skill lock: missing ({})", path.display());
         return;
@@ -127,6 +138,96 @@ fn render_lock(config: &RuntimeConfig) {
             }
         }
         Err(error) => eprintln!("Failed to load skill lock {}: {error}", path.display()),
+    }
+}
+
+fn render_index(config: &RuntimeConfig) {
+    let (warnings, skills) = discover_skills(config);
+    let lock_path = config
+        .paths
+        .profile_dir
+        .join(rc_skills::DEFAULT_SKILL_LOCK_FILE);
+    let lock = if lock_path.exists() {
+        match rc_skills::load_skill_lock_file(&lock_path) {
+            Ok(lock) => Some(lock),
+            Err(error) => {
+                eprintln!("Failed to load skill lock {}: {error}", lock_path.display());
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let mut slug_counts = std::collections::BTreeMap::new();
+    let mut origin_counts = std::collections::BTreeMap::new();
+    let mut with_references = 0usize;
+    let mut with_scripts = 0usize;
+    let mut with_assets = 0usize;
+    for skill in &skills {
+        *slug_counts
+            .entry(skill.metadata.slug.clone())
+            .or_insert(0usize) += 1;
+        *origin_counts
+            .entry(skill.origin_kind.to_owned())
+            .or_insert(0usize) += 1;
+        if !skill.metadata.references.is_empty() {
+            with_references += 1;
+        }
+        if !skill.metadata.scripts.is_empty() {
+            with_scripts += 1;
+        }
+        if !skill.metadata.assets.is_empty() {
+            with_assets += 1;
+        }
+    }
+
+    let duplicates = slug_counts
+        .iter()
+        .filter_map(|(slug, count)| (*count > 1).then_some(slug.clone()))
+        .collect::<Vec<_>>();
+    let uncached = skills
+        .iter()
+        .filter(|skill| {
+            lock.as_ref()
+                .is_none_or(|lock| !lock.skills.contains_key(&skill.metadata.slug))
+        })
+        .map(|skill| skill.metadata.slug.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+
+    println!(
+        "Skill index: total={} unique={} duplicates={}",
+        skills.len(),
+        slug_counts.len(),
+        duplicates.len()
+    );
+    for warning in &warnings {
+        println!("  warning: {warning}");
+    }
+    if !origin_counts.is_empty() {
+        println!(
+            "  origins: {}",
+            origin_counts
+                .iter()
+                .map(|(origin, count)| format!("{origin}={count}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    println!(
+        "  coverage: refs={} scripts={} assets={}",
+        with_references, with_scripts, with_assets
+    );
+    println!("  lock: {}", lock_path.display());
+    println!("  lock exists: {}", lock.is_some());
+    println!("  uncached slugs: {}", uncached.len());
+    if !duplicates.is_empty() {
+        println!("  duplicate slugs: {}", duplicates.join(", "));
+    }
+    if !uncached.is_empty() {
+        println!("  uncached: {}", uncached.join(", "));
     }
 }
 

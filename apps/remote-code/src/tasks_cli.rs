@@ -51,8 +51,14 @@ fn run_task_list(config: &RuntimeConfig, args: TasksListArgs) -> Result<()> {
 
 fn run_task_show(config: &RuntimeConfig, args: TaskShowArgs) -> Result<()> {
     let session_id = args.session_id.unwrap_or(config.session_id);
-    let task = load_persisted_task(&task_dir(config, session_id), &args.task_id)?
-        .ok_or_else(|| anyhow!("task '{}' not found for session {}", args.task_id, session_id))?;
+    let task =
+        load_persisted_task(&task_dir(config, session_id), &args.task_id)?.ok_or_else(|| {
+            anyhow!(
+                "task '{}' not found for session {}",
+                args.task_id,
+                session_id
+            )
+        })?;
     if args.output {
         if task.output.trim().is_empty() {
             println!("Task '{}' has no captured output.", task.id);

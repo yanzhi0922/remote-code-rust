@@ -38,6 +38,7 @@ rc-skills = { path = "../../crates/rc-skills" }
 rc-telemetry = { path = "../../crates/rc-telemetry" }
 rc-tools = { path = "../../crates/rc-tools" }
 rc-tui = { path = "../../crates/rc-tui" }
+rc-ui-bridge = { path = "../../crates/rc-ui-bridge" }
 
 [dev-dependencies]
 axum.workspace = true

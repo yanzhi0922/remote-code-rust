@@ -17,7 +17,9 @@ pub fn dispatch(input: &str, config: &RuntimeConfig) {
     match parts.next().unwrap_or_default() {
         "show" | "inspect" => {
             let Some(name) = parts.next() else {
-                println!("Usage: /plugins [list|show <plugin>|validate [plugin]]");
+                println!(
+                    "Usage: /plugins [list|show <plugin>|validate [plugin]|enable <plugin>|disable <plugin>]"
+                );
                 return;
             };
             render_plugin(config, name);
@@ -29,9 +31,21 @@ pub fn dispatch(input: &str, config: &RuntimeConfig) {
                 validate_plugin(config, None);
             }
         }
+        "enable" | "disable" => {
+            let Some(name) = parts.next() else {
+                println!(
+                    "Usage: /plugins {} <plugin>",
+                    remainder.split_whitespace().next().unwrap_or("enable")
+                );
+                return;
+            };
+            set_plugin_enabled(config, name, remainder.starts_with("enable"));
+        }
         other => {
             println!("Unknown /plugins subcommand '{other}'.");
-            println!("Usage: /plugins [list|show <plugin>|validate [plugin]]");
+            println!(
+                "Usage: /plugins [list|show <plugin>|validate [plugin]|enable <plugin>|disable <plugin>]"
+            );
         }
     }
 }
@@ -49,7 +63,10 @@ pub fn render(config: &RuntimeConfig) {
             plugins.sort_by(|left, right| left.manifest.name.cmp(&right.manifest.name));
             println!("Plugins ({}):", plugins.len());
             for plugin in plugins {
-                let disabled = plugin.root.join(rc_plugins::PLUGIN_DISABLED_MARKER).exists();
+                let disabled = plugin
+                    .root
+                    .join(rc_plugins::PLUGIN_DISABLED_MARKER)
+                    .exists();
                 println!(
                     "  {}  {}  runtime={}  skills={}  mcp={}  disabled={}  {}",
                     plugin.manifest.name,
@@ -81,8 +98,14 @@ fn render_plugin(config: &RuntimeConfig, name: &str) {
     match resolve_plugin(config, name) {
         Ok(plugin) => {
             let report = rc_plugins::validate_plugin_bundle(&plugin);
-            let disabled = plugin.root.join(rc_plugins::PLUGIN_DISABLED_MARKER).exists();
-            println!("Plugin: {} {}", plugin.manifest.name, plugin.manifest.version);
+            let disabled = plugin
+                .root
+                .join(rc_plugins::PLUGIN_DISABLED_MARKER)
+                .exists();
+            println!(
+                "Plugin: {} {}",
+                plugin.manifest.name, plugin.manifest.version
+            );
             println!("  root: {}", plugin.root.display());
             println!("  manifest: {}", plugin.manifest_path.display());
             println!("  disabled: {}", yes_no(disabled));
@@ -174,6 +197,47 @@ fn validate_plugin(config: &RuntimeConfig, name: Option<&str>) {
         for warning in report.warnings {
             println!("  warning: {warning}");
         }
+    }
+}
+
+fn set_plugin_enabled(config: &RuntimeConfig, name: &str, enabled: bool) {
+    let destination = config.paths.plugins_dir.join(name);
+    if !destination.exists() {
+        println!(
+            "No installed plugin named `{name}` exists in {}.",
+            config.paths.plugins_dir.display()
+        );
+        return;
+    }
+    if !destination.starts_with(&config.paths.plugins_dir) {
+        eprintln!(
+            "Refusing to mutate plugin outside {}",
+            config.paths.plugins_dir.display()
+        );
+        return;
+    }
+
+    let marker_path = destination.join(rc_plugins::PLUGIN_DISABLED_MARKER);
+    if enabled {
+        if !marker_path.exists() {
+            println!("Plugin {name} already enabled.");
+            return;
+        }
+        if let Err(error) = std::fs::remove_file(&marker_path) {
+            eprintln!("Failed to enable plugin {name}: {error}");
+            return;
+        }
+        println!("Plugin {name} enabled.");
+    } else {
+        if marker_path.exists() {
+            println!("Plugin {name} already disabled.");
+            return;
+        }
+        if let Err(error) = std::fs::write(&marker_path, b"disabled\n") {
+            eprintln!("Failed to disable plugin {name}: {error}");
+            return;
+        }
+        println!("Plugin {name} disabled.");
     }
 }
 

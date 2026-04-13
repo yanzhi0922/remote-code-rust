@@ -26,15 +26,18 @@ use rc_core::{
     ConversationEntry, ConversationRole, ProviderResponse, SubAgentCompletion,
     default_system_prompt,
 };
-use rc_permissions::{LayeredPermissionBroker, PermissionBroker, StaticPermissionBroker, load_layered_rules};
+use rc_permissions::{
+    LayeredPermissionBroker, PermissionBroker, StaticPermissionBroker, load_layered_rules,
+};
 use rc_provider::ProviderClient;
 use rc_provider::context::ContextWindowManager;
 use rc_provider::cost::CostTracker;
 use rc_session::SessionStore;
 use rc_session::resume_state::{PendingToolCall, ResumeState};
 use rc_tools::{
-    ToolExecutionContext, execute_tool_call,
+    ToolExecutionContext,
     agent::{parse_delegate_progress_event, render_delegate_progress_event},
+    execute_tool_call,
 };
 
 use completion::{
@@ -153,7 +156,11 @@ pub async fn run_tui_app(config: RuntimeConfig, store: &SessionStore) -> Result<
     let provider = Arc::new(ProviderClient::new()?);
     let broker = LayeredPermissionBroker::new(
         StaticPermissionBroker::new(config.permission_mode),
-        load_layered_rules(&config.cwd, &config.paths.profile_dir, &config.settings_files)?,
+        load_layered_rules(
+            &config.cwd,
+            &config.paths.profile_dir,
+            &config.settings_files,
+        )?,
     );
 
     let model_name = config.provider.model.as_deref().unwrap_or("unknown");
@@ -736,13 +743,25 @@ async fn run_conversation_turn(
     let mut total_output_tokens = 0u64;
 
     for turn in 0..config.max_turns {
-        // Compact conversation if context window is getting full
-        if context_manager.needs_compaction(conversation) {
+        let budget_snapshot = context_manager.budget_snapshot(conversation);
+        println!(
+            "  [context] {:.0}% of {} tokens used (threshold {})",
+            budget_snapshot.usage_ratio * 100.0,
+            budget_snapshot.max_input_tokens,
+            budget_snapshot.threshold_tokens(),
+        );
+
+        // Compact conversation if context window is getting full.
+        if budget_snapshot.exceeds_threshold() {
             let compacted = context_manager.compact(conversation);
             let removed = conversation.len().saturating_sub(compacted.len());
             *conversation = compacted;
             if removed > 0 {
-                println!("  [context compacted: {removed} entries summarized]");
+                let after = context_manager.budget_snapshot(conversation);
+                println!(
+                    "  [context compacted: {removed} entries summarized, now {:.0}%]",
+                    after.usage_ratio * 100.0
+                );
             }
         }
 

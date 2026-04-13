@@ -11,6 +11,9 @@ export function Header() {
   const projects = useAppStore((state) => state.projects);
   const activeProjectPath = useAppStore((state) => state.activeProjectPath);
   const lastPromptResult = useAppStore((state) => state.lastPromptResult);
+  const contextUsageBySession = useAppStore((state) => state.contextUsageBySession);
+  const contextOverflowBySession = useAppStore((state) => state.contextOverflowBySession);
+  const contextCompactionBySession = useAppStore((state) => state.contextCompactionBySession);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) ?? null,
@@ -28,6 +31,12 @@ export function Header() {
       null,
     [activeProjectPath, activeSession, projects],
   );
+
+  const activeContextUsage = activeSessionId ? contextUsageBySession[activeSessionId] ?? null : null;
+  const activeContextOverflow = activeSessionId ? contextOverflowBySession[activeSessionId] ?? null : null;
+  const activeContextCompaction = activeSessionId
+    ? contextCompactionBySession[activeSessionId] ?? null
+    : null;
 
   return (
     <header className="border-b border-[#ebe6dd] bg-white/90 px-4 py-3 backdrop-blur sm:px-6">
@@ -73,6 +82,22 @@ export function Header() {
           {lastPromptResult && (
             <div className="rounded-full border border-[#e2dbcf] bg-[#fbfaf7] px-3 py-1.5 font-mono text-xs text-slate-600">
               in {lastPromptResult.usage.input_tokens} / out {lastPromptResult.usage.output_tokens}
+            </div>
+          )}
+          {activeContextUsage && (
+            <div className="rounded-full border border-[#e2dbcf] bg-[#fbfaf7] px-3 py-1.5 font-mono text-xs text-slate-600">
+              ctx {(activeContextUsage.ratio * 100).toFixed(0)}% · {activeContextUsage.estimated_tokens}/
+              {activeContextUsage.max_input_tokens}
+            </div>
+          )}
+          {activeContextCompaction && (
+            <div className="rounded-full border border-[#eadfcd] bg-[#fff8ea] px-3 py-1.5 text-xs text-amber-700">
+              compacted {activeContextCompaction.entries_removed} · {(activeContextCompaction.usage_ratio * 100).toFixed(0)}%
+            </div>
+          )}
+          {!activeContextCompaction && activeContextOverflow && (
+            <div className="rounded-full border border-[#f1d7d4] bg-[#fff4f2] px-3 py-1.5 text-xs text-rose-700">
+              near limit {(activeContextOverflow.ratio * 100).toFixed(0)}%
             </div>
           )}
         </div>

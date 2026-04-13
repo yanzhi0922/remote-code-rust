@@ -3922,6 +3922,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "rc-core",
+ "rc-ui-bridge",
  "serde",
  "serde_json",
  "uuid",
@@ -4171,6 +4172,7 @@ dependencies = [
  "rc-telemetry",
  "rc-tools",
  "rc-tui",
+ "rc-ui-bridge",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

@@ -23,9 +23,12 @@ use rc_session::SessionStore;
 use rc_session::resume_state::{PendingToolCall, ResumeState};
 use rc_skills::SkillDocument;
 use rc_tools::{
-    ToolExecutionContext, builtin_tool_specs, execute_tool_call,
+    ToolExecutionContext,
     agent::{DelegateProgressEvent, parse_delegate_progress_event},
+    builtin_tool_specs, execute_tool_call,
+    tasks::load_persisted_ui_task_snapshots,
 };
+use rc_ui_bridge::UiTaskNode;
 
 use crate::cli::Cli;
 use crate::hooks::{
@@ -118,6 +121,25 @@ pub(crate) enum PromptStreamEvent {
         completed: usize,
         running: usize,
     },
+    ContextUsage {
+        estimated_tokens: u64,
+        max_input_tokens: u64,
+        threshold_tokens: u64,
+        ratio: f64,
+    },
+    ContextOverflow {
+        estimated_tokens: u64,
+        max_input_tokens: u64,
+        threshold_tokens: u64,
+        ratio: f64,
+    },
+    ContextCompacted {
+        entries_removed: usize,
+        usage_ratio: f64,
+    },
+    TaskSnapshot {
+        tasks: Vec<UiTaskNode>,
+    },
 }
 
 struct ConversationSubAgent {
@@ -151,6 +173,20 @@ pub(crate) fn truncate_preview(value: &str, max_chars: usize) -> String {
         preview.push_str("...");
     }
     preview
+}
+
+fn session_task_dir(config: &RuntimeConfig) -> PathBuf {
+    config
+        .paths
+        .artifacts_dir
+        .join("tasks")
+        .join(config.session_id.to_string())
+}
+
+fn emit_task_snapshot_if_available(event_sink: &PromptEventSink, task_dir: &PathBuf) {
+    if let Ok(tasks) = load_persisted_ui_task_snapshots(task_dir) {
+        event_sink(PromptStreamEvent::TaskSnapshot { tasks });
+    }
 }
 
 fn build_streaming_callbacks(
@@ -454,8 +490,10 @@ pub(crate) async fn run_prompt(
     store.append_conversation_entry(config.session_id, &user_entry)?;
     conversation.push(user_entry);
 
+    let task_dir = session_task_dir(config);
     let progress_cb = event_sink.as_ref().map(|event_sink| {
         let event_sink = event_sink.clone();
+        let task_dir = task_dir.clone();
         Arc::new(move |message: &str| {
             let Some(event) = parse_delegate_progress_event(message) else {
                 return;
@@ -466,43 +504,55 @@ pub(crate) async fn run_prompt(
                     parent_task_id,
                     description,
                     depth,
-                } => event_sink(PromptStreamEvent::SubtaskStarted {
-                    task_id,
-                    parent_task_id,
-                    description,
-                    depth,
-                }),
+                } => {
+                    event_sink(PromptStreamEvent::SubtaskStarted {
+                        task_id,
+                        parent_task_id,
+                        description,
+                        depth,
+                    });
+                    emit_task_snapshot_if_available(&event_sink, &task_dir);
+                }
                 DelegateProgressEvent::SubtaskProgress {
                     task_id,
                     turn,
                     max_turns,
                     summary,
-                } => event_sink(PromptStreamEvent::SubtaskProgress {
-                    task_id,
-                    turn,
-                    max_turns,
-                    summary,
-                }),
+                } => {
+                    event_sink(PromptStreamEvent::SubtaskProgress {
+                        task_id,
+                        turn,
+                        max_turns,
+                        summary,
+                    });
+                    emit_task_snapshot_if_available(&event_sink, &task_dir);
+                }
                 DelegateProgressEvent::SubtaskCompleted {
                     task_id,
                     success,
                     output_preview,
                     turns_used,
-                } => event_sink(PromptStreamEvent::SubtaskCompleted {
-                    task_id,
-                    success,
-                    output_preview,
-                    turns_used,
-                }),
+                } => {
+                    event_sink(PromptStreamEvent::SubtaskCompleted {
+                        task_id,
+                        success,
+                        output_preview,
+                        turns_used,
+                    });
+                    emit_task_snapshot_if_available(&event_sink, &task_dir);
+                }
                 DelegateProgressEvent::BatchProgress {
                     total,
                     completed,
                     running,
-                } => event_sink(PromptStreamEvent::BatchProgress {
-                    total,
-                    completed,
-                    running,
-                }),
+                } => {
+                    event_sink(PromptStreamEvent::BatchProgress {
+                        total,
+                        completed,
+                        running,
+                    });
+                    emit_task_snapshot_if_available(&event_sink, &task_dir);
+                }
             }
         }) as Arc<dyn Fn(&str) + Send + Sync>
     });
@@ -528,9 +578,69 @@ pub(crate) async fn run_prompt(
     for turn_index in 0..config.max_turns {
         num_turns += 1;
 
-        // Compact conversation if context window is getting full
-        if context_manager.needs_compaction(conversation) {
-            *conversation = context_manager.compact(conversation);
+        let budget_snapshot = context_manager.budget_snapshot(conversation);
+        if let Some(event_sink) = event_sink.as_ref() {
+            event_sink(PromptStreamEvent::ContextUsage {
+                estimated_tokens: budget_snapshot.estimated_tokens,
+                max_input_tokens: budget_snapshot.max_input_tokens,
+                threshold_tokens: budget_snapshot.threshold_tokens(),
+                ratio: budget_snapshot.usage_ratio,
+            });
+        }
+
+        // Compact conversation if context window is getting full.
+        if budget_snapshot.exceeds_threshold() {
+            if let Some(event_sink) = event_sink.as_ref() {
+                event_sink(PromptStreamEvent::ContextOverflow {
+                    estimated_tokens: budget_snapshot.estimated_tokens,
+                    max_input_tokens: budget_snapshot.max_input_tokens,
+                    threshold_tokens: budget_snapshot.threshold_tokens(),
+                    ratio: budget_snapshot.usage_ratio,
+                });
+            }
+            store.append_named_event(
+                config.session_id,
+                "context_overflow",
+                serde_json::json!({
+                    "turn": turn_index + 1,
+                    "estimated_tokens": budget_snapshot.estimated_tokens,
+                    "max_input_tokens": budget_snapshot.max_input_tokens,
+                    "threshold_tokens": budget_snapshot.threshold_tokens(),
+                    "usage_ratio": budget_snapshot.usage_ratio,
+                }),
+            )?;
+
+            let compacted = context_manager.compact(conversation);
+            let removed = conversation.len().saturating_sub(compacted.len());
+            *conversation = compacted;
+            let compacted_snapshot = context_manager.budget_snapshot(conversation);
+
+            if removed > 0 {
+                store.append_named_event(
+                    config.session_id,
+                    "context_compacted",
+                    serde_json::json!({
+                        "turn": turn_index + 1,
+                        "entries_removed": removed,
+                        "usage_ratio_before": budget_snapshot.usage_ratio,
+                        "usage_ratio_after": compacted_snapshot.usage_ratio,
+                        "estimated_tokens_before": budget_snapshot.estimated_tokens,
+                        "estimated_tokens_after": compacted_snapshot.estimated_tokens,
+                    }),
+                )?;
+                if let Some(event_sink) = event_sink.as_ref() {
+                    event_sink(PromptStreamEvent::ContextCompacted {
+                        entries_removed: removed,
+                        usage_ratio: compacted_snapshot.usage_ratio,
+                    });
+                    event_sink(PromptStreamEvent::ContextUsage {
+                        estimated_tokens: compacted_snapshot.estimated_tokens,
+                        max_input_tokens: compacted_snapshot.max_input_tokens,
+                        threshold_tokens: compacted_snapshot.threshold_tokens(),
+                        ratio: compacted_snapshot.usage_ratio,
+                    });
+                }
+            }
         }
 
         let response = if let Some(event_sink) = event_sink.clone() {
@@ -785,7 +895,11 @@ pub(crate) async fn run_oneshot_text(
     let provider = Arc::new(ProviderClient::new()?);
     let broker = LayeredPermissionBroker::new(
         StaticPermissionBroker::new(config.permission_mode),
-        load_layered_rules(&config.cwd, &config.paths.profile_dir, &config.settings_files)?,
+        load_layered_rules(
+            &config.cwd,
+            &config.paths.profile_dir,
+            &config.settings_files,
+        )?,
     );
     let discovery = discover_runtime_hooks(config, &[]);
     let mut hook_state = HookRunState::load(store, config.session_id)?;
@@ -818,8 +932,11 @@ pub(crate) fn run_doctor(config: &RuntimeConfig) -> Result<()> {
     let report = validate_provider_config(&config.provider);
     let discovery = discover_runtime_extensions(config);
     let hooks = crate::runtime_hooks::HookRuntime::discover(config);
-    let layered_rules =
-        load_layered_rules(&config.cwd, &config.paths.profile_dir, &config.settings_files)?;
+    let layered_rules = load_layered_rules(
+        &config.cwd,
+        &config.paths.profile_dir,
+        &config.settings_files,
+    )?;
     let api_key_state = if config.provider.api_key.is_some() {
         "present"
     } else {

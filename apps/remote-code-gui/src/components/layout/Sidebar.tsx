@@ -17,7 +17,7 @@ const LazySettingsPanel = lazy(() =>
   import('./SettingsPanel').then((module) => ({ default: module.SettingsPanel })),
 );
 
-type SessionTaskStatus = 'running' | 'completed' | 'failed';
+type SessionTaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'stopped';
 
 interface SessionTaskItem {
   id: string;
@@ -187,14 +187,16 @@ function SessionTaskRow({ task }: { task: SessionTaskItem }) {
       className="mt-1 flex items-start gap-2 rounded-2xl border border-[#ece5d9] bg-[#fbf9f4] px-3 py-2"
       style={{ marginLeft: `${28 + task.depth * 18}px` }}
     >
-      <span
-        className={cn(
-          'mt-1 h-2.5 w-2.5 shrink-0 rounded-full',
-          task.status === 'completed' && 'bg-emerald-500',
-          task.status === 'failed' && 'bg-rose-500',
-          task.status === 'running' && 'animate-pulse bg-amber-500',
-        )}
-      />
+        <span
+          className={cn(
+            'mt-1 h-2.5 w-2.5 shrink-0 rounded-full',
+            task.status === 'pending' && 'bg-slate-300',
+            task.status === 'stopped' && 'bg-slate-400',
+            task.status === 'completed' && 'bg-emerald-500',
+            task.status === 'failed' && 'bg-rose-500',
+            task.status === 'running' && 'animate-pulse bg-amber-500',
+          )}
+        />
       <div className="min-w-0">
         <div className="truncate text-xs font-semibold text-slate-700">{task.title}</div>
         <div className="mt-1 truncate text-[11px] text-slate-500">{task.detail}</div>

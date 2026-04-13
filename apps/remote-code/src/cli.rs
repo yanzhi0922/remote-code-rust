@@ -103,6 +103,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: Option<SessionsCommand>,
     },
+    Review(ReviewArgs),
+    Worktree {
+        #[command(subcommand)]
+        command: WorktreeCommand,
+    },
     Tasks {
         #[command(subcommand)]
         command: Option<TasksCommand>,
@@ -158,6 +163,13 @@ pub enum SessionsCommand {
 pub enum TasksCommand {
     List(TasksListArgs),
     Show(TaskShowArgs),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum WorktreeCommand {
+    List(WorktreeListArgs),
+    Add(WorktreeAddArgs),
+    Remove(WorktreeRemoveArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -265,6 +277,40 @@ pub struct TaskShowArgs {
     pub json: bool,
     #[arg(long)]
     pub output: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct ReviewArgs {
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct WorktreeListArgs {
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct WorktreeAddArgs {
+    pub branch: String,
+
+    #[arg(long)]
+    pub path: Option<PathBuf>,
+
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct WorktreeRemoveArgs {
+    pub branch: String,
+
+    #[arg(long)]
+    pub path: Option<PathBuf>,
+
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -743,6 +789,10 @@ pub enum McpCommand {
     Get(McpGetArgs),
     Add(McpAddArgs),
     Remove(McpRemoveArgs),
+    Enable(McpToggleArgs),
+    Disable(McpToggleArgs),
+    Reset(McpResetArgs),
+    Serve(McpServeArgs),
     Call(McpCallArgs),
 }
 
@@ -754,6 +804,9 @@ pub enum PluginsCommand {
     Validate(PluginsValidateArgs),
     Install(PluginsInstallArgs),
     Remove(PluginsRemoveArgs),
+    Enable(PluginsToggleArgs),
+    Disable(PluginsToggleArgs),
+    Update(PluginsUpdateArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -761,6 +814,7 @@ pub enum SkillsCommand {
     List(SkillsListArgs),
     Show(SkillsShowArgs),
     Lock(SkillsLockArgs),
+    Index(SkillsIndexArgs),
 }
 
 #[derive(Args, Debug)]
@@ -876,6 +930,53 @@ pub struct McpRemoveArgs {
 }
 
 #[derive(Args, Debug)]
+pub struct McpToggleArgs {
+    pub name: String,
+
+    #[arg(long)]
+    pub json: bool,
+
+    #[arg(long = "config")]
+    pub config_path: Option<PathBuf>,
+
+    #[arg(long)]
+    pub project: bool,
+
+    #[arg(long)]
+    pub if_exists: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct McpResetArgs {
+    #[arg(long)]
+    pub json: bool,
+
+    #[arg(long = "config")]
+    pub config_path: Option<PathBuf>,
+
+    #[arg(long)]
+    pub project: bool,
+
+    #[arg(long)]
+    pub if_exists: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct McpServeArgs {
+    #[arg(long)]
+    pub server: String,
+
+    #[arg(long)]
+    pub json: bool,
+
+    #[arg(long = "include-disabled")]
+    pub include_disabled: bool,
+
+    #[arg(long = "config")]
+    pub config_paths: Vec<PathBuf>,
+}
+
+#[derive(Args, Debug)]
 pub struct McpCallArgs {
     #[arg(long)]
     pub server: String,
@@ -985,6 +1086,25 @@ pub struct PluginsRemoveArgs {
 }
 
 #[derive(Args, Debug)]
+pub struct PluginsToggleArgs {
+    pub plugin: String,
+
+    #[arg(long)]
+    pub json: bool,
+
+    #[arg(long)]
+    pub if_exists: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct PluginsUpdateArgs {
+    pub path: PathBuf,
+
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
 pub struct SkillsListArgs {
     #[arg(long)]
     pub json: bool,
@@ -1011,6 +1131,21 @@ pub struct SkillsShowArgs {
 pub struct SkillsLockArgs {
     #[arg(long)]
     pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct SkillsIndexArgs {
+    #[arg(long)]
+    pub json: bool,
+
+    #[arg(long)]
+    pub no_plugins: bool,
+
+    #[arg(long)]
+    pub write_cache: bool,
+
+    #[arg(long)]
+    pub output: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]

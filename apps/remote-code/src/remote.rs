@@ -9,9 +9,9 @@ use futures::StreamExt;
 use rc_control_plane::{
     ArtifactCreateRequest as RemoteArtifactCreateRequest, ArtifactRecord as RemoteArtifactRecord,
     BootstrapClaimRequest as RemoteBootstrapClaimRequest,
-    BootstrapClaimResponse as RemoteBootstrapClaimResponse, ControlPlaneMeta as RemoteControlPlaneMeta,
-    CreateSessionRequest as RemoteCreateSessionRequest, DeviceKind as RemoteDeviceKind,
-    PairingAcceptRequest as RemotePairingAcceptRequest,
+    BootstrapClaimResponse as RemoteBootstrapClaimResponse,
+    ControlPlaneMeta as RemoteControlPlaneMeta, CreateSessionRequest as RemoteCreateSessionRequest,
+    DeviceKind as RemoteDeviceKind, PairingAcceptRequest as RemotePairingAcceptRequest,
     PairingAcceptResponse as RemotePairingAcceptResponse,
     PairingOfferCreateRequest as RemotePairingOfferCreateRequest,
     PairingOfferCreateResponse as RemotePairingOfferCreateResponse,
@@ -34,12 +34,12 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::cli::{
-    RemoteApprovalCreateArgs, RemoteApprovalRespondArgs, RemoteApprovalShowArgs, RemoteApprovalsCommand,
-    RemoteApprovalsListArgs, RemoteArtifactDownloadArgs, RemoteArtifactShowArgs,
-    RemoteArtifactUploadArgs, RemoteArtifactsCommand, RemoteArtifactsListArgs,
-    RemoteAuthCommand, RemoteBootstrapArgs, RemoteCommand, RemoteDeviceKindValue,
-    RemoteDevicesListArgs, RemoteEventKindValue, RemoteEventsArgs, RemoteMetaArgs,
-    RemotePairingAcceptArgs, RemotePairingOfferArgs, RemoteRunnerShowArgs,
+    RemoteApprovalCreateArgs, RemoteApprovalRespondArgs, RemoteApprovalShowArgs,
+    RemoteApprovalsCommand, RemoteApprovalsListArgs, RemoteArtifactDownloadArgs,
+    RemoteArtifactShowArgs, RemoteArtifactUploadArgs, RemoteArtifactsCommand,
+    RemoteArtifactsListArgs, RemoteAuthCommand, RemoteBootstrapArgs, RemoteCommand,
+    RemoteDeviceKindValue, RemoteDevicesListArgs, RemoteEventKindValue, RemoteEventsArgs,
+    RemoteMetaArgs, RemotePairingAcceptArgs, RemotePairingOfferArgs, RemoteRunnerShowArgs,
     RemoteRunnersCommand, RemoteRunnersListArgs, RemoteSessionCommandResponseValue,
     RemoteSessionCreateArgs, RemoteSessionInterruptArgs, RemoteSessionPromptArgs,
     RemoteSessionShowArgs, RemoteSessionStateArgs, RemoteSessionsCommand, RemoteSessionsListArgs,
@@ -192,9 +192,7 @@ where
     T: serde::de::DeserializeOwned,
 {
     let client = Client::new();
-    let response = authorize_remote_request(
-        client.get(build_remote_http_url(base_url, path)?),
-    )
+    let response = authorize_remote_request(client.get(build_remote_http_url(base_url, path)?))
         .send()
         .await?;
     decode_remote_json_response(response).await
@@ -202,9 +200,7 @@ where
 
 pub(crate) async fn remote_get_bytes(base_url: &str, path: &str) -> Result<Vec<u8>> {
     let client = Client::new();
-    let response = authorize_remote_request(
-        client.get(build_remote_http_url(base_url, path)?),
-    )
+    let response = authorize_remote_request(client.get(build_remote_http_url(base_url, path)?))
         .send()
         .await?;
     let status = response.status();
@@ -234,9 +230,7 @@ where
     O: serde::de::DeserializeOwned,
 {
     let client = Client::new();
-    let response = authorize_remote_request(
-        client.post(build_remote_http_url(base_url, path)?),
-    )
+    let response = authorize_remote_request(client.post(build_remote_http_url(base_url, path)?))
         .json(input)
         .send()
         .await?;

@@ -54,7 +54,10 @@ fn render_task_list(config: &RuntimeConfig) {
     }
 }
 
-fn render_tree_row(task: &BackgroundTask, by_parent: &HashMap<Option<String>, Vec<BackgroundTask>>) {
+fn render_tree_row(
+    task: &BackgroundTask,
+    by_parent: &HashMap<Option<String>, Vec<BackgroundTask>>,
+) {
     let indent = "  ".repeat(task.depth as usize);
     let kind = task.kind.as_str();
     let summary = if task.summary.trim().is_empty() {
@@ -120,7 +123,11 @@ fn render_task_output(config: &RuntimeConfig, task_id: &str) {
     let task = task_snapshots()
         .into_iter()
         .find(|task| task.id == task_id)
-        .or_else(|| load_persisted_task(&task_dir(config), task_id).ok().flatten());
+        .or_else(|| {
+            load_persisted_task(&task_dir(config), task_id)
+                .ok()
+                .flatten()
+        });
     let Some(task) = task else {
         println!("Task '{task_id}' not found.");
         return;

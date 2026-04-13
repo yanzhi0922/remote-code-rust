@@ -110,6 +110,43 @@ const DEFAULT_RECENT_TURNS: usize = 4;
 /// truncation.
 const DEFAULT_TOOL_OUTPUT_MAX_CHARS: usize = 10_000;
 
+/// Snapshot of the current context-budget state for a conversation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ContextBudgetSnapshot {
+    /// Estimated input tokens currently consumed by the conversation.
+    pub estimated_tokens: u64,
+    /// Maximum input-token budget after reserving output tokens.
+    pub max_input_tokens: u64,
+    /// Maximum model context window.
+    pub max_context_tokens: u64,
+    /// Reserved output-token budget.
+    pub output_reserve_tokens: u64,
+    /// Ratio at which proactive compaction should begin.
+    pub compaction_threshold_ratio: f64,
+    /// Fraction of the available input budget currently in use.
+    pub usage_ratio: f64,
+}
+
+impl ContextBudgetSnapshot {
+    /// Return the estimated token threshold at which compaction should start.
+    #[must_use]
+    pub fn threshold_tokens(&self) -> u64 {
+        ((self.max_input_tokens as f64) * self.compaction_threshold_ratio).ceil() as u64
+    }
+
+    /// Whether the snapshot is already past the proactive compaction threshold.
+    #[must_use]
+    pub fn exceeds_threshold(&self) -> bool {
+        self.usage_ratio >= self.compaction_threshold_ratio
+    }
+
+    /// Whether the conversation has exceeded the full available input budget.
+    #[must_use]
+    pub fn exceeds_budget(&self) -> bool {
+        self.estimated_tokens >= self.max_input_tokens
+    }
+}
+
 /// Context-window manager that tracks an approximate token budget and
 /// compacts conversations when the budget is exceeded.
 #[derive(Debug, Clone)]
@@ -167,6 +204,27 @@ impl ContextWindowManager {
         self.max_tokens.saturating_sub(self.output_reserve)
     }
 
+    /// Return a structured snapshot of the current context-budget usage.
+    #[must_use]
+    pub fn budget_snapshot(&self, conversation: &[ConversationEntry]) -> ContextBudgetSnapshot {
+        let estimated_tokens = self.estimator.estimate_conversation(conversation);
+        let max_input_tokens = self.available_budget();
+        let usage_ratio = if max_input_tokens == 0 {
+            1.0
+        } else {
+            (estimated_tokens as f64) / (max_input_tokens as f64)
+        };
+
+        ContextBudgetSnapshot {
+            estimated_tokens,
+            max_input_tokens,
+            max_context_tokens: self.max_tokens,
+            output_reserve_tokens: self.output_reserve,
+            compaction_threshold_ratio: self.compaction_threshold,
+            usage_ratio,
+        }
+    }
+
     /// Check whether the conversation exceeds the compaction threshold.
     #[must_use]
     pub fn needs_compaction(&self, conversation: &[ConversationEntry]) -> bool {
@@ -176,12 +234,7 @@ impl ContextWindowManager {
     /// Return the current usage ratio (0.0 – 1.0) of the input budget.
     #[must_use]
     pub fn usage_ratio(&self, conversation: &[ConversationEntry]) -> f64 {
-        let budget = self.available_budget();
-        if budget == 0 {
-            return 1.0;
-        }
-        let used = self.estimator.estimate_conversation(conversation);
-        (used as f64) / (budget as f64)
+        self.budget_snapshot(conversation).usage_ratio
     }
 
     /// Compact a conversation that has grown too large.
@@ -1079,6 +1132,26 @@ mod tests {
         assert!(
             long_ratio > short_ratio,
             "longer conversation should have higher usage ratio"
+        );
+    }
+
+    #[test]
+    fn budget_snapshot_reports_threshold_and_budget_state() {
+        let mgr = ContextWindowManager::new(1_000, 100);
+        let conversation = vec![ConversationEntry::user("a".repeat(800))];
+
+        let snapshot = mgr.budget_snapshot(&conversation);
+
+        assert_eq!(snapshot.max_input_tokens, 900);
+        assert_eq!(snapshot.threshold_tokens(), 720);
+        assert!(snapshot.estimated_tokens > 0);
+        assert_eq!(
+            snapshot.exceeds_threshold(),
+            snapshot.usage_ratio >= snapshot.compaction_threshold_ratio
+        );
+        assert_eq!(
+            snapshot.exceeds_budget(),
+            snapshot.estimated_tokens >= snapshot.max_input_tokens
         );
     }
 

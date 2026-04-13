@@ -7,6 +7,7 @@ use std::io::Write;
 
 use anyhow::Result;
 use rc_core::SessionState;
+use rc_ui_bridge::UiTaskNode;
 use serde::Serialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -215,6 +216,69 @@ impl<W: Write> ProtocolEmitter<W> {
             "total": total,
             "completed": completed,
             "running": running,
+            "uuid": Uuid::new_v4(),
+            "session_id": self.session_id,
+        }))
+    }
+
+    /// Emit a context-usage snapshot.
+    pub fn emit_context_usage(
+        &mut self,
+        estimated_tokens: u64,
+        max_input_tokens: u64,
+        threshold_tokens: u64,
+        ratio: f64,
+    ) -> Result<()> {
+        self.emit(json!({
+            "type": "context_usage",
+            "estimated_tokens": estimated_tokens,
+            "max_input_tokens": max_input_tokens,
+            "threshold_tokens": threshold_tokens,
+            "ratio": ratio,
+            "uuid": Uuid::new_v4(),
+            "session_id": self.session_id,
+        }))
+    }
+
+    /// Emit a context-overflow warning before compaction.
+    pub fn emit_context_overflow(
+        &mut self,
+        estimated_tokens: u64,
+        max_input_tokens: u64,
+        threshold_tokens: u64,
+        ratio: f64,
+    ) -> Result<()> {
+        self.emit(json!({
+            "type": "context_overflow",
+            "estimated_tokens": estimated_tokens,
+            "max_input_tokens": max_input_tokens,
+            "threshold_tokens": threshold_tokens,
+            "ratio": ratio,
+            "uuid": Uuid::new_v4(),
+            "session_id": self.session_id,
+        }))
+    }
+
+    /// Emit a context-compacted event.
+    pub fn emit_context_compacted(
+        &mut self,
+        entries_removed: usize,
+        usage_ratio: f64,
+    ) -> Result<()> {
+        self.emit(json!({
+            "type": "context_compacted",
+            "entries_removed": entries_removed,
+            "usage_ratio": usage_ratio,
+            "uuid": Uuid::new_v4(),
+            "session_id": self.session_id,
+        }))
+    }
+
+    /// Emit a snapshot of the current task tree for the active session.
+    pub fn emit_task_snapshot(&mut self, tasks: Vec<UiTaskNode>) -> Result<()> {
+        self.emit(json!({
+            "type": "task_snapshot",
+            "tasks": tasks,
             "uuid": Uuid::new_v4(),
             "session_id": self.session_id,
         }))
@@ -642,6 +706,47 @@ mod tests {
         assert_eq!(events[2]["success"], true);
         assert_eq!(events[3]["type"], "batch_progress");
         assert_eq!(events[3]["completed"], 2);
+    }
+
+    #[test]
+    fn emit_context_and_task_snapshot_events() {
+        let mut buf = Cursor::new(Vec::new());
+        let mut emitter = ProtocolEmitter::new(&mut buf, test_session_id());
+        emitter
+            .emit_context_usage(48_000, 100_000, 80_000, 0.48)
+            .expect("emit_context_usage should succeed");
+        emitter
+            .emit_context_overflow(82_000, 100_000, 80_000, 0.82)
+            .expect("emit_context_overflow should succeed");
+        emitter
+            .emit_context_compacted(6, 0.41)
+            .expect("emit_context_compacted should succeed");
+        emitter
+            .emit_task_snapshot(vec![UiTaskNode {
+                id: "task-1".to_owned(),
+                parent_task_id: None,
+                title: "Investigate".to_owned(),
+                status: rc_ui_bridge::UiTaskStatus::Running,
+                kind: rc_ui_bridge::UiTaskKind::Delegation,
+                depth: 0,
+                summary: "Working".to_owned(),
+                turns_used: Some(1),
+                output_path: None,
+                created_at: "1".to_owned(),
+                updated_at: "2".to_owned(),
+            }])
+            .expect("emit_task_snapshot should succeed");
+
+        let events = collect_lines(&buf.into_inner());
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0]["type"], "context_usage");
+        assert_eq!(events[0]["estimated_tokens"], 48_000);
+        assert_eq!(events[1]["type"], "context_overflow");
+        assert_eq!(events[1]["threshold_tokens"], 80_000);
+        assert_eq!(events[2]["type"], "context_compacted");
+        assert_eq!(events[2]["entries_removed"], 6);
+        assert_eq!(events[3]["type"], "task_snapshot");
+        assert_eq!(events[3]["tasks"][0]["id"], "task-1");
     }
 
     #[test]

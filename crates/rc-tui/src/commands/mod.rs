@@ -9,8 +9,8 @@ use rc_tools::runtime_builtin_tool_specs;
 use crate::theme::Theme;
 
 pub mod help;
-pub mod memory;
 pub mod mcp;
+pub mod memory;
 pub mod model;
 pub mod permissions;
 pub mod plugins;
@@ -73,17 +73,17 @@ pub const SLASH_COMMANDS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "/mcp",
         summary: "List or inspect discovered MCP servers",
-        usage: "/mcp [list|show <server>]",
+        usage: "/mcp [list|show <server>|enable <server> [project]|disable <server> [project]|reset [project]]",
     },
     SlashCommandSpec {
         name: "/plugins",
         summary: "List or inspect installed plugins",
-        usage: "/plugins [list|show <plugin>|validate [plugin]]",
+        usage: "/plugins [list|show <plugin>|validate [plugin]|enable <plugin>|disable <plugin>]",
     },
     SlashCommandSpec {
         name: "/skills",
         summary: "List, inspect, or show the skill lock file",
-        usage: "/skills [list|show <slug>|lock]",
+        usage: "/skills [list|show <slug>|lock|index]",
     },
     SlashCommandSpec {
         name: "/review",

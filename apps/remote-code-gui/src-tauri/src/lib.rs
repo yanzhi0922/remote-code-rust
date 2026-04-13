@@ -4,35 +4,36 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use rc_config::{
-    AppPaths, ProviderConfig as RuntimeProviderConfig, ProviderOverrides, RuntimeConfig,
-    RuntimeOverrides, load_runtime_config, normalize_base_url, validate_provider_config,
+    load_runtime_config, normalize_base_url, validate_provider_config, AppPaths,
+    ProviderConfig as RuntimeProviderConfig, ProviderOverrides, RuntimeConfig, RuntimeOverrides,
 };
 use rc_core::{
-    ConversationEntry, ConversationRole, PermissionMode, ProviderProtocol, ProviderResponse,
-    SubAgentCompletion, ToolCall, UsageSummary, default_system_prompt,
+    default_system_prompt, ConversationEntry, ConversationRole, PermissionMode, ProviderProtocol,
+    ProviderResponse, SubAgentCompletion, ToolCall, UsageSummary,
 };
 use rc_permissions::{
-    LayeredPermissionBroker, PermissionBroker, PermissionDecision, PermissionRequest,
-    auto_allows, classify_tool, load_layered_rules,
+    auto_allows, classify_tool, load_layered_rules, LayeredPermissionBroker, PermissionBroker,
+    PermissionDecision, PermissionRequest,
 };
-use rc_provider::ProviderClient;
 use rc_provider::context::ContextWindowManager;
 use rc_provider::streaming::StreamingCallbacks;
+use rc_provider::ProviderClient;
 use rc_session::{SessionStore, SessionSummary};
-use rc_tools::{
-    ToolExecutionContext, ToolRuntimePolicy, configure_tool_runtime_policy, execute_tool_call,
-    runtime_builtin_tool_specs,
-    agent::{DelegateProgressEvent, parse_delegate_progress_event},
-};
 use rc_tools::shell::ShellExecutionPolicy;
+use rc_tools::{
+    agent::{parse_delegate_progress_event, DelegateProgressEvent},
+    configure_tool_runtime_policy, execute_tool_call, runtime_builtin_tool_specs,
+    tasks::load_persisted_ui_task_snapshots,
+    ToolExecutionContext, ToolRuntimePolicy,
+};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_dialog::DialogExt;
-use tokio::sync::{Mutex, oneshot};
-use tokio::time::{Duration, timeout};
+use tokio::sync::{oneshot, Mutex};
+use tokio::time::{timeout, Duration};
 use uuid::Uuid;
 
 const APP_EVENT_PERMISSION_REQUEST: &str = "gui://permission-request";
@@ -46,6 +47,10 @@ const APP_EVENT_SUBTASK_STARTED: &str = "gui://subtask-started";
 const APP_EVENT_SUBTASK_PROGRESS: &str = "gui://subtask-progress";
 const APP_EVENT_SUBTASK_COMPLETED: &str = "gui://subtask-completed";
 const APP_EVENT_BATCH_PROGRESS: &str = "gui://batch-progress";
+const APP_EVENT_TASK_SNAPSHOT: &str = "gui://task-snapshot";
+const APP_EVENT_CONTEXT_USAGE: &str = "gui://context-usage";
+const APP_EVENT_CONTEXT_OVERFLOW: &str = "gui://context-overflow";
+const APP_EVENT_CONTEXT_COMPACTED: &str = "gui://context-compacted";
 const PROJECTS_FILE_NAME: &str = "gui-projects.json";
 const PROVIDERS_FILE_NAME: &str = "gui-providers.json";
 const SETTINGS_FILE_NAME: &str = "gui-settings.json";
@@ -382,6 +387,54 @@ struct BatchProgressDto {
     running: usize,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct SessionTaskDto {
+    session_id: String,
+    task_id: String,
+    parent_task_id: Option<String>,
+    description: String,
+    depth: u32,
+    status: String,
+    summary: String,
+    output_preview: Option<String>,
+    turns_used: Option<u32>,
+    kind: String,
+    output_path: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct TaskSnapshotDto {
+    session_id: String,
+    tasks: Vec<SessionTaskDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ContextUsageDto {
+    session_id: String,
+    estimated_tokens: u64,
+    max_input_tokens: u64,
+    threshold_tokens: u64,
+    ratio: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ContextOverflowDto {
+    session_id: String,
+    estimated_tokens: u64,
+    max_input_tokens: u64,
+    threshold_tokens: u64,
+    ratio: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ContextCompactedDto {
+    session_id: String,
+    entries_removed: usize,
+    usage_ratio: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedProviderContext {
     name: String,
@@ -675,6 +728,94 @@ fn usage_to_dto(usage: &UsageSummary) -> UsageDto {
     }
 }
 
+fn task_dir_for_paths(paths: &AppPaths, session_id: Uuid) -> PathBuf {
+    paths
+        .artifacts_dir
+        .join("tasks")
+        .join(session_id.to_string())
+}
+
+fn shell_output_dir_for_paths(paths: &AppPaths, session_id: Uuid) -> PathBuf {
+    paths
+        .artifacts_dir
+        .join("shell")
+        .join(session_id.to_string())
+}
+
+fn configure_runtime_policy_for_config(config: &RuntimeConfig) -> Result<()> {
+    configure_tool_runtime_policy(ToolRuntimePolicy {
+        allowed_tools: config.allowed_tools.clone(),
+        disallowed_tools: config.disallowed_tools.clone(),
+        task_output_dir: Some(task_dir_for_paths(&config.paths, config.session_id)),
+        shell_policy: ShellExecutionPolicy {
+            block_inline_cwd: true,
+            allow_background: true,
+            block_destructive_git: true,
+            max_capture_chars: 16_000,
+            output_dir: Some(shell_output_dir_for_paths(&config.paths, config.session_id)),
+        },
+    })
+}
+
+fn ui_task_node_to_dto(session_id: &str, task: rc_ui_bridge::UiTaskNode) -> SessionTaskDto {
+    SessionTaskDto {
+        session_id: session_id.to_owned(),
+        task_id: task.id,
+        parent_task_id: task.parent_task_id,
+        description: task.title,
+        depth: task.depth,
+        status: match task.status {
+            rc_ui_bridge::UiTaskStatus::Pending => "pending",
+            rc_ui_bridge::UiTaskStatus::Running => "running",
+            rc_ui_bridge::UiTaskStatus::Completed => "completed",
+            rc_ui_bridge::UiTaskStatus::Failed => "failed",
+            rc_ui_bridge::UiTaskStatus::Stopped => "stopped",
+        }
+        .to_owned(),
+        summary: task.summary.clone(),
+        output_preview: if task.summary.trim().is_empty() {
+            None
+        } else {
+            Some(task.summary)
+        },
+        turns_used: task.turns_used,
+        kind: match task.kind {
+            rc_ui_bridge::UiTaskKind::Background => "background",
+            rc_ui_bridge::UiTaskKind::Delegation => "delegation",
+            rc_ui_bridge::UiTaskKind::Batch => "batch",
+        }
+        .to_owned(),
+        output_path: task.output_path,
+        created_at: task.created_at,
+        updated_at: task.updated_at,
+    }
+}
+
+fn load_session_tasks_from_paths(
+    paths: &AppPaths,
+    session_id: Uuid,
+) -> Result<Vec<SessionTaskDto>> {
+    let session_id_string = session_id.to_string();
+    Ok(
+        load_persisted_ui_task_snapshots(&task_dir_for_paths(paths, session_id))?
+            .into_iter()
+            .map(|task| ui_task_node_to_dto(&session_id_string, task))
+            .collect(),
+    )
+}
+
+fn emit_task_snapshot_for_session(app: &AppHandle, paths: &AppPaths, session_id: Uuid) {
+    if let Ok(tasks) = load_session_tasks_from_paths(paths, session_id) {
+        let _ = app.emit(
+            APP_EVENT_TASK_SNAPSHOT,
+            TaskSnapshotDto {
+                session_id: session_id.to_string(),
+                tasks,
+            },
+        );
+    }
+}
+
 fn tool_call_to_dto(call: &ToolCall) -> ToolCallDto {
     ToolCallDto {
         id: call.id.clone(),
@@ -887,30 +1028,7 @@ fn build_runtime_state() -> Result<RuntimeState> {
         config.provider.base_url =
             normalize_base_url(config.provider.base_url.clone(), config.provider.protocol);
     }
-    configure_tool_runtime_policy(ToolRuntimePolicy {
-        allowed_tools: config.allowed_tools.clone(),
-        disallowed_tools: config.disallowed_tools.clone(),
-        task_output_dir: Some(
-            config
-                .paths
-                .artifacts_dir
-                .join("tasks")
-                .join(config.session_id.to_string()),
-        ),
-        shell_policy: ShellExecutionPolicy {
-            block_inline_cwd: true,
-            allow_background: true,
-            block_destructive_git: true,
-            max_capture_chars: 16_000,
-            output_dir: Some(
-                config
-                    .paths
-                    .artifacts_dir
-                    .join("shell")
-                    .join(config.session_id.to_string()),
-            ),
-        },
-    })?;
+    configure_runtime_policy_for_config(&config)?;
 
     let provider = Arc::new(ProviderClient::new()?);
     let session_store = Arc::new(SessionStore::open(config.paths.clone())?);
@@ -1216,6 +1334,9 @@ async fn run_gui_prompt(
 
     let context_manager =
         ContextWindowManager::for_model(config.provider.model.as_deref().unwrap_or("unknown"));
+    let task_paths = config.paths.clone();
+    let session_id = config.session_id;
+    let session_id_string = session_id.to_string();
 
     let tool_context = ToolExecutionContext {
         cwd: config.cwd.clone(),
@@ -1226,7 +1347,8 @@ async fn run_gui_prompt(
         ))),
         progress_cb: Some(Arc::new({
             let app = app.clone();
-            let sid = config.session_id.to_string();
+            let sid = session_id_string.clone();
+            let paths = task_paths.clone();
             move |message: &str| {
                 let Some(event) = parse_delegate_progress_event(message) else {
                     let _ = app.emit(
@@ -1257,6 +1379,7 @@ async fn run_gui_prompt(
                                 depth,
                             },
                         );
+                        emit_task_snapshot_for_session(&app, &paths, session_id);
                     }
                     DelegateProgressEvent::SubtaskProgress {
                         task_id,
@@ -1282,6 +1405,7 @@ async fn run_gui_prompt(
                                 message: summary,
                             },
                         );
+                        emit_task_snapshot_for_session(&app, &paths, session_id);
                     }
                     DelegateProgressEvent::SubtaskCompleted {
                         task_id,
@@ -1299,6 +1423,7 @@ async fn run_gui_prompt(
                                 turns_used,
                             },
                         );
+                        emit_task_snapshot_for_session(&app, &paths, session_id);
                     }
                     DelegateProgressEvent::BatchProgress {
                         total,
@@ -1314,6 +1439,7 @@ async fn run_gui_prompt(
                                 running,
                             },
                         );
+                        emit_task_snapshot_for_session(&app, &paths, session_id);
                     }
                 }
             }
@@ -1329,15 +1455,89 @@ async fn run_gui_prompt(
             app: app.clone(),
             pending_permissions,
         },
-        load_layered_rules(&config.cwd, &config.paths.profile_dir, &config.settings_files)?,
+        load_layered_rules(
+            &config.cwd,
+            &config.paths.profile_dir,
+            &config.settings_files,
+        )?,
     );
 
     let mut usage = UsageSummary::default();
     let started = Instant::now();
 
     for turn in 0..config.max_turns.max(DEFAULT_MAX_TURNS) {
-        if context_manager.needs_compaction(&conversation) {
-            conversation = context_manager.compact(&conversation);
+        let budget_snapshot = context_manager.budget_snapshot(&conversation);
+        let _ = app.emit(
+            APP_EVENT_CONTEXT_USAGE,
+            ContextUsageDto {
+                session_id: session_id_string.clone(),
+                estimated_tokens: budget_snapshot.estimated_tokens,
+                max_input_tokens: budget_snapshot.max_input_tokens,
+                threshold_tokens: budget_snapshot.threshold_tokens(),
+                ratio: budget_snapshot.usage_ratio,
+            },
+        );
+
+        if budget_snapshot.exceeds_threshold() {
+            let _ = app.emit(
+                APP_EVENT_CONTEXT_OVERFLOW,
+                ContextOverflowDto {
+                    session_id: session_id_string.clone(),
+                    estimated_tokens: budget_snapshot.estimated_tokens,
+                    max_input_tokens: budget_snapshot.max_input_tokens,
+                    threshold_tokens: budget_snapshot.threshold_tokens(),
+                    ratio: budget_snapshot.usage_ratio,
+                },
+            );
+            store.append_named_event(
+                config.session_id,
+                "context_overflow",
+                serde_json::json!({
+                    "turn": turn + 1,
+                    "estimated_tokens": budget_snapshot.estimated_tokens,
+                    "max_input_tokens": budget_snapshot.max_input_tokens,
+                    "threshold_tokens": budget_snapshot.threshold_tokens(),
+                    "usage_ratio": budget_snapshot.usage_ratio,
+                }),
+            )?;
+
+            let compacted = context_manager.compact(&conversation);
+            let removed = conversation.len().saturating_sub(compacted.len());
+            conversation = compacted;
+            let compacted_snapshot = context_manager.budget_snapshot(&conversation);
+
+            if removed > 0 {
+                store.append_named_event(
+                    config.session_id,
+                    "context_compacted",
+                    serde_json::json!({
+                        "turn": turn + 1,
+                        "entries_removed": removed,
+                        "usage_ratio_before": budget_snapshot.usage_ratio,
+                        "usage_ratio_after": compacted_snapshot.usage_ratio,
+                        "estimated_tokens_before": budget_snapshot.estimated_tokens,
+                        "estimated_tokens_after": compacted_snapshot.estimated_tokens,
+                    }),
+                )?;
+                let _ = app.emit(
+                    APP_EVENT_CONTEXT_COMPACTED,
+                    ContextCompactedDto {
+                        session_id: session_id_string.clone(),
+                        entries_removed: removed,
+                        usage_ratio: compacted_snapshot.usage_ratio,
+                    },
+                );
+                let _ = app.emit(
+                    APP_EVENT_CONTEXT_USAGE,
+                    ContextUsageDto {
+                        session_id: session_id_string.clone(),
+                        estimated_tokens: compacted_snapshot.estimated_tokens,
+                        max_input_tokens: compacted_snapshot.max_input_tokens,
+                        threshold_tokens: compacted_snapshot.threshold_tokens(),
+                        ratio: compacted_snapshot.usage_ratio,
+                    },
+                );
+            }
         }
 
         let streaming_callbacks = StreamingCallbacks {
@@ -1541,6 +1741,17 @@ async fn get_session_conversation(
 }
 
 #[tauri::command]
+async fn get_session_tasks(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> std::result::Result<Vec<SessionTaskDto>, String> {
+    let runtime = state.runtime.lock().await;
+    let session_id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
+    load_session_tasks_from_paths(&runtime.config.paths, session_id)
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
 async fn create_session(
     state: State<'_, AppState>,
     title: Option<String>,
@@ -1605,6 +1816,7 @@ async fn send_prompt(
     };
 
     apply_provider_credentials_from_configs(&mut config.provider, &provider_configs);
+    configure_runtime_policy_for_config(&config).map_err(|error| format!("{error:#}"))?;
 
     let sid = config.session_id.to_string();
 
@@ -2157,6 +2369,7 @@ pub fn run() {
             init_app,
             list_sessions,
             get_session_conversation,
+            get_session_tasks,
             send_prompt,
             cancel_prompt,
             get_provider_info,

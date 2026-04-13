@@ -3,6 +3,9 @@ import { listen, type EventCallback, type UnlistenFn } from '@tauri-apps/api/eve
 import type {
   BatchProgressInfo,
   ConversationEntry,
+  ContextCompactedInfo,
+  ContextOverflowInfo,
+  ContextUsageInfo,
   FullSettings,
   InitResult,
   PermissionDecisionInfo,
@@ -13,9 +16,11 @@ import type {
   ProviderConfigList,
   ProviderInfo,
   SessionSummary,
+  SessionSubtask,
   SubtaskCompletedInfo,
   SubtaskProgressInfo,
   SubtaskStartedInfo,
+  TaskSnapshotInfo,
   StreamingDeltaInfo,
   ToolProgressInfo,
   ToolResultInfo,
@@ -36,6 +41,10 @@ export function listArchivedSessions(): Promise<SessionSummary[]> {
 
 export function getSessionConversation(sessionId: string): Promise<ConversationEntry[]> {
   return invoke<ConversationEntry[]>('get_session_conversation', { sessionId });
+}
+
+export function getSessionTasks(sessionId: string): Promise<SessionSubtask[]> {
+  return invoke<SessionSubtask[]>('get_session_tasks', { sessionId });
 }
 
 export function createSession(title?: string, projectPath?: string): Promise<string> {
@@ -178,4 +187,28 @@ export function onBatchProgress(
   callback: EventCallback<BatchProgressInfo>,
 ): Promise<UnlistenFn> {
   return listen<BatchProgressInfo>('gui://batch-progress', callback);
+}
+
+export function onTaskSnapshot(
+  callback: EventCallback<TaskSnapshotInfo>,
+): Promise<UnlistenFn> {
+  return listen<TaskSnapshotInfo>('gui://task-snapshot', callback);
+}
+
+export function onContextUsage(
+  callback: EventCallback<ContextUsageInfo>,
+): Promise<UnlistenFn> {
+  return listen<ContextUsageInfo>('gui://context-usage', callback);
+}
+
+export function onContextOverflow(
+  callback: EventCallback<ContextOverflowInfo>,
+): Promise<UnlistenFn> {
+  return listen<ContextOverflowInfo>('gui://context-overflow', callback);
+}
+
+export function onContextCompacted(
+  callback: EventCallback<ContextCompactedInfo>,
+): Promise<UnlistenFn> {
+  return listen<ContextCompactedInfo>('gui://context-compacted', callback);
 }

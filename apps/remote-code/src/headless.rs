@@ -77,7 +77,11 @@ pub(crate) async fn run_headless(
             emitter: emitter.clone(),
             pending_permissions: pending_permissions.clone(),
         },
-        load_layered_rules(&config.cwd, &config.paths.profile_dir, &config.settings_files)?,
+        load_layered_rules(
+            &config.cwd,
+            &config.paths.profile_dir,
+            &config.settings_files,
+        )?,
     ));
     let (prompt_tx, mut prompt_rx) = mpsc::channel::<String>(8);
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<PromptStreamEvent>();
@@ -173,6 +177,41 @@ pub(crate) async fn run_headless(
                     running,
                 } => {
                     emitter.emit_batch_progress(total, completed, running)?;
+                }
+                PromptStreamEvent::ContextUsage {
+                    estimated_tokens,
+                    max_input_tokens,
+                    threshold_tokens,
+                    ratio,
+                } => {
+                    emitter.emit_context_usage(
+                        estimated_tokens,
+                        max_input_tokens,
+                        threshold_tokens,
+                        ratio,
+                    )?;
+                }
+                PromptStreamEvent::ContextOverflow {
+                    estimated_tokens,
+                    max_input_tokens,
+                    threshold_tokens,
+                    ratio,
+                } => {
+                    emitter.emit_context_overflow(
+                        estimated_tokens,
+                        max_input_tokens,
+                        threshold_tokens,
+                        ratio,
+                    )?;
+                }
+                PromptStreamEvent::ContextCompacted {
+                    entries_removed,
+                    usage_ratio,
+                } => {
+                    emitter.emit_context_compacted(entries_removed, usage_ratio)?;
+                }
+                PromptStreamEvent::TaskSnapshot { tasks } => {
+                    emitter.emit_task_snapshot(tasks)?;
                 }
             }
         }

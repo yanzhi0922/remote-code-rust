@@ -17,3 +17,4 @@ serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 rc-core = { path = "../rc-core" }
+rc-ui-bridge = { path = "../rc-ui-bridge" }

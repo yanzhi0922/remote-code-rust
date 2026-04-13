@@ -1,10 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 
 use anyhow::{Result, anyhow};
 use rc_config::{RUNTIME_VERSION, RuntimeConfig};
 
-use crate::cli::{McpAddArgs, McpCallArgs, McpCommand, McpGetArgs, McpListArgs, McpRemoveArgs};
+use crate::cli::{
+    McpAddArgs, McpCallArgs, McpCommand, McpGetArgs, McpListArgs, McpRemoveArgs, McpResetArgs,
+    McpServeArgs, McpToggleArgs,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeMcpServerEntry {
@@ -105,12 +109,37 @@ pub(crate) struct McpCallServerRecord {
     pub(crate) config_path: PathBuf,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+struct McpMutationOutput {
+    status: String,
+    name: Option<String>,
+    enabled: Option<bool>,
+    config_path: PathBuf,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct McpServeOutput {
+    warnings: Vec<String>,
+    server: String,
+    enabled: bool,
+    transport: rc_mcp::McpTransport,
+    command: Option<String>,
+    args: Vec<String>,
+    cwd: Option<PathBuf>,
+    env_keys: Vec<String>,
+    config_path: PathBuf,
+}
+
 pub(crate) async fn run_mcp(config: &RuntimeConfig, command: McpCommand) -> Result<()> {
     match command {
         McpCommand::List(args) => run_mcp_list(config, args).await,
         McpCommand::Get(args) => run_mcp_get(config, args).await,
         McpCommand::Add(args) => run_mcp_add(config, args),
         McpCommand::Remove(args) => run_mcp_remove(config, args),
+        McpCommand::Enable(args) => run_mcp_toggle(config, args, true),
+        McpCommand::Disable(args) => run_mcp_toggle(config, args, false),
+        McpCommand::Reset(args) => run_mcp_reset(config, args),
+        McpCommand::Serve(args) => run_mcp_serve(config, args).await,
         McpCommand::Call(args) => run_mcp_call(config, args).await,
     }
 }
@@ -262,11 +291,11 @@ fn run_mcp_add(config: &RuntimeConfig, args: McpAddArgs) -> Result<()> {
         }
     };
 
-        let metadata = if matches!(transport, rc_mcp::McpTransportConfig::Stdio { .. }) {
-            parse_string_map("--meta", &args.metadata)?
-        } else {
-            BTreeMap::new()
-        };
+    let metadata = if matches!(transport, rc_mcp::McpTransportConfig::Stdio { .. }) {
+        parse_string_map("--meta", &args.metadata)?
+    } else {
+        BTreeMap::new()
+    };
     mcp_config.servers.insert(
         args.name.clone(),
         rc_mcp::McpServerConfig {
@@ -323,6 +352,173 @@ fn run_mcp_remove(config: &RuntimeConfig, args: McpRemoveArgs) -> Result<()> {
             output["status"].as_str().unwrap_or("saved"),
             output["config_path"].as_str().unwrap_or_default()
         );
+    }
+    Ok(())
+}
+
+fn run_mcp_toggle(config: &RuntimeConfig, args: McpToggleArgs, enabled: bool) -> Result<()> {
+    let config_path = managed_mcp_config_path(config, args.config_path.as_ref(), args.project);
+    let mut mcp_config = load_managed_mcp_config(&config_path)?;
+    let Some(server) = mcp_config.servers.get_mut(&args.name) else {
+        if args.if_exists {
+            let output = McpMutationOutput {
+                status: "noop".to_owned(),
+                name: Some(args.name),
+                enabled: Some(enabled),
+                config_path,
+            };
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&output)?);
+            } else {
+                println!(
+                    "MCP server already absent from {}.",
+                    output.config_path.display()
+                );
+            }
+            return Ok(());
+        }
+        return Err(anyhow!(
+            "No MCP server named `{}` exists in {}",
+            args.name,
+            config_path.display()
+        ));
+    };
+    let status = if server.enabled == enabled {
+        "noop"
+    } else {
+        server.enabled = enabled;
+        mcp_config.save(&config_path)?;
+        if enabled { "enabled" } else { "disabled" }
+    };
+    let output = McpMutationOutput {
+        status: status.to_owned(),
+        name: Some(args.name),
+        enabled: Some(enabled),
+        config_path,
+    };
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else if output.status == "noop" {
+        println!(
+            "MCP server {} already {} in {}.",
+            output.name.as_deref().unwrap_or("unknown"),
+            if enabled { "enabled" } else { "disabled" },
+            output.config_path.display()
+        );
+    } else {
+        println!(
+            "MCP server {} {} in {}.",
+            output.name.as_deref().unwrap_or("unknown"),
+            output.status,
+            output.config_path.display()
+        );
+    }
+    Ok(())
+}
+
+fn run_mcp_reset(config: &RuntimeConfig, args: McpResetArgs) -> Result<()> {
+    let config_path = managed_mcp_config_path(config, args.config_path.as_ref(), args.project);
+    let status = if config_path.exists() {
+        std::fs::remove_file(&config_path)?;
+        "reset"
+    } else if args.if_exists {
+        "noop"
+    } else {
+        return Err(anyhow!(
+            "Managed MCP config {} does not exist",
+            config_path.display()
+        ));
+    };
+
+    let output = McpMutationOutput {
+        status: status.to_owned(),
+        name: None,
+        enabled: None,
+        config_path,
+    };
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else if output.status == "noop" {
+        println!(
+            "Managed MCP config already absent at {}.",
+            output.config_path.display()
+        );
+    } else {
+        println!(
+            "Managed MCP config reset at {}.",
+            output.config_path.display()
+        );
+    }
+    Ok(())
+}
+
+async fn run_mcp_serve(config: &RuntimeConfig, args: McpServeArgs) -> Result<()> {
+    let resolution = resolve_runtime_mcp_server(config, &args.server, &args.config_paths)?;
+    if !resolution.entry.server.enabled && !args.include_disabled {
+        return Err(anyhow!(
+            "MCP server `{}` is disabled; pass --include-disabled to launch it anyway",
+            args.server
+        ));
+    }
+
+    let launch = mcp_serve_output_from_resolution(&resolution);
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&launch)?);
+        return Ok(());
+    }
+    for warning in &launch.warnings {
+        println!("warning: {warning}");
+    }
+
+    let rc_mcp::McpTransportConfig::Stdio {
+        command,
+        args,
+        cwd,
+        env,
+    } = &resolution.entry.server.transport
+    else {
+        return Err(anyhow!(
+            "MCP server `{}` uses {} transport and cannot be launched locally via `mcp serve`",
+            args.server,
+            format_mcp_transport(resolution.entry.server.transport.kind())
+        ));
+    };
+
+    println!(
+        "Launching MCP server {} from {}",
+        resolution.entry.server.name,
+        resolution.entry.config_path.display()
+    );
+    if let Some(cwd) = cwd {
+        println!("cwd: {}", cwd.display());
+    }
+    let mut command_builder = tokio::process::Command::new(command);
+    command_builder
+        .args(args)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true);
+    if let Some(cwd) = cwd {
+        command_builder.current_dir(cwd);
+    }
+    if !env.is_empty() {
+        command_builder.envs(env);
+    }
+    let mut child = command_builder.spawn().map_err(|error| {
+        anyhow!(
+            "Failed to launch MCP server `{}` with `{}`: {error}",
+            resolution.entry.server.name,
+            command
+        )
+    })?;
+    let status = child.wait().await?;
+    if !status.success() {
+        return Err(anyhow!(
+            "MCP server `{}` exited with status {}",
+            resolution.entry.server.name,
+            status
+        ));
     }
     Ok(())
 }
@@ -514,7 +710,10 @@ pub(crate) fn parse_named_json_object_args(
     Ok(serde_json::Value::Object(object))
 }
 
-fn parse_string_map(flag_name: &str, entries: &[String]) -> Result<std::collections::BTreeMap<String, String>> {
+fn parse_string_map(
+    flag_name: &str,
+    entries: &[String],
+) -> Result<std::collections::BTreeMap<String, String>> {
     let mut map = std::collections::BTreeMap::new();
     for entry in entries {
         let (key, value) = entry
@@ -522,7 +721,9 @@ fn parse_string_map(flag_name: &str, entries: &[String]) -> Result<std::collecti
             .ok_or_else(|| anyhow!("invalid {flag_name} `{entry}`; expected key=value"))?;
         let key = key.trim();
         if key.is_empty() {
-            return Err(anyhow!("invalid {flag_name} `{entry}`; key cannot be empty"));
+            return Err(anyhow!(
+                "invalid {flag_name} `{entry}`; key cannot be empty"
+            ));
         }
         map.insert(key.to_owned(), value.trim().to_owned());
     }
@@ -534,18 +735,16 @@ fn managed_mcp_config_path(
     override_path: Option<&PathBuf>,
     project: bool,
 ) -> PathBuf {
-    override_path
-        .cloned()
-        .unwrap_or_else(|| {
-            if project {
-                config.cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE)
-            } else {
-                config
-                    .paths
-                    .profile_dir
-                    .join(rc_mcp::DEFAULT_MCP_CONFIG_FILE)
-            }
-        })
+    override_path.cloned().unwrap_or_else(|| {
+        if project {
+            config.cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE)
+        } else {
+            config
+                .paths
+                .profile_dir
+                .join(rc_mcp::DEFAULT_MCP_CONFIG_FILE)
+        }
+    })
 }
 
 fn load_managed_mcp_config(path: &Path) -> Result<rc_mcp::McpConfig> {
@@ -727,6 +926,34 @@ fn push_runtime_mcp_servers(
     }
 }
 
+fn mcp_serve_output_from_resolution(resolution: &RuntimeMcpResolution) -> McpServeOutput {
+    let (command, args, cwd, env_keys) = match &resolution.entry.server.transport {
+        rc_mcp::McpTransportConfig::Stdio {
+            command,
+            args,
+            cwd,
+            env,
+        } => {
+            let mut env_keys = env.keys().cloned().collect::<Vec<_>>();
+            env_keys.sort();
+            (Some(command.clone()), args.clone(), cwd.clone(), env_keys)
+        }
+        _ => (None, Vec::new(), None, Vec::new()),
+    };
+
+    McpServeOutput {
+        warnings: resolution.warnings.clone(),
+        server: resolution.entry.server.name.clone(),
+        enabled: resolution.entry.server.enabled,
+        transport: resolution.entry.server.transport.kind(),
+        command,
+        args,
+        cwd,
+        env_keys,
+        config_path: resolution.entry.config_path.clone(),
+    }
+}
+
 pub(crate) fn format_mcp_transport(transport: rc_mcp::McpTransport) -> &'static str {
     match transport {
         rc_mcp::McpTransport::Stdio => "stdio",
@@ -764,8 +991,12 @@ mod tests {
     use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
     use tempfile::tempdir;
 
-    use super::{load_managed_mcp_config, managed_mcp_config_path, parse_string_map, run_mcp_add, run_mcp_remove};
-    use crate::cli::{McpAddArgs, McpRemoveArgs};
+    use super::{
+        load_managed_mcp_config, managed_mcp_config_path, mcp_serve_output_from_resolution,
+        parse_string_map, resolve_runtime_mcp_server, run_mcp_add, run_mcp_remove, run_mcp_reset,
+        run_mcp_toggle,
+    };
+    use crate::cli::{McpAddArgs, McpRemoveArgs, McpResetArgs, McpToggleArgs};
 
     fn test_config() -> (tempfile::TempDir, rc_config::RuntimeConfig) {
         let tempdir = tempdir().expect("tempdir");
@@ -839,5 +1070,132 @@ mod tests {
         .expect("remove mcp");
         let loaded = load_managed_mcp_config(&path).expect("reload config");
         assert!(!loaded.servers.contains_key("demo"));
+    }
+
+    #[test]
+    fn managed_mcp_toggle_round_trip() {
+        let (_tempdir, config) = test_config();
+        run_mcp_add(
+            &config,
+            McpAddArgs {
+                name: "demo".to_owned(),
+                command: Some("python".to_owned()),
+                url: None,
+                args: vec!["server.py".to_owned()],
+                cwd: None,
+                env: Vec::new(),
+                disabled: false,
+                startup_timeout_secs: None,
+                request_timeout_secs: None,
+                metadata: Vec::new(),
+                json: false,
+                config_path: None,
+                project: false,
+            },
+        )
+        .expect("add mcp");
+
+        run_mcp_toggle(
+            &config,
+            McpToggleArgs {
+                name: "demo".to_owned(),
+                json: false,
+                config_path: None,
+                project: false,
+                if_exists: false,
+            },
+            false,
+        )
+        .expect("disable mcp");
+
+        let path = managed_mcp_config_path(&config, None, false);
+        let loaded = load_managed_mcp_config(&path).expect("load config");
+        assert!(!loaded.servers.get("demo").expect("demo").enabled);
+
+        run_mcp_toggle(
+            &config,
+            McpToggleArgs {
+                name: "demo".to_owned(),
+                json: false,
+                config_path: None,
+                project: false,
+                if_exists: false,
+            },
+            true,
+        )
+        .expect("enable mcp");
+        let loaded = load_managed_mcp_config(&path).expect("reload config");
+        assert!(loaded.servers.get("demo").expect("demo").enabled);
+    }
+
+    #[test]
+    fn managed_mcp_reset_removes_file() {
+        let (_tempdir, config) = test_config();
+        run_mcp_add(
+            &config,
+            McpAddArgs {
+                name: "demo".to_owned(),
+                command: Some("python".to_owned()),
+                url: None,
+                args: vec!["server.py".to_owned()],
+                cwd: None,
+                env: Vec::new(),
+                disabled: false,
+                startup_timeout_secs: None,
+                request_timeout_secs: None,
+                metadata: Vec::new(),
+                json: false,
+                config_path: None,
+                project: false,
+            },
+        )
+        .expect("add mcp");
+        let path = managed_mcp_config_path(&config, None, false);
+        assert!(path.exists());
+
+        run_mcp_reset(
+            &config,
+            McpResetArgs {
+                json: false,
+                config_path: None,
+                project: false,
+                if_exists: false,
+            },
+        )
+        .expect("reset mcp");
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn mcp_serve_output_reports_stdio_launch_plan() {
+        let (_tempdir, config) = test_config();
+        run_mcp_add(
+            &config,
+            McpAddArgs {
+                name: "demo".to_owned(),
+                command: Some("python".to_owned()),
+                url: None,
+                args: vec!["server.py".to_owned()],
+                cwd: Some(config.cwd.clone()),
+                env: vec!["TOKEN=secret".to_owned()],
+                disabled: false,
+                startup_timeout_secs: None,
+                request_timeout_secs: None,
+                metadata: Vec::new(),
+                json: false,
+                config_path: None,
+                project: false,
+            },
+        )
+        .expect("add mcp");
+
+        let resolution =
+            resolve_runtime_mcp_server(&config, "demo", &[]).expect("resolve runtime server");
+        let launch = mcp_serve_output_from_resolution(&resolution);
+        assert_eq!(launch.server, "demo");
+        assert_eq!(launch.command.as_deref(), Some("python"));
+        assert_eq!(launch.args, vec!["server.py".to_owned()]);
+        assert_eq!(launch.env_keys, vec!["TOKEN".to_owned()]);
+        assert_eq!(launch.cwd, Some(config.cwd.clone()));
     }
 }
