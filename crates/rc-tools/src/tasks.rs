@@ -9,7 +9,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use once_cell::sync::Lazy;
 use rc_ui_bridge::{UiTaskKind, UiTaskNode, UiTaskStatus};
 use serde::{Deserialize, Serialize};
