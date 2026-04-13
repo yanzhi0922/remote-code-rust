@@ -636,6 +636,38 @@ mod tests {
         assert!(task.output_path.is_some());
         assert!(tempdir.path().join(format!("{task_id}.json")).exists());
     }
+
+    #[test]
+    fn load_persisted_tasks_reads_metadata_and_output() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        configure_task_output_dir(Some(tempdir.path().to_path_buf())).expect("configure output");
+
+        let task = start_tracked_task(
+            "persisted-task".to_owned(),
+            "Persisted task",
+            None,
+            0,
+            TaskKind::Delegation,
+            Some("working"),
+        )
+        .expect("tracked task");
+        finish_tracked_task(
+            &task.id,
+            TaskStatus::Completed,
+            Some("done"),
+            "captured output",
+            Some(2),
+        )
+        .expect("finish task");
+
+        let loaded = load_persisted_tasks(tempdir.path()).expect("load persisted tasks");
+        let loaded_task = loaded
+            .into_iter()
+            .find(|candidate| candidate.id == task.id)
+            .expect("persisted task should exist");
+        assert_eq!(loaded_task.summary, "done");
+        assert_eq!(loaded_task.output, "captured output");
+    }
 }
 
 fn persist_task_if_configured(task_id: &str) -> Result<()> {
