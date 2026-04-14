@@ -33,6 +33,7 @@ use crate::hooks::{
     HookRunState, RuntimeHookDiscovery, apply_post_tool_hooks, apply_pre_tool_use_hooks,
     discover_runtime_hooks, ensure_session_start_hooks,
 };
+use crate::query_engine_compat::run_prompt_with_query_engine_compat;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct PersistedProviderContext {
@@ -469,6 +470,37 @@ pub(crate) fn initialize_conversation(
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_prompt(
+    config: &RuntimeConfig,
+    store: &SessionStore,
+    backend: &dyn ConversationBackend,
+    broker: &dyn PermissionBroker,
+    event_sink: Option<PromptEventSink>,
+    discovery: &RuntimeHookDiscovery,
+    hook_state: &mut HookRunState,
+    conversation: &mut Vec<ConversationEntry>,
+    prompt: &str,
+) -> Result<PromptRunOutcome> {
+    if event_sink.is_some() {
+        return run_prompt_legacy(
+            config,
+            store,
+            backend,
+            broker,
+            event_sink,
+            discovery,
+            hook_state,
+            conversation,
+            prompt,
+        )
+        .await;
+    }
+    run_prompt_with_query_engine_compat(config, store, discovery, hook_state, conversation, prompt)
+        .await
+}
+
+#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
+async fn run_prompt_legacy(
     config: &RuntimeConfig,
     store: &SessionStore,
     backend: &dyn ConversationBackend,
@@ -917,8 +949,8 @@ pub(crate) async fn run_oneshot_text(
         )?,
     );
     let discovery = discover_runtime_hooks(config, &[]);
-    let mut hook_state = HookRunState::load(store, config.session_id)?;
     let mut conversation = initialize_conversation(store, config, Some(&prompt))?;
+    let mut hook_state = HookRunState::load(store, config.session_id)?;
     ensure_session_start_hooks(
         &discovery,
         config,

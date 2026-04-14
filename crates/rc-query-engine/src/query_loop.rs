@@ -2,10 +2,11 @@ use anyhow::{Result, anyhow};
 use rc_core::{ConversationEntry, Message, ToolResult};
 use rc_engine_events::{
     CompactionResult, EngineEvent, EngineStateSnapshot, ToolError, ToolResult as EventToolResult,
+    Usage,
 };
 use serde_json::json;
 
-use crate::config::{ProcessUserInputContext, QueryEngineConfig};
+use crate::config::{ProcessUserInputContext, QueryEngineConfig, ToolRunResult};
 use crate::engine::{
     EngineError, EngineState, QueryResult, assistant_message_from_response, budget_stop_message,
     tool_result_message, usage_from_accumulator,
@@ -111,6 +112,16 @@ pub async fn run_query_loop(
                 message: assistant_message.clone(),
                 stop_reason: response.stop_reason.clone(),
                 turn: state.turn,
+                usage: Usage {
+                    input_tokens: response.usage.input_tokens,
+                    output_tokens: response.usage.output_tokens,
+                    cache_creation_input_tokens: response.usage.cache_creation_input_tokens,
+                    cache_read_input_tokens: response.usage.cache_read_input_tokens,
+                    total_tokens: response.usage.input_tokens
+                        + response.usage.output_tokens
+                        + response.usage.cache_creation_input_tokens
+                        + response.usage.cache_read_input_tokens,
+                },
             })
             .await;
         config.event_stream.emit(EngineEvent::StateUpdated {
@@ -152,7 +163,7 @@ pub async fn run_query_loop(
                 tool_name: tool_call.name.clone(),
                 input: tool_call.input.clone(),
             });
-            let tool_result = match config.tool_runner.run_tool(tool_call, context).await {
+            let tool_run = match config.tool_runner.run_tool(tool_call, context).await {
                 Ok(result) => result,
                 Err(error) => {
                     config.event_stream.emit(EngineEvent::ToolUseError {
@@ -162,33 +173,59 @@ pub async fn run_query_loop(
                             retryable: false,
                         },
                     });
-                    ToolResult {
+                    ToolRunResult::from(ToolResult {
                         content: format!("Tool execution error: {error:#}"),
                         is_error: true,
-                    }
+                    })
                 }
             };
-            record_permission_denial(state, tool_call, &tool_result);
+            if let Some(permission_denial) = tool_run.permission_denial.clone() {
+                state.permission_denials.push(permission_denial);
+            } else {
+                record_permission_denial(state, tool_call, &tool_run.result);
+            }
             config.event_stream.emit(EngineEvent::ToolUseCompleted {
                 tool_use_id: tool_call.id.clone(),
                 result: EventToolResult {
-                    content: tool_result.content.clone(),
-                    is_error: tool_result.is_error,
+                    content: tool_run.result.content.clone(),
+                    is_error: tool_run.result.is_error,
                     mime_type: None,
                 },
             });
+            if !tool_run.pre_messages.is_empty() {
+                state.messages.extend(tool_run.pre_messages.clone());
+                let _ = config
+                    .observer
+                    .on_event(QueryObserverEvent::MessagesAppended {
+                        session_id: context.session_id.clone(),
+                        appended: tool_run.pre_messages.clone(),
+                        total_messages: state.messages.len(),
+                    })
+                    .await;
+            }
             state
                 .messages
-                .push(tool_result_message(tool_call, &tool_result));
+                .push(tool_result_message(tool_call, &tool_run.result));
             let _ = config
                 .observer
                 .on_event(QueryObserverEvent::ToolResultCommitted {
                     tool_call: tool_call.clone(),
-                    result: tool_result.clone(),
+                    result: tool_run.result.clone(),
                     turn: state.turn,
                     total_messages: state.messages.len(),
                 })
                 .await;
+            if !tool_run.post_messages.is_empty() {
+                state.messages.extend(tool_run.post_messages.clone());
+                let _ = config
+                    .observer
+                    .on_event(QueryObserverEvent::MessagesAppended {
+                        session_id: context.session_id.clone(),
+                        appended: tool_run.post_messages.clone(),
+                        total_messages: state.messages.len(),
+                    })
+                    .await;
+            }
             config.event_stream.emit(EngineEvent::StateUpdated {
                 state_snapshot: state_snapshot(state, 1),
             });
@@ -213,6 +250,7 @@ async fn maybe_compact_conversation(
     let _ = config
         .observer
         .on_event(QueryObserverEvent::ContextBudgetEvaluated {
+            turn: state.turn + 1,
             context: QueryContextBudgetState {
                 estimated_tokens: before_snapshot.estimated_tokens,
                 max_input_tokens: before_snapshot.max_input_tokens,
@@ -248,8 +286,13 @@ async fn maybe_compact_conversation(
     let _ = config
         .observer
         .on_event(QueryObserverEvent::ContextCompactionApplied {
+            turn: state.turn + 1,
             before_messages,
             after_messages: legacy_conversation.len(),
+            max_input_tokens: before_snapshot.max_input_tokens,
+            threshold_tokens: before_snapshot.threshold_tokens(),
+            usage_ratio_before: before_snapshot.usage_ratio,
+            usage_ratio_after: after_snapshot.usage_ratio,
             estimated_tokens_before: before_snapshot.estimated_tokens,
             estimated_tokens_after: after_snapshot.estimated_tokens,
         })

@@ -90,12 +90,18 @@ pub enum QueryObserverEvent {
         reason: String,
     },
     ContextBudgetEvaluated {
+        turn: u32,
         context: QueryContextBudgetState,
         message_count: usize,
     },
     ContextCompactionApplied {
+        turn: u32,
         before_messages: usize,
         after_messages: usize,
+        max_input_tokens: u64,
+        threshold_tokens: u64,
+        usage_ratio_before: f64,
+        usage_ratio_after: f64,
         estimated_tokens_before: u64,
         estimated_tokens_after: u64,
     },
@@ -103,6 +109,7 @@ pub enum QueryObserverEvent {
         message: Message,
         stop_reason: String,
         turn: u32,
+        usage: Usage,
     },
     ToolCallStarted {
         tool_call: ToolCall,

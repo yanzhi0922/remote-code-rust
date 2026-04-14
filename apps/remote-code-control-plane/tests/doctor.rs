@@ -1,11 +1,20 @@
+use std::fs;
 use std::process::Command;
 
 #[test]
 fn doctor_outputs_control_plane_summary() {
+    let profile_dir = std::env::temp_dir().join(format!(
+        "remote-code-control-plane-test-{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&profile_dir).expect("temp profile dir should exist");
+
     let output = Command::new(env!("CARGO_BIN_EXE_remote-code-control-plane"))
         .args([
             "--bind",
             "127.0.0.1:9899",
+            "--profile-dir",
+            profile_dir.to_str().expect("temp path should be utf-8"),
             "--service-name",
             "control-plane-test",
             "doctor",

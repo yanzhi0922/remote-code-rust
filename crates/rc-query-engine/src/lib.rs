@@ -6,7 +6,7 @@ pub mod token_budget;
 
 pub use config::{
     EffortLevel, ProcessUserInputContext, QueryEngineConfig, QuerySource, TaskBudget,
-    ThinkingConfig, ToolRunner,
+    ThinkingConfig, ToolRunResult, ToolRunner,
 };
 pub use engine::{EngineError, EngineState, QueryEngine, QueryResult};
 pub use observer::{

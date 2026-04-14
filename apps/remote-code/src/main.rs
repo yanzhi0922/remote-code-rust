@@ -8,6 +8,7 @@ mod hooks;
 mod interactive;
 mod mcp_cli;
 mod plugins;
+mod query_engine_compat;
 mod remote;
 mod review_cli;
 #[allow(dead_code)]

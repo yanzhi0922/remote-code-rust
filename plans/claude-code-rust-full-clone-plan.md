@@ -1,6 +1,6 @@
 # Claude Code → Rust 全面复刻方案（执行优化版）
 
-**日期**: 2026-04-14  
+**日期**: 2026-04-15  
 **目标**: 将 `.research/claude-code-rev` (2,048 文件, ~200,000 行 TS/TSX) **全面**复刻为 Rust，并以 `remote-code-rust` 为宿主完成 full-scope parity  
 **原则**: 
 1. 复刻行为、能力边界与架构分层，保留 remote-code-rust 的多 provider 优势
@@ -12,7 +12,7 @@
 **状态**: 深度调研完成，差距分析完成，执行方案已优化；Phase 1 / Phase 2 基础骨架已开始落地到 `main`
 **核心结论**: **必须以新内核重构为主，但不能做无差别推倒重写。** 当前 Rust 代码结构与 Claude Code 之间存在根本性架构差距；正确做法是以 full-scope parity 为目标，在 `main` 上通过抽取、替换、兼容过渡、默认切换完成整仓升级。
 
-### 0.0 当前执行进展（2026-04-14）
+### 0.0 当前执行进展（2026-04-15）
 
 本轮已将计划从“研究态”推进到“可编译、可测试的主干骨架”：
 
@@ -21,9 +21,17 @@
 - 已新增 [`rc-transcript`](../crates/rc-transcript/src/lib.rs) crate，完成 `TranscriptEntry` / `CompactBoundary` / `TranscriptStorage` 的 JSONL 持久化与 round-trip 测试。
 - 已为 [`rc-session`](../crates/rc-session/src/lib.rs) 接入 transcript V2 兼容层：新增 `append_transcript_entry()`、`load_transcript_v2()`、`transcript_storage()`，保持现有 `StoredEvent` 主路径不破坏。
 - 已新增 [`rc-query-engine`](../crates/rc-query-engine/src/lib.rs) compat 内核，先抽出“回合推进 + budget + tool loop + legacy backend seam”，并通过最小闭环测试。
+- 已为 [`rc-query-engine`](../crates/rc-query-engine/src/lib.rs) 补齐 host observer / checkpoint seam：新增 `QueryObserver`、`QueryObserverEvent`、`QueryCheckpoint`，query loop 现在会显式发出消息追加、budget 评估/超限、context compaction、assistant commit、tool batch checkpoint create/clear 等生命周期事件。
+- 已开始把 [`apps/remote-code/src/conversation.rs`](../apps/remote-code/src/conversation.rs) 迁移到 app 层 compat adapter：新增 [`query_engine_compat.rs`](../apps/remote-code/src/query_engine_compat.rs)，当前以 `run_prompt_with_query_engine_compat()` 承接 non-streaming prompt 路径，把 transcript / named events / resume boundary / tool side effects 继续保留在宿主层翻译。
+- 当前 cutover 策略已明确：普通 non-streaming 路径先走 `rc-query-engine` compat adapter；[`apps/remote-code/src/headless.rs`](../apps/remote-code/src/headless.rs) 继续停留在 legacy streaming loop，等 query engine 补齐 streaming provider seam 与更丰富的 host tool outcome 后再切换。
 - 当前验证结果：`cargo test -p rc-core`、`cargo test -p rc-engine-events`、`cargo test -p rc-transcript`、`cargo test -p rc-session`、`cargo test -p rc-query-engine`、`cargo test --workspace` 均通过。
 
-这意味着 Phase 1 的契约冻结与 Phase 2 的最小可运行引擎都已进入主干骨架阶段；下一步重点是把 `apps/remote-code/src/conversation.rs` 迁移到 `run_prompt_v2_compat` 路径，并继续补 streaming observer、resume boundary、compaction orchestration。
+这意味着 Phase 1 的契约冻结与 Phase 2 的最小可运行引擎都已进入主干骨架阶段；当前主线重点已经从“搭骨架”进入“app compat 接线”：
+
+- 稳定 `conversation.rs -> query_engine_compat.rs -> rc-query-engine` 的 non-streaming 主路径。
+- 把 observer/checkpoint 事件完整翻译回 `SessionStore`、`PromptStreamEvent`、named events、resume state。
+- 保持 `headless` 继续使用 legacy streaming loop，直到 query engine 具备 streaming provider seam 与等价 runtime event 粒度。
+- 在 app 层 cutover 完成后，再推进 streaming observer、resume boundary 编排、compaction orchestration 的默认切换。
 
 ---
 

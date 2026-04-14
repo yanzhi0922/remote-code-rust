@@ -4,7 +4,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 use rc_core::{
-    AgentId, FileHistoryState, PermissionMode, SessionId, ToolPermissionContext, ToolResult,
+    AgentId, FileHistoryState, Message, PermissionMode, SessionId, ToolPermissionContext,
+    ToolResult,
 };
 use rc_provider::ConversationBackend;
 use rc_provider::context::ContextWindowManager;
@@ -112,13 +113,33 @@ impl ProcessUserInputContext {
 }
 
 /// Host-provided tool execution seam for the compat query engine.
+#[derive(Debug, Clone)]
+pub struct ToolRunResult {
+    pub result: ToolResult,
+    pub pre_messages: Vec<Message>,
+    pub post_messages: Vec<Message>,
+    pub permission_denial: Option<Value>,
+}
+
+impl From<ToolResult> for ToolRunResult {
+    fn from(result: ToolResult) -> Self {
+        Self {
+            result,
+            pre_messages: Vec::new(),
+            post_messages: Vec::new(),
+            permission_denial: None,
+        }
+    }
+}
+
+/// Host-provided tool execution seam for the compat query engine.
 #[async_trait]
 pub trait ToolRunner: Send + Sync {
     async fn run_tool(
         &self,
         tool_call: &rc_core::ToolCall,
         context: &ProcessUserInputContext,
-    ) -> Result<ToolResult>;
+    ) -> Result<ToolRunResult>;
 }
 
 /// Immutable configuration for the compat query engine.

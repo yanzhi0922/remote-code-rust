@@ -235,7 +235,7 @@ mod tests {
     use tokio::sync::broadcast::Receiver;
 
     use super::QueryEngine;
-    use crate::config::{ProcessUserInputContext, QueryEngineConfig, ToolRunner};
+    use crate::config::{ProcessUserInputContext, QueryEngineConfig, ToolRunResult, ToolRunner};
     use crate::observer::{QueryCheckpointKind, QueryObserver, QueryObserverEvent};
 
     struct DummyCompletion;
@@ -285,11 +285,11 @@ mod tests {
             &self,
             tool_call: &ToolCall,
             _context: &ProcessUserInputContext,
-        ) -> Result<ToolResult> {
-            Ok(ToolResult {
+        ) -> Result<ToolRunResult> {
+            Ok(ToolRunResult::from(ToolResult {
                 content: format!("tool:{} ok", tool_call.name),
                 is_error: false,
-            })
+            }))
         }
     }
 

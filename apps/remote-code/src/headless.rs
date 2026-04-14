@@ -200,8 +200,8 @@ pub(crate) async fn run_headless(
             &processor_config.provider,
         );
         let discovery = discover_runtime_hooks(&processor_config, &[]);
-        let mut hook_state = HookRunState::load(&processor_store, processor_config.session_id)?;
         let mut conversation = initialize_conversation(&processor_store, &processor_config, None)?;
+        let mut hook_state = HookRunState::load(&processor_store, processor_config.session_id)?;
         let event_sink: PromptEventSink = Arc::new(move |event| {
             let _ = processor_event_tx.send(event);
         });
