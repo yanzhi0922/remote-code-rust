@@ -29,7 +29,15 @@ use rc_runner::{
 };
 use reqwest::Client;
 use tokio::io::AsyncWriteExt;
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as TungsteniteMessage};
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{
+        Error as TungsteniteError,
+        client::IntoClientRequest,
+        http::{HeaderValue, Request as WsRequest, header::AUTHORIZATION as WS_AUTHORIZATION},
+        protocol::Message as TungsteniteMessage,
+    },
+};
 use tracing::warn;
 use uuid::Uuid;
 
@@ -169,7 +177,7 @@ pub(crate) fn build_remote_http_url(base_url: &str, path: &str) -> Result<String
 
 pub(crate) fn build_remote_ws_url(base_url: &str, path: &str) -> Result<String> {
     let base = normalize_remote_base_url(base_url)?;
-    let mut url = if let Some(rest) = base.strip_prefix("http://") {
+    let url = if let Some(rest) = base.strip_prefix("http://") {
         format!("ws://{rest}{}", normalize_remote_request_path(path))
     } else if let Some(rest) = base.strip_prefix("https://") {
         format!("wss://{rest}{}", normalize_remote_request_path(path))
@@ -178,13 +186,25 @@ pub(crate) fn build_remote_ws_url(base_url: &str, path: &str) -> Result<String> 
             "control plane URL must start with http:// or https://"
         ));
     };
-    if let Some(token) = remote_control_plane_auth_token() {
-        let separator = if url.contains('?') { '&' } else { '?' };
-        url.push(separator);
-        url.push_str("access_token=");
-        url.push_str(&encode_remote_path_segment(&token));
-    }
     Ok(url)
+}
+
+pub(crate) fn build_remote_ws_request(base_url: &str, path: &str) -> Result<WsRequest<()>> {
+    build_remote_ws_request_with_token(base_url, path, remote_control_plane_auth_token().as_deref())
+}
+
+pub(crate) fn build_remote_ws_request_with_token(
+    base_url: &str,
+    path: &str,
+    auth_token: Option<&str>,
+) -> Result<WsRequest<()>> {
+    let ws_url = build_remote_ws_url(base_url, path)?;
+    let mut request = ws_url.into_client_request()?;
+    if let Some(token) = auth_token.map(str::trim).filter(|token| !token.is_empty()) {
+        let header_value = HeaderValue::from_str(&format!("Bearer {token}"))?;
+        request.headers_mut().insert(WS_AUTHORIZATION, header_value);
+    }
+    Ok(request)
 }
 
 pub(crate) async fn remote_get_json<T>(base_url: &str, path: &str) -> Result<T>
@@ -299,6 +319,29 @@ pub(crate) fn encode_remote_path_segment(raw: &str) -> String {
         }
     }
     encoded
+}
+
+fn is_retryable_remote_follow_connect_error(error: &TungsteniteError) -> bool {
+    match error {
+        TungsteniteError::Http(response) => {
+            !matches!(response.status().as_u16(), 400 | 401 | 403 | 404 | 422)
+        }
+        TungsteniteError::Url(_) => false,
+        _ => true,
+    }
+}
+
+fn format_remote_follow_connect_error(error: &TungsteniteError) -> String {
+    match error {
+        TungsteniteError::Http(response) => {
+            format!(
+                "remote follow websocket handshake failed with HTTP {}",
+                response.status().as_u16()
+            )
+        }
+        TungsteniteError::Url(message) => format!("invalid remote websocket URL: {message}"),
+        _ => format!("remote follow connect failed: {error}"),
+    }
 }
 
 fn print_remote_session_summary(session: &RemoteSessionRecord) {
@@ -1547,11 +1590,14 @@ where
 {
     loop {
         let ws_path = path_builder(last_sequence)?;
-        let ws_url = build_remote_ws_url(control_plane_url, &ws_path)?;
-        let (mut socket, _) = match connect_async(&ws_url).await {
+        let ws_request = build_remote_ws_request(control_plane_url, &ws_path)?;
+        let (mut socket, _) = match connect_async(ws_request).await {
             Ok(connection) => connection,
             Err(error) => {
-                warn!("remote follow connect failed: {error}");
+                if !is_retryable_remote_follow_connect_error(&error) {
+                    return Err(anyhow!(format_remote_follow_connect_error(&error)));
+                }
+                warn!("{}", format_remote_follow_connect_error(&error));
                 if wait_for_remote_follow_retry(reconnect_delay).await? {
                     return Ok(());
                 }

@@ -29,7 +29,7 @@ use uuid::Uuid;
 const DEFAULT_RUNNER_BIND: &str = "127.0.0.1:8788";
 const DEFAULT_HEARTBEAT_INTERVAL_SECS: u64 = 15;
 const DEFAULT_MAX_PARALLEL_SESSIONS: u16 = 4;
-const PHASE: &str = "phase4-remote-beta";
+const PHASE: &str = "phase5-remote-stable";
 
 /// Overrides applied to runner configuration from CLI flags or environment variables.
 #[derive(Debug, Clone, Default)]

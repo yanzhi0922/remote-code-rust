@@ -27,7 +27,7 @@ pub(crate) const MAX_EVENT_LIST_LIMIT: usize = 200;
 pub(crate) const DEFAULT_PAIRING_TTL_SECS: u64 = 600;
 pub(crate) const MAX_PAIRING_TTL_SECS: u64 = 3600;
 pub(crate) const EVENT_STREAM_BUFFER: usize = 256;
-pub(crate) const PHASE: &str = "phase4-remote-beta";
+pub(crate) const PHASE: &str = "phase5-remote-stable";
 
 // ---------------------------------------------------------------------------
 // Public configuration types

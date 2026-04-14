@@ -30,5 +30,5 @@ fn doctor_outputs_runner_summary() {
         serde_json::from_slice(&output.stdout).expect("json should parse");
     assert_eq!(json["runner_id"], "runner-cli");
     assert_eq!(json["ok"], true);
-    assert_eq!(json["phase"], "phase4-remote-beta");
+    assert_eq!(json["phase"], "phase5-remote-stable");
 }

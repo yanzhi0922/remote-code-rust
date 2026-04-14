@@ -22,5 +22,5 @@ fn doctor_outputs_control_plane_summary() {
         serde_json::from_slice(&output.stdout).expect("json should parse");
     assert_eq!(json["service_name"], "control-plane-test");
     assert_eq!(json["bind"], "127.0.0.1:9899");
-    assert_eq!(json["phase"], "phase4-remote-beta");
+    assert_eq!(json["phase"], "phase5-remote-stable");
 }

@@ -351,15 +351,15 @@ mod tests {
         parse_mcp_call_arguments, resolve_runtime_mcp_server,
     };
     use crate::remote::{
-        RemoteFollowControl, StateLabel, build_remote_http_url, build_remote_ws_url,
-        default_artifact_file_name, default_artifact_name, encode_remote_path_segment,
-        follow_remote_timeline_stream, is_terminal_remote_session_state, merge_follow_sequence,
-        normalize_remote_base_url, parse_repeated_key_value_args, remote_approval_path,
-        remote_approvals_path, remote_approvals_stream_path, remote_artifact_download_path,
-        remote_artifacts_path, remote_event_reaches_terminal_session_state, remote_events_path,
-        remote_events_stream_path, remote_get_bytes, remote_get_json, remote_post_json,
-        remote_runner_path, remote_session_commands_path, remote_session_state_path,
-        remote_sessions_path,
+        RemoteFollowControl, StateLabel, build_remote_http_url, build_remote_ws_request_with_token,
+        build_remote_ws_url, default_artifact_file_name, default_artifact_name,
+        encode_remote_path_segment, follow_remote_timeline_stream,
+        is_terminal_remote_session_state, merge_follow_sequence, normalize_remote_base_url,
+        parse_repeated_key_value_args, remote_approval_path, remote_approvals_path,
+        remote_approvals_stream_path, remote_artifact_download_path, remote_artifacts_path,
+        remote_event_reaches_terminal_session_state, remote_events_path, remote_events_stream_path,
+        remote_get_bytes, remote_get_json, remote_post_json, remote_runner_path,
+        remote_session_commands_path, remote_session_state_path, remote_sessions_path,
     };
 
     use axum::{
@@ -452,6 +452,28 @@ mod tests {
         let ws_url = build_remote_ws_url("https://example.com/control/", "/v1/events/stream")
             .unwrap_or_else(|error| panic!("ws URL build failed: {error}"));
         assert_eq!(ws_url, "wss://example.com/control/v1/events/stream");
+    }
+
+    #[test]
+    fn build_remote_ws_request_prefers_authorization_header_over_query_token() {
+        let request = build_remote_ws_request_with_token(
+            "https://example.com/control/",
+            "/v1/events/stream?after=42",
+            Some("device-token"),
+        )
+        .unwrap_or_else(|error| panic!("ws request build failed: {error}"));
+
+        assert_eq!(
+            request.uri().to_string(),
+            "wss://example.com/control/v1/events/stream?after=42"
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get("authorization")
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer device-token")
+        );
     }
 
     #[test]

@@ -789,6 +789,7 @@ mod tests {
     use tokio::net::TcpListener;
     use tokio::task::JoinHandle;
     use tokio::time::{Duration as TokioDuration, timeout};
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as TungsteniteMessage};
     use tower::ServiceExt;
     use uuid::Uuid;
@@ -885,7 +886,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn control_plane_requires_auth_for_http_and_accepts_query_token_for_websocket() {
+    async fn control_plane_requires_auth_for_http_and_accepts_header_or_query_token_for_websocket()
+    {
         let profile = tempdir().expect("tempdir should exist");
         let service = ControlPlaneService::new(
             load_control_plane_config(ControlPlaneConfigOverrides {
@@ -931,12 +933,24 @@ mod tests {
             "0.1.0",
         );
         let (base_url, server_handle) = spawn_control_plane_server(service).await;
-        let ws_url =
-            base_url.replacen("http://", "ws://", 1) + "/v1/events/stream?access_token=test-secret";
+        let ws_url = base_url.replacen("http://", "ws://", 1) + "/v1/events/stream";
+        let mut ws_request = ws_url
+            .into_client_request()
+            .expect("websocket request should build");
+        ws_request.headers_mut().insert(
+            AUTHORIZATION,
+            "Bearer test-secret".parse().expect("header should parse"),
+        );
 
-        let (mut socket, _) = connect_async(&ws_url)
+        let (mut socket, _) = connect_async(ws_request)
             .await
             .expect("authenticated websocket should connect");
+        let query_ws_url =
+            base_url.replacen("http://", "ws://", 1) + "/v1/events/stream?access_token=test-secret";
+        let (query_socket, _) = connect_async(&query_ws_url)
+            .await
+            .expect("query websocket should remain supported for browser clients");
+        drop(query_socket);
 
         let client = Client::new();
         let response = client
