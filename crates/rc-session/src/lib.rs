@@ -20,6 +20,7 @@ use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use rc_config::AppPaths;
 use rc_core::{ConversationEntry, StoredEvent};
+use rc_transcript::TranscriptEntry;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -232,6 +233,17 @@ impl SessionStore {
         Ok(())
     }
 
+    /// Append a typed transcript entry via the legacy `StoredEvent` storage shape.
+    ///
+    /// # Errors
+    /// Returns an error if the projected event cannot be persisted.
+    pub fn append_transcript_entry(&self, entry: &TranscriptEntry) -> Result<()> {
+        let event = StoredEvent::from(entry);
+        self.append_event(&event)?;
+        self.touch(event.session_id)?;
+        Ok(())
+    }
+
     /// List all sessions ordered by last-updated time (newest first).
     ///
     /// # Errors
@@ -363,6 +375,25 @@ impl SessionStore {
             session_id,
             self.load_events(session_id)?,
         ))
+    }
+
+    /// Load a typed transcript view projected from the legacy stored-event log.
+    ///
+    /// # Errors
+    /// Returns an error if any stored event cannot be converted into a
+    /// `TranscriptEntry`.
+    pub fn load_transcript_v2(&self, session_id: Uuid) -> Result<Vec<TranscriptEntry>> {
+        self.load_events(session_id)?
+            .into_iter()
+            .map(TranscriptEntry::try_from)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Create a Phase 1 transcript storage handle for the session's transcript path.
+    #[must_use]
+    pub fn transcript_storage(&self, session_id: Uuid) -> rc_transcript::TranscriptStorage {
+        rc_transcript::TranscriptStorage::new(self.session_transcript_path(session_id))
     }
 
     /// Load only the conversation entries for a session.
@@ -650,6 +681,7 @@ mod tests {
     use crate::resume_state::{PendingToolCall, ResumeState};
     use rc_config::AppPaths;
     use rc_core::ConversationEntry;
+    use rc_transcript::{CompactBoundary, CompactTrigger, TranscriptEntry};
     use serde_json::json;
     use tempfile::tempdir;
     use uuid::Uuid;
@@ -749,5 +781,68 @@ mod tests {
             .unwrap_or_else(|error| panic!("{error}"))
             .unwrap_or_else(|| panic!("missing cleared state"));
         assert!(cleared.pending_tool_calls.is_empty());
+    }
+
+    #[test]
+    fn transcript_v2_projection_round_trips_existing_events() {
+        let tempdir = tempdir().unwrap_or_else(|error| panic!("failed to create tempdir: {error}"));
+        let paths = AppPaths::discover(Some(tempdir.path().join(".remote-code-rust")))
+            .unwrap_or_else(|error| panic!("{error}"));
+        let store = SessionStore::open(paths).unwrap_or_else(|error| panic!("{error}"));
+
+        let session_id = Uuid::new_v4();
+        store
+            .ensure_session(
+                session_id,
+                tempdir.path(),
+                "mock",
+                Some("mock-model"),
+                Some("compat"),
+            )
+            .unwrap_or_else(|error| panic!("{error}"));
+        store
+            .append_conversation_entry(session_id, &ConversationEntry::user("hello"))
+            .unwrap_or_else(|error| panic!("{error}"));
+        store
+            .append_named_event(session_id, "tool_result", json!({"ok": true}))
+            .unwrap_or_else(|error| panic!("{error}"));
+
+        let entries = store
+            .load_transcript_v2(session_id)
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].event_type(), "conversation");
+        assert_eq!(entries[1].event_type(), "tool_result");
+    }
+
+    #[test]
+    fn session_store_accepts_typed_transcript_entries() {
+        let tempdir = tempdir().unwrap_or_else(|error| panic!("failed to create tempdir: {error}"));
+        let paths = AppPaths::discover(Some(tempdir.path().join(".remote-code-rust")))
+            .unwrap_or_else(|error| panic!("{error}"));
+        let store = SessionStore::open(paths).unwrap_or_else(|error| panic!("{error}"));
+
+        let session_id = Uuid::new_v4();
+        store
+            .ensure_session(
+                session_id,
+                tempdir.path(),
+                "mock",
+                Some("mock-model"),
+                Some("compat"),
+            )
+            .unwrap_or_else(|error| panic!("{error}"));
+        store
+            .append_transcript_entry(&TranscriptEntry::compact_boundary_now(
+                session_id,
+                CompactBoundary::new(CompactTrigger::Auto, 2048),
+            ))
+            .unwrap_or_else(|error| panic!("{error}"));
+
+        let entries = store
+            .load_transcript_v2(session_id)
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].as_compact_boundary().is_some());
     }
 }

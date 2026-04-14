@@ -4,13 +4,34 @@
 //! permission modes, provider protocols, conversation entries, tool calls,
 //! usage summaries, hook definitions, and session events.
 
+pub mod cost;
+pub mod hooks;
+pub mod ids;
+pub mod message;
+pub mod permission_types;
+pub mod state;
 pub mod task_stack;
+pub mod usage;
 
 use chrono::{DateTime, Utc};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
+
+pub use cost::CostTracker;
+pub use hooks::{HookDecision, HookEventEnvelope, HookEventKind, HookResponse, HookSpecificOutput};
+pub use ids::{AgentId, SessionId};
+pub use message::{
+    AssistantContentBlock, AssistantMessage, AttachmentMessage, CollapsedReadSearchMessage,
+    GroupedToolUseMessage, HookResultMessage, Message, MessageBase, MessageOrigin, ProgressMessage,
+    SystemMessage, SystemMessageSubtype, TombstoneMessage, ToolUseSummaryMessage, UserMessage,
+};
+pub use permission_types::{
+    PermissionBehavior, PermissionResult, PermissionRule, PermissionRuleSource,
+};
+pub use state::{AppState, FileHistoryState, ToolPermissionContext};
+pub use usage::UsageAccumulator;
 
 /// Application binary name.
 pub const APP_NAME: &str = "remote-code";
@@ -547,7 +568,7 @@ pub struct StoredEvent {
 #[must_use]
 pub fn default_system_prompt(cwd: &std::path::Path) -> String {
     format!(
-        "You are Remote Code Rust, a concise coding agent running inside {}. Keep responses practical, prefer safe actions, and preserve compatibility with the Remote Code stream-json runtime where possible.",
+        "You are Remote Code Rust, a concise coding agent running inside {}. Keep responses practical, prefer safe actions, and preserve compatibility with the Remote Code stream-json runtime where possible. When using shell tools, do not prefix commands with cd or Set-Location; pass the target directory via the tool's cwd field instead.",
         cwd.display()
     )
 }

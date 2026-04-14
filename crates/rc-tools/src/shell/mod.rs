@@ -103,7 +103,7 @@ pub async fn execute_shell_command(
 
     if policy.block_inline_cwd && analysis.changes_directory && input.get("cwd").is_none() {
         return Err(anyhow!(
-            "inline directory changes are blocked; pass the target via the cwd field instead"
+            "inline directory changes are blocked; pass the target via the cwd field instead (for example {{\"command\":\"npm test\",\"cwd\":\"apps/remote-code-mobile\"}}) rather than prefixing the command with cd or Set-Location"
         ));
     }
     if policy.block_destructive_git && analysis.destructive_git {
@@ -465,5 +465,36 @@ mod tests {
 
         assert!(result.contains("description: print a greeting"));
         assert!(result.contains("stdout:"));
+    }
+
+    #[tokio::test]
+    async fn inline_directory_change_errors_suggest_using_cwd() {
+        let tempdir = tempdir().expect("tempdir");
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 2_000,
+            ..ToolExecutionContext::default()
+        };
+        let policy = ShellExecutionPolicy::default();
+        let command = if cfg!(windows) {
+            "Set-Location child; npm test"
+        } else {
+            "cd child && cargo test"
+        };
+
+        let result = execute_shell_command(
+            test_shell_kind(),
+            &json!({
+                "command": command
+            }),
+            &context,
+            &policy,
+        )
+        .await;
+
+        let error = result.expect_err("inline cwd changes should be rejected");
+        let rendered = error.to_string();
+        assert!(rendered.contains("\"cwd\""));
+        assert!(rendered.contains("npm test"));
     }
 }

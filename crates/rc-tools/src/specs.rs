@@ -126,13 +126,16 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
             name: "bash_command".to_owned(),
             protocol_name: "Bash".to_owned(),
             permission_tool_name: "Bash".to_owned(),
-            description: "Run a shell command in the current workspace.".to_owned(),
+            description: "Run a shell command in the current workspace. To run in a subdirectory, pass cwd instead of prefixing the command with cd or Set-Location.".to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "command": {"type": "string"},
-                    "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 600000}
+                    "cwd": {"type": "string", "description": "Optional working directory, relative to the current workspace. Use this instead of prefixing the command with cd or Set-Location."},
+                    "description": {"type": "string", "description": "Optional short human description of what the command is doing."},
+                    "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 600000},
+                    "background": {"type": "boolean", "description": "Run the command in the background and return a task handle immediately."}
                 },
                 "required": ["command"],
                 "additionalProperties": false,
@@ -657,13 +660,16 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
             name: "powershell".to_owned(),
             protocol_name: "PowerShell".to_owned(),
             permission_tool_name: "Bash".to_owned(),
-            description: "Execute a PowerShell command (Windows only).".to_owned(),
+            description: "Execute a PowerShell command (Windows only). To run in a subdirectory, pass cwd instead of prefixing the command with cd or Set-Location.".to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "command": {"type": "string"},
-                    "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 600000}
+                    "cwd": {"type": "string", "description": "Optional working directory, relative to the current workspace. Use this instead of prefixing the command with cd or Set-Location."},
+                    "description": {"type": "string", "description": "Optional short human description of what the command is doing."},
+                    "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 600000},
+                    "background": {"type": "boolean", "description": "Run the command in the background and return a task handle immediately."}
                 },
                 "required": ["command"],
                 "additionalProperties": false,
@@ -998,4 +1004,38 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
             }),
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::builtin_tool_specs;
+
+    #[test]
+    fn shell_tool_schemas_expose_cwd_controls() {
+        let specs = builtin_tool_specs();
+        for tool_name in ["bash_command", "powershell"] {
+            let spec = specs
+                .iter()
+                .find(|spec| spec.name == tool_name)
+                .unwrap_or_else(|| panic!("missing tool spec for {tool_name}"));
+            let properties = spec
+                .input_schema
+                .get("properties")
+                .and_then(|value| value.as_object())
+                .unwrap_or_else(|| panic!("missing properties object for {tool_name}"));
+
+            assert!(
+                properties.contains_key("cwd"),
+                "{tool_name} should expose cwd"
+            );
+            assert!(
+                properties.contains_key("description"),
+                "{tool_name} should expose description"
+            );
+            assert!(
+                properties.contains_key("background"),
+                "{tool_name} should expose background"
+            );
+        }
+    }
 }

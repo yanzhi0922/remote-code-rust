@@ -5,6 +5,15 @@
 > 代码规模: ~53,000 行 (Rust + TypeScript)
 > 当前验证基线: `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings` / `apps/remote-code-gui npm test` / `apps/remote-code-mobile npm test` / GUI & mobile build 全部通过
 
+## Claude Parity Track
+
+并行中的 Claude Code 全量复刻路线已从纯研究进入主干骨架阶段：
+
+- 已新增 `rc-transcript`、`rc-query-engine`，并升级 `rc-engine-events` 为“运行时兼容事件 + EngineEvent/EventStream”双层结构。
+- 已为 `rc-core` 补齐 v2 类型层（品牌 ID、Message 联合类型、AppState、Usage/Cost、扩展 hook 类型）。
+- 已为 `rc-session` 接入 transcript V2 兼容读写 API，保持现有 session/NDJSON 主路径稳定。
+- 当前 Rust 工作区回归仍保持全绿：`cargo test --workspace` 通过。
+
 ---
 
 ## 一、当前产品状态
