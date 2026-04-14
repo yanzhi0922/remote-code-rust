@@ -8,19 +8,16 @@ use anyhow::{Result, anyhow};
 use rc_config::{
     RuntimeConfig, import_legacy_profile, normalize_base_url, validate_provider_config,
 };
-use rc_core::{
-    ConversationEntry, ConversationRole, PermissionMode, ProviderResponse, SubAgentCompletion,
-    default_system_prompt,
-};
+use rc_core::{ConversationEntry, ConversationRole, PermissionMode};
 use rc_permissions::{
     LayeredPermissionBroker, PermissionBroker, StaticPermissionBroker, load_layered_rules,
     rules::summarize_rule_sources,
 };
-use rc_protocol::UsagePayload;
+use rc_protocol::{MessageRole, RuntimeEventDetail, UsagePayload};
 use rc_provider::context::ContextWindowManager;
-use rc_provider::{ProviderClient, StreamingCallbacks};
-use rc_session::SessionStore;
+use rc_provider::{ProviderCompatBackend, StreamingCallbacks};
 use rc_session::resume_state::{PendingToolCall, ResumeState};
+use rc_session::{SessionStore, conversation::ensure_conversation_initialized};
 use rc_skills::SkillDocument;
 use rc_tools::{
     ToolExecutionContext,
@@ -31,6 +28,7 @@ use rc_tools::{
 use rc_ui_bridge::UiTaskNode;
 
 use crate::cli::Cli;
+use crate::conversation_backend::ConversationBackend;
 use crate::hooks::{
     HookRunState, RuntimeHookDiscovery, apply_post_tool_hooks, apply_pre_tool_use_hooks,
     discover_runtime_hooks, ensure_session_start_hooks,
@@ -142,27 +140,57 @@ pub(crate) enum PromptStreamEvent {
     },
 }
 
-struct ConversationSubAgent {
-    client: Arc<ProviderClient>,
-    provider: rc_config::ProviderConfig,
-}
-
-impl ConversationSubAgent {
-    fn new(client: Arc<ProviderClient>, provider: &rc_config::ProviderConfig) -> Self {
-        Self {
-            client,
-            provider: provider.clone(),
+impl PromptStreamEvent {
+    #[must_use]
+    pub(crate) fn runtime_event_detail(&self) -> Option<RuntimeEventDetail> {
+        match self {
+            Self::MessageDelta { delta } => Some(RuntimeEventDetail::MessageDelta {
+                role: MessageRole::Assistant,
+                delta: delta.clone(),
+                message_id: None,
+            }),
+            Self::MessageCommitted { text } => Some(RuntimeEventDetail::MessageCommitted {
+                role: MessageRole::Assistant,
+                text: text.clone(),
+                message_id: None,
+            }),
+            Self::ToolStarted {
+                tool_call_id,
+                tool_name,
+            } => Some(RuntimeEventDetail::ToolStarted {
+                tool_call_id: tool_call_id.clone(),
+                tool_name: tool_name.clone(),
+            }),
+            Self::ToolProgress {
+                tool_call_id,
+                delta,
+                elapsed_time_seconds,
+            } => Some(RuntimeEventDetail::ToolProgress {
+                tool_call_id: tool_call_id.clone(),
+                tool_name: None,
+                delta: delta.clone(),
+                elapsed_time_seconds: *elapsed_time_seconds,
+            }),
+            Self::ToolFinished {
+                tool_call_id,
+                tool_name,
+                is_error,
+                summary,
+            } => Some(RuntimeEventDetail::ToolFinished {
+                tool_call_id: tool_call_id.clone(),
+                tool_name: tool_name.clone(),
+                is_error: *is_error,
+                summary: summary.clone(),
+            }),
+            Self::SubtaskStarted { .. }
+            | Self::SubtaskProgress { .. }
+            | Self::SubtaskCompleted { .. }
+            | Self::BatchProgress { .. }
+            | Self::ContextUsage { .. }
+            | Self::ContextOverflow { .. }
+            | Self::ContextCompacted { .. }
+            | Self::TaskSnapshot { .. } => None,
         }
-    }
-}
-
-#[async_trait::async_trait]
-impl SubAgentCompletion for ConversationSubAgent {
-    async fn complete(
-        &self,
-        conversation: &[ConversationEntry],
-    ) -> anyhow::Result<ProviderResponse> {
-        self.client.complete(&self.provider, conversation).await
     }
 }
 
@@ -259,18 +287,14 @@ pub(crate) fn restore_session_context(
         }
     }
 
-    let Ok(events) = store.load_events(config.session_id) else {
+    let Ok(transcript) = store.load_transcript(config.session_id) else {
         return Ok(());
     };
-    let payload = events.into_iter().rev().find_map(|event| {
-        (event.event_type == "session_context")
-            .then_some(event.payload)
-            .flatten()
-    });
-    let Some(payload) = payload else {
+    let Some(persisted) =
+        transcript.latest_named_event_as::<PersistedSessionContext>("session_context")?
+    else {
         return Ok(());
     };
-    let persisted = serde_json::from_value::<PersistedSessionContext>(payload)?;
     config.cwd = persisted.cwd;
     if let Some(permission_mode) = parse_permission_mode(&persisted.permission_mode) {
         config.permission_mode = permission_mode;
@@ -431,23 +455,15 @@ pub(crate) fn initialize_conversation(
         .as_deref()
         .or(title_hint)
         .or(config.provider.model.as_deref());
-    store.ensure_session(
+    persist_session_context(store, config)?;
+    ensure_conversation_initialized(
+        store,
         config.session_id,
         &config.cwd,
         &config.provider.name,
         config.provider.model.as_deref(),
         title_hint,
-    )?;
-    persist_session_context(store, config)?;
-    let mut conversation = store
-        .load_conversation(config.session_id)
-        .unwrap_or_default();
-    if conversation.is_empty() {
-        let system = ConversationEntry::system(default_system_prompt(&config.cwd));
-        store.append_conversation_entry(config.session_id, &system)?;
-        conversation.push(system);
-    }
-    Ok(conversation)
+    )
 }
 
 #[allow(clippy::too_many_lines)]
@@ -455,7 +471,7 @@ pub(crate) fn initialize_conversation(
 pub(crate) async fn run_prompt(
     config: &RuntimeConfig,
     store: &SessionStore,
-    provider: &Arc<ProviderClient>,
+    backend: &dyn ConversationBackend,
     broker: &dyn PermissionBroker,
     event_sink: Option<PromptEventSink>,
     discovery: &RuntimeHookDiscovery,
@@ -560,10 +576,7 @@ pub(crate) async fn run_prompt(
     let tool_context = ToolExecutionContext {
         cwd: config.cwd.clone(),
         timeout_ms: config.provider.timeout_ms,
-        sub_agent: Some(Arc::new(ConversationSubAgent::new(
-            Arc::clone(provider),
-            &config.provider,
-        ))),
+        sub_agent: Some(backend.sub_agent_completion()),
         progress_cb,
         task_stack: std::sync::Arc::new(std::sync::Mutex::new(
             rc_core::task_stack::TaskStack::default(),
@@ -644,9 +657,8 @@ pub(crate) async fn run_prompt(
         }
 
         let response = if let Some(event_sink) = event_sink.clone() {
-            provider
-                .complete_streaming_with_callbacks(
-                    &config.provider,
+            backend
+                .complete_streaming(
                     conversation,
                     Some(build_streaming_callbacks(
                         config.include_partial_messages,
@@ -655,7 +667,7 @@ pub(crate) async fn run_prompt(
                 )
                 .await?
         } else {
-            provider.complete(&config.provider, conversation).await?
+            backend.complete(conversation).await?
         };
         usage.input_tokens += response.usage.input_tokens;
         usage.output_tokens += response.usage.output_tokens;
@@ -892,7 +904,10 @@ pub(crate) async fn run_oneshot_text(
     store: &SessionStore,
     prompt: String,
 ) -> Result<()> {
-    let provider = Arc::new(ProviderClient::new()?);
+    let backend = ProviderCompatBackend::new(
+        Arc::new(rc_provider::ProviderClient::new()?),
+        &config.provider,
+    );
     let broker = LayeredPermissionBroker::new(
         StaticPermissionBroker::new(config.permission_mode),
         load_layered_rules(
@@ -915,7 +930,7 @@ pub(crate) async fn run_oneshot_text(
     let response = run_prompt(
         config,
         store,
-        &provider,
+        &backend,
         &broker,
         None,
         &discovery,
@@ -1284,4 +1299,38 @@ fn read_line_prompt(prompt: &str) -> Result<String> {
     let mut buf = String::new();
     io::stdin().read_line(&mut buf)?;
     Ok(buf)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PromptStreamEvent;
+    use rc_protocol::{MessageRole, RuntimeEventDetail};
+
+    #[test]
+    fn prompt_stream_event_maps_message_delta_to_shared_runtime_event() {
+        let event = PromptStreamEvent::MessageDelta {
+            delta: "hello".to_owned(),
+        };
+
+        assert_eq!(
+            event.runtime_event_detail(),
+            Some(RuntimeEventDetail::MessageDelta {
+                role: MessageRole::Assistant,
+                delta: "hello".to_owned(),
+                message_id: None,
+            })
+        );
+    }
+
+    #[test]
+    fn prompt_stream_event_keeps_non_runtime_only_events_local() {
+        let event = PromptStreamEvent::ContextUsage {
+            estimated_tokens: 10,
+            max_input_tokens: 100,
+            threshold_tokens: 80,
+            ratio: 0.1,
+        };
+
+        assert_eq!(event.runtime_event_detail(), None);
+    }
 }

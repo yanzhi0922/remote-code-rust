@@ -13,6 +13,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::SessionStore;
+use crate::transcript::SessionTranscript;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -83,13 +84,14 @@ impl SessionReplay {
     /// # Errors
     /// Returns an error if session events cannot be loaded from the store.
     pub fn load(session_id: Uuid, store: &SessionStore) -> Result<Self> {
-        let stored = store.load_events(session_id)?;
-        let events = stored
-            .iter()
-            .enumerate()
-            .map(|(idx, raw)| convert_event(idx, raw))
-            .collect();
-        Ok(Self { events })
+        let transcript = store.load_transcript(session_id)?;
+        Ok(Self::from_transcript(&transcript))
+    }
+
+    #[must_use]
+    pub fn from_transcript(transcript: &SessionTranscript) -> Self {
+        let events = transcript.iter_events().map(convert_event).collect();
+        Self { events }
     }
 
     #[must_use]
@@ -220,7 +222,7 @@ pub fn replay_session(session_id: Uuid, store: &SessionStore) -> Result<ReplaySu
 }
 
 #[allow(clippy::too_many_lines)]
-fn convert_event(_idx: usize, raw: &StoredEvent) -> ReplayEvent {
+fn convert_event(raw: &StoredEvent) -> ReplayEvent {
     if let Some(conv) = &raw.conversation {
         return convert_conversation(conv);
     }

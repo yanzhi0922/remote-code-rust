@@ -21,19 +21,16 @@ use std::io::{self, Write};
 use std::sync::Arc;
 
 use anyhow::Result;
-use rc_config::{ProviderConfig, RuntimeConfig};
-use rc_core::{
-    ConversationEntry, ConversationRole, ProviderResponse, SubAgentCompletion,
-    default_system_prompt,
-};
+use rc_config::RuntimeConfig;
+use rc_core::{ConversationEntry, ConversationRole};
 use rc_permissions::{
     LayeredPermissionBroker, PermissionBroker, StaticPermissionBroker, load_layered_rules,
 };
-use rc_provider::ProviderClient;
 use rc_provider::context::ContextWindowManager;
 use rc_provider::cost::CostTracker;
-use rc_session::SessionStore;
+use rc_provider::{ConversationBackend, ProviderClient, ProviderCompatBackend};
 use rc_session::resume_state::{PendingToolCall, ResumeState};
+use rc_session::{SessionStore, conversation::ensure_conversation_initialized};
 use rc_tools::{
     ToolExecutionContext,
     agent::{parse_delegate_progress_event, render_delegate_progress_event},
@@ -53,40 +50,6 @@ enum VimMode {
     Normal,
     /// Insert mode: text input for conversation.
     Insert,
-}
-
-// ---------------------------------------------------------------------------
-// Sub-agent completion provider
-// ---------------------------------------------------------------------------
-
-/// Wrapper around [`ProviderClient`] that implements [`SubAgentCompletion`].
-///
-/// This allows the agent tool to create sub-conversations and execute them
-/// using the same provider configuration as the main conversation.
-/// Uses `Arc<ProviderClient>` to share the client (including its circuit
-/// breaker state) across the main loop and sub-agent tasks.
-struct TuiSubAgent {
-    client: Arc<ProviderClient>,
-    provider: ProviderConfig,
-}
-
-impl TuiSubAgent {
-    fn new(client: Arc<ProviderClient>, provider: &ProviderConfig) -> Self {
-        Self {
-            client,
-            provider: provider.clone(),
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl SubAgentCompletion for TuiSubAgent {
-    async fn complete(
-        &self,
-        conversation: &[ConversationEntry],
-    ) -> anyhow::Result<ProviderResponse> {
-        self.client.complete(&self.provider, conversation).await
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -207,7 +170,8 @@ pub fn run_dashboard(config: &RuntimeConfig, store: &SessionStore) -> Result<()>
 /// - True Vim mode with raw key detection (ESC, Ctrl+C, etc.)
 #[allow(clippy::too_many_lines)]
 pub async fn run_tui_app(config: RuntimeConfig, store: &SessionStore) -> Result<()> {
-    let provider = Arc::new(ProviderClient::new()?);
+    let provider_client = Arc::new(ProviderClient::new()?);
+    let backend = ProviderCompatBackend::new(Arc::clone(&provider_client), &config.provider);
     let broker = LayeredPermissionBroker::new(
         StaticPermissionBroker::new(config.permission_mode),
         load_layered_rules(
@@ -466,7 +430,7 @@ pub async fn run_tui_app(config: RuntimeConfig, store: &SessionStore) -> Result<
 
                         // Execute conversation turn (outside raw mode for normal output).
                         if let Err(error) = run_conversation_turn(
-                            &provider,
+                            &backend,
                             &config,
                             store,
                             &mut conversation,
@@ -691,25 +655,14 @@ fn load_or_create_conversation(
     store: &SessionStore,
     config: &RuntimeConfig,
 ) -> Result<Vec<ConversationEntry>> {
-    store.ensure_session(
+    ensure_conversation_initialized(
+        store,
         config.session_id,
         &config.cwd,
         &config.provider.name,
         config.provider.model.as_deref(),
         config.session_name.as_deref(),
-    )?;
-
-    let mut conversation = store
-        .load_conversation(config.session_id)
-        .unwrap_or_default();
-
-    if conversation.is_empty() {
-        let system = ConversationEntry::system(default_system_prompt(&config.cwd));
-        store.append_conversation_entry(config.session_id, &system)?;
-        conversation.push(system);
-    }
-
-    Ok(conversation)
+    )
 }
 
 /// Run a full multi-turn conversation turn.
@@ -725,7 +678,7 @@ fn load_or_create_conversation(
 /// the next provider call.
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 async fn run_conversation_turn(
-    provider: &Arc<ProviderClient>,
+    backend: &dyn ConversationBackend,
     config: &RuntimeConfig,
     store: &SessionStore,
     conversation: &mut Vec<ConversationEntry>,
@@ -742,10 +695,7 @@ async fn run_conversation_turn(
     let tool_context = ToolExecutionContext {
         cwd: config.cwd.clone(),
         timeout_ms: config.provider.timeout_ms,
-        sub_agent: Some(Arc::new(TuiSubAgent::new(
-            Arc::clone(provider),
-            &config.provider,
-        ))),
+        sub_agent: Some(backend.sub_agent_completion()),
         progress_cb: Some(Arc::new(|msg: &str| {
             if let Some(event) = parse_delegate_progress_event(msg) {
                 println!("{}", render_delegate_progress_event(&event));
@@ -787,7 +737,7 @@ async fn run_conversation_turn(
         }
 
         // Call provider
-        let response = provider.complete(&config.provider, conversation).await?;
+        let response = backend.complete(conversation).await?;
         total_input_tokens += response.usage.input_tokens;
         total_output_tokens += response.usage.output_tokens;
 

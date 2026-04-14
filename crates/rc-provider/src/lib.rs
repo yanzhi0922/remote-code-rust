@@ -12,6 +12,7 @@
 
 pub mod circuit_breaker;
 pub mod context;
+pub mod conversation_backend;
 pub mod cost;
 pub mod credential_pool;
 pub mod failover;
@@ -20,6 +21,7 @@ pub mod sigv4;
 pub mod streaming;
 
 pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
+pub use conversation_backend::{ConversationBackend, ProviderCompatBackend};
 pub use streaming::StreamingCallbacks;
 
 use anyhow::{Context, Result, anyhow};

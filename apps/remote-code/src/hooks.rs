@@ -146,25 +146,11 @@ pub struct HookRunState {
 
 impl HookRunState {
     pub fn load(store: &SessionStore, session_id: Uuid) -> Result<Self> {
-        let mut state = Self::default();
-        let events = store.load_events(session_id).unwrap_or_default();
-        for event in events {
-            let Some(payload) = event.payload else {
-                continue;
-            };
-            if event.event_type == "hook_execution"
-                && payload.get("once").and_then(Value::as_bool) == Some(true)
-                && let Some(hook_id) = payload.get("hook_id").and_then(Value::as_str)
-            {
-                state.consumed_once_hooks.insert(hook_id.to_owned());
-            }
-            if event.event_type == "hook_phase"
-                && payload.get("phase").and_then(Value::as_str) == Some("session_start")
-            {
-                state.session_start_completed = true;
-            }
-        }
-        Ok(state)
+        let transcript = store.load_transcript(session_id)?;
+        Ok(Self {
+            consumed_once_hooks: transcript.consumed_once_hook_ids(),
+            session_start_completed: transcript.has_hook_phase("session_start"),
+        })
     }
 
     fn should_skip_once(&self, hook: &HookRecord) -> bool {

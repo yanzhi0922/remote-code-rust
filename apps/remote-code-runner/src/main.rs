@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 use rc_control_plane::{
     RunnerCommandPullResponse, RunnerQueuedCommandBody, RuntimeEventCreateRequest,
     RuntimeEventDetail, SessionState as ControlPlaneSessionState, SessionStateUpdateRequest,
+    runtime_event_detail_from_stream_json_value,
 };
 use rc_runner::{
     ApprovalCreateRequest, ApprovalDecision, ApprovalDecisionRequest, ApprovalRequestRecord,
@@ -313,47 +314,6 @@ impl HostedSessionManager {
                     self.apply_runtime_session_state(session_id, state).await?;
                 }
             }
-            "message_delta" => {
-                if let Some(detail) = message_detail_from_protocol(&value, true) {
-                    self.post_runtime_event(session_id, detail).await?;
-                }
-            }
-            "message_committed" => {
-                if let Some(detail) = message_detail_from_protocol(&value, false) {
-                    self.post_runtime_event(session_id, detail).await?;
-                }
-            }
-            "tool_started" => {
-                if let Some(detail) = tool_started_from_protocol(&value) {
-                    self.post_runtime_event(session_id, detail).await?;
-                }
-            }
-            "tool_progress" => {
-                if let Some(detail) = tool_progress_from_protocol(&value) {
-                    self.post_runtime_event(session_id, detail).await?;
-                }
-            }
-            "tool_finished" => {
-                if let Some(detail) = tool_finished_from_protocol(&value) {
-                    self.post_runtime_event(session_id, detail).await?;
-                }
-            }
-            "artifact_manifest" => {
-                if let Some(detail) = artifact_manifest_from_protocol(&value) {
-                    self.post_runtime_event(session_id, detail).await?;
-                }
-            }
-            "runtime_error" => {
-                if let Some(message) = value.get("message").and_then(serde_json::Value::as_str) {
-                    self.post_runtime_event(
-                        session_id,
-                        RuntimeEventDetail::RuntimeError {
-                            message: message.to_owned(),
-                        },
-                    )
-                    .await?;
-                }
-            }
             "control_request" => {
                 self.handle_control_request(session_id, &value, handle)
                     .await?;
@@ -366,7 +326,11 @@ impl HostedSessionManager {
                         .await?;
                 }
             }
-            _ => {}
+            _ => {
+                if let Some(detail) = runtime_event_detail_from_stream_json_value(&value) {
+                    self.post_runtime_event(session_id, detail).await?;
+                }
+            }
         }
         Ok(())
     }
@@ -742,109 +706,6 @@ fn map_runtime_session_state(
             ControlPlaneSessionState::Running,
         )),
         "requires_action" => None,
-        _ => None,
-    }
-}
-
-fn message_detail_from_protocol(
-    value: &serde_json::Value,
-    is_delta: bool,
-) -> Option<RuntimeEventDetail> {
-    let role = value.get("role").and_then(serde_json::Value::as_str)?;
-    let role = parse_message_role(role)?;
-    let message_id = value
-        .get("message_id")
-        .and_then(serde_json::Value::as_str)
-        .map(ToOwned::to_owned);
-    if is_delta {
-        let delta = value.get("delta").and_then(serde_json::Value::as_str)?;
-        Some(RuntimeEventDetail::MessageDelta {
-            role,
-            delta: delta.to_owned(),
-            message_id,
-        })
-    } else {
-        let text = value.get("text").and_then(serde_json::Value::as_str)?;
-        Some(RuntimeEventDetail::MessageCommitted {
-            role,
-            text: text.to_owned(),
-            message_id,
-        })
-    }
-}
-
-fn tool_started_from_protocol(value: &serde_json::Value) -> Option<RuntimeEventDetail> {
-    Some(RuntimeEventDetail::ToolStarted {
-        tool_call_id: value
-            .get("tool_use_id")
-            .and_then(serde_json::Value::as_str)?
-            .to_owned(),
-        tool_name: value
-            .get("tool_name")
-            .and_then(serde_json::Value::as_str)?
-            .to_owned(),
-    })
-}
-
-fn tool_progress_from_protocol(value: &serde_json::Value) -> Option<RuntimeEventDetail> {
-    Some(RuntimeEventDetail::ToolProgress {
-        tool_call_id: value
-            .get("tool_use_id")
-            .and_then(serde_json::Value::as_str)
-            .map(ToOwned::to_owned),
-        tool_name: value
-            .get("tool_name")
-            .and_then(serde_json::Value::as_str)
-            .map(ToOwned::to_owned),
-        delta: value
-            .get("input_delta")
-            .and_then(serde_json::Value::as_str)
-            .map(ToOwned::to_owned),
-        elapsed_time_seconds: value
-            .get("elapsed_time_seconds")
-            .and_then(serde_json::Value::as_u64),
-    })
-}
-
-fn tool_finished_from_protocol(value: &serde_json::Value) -> Option<RuntimeEventDetail> {
-    Some(RuntimeEventDetail::ToolFinished {
-        tool_call_id: value
-            .get("tool_use_id")
-            .and_then(serde_json::Value::as_str)?
-            .to_owned(),
-        tool_name: value
-            .get("tool_name")
-            .and_then(serde_json::Value::as_str)?
-            .to_owned(),
-        is_error: value
-            .get("is_error")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false),
-        summary: value
-            .get("summary")
-            .and_then(serde_json::Value::as_str)
-            .map(ToOwned::to_owned),
-    })
-}
-
-fn artifact_manifest_from_protocol(value: &serde_json::Value) -> Option<RuntimeEventDetail> {
-    let artifact_ids = value
-        .get("artifact_ids")
-        .and_then(serde_json::Value::as_array)?
-        .iter()
-        .map(|entry| entry.as_str().and_then(|raw| Uuid::parse_str(raw).ok()))
-        .collect::<Option<Vec<_>>>()?;
-    if artifact_ids.is_empty() {
-        return None;
-    }
-    Some(RuntimeEventDetail::ArtifactManifest { artifact_ids })
-}
-
-fn parse_message_role(role: &str) -> Option<rc_control_plane::MessageRole> {
-    match role {
-        "assistant" => Some(rc_control_plane::MessageRole::Assistant),
-        "user" => Some(rc_control_plane::MessageRole::User),
-        "system" => Some(rc_control_plane::MessageRole::System),
         _ => None,
     }
 }

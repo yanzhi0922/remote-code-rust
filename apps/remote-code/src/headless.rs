@@ -15,9 +15,9 @@ use rc_permissions::{
 };
 use rc_protocol::{
     InitPayload, PermissionRequestPayload, ProtocolEmitter, ProtocolInput, ResultPayload,
-    ToolProgressPayload, UsagePayload, parse_input_line,
+    UsagePayload, parse_input_line,
 };
-use rc_provider::ProviderClient;
+use rc_provider::ProviderCompatBackend;
 use rc_session::SessionStore;
 use rc_tools::runtime_builtin_tool_specs;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -101,44 +101,11 @@ pub(crate) async fn run_headless(
     let event_forwarder = tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
             let mut emitter = event_emitter.lock().await;
+            if let Some(detail) = event.runtime_event_detail() {
+                emitter.emit_runtime_event(&detail)?;
+                continue;
+            }
             match event {
-                PromptStreamEvent::MessageDelta { delta } => {
-                    emitter.emit_message_delta("assistant", delta, None)?;
-                }
-                PromptStreamEvent::MessageCommitted { text } => {
-                    emitter.emit_message_committed("assistant", text, None)?;
-                }
-                PromptStreamEvent::ToolStarted {
-                    tool_call_id,
-                    tool_name,
-                } => {
-                    emitter.emit_tool_started(&tool_call_id, &tool_name)?;
-                }
-                PromptStreamEvent::ToolProgress {
-                    tool_call_id,
-                    delta,
-                    elapsed_time_seconds,
-                } => {
-                    emitter.emit_tool_progress_detail(ToolProgressPayload {
-                        tool_use_id: tool_call_id,
-                        tool_name: None,
-                        input_delta: delta,
-                        elapsed_time_seconds,
-                    })?;
-                }
-                PromptStreamEvent::ToolFinished {
-                    tool_call_id,
-                    tool_name,
-                    is_error,
-                    summary,
-                } => {
-                    emitter.emit_tool_finished(
-                        &tool_call_id,
-                        &tool_name,
-                        is_error,
-                        summary.as_deref(),
-                    )?;
-                }
                 PromptStreamEvent::SubtaskStarted {
                     task_id,
                     parent_task_id,
@@ -215,13 +182,23 @@ pub(crate) async fn run_headless(
                 PromptStreamEvent::TaskSnapshot { tasks } => {
                     emitter.emit_task_snapshot(tasks)?;
                 }
+                PromptStreamEvent::MessageDelta { .. }
+                | PromptStreamEvent::MessageCommitted { .. }
+                | PromptStreamEvent::ToolStarted { .. }
+                | PromptStreamEvent::ToolProgress { .. }
+                | PromptStreamEvent::ToolFinished { .. } => unreachable!(
+                    "runtime events should have been emitted through the shared runtime path"
+                ),
             }
         }
         Ok::<(), anyhow::Error>(())
     });
     let processor_event_tx = event_tx.clone();
     let processor = tokio::spawn(async move {
-        let provider = Arc::new(ProviderClient::new()?);
+        let backend = ProviderCompatBackend::new(
+            Arc::new(rc_provider::ProviderClient::new()?),
+            &processor_config.provider,
+        );
         let discovery = discover_runtime_hooks(&processor_config, &[]);
         let mut hook_state = HookRunState::load(&processor_store, processor_config.session_id)?;
         let mut conversation = initialize_conversation(&processor_store, &processor_config, None)?;
@@ -249,7 +226,7 @@ pub(crate) async fn run_headless(
             let result = run_prompt(
                 &processor_config,
                 &processor_store,
-                &provider,
+                &backend,
                 processor_broker.as_ref(),
                 Some(event_sink.clone()),
                 &discovery,

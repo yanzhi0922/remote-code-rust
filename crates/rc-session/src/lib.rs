@@ -4,9 +4,11 @@
 //! event storage, and export. Each session is backed by a SQLite row for
 //! metadata and an NDJSON file for the full event transcript.
 
+pub mod conversation;
 pub mod memory;
 pub mod replay;
 pub mod resume_state;
+pub mod transcript;
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -24,6 +26,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::resume_state::ResumeState;
+use crate::transcript::SessionTranscript;
 
 /// Summary metadata for a single session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -351,16 +354,23 @@ impl SessionStore {
         Ok(events)
     }
 
+    /// Load a transcript facade for semantic read access to the NDJSON event log.
+    ///
+    /// # Errors
+    /// Returns an error if the transcript file cannot be read or parsed.
+    pub fn load_transcript(&self, session_id: Uuid) -> Result<SessionTranscript> {
+        Ok(SessionTranscript::new(
+            session_id,
+            self.load_events(session_id)?,
+        ))
+    }
+
     /// Load only the conversation entries for a session.
     ///
     /// # Errors
     /// Returns an error if the transcript file cannot be read or parsed.
     pub fn load_conversation(&self, session_id: Uuid) -> Result<Vec<ConversationEntry>> {
-        Ok(self
-            .load_events(session_id)?
-            .into_iter()
-            .filter_map(|event| event.conversation)
-            .collect())
+        Ok(self.load_transcript(session_id)?.conversation_entries())
     }
 
     /// Load a complete session bundle (summary, stats, conversation, events).
@@ -369,12 +379,10 @@ impl SessionStore {
     /// Returns an error if the session does not exist or data cannot be read.
     pub fn load_session_bundle(&self, session_id: Uuid) -> Result<SessionBundle> {
         let summary = self.get_session_summary(session_id)?;
-        let events = self.load_events(session_id)?;
-        let conversation = events
-            .iter()
-            .filter_map(|event| event.conversation.clone())
-            .collect::<Vec<_>>();
-        let stats = build_session_stats(&events, &conversation);
+        let transcript = self.load_transcript(session_id)?;
+        let events = transcript.events().to_vec();
+        let conversation = transcript.conversation_entries();
+        let stats = build_session_stats(&transcript);
         Ok(SessionBundle {
             summary,
             stats,
@@ -404,19 +412,7 @@ impl SessionStore {
     /// # Errors
     /// Returns an error if the transcript cannot be read or the snapshot is invalid.
     pub fn load_resume_state(&self, session_id: Uuid) -> Result<Option<ResumeState>> {
-        let state = self
-            .load_events(session_id)?
-            .into_iter()
-            .rev()
-            .find_map(|event| {
-                (event.event_type == "resume_state")
-                    .then_some(event.payload)
-                    .flatten()
-            });
-        state
-            .map(serde_json::from_value)
-            .transpose()
-            .map_err(Into::into)
+        self.load_transcript(session_id)?.latest_resume_state()
     }
 
     /// Export the session transcript to an NDJSON file.
@@ -613,11 +609,13 @@ fn raw_row_to_summary(
     })
 }
 
-fn build_session_stats(events: &[StoredEvent], conversation: &[ConversationEntry]) -> SessionStats {
+fn build_session_stats(transcript: &SessionTranscript) -> SessionStats {
+    let events = transcript.events();
+    let conversation = transcript.conversation_entries();
     let mut messages_by_role = BTreeMap::new();
     let mut tool_call_count = 0usize;
     let mut error_count = 0usize;
-    for entry in conversation {
+    for entry in &conversation {
         let role = match entry.role {
             rc_core::ConversationRole::System => "system",
             rc_core::ConversationRole::User => "user",
@@ -631,32 +629,9 @@ fn build_session_stats(events: &[StoredEvent], conversation: &[ConversationEntry
         }
     }
 
-    let mut usage = SessionUsageSummary::default();
-    let mut last_stop_reason = None;
-    for event in events {
-        if let Some(payload) = &event.payload {
-            if payload
-                .get("is_error")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
-                error_count += 1;
-            }
-            if let Some(stop_reason) = payload.get("stop_reason").and_then(Value::as_str) {
-                last_stop_reason = Some(stop_reason.to_owned());
-            }
-            if let Some(event_usage) = payload.get("usage") {
-                usage.input_tokens += event_usage
-                    .get("input_tokens")
-                    .and_then(Value::as_u64)
-                    .unwrap_or_default();
-                usage.output_tokens += event_usage
-                    .get("output_tokens")
-                    .and_then(Value::as_u64)
-                    .unwrap_or_default();
-            }
-        }
-    }
+    error_count += transcript.named_event_error_count();
+    let usage = transcript.accumulated_usage();
+    let last_stop_reason = transcript.last_stop_reason();
 
     SessionStats {
         total_events: events.len(),

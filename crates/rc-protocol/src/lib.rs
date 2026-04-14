@@ -7,6 +7,9 @@ use std::io::Write;
 
 use anyhow::Result;
 use rc_core::SessionState;
+pub use rc_engine_events::{
+    DaemonPresenceState, MessageRole, RuntimeEventCreateRequest, RuntimeEventDetail,
+};
 use rc_ui_bridge::{UiRuntimeStatusSnapshot, UiTaskNode};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -109,14 +112,11 @@ impl<W: Write> ProtocolEmitter<W> {
         delta: impl AsRef<str>,
         message_id: Option<&str>,
     ) -> Result<()> {
-        self.emit(json!({
-            "type": "message_delta",
-            "role": role,
-            "delta": delta.as_ref(),
-            "message_id": message_id,
-            "uuid": Uuid::new_v4(),
-            "session_id": self.session_id,
-        }))
+        self.emit_runtime_event(&RuntimeEventDetail::MessageDelta {
+            role: parse_message_role(role),
+            delta: delta.as_ref().to_owned(),
+            message_id: message_id.map(ToOwned::to_owned),
+        })
     }
 
     /// Emit a normalized committed-message event for remote consumers.
@@ -126,25 +126,19 @@ impl<W: Write> ProtocolEmitter<W> {
         text: impl AsRef<str>,
         message_id: Option<&str>,
     ) -> Result<()> {
-        self.emit(json!({
-            "type": "message_committed",
-            "role": role,
-            "text": text.as_ref(),
-            "message_id": message_id,
-            "uuid": Uuid::new_v4(),
-            "session_id": self.session_id,
-        }))
+        self.emit_runtime_event(&RuntimeEventDetail::MessageCommitted {
+            role: parse_message_role(role),
+            text: text.as_ref().to_owned(),
+            message_id: message_id.map(ToOwned::to_owned),
+        })
     }
 
     /// Emit a tool-started event.
     pub fn emit_tool_started(&mut self, tool_use_id: &str, tool_name: &str) -> Result<()> {
-        self.emit(json!({
-            "type": "tool_started",
-            "tool_use_id": tool_use_id,
-            "tool_name": tool_name,
-            "uuid": Uuid::new_v4(),
-            "session_id": self.session_id,
-        }))
+        self.emit_runtime_event(&RuntimeEventDetail::ToolStarted {
+            tool_call_id: tool_use_id.to_owned(),
+            tool_name: tool_name.to_owned(),
+        })
     }
 
     /// Emit a structured subtask-started event.
@@ -362,15 +356,12 @@ impl<W: Write> ProtocolEmitter<W> {
 
     /// Emit a detailed tool progress update for remote consumers.
     pub fn emit_tool_progress_detail(&mut self, payload: ToolProgressPayload) -> Result<()> {
-        self.emit(json!({
-            "type": "tool_progress",
-            "tool_use_id": payload.tool_use_id,
-            "tool_name": payload.tool_name,
-            "input_delta": payload.input_delta,
-            "elapsed_time_seconds": payload.elapsed_time_seconds,
-            "uuid": Uuid::new_v4(),
-            "session_id": self.session_id,
-        }))
+        self.emit_runtime_event(&RuntimeEventDetail::ToolProgress {
+            tool_call_id: payload.tool_use_id,
+            tool_name: payload.tool_name,
+            delta: payload.input_delta,
+            elapsed_time_seconds: payload.elapsed_time_seconds,
+        })
     }
 
     /// Emit a tool-finished event.
@@ -381,25 +372,24 @@ impl<W: Write> ProtocolEmitter<W> {
         is_error: bool,
         summary: Option<&str>,
     ) -> Result<()> {
-        self.emit(json!({
-            "type": "tool_finished",
-            "tool_use_id": tool_use_id,
-            "tool_name": tool_name,
-            "is_error": is_error,
-            "summary": summary,
-            "uuid": Uuid::new_v4(),
-            "session_id": self.session_id,
-        }))
+        self.emit_runtime_event(&RuntimeEventDetail::ToolFinished {
+            tool_call_id: tool_use_id.to_owned(),
+            tool_name: tool_name.to_owned(),
+            is_error,
+            summary: summary.map(ToOwned::to_owned),
+        })
     }
 
     /// Emit a normalized runtime error event.
     pub fn emit_runtime_error(&mut self, message: impl AsRef<str>) -> Result<()> {
-        self.emit(json!({
-            "type": "runtime_error",
-            "message": message.as_ref(),
-            "uuid": Uuid::new_v4(),
-            "session_id": self.session_id,
-        }))
+        self.emit_runtime_event(&RuntimeEventDetail::RuntimeError {
+            message: message.as_ref().to_owned(),
+        })
+    }
+
+    /// Emit a shared runtime event using the protocol's legacy wire format.
+    pub fn emit_runtime_event(&mut self, detail: &RuntimeEventDetail) -> Result<()> {
+        self.emit(ProtocolRuntimeEnvelope::new(self.session_id, detail))
     }
 
     fn emit<T: Serialize>(&mut self, event: T) -> Result<()> {
@@ -505,6 +495,152 @@ pub struct ToolProgressPayload {
     pub input_delta: Option<String>,
     /// Tool execution elapsed seconds, if known.
     pub elapsed_time_seconds: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct ProtocolRuntimeEnvelope<'a> {
+    #[serde(flatten)]
+    detail: ProtocolRuntimeEventRef<'a>,
+    uuid: Uuid,
+    session_id: Uuid,
+}
+
+impl<'a> ProtocolRuntimeEnvelope<'a> {
+    fn new(session_id: Uuid, detail: &'a RuntimeEventDetail) -> Self {
+        Self {
+            detail: ProtocolRuntimeEventRef::from(detail),
+            uuid: Uuid::new_v4(),
+            session_id,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ProtocolRuntimeEventRef<'a> {
+    MessageDelta {
+        role: &'a MessageRole,
+        delta: &'a str,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message_id: Option<&'a str>,
+    },
+    MessageCommitted {
+        role: &'a MessageRole,
+        text: &'a str,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message_id: Option<&'a str>,
+    },
+    ToolStarted {
+        #[serde(rename = "tool_use_id")]
+        tool_call_id: &'a str,
+        tool_name: &'a str,
+    },
+    ToolProgress {
+        #[serde(
+            rename = "tool_use_id",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        tool_call_id: Option<&'a str>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_name: Option<&'a str>,
+        #[serde(
+            rename = "input_delta",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        delta: Option<&'a str>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        elapsed_time_seconds: Option<u64>,
+    },
+    ToolFinished {
+        #[serde(rename = "tool_use_id")]
+        tool_call_id: &'a str,
+        tool_name: &'a str,
+        is_error: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<&'a str>,
+    },
+    ArtifactManifest {
+        artifact_ids: &'a [Uuid],
+    },
+    RuntimeError {
+        message: &'a str,
+    },
+    DaemonPresenceChanged {
+        state: &'a DaemonPresenceState,
+    },
+}
+
+impl<'a> From<&'a RuntimeEventDetail> for ProtocolRuntimeEventRef<'a> {
+    fn from(value: &'a RuntimeEventDetail) -> Self {
+        match value {
+            RuntimeEventDetail::MessageDelta {
+                role,
+                delta,
+                message_id,
+            } => Self::MessageDelta {
+                role,
+                delta,
+                message_id: message_id.as_deref(),
+            },
+            RuntimeEventDetail::MessageCommitted {
+                role,
+                text,
+                message_id,
+            } => Self::MessageCommitted {
+                role,
+                text,
+                message_id: message_id.as_deref(),
+            },
+            RuntimeEventDetail::ToolStarted {
+                tool_call_id,
+                tool_name,
+            } => Self::ToolStarted {
+                tool_call_id,
+                tool_name,
+            },
+            RuntimeEventDetail::ToolProgress {
+                tool_call_id,
+                tool_name,
+                delta,
+                elapsed_time_seconds,
+            } => Self::ToolProgress {
+                tool_call_id: tool_call_id.as_deref(),
+                tool_name: tool_name.as_deref(),
+                delta: delta.as_deref(),
+                elapsed_time_seconds: *elapsed_time_seconds,
+            },
+            RuntimeEventDetail::ToolFinished {
+                tool_call_id,
+                tool_name,
+                is_error,
+                summary,
+            } => Self::ToolFinished {
+                tool_call_id,
+                tool_name,
+                is_error: *is_error,
+                summary: summary.as_deref(),
+            },
+            RuntimeEventDetail::ArtifactManifest { artifact_ids } => Self::ArtifactManifest {
+                artifact_ids: artifact_ids.as_slice(),
+            },
+            RuntimeEventDetail::RuntimeError { message } => Self::RuntimeError { message },
+            RuntimeEventDetail::DaemonPresenceChanged { state } => {
+                Self::DaemonPresenceChanged { state }
+            }
+        }
+    }
+}
+
+fn parse_message_role(role: &str) -> MessageRole {
+    if role.eq_ignore_ascii_case("assistant") {
+        MessageRole::Assistant
+    } else if role.eq_ignore_ascii_case("user") {
+        MessageRole::User
+    } else {
+        MessageRole::System
+    }
 }
 
 /// Parse a single line of JSON input from the external consumer.
@@ -688,6 +824,53 @@ mod tests {
         assert_eq!(events[2]["summary"], "command completed");
         assert_eq!(events[3]["type"], "runtime_error");
         assert_eq!(events[3]["message"], "simulated failure");
+    }
+
+    #[test]
+    fn emit_shared_runtime_event_preserves_protocol_field_names() {
+        let mut buf = Cursor::new(Vec::new());
+        let mut emitter = ProtocolEmitter::new(&mut buf, test_session_id());
+        emitter
+            .emit_runtime_event(&RuntimeEventDetail::ToolProgress {
+                tool_call_id: Some("tool-call-1".to_owned()),
+                tool_name: Some("bash_command".to_owned()),
+                delta: Some("{\"command\":\"dir\"}".to_owned()),
+                elapsed_time_seconds: Some(9),
+            })
+            .expect("emit_runtime_event should succeed");
+        emitter
+            .emit_runtime_event(&RuntimeEventDetail::DaemonPresenceChanged {
+                state: DaemonPresenceState::Online,
+            })
+            .expect("emit_runtime_event should succeed");
+
+        let events = collect_lines(&buf.into_inner());
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["type"], "tool_progress");
+        assert_eq!(events[0]["tool_use_id"], "tool-call-1");
+        assert_eq!(events[0]["tool_name"], "bash_command");
+        assert_eq!(events[0]["input_delta"], "{\"command\":\"dir\"}");
+        assert_eq!(events[0]["elapsed_time_seconds"], 9);
+        assert!(events[0].get("tool_call_id").is_none());
+        assert!(events[0].get("delta").is_none());
+        assert_eq!(events[1]["type"], "daemon_presence_changed");
+        assert_eq!(events[1]["state"], "online");
+    }
+
+    #[test]
+    fn emit_message_delta_helper_uses_shared_runtime_role_encoding() {
+        let mut buf = Cursor::new(Vec::new());
+        let mut emitter = ProtocolEmitter::new(&mut buf, test_session_id());
+        emitter
+            .emit_message_delta("USER", "hello", None)
+            .expect("emit_message_delta should succeed");
+
+        let events = collect_lines(&buf.into_inner());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["type"], "message_delta");
+        assert_eq!(events[0]["role"], "user");
+        assert_eq!(events[0]["delta"], "hello");
+        assert!(events[0].get("message_id").is_none());
     }
 
     #[test]

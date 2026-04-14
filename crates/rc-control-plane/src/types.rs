@@ -8,11 +8,15 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
+pub use rc_engine_events::{
+    DaemonPresenceState, MessageRole, RuntimeEventCreateRequest, RuntimeEventDetail,
+};
 use rc_runner::{
     ApprovalCreateRequest, ApprovalDecisionRequest, ApprovalState, RunnerSessionCommandRequest,
     RunnerSessionCreateRequest, RunnerSessionStateUpdateRequest, RunnerSnapshot, RunnerState,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -424,61 +428,37 @@ pub struct TimelineEvent {
     pub detail: TimelineEventDetail,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum MessageRole {
-    Assistant,
-    User,
-    System,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum DaemonPresenceState {
-    Online,
-    Offline,
-    Reconnecting,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RuntimeEventCreateRequest {
-    pub detail: RuntimeEventDetail,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum RuntimeEventDetail {
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum SharedRuntimeEventContract {
     MessageDelta {
         role: MessageRole,
         delta: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
         message_id: Option<String>,
     },
     MessageCommitted {
         role: MessageRole,
         text: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
         message_id: Option<String>,
     },
     ToolStarted {
-        tool_call_id: String,
+        #[serde(alias = "tool_call_id")]
+        tool_use_id: String,
         tool_name: String,
     },
     ToolProgress {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tool_call_id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tool_name: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        delta: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        elapsed_time_seconds: Option<u64>,
+        #[serde(flatten)]
+        progress: SharedToolProgressPayload,
     },
     ToolFinished {
-        tool_call_id: String,
+        #[serde(alias = "tool_call_id")]
+        tool_use_id: String,
         tool_name: String,
+        #[serde(default)]
         is_error: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
         summary: Option<String>,
     },
     ArtifactManifest {
@@ -487,9 +467,18 @@ pub enum RuntimeEventDetail {
     RuntimeError {
         message: String,
     },
-    DaemonPresenceChanged {
-        state: DaemonPresenceState,
-    },
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+struct SharedToolProgressPayload {
+    #[serde(default, alias = "tool_call_id", alias = "tool_use_id")]
+    tool_use_id: Option<String>,
+    #[serde(default)]
+    tool_name: Option<String>,
+    #[serde(default, alias = "delta", alias = "input_delta")]
+    input_delta: Option<String>,
+    #[serde(default)]
+    elapsed_time_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -673,6 +662,120 @@ impl From<RuntimeEventDetail> for TimelineEventDetail {
                 Self::DaemonPresenceChanged { state }
             }
         }
+    }
+}
+
+impl TryFrom<SharedRuntimeEventContract> for RuntimeEventDetail {
+    type Error = ();
+
+    fn try_from(value: SharedRuntimeEventContract) -> Result<Self, Self::Error> {
+        let detail = match value {
+            SharedRuntimeEventContract::MessageDelta {
+                role,
+                delta,
+                message_id,
+            } => Self::MessageDelta {
+                role,
+                delta,
+                message_id,
+            },
+            SharedRuntimeEventContract::MessageCommitted {
+                role,
+                text,
+                message_id,
+            } => Self::MessageCommitted {
+                role,
+                text,
+                message_id,
+            },
+            SharedRuntimeEventContract::ToolStarted {
+                tool_use_id,
+                tool_name,
+            } => Self::ToolStarted {
+                tool_call_id: tool_use_id,
+                tool_name,
+            },
+            SharedRuntimeEventContract::ToolProgress { progress } => Self::ToolProgress {
+                tool_call_id: progress.tool_use_id,
+                tool_name: progress.tool_name,
+                delta: progress.input_delta,
+                elapsed_time_seconds: progress.elapsed_time_seconds,
+            },
+            SharedRuntimeEventContract::ToolFinished {
+                tool_use_id,
+                tool_name,
+                is_error,
+                summary,
+            } => Self::ToolFinished {
+                tool_call_id: tool_use_id,
+                tool_name,
+                is_error,
+                summary,
+            },
+            SharedRuntimeEventContract::ArtifactManifest { artifact_ids } => {
+                Self::ArtifactManifest { artifact_ids }
+            }
+            SharedRuntimeEventContract::RuntimeError { message } => Self::RuntimeError { message },
+        };
+        Ok(detail)
+    }
+}
+
+#[must_use]
+pub fn runtime_event_detail_from_stream_json_value(
+    value: &JsonValue,
+) -> Option<RuntimeEventDetail> {
+    serde_json::from_value::<SharedRuntimeEventContract>(value.clone())
+        .ok()
+        .and_then(|event| RuntimeEventDetail::try_from(event).ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RuntimeEventDetail, runtime_event_detail_from_stream_json_value};
+    use serde_json::json;
+
+    #[test]
+    fn stream_json_parser_accepts_shared_tool_progress_fields() {
+        let detail = runtime_event_detail_from_stream_json_value(&json!({
+            "type": "tool_progress",
+            "tool_use_id": "tool-1",
+            "tool_name": "shell",
+            "input_delta": "dir",
+            "elapsed_time_seconds": 2
+        }))
+        .expect("shared stream-json event should parse");
+
+        assert_eq!(
+            detail,
+            RuntimeEventDetail::ToolProgress {
+                tool_call_id: Some("tool-1".to_owned()),
+                tool_name: Some("shell".to_owned()),
+                delta: Some("dir".to_owned()),
+                elapsed_time_seconds: Some(2),
+            }
+        );
+    }
+
+    #[test]
+    fn stream_json_parser_accepts_legacy_tool_progress_aliases() {
+        let detail = runtime_event_detail_from_stream_json_value(&json!({
+            "type": "tool_progress",
+            "tool_call_id": "tool-legacy",
+            "tool_name": "shell",
+            "delta": "ls"
+        }))
+        .expect("legacy stream-json event should parse");
+
+        assert_eq!(
+            detail,
+            RuntimeEventDetail::ToolProgress {
+                tool_call_id: Some("tool-legacy".to_owned()),
+                tool_name: Some("shell".to_owned()),
+                delta: Some("ls".to_owned()),
+                elapsed_time_seconds: None,
+            }
+        );
     }
 }
 

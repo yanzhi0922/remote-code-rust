@@ -64,7 +64,7 @@ pub use types::{
     PushTokenRegistrationResponse, RunnerCommandPullResponse, RunnerQueuedCommand,
     RunnerQueuedCommandBody, RunnerRegistrationResponse, RuntimeEventCreateRequest,
     RuntimeEventDetail, SessionRecord, SessionState, SessionStateUpdateRequest, TimelineEvent,
-    TimelineEventDetail, TrustedDeviceRecord,
+    TimelineEventDetail, TrustedDeviceRecord, runtime_event_detail_from_stream_json_value,
 };
 
 // ---------------------------------------------------------------------------

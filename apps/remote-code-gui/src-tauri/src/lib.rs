@@ -12,8 +12,7 @@ use rc_config::{
     RuntimeOverrides,
 };
 use rc_core::{
-    default_system_prompt, ConversationEntry, ConversationRole, PermissionMode, ProviderProtocol,
-    ProviderResponse, SubAgentCompletion, ToolCall, UsageSummary,
+    ConversationEntry, ConversationRole, PermissionMode, ProviderProtocol, ToolCall, UsageSummary,
 };
 use rc_mcp::{
     inspect_server, McpClientInfo, McpConfig, McpServerConfig, McpServerInspection, McpTransport,
@@ -27,8 +26,8 @@ use rc_plugins::{discover_plugins, PluginBundle, PLUGIN_DISABLED_MARKER};
 use rc_provider::context::ContextWindowManager;
 use rc_provider::model_info::{get_model_info, ModelCapability};
 use rc_provider::streaming::StreamingCallbacks;
-use rc_provider::ProviderClient;
-use rc_session::{SessionStore, SessionSummary};
+use rc_provider::{ConversationBackend, ProviderClient, ProviderCompatBackend};
+use rc_session::{conversation::ensure_conversation_initialized, SessionStore, SessionSummary};
 use rc_skills::discover_skills;
 use rc_tools::shell::ShellExecutionPolicy;
 use rc_tools::{
@@ -2038,16 +2037,12 @@ fn restore_session_context(store: &SessionStore, config: &mut RuntimeConfig) -> 
         config.provider.name = summary.provider_name;
         config.provider.model = summary.model;
     }
-    let events = store.load_events(config.session_id).unwrap_or_default();
-    let payload = events.into_iter().rev().find_map(|event| {
-        (event.event_type == "session_context")
-            .then_some(event.payload)
-            .flatten()
-    });
-    let Some(payload) = payload else {
+    let transcript = store.load_transcript(config.session_id)?;
+    let Some(persisted) =
+        transcript.latest_named_event_as::<PersistedSessionContext>("session_context")?
+    else {
         return Ok(());
     };
-    let persisted: PersistedSessionContext = serde_json::from_value(payload)?;
     config.cwd = persisted.cwd;
     config.provider.name = persisted.provider.name;
     config.provider.base_url = persisted.provider.base_url;
@@ -2068,23 +2063,15 @@ fn initialize_session_conversation(
     config: &RuntimeConfig,
     title_hint: Option<&str>,
 ) -> Result<Vec<ConversationEntry>> {
-    store.ensure_session(
+    persist_session_context(store, config)?;
+    ensure_conversation_initialized(
+        store,
         config.session_id,
         &config.cwd,
         &config.provider.name,
         config.provider.model.as_deref(),
         title_hint,
-    )?;
-    persist_session_context(store, config)?;
-    let mut conversation = store
-        .load_conversation(config.session_id)
-        .unwrap_or_default();
-    if conversation.is_empty() {
-        let system = ConversationEntry::system(default_system_prompt(&config.cwd));
-        store.append_conversation_entry(config.session_id, &system)?;
-        conversation.push(system);
-    }
-    Ok(conversation)
+    )
 }
 
 fn build_project_infos(
@@ -2150,30 +2137,6 @@ fn store_provider_selection(state: &mut RuntimeState, config: &RuntimeProviderCo
     state.gui_settings.provider_model = config.model.clone();
     state.gui_settings.provider_base_url = config.base_url.clone();
     state.gui_settings.provider_protocol = Some(config.protocol.as_str().to_owned());
-}
-
-struct GuiSubAgent {
-    client: Arc<ProviderClient>,
-    provider: RuntimeProviderConfig,
-}
-
-impl GuiSubAgent {
-    fn new(client: Arc<ProviderClient>, provider: &RuntimeProviderConfig) -> Self {
-        Self {
-            client,
-            provider: provider.clone(),
-        }
-    }
-}
-
-#[async_trait]
-impl SubAgentCompletion for GuiSubAgent {
-    async fn complete(
-        &self,
-        conversation: &[ConversationEntry],
-    ) -> anyhow::Result<ProviderResponse> {
-        self.client.complete(&self.provider, conversation).await
-    }
 }
 
 struct GuiPermissionBroker {
@@ -2271,7 +2234,7 @@ struct PromptRunOutcome {
 async fn run_gui_prompt(
     app: AppHandle,
     config: RuntimeConfig,
-    provider: Arc<ProviderClient>,
+    backend: &dyn ConversationBackend,
     store: Arc<SessionStore>,
     pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
     prompt: &str,
@@ -2301,10 +2264,7 @@ async fn run_gui_prompt(
     let tool_context = ToolExecutionContext {
         cwd: config.cwd.clone(),
         timeout_ms: config.provider.timeout_ms,
-        sub_agent: Some(Arc::new(GuiSubAgent::new(
-            Arc::clone(&provider),
-            &config.provider,
-        ))),
+        sub_agent: Some(backend.sub_agent_completion()),
         progress_cb: Some(Arc::new({
             let app = app.clone();
             let sid = session_id_string.clone();
@@ -2517,12 +2477,8 @@ async fn run_gui_prompt(
             ..Default::default()
         };
 
-        let response = provider
-            .complete_streaming_with_callbacks(
-                &config.provider,
-                &conversation,
-                Some(streaming_callbacks),
-            )
+        let response = backend
+            .complete_streaming(&conversation, Some(streaming_callbacks))
             .await?;
         usage.input_tokens += response.usage.input_tokens;
         usage.output_tokens += response.usage.output_tokens;
@@ -2796,10 +2752,11 @@ async fn send_prompt(
     let sid_for_cleanup = sid.clone();
 
     let handle = tokio::spawn(async move {
+        let backend = ProviderCompatBackend::new(Arc::clone(&provider), &config.provider);
         let result = run_gui_prompt(
             app.clone(),
             config.clone(),
-            provider,
+            &backend,
             session_store,
             pending_permissions,
             &prompt,

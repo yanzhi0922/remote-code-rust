@@ -1,6 +1,7 @@
 mod agents;
 mod cli;
 mod conversation;
+mod conversation_backend;
 mod doctor;
 mod headless;
 mod hooks;
