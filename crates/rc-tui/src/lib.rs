@@ -93,6 +93,60 @@ impl SubAgentCompletion for TuiSubAgent {
 // Public entry points
 // ---------------------------------------------------------------------------
 
+/// RAII guard for terminal raw mode + alternate screen.
+///
+/// The TUI regularly suspends the raw terminal session while provider output is
+/// printed. Keeping that lifecycle in one place ensures the terminal is
+/// restored even if an error bubbles out in the middle of a turn.
+struct TuiTerminalSession {
+    active: bool,
+}
+
+impl TuiTerminalSession {
+    fn enter() -> Result<Self> {
+        let mut session = Self { active: false };
+        session.activate()?;
+        Ok(session)
+    }
+
+    fn activate(&mut self) -> Result<()> {
+        if self.active {
+            return Ok(());
+        }
+        crossterm::terminal::enable_raw_mode()?;
+        crossterm::execute!(
+            io::stdout(),
+            crossterm::terminal::EnterAlternateScreen,
+            crossterm::event::EnableMouseCapture
+        )?;
+        self.active = true;
+        Ok(())
+    }
+
+    fn deactivate(&mut self) -> Result<()> {
+        if !self.active {
+            return Ok(());
+        }
+        let _ = crossterm::execute!(io::stdout(), crossterm::event::DisableMouseCapture);
+        crossterm::terminal::disable_raw_mode()?;
+        crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen)?;
+        self.active = false;
+        Ok(())
+    }
+}
+
+impl Drop for TuiTerminalSession {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        let _ = crossterm::execute!(io::stdout(), crossterm::event::DisableMouseCapture);
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen);
+        self.active = false;
+    }
+}
+
 /// Text-based dashboard that prints session info and recent sessions.
 ///
 /// This is a non-interactive overview used by the `remote-code tui` subcommand.
@@ -168,10 +222,7 @@ pub async fn run_tui_app(config: RuntimeConfig, store: &SessionStore) -> Result<
     let cost_tracker = CostTracker::new();
     let mut conversation = load_or_create_conversation(store, &config)?;
 
-    // Enter crossterm alternate screen and raw mode.
-    crossterm::terminal::enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen)?;
+    let mut terminal_session = TuiTerminalSession::enter()?;
 
     // Helper to print a line in raw mode (use \r\n for line endings).
     let print_line = |text: &str| {
@@ -207,9 +258,6 @@ pub async fn run_tui_app(config: RuntimeConfig, store: &SessionStore) -> Result<
     let mut search_results: Vec<usize> = Vec::new(); // Matching history indices
     let mut search_result_index: usize = 0; // Current position in search results
     let mut theme = Theme::dark(); // Current color theme
-
-    // Enable mouse capture for scroll support.
-    let _ = crossterm::execute!(io::stdout(), crossterm::event::EnableMouseCapture);
 
     loop {
         // Print prompt and current input buffer.
@@ -382,19 +430,10 @@ pub async fn run_tui_app(config: RuntimeConfig, store: &SessionStore) -> Result<
                         }
 
                         // Temporarily leave raw mode for conversation turn output.
-                        crossterm::terminal::disable_raw_mode()?;
-                        crossterm::execute!(
-                            io::stdout(),
-                            crossterm::terminal::LeaveAlternateScreen
-                        )?;
+                        terminal_session.deactivate()?;
 
                         if input.is_empty() {
-                            // Re-enter raw mode.
-                            crossterm::terminal::enable_raw_mode()?;
-                            crossterm::execute!(
-                                io::stdout(),
-                                crossterm::terminal::EnterAlternateScreen
-                            )?;
+                            terminal_session.activate()?;
                             continue;
                         }
 
@@ -411,11 +450,6 @@ pub async fn run_tui_app(config: RuntimeConfig, store: &SessionStore) -> Result<
                                 &mut theme,
                             ) {
                                 SlashCommandAction::Quit => {
-                                    // Disable mouse capture before exit.
-                                    let _ = crossterm::execute!(
-                                        io::stdout(),
-                                        crossterm::event::DisableMouseCapture
-                                    );
                                     let cost = cost_tracker.total_cost_usd();
                                     if cost > 0.0 {
                                         println!();
@@ -426,12 +460,7 @@ pub async fn run_tui_app(config: RuntimeConfig, store: &SessionStore) -> Result<
                                 SlashCommandAction::ResetScroll => history_scroll = 0,
                                 SlashCommandAction::Continue => {}
                             }
-                            // Re-enter raw mode.
-                            crossterm::terminal::enable_raw_mode()?;
-                            crossterm::execute!(
-                                io::stdout(),
-                                crossterm::terminal::EnterAlternateScreen
-                            )?;
+                            terminal_session.activate()?;
                             continue;
                         }
 
@@ -468,12 +497,7 @@ pub async fn run_tui_app(config: RuntimeConfig, store: &SessionStore) -> Result<
                             }
                         }
 
-                        // Re-enter raw mode.
-                        crossterm::terminal::enable_raw_mode()?;
-                        crossterm::execute!(
-                            io::stdout(),
-                            crossterm::terminal::EnterAlternateScreen
-                        )?;
+                        terminal_session.activate()?;
                         continue;
                     }
                     crossterm::event::KeyCode::Char(c) => {
@@ -646,10 +670,7 @@ pub async fn run_tui_app(config: RuntimeConfig, store: &SessionStore) -> Result<
         }
     }
 
-    // Restore terminal state.
-    let _ = crossterm::execute!(io::stdout(), crossterm::event::DisableMouseCapture);
-    crossterm::terminal::disable_raw_mode()?;
-    crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen)?;
+    terminal_session.deactivate()?;
 
     // Print cost summary on exit.
     let cost = cost_tracker.total_cost_usd();

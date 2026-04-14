@@ -24,11 +24,12 @@ const mockFileDownload = vi.hoisted(() => ({
 const mockRuntime = vi.hoisted(() => ({
   clearRemoteActiveSessionId: vi.fn(),
   clearRemoteAccessToken: vi.fn(),
+  clearRemotePairingContext: vi.fn(),
   persistRemoteActiveSessionId: vi.fn(),
   persistRemoteAccessToken: vi.fn(),
   resolveRemoteActiveSessionId: vi.fn<() => string | null>(() => null),
-  resolveRemoteAccessToken: vi.fn(() => 'token'),
-  resolveRemoteBaseUrl: vi.fn(() => 'https://remote-code.yz520gzy.top'),
+  resolveRemoteAccessToken: vi.fn<() => string | null>(() => 'token'),
+  resolveRemoteBaseUrl: vi.fn<() => string | null>(() => 'https://remote-code.yz520gzy.top'),
   resolveRemotePairingContext: vi.fn(() => ({ offerId: null, pairingSecret: null })),
   stripRemoteSensitiveQueryParams: vi.fn(),
 }));
@@ -320,6 +321,27 @@ describe('RemoteApp', () => {
     );
   });
 
+  it('falls back to the newest available session when the stored session id is stale', async () => {
+    mockRuntime.resolveRemoteActiveSessionId.mockReturnValue('session-stale');
+
+    render(<RemoteApp />);
+
+    await waitFor(() => {
+      expect(mockApi.listSessionEvents).toHaveBeenCalledWith(
+        'https://remote-code.yz520gzy.top',
+        'session-1',
+      );
+    });
+
+    expect(
+      mockApi.listSessionEvents.mock.calls.some(([, sessionId]) => sessionId === 'session-stale'),
+    ).toBe(false);
+    expect(mockRuntime.persistRemoteActiveSessionId).toHaveBeenCalledWith(
+      'https://remote-code.yz520gzy.top',
+      'session-1',
+    );
+  });
+
   it('persists the new active session when the user switches sessions', async () => {
     mockApi.listSessions.mockResolvedValue({
       items: [
@@ -388,5 +410,21 @@ describe('RemoteApp', () => {
       const dialogTitles = screen.getAllByText(/Pending Approvals/i);
       expect(dialogTitles.length).toBeGreaterThanOrEqual(2);
     });
+  });
+
+  it('clears pairing context after saving a manual access token', async () => {
+    mockRuntime.resolveRemoteAccessToken.mockReturnValue(null);
+
+    render(<RemoteApp />);
+
+    const tokenInput = await screen.findByPlaceholderText('rcdt_...');
+    fireEvent.change(tokenInput, {
+      target: { value: 'rcdt_manual_token' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Token' }));
+
+    expect(mockRuntime.persistRemoteAccessToken).toHaveBeenCalledWith('rcdt_manual_token');
+    expect(mockRuntime.clearRemotePairingContext).toHaveBeenCalledTimes(1);
+    expect(mockRuntime.stripRemoteSensitiveQueryParams).toHaveBeenCalledTimes(1);
   });
 });

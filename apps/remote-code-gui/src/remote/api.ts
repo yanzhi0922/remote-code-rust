@@ -239,15 +239,8 @@ export async function requestJson<T>(
   }
 }
 
-function buildHttpUrl(baseUrl: string, path: string, includeTokenQuery = false): string {
-  const url = new URL(path, `${baseUrl.replace(/\/$/, '')}/`);
-  if (includeTokenQuery) {
-    const token = resolveRemoteAccessToken();
-    if (token) {
-      url.searchParams.set('access_token', token);
-    }
-  }
-  return url.toString();
+function buildHttpUrl(baseUrl: string, path: string): string {
+  return new URL(path, `${baseUrl.replace(/\/$/, '')}/`).toString();
 }
 
 function buildAuthHeaders(): HeadersInit {

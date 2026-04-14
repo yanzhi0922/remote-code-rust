@@ -4,6 +4,7 @@ import MobileApp from './MobileApp';
 
 const mockRuntime = vi.hoisted(() => ({
   initMobileRuntime: vi.fn(),
+  persistRemotePairingContext: vi.fn(),
   resolveRemoteAccessToken: vi.fn<() => string | null>(() => null),
   resolveRemoteBaseUrl: vi.fn<() => string | null>(() => null),
 }));
@@ -20,7 +21,12 @@ const mockPush = vi.hoisted(() => ({
 
 const mockDeepLinks = vi.hoisted(() => ({
   initDeepLinks: vi.fn(),
-  parsePairingUrl: vi.fn(() => null),
+  parsePairingUrl: vi.fn<
+    () => {
+      offerId: string;
+      secret: string;
+    } | null
+  >(() => null),
 }));
 
 const mockNetwork = vi.hoisted(() => ({
@@ -118,5 +124,25 @@ describe('MobileApp', () => {
 
     expect(await screen.findByText(/网络已断开/)).toBeInTheDocument();
     expect(screen.getByText(/cellular/)).toBeInTheDocument();
+  });
+
+  it('persists deep-link pairing context for the shared remote shell', async () => {
+    mockDeepLinks.parsePairingUrl.mockReturnValue({
+      offerId: 'offer-1',
+      secret: 'secret-1',
+    });
+    mockDeepLinks.initDeepLinks.mockImplementation((handler: (url: string) => void) => {
+      handler('remote-code://pair?pairing_offer=offer-1&pairing_secret=secret-1');
+    });
+
+    render(<MobileApp />);
+
+    await screen.findByText('Remote shell ready');
+    await waitFor(() => {
+      expect(mockRuntime.persistRemotePairingContext).toHaveBeenCalledWith(
+        'offer-1',
+        'secret-1',
+      );
+    });
   });
 });

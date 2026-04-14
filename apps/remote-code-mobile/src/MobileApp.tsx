@@ -11,7 +11,7 @@
 
 import { useState, useEffect, useCallback, type ReactNode } from 'react';
 import RemoteApp from '@remote/RemoteApp';
-import { initMobileRuntime } from './lib/runtime';
+import { initMobileRuntime, persistRemotePairingContext } from './lib/runtime';
 import { performBiometricCheck } from './native/biometric';
 import {
   initPushNotifications,
@@ -121,9 +121,7 @@ export default function MobileApp() {
         // Handle pairing deep links
         const pairing = parsePairingUrl(url);
         if (pairing) {
-          // Store pairing context for RemoteApp to pick up
-          localStorage.setItem('remote_pairing_offer_id', pairing.offerId);
-          localStorage.setItem('remote_pairing_secret', pairing.secret);
+          void persistRemotePairingContext(pairing.offerId, pairing.secret);
           window.dispatchEvent(new CustomEvent('deep-link-pairing', { detail: pairing }));
         }
       });

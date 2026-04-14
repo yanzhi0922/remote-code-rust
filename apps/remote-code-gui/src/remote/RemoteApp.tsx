@@ -25,6 +25,7 @@ import {
 import {
   clearRemoteActiveSessionId,
   clearRemoteAccessToken,
+  clearRemotePairingContext,
   persistRemoteActiveSessionId,
   persistRemoteAccessToken,
   resolveRemoteActiveSessionId,
@@ -138,12 +139,12 @@ export default function RemoteApp() {
   const sessionRefreshTimerRef = useRef<number | null>(null);
   const statusTimerRef = useRef<number | null>(null);
 
-  activeSessionIdRef.current = activeSessionId;
-
   const activeSession = useMemo(
     () => sessions.find((session) => session.session_id === activeSessionId) ?? null,
     [activeSessionId, sessions],
   );
+  const selectedSessionId = activeSession?.session_id ?? null;
+  activeSessionIdRef.current = selectedSessionId;
   const activeSessionControlStatus = useMemo(
     () => describeSessionControl(activeSession, locale, copy),
     [activeSession, copy, locale],
@@ -204,12 +205,12 @@ export default function RemoteApp() {
   // ── Active session persistence ─────────────────────────────────────────
 
   useEffect(() => {
-    if (activeSessionId) {
-      persistRemoteActiveSessionId(baseUrl, activeSessionId);
+    if (selectedSessionId) {
+      persistRemoteActiveSessionId(baseUrl, selectedSessionId);
       return;
     }
     clearRemoteActiveSessionId(baseUrl);
-  }, [activeSessionId, baseUrl]);
+  }, [baseUrl, selectedSessionId]);
 
   // ── Health check ───────────────────────────────────────────────────────
 
@@ -238,7 +239,12 @@ export default function RemoteApp() {
 
   const completeAuthentication = useEffectEvent((token: string, message: string) => {
     persistRemoteAccessToken(token);
+    void clearRemotePairingContext();
     stripRemoteSensitiveQueryParams();
+    setBootstrapSecret('');
+    setPairingOfferId('');
+    setPairingSecret('');
+    setManualAccessToken('');
     setAccessToken(token);
     setAuthErrorMessage(null);
     setErrorMessage(null);
@@ -289,7 +295,12 @@ export default function RemoteApp() {
       return;
     }
     persistRemoteAccessToken(manualAccessToken);
+    void clearRemotePairingContext();
     stripRemoteSensitiveQueryParams();
+    setBootstrapSecret('');
+    setPairingOfferId('');
+    setPairingSecret('');
+    setManualAccessToken('');
     setAccessToken(manualAccessToken.trim());
     setAuthErrorMessage(null);
     showStatusMessage(copy.statusSavedAccessToken);
@@ -298,7 +309,11 @@ export default function RemoteApp() {
   const handleClearSavedToken = useEffectEvent(() => {
     clearRemoteAccessToken();
     clearRemoteActiveSessionId(baseUrl);
+    void clearRemotePairingContext();
     stripRemoteSensitiveQueryParams();
+    setBootstrapSecret('');
+    setPairingOfferId('');
+    setPairingSecret('');
     setAccessToken(null);
     setManualAccessToken('');
     setAuthErrorMessage(null);
@@ -482,7 +497,7 @@ export default function RemoteApp() {
   // ── WebSocket subscription ─────────────────────────────────────────────
 
   useEffect(() => {
-    if (!baseUrl || !activeSessionId || !health || (authRequired && !accessToken)) {
+    if (!baseUrl || !selectedSessionId || !health || (authRequired && !accessToken)) {
       setEvents([]);
       setApprovals([]);
       setArtifacts([]);
@@ -497,11 +512,11 @@ export default function RemoteApp() {
     const bootstrap = async () => {
       setEventsLoading(true);
       try {
-        await refreshSessionBundle(activeSessionId);
+        await refreshSessionBundle(selectedSessionId);
         if (!cancelled) {
           subscription = subscribeToRemoteSessionEvents({
             baseUrl,
-            sessionId: activeSessionId,
+            sessionId: selectedSessionId,
             getAfterSequence: () => latestSequenceRef.current,
             onConnectionStateChange: (state) => {
               if (!cancelled) {
@@ -510,7 +525,7 @@ export default function RemoteApp() {
             },
             onEvent: (event) => {
               if (!cancelled) {
-                handleLiveEvent(activeSessionId, event);
+                handleLiveEvent(selectedSessionId, event);
               }
             },
           });
@@ -539,14 +554,14 @@ export default function RemoteApp() {
       cancelled = true;
       subscription?.close();
     };
-  }, [accessToken, activeSessionId, authRequired, baseUrl, health]);
+  }, [accessToken, authRequired, baseUrl, health, selectedSessionId]);
 
   // ── Action handlers ────────────────────────────────────────────────────
 
   const handleSendPrompt = async () => {
     if (
       !baseUrl ||
-      !activeSessionId ||
+      !selectedSessionId ||
       (authRequired && !accessToken) ||
       !composer.trim() ||
       sending ||
@@ -557,7 +572,7 @@ export default function RemoteApp() {
 
     setSending(true);
     try {
-      await sendPrompt(baseUrl, activeSessionId, composer.trim());
+      await sendPrompt(baseUrl, selectedSessionId, composer.trim());
       setComposer('');
       showStatusMessage(copy.statusPromptForwarded);
     } catch (error) {
@@ -575,7 +590,7 @@ export default function RemoteApp() {
   const handleInterrupt = async () => {
     if (
       !baseUrl ||
-      !activeSessionId ||
+      !selectedSessionId ||
       (authRequired && !accessToken) ||
       interrupting ||
       !activeSessionControlStatus.canInterrupt
@@ -585,7 +600,7 @@ export default function RemoteApp() {
 
     setInterrupting(true);
     try {
-      await interruptSession(baseUrl, activeSessionId);
+      await interruptSession(baseUrl, selectedSessionId);
       showStatusMessage(copy.statusInterruptForwarded);
     } catch (error) {
       const message = extractErrorMessage(error);
@@ -611,8 +626,8 @@ export default function RemoteApp() {
     try {
       await respondToApproval(baseUrl, approvalId, decision);
       showStatusMessage(copy.statusApprovalDecision(copy.approvalDecisionLabels[decision]));
-      if (activeSessionId) {
-        await refreshApprovals(activeSessionId);
+      if (selectedSessionId) {
+        await refreshApprovals(selectedSessionId);
       }
     } catch (error) {
       const message = extractErrorMessage(error);
@@ -718,7 +733,7 @@ export default function RemoteApp() {
     <RemoteShell
       sessions={sessions}
       sessionsLoading={sessionsLoading}
-      activeSessionId={activeSessionId}
+      activeSessionId={selectedSessionId}
       activeSession={activeSession}
       connectionState={connectionState}
       sidebarOpen={sidebarOpen}

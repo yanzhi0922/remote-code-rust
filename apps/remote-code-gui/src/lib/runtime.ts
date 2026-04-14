@@ -7,6 +7,8 @@ declare global {
 
 const REMOTE_ACCESS_TOKEN_STORAGE_KEY = 'remote-code-control-plane-access-token';
 const REMOTE_ACTIVE_SESSION_STORAGE_KEY_PREFIX = 'remote-code-control-plane-active-session:';
+const REMOTE_PAIRING_OFFER_STORAGE_KEY = 'remote_pairing_offer_id';
+const REMOTE_PAIRING_SECRET_STORAGE_KEY = 'remote_pairing_secret';
 
 export function hasTauriRuntime(): boolean {
   return Boolean(window.__TAURI__ || window.__TAURI_INTERNALS__);
@@ -119,6 +121,15 @@ export function resolveRemotePairingContext(): { offerId: string | null; pairing
     offerId: params.get('pairing_offer')?.trim() ?? null,
     pairingSecret: params.get('pairing_secret')?.trim() ?? null,
   };
+}
+
+export function clearRemotePairingContext(): void {
+  try {
+    window.localStorage.removeItem(REMOTE_PAIRING_OFFER_STORAGE_KEY);
+    window.localStorage.removeItem(REMOTE_PAIRING_SECRET_STORAGE_KEY);
+  } catch {
+    // Ignore storage access failures.
+  }
 }
 
 export function stripRemoteSensitiveQueryParams(): void {

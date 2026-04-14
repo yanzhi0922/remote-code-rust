@@ -94,9 +94,36 @@ export function resolveRemotePairingContext(): {
   pairingSecret: string | null;
 } {
   return {
-    offerId: localStorage.getItem(STORAGE_KEY_PAIRING_OFFER_ID),
-    pairingSecret: localStorage.getItem(STORAGE_KEY_PAIRING_SECRET),
+    offerId: localStorage.getItem(STORAGE_KEY_PAIRING_OFFER_ID)?.trim() ?? null,
+    pairingSecret: localStorage.getItem(STORAGE_KEY_PAIRING_SECRET)?.trim() ?? null,
   };
+}
+
+export async function persistRemotePairingContext(
+  offerId: string,
+  pairingSecret: string,
+): Promise<void> {
+  const normalizedOfferId = offerId.trim();
+  const normalizedPairingSecret = pairingSecret.trim();
+  if (!normalizedOfferId || !normalizedPairingSecret) {
+    return;
+  }
+
+  localStorage.setItem(STORAGE_KEY_PAIRING_OFFER_ID, normalizedOfferId);
+  localStorage.setItem(STORAGE_KEY_PAIRING_SECRET, normalizedPairingSecret);
+  await Promise.all([
+    writeSecureString(STORAGE_KEY_PAIRING_OFFER_ID, normalizedOfferId),
+    writeSecureString(STORAGE_KEY_PAIRING_SECRET, normalizedPairingSecret),
+  ]);
+}
+
+export async function clearRemotePairingContext(): Promise<void> {
+  localStorage.removeItem(STORAGE_KEY_PAIRING_OFFER_ID);
+  localStorage.removeItem(STORAGE_KEY_PAIRING_SECRET);
+  await Promise.all([
+    removeSecureString(STORAGE_KEY_PAIRING_OFFER_ID),
+    removeSecureString(STORAGE_KEY_PAIRING_SECRET),
+  ]);
 }
 
 // ─── URL Helpers ────────────────────────────────────────────────────
@@ -125,9 +152,11 @@ export function shouldUseRemoteMode(): boolean {
  * Must be called before React renders.
  */
 export async function initMobileRuntime(): Promise<void> {
-  const [baseUrl, accessToken] = await Promise.all([
+  const [baseUrl, accessToken, pairingOfferId, pairingSecret] = await Promise.all([
     readSecureString(STORAGE_KEY_BASE_URL),
     readSecureString(STORAGE_KEY_ACCESS_TOKEN),
+    readSecureString(STORAGE_KEY_PAIRING_OFFER_ID),
+    readSecureString(STORAGE_KEY_PAIRING_SECRET),
   ]);
 
   if (baseUrl) {
@@ -135,6 +164,12 @@ export async function initMobileRuntime(): Promise<void> {
   }
   if (accessToken) {
     localStorage.setItem(STORAGE_KEY_ACCESS_TOKEN, accessToken);
+  }
+  if (pairingOfferId) {
+    localStorage.setItem(STORAGE_KEY_PAIRING_OFFER_ID, pairingOfferId);
+  }
+  if (pairingSecret) {
+    localStorage.setItem(STORAGE_KEY_PAIRING_SECRET, pairingSecret);
   }
 
   // Initialize app lifecycle listeners
