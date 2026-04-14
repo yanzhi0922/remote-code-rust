@@ -44,6 +44,19 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  if (
+    requestUrl.searchParams.has('access_token') ||
+    requestUrl.searchParams.has('token') ||
+    requestUrl.searchParams.has('pairing_secret')
+  ) {
+    event.respondWith(
+      fetch(event.request, {
+        cache: 'no-store',
+      }),
+    );
+    return;
+  }
+
   if (requestUrl.pathname.startsWith('/v1/')) {
     event.respondWith(fetch(event.request));
     return;

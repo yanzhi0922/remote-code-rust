@@ -33,6 +33,7 @@ import {
   resolveRemotePairingContext,
   stripRemoteSensitiveQueryParams,
 } from '../lib/runtime';
+import { downloadRemoteArtifact } from '../lib/fileDownload';
 import { ApprovalPanel } from '../components/shared/ApprovalPanel';
 import { ArtifactPanel } from '../components/shared/ArtifactPanel';
 import { formatBytes } from '../components/shared/formatBytes';
@@ -126,6 +127,7 @@ export default function RemoteApp() {
   const [sending, setSending] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
   const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [downloadingArtifactId, setDownloadingArtifactId] = useState<string | null>(null);
   const [connectionState, setConnectionState] = useState<ConnectionState>('idle');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -453,6 +455,20 @@ export default function RemoteApp() {
   }, []);
 
   useEffect(() => {
+    const onOnline = () => {
+      void refreshSessions().catch(reportAsyncError);
+      if (activeSessionIdRef.current) {
+        void refreshSessionBundle(activeSessionIdRef.current).catch(reportAsyncError);
+      }
+    };
+
+    window.addEventListener('online', onOnline);
+    return () => {
+      window.removeEventListener('online', onOnline);
+    };
+  }, []);
+
+  useEffect(() => {
     return () => {
       if (sessionRefreshTimerRef.current !== null) {
         window.clearTimeout(sessionRefreshTimerRef.current);
@@ -607,6 +623,31 @@ export default function RemoteApp() {
       }
     } finally {
       setApprovingId(null);
+    }
+  };
+
+  const handleArtifactDownload = async (artifact: RemoteArtifactRecord) => {
+    if (!baseUrl || (authRequired && !accessToken) || downloadingArtifactId) {
+      return;
+    }
+
+    setDownloadingArtifactId(artifact.artifact_id);
+    try {
+      await downloadRemoteArtifact({
+        url: buildArtifactDownloadUrl(baseUrl, artifact.artifact_id),
+        fileName: artifact.file_name,
+        token: accessToken,
+      });
+      showStatusMessage(copy.statusArtifactDownloaded(artifact.file_name));
+    } catch (error) {
+      const message = extractErrorMessage(error);
+      if (message.includes('HTTP 401')) {
+        setAuthErrorMessage(message);
+      } else {
+        setErrorMessage(message);
+      }
+    } finally {
+      setDownloadingArtifactId(null);
     }
   };
 
@@ -816,7 +857,14 @@ export default function RemoteApp() {
               icon={<FileOutput size={16} />}
               emptyText={copy.noArtifacts}
               items={artifacts}
-              buildDownloadUrl={(artifactId) => buildArtifactDownloadUrl(baseUrl, artifactId)}
+              downloadingId={downloadingArtifactId}
+              onDownload={(artifact) => {
+                const record = artifacts.find((item) => item.artifact_id === artifact.artifact_id);
+                if (!record) {
+                  return;
+                }
+                void handleArtifactDownload(record);
+              }}
             />
           </div>
         </aside>
@@ -935,7 +983,14 @@ export default function RemoteApp() {
                     icon={<FileOutput size={16} />}
                     emptyText={copy.noArtifacts}
                     items={artifacts}
-                    buildDownloadUrl={(artifactId) => buildArtifactDownloadUrl(baseUrl, artifactId)}
+                    downloadingId={downloadingArtifactId}
+                    onDownload={(artifact) => {
+                      const record = artifacts.find((item) => item.artifact_id === artifact.artifact_id);
+                      if (!record) {
+                        return;
+                      }
+                      void handleArtifactDownload(record);
+                    }}
                     hideTitle
                   />
                 </div>

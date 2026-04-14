@@ -183,7 +183,7 @@ export async function registerPushToken(
 }
 
 export function buildArtifactDownloadUrl(baseUrl: string, artifactId: string): string {
-  return buildHttpUrl(baseUrl, `/v1/artifacts/${encodeURIComponent(artifactId)}/download`, true);
+  return buildHttpUrl(baseUrl, `/v1/artifacts/${encodeURIComponent(artifactId)}/download`);
 }
 
 export function buildSessionEventsStreamUrl(
@@ -208,25 +208,35 @@ export async function requestJson<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
-  const response = await fetch(buildHttpUrl(baseUrl, path), {
-    ...init,
-    headers: {
-      'content-type': 'application/json',
-      ...buildAuthHeaders(),
-      ...(init?.headers ?? {}),
-    },
-  });
+  const method = (init?.method ?? 'GET').toUpperCase();
+  const requestUrl = buildHttpUrl(baseUrl, path);
+  const canRetry = method === 'GET';
 
-  const responseText = await response.text();
-  if (!response.ok) {
-    throw new Error(extractRemoteError(responseText, response.status));
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const response = await fetchWithTimeout(requestUrl, {
+        ...init,
+        cache: method === 'GET' ? 'no-store' : init?.cache,
+        headers: buildRequestHeaders(init),
+      });
+
+      const responseText = await response.text();
+      if (!response.ok) {
+        throw new Error(extractRemoteError(responseText, response.status));
+      }
+
+      if (!responseText) {
+        return {} as T;
+      }
+
+      return JSON.parse(responseText) as T;
+    } catch (error) {
+      if (!canRetry || attempt >= 1 || !isRetryableRemoteError(error)) {
+        throw error;
+      }
+      await delay(350 * (attempt + 1));
+    }
   }
-
-  if (!responseText) {
-    return {} as T;
-  }
-
-  return JSON.parse(responseText) as T;
 }
 
 function buildHttpUrl(baseUrl: string, path: string, includeTokenQuery = false): string {
@@ -248,6 +258,98 @@ function buildAuthHeaders(): HeadersInit {
   return {
     authorization: `Bearer ${token}`,
   };
+}
+
+function buildRequestHeaders(init?: RequestInit): Headers {
+  const headers = new Headers(init?.headers ?? {});
+  headers.set('accept', 'application/json');
+
+  for (const [key, value] of Object.entries(buildAuthHeaders())) {
+    if (!headers.has(key)) {
+      headers.set(key, value);
+    }
+  }
+
+  if (shouldAttachJsonContentType(init?.body) && !headers.has('content-type')) {
+    headers.set('content-type', 'application/json');
+  }
+
+  return headers;
+}
+
+function shouldAttachJsonContentType(body: BodyInit | null | undefined): boolean {
+  if (body == null) {
+    return false;
+  }
+  if (typeof FormData !== 'undefined' && body instanceof FormData) {
+    return false;
+  }
+  if (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) {
+    return false;
+  }
+  if (typeof Blob !== 'undefined' && body instanceof Blob) {
+    return false;
+  }
+  return true;
+}
+
+async function fetchWithTimeout(input: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => {
+    controller.abort(new DOMException('Remote request timed out.', 'AbortError'));
+  }, 15_000);
+  const cleanupSignal = pipeAbortSignal(init.signal, controller);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    cleanupSignal();
+    window.clearTimeout(timeoutId);
+  }
+}
+
+function pipeAbortSignal(
+  signal: AbortSignal | null | undefined,
+  controller: AbortController,
+): () => void {
+  if (!signal) {
+    return () => {};
+  }
+
+  if (signal.aborted) {
+    controller.abort(signal.reason);
+    return () => {};
+  }
+
+  const handleAbort = () => {
+    controller.abort(signal.reason);
+  };
+  signal.addEventListener('abort', handleAbort, { once: true });
+  return () => {
+    signal.removeEventListener('abort', handleAbort);
+  };
+}
+
+function isRetryableRemoteError(error: unknown): boolean {
+  if (error instanceof DOMException && error.name === 'AbortError') {
+    return true;
+  }
+  if (error instanceof TypeError) {
+    return true;
+  }
+  if (error instanceof Error) {
+    return /NetworkError|Failed to fetch/i.test(error.message);
+  }
+  return false;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
 }
 
 function extractRemoteError(payload: string, status: number): string {

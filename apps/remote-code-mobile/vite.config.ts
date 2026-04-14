@@ -26,6 +26,9 @@ function mobileLibRewrite(): Plugin {
       if (source === '../lib/runtime') {
         return path.resolve(libDir, 'runtime.ts');
       }
+      if (source === '../lib/fileDownload') {
+        return path.resolve(libDir, 'fileDownload.ts');
+      }
       if (source === '../lib/utils') {
         return path.resolve(libDir, 'utils.ts');
       }

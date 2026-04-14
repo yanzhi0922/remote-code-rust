@@ -1,7 +1,7 @@
 /**
  * ArtifactPanel — 共享的产物库面板组件。
  *
- * 渲染产物列表，每项显示名称、文件名、大小，并提供下载链接。
+ * 渲染产物列表，每项显示名称、文件名、大小，并提供下载动作。
  * 本地桌面端和远程 Web/PWA 端共用同一视觉语言。
  *
  * Props:
@@ -12,7 +12,7 @@
  * - buildDownloadUrl: 构建下载 URL 的回调
  */
 
-import { Download } from 'lucide-react';
+import { Download, LoaderCircle } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { formatBytes } from './formatBytes';
 import { PanelHint } from './ApprovalPanel';
@@ -29,7 +29,9 @@ export interface ArtifactPanelProps {
   icon: ReactNode;
   emptyText: string;
   items: ArtifactItem[];
-  buildDownloadUrl: (artifactId: string) => string;
+  onDownload?: (artifact: ArtifactItem) => void | Promise<void>;
+  buildDownloadUrl?: (artifactId: string) => string;
+  downloadingId?: string | null;
   /** 为 true 时隐藏面板自带标题（用于外部已有标题的场景，如移动端 bottom sheet） */
   hideTitle?: boolean;
 }
@@ -39,7 +41,9 @@ export function ArtifactPanel({
   icon,
   emptyText,
   items,
+  onDownload,
   buildDownloadUrl,
+  downloadingId,
   hideTitle,
 }: ArtifactPanelProps) {
   return (
@@ -54,23 +58,51 @@ export function ArtifactPanel({
         {items.length === 0 ? (
           <PanelHint>{emptyText}</PanelHint>
         ) : (
-          items.map((artifact) => (
-            <a
-              key={artifact.artifact_id}
-              href={buildDownloadUrl(artifact.artifact_id)}
-              className="flex items-start justify-between gap-3 rounded-2xl border border-[#ebe2d5] bg-[#faf7f1] px-3 py-3 transition-colors hover:bg-white"
-            >
-              <div className="min-w-0">
-                <div className="truncate text-sm font-medium text-slate-900">
-                  {artifact.name}
+          items.map((artifact) => {
+            const content = (
+              <>
+                <div className="min-w-0 text-left">
+                  <div className="truncate text-sm font-medium text-slate-900">
+                    {artifact.name}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {artifact.file_name} • {formatBytes(artifact.size_bytes)}
+                  </div>
                 </div>
-                <div className="mt-1 text-xs text-slate-500">
-                  {artifact.file_name} • {formatBytes(artifact.size_bytes)}
-                </div>
-              </div>
-              <Download size={16} className="mt-0.5 shrink-0 text-slate-500" />
-            </a>
-          ))
+                {downloadingId === artifact.artifact_id ? (
+                  <LoaderCircle size={16} className="mt-0.5 shrink-0 animate-spin text-slate-500" />
+                ) : (
+                  <Download size={16} className="mt-0.5 shrink-0 text-slate-500" />
+                )}
+              </>
+            );
+
+            if (onDownload) {
+              return (
+                <button
+                  key={artifact.artifact_id}
+                  type="button"
+                  onClick={() => {
+                    void onDownload(artifact);
+                  }}
+                  disabled={downloadingId === artifact.artifact_id}
+                  className="flex w-full items-start justify-between gap-3 rounded-2xl border border-[#ebe2d5] bg-[#faf7f1] px-3 py-3 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {content}
+                </button>
+              );
+            }
+
+            return (
+              <a
+                key={artifact.artifact_id}
+                href={buildDownloadUrl?.(artifact.artifact_id) ?? '#'}
+                className="flex items-start justify-between gap-3 rounded-2xl border border-[#ebe2d5] bg-[#faf7f1] px-3 py-3 transition-colors hover:bg-white"
+              >
+                {content}
+              </a>
+            );
+          })
         )}
       </div>
     </section>

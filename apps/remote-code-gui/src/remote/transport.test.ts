@@ -12,6 +12,7 @@ vi.mock('./api', () => mockApi);
 
 class MockWebSocket {
   static instances: MockWebSocket[] = [];
+  static autoOpen = true;
 
   url: string;
   onopen: (() => void) | null = null;
@@ -22,9 +23,11 @@ class MockWebSocket {
   constructor(url: string) {
     this.url = url;
     MockWebSocket.instances.push(this);
-    queueMicrotask(() => {
-      this.onopen?.();
-    });
+    if (MockWebSocket.autoOpen) {
+      queueMicrotask(() => {
+        this.onopen?.();
+      });
+    }
   }
 
   close() {
@@ -35,11 +38,13 @@ class MockWebSocket {
 describe('remote transport', () => {
   beforeEach(() => {
     MockWebSocket.instances = [];
+    MockWebSocket.autoOpen = true;
     vi.stubGlobal('WebSocket', MockWebSocket);
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.useRealTimers();
     vi.clearAllMocks();
   });
 
@@ -167,6 +172,53 @@ describe('remote transport', () => {
     } as MessageEvent);
 
     expect(events).toHaveLength(1);
+
+    handle.close();
+  });
+
+  it('backs off reconnect attempts and waits for online recovery when offline', async () => {
+    vi.useFakeTimers();
+    MockWebSocket.autoOpen = false;
+    Object.defineProperty(window.navigator, 'onLine', {
+      configurable: true,
+      value: true,
+    });
+
+    const states: string[] = [];
+    const handle = subscribeToRemoteSessionEvents({
+      baseUrl: 'https://remote-code.yz520gzy.top',
+      sessionId: 'session-1',
+      getAfterSequence: () => 0,
+      onConnectionStateChange: (state) => {
+        states.push(state);
+      },
+      onEvent: () => {},
+    });
+
+    expect(MockWebSocket.instances).toHaveLength(1);
+
+    MockWebSocket.instances[0].onclose?.();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(MockWebSocket.instances).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(MockWebSocket.instances).toHaveLength(2);
+
+    Object.defineProperty(window.navigator, 'onLine', {
+      configurable: true,
+      value: false,
+    });
+    MockWebSocket.instances[1].onclose?.();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(MockWebSocket.instances).toHaveLength(2);
+
+    Object.defineProperty(window.navigator, 'onLine', {
+      configurable: true,
+      value: true,
+    });
+    window.dispatchEvent(new Event('online'));
+    expect(MockWebSocket.instances).toHaveLength(3);
+    expect(states).toContain('reconnecting');
 
     handle.close();
   });

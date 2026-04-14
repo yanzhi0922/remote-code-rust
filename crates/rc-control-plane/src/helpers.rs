@@ -109,17 +109,95 @@ pub(crate) fn sanitize_artifact_component(raw: &str, fallback: &str) -> String {
         .and_then(|value| value.to_str())
         .unwrap_or(raw)
         .trim();
-    let sanitized = candidate
+    let mut sanitized = candidate
+        .chars()
+        .map(|character| match character {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            character if character.is_control() => '_',
+            _ => character,
+        })
+        .collect::<String>();
+    sanitized = sanitized.trim_end_matches(['.', ' ']).to_owned();
+    if sanitized.is_empty() {
+        return fallback.to_owned();
+    }
+    if is_windows_reserved_file_name(&sanitized) {
+        sanitized = append_reserved_suffix(&sanitized);
+    }
+    sanitized
+}
+
+pub(crate) fn build_content_disposition(file_name: &str) -> String {
+    let ascii_fallback = file_name
         .chars()
         .map(|character| match character {
             'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' | '-' => character,
             _ => '_',
         })
         .collect::<String>();
-    if sanitized.is_empty() {
-        fallback.to_owned()
+    let ascii_fallback = if ascii_fallback.trim_matches('_').is_empty() {
+        "download".to_owned()
     } else {
-        sanitized
+        ascii_fallback
+    };
+    let encoded = encode_header_value(file_name);
+    format!("attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{encoded}")
+}
+
+fn encode_header_value(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(char::from(byte));
+            }
+            b' ' => encoded.push_str("%20"),
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
+
+fn is_windows_reserved_file_name(file_name: &str) -> bool {
+    let stem = file_name
+        .split('.')
+        .next()
+        .unwrap_or(file_name)
+        .trim()
+        .to_ascii_uppercase();
+    matches!(
+        stem.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
+}
+
+fn append_reserved_suffix(file_name: &str) -> String {
+    match file_name.rsplit_once('.') {
+        Some((stem, extension)) if !stem.is_empty() && !extension.is_empty() => {
+            format!("{stem}_.{extension}")
+        }
+        _ => format!("{file_name}_"),
     }
 }
 
@@ -448,4 +526,37 @@ pub(crate) fn read_env(key: &str) -> Option<String> {
             Some(trimmed.to_owned())
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_content_disposition, sanitize_artifact_component};
+
+    #[test]
+    fn sanitize_artifact_component_preserves_cjk_and_replaces_reserved_chars() {
+        assert_eq!(
+            sanitize_artifact_component("检查报告.txt", "artifact.bin"),
+            "检查报告.txt"
+        );
+        assert_eq!(
+            sanitize_artifact_component("a/b:c?.txt", "artifact.bin"),
+            "b_c_.txt"
+        );
+    }
+
+    #[test]
+    fn sanitize_artifact_component_guards_windows_reserved_names() {
+        assert_eq!(sanitize_artifact_component("CON", "artifact.bin"), "CON_");
+        assert_eq!(
+            sanitize_artifact_component("NUL.txt", "artifact.bin"),
+            "NUL_.txt"
+        );
+    }
+
+    #[test]
+    fn build_content_disposition_emits_ascii_and_utf8_names() {
+        let header = build_content_disposition("检查报告.txt");
+        assert!(header.contains("filename=\"____.txt\""));
+        assert!(header.contains("filename*=UTF-8''%E6%A3%80%E6%9F%A5%E6%8A%A5%E5%91%8A.txt"));
+    }
 }

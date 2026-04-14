@@ -18,10 +18,10 @@ use rc_runner::{
 use uuid::Uuid;
 
 use crate::helpers::{
-    artifact_file_path, dispatch_session_command_to_runner, dispatch_session_to_runner,
-    relay_approval_decision_to_runner, relay_approval_to_runner, runner_is_available,
-    runner_uses_pull_commands, session_state_from_runner, session_state_to_runner,
-    update_runner_session_state,
+    artifact_file_path, build_content_disposition, dispatch_session_command_to_runner,
+    dispatch_session_to_runner, relay_approval_decision_to_runner, relay_approval_to_runner,
+    runner_is_available, runner_uses_pull_commands, session_state_from_runner,
+    session_state_to_runner, update_runner_session_state,
 };
 use crate::streams::{
     serve_approval_stream, serve_event_stream, serve_runner_approval_stream,
@@ -1025,7 +1025,7 @@ pub(crate) async fn download_artifact(
             (CONTENT_TYPE, artifact.media_type.clone()),
             (
                 CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{}\"", artifact.file_name),
+                build_content_disposition(&artifact.file_name),
             ),
         ],
         bytes,

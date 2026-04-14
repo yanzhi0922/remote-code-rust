@@ -17,6 +17,10 @@ const mockApi = vi.hoisted(() => ({
   sendPrompt: vi.fn(),
 }));
 
+const mockFileDownload = vi.hoisted(() => ({
+  downloadRemoteArtifact: vi.fn(),
+}));
+
 const mockRuntime = vi.hoisted(() => ({
   clearRemoteActiveSessionId: vi.fn(),
   clearRemoteAccessToken: vi.fn(),
@@ -30,6 +34,7 @@ const mockRuntime = vi.hoisted(() => ({
 }));
 
 vi.mock('./api', () => mockApi);
+vi.mock('../lib/fileDownload', () => mockFileDownload);
 vi.mock('../lib/runtime', () => mockRuntime);
 
 const HEALTH_RESPONSE = {
@@ -139,7 +144,7 @@ describe('RemoteApp', () => {
     });
   });
 
-  it('renders approvals and artifacts, and forwards approval decisions', async () => {
+  it('renders approvals and artifacts, forwards approval decisions, and downloads securely', async () => {
     mockApi.listSessionApprovals.mockResolvedValue({
       items: [
         {
@@ -177,6 +182,7 @@ describe('RemoteApp', () => {
     });
     mockApi.respondToApproval.mockResolvedValue(undefined);
     mockApi.buildArtifactDownloadUrl.mockReturnValue('https://example.test/artifact-1');
+    mockFileDownload.downloadRemoteArtifact.mockResolvedValue(undefined);
 
     render(<RemoteApp />);
 
@@ -195,10 +201,15 @@ describe('RemoteApp', () => {
       );
     });
 
-    expect(screen.getByRole('link', { name: /Transcript/i })).toHaveAttribute(
-      'href',
-      'https://example.test/artifact-1',
-    );
+    fireEvent.click(screen.getByRole('button', { name: /Transcript/i }));
+
+    await waitFor(() => {
+      expect(mockFileDownload.downloadRemoteArtifact).toHaveBeenCalledWith({
+        url: 'https://example.test/artifact-1',
+        fileName: 'session.md',
+        token: 'token',
+      });
+    });
   });
 
   it('forwards follow-up prompts and clears the composer', async () => {

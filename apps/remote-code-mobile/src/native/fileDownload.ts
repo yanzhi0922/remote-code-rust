@@ -27,9 +27,31 @@ export async function downloadArtifact(
   token: string,
 ): Promise<DownloadResult | null> {
   if (!isNative()) {
-    // Fallback for web: open in new tab
-    window.open(url, '_blank');
-    return null;
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Download failed: ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+
+    try {
+      const anchor = document.createElement('a');
+      anchor.href = objectUrl;
+      anchor.download = fileName;
+      anchor.rel = 'noopener';
+      anchor.style.display = 'none';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      return null;
+    } finally {
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+    }
   }
 
   try {

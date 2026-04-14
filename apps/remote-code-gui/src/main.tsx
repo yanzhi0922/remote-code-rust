@@ -5,7 +5,7 @@ import App from "./App";
 import { AppErrorBoundary } from "./components/layout/AppErrorBoundary";
 import { hasTauriRuntime } from "./lib/runtime";
 
-const SERVICE_WORKER_VERSION = '2026-04-13-2';
+const SERVICE_WORKER_VERSION = __APP_BUILD_ID__;
 const SERVICE_WORKER_URL = `/sw.js?v=${SERVICE_WORKER_VERSION}`;
 
 if ('serviceWorker' in navigator && !hasTauriRuntime()) {

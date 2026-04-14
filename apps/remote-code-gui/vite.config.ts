@@ -1,13 +1,44 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
+import { execSync } from "child_process";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
 
+function resolveBuildId(command: 'build' | 'serve'): string {
+  if (command === 'serve') {
+    return 'dev';
+  }
+
+  const envBuildId =
+    process.env.REMOTE_CODE_BUILD_ID?.trim() ||
+    process.env.GITHUB_SHA?.trim() ||
+    process.env.VERCEL_GIT_COMMIT_SHA?.trim() ||
+    process.env.CF_PAGES_COMMIT_SHA?.trim();
+
+  if (envBuildId) {
+    return envBuildId.slice(0, 12);
+  }
+
+  try {
+    return execSync('git rev-parse --short=12 HEAD', {
+      cwd: __dirname,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+      .toString()
+      .trim();
+  } catch {
+    return new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
+  }
+}
+
 // https://vite.dev/config/
-export default defineConfig(async () => ({
+export default defineConfig(async ({ command }) => ({
   plugins: [react()],
+  define: {
+    __APP_BUILD_ID__: JSON.stringify(resolveBuildId(command)),
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

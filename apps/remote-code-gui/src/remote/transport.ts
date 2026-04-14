@@ -52,10 +52,16 @@ export function subscribeToRemoteSessionEvents(input: {
   let cancelled = false;
   let reconnectTimer: number | null = null;
   let socket: WebSocket | null = null;
+  let reconnectAttempt = 0;
 
   const openSocket = (after: number) => {
     if (cancelled) {
       return;
+    }
+
+    if (reconnectTimer !== null) {
+      window.clearTimeout(reconnectTimer);
+      reconnectTimer = null;
     }
 
     input.onConnectionStateChange(after > 0 ? 'reconnecting' : 'connecting');
@@ -63,6 +69,7 @@ export function subscribeToRemoteSessionEvents(input: {
 
     socket.onopen = () => {
       if (!cancelled) {
+        reconnectAttempt = 0;
         input.onConnectionStateChange('open');
       }
     };
@@ -89,17 +96,66 @@ export function subscribeToRemoteSessionEvents(input: {
       if (cancelled) {
         return;
       }
-      reconnectTimer = window.setTimeout(() => {
-        openSocket(input.getAfterSequence());
-      }, 1_000);
+      socket = null;
+      scheduleReconnect();
     };
   };
+
+  const scheduleReconnect = () => {
+    if (cancelled || reconnectTimer !== null) {
+      return;
+    }
+
+    const isOffline =
+      typeof navigator !== 'undefined' &&
+      'onLine' in navigator &&
+      navigator.onLine === false;
+    input.onConnectionStateChange('reconnecting');
+
+    if (isOffline) {
+      return;
+    }
+
+    const delayMs = Math.min(1_000 * 2 ** reconnectAttempt, 15_000);
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = null;
+      reconnectAttempt += 1;
+      openSocket(input.getAfterSequence());
+    }, delayMs);
+  };
+
+  const handleOnline = () => {
+    if (cancelled || socket) {
+      return;
+    }
+    if (reconnectTimer !== null) {
+      window.clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    reconnectAttempt = 0;
+    openSocket(input.getAfterSequence());
+  };
+
+  const handleOffline = () => {
+    if (!cancelled) {
+      input.onConnectionStateChange('reconnecting');
+    }
+    if (reconnectTimer !== null) {
+      window.clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+  };
+
+  window.addEventListener('online', handleOnline);
+  window.addEventListener('offline', handleOffline);
 
   openSocket(input.getAfterSequence());
 
   return {
     close() {
       cancelled = true;
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
       if (reconnectTimer !== null) {
         window.clearTimeout(reconnectTimer);
       }

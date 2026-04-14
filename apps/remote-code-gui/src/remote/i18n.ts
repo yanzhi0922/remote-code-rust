@@ -84,6 +84,7 @@ export interface RemoteCopy {
   statusClearedAccessToken: string;
   statusPromptForwarded: string;
   statusInterruptForwarded: string;
+  statusArtifactDownloaded: (fileName: string) => string;
   statusApprovalDecision: (decision: string) => string;
   approvalWaiting: (title: string) => string;
   approvalResolved: (approvalId: string, state: string) => string;
@@ -236,6 +237,7 @@ const ENGLISH_COPY: RemoteCopy = {
   statusClearedAccessToken: 'Cleared the saved access token.',
   statusPromptForwarded: 'Prompt forwarded to the local runner.',
   statusInterruptForwarded: 'Interrupt signal forwarded.',
+  statusArtifactDownloaded: (fileName) => `Downloading artifact ${fileName}.`,
   statusApprovalDecision: (decision) => `Approval ${decision}.`,
   approvalWaiting: (title) => `${title} is waiting for a decision.`,
   approvalResolved: (approvalId, state) => `Approval ${approvalId} is now ${state}.`,
@@ -385,6 +387,7 @@ const CHINESE_COPY: RemoteCopy = {
   statusClearedAccessToken: '已清除本地保存的访问令牌。',
   statusPromptForwarded: '提示词已转发给本地 runner。',
   statusInterruptForwarded: '中断信号已转发。',
+  statusArtifactDownloaded: (fileName) => `正在下载产物 ${fileName}。`,
   statusApprovalDecision: (decision) => `审批已${decision}。`,
   approvalWaiting: (title) => `${title} 正在等待处理。`,
   approvalResolved: (approvalId, state) => `审批 ${approvalId} 当前状态为 ${state}。`,

@@ -133,7 +133,28 @@ describe('ArtifactPanel', () => {
     { artifact_id: 'art-2', name: 'Data', file_name: 'data.csv', size_bytes: 1536 },
   ];
 
-  it('renders artifact items with download links', () => {
+  it('renders artifact items with download actions', () => {
+    const onDownload = vi.fn();
+    render(
+      <ArtifactPanel
+        title="Artifacts"
+        icon={<span>📦</span>}
+        emptyText="No artifacts"
+        items={items}
+        onDownload={onDownload}
+      />,
+    );
+
+    expect(screen.getByText('Artifacts')).toBeInTheDocument();
+    expect(screen.getByText('Report')).toBeInTheDocument();
+    expect(screen.getByText('Data')).toBeInTheDocument();
+    expect(screen.getByText(/data\.csv/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Report/i }));
+    expect(onDownload).toHaveBeenCalledWith(items[0]);
+  });
+
+  it('can still render link fallback mode', () => {
     render(
       <ArtifactPanel
         title="Artifacts"
@@ -143,12 +164,6 @@ describe('ArtifactPanel', () => {
         buildDownloadUrl={(id) => `https://example.com/download/${id}`}
       />,
     );
-
-    expect(screen.getByText('Artifacts')).toBeInTheDocument();
-    expect(screen.getByText('Report')).toBeInTheDocument();
-    expect(screen.getByText('Data')).toBeInTheDocument();
-    // file_name appears inside a combined text node like "data.csv • 1.5 KB"
-    expect(screen.getByText(/data\.csv/)).toBeInTheDocument();
 
     const links = screen.getAllByRole('link');
     expect(links[0]).toHaveAttribute('href', 'https://example.com/download/art-1');
@@ -162,7 +177,7 @@ describe('ArtifactPanel', () => {
         icon={<span>📦</span>}
         emptyText="Nothing here"
         items={[]}
-        buildDownloadUrl={() => ''}
+        onDownload={() => {}}
       />,
     );
     expect(screen.getByText('Nothing here')).toBeInTheDocument();
