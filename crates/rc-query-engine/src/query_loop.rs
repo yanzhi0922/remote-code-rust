@@ -1,14 +1,18 @@
 use anyhow::{Result, anyhow};
 use rc_core::{ConversationEntry, Message, ToolResult};
 use rc_engine_events::{
-    EngineEvent, EngineStateSnapshot, ToolError, ToolResult as EventToolResult, Usage,
+    CompactionResult, EngineEvent, EngineStateSnapshot, ToolError, ToolResult as EventToolResult,
 };
 use serde_json::json;
 
 use crate::config::{ProcessUserInputContext, QueryEngineConfig};
 use crate::engine::{
     EngineError, EngineState, QueryResult, assistant_message_from_response, budget_stop_message,
-    tool_result_message,
+    tool_result_message, usage_from_accumulator,
+};
+use crate::observer::{
+    QueryBudgetState, QueryCheckpoint, QueryCheckpointKind, QueryContextBudgetState,
+    QueryObserverEvent,
 };
 use crate::token_budget::TokenBudgetDecision;
 
@@ -19,7 +23,16 @@ pub async fn run_query_loop(
     user_input: Vec<Message>,
     context: &ProcessUserInputContext,
 ) -> Result<QueryResult, EngineError> {
-    state.messages.extend(user_input);
+    let appended_messages = user_input;
+    state.messages.extend(appended_messages.clone());
+    let _ = config
+        .observer
+        .on_event(QueryObserverEvent::MessagesAppended {
+            session_id: context.session_id.clone(),
+            appended: appended_messages,
+            total_messages: state.messages.len(),
+        })
+        .await;
     let max_turns = context
         .task_budget
         .as_ref()
@@ -32,20 +45,48 @@ pub async fn run_query_loop(
         .and_then(|budget| budget.max_total_tokens);
 
     loop {
+        let budget = QueryBudgetState {
+            turn: state.turn,
+            total_tokens: state.usage.total_tokens(),
+            max_turns: state.budget_tracker.max_turns,
+            max_total_tokens: state.budget_tracker.max_total_tokens,
+        };
+        let _ = config
+            .observer
+            .on_event(QueryObserverEvent::BudgetEvaluated {
+                budget: budget.clone(),
+            })
+            .await;
         match state
             .budget_tracker
-            .evaluate(state.turn, state.usage.total_tokens())
+            .evaluate(budget.turn, budget.total_tokens)
         {
             TokenBudgetDecision::Continue => {}
             TokenBudgetDecision::Stop { reason } => {
                 state.stop_reason = Some("budget_exceeded".to_owned());
-                state.messages.push(budget_stop_message(reason.clone()));
+                let stop_message = budget_stop_message(reason.clone());
+                state.messages.push(stop_message.clone());
+                let _ = config
+                    .observer
+                    .on_event(QueryObserverEvent::BudgetExceeded {
+                        budget,
+                        reason: reason.clone(),
+                    })
+                    .await;
+                let _ = config
+                    .observer
+                    .on_event(QueryObserverEvent::MessagesAppended {
+                        session_id: context.session_id.clone(),
+                        appended: vec![stop_message],
+                        total_messages: state.messages.len(),
+                    })
+                    .await;
                 return Err(EngineError::Stopped(reason));
             }
         }
 
         let mut legacy_conversation = state.legacy_conversation();
-        maybe_compact_conversation(config, state, &mut legacy_conversation);
+        maybe_compact_conversation(config, state, &mut legacy_conversation).await;
 
         let response = config
             .backend
@@ -62,9 +103,16 @@ pub async fn run_query_loop(
         config.event_stream.emit(EngineEvent::UsageUpdated {
             usage: usage_from_accumulator(&state.usage),
         });
-        state
-            .messages
-            .push(assistant_message_from_response(&response));
+        let assistant_message = assistant_message_from_response(&response);
+        state.messages.push(assistant_message.clone());
+        let _ = config
+            .observer
+            .on_event(QueryObserverEvent::AssistantMessageCommitted {
+                message: assistant_message.clone(),
+                stop_reason: response.stop_reason.clone(),
+                turn: state.turn,
+            })
+            .await;
         config.event_stream.emit(EngineEvent::StateUpdated {
             state_snapshot: state_snapshot(state, response.tool_calls.len()),
         });
@@ -79,7 +127,26 @@ pub async fn run_query_loop(
             });
         }
 
-        for tool_call in &response.tool_calls {
+        let checkpoints = checkpoints_for_tool_batch(state, context, &assistant_message, &response);
+        for checkpoint in &checkpoints {
+            let _ = config
+                .observer
+                .on_event(QueryObserverEvent::CheckpointCreated {
+                    checkpoint: checkpoint.clone(),
+                })
+                .await;
+        }
+
+        for (batch_index, tool_call) in response.tool_calls.iter().enumerate() {
+            let _ = config
+                .observer
+                .on_event(QueryObserverEvent::ToolCallStarted {
+                    tool_call: tool_call.clone(),
+                    turn: state.turn,
+                    batch_size: response.tool_calls.len(),
+                    batch_index,
+                })
+                .await;
             config.event_stream.emit(EngineEvent::ToolUseStarted {
                 tool_use_id: tool_call.id.clone(),
                 tool_name: tool_call.name.clone(),
@@ -113,27 +180,80 @@ pub async fn run_query_loop(
             state
                 .messages
                 .push(tool_result_message(tool_call, &tool_result));
+            let _ = config
+                .observer
+                .on_event(QueryObserverEvent::ToolResultCommitted {
+                    tool_call: tool_call.clone(),
+                    result: tool_result.clone(),
+                    turn: state.turn,
+                    total_messages: state.messages.len(),
+                })
+                .await;
             config.event_stream.emit(EngineEvent::StateUpdated {
                 state_snapshot: state_snapshot(state, 1),
             });
         }
+
+        for checkpoint in checkpoints {
+            let _ = config
+                .observer
+                .on_event(QueryObserverEvent::CheckpointCleared { checkpoint })
+                .await;
+        }
     }
 }
 
-fn maybe_compact_conversation(
+async fn maybe_compact_conversation(
     config: &QueryEngineConfig,
     state: &mut EngineState,
     legacy_conversation: &mut Vec<ConversationEntry>,
 ) {
-    if !config.context_manager.needs_compaction(legacy_conversation) {
+    let before_snapshot = config.context_manager.budget_snapshot(legacy_conversation);
+    let needs_compaction = before_snapshot.exceeds_threshold();
+    let _ = config
+        .observer
+        .on_event(QueryObserverEvent::ContextBudgetEvaluated {
+            context: QueryContextBudgetState {
+                estimated_tokens: before_snapshot.estimated_tokens,
+                max_input_tokens: before_snapshot.max_input_tokens,
+                threshold_tokens: before_snapshot.threshold_tokens(),
+                usage_ratio: before_snapshot.usage_ratio,
+                needs_compaction,
+            },
+            message_count: legacy_conversation.len(),
+        })
+        .await;
+    if !needs_compaction {
         return;
     }
+    config.event_stream.emit(EngineEvent::CompactStarted {
+        strategy: "standard".to_owned(),
+    });
+    let before_messages = legacy_conversation.len();
     let compacted = config.context_manager.compact(legacy_conversation);
-    if compacted.len() == legacy_conversation.len() {
+    if compacted.len() == before_messages {
         return;
     }
+    let after_snapshot = config.context_manager.budget_snapshot(&compacted);
     *legacy_conversation = compacted;
     state.replace_from_legacy(legacy_conversation);
+    config.event_stream.emit(EngineEvent::CompactCompleted {
+        result: CompactionResult {
+            strategy: "standard".to_owned(),
+            before_messages,
+            after_messages: legacy_conversation.len(),
+            summary: Some("compat context compaction applied".to_owned()),
+        },
+    });
+    let _ = config
+        .observer
+        .on_event(QueryObserverEvent::ContextCompactionApplied {
+            before_messages,
+            after_messages: legacy_conversation.len(),
+            estimated_tokens_before: before_snapshot.estimated_tokens,
+            estimated_tokens_after: after_snapshot.estimated_tokens,
+        })
+        .await;
 }
 
 fn record_permission_denial(
@@ -155,16 +275,6 @@ fn record_permission_denial(
     }
 }
 
-fn usage_from_accumulator(accumulator: &rc_core::UsageAccumulator) -> Usage {
-    Usage {
-        input_tokens: accumulator.input_tokens,
-        output_tokens: accumulator.output_tokens,
-        cache_creation_input_tokens: accumulator.cache_creation_input_tokens,
-        cache_read_input_tokens: accumulator.cache_read_input_tokens,
-        total_tokens: accumulator.total_tokens(),
-    }
-}
-
 fn state_snapshot(state: &EngineState, tool_call_count: usize) -> EngineStateSnapshot {
     EngineStateSnapshot {
         turn: state.turn,
@@ -172,6 +282,39 @@ fn state_snapshot(state: &EngineState, tool_call_count: usize) -> EngineStateSna
         tool_call_count,
         usage: usage_from_accumulator(&state.usage),
     }
+}
+
+fn checkpoints_for_tool_batch(
+    state: &EngineState,
+    context: &ProcessUserInputContext,
+    assistant_message: &Message,
+    response: &rc_core::ProviderResponse,
+) -> Vec<QueryCheckpoint> {
+    let tool_use_ids = response
+        .tool_calls
+        .iter()
+        .map(|tool_call| tool_call.id.clone())
+        .collect::<Vec<_>>();
+    let assistant_message_id = Some(assistant_message.uuid());
+
+    vec![
+        QueryCheckpoint::new(
+            QueryCheckpointKind::ResumeBoundary,
+            context.session_id.clone(),
+            state.turn,
+            assistant_message_id,
+            tool_use_ids.clone(),
+            state.messages.len(),
+        ),
+        QueryCheckpoint::new(
+            QueryCheckpointKind::ToolBatch,
+            context.session_id.clone(),
+            state.turn,
+            assistant_message_id,
+            tool_use_ids,
+            state.messages.len(),
+        ),
+    ]
 }
 
 #[allow(dead_code)]

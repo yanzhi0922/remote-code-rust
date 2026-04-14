@@ -11,6 +11,8 @@ use rc_provider::context::ContextWindowManager;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::observer::{NoopQueryObserver, QueryObserver};
+
 /// Query effort hint aligned with Claude Code's runtime knobs.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -125,6 +127,7 @@ pub struct QueryEngineConfig {
     pub model: String,
     pub backend: Arc<dyn ConversationBackend>,
     pub tool_runner: Arc<dyn ToolRunner>,
+    pub observer: Arc<dyn QueryObserver>,
     pub event_stream: rc_engine_events::EventStream,
     pub max_turns: u32,
     pub context_manager: ContextWindowManager,
@@ -149,10 +152,17 @@ impl QueryEngineConfig {
             model,
             backend,
             tool_runner,
+            observer: Arc::new(NoopQueryObserver),
             event_stream,
             max_turns: 8,
             failure_threshold: 3,
             metadata: Value::Null,
         }
+    }
+
+    #[must_use]
+    pub fn with_observer(mut self, observer: Arc<dyn QueryObserver>) -> Self {
+        self.observer = observer;
+        self
     }
 }

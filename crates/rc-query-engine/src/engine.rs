@@ -5,12 +5,13 @@ use rc_core::{
     MessageOrigin, SessionId, SystemMessage, SystemMessageSubtype, ToolCall, ToolUseSummaryMessage,
     UsageAccumulator,
 };
-use rc_engine_events::EngineEvent;
+use rc_engine_events::{EngineEvent, Usage};
 use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::config::{ProcessUserInputContext, QueryEngineConfig};
+use crate::observer::QueryObserverEvent;
 use crate::query_loop::run_query_loop;
 use crate::token_budget::BudgetTracker;
 
@@ -101,18 +102,53 @@ impl QueryEngine {
         context: ProcessUserInputContext,
     ) -> Result<QueryResult, EngineError> {
         let started = Instant::now();
+        let existing_messages = self.state.messages.len();
+        let new_messages = user_input.len();
         self.config.event_stream.emit(EngineEvent::QueryStarted {
             session_id: event_session_id(&context.session_id),
         });
+        let _ = self
+            .config
+            .observer
+            .on_event(QueryObserverEvent::QueryStarted {
+                session_id: context.session_id.clone(),
+                existing_messages,
+                new_messages,
+            })
+            .await;
         let result = run_query_loop(&self.config, &mut self.state, user_input, &context).await;
         match &result {
-            Ok(_) => self.config.event_stream.emit(EngineEvent::QueryCompleted {
-                session_id: event_session_id(&context.session_id),
-                duration_ms: started.elapsed().as_millis() as u64,
-            }),
-            Err(_) => self.config.event_stream.emit(EngineEvent::QueryAborted {
-                session_id: event_session_id(&context.session_id),
-            }),
+            Ok(query_result) => {
+                self.config.event_stream.emit(EngineEvent::QueryCompleted {
+                    session_id: event_session_id(&context.session_id),
+                    duration_ms: started.elapsed().as_millis() as u64,
+                });
+                let _ = self
+                    .config
+                    .observer
+                    .on_event(QueryObserverEvent::QueryFinished {
+                        stop_reason: query_result.stop_reason.clone(),
+                        turns: query_result.turns,
+                        final_text: query_result.final_text.clone(),
+                        usage: usage_from_accumulator(&query_result.state.usage),
+                    })
+                    .await;
+            }
+            Err(error) => {
+                self.config.event_stream.emit(EngineEvent::QueryAborted {
+                    session_id: event_session_id(&context.session_id),
+                });
+                let _ = self
+                    .config
+                    .observer
+                    .on_event(QueryObserverEvent::QueryFailed {
+                        error: error.to_string(),
+                        turns: self.state.turn,
+                        consecutive_failures: self.state.consecutive_failures,
+                        usage: usage_from_accumulator(&self.state.usage),
+                    })
+                    .await;
+            }
         }
         result
     }
@@ -120,6 +156,16 @@ impl QueryEngine {
 
 fn event_session_id(session_id: &SessionId) -> Uuid {
     session_id.try_as_uuid().unwrap_or_else(|_| Uuid::nil())
+}
+
+pub(crate) fn usage_from_accumulator(accumulator: &UsageAccumulator) -> Usage {
+    Usage {
+        input_tokens: accumulator.input_tokens,
+        output_tokens: accumulator.output_tokens,
+        cache_creation_input_tokens: accumulator.cache_creation_input_tokens,
+        cache_read_input_tokens: accumulator.cache_read_input_tokens,
+        total_tokens: accumulator.total_tokens(),
+    }
 }
 
 pub(crate) fn assistant_message_from_response(response: &rc_core::ProviderResponse) -> Message {
@@ -183,10 +229,14 @@ mod tests {
         ConversationEntry, PermissionMode, ProviderResponse, SessionId, SubAgentCompletion,
         ToolCall, ToolResult, UsageSummary,
     };
+    use rc_engine_events::EngineEvent;
+    use rc_provider::context::ContextWindowManager;
     use rc_provider::{ConversationBackend, StreamingCallbacks};
+    use tokio::sync::broadcast::Receiver;
 
     use super::QueryEngine;
     use crate::config::{ProcessUserInputContext, QueryEngineConfig, ToolRunner};
+    use crate::observer::{QueryCheckpointKind, QueryObserver, QueryObserverEvent};
 
     struct DummyCompletion;
 
@@ -243,9 +293,43 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct RecordingObserver {
+        events: Mutex<Vec<QueryObserverEvent>>,
+    }
+
+    impl RecordingObserver {
+        fn snapshot(&self) -> Vec<QueryObserverEvent> {
+            self.events
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+        }
+    }
+
+    #[async_trait]
+    impl QueryObserver for RecordingObserver {
+        async fn on_event(&self, event: QueryObserverEvent) -> Result<()> {
+            self.events
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(event);
+            Ok(())
+        }
+    }
+
+    fn drain_engine_events(receiver: &mut Receiver<EngineEvent>) -> Vec<EngineEvent> {
+        let mut events = Vec::new();
+        while let Ok(event) = receiver.try_recv() {
+            events.push(event);
+        }
+        events
+    }
+
     #[tokio::test]
     async fn query_engine_completes_basic_tool_round_trip() {
         let session_id = SessionId::new();
+        let observer = Arc::new(RecordingObserver::default());
         let backend = Arc::new(MockBackend {
             responses: Mutex::new(VecDeque::from([
                 ProviderResponse {
@@ -288,7 +372,9 @@ mod tests {
             backend,
             Arc::new(MockToolRunner),
             rc_engine_events::EventStream::new(64),
-        );
+        )
+        .with_observer(observer.clone());
+        let mut engine_events = config.event_stream.subscribe();
         let mut engine = QueryEngine::new(
             config,
             vec![rc_core::Message::from(ConversationEntry::system("sys"))],
@@ -316,5 +402,202 @@ mod tests {
                 .filter_map(rc_core::Message::as_conversation_entry)
                 .any(|entry| entry.role == rc_core::ConversationRole::Tool)
         );
+
+        let observer_events = observer.snapshot();
+        assert!(observer_events.iter().any(|event| matches!(
+            event,
+            QueryObserverEvent::MessagesAppended { appended, .. } if appended.len() == 1
+        )));
+        assert!(observer_events.iter().any(|event| matches!(
+            event,
+            QueryObserverEvent::AssistantMessageCommitted { stop_reason, .. }
+                if stop_reason == "tool_use"
+        )));
+        assert!(observer_events.iter().any(|event| matches!(
+            event,
+            QueryObserverEvent::ToolCallStarted { tool_call, .. } if tool_call.id == "tool-1"
+        )));
+        assert!(observer_events.iter().any(|event| matches!(
+            event,
+            QueryObserverEvent::ToolResultCommitted { tool_call, result, .. }
+                if tool_call.id == "tool-1" && result.content == "tool:bash_command ok"
+        )));
+        assert!(observer_events.iter().any(|event| matches!(
+            event,
+            QueryObserverEvent::CheckpointCreated { checkpoint }
+                if checkpoint.kind == QueryCheckpointKind::ResumeBoundary
+                    && checkpoint.tool_use_ids == vec!["tool-1".to_owned()]
+        )));
+        assert!(observer_events.iter().any(|event| matches!(
+            event,
+            QueryObserverEvent::CheckpointCleared { checkpoint }
+                if checkpoint.kind == QueryCheckpointKind::ToolBatch
+        )));
+        assert!(observer_events.iter().any(|event| matches!(
+            event,
+            QueryObserverEvent::QueryFinished { stop_reason, final_text, .. }
+                if stop_reason == "end_turn" && final_text.as_deref() == Some("done")
+        )));
+
+        let engine_events = drain_engine_events(&mut engine_events);
+        assert!(
+            engine_events
+                .iter()
+                .any(|event| matches!(event, EngineEvent::QueryStarted { .. }))
+        );
+        assert!(engine_events.iter().any(|event| matches!(
+            event,
+            EngineEvent::ToolUseStarted { tool_use_id, .. } if tool_use_id == "tool-1"
+        )));
+        assert!(
+            engine_events
+                .iter()
+                .any(|event| matches!(event, EngineEvent::QueryCompleted { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn query_engine_reports_budget_stop_to_observer_and_event_stream() {
+        let session_id = SessionId::new();
+        let observer = Arc::new(RecordingObserver::default());
+        let backend = Arc::new(MockBackend {
+            responses: Mutex::new(VecDeque::new()),
+        });
+        let config = QueryEngineConfig::new(
+            session_id.clone(),
+            "mock-model",
+            backend,
+            Arc::new(MockToolRunner),
+            rc_engine_events::EventStream::new(16),
+        )
+        .with_observer(observer.clone());
+        let mut engine_events = config.event_stream.subscribe();
+        let mut engine = QueryEngine::new(
+            config,
+            vec![rc_core::Message::from(ConversationEntry::system("sys"))],
+        );
+        let mut context =
+            ProcessUserInputContext::new(session_id, PermissionMode::Default, "mock-model");
+        context.task_budget = Some(crate::TaskBudget {
+            max_turns: Some(0),
+            max_total_tokens: None,
+        });
+
+        let error = engine
+            .submit_message(
+                vec![rc_core::Message::from(ConversationEntry::user("hello"))],
+                context,
+            )
+            .await
+            .expect_err("budget stop should abort before provider call");
+
+        match error {
+            crate::EngineError::Stopped(reason) => {
+                assert_eq!(reason, "turn budget exceeded (0)");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let observer_events = observer.snapshot();
+        assert!(observer_events.iter().any(|event| matches!(
+            event,
+            QueryObserverEvent::BudgetExceeded { reason, .. }
+                if reason == "turn budget exceeded (0)"
+        )));
+        assert!(observer_events.iter().any(|event| matches!(
+            event,
+            QueryObserverEvent::QueryFailed { error, .. }
+                if error == "query stopped: turn budget exceeded (0)"
+        )));
+
+        let engine_events = drain_engine_events(&mut engine_events);
+        assert!(
+            engine_events
+                .iter()
+                .any(|event| matches!(event, EngineEvent::QueryAborted { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn query_engine_emits_compaction_events_to_observer_and_stream() {
+        let session_id = SessionId::new();
+        let observer = Arc::new(RecordingObserver::default());
+        let backend = Arc::new(MockBackend {
+            responses: Mutex::new(VecDeque::from([ProviderResponse {
+                text: "done".to_owned(),
+                history_text: None,
+                thinking: None,
+                content_blocks: Vec::new(),
+                tool_calls: Vec::new(),
+                usage: UsageSummary {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                },
+                stop_reason: "end_turn".to_owned(),
+            }])),
+        });
+        let mut config = QueryEngineConfig::new(
+            session_id.clone(),
+            "mock-model",
+            backend,
+            Arc::new(MockToolRunner),
+            rc_engine_events::EventStream::new(16),
+        )
+        .with_observer(observer.clone());
+        config.context_manager = ContextWindowManager::new(100, 20);
+        let mut engine_events = config.event_stream.subscribe();
+
+        let mut existing_messages = vec![rc_core::Message::from(ConversationEntry::system("sys"))];
+        for index in 0..5 {
+            existing_messages.push(rc_core::Message::from(ConversationEntry::user(format!(
+                "user-{index}-{}",
+                "a".repeat(200)
+            ))));
+            existing_messages.push(rc_core::Message::from(ConversationEntry::assistant(
+                format!("assistant-{index}-{}", "b".repeat(200)),
+            )));
+        }
+
+        let mut engine = QueryEngine::new(config, existing_messages);
+        let context =
+            ProcessUserInputContext::new(session_id, PermissionMode::Default, "mock-model");
+        let result = engine
+            .submit_message(
+                vec![rc_core::Message::from(ConversationEntry::user(format!(
+                    "latest-{}",
+                    "c".repeat(200)
+                )))],
+                context,
+            )
+            .await
+            .expect("query engine should succeed after compaction");
+
+        assert_eq!(result.final_text.as_deref(), Some("done"));
+
+        let observer_events = observer.snapshot();
+        assert!(observer_events.iter().any(|event| matches!(
+            event,
+            QueryObserverEvent::ContextBudgetEvaluated { context, .. } if context.needs_compaction
+        )));
+        assert!(observer_events.iter().any(|event| matches!(
+            event,
+            QueryObserverEvent::ContextCompactionApplied {
+                before_messages,
+                after_messages,
+                ..
+            } if before_messages > after_messages
+        )));
+
+        let engine_events = drain_engine_events(&mut engine_events);
+        assert!(engine_events.iter().any(|event| matches!(
+            event,
+            EngineEvent::CompactStarted { strategy } if strategy == "standard"
+        )));
+        assert!(engine_events.iter().any(|event| matches!(
+            event,
+            EngineEvent::CompactCompleted { result } if result.before_messages > result.after_messages
+        )));
     }
 }
