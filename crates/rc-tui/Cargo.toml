@@ -26,3 +26,6 @@ rc-permissions = { path = "../rc-permissions" }
 rc-mcp = { path = "../rc-mcp" }
 rc-plugins = { path = "../rc-plugins" }
 rc-skills = { path = "../rc-skills" }
+
+[dev-dependencies]
+tempfile.workspace = true

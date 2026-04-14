@@ -15,13 +15,20 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use axum::Router;
 use axum::extract::{Request, State};
+use axum::http::{
+    Method,
+    header::{CONTENT_DISPOSITION, CONTENT_TYPE},
+};
 use axum::middleware::{self, Next};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use rc_config::AppPaths;
 use rusqlite::Row;
+use rusqlite::params_from_iter;
+use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OptionalExtension, params};
 use tokio::sync::RwLock;
+use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
 
 use handlers::{
@@ -31,15 +38,16 @@ use handlers::{
     list_approvals, list_artifacts, list_devices, list_recent_events, list_runner_approvals,
     list_runner_artifacts, list_runner_events, list_runner_sessions, list_runners,
     list_session_approvals, list_session_artifacts, list_session_events, list_sessions,
-    post_session_command, pull_runner_commands, register_runner, subscribe_approvals,
-    subscribe_events, subscribe_runner_approvals, subscribe_runner_events,
+    post_session_command, pull_runner_commands, register_push_token, register_runner,
+    subscribe_approvals, subscribe_events, subscribe_runner_approvals, subscribe_runner_events,
     subscribe_session_approvals, subscribe_session_events, update_runner_heartbeat,
     update_session_state,
 };
+use helpers::{event_kind_name, event_kind_name_for_detail, is_approval_kind};
 use registry::{Registry, TimelineSnapshot, TimelineStore};
 use types::{
     DEFAULT_BIND, DEFAULT_EVENT_HISTORY_LIMIT, DEFAULT_RUNNER_LEASE_TTL_SECS, EVENT_STREAM_BUFFER,
-    PHASE, TimelineEventDraft,
+    MAX_EVENT_LIST_LIMIT, PHASE, TimelineEventDraft, TimelineEventKind,
 };
 
 // ---------------------------------------------------------------------------
@@ -52,7 +60,8 @@ pub use types::{
     ControlPlaneConfig, ControlPlaneConfigOverrides, ControlPlaneHealth, ControlPlaneMeta,
     ControlPlaneStatus, CreateSessionRequest, DaemonPresenceState, DeviceKind, MessageRole,
     PairingAcceptRequest, PairingAcceptResponse, PairingOfferCreateRequest,
-    PairingOfferCreateResponse, RunnerCommandPullResponse, RunnerQueuedCommand,
+    PairingOfferCreateResponse, PushPlatform, PushTokenRegistrationRequest,
+    PushTokenRegistrationResponse, RunnerCommandPullResponse, RunnerQueuedCommand,
     RunnerQueuedCommandBody, RunnerRegistrationResponse, RuntimeEventCreateRequest,
     RuntimeEventDetail, SessionRecord, SessionState, SessionStateUpdateRequest, TimelineEvent,
     TimelineEventDetail, TrustedDeviceRecord,
@@ -93,6 +102,16 @@ impl AuthPrincipal {
 struct PersistedControlPlaneState {
     registry: Registry,
     timeline: TimelineSnapshot,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PersistedEventQuery {
+    pub(crate) after: Option<u64>,
+    pub(crate) limit: Option<usize>,
+    pub(crate) kind: Option<TimelineEventKind>,
+    pub(crate) session_id: Option<Uuid>,
+    pub(crate) runner_id: Option<String>,
+    pub(crate) approvals_only: bool,
 }
 
 impl ControlPlaneService {
@@ -144,6 +163,28 @@ impl ControlPlaneService {
             return true;
         }
         self.registry.read().await.owner_claimed()
+    }
+
+    pub(crate) async fn list_persisted_events(
+        &self,
+        query: PersistedEventQuery,
+    ) -> Result<Vec<TimelineEvent>> {
+        let state_db_path = self.state_db_path.clone();
+        tokio::task::spawn_blocking(move || load_persisted_events(&state_db_path, &query))
+            .await
+            .context("control-plane event query task failed to join")?
+    }
+
+    pub(crate) async fn latest_persisted_event_sequence(
+        &self,
+        query: PersistedEventQuery,
+    ) -> Result<Option<u64>> {
+        let state_db_path = self.state_db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            load_latest_persisted_event_sequence(&state_db_path, &query)
+        })
+        .await
+        .context("control-plane latest event query task failed to join")?
     }
 
     pub fn router(self) -> Router {
@@ -201,6 +242,7 @@ impl ControlPlaneService {
                 "/v1/runners/{runner_id}/commands/pull",
                 post(pull_runner_commands),
             )
+            .route("/v1/devices/push-token", post(register_push_token))
             .route("/v1/pairing/offers", post(create_pairing_offer))
             .route("/v1/sessions", get(list_sessions).post(create_session))
             .route("/v1/sessions/{session_id}", get(get_session))
@@ -238,12 +280,22 @@ impl ControlPlaneService {
             .route("/v1/bootstrap/claim", post(claim_bootstrap_device))
             .route("/v1/pairing/accept", post(accept_pairing_offer))
             .merge(protected)
+            .layer(build_cors_layer())
             .with_state(self)
     }
 
     async fn publish_event(&self, draft: TimelineEventDraft) -> types::TimelineEvent {
         let event = self.timeline.publish(draft).await;
-        let _ = self.persist_state().await;
+        let snapshot = PersistedControlPlaneState {
+            registry: self.registry.read().await.clone(),
+            timeline: self.timeline.snapshot().await,
+        };
+        let state_db_path = self.state_db_path.clone();
+        let event_to_persist = event.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            persist_control_plane_state(&state_db_path, &snapshot, Some(&event_to_persist))
+        })
+        .await;
         event
     }
 
@@ -253,9 +305,11 @@ impl ControlPlaneService {
             timeline: self.timeline.snapshot().await,
         };
         let state_db_path = self.state_db_path.clone();
-        tokio::task::spawn_blocking(move || persist_state_snapshot(&state_db_path, &snapshot))
-            .await
-            .context("control-plane snapshot task failed to join")??;
+        tokio::task::spawn_blocking(move || {
+            persist_control_plane_state(&state_db_path, &snapshot, None)
+        })
+        .await
+        .context("control-plane snapshot task failed to join")??;
         Ok(())
     }
 }
@@ -318,8 +372,10 @@ pub fn load_control_plane_config(
 
 #[must_use]
 pub fn describe_status(config: &ControlPlaneConfig) -> ControlPlaneStatus {
+    let issues = validate_control_plane_config(config);
     ControlPlaneStatus {
-        ok: true,
+        ok: issues.is_empty(),
+        issues,
         bind: config.bind.to_string(),
         public_base_url: config.public_base_url.clone(),
         service_name: config.service_name.clone(),
@@ -331,6 +387,55 @@ pub fn describe_status(config: &ControlPlaneConfig) -> ControlPlaneStatus {
         bootstrap_secret_configured: config.bootstrap_secret.is_some(),
         phase: PHASE,
     }
+}
+
+fn validate_control_plane_config(config: &ControlPlaneConfig) -> Vec<String> {
+    let mut issues = Vec::new();
+    let auth_configured = config.auth_token.is_some() || config.bootstrap_secret.is_some();
+    let public_url = config.public_base_url.as_deref();
+    let remote_public_url = public_url.filter(|url| !is_local_control_plane_url(url));
+
+    if !config.bind.ip().is_loopback() && !auth_configured {
+        issues.push(
+            "non-loopback control-plane binds require REMOTE_CODE_CONTROL_PLANE_AUTH_TOKEN or REMOTE_CODE_CONTROL_PLANE_BOOTSTRAP_SECRET".to_owned(),
+        );
+    }
+
+    if remote_public_url.is_some() && !auth_configured {
+        issues.push(
+            "remote public_base_url requires REMOTE_CODE_CONTROL_PLANE_AUTH_TOKEN or REMOTE_CODE_CONTROL_PLANE_BOOTSTRAP_SECRET".to_owned(),
+        );
+    }
+
+    if let Some(url) = remote_public_url
+        && !url.starts_with("https://")
+    {
+        issues.push("remote public_base_url must use https".to_owned());
+    }
+
+    issues
+}
+
+fn is_local_control_plane_url(raw: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(raw) else {
+        return false;
+    };
+
+    match parsed.host_str() {
+        Some("localhost") => true,
+        Some(host) => host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback()),
+        None => false,
+    }
+}
+
+fn build_cors_layer() -> CorsLayer {
+    CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers(Any)
+        .expose_headers([CONTENT_DISPOSITION, CONTENT_TYPE])
 }
 
 fn hash_secret_value(raw: &str) -> String {
@@ -461,6 +566,8 @@ fn load_persisted_state(state_db_path: &std::path::Path) -> Result<(Registry, Ti
     };
     let snapshot: PersistedControlPlaneState = serde_json::from_str(&payload)
         .with_context(|| format!("failed to decode {}", state_db_path.display()))?;
+    backfill_persisted_events(&connection, &snapshot.timeline)
+        .with_context(|| format!("failed to backfill events in {}", state_db_path.display()))?;
     Ok((
         snapshot.registry,
         TimelineStore::from_snapshot(
@@ -471,14 +578,16 @@ fn load_persisted_state(state_db_path: &std::path::Path) -> Result<(Registry, Ti
     ))
 }
 
-fn persist_state_snapshot(
+fn persist_control_plane_state(
     state_db_path: &std::path::Path,
     snapshot: &PersistedControlPlaneState,
+    event: Option<&TimelineEvent>,
 ) -> Result<()> {
-    let connection = open_state_connection(state_db_path)?;
+    let mut connection = open_state_connection(state_db_path)?;
+    let transaction = connection.transaction()?;
     let payload = serde_json::to_string(snapshot)
         .with_context(|| format!("failed to encode {}", state_db_path.display()))?;
-    connection
+    transaction
         .execute(
             "INSERT INTO control_plane_snapshot (id, payload, updated_at)
              VALUES (1, ?1, CURRENT_TIMESTAMP)
@@ -486,6 +595,16 @@ fn persist_state_snapshot(
             params![payload],
         )
         .with_context(|| format!("failed to persist {}", state_db_path.display()))?;
+    if let Some(event) = event {
+        persist_timeline_event(&transaction, event).with_context(|| {
+            format!(
+                "failed to persist event {} in {}",
+                event.sequence,
+                state_db_path.display()
+            )
+        })?;
+    }
+    transaction.commit()?;
     Ok(())
 }
 
@@ -497,9 +616,150 @@ fn open_state_connection(state_db_path: &std::path::Path) -> Result<Connection> 
             id INTEGER PRIMARY KEY CHECK (id = 1),
             payload TEXT NOT NULL,
             updated_at TEXT NOT NULL
-        );",
+        );
+        CREATE TABLE IF NOT EXISTS control_plane_events (
+            sequence INTEGER PRIMARY KEY,
+            recorded_at TEXT NOT NULL,
+            runner_id TEXT,
+            session_id TEXT,
+            kind TEXT NOT NULL,
+            is_approval INTEGER NOT NULL,
+            payload TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_control_plane_events_session_sequence
+            ON control_plane_events(session_id, sequence);
+        CREATE INDEX IF NOT EXISTS idx_control_plane_events_runner_sequence
+            ON control_plane_events(runner_id, sequence);
+        CREATE INDEX IF NOT EXISTS idx_control_plane_events_kind_sequence
+            ON control_plane_events(kind, sequence);
+        CREATE INDEX IF NOT EXISTS idx_control_plane_events_approval_sequence
+            ON control_plane_events(is_approval, sequence);",
     )?;
     Ok(connection)
+}
+
+fn persist_timeline_event(connection: &Connection, event: &TimelineEvent) -> Result<()> {
+    let payload = serde_json::to_string(event)?;
+    let kind = crate::helpers::event_kind(&event.detail);
+    connection.execute(
+        "INSERT OR IGNORE INTO control_plane_events (
+            sequence,
+            recorded_at,
+            runner_id,
+            session_id,
+            kind,
+            is_approval,
+            payload
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            i64::try_from(event.sequence)?,
+            event.recorded_at.to_rfc3339(),
+            event.runner_id.as_deref(),
+            event.session_id.map(|value| value.to_string()),
+            event_kind_name_for_detail(&event.detail),
+            i64::from(is_approval_kind(kind)),
+            payload,
+        ],
+    )?;
+    Ok(())
+}
+
+fn backfill_persisted_events(connection: &Connection, snapshot: &TimelineSnapshot) -> Result<()> {
+    for event in snapshot.history() {
+        persist_timeline_event(connection, event)?;
+    }
+    Ok(())
+}
+
+fn load_persisted_events(
+    state_db_path: &std::path::Path,
+    query: &PersistedEventQuery,
+) -> Result<Vec<TimelineEvent>> {
+    let connection = open_state_connection(state_db_path)?;
+    let mut params: Vec<SqlValue> = Vec::new();
+    let mut clauses = Vec::new();
+    if let Some(after) = query.after {
+        clauses.push("sequence > ?".to_owned());
+        params.push(SqlValue::Integer(i64::try_from(after)?));
+    }
+    if let Some(session_id) = query.session_id {
+        clauses.push("session_id = ?".to_owned());
+        params.push(SqlValue::Text(session_id.to_string()));
+    }
+    if let Some(runner_id) = query.runner_id.as_deref() {
+        clauses.push("runner_id = ?".to_owned());
+        params.push(SqlValue::Text(runner_id.to_owned()));
+    }
+    if let Some(kind) = query.kind {
+        clauses.push("kind = ?".to_owned());
+        params.push(SqlValue::Text(event_kind_name(kind).to_owned()));
+    }
+    if query.approvals_only {
+        clauses.push("is_approval = 1".to_owned());
+    }
+
+    let mut sql = String::from("SELECT payload FROM control_plane_events");
+    if !clauses.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&clauses.join(" AND "));
+    }
+    sql.push_str(" ORDER BY sequence DESC");
+
+    if let Some(limit) = query.limit {
+        sql.push_str(" LIMIT ?");
+        params.push(SqlValue::Integer(i64::try_from(
+            limit.clamp(1, MAX_EVENT_LIST_LIMIT),
+        )?));
+    }
+
+    let mut statement = connection.prepare(&sql)?;
+    let payloads = statement.query_map(params_from_iter(params), |row| row.get::<_, String>(0))?;
+    let mut events = Vec::new();
+    for payload in payloads {
+        let payload = payload?;
+        let event = serde_json::from_str::<TimelineEvent>(&payload)?;
+        events.push(event);
+    }
+    events.reverse();
+    Ok(events)
+}
+
+fn load_latest_persisted_event_sequence(
+    state_db_path: &std::path::Path,
+    query: &PersistedEventQuery,
+) -> Result<Option<u64>> {
+    let connection = open_state_connection(state_db_path)?;
+    let mut params: Vec<SqlValue> = Vec::new();
+    let mut clauses = Vec::new();
+    if let Some(session_id) = query.session_id {
+        clauses.push("session_id = ?".to_owned());
+        params.push(SqlValue::Text(session_id.to_string()));
+    }
+    if let Some(runner_id) = query.runner_id.as_deref() {
+        clauses.push("runner_id = ?".to_owned());
+        params.push(SqlValue::Text(runner_id.to_owned()));
+    }
+    if let Some(kind) = query.kind {
+        clauses.push("kind = ?".to_owned());
+        params.push(SqlValue::Text(event_kind_name(kind).to_owned()));
+    }
+    if query.approvals_only {
+        clauses.push("is_approval = 1".to_owned());
+    }
+
+    let mut sql = String::from("SELECT sequence FROM control_plane_events");
+    if !clauses.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&clauses.join(" AND "));
+    }
+    sql.push_str(" ORDER BY sequence DESC LIMIT 1");
+    let sequence = connection
+        .query_row(&sql, params_from_iter(params), |row| row.get::<_, i64>(0))
+        .optional()?;
+    sequence
+        .map(u64::try_from)
+        .transpose()
+        .context("persisted event sequence overflowed u64")
 }
 #[cfg(test)]
 mod tests {
@@ -524,7 +784,7 @@ mod tests {
         RunnerWorkspace, SessionState as RunnerSessionState, load_runner_config,
     };
     use reqwest::Client;
-    use serde::de::DeserializeOwned;
+    use serde::{Deserialize, de::DeserializeOwned};
     use tempfile::{TempDir, tempdir};
     use tokio::net::TcpListener;
     use tokio::task::JoinHandle;
@@ -544,6 +804,15 @@ mod tests {
         fn drop(&mut self) {
             self.server.abort();
         }
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ApiSessionView {
+        #[serde(flatten)]
+        session: SessionRecord,
+        owner_runner_available: bool,
+        owner_runner_state: Option<RunnerState>,
+        owner_runner_last_seen_at: Option<chrono::DateTime<Utc>>,
     }
 
     fn isolated_test_overrides() -> ControlPlaneConfigOverrides {
@@ -572,6 +841,47 @@ mod tests {
         assert_eq!(config.service_name, "rc-control");
         assert_eq!(config.runner_lease_ttl_secs, 45);
         assert!(config.artifact_root_dir.ends_with("control-plane"));
+        assert!(describe_status(&config).ok);
+    }
+
+    #[test]
+    fn remote_public_config_requires_auth() {
+        let profile = tempdir().expect("tempdir should exist");
+        let config = load_control_plane_config(ControlPlaneConfigOverrides {
+            bind: Some(SocketAddr::from_str("127.0.0.1:9898").expect("bind should parse")),
+            public_base_url: Some("https://remote.example.com".to_owned()),
+            profile_dir: Some(profile.path().join("profile")),
+            auth_token: None,
+            bootstrap_secret: None,
+            ..ControlPlaneConfigOverrides::default()
+        })
+        .expect("config should load");
+
+        let status = describe_status(&config);
+        assert!(!status.ok);
+        assert!(status.issues.iter().any(|issue| issue.contains("requires")));
+    }
+
+    #[test]
+    fn remote_public_config_requires_https() {
+        let profile = tempdir().expect("tempdir should exist");
+        let config = load_control_plane_config(ControlPlaneConfigOverrides {
+            bind: Some(SocketAddr::from_str("127.0.0.1:9898").expect("bind should parse")),
+            public_base_url: Some("http://remote.example.com".to_owned()),
+            profile_dir: Some(profile.path().join("profile")),
+            auth_token: Some("test-secret".to_owned()),
+            ..ControlPlaneConfigOverrides::default()
+        })
+        .expect("config should load");
+
+        let status = describe_status(&config);
+        assert!(!status.ok);
+        assert!(
+            status
+                .issues
+                .iter()
+                .any(|issue| issue.contains("must use https"))
+        );
     }
 
     #[tokio::test]
@@ -1322,6 +1632,173 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn session_views_report_owner_runner_availability() {
+        let service = ControlPlaneService::new(
+            load_control_plane_config(isolated_test_overrides()).expect("config should load"),
+            "0.1.0",
+        );
+        let app = service.clone().router();
+
+        let runner = spawn_runner_server("runner-availability", "default").await;
+        let register_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/runners/register")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&runner.registration).expect("request should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("register request should succeed");
+        assert_eq!(register_response.status(), StatusCode::OK);
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&CreateSessionRequest {
+                            session_id: None,
+                            workspace_id: "default".to_owned(),
+                            preferred_runner_id: Some("runner-availability".to_owned()),
+                            metadata: BTreeMap::new(),
+                        })
+                        .expect("request should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("create request should succeed");
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+        let session: SessionRecord = read_json(create_response).await;
+
+        {
+            let mut registry = service.registry.write().await;
+            let runner = registry
+                .runners
+                .get_mut("runner-availability")
+                .expect("runner should exist");
+            runner.last_seen_at = Utc::now() - chrono::Duration::seconds(120);
+            runner.state = RunnerState::Offline;
+        }
+
+        let session_response = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/v1/sessions/{}", session.session_id))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("session request should succeed");
+        assert_eq!(session_response.status(), StatusCode::OK);
+        let session_view: ApiSessionView = read_json(session_response).await;
+        assert_eq!(session_view.session.session_id, session.session_id);
+        assert!(!session_view.owner_runner_available);
+        assert_eq!(session_view.owner_runner_state, Some(RunnerState::Offline));
+        assert!(session_view.owner_runner_last_seen_at.is_some());
+
+        let list_response = app
+            .oneshot(
+                Request::get("/v1/sessions")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("list request should succeed");
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list: ListResponse<ApiSessionView> = read_json(list_response).await;
+        assert_eq!(list.items.len(), 1);
+        assert!(!list.items[0].owner_runner_available);
+    }
+
+    #[tokio::test]
+    async fn queued_session_commands_report_when_runner_is_unavailable() {
+        let service = ControlPlaneService::new(
+            load_control_plane_config(isolated_test_overrides()).expect("config should load"),
+            "0.1.0",
+        );
+        let app = service.clone().router();
+
+        let register_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/runners/register")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&RunnerRegistrationRequest {
+                            public_base_url: None,
+                            ..runner_registration(
+                                "runner-pull-unavailable",
+                                "default",
+                                "C:/workspace/pull",
+                            )
+                        })
+                        .expect("request should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("register request should succeed");
+        assert_eq!(register_response.status(), StatusCode::OK);
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&CreateSessionRequest {
+                            session_id: None,
+                            workspace_id: "default".to_owned(),
+                            preferred_runner_id: Some("runner-pull-unavailable".to_owned()),
+                            metadata: BTreeMap::new(),
+                        })
+                        .expect("request should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("create request should succeed");
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+        let session: SessionRecord = read_json(create_response).await;
+
+        {
+            let mut registry = service.registry.write().await;
+            let runner = registry
+                .runners
+                .get_mut("runner-pull-unavailable")
+                .expect("runner should exist");
+            runner.last_seen_at = Utc::now() - chrono::Duration::seconds(120);
+        }
+
+        let command_response = app
+            .oneshot(
+                Request::post(format!("/v1/sessions/{}/commands", session.session_id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&RunnerSessionCommandRequest::SendPrompt {
+                            content: "hello while offline".to_owned(),
+                        })
+                        .expect("request should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("command request should succeed");
+        assert_eq!(command_response.status(), StatusCode::OK);
+        let response: RunnerSessionCommandResponse = read_json(command_response).await;
+        assert!(response.accepted);
+        assert_eq!(
+            response.message,
+            "prompt queued; runner currently unavailable"
+        );
+    }
+
+    #[tokio::test]
     async fn heartbeat_updates_runner_state() {
         let service = ControlPlaneService::new(
             load_control_plane_config(isolated_test_overrides()).expect("config should load"),
@@ -1462,6 +1939,138 @@ mod tests {
             TimelineEventDetail::SessionCreated { .. }
         ));
         assert_eq!(events.items[2].session_id, Some(created_session.session_id));
+    }
+
+    #[tokio::test]
+    async fn session_events_survive_history_rollover_and_restart() {
+        let profile = tempdir().expect("tempdir should exist");
+        let profile_dir = profile.path().join("profile");
+        let service = ControlPlaneService::new(
+            load_control_plane_config(ControlPlaneConfigOverrides {
+                profile_dir: Some(profile_dir.clone()),
+                ..ControlPlaneConfigOverrides::default()
+            })
+            .expect("config should load"),
+            "0.1.0",
+        );
+        let app = service.clone().router();
+
+        let runner = spawn_runner_server("runner-rollover", "default").await;
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/runners/register")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&runner.registration).expect("json should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"workspace_id": "default"}).to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let session: SessionRecord = read_json(create_response).await;
+
+        let runtime_response = app
+            .clone()
+            .oneshot(
+                Request::post(format!("/v1/sessions/{}/events", session.session_id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "detail": {
+                                "kind": "message_committed",
+                                "role": "assistant",
+                                "text": "persist me through rollover"
+                            }
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("runtime event request should succeed");
+        assert_eq!(runtime_response.status(), StatusCode::CREATED);
+
+        for index in 0..(DEFAULT_EVENT_HISTORY_LIMIT + 64) {
+            let heartbeat = RunnerHeartbeat {
+                runner_id: "runner-rollover".to_owned(),
+                state: RunnerState::Busy,
+                active_sessions: 1,
+                queued_sessions: 0,
+                timestamp: Utc::now() + chrono::Duration::seconds(i64::from(index as i32)),
+            };
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::post("/v1/runners/runner-rollover/heartbeat")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&heartbeat).expect("json should serialize"),
+                        ))
+                        .expect("request should build"),
+                )
+                .await
+                .expect("heartbeat request should succeed");
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let snapshot = service.timeline.snapshot().await;
+        assert!(
+            !snapshot.history().any(|event| {
+                event.session_id == Some(session.session_id)
+                    && matches!(event.detail, TimelineEventDetail::MessageCommitted { .. })
+            }),
+            "session message should have rolled out of the in-memory timeline"
+        );
+
+        drop(app);
+
+        let restored = ControlPlaneService::new(
+            load_control_plane_config(ControlPlaneConfigOverrides {
+                profile_dir: Some(profile_dir),
+                ..ControlPlaneConfigOverrides::default()
+            })
+            .expect("config should load"),
+            "0.1.0",
+        );
+        let restored_app = restored.router();
+
+        let response = restored_app
+            .oneshot(
+                Request::get(format!(
+                    "/v1/sessions/{}/events?limit=20",
+                    session.session_id
+                ))
+                .body(Body::empty())
+                .expect("request should build"),
+            )
+            .await
+            .expect("session events request should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+        let events: ListResponse<TimelineEvent> = read_json(response).await;
+        assert!(
+            events.items.iter().any(|event| {
+                matches!(
+                    &event.detail,
+                    TimelineEventDetail::MessageCommitted { text, .. }
+                        if text == "persist me through rollover"
+                )
+            }),
+            "session events should still be queryable after restart"
+        );
     }
 
     #[tokio::test]

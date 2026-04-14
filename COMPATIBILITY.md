@@ -308,7 +308,7 @@ Compatibility objectives:
 
 - existing web and mobile clients should be able to migrate without a ground-up rewrite ✅
 - runner registration and session streaming semantics remain familiar ✅
-- approval and artifact flows map cleanly from the current `remote-hub` behavior ✅
+- approval and artifact flows map cleanly from the current remote control behavior ✅
 
 The API surface is allowed to become stricter and more explicit than the current TypeScript service as long as compatibility shims preserve expected workflows.
 

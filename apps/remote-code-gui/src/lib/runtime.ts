@@ -6,6 +6,7 @@ declare global {
 }
 
 const REMOTE_ACCESS_TOKEN_STORAGE_KEY = 'remote-code-control-plane-access-token';
+const REMOTE_ACTIVE_SESSION_STORAGE_KEY_PREFIX = 'remote-code-control-plane-active-session:';
 
 export function hasTauriRuntime(): boolean {
   return Boolean(window.__TAURI__ || window.__TAURI_INTERNALS__);
@@ -74,6 +75,44 @@ export function clearRemoteAccessToken(): void {
   }
 }
 
+export function resolveRemoteActiveSessionId(baseUrl: string | null): string | null {
+  const storageKey = buildRemoteActiveSessionStorageKey(baseUrl);
+  if (!storageKey) {
+    return null;
+  }
+  try {
+    return window.localStorage.getItem(storageKey)?.trim() ?? null;
+  } catch {
+    // Ignore storage access failures.
+    return null;
+  }
+}
+
+export function persistRemoteActiveSessionId(baseUrl: string | null, sessionId: string): void {
+  const storageKey = buildRemoteActiveSessionStorageKey(baseUrl);
+  const normalized = sessionId.trim();
+  if (!storageKey || !normalized) {
+    return;
+  }
+  try {
+    window.localStorage.setItem(storageKey, normalized);
+  } catch {
+    // Ignore storage access failures.
+  }
+}
+
+export function clearRemoteActiveSessionId(baseUrl: string | null): void {
+  const storageKey = buildRemoteActiveSessionStorageKey(baseUrl);
+  if (!storageKey) {
+    return;
+  }
+  try {
+    window.localStorage.removeItem(storageKey);
+  } catch {
+    // Ignore storage access failures.
+  }
+}
+
 export function resolveRemotePairingContext(): { offerId: string | null; pairingSecret: string | null } {
   const params = new URLSearchParams(window.location.search);
   return {
@@ -122,4 +161,15 @@ function normalizeBaseUrl(raw: string): string | null {
   } catch {
     return null;
   }
+}
+
+function buildRemoteActiveSessionStorageKey(baseUrl: string | null): string | null {
+  if (!baseUrl) {
+    return null;
+  }
+  const normalized = normalizeBaseUrl(baseUrl);
+  if (!normalized) {
+    return null;
+  }
+  return `${REMOTE_ACTIVE_SESSION_STORAGE_KEY_PREFIX}${normalized}`;
 }

@@ -27,7 +27,7 @@ pub(crate) const MAX_EVENT_LIST_LIMIT: usize = 200;
 pub(crate) const DEFAULT_PAIRING_TTL_SECS: u64 = 600;
 pub(crate) const MAX_PAIRING_TTL_SECS: u64 = 3600;
 pub(crate) const EVENT_STREAM_BUFFER: usize = 256;
-pub(crate) const PHASE: &str = "phase3-remote-skeleton";
+pub(crate) const PHASE: &str = "phase4-remote-beta";
 
 // ---------------------------------------------------------------------------
 // Public configuration types
@@ -107,6 +107,9 @@ pub struct ControlPlaneMeta {
 pub struct ControlPlaneStatus {
     /// Whether the configuration is valid.
     pub ok: bool,
+    /// Blocking issues that must be resolved before the service is considered safe to expose.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<String>,
     /// Bind address.
     pub bind: String,
     /// Public base URL.
@@ -230,6 +233,33 @@ pub struct PairingAcceptResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Push-token registration (mobile devices)
+// ---------------------------------------------------------------------------
+
+/// Push notification platform.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PushPlatform {
+    #[default]
+    Apns,
+    Fcm,
+}
+
+/// Request body for `POST /v1/devices/push-token`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PushTokenRegistrationRequest {
+    pub push_token: String,
+    #[serde(default)]
+    pub platform: PushPlatform,
+}
+
+/// Response body for `POST /v1/devices/push-token`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PushTokenRegistrationResponse {
+    pub registered: bool,
+}
+
+// ---------------------------------------------------------------------------
 // Runner pull-command types
 // ---------------------------------------------------------------------------
 
@@ -310,6 +340,19 @@ pub struct SessionRecord {
     pub metadata: BTreeMap<String, String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+/// Session payload exposed by the HTTP API with dynamic runner availability metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionView {
+    #[serde(flatten)]
+    pub session: SessionRecord,
+    #[serde(default)]
+    pub owner_runner_available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_runner_state: Option<RunnerState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_runner_last_seen_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

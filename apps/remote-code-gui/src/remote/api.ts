@@ -8,6 +8,8 @@ import type {
   RemoteListResponse,
   RemotePairingAcceptResponse,
   RemotePairingOfferCreateResponse,
+  RemotePushTokenRegistrationRequest,
+  RemotePushTokenRegistrationResponse,
   RemoteSessionRecord,
   RemoteTimelineEvent,
   RemoteTrustedDeviceRecord,
@@ -162,6 +164,20 @@ export async function respondToApproval(
         responder: 'remote-code-gui',
         note: note ?? null,
       }),
+    },
+  );
+}
+
+export async function registerPushToken(
+  baseUrl: string,
+  request: RemotePushTokenRegistrationRequest,
+): Promise<RemotePushTokenRegistrationResponse> {
+  return requestJson<RemotePushTokenRegistrationResponse>(
+    baseUrl,
+    '/v1/devices/push-token',
+    {
+      method: 'POST',
+      body: JSON.stringify(request),
     },
   );
 }

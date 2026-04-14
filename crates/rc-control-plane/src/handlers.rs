@@ -18,10 +18,10 @@ use rc_runner::{
 use uuid::Uuid;
 
 use crate::helpers::{
-    approval_event_matches, artifact_file_path, dispatch_session_command_to_runner,
-    dispatch_session_to_runner, event_matches_kind, relay_approval_decision_to_runner,
-    relay_approval_to_runner, runner_is_available, runner_uses_pull_commands,
-    session_state_from_runner, session_state_to_runner, update_runner_session_state,
+    artifact_file_path, dispatch_session_command_to_runner, dispatch_session_to_runner,
+    relay_approval_decision_to_runner, relay_approval_to_runner, runner_is_available,
+    runner_uses_pull_commands, session_state_from_runner, session_state_to_runner,
+    update_runner_session_state,
 };
 use crate::streams::{
     serve_approval_stream, serve_event_stream, serve_runner_approval_stream,
@@ -29,18 +29,56 @@ use crate::streams::{
 };
 use crate::types::{
     ApiError, ArtifactCreateRequest, ArtifactRecord, BootstrapClaimRequest, BootstrapClaimResponse,
-    ControlPlaneHealth, ControlPlaneMeta, CreateSessionRequest, EventStreamQuery,
-    ListSessionsQuery, PairingAcceptRequest, PairingAcceptResponse, PairingOfferCreateRequest,
-    PairingOfferCreateResponse, RecentEventsQuery, RunnerCommandPullQuery,
+    ControlPlaneHealth, ControlPlaneMeta, CreateSessionRequest, DEFAULT_EVENT_LIST_LIMIT,
+    EventStreamQuery, ListSessionsQuery, PairingAcceptRequest, PairingAcceptResponse,
+    PairingOfferCreateRequest, PairingOfferCreateResponse, PushTokenRegistrationRequest,
+    PushTokenRegistrationResponse, RecentEventsQuery, RunnerCommandPullQuery,
     RunnerCommandPullResponse, RunnerQueuedCommandBody, RunnerRegistrationResponse,
     RuntimeEventCreateRequest, RuntimeEventDetail, SessionRecord, SessionStateUpdateRequest,
-    TimelineEvent, TimelineEventDetail, TimelineEventDraft, TrustedDeviceRecord,
+    SessionView, TimelineEvent, TimelineEventDetail, TimelineEventDraft, TrustedDeviceRecord,
 };
-use crate::{AuthPrincipal, ControlPlaneService};
+use crate::{AuthPrincipal, ControlPlaneService, PersistedEventQuery};
 
 // ---------------------------------------------------------------------------
 // Health / meta
 // ---------------------------------------------------------------------------
+
+fn build_session_view(
+    service: &ControlPlaneService,
+    registry: &crate::registry::Registry,
+    session: SessionRecord,
+) -> SessionView {
+    let (owner_runner_available, owner_runner_state, owner_runner_last_seen_at) = session
+        .owner_runner_id
+        .as_deref()
+        .and_then(|runner_id| registry.runners.get(runner_id))
+        .map(|runner| {
+            (
+                runner_is_available(runner, service.runner_lease_ttl_secs),
+                Some(runner.state),
+                Some(runner.last_seen_at),
+            )
+        })
+        .unwrap_or((false, None, None));
+
+    SessionView {
+        session,
+        owner_runner_available,
+        owner_runner_state,
+        owner_runner_last_seen_at,
+    }
+}
+
+fn build_session_views(
+    service: &ControlPlaneService,
+    registry: &crate::registry::Registry,
+    sessions: Vec<SessionRecord>,
+) -> Vec<SessionView> {
+    sessions
+        .into_iter()
+        .map(|session| build_session_view(service, registry, session))
+        .collect()
+}
 
 pub(crate) async fn get_health(
     State(service): State<ControlPlaneService>,
@@ -159,20 +197,27 @@ pub(crate) async fn accept_pairing_offer(
 pub(crate) async fn list_recent_events(
     State(service): State<ControlPlaneService>,
     Query(query): Query<RecentEventsQuery>,
-) -> Json<ListResponse<TimelineEvent>> {
+) -> Result<Json<ListResponse<TimelineEvent>>, ApiError> {
     let latest_sequence = service
-        .timeline
-        .latest_filtered(|event| event_matches_kind(event, query.kind))
-        .await;
-    Json(ListResponse {
-        items: service
-            .timeline
-            .recent_filtered(query.after, query.limit, |event| {
-                event_matches_kind(event, query.kind)
-            })
-            .await,
+        .latest_persisted_event_sequence(PersistedEventQuery {
+            kind: query.kind,
+            ..PersistedEventQuery::default()
+        })
+        .await
+        .map_err(|error| ApiError::internal(format!("failed to read persisted events: {error}")))?;
+    let items = service
+        .list_persisted_events(PersistedEventQuery {
+            after: query.after,
+            limit: Some(query.limit.unwrap_or(DEFAULT_EVENT_LIST_LIMIT)),
+            kind: query.kind,
+            ..PersistedEventQuery::default()
+        })
+        .await
+        .map_err(|error| ApiError::internal(format!("failed to read persisted events: {error}")))?;
+    Ok(Json(ListResponse {
+        items,
         latest_sequence,
-    })
+    }))
 }
 
 pub(crate) async fn list_session_events(
@@ -189,18 +234,26 @@ pub(crate) async fn list_session_events(
         }
     }
     let latest_sequence = service
-        .timeline
-        .latest_filtered(|event| {
-            event.session_id == Some(session_id) && event_matches_kind(event, query.kind)
+        .latest_persisted_event_sequence(PersistedEventQuery {
+            kind: query.kind,
+            session_id: Some(session_id),
+            ..PersistedEventQuery::default()
         })
         .await;
+    let latest_sequence = latest_sequence
+        .map_err(|error| ApiError::internal(format!("failed to read session events: {error}")))?;
+    let items = service
+        .list_persisted_events(PersistedEventQuery {
+            after: query.after,
+            limit: Some(query.limit.unwrap_or(DEFAULT_EVENT_LIST_LIMIT)),
+            kind: query.kind,
+            session_id: Some(session_id),
+            ..PersistedEventQuery::default()
+        })
+        .await
+        .map_err(|error| ApiError::internal(format!("failed to read session events: {error}")))?;
     Ok(Json(ListResponse {
-        items: service
-            .timeline
-            .recent_filtered(query.after, query.limit, |event| {
-                event.session_id == Some(session_id) && event_matches_kind(event, query.kind)
-            })
-            .await,
+        items,
         latest_sequence,
     }))
 }
@@ -219,20 +272,26 @@ pub(crate) async fn list_runner_events(
         }
     }
     let latest_sequence = service
-        .timeline
-        .latest_filtered(|event| {
-            event.runner_id.as_deref() == Some(runner_id.as_str())
-                && event_matches_kind(event, query.kind)
+        .latest_persisted_event_sequence(PersistedEventQuery {
+            kind: query.kind,
+            runner_id: Some(runner_id.clone()),
+            ..PersistedEventQuery::default()
         })
         .await;
+    let latest_sequence = latest_sequence
+        .map_err(|error| ApiError::internal(format!("failed to read runner events: {error}")))?;
+    let items = service
+        .list_persisted_events(PersistedEventQuery {
+            after: query.after,
+            limit: Some(query.limit.unwrap_or(DEFAULT_EVENT_LIST_LIMIT)),
+            kind: query.kind,
+            runner_id: Some(runner_id),
+            ..PersistedEventQuery::default()
+        })
+        .await
+        .map_err(|error| ApiError::internal(format!("failed to read runner events: {error}")))?;
     Ok(Json(ListResponse {
-        items: service
-            .timeline
-            .recent_filtered(query.after, query.limit, |event| {
-                event.runner_id.as_deref() == Some(runner_id.as_str())
-                    && event_matches_kind(event, query.kind)
-            })
-            .await,
+        items,
         latest_sequence,
     }))
 }
@@ -248,10 +307,20 @@ pub(crate) async fn subscribe_events(
 ) -> Response {
     let subscription = service.timeline.subscribe();
     let backlog = if query.after.is_some() {
-        service
-            .timeline
-            .replay_filtered(query.after, |event| event_matches_kind(event, query.kind))
+        match service
+            .list_persisted_events(PersistedEventQuery {
+                after: query.after,
+                kind: query.kind,
+                ..PersistedEventQuery::default()
+            })
             .await
+        {
+            Ok(backlog) => backlog,
+            Err(error) => {
+                return ApiError::internal(format!("failed to replay persisted events: {error}"))
+                    .into_response();
+            }
+        }
     } else {
         Vec::new()
     };
@@ -276,12 +345,23 @@ pub(crate) async fn subscribe_session_events(
     }
     let subscription = service.timeline.subscribe();
     let backlog = if query.after.is_some() {
-        service
-            .timeline
-            .replay_filtered(query.after, |event| {
-                event.session_id == Some(session_id) && event_matches_kind(event, query.kind)
+        match service
+            .list_persisted_events(PersistedEventQuery {
+                after: query.after,
+                kind: query.kind,
+                session_id: Some(session_id),
+                ..PersistedEventQuery::default()
             })
             .await
+        {
+            Ok(backlog) => backlog,
+            Err(error) => {
+                return ApiError::internal(format!(
+                    "failed to replay persisted session events: {error}"
+                ))
+                .into_response();
+            }
+        }
     } else {
         Vec::new()
     };
@@ -298,13 +378,23 @@ pub(crate) async fn subscribe_runner_events(
 ) -> Response {
     let subscription = service.timeline.subscribe();
     let backlog = if query.after.is_some() {
-        service
-            .timeline
-            .replay_filtered(query.after, |event| {
-                event.runner_id.as_deref() == Some(runner_id.as_str())
-                    && event_matches_kind(event, query.kind)
+        match service
+            .list_persisted_events(PersistedEventQuery {
+                after: query.after,
+                kind: query.kind,
+                runner_id: Some(runner_id.clone()),
+                ..PersistedEventQuery::default()
             })
             .await
+        {
+            Ok(backlog) => backlog,
+            Err(error) => {
+                return ApiError::internal(format!(
+                    "failed to replay persisted runner events: {error}"
+                ))
+                .into_response();
+            }
+        }
     } else {
         Vec::new()
     };
@@ -320,12 +410,23 @@ pub(crate) async fn subscribe_approvals(
 ) -> Response {
     let subscription = service.timeline.subscribe();
     let backlog = if query.after.is_some() {
-        service
-            .timeline
-            .replay_filtered(query.after, |event| {
-                approval_event_matches(event, query.kind)
+        match service
+            .list_persisted_events(PersistedEventQuery {
+                after: query.after,
+                kind: query.kind,
+                approvals_only: true,
+                ..PersistedEventQuery::default()
             })
             .await
+        {
+            Ok(backlog) => backlog,
+            Err(error) => {
+                return ApiError::internal(format!(
+                    "failed to replay persisted approval events: {error}"
+                ))
+                .into_response();
+            }
+        }
     } else {
         Vec::new()
     };
@@ -354,12 +455,13 @@ pub(crate) async fn list_runner_approvals(
     let items = registry.list_runner_approvals(&runner_id)?;
     drop(registry);
     let latest_sequence = service
-        .timeline
-        .latest_filtered(|event| {
-            event.runner_id.as_deref() == Some(runner_id.as_str())
-                && approval_event_matches(event, None)
+        .latest_persisted_event_sequence(PersistedEventQuery {
+            runner_id: Some(runner_id.clone()),
+            approvals_only: true,
+            ..PersistedEventQuery::default()
         })
-        .await;
+        .await
+        .map_err(|error| ApiError::internal(format!("failed to read runner approvals: {error}")))?;
     Ok(Json(ListResponse {
         items,
         latest_sequence,
@@ -374,13 +476,24 @@ pub(crate) async fn subscribe_runner_approvals(
 ) -> Response {
     let subscription = service.timeline.subscribe();
     let backlog = if query.after.is_some() {
-        service
-            .timeline
-            .replay_filtered(query.after, |event| {
-                event.runner_id.as_deref() == Some(runner_id.as_str())
-                    && approval_event_matches(event, query.kind)
+        match service
+            .list_persisted_events(PersistedEventQuery {
+                after: query.after,
+                kind: query.kind,
+                runner_id: Some(runner_id.clone()),
+                approvals_only: true,
+                ..PersistedEventQuery::default()
             })
             .await
+        {
+            Ok(backlog) => backlog,
+            Err(error) => {
+                return ApiError::internal(format!(
+                    "failed to replay persisted runner approvals: {error}"
+                ))
+                .into_response();
+            }
+        }
     } else {
         Vec::new()
     };
@@ -407,12 +520,24 @@ pub(crate) async fn subscribe_session_approvals(
     }
     let subscription = service.timeline.subscribe();
     let backlog = if query.after.is_some() {
-        service
-            .timeline
-            .replay_filtered(query.after, |event| {
-                event.session_id == Some(session_id) && approval_event_matches(event, query.kind)
+        match service
+            .list_persisted_events(PersistedEventQuery {
+                after: query.after,
+                kind: query.kind,
+                session_id: Some(session_id),
+                approvals_only: true,
+                ..PersistedEventQuery::default()
             })
             .await
+        {
+            Ok(backlog) => backlog,
+            Err(error) => {
+                return ApiError::internal(format!(
+                    "failed to replay persisted session approvals: {error}"
+                ))
+                .into_response();
+            }
+        }
     } else {
         Vec::new()
     };
@@ -520,10 +645,10 @@ pub(crate) async fn pull_runner_commands(
 pub(crate) async fn list_sessions(
     State(service): State<ControlPlaneService>,
     Query(query): Query<ListSessionsQuery>,
-) -> Json<ListResponse<SessionRecord>> {
+) -> Json<ListResponse<SessionView>> {
     let registry = service.registry.read().await;
     Json(ListResponse {
-        items: registry.list_sessions_filtered(&query),
+        items: build_session_views(&service, &registry, registry.list_sessions_filtered(&query)),
         latest_sequence: None,
     })
 }
@@ -531,16 +656,20 @@ pub(crate) async fn list_sessions(
 pub(crate) async fn get_session(
     State(service): State<ControlPlaneService>,
     AxumPath(session_id): AxumPath<Uuid>,
-) -> Result<Json<SessionRecord>, ApiError> {
+) -> Result<Json<SessionView>, ApiError> {
     let registry = service.registry.read().await;
-    Ok(Json(registry.get_session(session_id)?))
+    Ok(Json(build_session_view(
+        &service,
+        &registry,
+        registry.get_session(session_id)?,
+    )))
 }
 
 pub(crate) async fn list_runner_sessions(
     State(service): State<ControlPlaneService>,
     AxumPath(runner_id): AxumPath<String>,
     Query(mut query): Query<ListSessionsQuery>,
-) -> Result<Json<ListResponse<SessionRecord>>, ApiError> {
+) -> Result<Json<ListResponse<SessionView>>, ApiError> {
     let registry = service.registry.read().await;
     if !registry.runners.contains_key(&runner_id) {
         return Err(ApiError::not_found(format!(
@@ -549,7 +678,7 @@ pub(crate) async fn list_runner_sessions(
     }
     query.runner_id = Some(runner_id);
     Ok(Json(ListResponse {
-        items: registry.list_sessions_filtered(&query),
+        items: build_session_views(&service, &registry, registry.list_sessions_filtered(&query)),
         latest_sequence: None,
     }))
 }
@@ -569,7 +698,7 @@ pub(crate) async fn update_session_state(
     State(service): State<ControlPlaneService>,
     AxumPath(session_id): AxumPath<Uuid>,
     Json(request): Json<SessionStateUpdateRequest>,
-) -> Result<Json<SessionRecord>, ApiError> {
+) -> Result<Json<SessionView>, ApiError> {
     let existing = {
         let registry = service.registry.read().await;
         registry.get_session(session_id)?
@@ -645,7 +774,8 @@ pub(crate) async fn update_session_state(
             },
         })
         .await;
-    Ok(Json(updated))
+    let registry = service.registry.read().await;
+    Ok(Json(build_session_view(&service, &registry, updated)))
 }
 
 pub(crate) async fn post_session_command(
@@ -673,6 +803,7 @@ pub(crate) async fn post_session_command(
             })?
     };
     if runner_uses_pull_commands(&runner) {
+        let runner_available = runner_is_available(&runner, service.runner_lease_ttl_secs);
         {
             let mut registry = service.registry.write().await;
             registry.enqueue_runner_command(
@@ -684,9 +815,19 @@ pub(crate) async fn post_session_command(
             )?;
         }
         let _ = service.persist_state().await;
-        let message = match request {
-            RunnerSessionCommandRequest::SendPrompt { .. } => "prompt queued for runner delivery",
-            RunnerSessionCommandRequest::Interrupt => "interrupt queued for runner delivery",
+        let message = match (request, runner_available) {
+            (RunnerSessionCommandRequest::SendPrompt { .. }, true) => {
+                "prompt queued for runner delivery"
+            }
+            (RunnerSessionCommandRequest::Interrupt, true) => {
+                "interrupt queued for runner delivery"
+            }
+            (RunnerSessionCommandRequest::SendPrompt { .. }, false) => {
+                "prompt queued; runner currently unavailable"
+            }
+            (RunnerSessionCommandRequest::Interrupt, false) => {
+                "interrupt queued; runner currently unavailable"
+            }
         };
         return Ok(Json(RunnerSessionCommandResponse {
             session_id,
@@ -706,11 +847,15 @@ pub(crate) async fn list_session_approvals(
     let items = registry.list_session_approvals(session_id)?;
     drop(registry);
     let latest_sequence = service
-        .timeline
-        .latest_filtered(|event| {
-            event.session_id == Some(session_id) && approval_event_matches(event, None)
+        .latest_persisted_event_sequence(PersistedEventQuery {
+            session_id: Some(session_id),
+            approvals_only: true,
+            ..PersistedEventQuery::default()
         })
-        .await;
+        .await
+        .map_err(|error| {
+            ApiError::internal(format!("failed to read session approvals: {error}"))
+        })?;
     Ok(Json(ListResponse {
         items,
         latest_sequence,
@@ -731,7 +876,7 @@ pub(crate) async fn list_session_artifacts(
 pub(crate) async fn create_session(
     State(service): State<ControlPlaneService>,
     Json(request): Json<CreateSessionRequest>,
-) -> Result<(StatusCode, Json<SessionRecord>), ApiError> {
+) -> Result<(StatusCode, Json<SessionView>), ApiError> {
     let planned = {
         let registry = service.registry.read().await;
         registry.plan_session(&request, service.runner_lease_ttl_secs)?
@@ -774,7 +919,11 @@ pub(crate) async fn create_session(
             },
         })
         .await;
-    Ok((StatusCode::CREATED, Json(record)))
+    let registry = service.registry.read().await;
+    Ok((
+        StatusCode::CREATED,
+        Json(build_session_view(&service, &registry, record)),
+    ))
 }
 
 pub(crate) async fn create_session_runtime_event(
@@ -895,9 +1044,13 @@ pub(crate) async fn list_approvals(
     let items = registry.list_approvals();
     drop(registry);
     let latest_sequence = service
-        .timeline
-        .latest_filtered(|event| approval_event_matches(event, None))
-        .await;
+        .latest_persisted_event_sequence(PersistedEventQuery {
+            approvals_only: true,
+            ..PersistedEventQuery::default()
+        })
+        .await
+        .ok()
+        .flatten();
     Json(ListResponse {
         items,
         latest_sequence,
@@ -1291,4 +1444,34 @@ fn require_non_empty_runtime_field(field: &str, value: &str) -> Result<(), ApiEr
         )));
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Push-token registration (mobile devices)
+// ---------------------------------------------------------------------------
+
+pub(crate) async fn register_push_token(
+    State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
+    Json(body): Json<PushTokenRegistrationRequest>,
+) -> Result<Json<PushTokenRegistrationResponse>, ApiError> {
+    if body.push_token.trim().is_empty() {
+        return Err(ApiError::bad_request(
+            "push_token cannot be empty".to_owned(),
+        ));
+    }
+    let device_id = principal
+        .created_by_device_id()
+        .ok_or_else(|| ApiError::unauthorized("no device identity".to_owned()))?;
+
+    let mut registry = service.registry.write().await;
+    let _is_new = registry.register_push_token(device_id, body)?;
+    drop(registry);
+
+    service
+        .persist_state()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    Ok(Json(PushTokenRegistrationResponse { registered: true }))
 }

@@ -1,0 +1,69 @@
+import { vi } from 'vitest';
+import { useAppStore } from '../stores/useAppStore';
+
+type StoreState = ReturnType<typeof useAppStore.getState>;
+
+const initialState = useAppStore.getState();
+
+export function resetAppStore(overrides: Partial<StoreState> = {}): StoreState {
+  const nextState: StoreState = {
+    ...initialState,
+    initialised: true,
+    initError: null,
+    listenersRegistered: true,
+    provider: null,
+    runtimeStatus: null,
+    projects: [],
+    activeProjectPath: null,
+    sessions: [],
+    archivedSessions: [],
+    sessionsLoading: false,
+    activeSessionId: null,
+    conversation: [],
+    conversationLoading: false,
+    sending: false,
+    sendError: null,
+    lastPromptResult: null,
+    liveToolProgress: [],
+    liveToolResults: [],
+    sessionTasks: {},
+    batchProgressBySession: {},
+    contextUsageBySession: {},
+    contextOverflowBySession: {},
+    contextCompactionBySession: {},
+    streamingText: '',
+    runningSessionIds: new Set<string>(),
+    settings: null,
+    settingsLoading: false,
+    providerConfigs: null,
+    pendingPermission: null,
+    init: vi.fn().mockResolvedValue(undefined),
+    refreshSessions: vi.fn().mockResolvedValue(undefined),
+    loadArchivedSessions: vi.fn().mockResolvedValue(undefined),
+    selectSession: vi.fn().mockResolvedValue(undefined),
+    createSession: vi.fn().mockResolvedValue('session-new'),
+    archiveSession: vi.fn().mockResolvedValue(undefined),
+    restoreSession: vi.fn().mockResolvedValue(undefined),
+    sendMessage: vi.fn().mockResolvedValue(undefined),
+    cancelPrompt: vi.fn().mockResolvedValue(undefined),
+    refreshProviderInfo: vi.fn().mockResolvedValue(undefined),
+    refreshRuntimeStatus: vi.fn().mockResolvedValue(undefined),
+    refreshProjects: vi.fn().mockResolvedValue(undefined),
+    addProject: vi.fn().mockResolvedValue(undefined),
+    removeProject: vi.fn().mockResolvedValue(undefined),
+    setActiveProject: vi.fn(),
+    loadSettings: vi.fn().mockResolvedValue(undefined),
+    updateSettings: vi.fn().mockResolvedValue(undefined),
+    pickFolderAndAddProject: vi.fn().mockResolvedValue(undefined),
+    loadProviderConfigs: vi.fn().mockResolvedValue(undefined),
+    saveProviderConfig: vi.fn().mockResolvedValue(undefined),
+    deleteProviderConfig: vi.fn().mockResolvedValue(undefined),
+    setActiveProvider: vi.fn().mockResolvedValue(undefined),
+    switchProfile: vi.fn().mockResolvedValue(undefined),
+    resolvePermission: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+
+  useAppStore.setState(nextState, true);
+  return nextState;
+}

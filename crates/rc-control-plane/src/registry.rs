@@ -19,8 +19,8 @@ use crate::helpers::{
 };
 use crate::types::{
     ApiError, ArtifactCreateRequest, ArtifactRecord, BootstrapClaimRequest, CreateSessionRequest,
-    DEFAULT_EVENT_LIST_LIMIT, DEFAULT_PAIRING_TTL_SECS, DeviceKind, ListSessionsQuery,
-    MAX_EVENT_LIST_LIMIT, MAX_PAIRING_TTL_SECS, PairingAcceptRequest, PairingOfferCreateRequest,
+    DEFAULT_PAIRING_TTL_SECS, DeviceKind, ListSessionsQuery, MAX_PAIRING_TTL_SECS,
+    PairingAcceptRequest, PairingOfferCreateRequest, PushPlatform, PushTokenRegistrationRequest,
     RunnerQueuedCommand, RunnerQueuedCommandBody, SessionRecord, SessionState,
     SessionStateTransition, TimelineEvent, TimelineEventDraft, TrustedDeviceRecord,
 };
@@ -43,6 +43,19 @@ pub(crate) struct Registry {
     pub(crate) owner_device_id: Option<Uuid>,
     #[serde(default)]
     pub(crate) queued_runner_commands: BTreeMap<String, VecDeque<RunnerQueuedCommand>>,
+    /// Push tokens keyed by device_id for sending push notifications.
+    #[serde(default)]
+    pub(crate) push_tokens: BTreeMap<Uuid, StoredPushToken>,
+}
+
+/// Stored push notification token for a trusted device.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StoredPushToken {
+    pub(crate) device_id: Uuid,
+    pub(crate) push_token: String,
+    pub(crate) platform: PushPlatform,
+    pub(crate) registered_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,6 +142,13 @@ pub(crate) struct TimelineSnapshot {
     history: VecDeque<TimelineEvent>,
 }
 
+impl TimelineSnapshot {
+    /// Return an iterator over the historical timeline events.
+    pub(crate) fn history(&self) -> impl Iterator<Item = &TimelineEvent> {
+        self.history.iter()
+    }
+}
+
 impl TimelineStore {
     pub(crate) fn new(history_limit: usize, buffer: usize) -> Self {
         let (tx, _) = broadcast::channel(buffer.max(1));
@@ -178,63 +198,6 @@ impl TimelineStore {
         };
         let _ = self.tx.send(event.clone());
         event
-    }
-
-    pub(crate) async fn recent_filtered<F>(
-        &self,
-        after: Option<u64>,
-        limit: Option<usize>,
-        filter: F,
-    ) -> Vec<TimelineEvent>
-    where
-        F: Fn(&TimelineEvent) -> bool,
-    {
-        let limit = limit
-            .unwrap_or(DEFAULT_EVENT_LIST_LIMIT)
-            .clamp(1, MAX_EVENT_LIST_LIMIT);
-        let timeline = self.inner.lock().await;
-        let mut events = timeline
-            .history
-            .iter()
-            .filter(|event| after.is_none_or(|sequence| event.sequence > sequence))
-            .filter(|event| filter(event))
-            .cloned()
-            .collect::<Vec<_>>();
-        if events.len() > limit {
-            events.drain(..events.len() - limit);
-        }
-        events
-    }
-
-    pub(crate) async fn replay_filtered<F>(
-        &self,
-        after: Option<u64>,
-        filter: F,
-    ) -> Vec<TimelineEvent>
-    where
-        F: Fn(&TimelineEvent) -> bool,
-    {
-        let timeline = self.inner.lock().await;
-        timeline
-            .history
-            .iter()
-            .filter(|event| after.is_none_or(|sequence| event.sequence > sequence))
-            .filter(|event| filter(event))
-            .cloned()
-            .collect()
-    }
-
-    pub(crate) async fn latest_filtered<F>(&self, filter: F) -> Option<u64>
-    where
-        F: Fn(&TimelineEvent) -> bool,
-    {
-        let timeline = self.inner.lock().await;
-        timeline
-            .history
-            .iter()
-            .rev()
-            .find(|event| filter(event))
-            .map(|event| event.sequence)
     }
 
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<TimelineEvent> {
@@ -1087,5 +1050,41 @@ impl Registry {
             self.queued_runner_commands.remove(runner_id);
         }
         Ok(commands)
+    }
+
+    /// Remove push token for a device (cascade on device removal).
+    #[allow(dead_code)]
+    pub(crate) fn remove_push_token(&mut self, device_id: Uuid) {
+        self.push_tokens.remove(&device_id);
+    }
+
+    /// Register or update a push notification token for a trusted device.
+    pub(crate) fn register_push_token(
+        &mut self,
+        device_id: Uuid,
+        request: PushTokenRegistrationRequest,
+    ) -> Result<bool, ApiError> {
+        if !self.trusted_devices.contains_key(&device_id) {
+            return Err(ApiError::not_found(format!(
+                "device `{device_id}` is not a trusted device"
+            )));
+        }
+        let now = Utc::now();
+        let is_new = !self.push_tokens.contains_key(&device_id);
+        self.push_tokens.insert(
+            device_id,
+            StoredPushToken {
+                device_id,
+                push_token: request.push_token,
+                platform: request.platform,
+                registered_at: self
+                    .push_tokens
+                    .get(&device_id)
+                    .map(|t| t.registered_at)
+                    .unwrap_or(now),
+                updated_at: now,
+            },
+        );
+        Ok(is_new)
     }
 }

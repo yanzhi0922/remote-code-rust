@@ -424,8 +424,7 @@ pub fn load_provider_config(
             !matches!(value.to_ascii_lowercase().as_str(), "0" | "false" | "no")
         });
     let request_header_overrides = build_request_header_overrides(session_id);
-
-    Ok(ProviderConfig {
+    let mut provider = ProviderConfig {
         name: provider_name,
         base_url: normalized_base_url,
         api_key: overrides
@@ -445,7 +444,51 @@ pub fn load_provider_config(
         respect_retry_after,
         request_header_overrides,
         thinking_budget: settings.thinking_budget,
-    })
+    };
+    let discovered = discover_env_providers();
+    let keep_explicit_protocol = explicit_protocol.is_some() || provider.base_url.is_some();
+    hydrate_provider_from_discovered(&mut provider, &discovered, keep_explicit_protocol);
+    Ok(provider)
+}
+
+fn hydrate_provider_from_discovered(
+    provider: &mut ProviderConfig,
+    discovered: &[ProviderConfig],
+    keep_explicit_protocol: bool,
+) {
+    let matching = discovered
+        .iter()
+        .find(|candidate| candidate.name == provider.name)
+        .or_else(|| {
+            if provider.name == "custom"
+                && provider.base_url.is_none()
+                && provider.api_key.is_none()
+                && provider.model.is_none()
+                && discovered.len() == 1
+            {
+                discovered.first()
+            } else {
+                None
+            }
+        });
+    let Some(candidate) = matching else {
+        return;
+    };
+    if provider.name == "custom" {
+        provider.name = candidate.name.clone();
+    }
+    if provider.base_url.is_none() {
+        provider.base_url = candidate.base_url.clone();
+    }
+    if provider.api_key.is_none() {
+        provider.api_key = candidate.api_key.clone();
+    }
+    if provider.model.is_none() {
+        provider.model = candidate.model.clone();
+    }
+    if !keep_explicit_protocol {
+        provider.protocol = candidate.protocol;
+    }
 }
 
 #[must_use]
@@ -1208,8 +1251,10 @@ mod tests {
     use std::fs;
 
     use super::{
-        discover_minimax_token_plan_provider, load_hooks_file, load_settings_hooks,
-        normalize_base_url, normalize_protocol,
+        ProviderConfig, default_provider_max_retries, default_provider_respect_retry_after,
+        default_provider_retry_initial_backoff_ms, default_provider_retry_max_backoff_ms,
+        discover_minimax_token_plan_provider, hydrate_provider_from_discovered, load_hooks_file,
+        load_settings_hooks, normalize_base_url, normalize_protocol,
     };
     use rc_core::HookEvent;
     use rc_core::ProviderProtocol;
@@ -1335,5 +1380,95 @@ mod tests {
             Some("https://api.minimaxi.com/anthropic/v1/messages")
         );
         assert_eq!(provider.model.as_deref(), Some("minimax-m2.7"));
+    }
+
+    #[test]
+    fn discovered_provider_hydrates_named_runtime_provider() {
+        let mut provider = ProviderConfig {
+            name: "glm-coding".to_owned(),
+            base_url: None,
+            api_key: None,
+            model: None,
+            protocol: ProviderProtocol::OpenAi,
+            timeout_ms: 600_000,
+            max_output_tokens: 4_096,
+            max_retries: default_provider_max_retries(),
+            retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+            retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+            respect_retry_after: default_provider_respect_retry_after(),
+            request_header_overrides: BTreeMap::new(),
+            thinking_budget: None,
+        };
+        let discovered = vec![ProviderConfig {
+            name: "glm-coding".to_owned(),
+            base_url: Some("https://open.bigmodel.cn/api/anthropic/v1/messages".to_owned()),
+            api_key: Some("secret".to_owned()),
+            model: Some("glm-5.1".to_owned()),
+            protocol: ProviderProtocol::Anthropic,
+            timeout_ms: 600_000,
+            max_output_tokens: 8_192,
+            max_retries: default_provider_max_retries(),
+            retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+            retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+            respect_retry_after: default_provider_respect_retry_after(),
+            request_header_overrides: BTreeMap::new(),
+            thinking_budget: None,
+        }];
+
+        hydrate_provider_from_discovered(&mut provider, &discovered, false);
+
+        assert_eq!(provider.name, "glm-coding");
+        assert_eq!(
+            provider.base_url.as_deref(),
+            Some("https://open.bigmodel.cn/api/anthropic/v1/messages")
+        );
+        assert_eq!(provider.api_key.as_deref(), Some("secret"));
+        assert_eq!(provider.model.as_deref(), Some("glm-5.1"));
+        assert_eq!(provider.protocol, ProviderProtocol::Anthropic);
+    }
+
+    #[test]
+    fn discovered_provider_can_replace_empty_custom_provider_when_only_one_exists() {
+        let mut provider = ProviderConfig {
+            name: "custom".to_owned(),
+            base_url: None,
+            api_key: None,
+            model: None,
+            protocol: ProviderProtocol::OpenAi,
+            timeout_ms: 600_000,
+            max_output_tokens: 4_096,
+            max_retries: default_provider_max_retries(),
+            retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+            retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+            respect_retry_after: default_provider_respect_retry_after(),
+            request_header_overrides: BTreeMap::new(),
+            thinking_budget: None,
+        };
+        let discovered = vec![ProviderConfig {
+            name: "minimax-token-plan".to_owned(),
+            base_url: Some("https://api.minimaxi.com/anthropic/v1/messages".to_owned()),
+            api_key: Some("secret".to_owned()),
+            model: Some("minimax-m2.7".to_owned()),
+            protocol: ProviderProtocol::Anthropic,
+            timeout_ms: 600_000,
+            max_output_tokens: 8_192,
+            max_retries: default_provider_max_retries(),
+            retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+            retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+            respect_retry_after: default_provider_respect_retry_after(),
+            request_header_overrides: BTreeMap::new(),
+            thinking_budget: None,
+        }];
+
+        hydrate_provider_from_discovered(&mut provider, &discovered, false);
+
+        assert_eq!(provider.name, "minimax-token-plan");
+        assert_eq!(
+            provider.base_url.as_deref(),
+            Some("https://api.minimaxi.com/anthropic/v1/messages")
+        );
+        assert_eq!(provider.api_key.as_deref(), Some("secret"));
+        assert_eq!(provider.model.as_deref(), Some("minimax-m2.7"));
+        assert_eq!(provider.protocol, ProviderProtocol::Anthropic);
     }
 }

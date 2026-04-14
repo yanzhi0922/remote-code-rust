@@ -325,3 +325,124 @@ pub fn dispatch(input: &str, context: SlashCommandContext<'_>) -> SlashCommandAc
     }
     SlashCommandAction::Continue
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
+    use rc_core::{InputFormat, OutputFormat, PermissionMode};
+    use rc_permissions::StaticPermissionBroker;
+    use rc_provider::cost::CostTracker;
+    use rc_session::SessionStore;
+    use tempfile::tempdir;
+
+    fn build_test_config() -> (RuntimeConfig, SessionStore) {
+        let temp = tempdir().expect("tempdir should work");
+        let root = temp.keep();
+        let config = load_runtime_config(
+            Some(root.clone()),
+            Some(root.join(".remote-code-rust")),
+            None,
+            PermissionMode::Default,
+            InputFormat::Text,
+            OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            8,
+            ProviderOverrides {
+                provider: Some("glm-coding".to_owned()),
+                base_url: Some("https://open.bigmodel.cn/api/anthropic".to_owned()),
+                api_key: Some("secret".to_owned()),
+                model: Some("glm-5.1".to_owned()),
+                protocol: Some(rc_core::ProviderProtocol::Anthropic),
+            },
+            RuntimeOverrides::default(),
+        )
+        .expect("config should load");
+        let store = SessionStore::open(config.paths.clone()).expect("store should open");
+        (config, store)
+    }
+
+    #[test]
+    fn command_names_expose_management_surfaces() {
+        let names = command_names();
+        assert!(names.contains(&"/help".to_owned()));
+        assert!(names.contains(&"/permissions".to_owned()));
+        assert!(names.contains(&"/tasks".to_owned()));
+        assert!(names.contains(&"/plugins".to_owned()));
+        assert!(names.contains(&"/skills".to_owned()));
+        assert!(names.contains(&"/quit".to_owned()));
+    }
+
+    #[test]
+    fn clear_command_preserves_system_prompt_and_resets_scroll() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(PermissionMode::Default);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![
+            ConversationEntry::system("system prompt"),
+            ConversationEntry::user("hello"),
+            ConversationEntry::assistant("world"),
+        ];
+
+        let action = dispatch(
+            "/clear",
+            SlashCommandContext {
+                config: &config,
+                store: &store,
+                conversation: &mut conversation,
+                context_manager: &context_manager,
+                cost_tracker: &cost_tracker,
+                broker: &broker,
+                theme: &mut theme,
+            },
+        );
+
+        assert!(matches!(action, SlashCommandAction::ResetScroll));
+        assert_eq!(conversation.len(), 1);
+        assert!(matches!(conversation[0].role, ConversationRole::System));
+    }
+
+    #[test]
+    fn theme_command_switches_theme_and_quit_returns_quit_action() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(PermissionMode::Default);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let action = dispatch(
+            "/theme solarized",
+            SlashCommandContext {
+                config: &config,
+                store: &store,
+                conversation: &mut conversation,
+                context_manager: &context_manager,
+                cost_tracker: &cost_tracker,
+                broker: &broker,
+                theme: &mut theme,
+            },
+        );
+        assert!(matches!(action, SlashCommandAction::Continue));
+        assert_eq!(theme.name, "solarized");
+
+        let quit_action = dispatch(
+            "/quit",
+            SlashCommandContext {
+                config: &config,
+                store: &store,
+                conversation: &mut conversation,
+                context_manager: &context_manager,
+                cost_tracker: &cost_tracker,
+                broker: &broker,
+                theme: &mut theme,
+            },
+        );
+        assert!(matches!(quit_action, SlashCommandAction::Quit));
+    }
+}

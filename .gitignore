@@ -34,3 +34,6 @@ key_for_test.txt
 
 # Node.js (GUI sub-project)
 node_modules/
+.playwright-cli/
+.research/
+output/

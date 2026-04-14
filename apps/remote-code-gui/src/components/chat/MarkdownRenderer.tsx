@@ -77,20 +77,24 @@ export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
       );
     },
     code: ({ className, children, ...props }) => {
+      // `react-markdown` can surface a `ref` typed from a sibling React install
+      // when this renderer is reused across package boundaries. Drop it so the
+      // shared remote UI remains buildable in both the GUI and mobile app.
+      const { ref: _ref, ...safeProps } = props as typeof props & { ref?: unknown };
       const match = /language-(\w+)/.exec(className || '');
       const isInline = !match && !className;
       if (isInline) {
         return (
           <code
             className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-800"
-            {...props}
+            {...safeProps}
           >
             {children}
           </code>
         );
       }
       return (
-        <code className={className} {...props}>
+        <code className={className} {...safeProps}>
           {children}
         </code>
       );

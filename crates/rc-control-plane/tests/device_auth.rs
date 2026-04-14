@@ -1,9 +1,13 @@
 use axum::body::Body;
-use axum::http::{Request, StatusCode, header::AUTHORIZATION};
+use axum::http::{
+    Method, Request, StatusCode,
+    header::{ACCESS_CONTROL_REQUEST_METHOD, AUTHORIZATION, ORIGIN},
+};
 use rc_control_plane::{
     BootstrapClaimRequest, BootstrapClaimResponse, ControlPlaneConfig, ControlPlaneHealth,
     ControlPlaneService, PairingAcceptRequest, PairingAcceptResponse, PairingOfferCreateRequest,
-    PairingOfferCreateResponse, TrustedDeviceRecord,
+    PairingOfferCreateResponse, PushTokenRegistrationRequest, PushTokenRegistrationResponse,
+    TrustedDeviceRecord,
 };
 use rc_runner::ListResponse;
 use serde::de::DeserializeOwned;
@@ -201,4 +205,139 @@ async fn pairing_offer_accept_adds_second_device_and_persists_across_restart() {
             .iter()
             .any(|device| device.name == "Travel phone")
     );
+}
+
+#[tokio::test]
+async fn cors_preflight_allows_cross_origin_browser_and_mobile_clients() {
+    let app = ControlPlaneService::new(test_config(), "test-version").router();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::OPTIONS)
+                .uri("/v1/devices")
+                .header(ORIGIN, "capacitor://localhost")
+                .header(ACCESS_CONTROL_REQUEST_METHOD, "GET")
+                .body(Body::empty())
+                .expect("request should build"),
+        )
+        .await
+        .expect("preflight should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .expect("allow origin header should exist"),
+        "*"
+    );
+}
+
+#[tokio::test]
+async fn push_token_registration_succeeds_for_authenticated_device() {
+    let app = ControlPlaneService::new(test_config(), "test-version").router();
+
+    // Bootstrap a device first
+    let bootstrap_response = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/bootstrap/claim")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&BootstrapClaimRequest {
+                        bootstrap_secret: "bootstrap-secret".to_owned(),
+                        device_name: "Mobile phone".to_owned(),
+                        device_kind: rc_control_plane::DeviceKind::Cli,
+                    })
+                    .expect("request should serialize"),
+                ))
+                .expect("request should build"),
+        )
+        .await
+        .expect("bootstrap request should succeed");
+    let bootstrap: BootstrapClaimResponse = read_json(bootstrap_response).await;
+    let token = bootstrap.access_token;
+
+    // Register push token without auth → should fail
+    let unauthorized = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/devices/push-token")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&PushTokenRegistrationRequest {
+                        push_token: "fcm-test-token-123".to_owned(),
+                        platform: rc_control_plane::PushPlatform::Fcm,
+                    })
+                    .expect("request should serialize"),
+                ))
+                .expect("request should build"),
+        )
+        .await
+        .expect("request should complete");
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    // Register push token with auth → should succeed
+    let register_response = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/devices/push-token")
+                .header("content-type", "application/json")
+                .header(AUTHORIZATION, format!("Bearer {}", token))
+                .body(Body::from(
+                    serde_json::to_vec(&PushTokenRegistrationRequest {
+                        push_token: "fcm-test-token-123".to_owned(),
+                        platform: rc_control_plane::PushPlatform::Fcm,
+                    })
+                    .expect("request should serialize"),
+                ))
+                .expect("request should build"),
+        )
+        .await
+        .expect("push token request should succeed");
+    assert_eq!(register_response.status(), StatusCode::OK);
+    let result: PushTokenRegistrationResponse = read_json(register_response).await;
+    assert!(result.registered);
+
+    // Register with empty token → should fail
+    let empty_response = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/devices/push-token")
+                .header("content-type", "application/json")
+                .header(AUTHORIZATION, format!("Bearer {}", token))
+                .body(Body::from(
+                    serde_json::to_vec(&PushTokenRegistrationRequest {
+                        push_token: "  ".to_owned(),
+                        platform: rc_control_plane::PushPlatform::Apns,
+                    })
+                    .expect("request should serialize"),
+                ))
+                .expect("request should build"),
+        )
+        .await
+        .expect("empty token request should complete");
+    assert_eq!(empty_response.status(), StatusCode::BAD_REQUEST);
+
+    // Update with a new token → should succeed
+    let update_response = app
+        .oneshot(
+            Request::post("/v1/devices/push-token")
+                .header("content-type", "application/json")
+                .header(AUTHORIZATION, format!("Bearer {}", token))
+                .body(Body::from(
+                    serde_json::to_vec(&PushTokenRegistrationRequest {
+                        push_token: "apns-updated-token-456".to_owned(),
+                        platform: rc_control_plane::PushPlatform::Apns,
+                    })
+                    .expect("request should serialize"),
+                ))
+                .expect("request should build"),
+        )
+        .await
+        .expect("push token update should succeed");
+    assert_eq!(update_response.status(), StatusCode::OK);
+    let update_result: PushTokenRegistrationResponse = read_json(update_response).await;
+    assert!(update_result.registered);
 }

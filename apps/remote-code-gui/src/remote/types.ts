@@ -63,6 +63,9 @@ export interface RemoteSessionRecord {
   session_id: string;
   workspace_id: string;
   owner_runner_id: string | null;
+  owner_runner_available?: boolean;
+  owner_runner_state?: RemoteRunnerState | null;
+  owner_runner_last_seen_at?: string | null;
   state: RemoteSessionState;
   metadata: Record<string, string>;
   created_at: string;
@@ -210,4 +213,19 @@ export interface RemoteCommandResponse {
   session_id: string;
   accepted: boolean;
   message: string;
+}
+
+// ---------------------------------------------------------------------------
+// Push token registration (mobile devices)
+// ---------------------------------------------------------------------------
+
+export type RemotePushPlatform = 'apns' | 'fcm';
+
+export interface RemotePushTokenRegistrationRequest {
+  push_token: string;
+  platform?: RemotePushPlatform;
+}
+
+export interface RemotePushTokenRegistrationResponse {
+  registered: boolean;
 }

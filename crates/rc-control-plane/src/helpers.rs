@@ -44,6 +44,37 @@ pub(crate) fn event_kind(detail: &TimelineEventDetail) -> TimelineEventKind {
     }
 }
 
+pub(crate) fn event_kind_name(kind: TimelineEventKind) -> &'static str {
+    match kind {
+        TimelineEventKind::RunnerRegistered => "runner_registered",
+        TimelineEventKind::RunnerHeartbeat => "runner_heartbeat",
+        TimelineEventKind::SessionCreated => "session_created",
+        TimelineEventKind::SessionStateChanged => "session_state_changed",
+        TimelineEventKind::ApprovalRequested => "approval_requested",
+        TimelineEventKind::ApprovalResolved => "approval_resolved",
+        TimelineEventKind::ArtifactCreated => "artifact_created",
+        TimelineEventKind::MessageDelta => "message_delta",
+        TimelineEventKind::MessageCommitted => "message_committed",
+        TimelineEventKind::ToolStarted => "tool_started",
+        TimelineEventKind::ToolProgress => "tool_progress",
+        TimelineEventKind::ToolFinished => "tool_finished",
+        TimelineEventKind::ArtifactManifest => "artifact_manifest",
+        TimelineEventKind::RuntimeError => "runtime_error",
+        TimelineEventKind::DaemonPresenceChanged => "daemon_presence_changed",
+    }
+}
+
+pub(crate) fn event_kind_name_for_detail(detail: &TimelineEventDetail) -> &'static str {
+    event_kind_name(event_kind(detail))
+}
+
+pub(crate) fn is_approval_kind(kind: TimelineEventKind) -> bool {
+    matches!(
+        kind,
+        TimelineEventKind::ApprovalRequested | TimelineEventKind::ApprovalResolved
+    )
+}
+
 pub(crate) fn event_matches_kind(event: &TimelineEvent, kind: Option<TimelineEventKind>) -> bool {
     kind.is_none_or(|kind| event_kind(&event.detail) == kind)
 }

@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 use rc_control_plane::{
     ControlPlaneConfigOverrides, ControlPlaneService, describe_status, load_control_plane_config,
@@ -66,6 +66,10 @@ async fn main() -> Result<()> {
             serde_json::to_string_pretty(&describe_status(&config))?
         ),
         Command::Serve => {
+            let status = describe_status(&config);
+            if !status.ok {
+                bail!(status.issues.join("; "));
+            }
             let bind = config.bind;
             let app = ControlPlaneService::new(config, env!("CARGO_PKG_VERSION")).router();
             let listener = tokio::net::TcpListener::bind(bind).await?;

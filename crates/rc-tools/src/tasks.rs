@@ -510,214 +510,6 @@ pub fn task_update(input: &Value) -> Result<String> {
     .to_string())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn task_create_and_get_work() {
-        let create_result = task_create(&json!({"title": "Test task"}));
-        assert!(create_result.is_ok(), "create failed: {:?}", create_result);
-
-        let create_str = create_result.expect("create should work");
-        let create_json: Value = serde_json::from_str(&create_str).expect("should be valid JSON");
-        let task_id = create_json["id"].as_str().expect("should have id");
-
-        let get_result = task_get(&json!({"id": task_id}));
-        assert!(get_result.is_ok(), "get failed: {:?}", get_result);
-
-        let get_str = get_result.expect("get should work");
-        let task: BackgroundTask = serde_json::from_str(&get_str).expect("should parse task");
-        assert_eq!(task.title, "Test task");
-        assert_eq!(task.status.as_str(), "pending");
-        assert!(task.output_path.is_none());
-        assert_eq!(task.kind.as_str(), "background");
-    }
-
-    #[test]
-    fn task_update_changes_status() {
-        let create_str = task_create(&json!({"title": "Update test"})).expect("create should work");
-        let create_json: Value = serde_json::from_str(&create_str).expect("should be valid JSON");
-        let task_id = create_json["id"].as_str().expect("should have id");
-
-        let update_result = task_update(&json!({
-            "id": task_id,
-            "status": "running",
-            "output": "in progress"
-        }));
-        assert!(update_result.is_ok(), "update failed: {:?}", update_result);
-
-        let get_str = task_get(&json!({"id": task_id})).expect("get should work");
-        let task: BackgroundTask = serde_json::from_str(&get_str).expect("should parse task");
-        assert_eq!(task.status.as_str(), "running");
-        assert_eq!(task.output, "in progress");
-    }
-
-    #[test]
-    fn tracked_task_records_tree_metadata() {
-        let task = start_tracked_task(
-            "delegation-root".to_owned(),
-            "Fix delegation",
-            Some("parent-1".to_owned()),
-            2,
-            TaskKind::Delegation,
-            Some("started"),
-        )
-        .expect("tracked task");
-
-        assert_eq!(task.parent_task_id.as_deref(), Some("parent-1"));
-        assert_eq!(task.depth, 2);
-        assert_eq!(task.kind.as_str(), "delegation");
-        assert_eq!(task.summary, "started");
-    }
-
-    #[test]
-    fn task_stop_marks_stopped() {
-        let create_str = task_create(&json!({"title": "Stop test"})).expect("create should work");
-        let create_json: Value = serde_json::from_str(&create_str).expect("should be valid JSON");
-        let task_id = create_json["id"].as_str().expect("should have id");
-
-        let stop_result = task_stop(&json!({"id": task_id}));
-        assert!(stop_result.is_ok(), "stop failed: {:?}", stop_result);
-
-        let get_str = task_get(&json!({"id": task_id})).expect("get should work");
-        let task: BackgroundTask = serde_json::from_str(&get_str).expect("should parse task");
-        assert_eq!(task.status.as_str(), "stopped");
-    }
-
-    #[test]
-    fn task_list_returns_tasks() {
-        let _ = task_create(&json!({"title": "List test"}));
-
-        let list_result = task_list(&json!({}));
-        assert!(list_result.is_ok(), "list failed: {:?}", list_result);
-
-        let list_str = list_result.expect("list should work");
-        assert!(
-            !list_str.contains("No tasks found"),
-            "should have at least one task"
-        );
-    }
-
-    #[test]
-    fn task_get_missing_returns_error() {
-        let result = task_get(&json!({"id": "nonexistent"}));
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn ui_task_snapshot_exports_task_tree_fields() {
-        let task_id = allocate_task_id();
-        start_tracked_task(
-            task_id.clone(),
-            "Snapshot task",
-            Some("parent-x".to_owned()),
-            1,
-            TaskKind::Delegation,
-            Some("working"),
-        )
-        .expect("tracked task");
-
-        let tasks = ui_task_snapshots();
-        let task = tasks
-            .into_iter()
-            .find(|task| task.id == task_id)
-            .expect("snapshot should contain task");
-        assert_eq!(task.parent_task_id.as_deref(), Some("parent-x"));
-        assert_eq!(task.depth, 1);
-    }
-
-    #[test]
-    fn configure_output_dir_persists_task_output() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        configure_task_output_dir(Some(tempdir.path().to_path_buf())).expect("configure output");
-
-        let create_str =
-            task_create(&json!({"title": "Persist output test"})).expect("create should work");
-        let create_json: Value = serde_json::from_str(&create_str).expect("valid JSON");
-        let task_id = create_json["id"].as_str().expect("task id");
-        task_update(&json!({
-            "id": task_id,
-            "status": "completed",
-            "output": "done"
-        }))
-        .expect("update should work");
-
-        let get_str = task_get(&json!({"id": task_id})).expect("get should work");
-        let task: BackgroundTask = serde_json::from_str(&get_str).expect("parse task");
-        assert!(task.output_path.is_some());
-        assert!(tempdir.path().join(format!("{task_id}.json")).exists());
-    }
-
-    #[test]
-    fn load_persisted_tasks_reads_metadata_and_output() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let task_id = allocate_task_id();
-        crate::task_output::persist_task(
-            tempdir.path(),
-            &BackgroundTask {
-                id: task_id.clone(),
-                parent_task_id: None,
-                depth: 0,
-                kind: TaskKind::Delegation,
-                title: "Persisted task".to_owned(),
-                status: TaskStatus::Completed,
-                summary: "done".to_owned(),
-                output: "captured output".to_owned(),
-                output_path: None,
-                turns_used: Some(2),
-                created_at: "1".to_owned(),
-                updated_at: "2".to_owned(),
-            },
-        )
-        .expect("persist task");
-
-        let loaded = load_persisted_tasks(tempdir.path()).expect("load persisted tasks");
-        let loaded_task = loaded
-            .into_iter()
-            .find(|candidate| candidate.id == task_id)
-            .expect("persisted task should exist");
-        assert_eq!(loaded_task.summary, "done");
-        assert_eq!(loaded_task.output, "captured output");
-    }
-
-    #[test]
-    fn load_persisted_ui_task_snapshots_projects_task_tree() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let task_id = allocate_task_id();
-        crate::task_output::persist_task(
-            tempdir.path(),
-            &BackgroundTask {
-                id: task_id.clone(),
-                parent_task_id: Some("parent-task".to_owned()),
-                depth: 2,
-                kind: TaskKind::Batch,
-                title: "UI task".to_owned(),
-                status: TaskStatus::Completed,
-                summary: "done".to_owned(),
-                output: "batch output".to_owned(),
-                output_path: None,
-                turns_used: Some(4),
-                created_at: "1".to_owned(),
-                updated_at: "2".to_owned(),
-            },
-        )
-        .expect("persist task");
-
-        let snapshots =
-            load_persisted_ui_task_snapshots(tempdir.path()).expect("load persisted ui snapshots");
-        let snapshot = snapshots
-            .into_iter()
-            .find(|candidate| candidate.id == task_id)
-            .expect("persisted UI task should exist");
-        assert_eq!(snapshot.parent_task_id.as_deref(), Some("parent-task"));
-        assert_eq!(snapshot.depth, 2);
-        assert_eq!(snapshot.summary, "done");
-        assert_eq!(snapshot.turns_used, Some(4));
-    }
-}
-
 fn persist_task_if_configured(task_id: &str) -> Result<()> {
     let output_dir = TASK_OUTPUT_DIR
         .lock()
@@ -750,4 +542,244 @@ fn persist_existing_task(task: &mut BackgroundTask) -> Result<()> {
     let persisted_path = task_output::persist_task(&output_dir, task)?;
     task.output_path = persisted_path.map(|path| path.display().to_string());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use once_cell::sync::Lazy;
+    use serde_json::json;
+    use std::sync::{Mutex, MutexGuard};
+
+    static TEST_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+    fn reset_test_state() {
+        TASK_STORE
+            .lock()
+            .expect("task store lock should work in tests")
+            .clear();
+        *TASK_OUTPUT_DIR
+            .lock()
+            .expect("task output dir lock should work in tests") = None;
+    }
+
+    fn test_guard() -> MutexGuard<'static, ()> {
+        let guard = TEST_GUARD
+            .lock()
+            .expect("test guard lock should work in tests");
+        reset_test_state();
+        guard
+    }
+
+    #[test]
+    fn task_create_and_get_work() {
+        let _guard = test_guard();
+        let create_result = task_create(&json!({"title": "Test task"}));
+        assert!(create_result.is_ok(), "create failed: {:?}", create_result);
+
+        let create_str = create_result.expect("create should work");
+        let create_json: Value = serde_json::from_str(&create_str).expect("should be valid JSON");
+        let task_id = create_json["id"].as_str().expect("should have id");
+
+        let get_result = task_get(&json!({"id": task_id}));
+        assert!(get_result.is_ok(), "get failed: {:?}", get_result);
+
+        let get_str = get_result.expect("get should work");
+        let task: BackgroundTask = serde_json::from_str(&get_str).expect("should parse task");
+        assert_eq!(task.title, "Test task");
+        assert_eq!(task.status.as_str(), "pending");
+        assert!(task.output_path.is_none());
+        assert_eq!(task.kind.as_str(), "background");
+    }
+
+    #[test]
+    fn task_update_changes_status() {
+        let _guard = test_guard();
+        let create_str = task_create(&json!({"title": "Update test"})).expect("create should work");
+        let create_json: Value = serde_json::from_str(&create_str).expect("should be valid JSON");
+        let task_id = create_json["id"].as_str().expect("should have id");
+
+        let update_result = task_update(&json!({
+            "id": task_id,
+            "status": "running",
+            "output": "in progress"
+        }));
+        assert!(update_result.is_ok(), "update failed: {:?}", update_result);
+
+        let get_str = task_get(&json!({"id": task_id})).expect("get should work");
+        let task: BackgroundTask = serde_json::from_str(&get_str).expect("should parse task");
+        assert_eq!(task.status.as_str(), "running");
+        assert_eq!(task.output, "in progress");
+    }
+
+    #[test]
+    fn tracked_task_records_tree_metadata() {
+        let _guard = test_guard();
+        let task = start_tracked_task(
+            "delegation-root".to_owned(),
+            "Fix delegation",
+            Some("parent-1".to_owned()),
+            2,
+            TaskKind::Delegation,
+            Some("started"),
+        )
+        .expect("tracked task");
+
+        assert_eq!(task.parent_task_id.as_deref(), Some("parent-1"));
+        assert_eq!(task.depth, 2);
+        assert_eq!(task.kind.as_str(), "delegation");
+        assert_eq!(task.summary, "started");
+    }
+
+    #[test]
+    fn task_stop_marks_stopped() {
+        let _guard = test_guard();
+        let create_str = task_create(&json!({"title": "Stop test"})).expect("create should work");
+        let create_json: Value = serde_json::from_str(&create_str).expect("should be valid JSON");
+        let task_id = create_json["id"].as_str().expect("should have id");
+
+        let stop_result = task_stop(&json!({"id": task_id}));
+        assert!(stop_result.is_ok(), "stop failed: {:?}", stop_result);
+
+        let get_str = task_get(&json!({"id": task_id})).expect("get should work");
+        let task: BackgroundTask = serde_json::from_str(&get_str).expect("should parse task");
+        assert_eq!(task.status.as_str(), "stopped");
+    }
+
+    #[test]
+    fn task_list_returns_tasks() {
+        let _guard = test_guard();
+        let _ = task_create(&json!({"title": "List test"}));
+
+        let list_result = task_list(&json!({}));
+        assert!(list_result.is_ok(), "list failed: {:?}", list_result);
+
+        let list_str = list_result.expect("list should work");
+        assert!(
+            !list_str.contains("No tasks found"),
+            "should have at least one task"
+        );
+    }
+
+    #[test]
+    fn task_get_missing_returns_error() {
+        let _guard = test_guard();
+        let result = task_get(&json!({"id": "nonexistent"}));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn ui_task_snapshot_exports_task_tree_fields() {
+        let _guard = test_guard();
+        let task_id = allocate_task_id();
+        start_tracked_task(
+            task_id.clone(),
+            "Snapshot task",
+            Some("parent-x".to_owned()),
+            1,
+            TaskKind::Delegation,
+            Some("working"),
+        )
+        .expect("tracked task");
+
+        let tasks = ui_task_snapshots();
+        let task = tasks
+            .into_iter()
+            .find(|task| task.id == task_id)
+            .expect("snapshot should contain task");
+        assert_eq!(task.parent_task_id.as_deref(), Some("parent-x"));
+        assert_eq!(task.depth, 1);
+    }
+
+    #[test]
+    fn configure_output_dir_persists_task_output() {
+        let _guard = test_guard();
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        configure_task_output_dir(Some(tempdir.path().to_path_buf())).expect("configure output");
+
+        let create_str =
+            task_create(&json!({"title": "Persist output test"})).expect("create should work");
+        let create_json: Value = serde_json::from_str(&create_str).expect("valid JSON");
+        let task_id = create_json["id"].as_str().expect("task id");
+        task_update(&json!({
+            "id": task_id,
+            "status": "completed",
+            "output": "done"
+        }))
+        .expect("update should work");
+
+        let get_str = task_get(&json!({"id": task_id})).expect("get should work");
+        let task: BackgroundTask = serde_json::from_str(&get_str).expect("parse task");
+        assert!(task.output_path.is_some());
+        assert!(tempdir.path().join(format!("{task_id}.json")).exists());
+    }
+
+    #[test]
+    fn load_persisted_tasks_reads_metadata_and_output() {
+        let _guard = test_guard();
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let task_id = allocate_task_id();
+        crate::task_output::persist_task(
+            tempdir.path(),
+            &BackgroundTask {
+                id: task_id.clone(),
+                parent_task_id: None,
+                depth: 0,
+                kind: TaskKind::Delegation,
+                title: "Persisted task".to_owned(),
+                status: TaskStatus::Completed,
+                summary: "done".to_owned(),
+                output: "captured output".to_owned(),
+                output_path: None,
+                turns_used: Some(2),
+                created_at: "1".to_owned(),
+                updated_at: "2".to_owned(),
+            },
+        )
+        .expect("persist task");
+
+        let loaded = load_persisted_tasks(tempdir.path()).expect("load persisted tasks");
+        let loaded_task = loaded
+            .into_iter()
+            .find(|candidate| candidate.id == task_id)
+            .expect("persisted task should exist");
+        assert_eq!(loaded_task.summary, "done");
+        assert_eq!(loaded_task.output, "captured output");
+    }
+
+    #[test]
+    fn load_persisted_ui_task_snapshots_projects_task_tree() {
+        let _guard = test_guard();
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let task_id = allocate_task_id();
+        crate::task_output::persist_task(
+            tempdir.path(),
+            &BackgroundTask {
+                id: task_id.clone(),
+                parent_task_id: Some("parent-task".to_owned()),
+                depth: 2,
+                kind: TaskKind::Batch,
+                title: "UI task".to_owned(),
+                status: TaskStatus::Completed,
+                summary: "done".to_owned(),
+                output: "batch output".to_owned(),
+                output_path: None,
+                turns_used: Some(4),
+                created_at: "1".to_owned(),
+                updated_at: "2".to_owned(),
+            },
+        )
+        .expect("persist task");
+
+        let snapshots =
+            load_persisted_ui_task_snapshots(tempdir.path()).expect("load persisted ui snapshots");
+        let snapshot = snapshots
+            .into_iter()
+            .find(|candidate| candidate.id == task_id)
+            .expect("persisted UI task should exist");
+        assert_eq!(snapshot.parent_task_id.as_deref(), Some("parent-task"));
+        assert_eq!(snapshot.depth, 2);
+        assert_eq!(snapshot.summary, "done");
+        assert_eq!(snapshot.turns_used, Some(4));
+    }
 }

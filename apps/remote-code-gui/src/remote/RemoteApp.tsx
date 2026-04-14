@@ -1,12 +1,10 @@
+import * as Dialog from '@radix-ui/react-dialog';
 import {
   AlertTriangle,
   Bot,
-  Download,
   FileOutput,
   LoaderCircle,
-  Menu,
   MessageSquareText,
-  RotateCcw,
   Shield,
   Square,
   Wifi,
@@ -23,81 +21,87 @@ import {
   useMemo,
   useRef,
   useState,
-  type ReactNode,
 } from 'react';
 import {
+  clearRemoteActiveSessionId,
   clearRemoteAccessToken,
+  persistRemoteActiveSessionId,
   persistRemoteAccessToken,
+  resolveRemoteActiveSessionId,
   resolveRemoteAccessToken,
   resolveRemoteBaseUrl,
   resolveRemotePairingContext,
   stripRemoteSensitiveQueryParams,
 } from '../lib/runtime';
-import { cn, truncateMiddle } from '../lib/utils';
+import { ApprovalPanel } from '../components/shared/ApprovalPanel';
+import { ArtifactPanel } from '../components/shared/ArtifactPanel';
+import { formatBytes } from '../components/shared/formatBytes';
+import { TimelineEventCard } from '../components/shared/TimelineEventCard';
+import { TimelineMessageCard } from '../components/shared/TimelineMessageCard';
 import {
   acceptPairingOffer,
   buildArtifactDownloadUrl,
-  buildSessionEventsStreamUrl,
   bootstrapControlPlane,
   getControlPlaneHealth,
   interruptSession,
   listSessionApprovals,
   listSessionArtifacts,
-  listSessionEvents,
   listSessions,
   respondToApproval,
   sendPrompt,
 } from './api';
+import {
+  formatRemoteRelativeTime,
+  getRemoteCopy,
+  resolveRemoteLocale,
+  type RemoteConnectionState,
+} from './i18n';
+import {
+  appendRemoteTimelineEvent,
+} from '../session/normalize/fromRemote';
+import { RemoteAuthGate } from './RemoteAuthGate';
+import { RemoteShell, EmptyCard } from './RemoteShell';
+import { loadRemoteSessionBundle, subscribeToRemoteSessionEvents } from './transport';
 import type {
   RemoteApprovalDecision,
   RemoteApprovalRecord,
   RemoteArtifactRecord,
   RemoteControlPlaneHealth,
-  RemoteMessageRole,
   RemoteSessionRecord,
-  RemoteSessionState,
   RemoteTimelineEvent,
   RemoteTimelineEventDetail,
 } from './types';
 
-type ConnectionState = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'error';
+type ConnectionState = RemoteConnectionState;
 
 const LazyMarkdownRenderer = lazy(() => import('../components/chat/MarkdownRenderer'));
 
-const SESSION_STATE_LABELS: Record<RemoteSessionState, string> = {
-  pending: 'Pending',
-  assigned: 'Assigned',
-  running: 'Running',
-  waiting_approval: 'Waiting Approval',
-  completed: 'Completed',
-  failed: 'Failed',
-  cancelled: 'Cancelled',
-};
-
 const APPROVAL_DECISIONS: Array<{
   decision: RemoteApprovalDecision;
-  label: string;
   className: string;
 }> = [
   {
     decision: 'approved',
-    label: 'Approve',
     className: 'bg-[#1d6b45] text-white hover:bg-[#145033]',
   },
   {
     decision: 'denied',
-    label: 'Deny',
     className: 'bg-[#a13a30] text-white hover:bg-[#7e2b24]',
   },
   {
     decision: 'cancelled',
-    label: 'Cancel',
     className: 'bg-[#efe7db] text-slate-700 hover:bg-[#e6dccd]',
   },
 ];
 
+// ═══════════════════════════════════════════════════════════════════════════
+// RemoteApp — thin orchestrator
+// ═══════════════════════════════════════════════════════════════════════════
+
 export default function RemoteApp() {
   const baseUrl = resolveRemoteBaseUrl();
+  const locale = useMemo(() => resolveRemoteLocale(), []);
+  const copy = useMemo(() => getRemoteCopy(locale), [locale]);
   const initialPairingContext = resolveRemotePairingContext();
   const [accessToken, setAccessToken] = useState<string | null>(() => resolveRemoteAccessToken());
   const [health, setHealth] = useState<RemoteControlPlaneHealth | null>(null);
@@ -110,7 +114,9 @@ export default function RemoteApp() {
   const [pairingSecret, setPairingSecret] = useState(initialPairingContext.pairingSecret ?? '');
   const [sessions, setSessions] = useState<RemoteSessionRecord[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(() =>
+    resolveRemoteActiveSessionId(baseUrl),
+  );
   const [events, setEvents] = useState<RemoteTimelineEvent[]>([]);
   const deferredEvents = useDeferredValue(events);
   const [eventsLoading, setEventsLoading] = useState(false);
@@ -127,6 +133,7 @@ export default function RemoteApp() {
 
   const activeSessionIdRef = useRef<string | null>(null);
   const latestSequenceRef = useRef(0);
+  const sessionRefreshTimerRef = useRef<number | null>(null);
   const statusTimerRef = useRef<number | null>(null);
 
   activeSessionIdRef.current = activeSessionId;
@@ -135,12 +142,26 @@ export default function RemoteApp() {
     () => sessions.find((session) => session.session_id === activeSessionId) ?? null,
     [activeSessionId, sessions],
   );
+  const activeSessionControlStatus = useMemo(
+    () => describeSessionControl(activeSession, locale, copy),
+    [activeSession, copy, locale],
+  );
   const pendingApprovals = useMemo(
     () => approvals.filter((approval) => approval.state === 'pending'),
     [approvals],
   );
+  const approvalActions = useMemo(
+    () =>
+      APPROVAL_DECISIONS.map((item) => ({
+        ...item,
+        label: copy.approvalDecisionLabels[item.decision],
+      })),
+    [copy],
+  );
   const authRequired = health?.auth_required ?? false;
   const showAuthGate = Boolean(baseUrl) && ((authRequired && !accessToken) || authErrorMessage);
+
+  // ── Utility callbacks ──────────────────────────────────────────────────
 
   const showStatusMessage = useEffectEvent((message: string) => {
     setStatusMessage(message);
@@ -152,6 +173,43 @@ export default function RemoteApp() {
       statusTimerRef.current = null;
     }, 3000);
   });
+
+  const reportAsyncError = useEffectEvent((error: unknown) => {
+    const message = extractErrorMessage(error);
+    if (message.includes('HTTP 401')) {
+      setAuthErrorMessage(message);
+    } else {
+      setErrorMessage(message);
+    }
+  });
+
+  const scheduleSessionsRefresh = useEffectEvent(() => {
+    if (sessionRefreshTimerRef.current !== null) {
+      return;
+    }
+    sessionRefreshTimerRef.current = window.setTimeout(() => {
+      sessionRefreshTimerRef.current = null;
+      void refreshSessions().catch(reportAsyncError);
+    }, 350);
+  });
+
+  // ── Locale ─────────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    document.documentElement.lang = locale;
+  }, [locale]);
+
+  // ── Active session persistence ─────────────────────────────────────────
+
+  useEffect(() => {
+    if (activeSessionId) {
+      persistRemoteActiveSessionId(baseUrl, activeSessionId);
+      return;
+    }
+    clearRemoteActiveSessionId(baseUrl);
+  }, [activeSessionId, baseUrl]);
+
+  // ── Health check ───────────────────────────────────────────────────────
 
   useEffect(() => {
     if (!baseUrl) {
@@ -174,6 +232,8 @@ export default function RemoteApp() {
     };
   }, [baseUrl, accessToken]);
 
+  // ── Auth handlers ──────────────────────────────────────────────────────
+
   const completeAuthentication = useEffectEvent((token: string, message: string) => {
     persistRemoteAccessToken(token);
     stripRemoteSensitiveQueryParams();
@@ -190,7 +250,7 @@ export default function RemoteApp() {
     setAuthLoading(true);
     try {
       const response = await bootstrapControlPlane(baseUrl, bootstrapSecret, deviceName);
-      completeAuthentication(response.access_token, 'Bootstrap claim succeeded.');
+      completeAuthentication(response.access_token, copy.statusBootstrapClaimSucceeded);
       const nextHealth = await getControlPlaneHealth(baseUrl);
       setHealth(nextHealth);
     } catch (error) {
@@ -212,7 +272,7 @@ export default function RemoteApp() {
         pairingSecret,
         deviceName,
       );
-      completeAuthentication(response.access_token, 'Pairing succeeded.');
+      completeAuthentication(response.access_token, copy.statusPairingSucceeded);
       const nextHealth = await getControlPlaneHealth(baseUrl);
       setHealth(nextHealth);
     } catch (error) {
@@ -230,23 +290,25 @@ export default function RemoteApp() {
     stripRemoteSensitiveQueryParams();
     setAccessToken(manualAccessToken.trim());
     setAuthErrorMessage(null);
-    showStatusMessage('Saved access token locally.');
+    showStatusMessage(copy.statusSavedAccessToken);
   });
 
   const handleClearSavedToken = useEffectEvent(() => {
     clearRemoteAccessToken();
+    clearRemoteActiveSessionId(baseUrl);
     stripRemoteSensitiveQueryParams();
     setAccessToken(null);
     setManualAccessToken('');
     setAuthErrorMessage(null);
-    showStatusMessage('Cleared the saved access token.');
+    showStatusMessage(copy.statusClearedAccessToken);
   });
+
+  // ── Data fetching ──────────────────────────────────────────────────────
 
   const refreshSessions = useEffectEvent(async () => {
     if (!baseUrl || !health || (authRequired && !accessToken)) {
       return;
     }
-
     setSessionsLoading((current) => (sessions.length === 0 ? true : current));
     try {
       const response = await listSessions(baseUrl);
@@ -258,6 +320,10 @@ export default function RemoteApp() {
       setActiveSessionId((current) => {
         if (current && nextSessions.some((session) => session.session_id === current)) {
           return current;
+        }
+        const stored = resolveRemoteActiveSessionId(baseUrl);
+        if (stored && nextSessions.some((session) => session.session_id === stored)) {
+          return stored;
         }
         return nextSessions[0]?.session_id ?? null;
       });
@@ -311,38 +377,19 @@ export default function RemoteApp() {
       return;
     }
 
-    const [eventsResponse, approvalsResponse, artifactsResponse] = await Promise.all([
-      listSessionEvents(baseUrl, sessionId),
-      listSessionApprovals(baseUrl, sessionId),
-      listSessionArtifacts(baseUrl, sessionId),
-    ]);
+    const bundle = await loadRemoteSessionBundle(baseUrl, sessionId);
 
     if (activeSessionIdRef.current !== sessionId) {
       return;
     }
 
-    const hydratedEvents = hydrateTimeline(eventsResponse.items);
-    const latestSequence =
-      eventsResponse.latest_sequence ??
-      hydratedEvents[hydratedEvents.length - 1]?.sequence ??
-      0;
-    latestSequenceRef.current = latestSequence;
+    latestSequenceRef.current = bundle.latestSequence;
 
     startTransition(() => {
-      setEvents(hydratedEvents);
+      setEvents(bundle.events);
     });
-    setApprovals(
-      [...approvalsResponse.items].sort(
-        (left, right) =>
-          new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime(),
-      ),
-    );
-    setArtifacts(
-      [...artifactsResponse.items].sort(
-        (left, right) =>
-          new Date(right.created_at).getTime() - new Date(left.created_at).getTime(),
-      ),
-    );
+    setApprovals(bundle.approvals);
+    setArtifacts(bundle.artifacts);
   });
 
   const handleLiveEvent = useEffectEvent((sessionId: string, event: RemoteTimelineEvent) => {
@@ -352,24 +399,31 @@ export default function RemoteApp() {
 
     latestSequenceRef.current = Math.max(latestSequenceRef.current, event.sequence);
     startTransition(() => {
-      setEvents((current) => appendTimelineEvent(current, event));
+      setEvents((current) => appendRemoteTimelineEvent(current, event));
     });
 
     if (event.detail.kind === 'approval_requested' || event.detail.kind === 'approval_resolved') {
-      void refreshApprovals(sessionId);
+      void refreshApprovals(sessionId).catch(reportAsyncError);
     }
     if (event.detail.kind === 'artifact_created' || event.detail.kind === 'artifact_manifest') {
-      void refreshArtifacts(sessionId);
+      void refreshArtifacts(sessionId).catch(reportAsyncError);
     }
     if (
-      event.detail.kind === 'session_state_changed' ||
       event.detail.kind === 'approval_requested' ||
       event.detail.kind === 'approval_resolved' ||
       event.detail.kind === 'daemon_presence_changed'
     ) {
-      void refreshSessions();
+      scheduleSessionsRefresh();
+    }
+    if (
+      event.detail.kind === 'session_state_changed' &&
+      event.detail.previous_state !== event.detail.state
+    ) {
+      scheduleSessionsRefresh();
     }
   });
+
+  // ── Periodic + visibility refresh ──────────────────────────────────────
 
   useEffect(() => {
     void refreshSessions();
@@ -379,16 +433,16 @@ export default function RemoteApp() {
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [accessToken, baseUrl, health, refreshSessions]);
+  }, [accessToken, baseUrl, health]);
 
   useEffect(() => {
     const onVisibilityChange = () => {
       if (document.visibilityState !== 'visible') {
         return;
       }
-      void refreshSessions();
+      void refreshSessions().catch(reportAsyncError);
       if (activeSessionIdRef.current) {
-        void refreshSessionBundle(activeSessionIdRef.current);
+        void refreshSessionBundle(activeSessionIdRef.current).catch(reportAsyncError);
       }
     };
 
@@ -396,15 +450,20 @@ export default function RemoteApp() {
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [refreshSessionBundle, refreshSessions]);
+  }, []);
 
   useEffect(() => {
     return () => {
+      if (sessionRefreshTimerRef.current !== null) {
+        window.clearTimeout(sessionRefreshTimerRef.current);
+      }
       if (statusTimerRef.current !== null) {
         window.clearTimeout(statusTimerRef.current);
       }
     };
   }, []);
+
+  // ── WebSocket subscription ─────────────────────────────────────────────
 
   useEffect(() => {
     if (!baseUrl || !activeSessionId || !health || (authRequired && !accessToken)) {
@@ -417,58 +476,28 @@ export default function RemoteApp() {
     }
 
     let cancelled = false;
-    let reconnectTimer: number | null = null;
-    let socket: WebSocket | null = null;
-
-    const openSocket = (after: number) => {
-      if (cancelled) {
-        return;
-      }
-
-      setConnectionState(after > 0 ? 'reconnecting' : 'connecting');
-      socket = new WebSocket(buildSessionEventsStreamUrl(baseUrl, activeSessionId, after));
-
-      socket.onopen = () => {
-        if (!cancelled) {
-          setConnectionState('open');
-        }
-      };
-
-      socket.onmessage = (message) => {
-        if (typeof message.data !== 'string') {
-          return;
-        }
-
-        try {
-          const event = JSON.parse(message.data) as RemoteTimelineEvent;
-          handleLiveEvent(activeSessionId, event);
-        } catch {
-          setConnectionState('error');
-        }
-      };
-
-      socket.onerror = () => {
-        if (!cancelled) {
-          setConnectionState('error');
-        }
-      };
-
-      socket.onclose = () => {
-        if (cancelled) {
-          return;
-        }
-        reconnectTimer = window.setTimeout(() => {
-          openSocket(latestSequenceRef.current);
-        }, 1_000);
-      };
-    };
+    let subscription: { close(): void } | null = null;
 
     const bootstrap = async () => {
       setEventsLoading(true);
       try {
         await refreshSessionBundle(activeSessionId);
         if (!cancelled) {
-          openSocket(latestSequenceRef.current);
+          subscription = subscribeToRemoteSessionEvents({
+            baseUrl,
+            sessionId: activeSessionId,
+            getAfterSequence: () => latestSequenceRef.current,
+            onConnectionStateChange: (state) => {
+              if (!cancelled) {
+                setConnectionState(state);
+              }
+            },
+            onEvent: (event) => {
+              if (!cancelled) {
+                handleLiveEvent(activeSessionId, event);
+              }
+            },
+          });
           setErrorMessage(null);
         }
       } catch (error) {
@@ -492,15 +521,21 @@ export default function RemoteApp() {
 
     return () => {
       cancelled = true;
-      if (reconnectTimer !== null) {
-        window.clearTimeout(reconnectTimer);
-      }
-      socket?.close();
+      subscription?.close();
     };
-  }, [accessToken, activeSessionId, authRequired, baseUrl, handleLiveEvent, health, refreshSessionBundle]);
+  }, [accessToken, activeSessionId, authRequired, baseUrl, health]);
+
+  // ── Action handlers ────────────────────────────────────────────────────
 
   const handleSendPrompt = async () => {
-    if (!baseUrl || !activeSessionId || (authRequired && !accessToken) || !composer.trim() || sending) {
+    if (
+      !baseUrl ||
+      !activeSessionId ||
+      (authRequired && !accessToken) ||
+      !composer.trim() ||
+      sending ||
+      !activeSessionControlStatus.canSendPrompt
+    ) {
       return;
     }
 
@@ -508,7 +543,7 @@ export default function RemoteApp() {
     try {
       await sendPrompt(baseUrl, activeSessionId, composer.trim());
       setComposer('');
-      showStatusMessage('Prompt forwarded to the local runner.');
+      showStatusMessage(copy.statusPromptForwarded);
     } catch (error) {
       const message = extractErrorMessage(error);
       if (message.includes('HTTP 401')) {
@@ -522,14 +557,20 @@ export default function RemoteApp() {
   };
 
   const handleInterrupt = async () => {
-    if (!baseUrl || !activeSessionId || (authRequired && !accessToken) || interrupting) {
+    if (
+      !baseUrl ||
+      !activeSessionId ||
+      (authRequired && !accessToken) ||
+      interrupting ||
+      !activeSessionControlStatus.canInterrupt
+    ) {
       return;
     }
 
     setInterrupting(true);
     try {
       await interruptSession(baseUrl, activeSessionId);
-      showStatusMessage('Interrupt signal forwarded.');
+      showStatusMessage(copy.statusInterruptForwarded);
     } catch (error) {
       const message = extractErrorMessage(error);
       if (message.includes('HTTP 401')) {
@@ -553,7 +594,7 @@ export default function RemoteApp() {
     setApprovingId(approvalId);
     try {
       await respondToApproval(baseUrl, approvalId, decision);
-      showStatusMessage(`Approval ${decision}.`);
+      showStatusMessage(copy.statusApprovalDecision(copy.approvalDecisionLabels[decision]));
       if (activeSessionId) {
         await refreshApprovals(activeSessionId);
       }
@@ -569,39 +610,42 @@ export default function RemoteApp() {
     }
   };
 
+  // ── Render: early exits ────────────────────────────────────────────────
+
   if (!baseUrl) {
     return (
-      <RemoteFrame>
+      <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#fbf6ec,transparent_28%),linear-gradient(180deg,#f4efe4_0%,#efe8db_100%)] text-slate-900">
         <div className="flex min-h-screen items-center justify-center px-6">
           <EmptyCard
-            title="Remote Mode Is Not Configured"
-            description="Open this UI from your control-plane domain, or pass `?mode=remote&control_plane_url=https://your-domain`."
+            title={copy.remoteModeNotConfiguredTitle}
+            description={copy.remoteModeNotConfiguredDescription}
           />
         </div>
-      </RemoteFrame>
+      </div>
     );
   }
 
   if (!health) {
     return (
-      <RemoteFrame>
+      <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#fbf6ec,transparent_28%),linear-gradient(180deg,#f4efe4_0%,#efe8db_100%)] text-slate-900">
         <div className="flex min-h-screen items-center justify-center px-6">
           <div className="flex items-center gap-3 rounded-2xl border border-[#e2d8c8] bg-white px-5 py-4 text-sm text-slate-600 shadow-[0_18px_45px_rgba(52,45,34,0.08)]">
             <LoaderCircle size={16} className="animate-spin" />
-            Contacting the control plane...
+            {copy.contactingControlPlane}
           </div>
         </div>
-      </RemoteFrame>
+      </div>
     );
   }
 
   if (showAuthGate) {
     return (
-      <RemoteFrame>
+      <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#fbf6ec,transparent_28%),linear-gradient(180deg,#f4efe4_0%,#efe8db_100%)] text-slate-900">
         <RemoteAuthGate
           authErrorMessage={authErrorMessage}
           authLoading={authLoading}
           bootstrapEnabled={!health.owner_claimed && health.bootstrap_secret_configured}
+          copy={copy}
           deviceName={deviceName}
           health={health}
           manualAccessToken={manualAccessToken}
@@ -623,537 +667,309 @@ export default function RemoteApp() {
           setPairingOfferId={setPairingOfferId}
           setPairingSecret={setPairingSecret}
         />
-      </RemoteFrame>
+      </div>
     );
   }
 
+  // ── Render: main shell ─────────────────────────────────────────────────
+
   return (
-    <RemoteFrame>
-      {sidebarOpen && (
-        <button
-          aria-label="Close session sidebar"
-          className="fixed inset-0 z-30 bg-slate-950/30 lg:hidden"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
-
-      <div className="mx-auto flex min-h-screen max-w-[1580px] flex-col lg:flex-row">
-        <aside
-          className={cn(
-            'fixed inset-y-0 left-0 z-40 w-[320px] transform border-r border-[#e5ddcf] bg-[#f5efe4] transition-transform lg:static lg:z-0 lg:translate-x-0',
-            sidebarOpen ? 'translate-x-0' : '-translate-x-full',
-          )}
-        >
-          <div className="border-b border-[#e5ddcf] px-5 py-5">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-400">
-              Remote Shell
-            </div>
-            <div className="mt-2 text-2xl font-semibold text-slate-900">remote-code</div>
-            <div className="mt-3 text-sm leading-6 text-slate-500">
-              Time line, approvals, artifact download, and follow-up control routed through your self-hosted control plane.
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                void refreshSessions();
-              }}
-              className="mt-4 inline-flex items-center gap-2 rounded-full border border-[#ddd4c5] bg-white px-3 py-1.5 text-sm text-slate-700 transition-colors hover:bg-[#faf6ef]"
-            >
-              <RotateCcw size={14} />
-              Refresh Sessions
-            </button>
-          </div>
-
-          <div className="h-[calc(100vh-181px)] overflow-y-auto px-3 py-4">
-            {sessionsLoading ? (
-              <div className="flex items-center gap-2 rounded-2xl bg-white/80 px-4 py-3 text-sm text-slate-500">
-                <LoaderCircle size={16} className="animate-spin" />
-                Loading remote sessions...
-              </div>
-            ) : sessions.length === 0 ? (
-              <EmptyCard
-                title="No Sessions Yet"
-                description="Start a local session on your runner, then refresh here to attach from the browser."
-              />
-            ) : (
-              <div className="space-y-2">
-                {sessions.map((session) => {
-                  const selected = session.session_id === activeSessionId;
-                  return (
-                    <button
-                      key={session.session_id}
-                      type="button"
-                      onClick={() => {
-                        setActiveSessionId(session.session_id);
-                        setSidebarOpen(false);
-                      }}
-                      className={cn(
-                        'w-full rounded-[22px] border px-4 py-3 text-left transition-colors',
-                        selected
-                          ? 'border-[#d7cdbe] bg-white shadow-[0_12px_28px_rgba(34,32,28,0.08)]'
-                          : 'border-transparent bg-white/60 hover:bg-white',
-                      )}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-semibold text-slate-900">
-                            {sessionTitle(session)}
-                          </div>
-                          <div className="mt-1 text-xs text-slate-500">
-                            {truncateMiddle(session.workspace_id, 48)}
-                          </div>
-                        </div>
-                        <StatePill state={session.state} />
-                      </div>
-                      <div className="mt-3 flex items-center gap-2 text-[11px] text-slate-500">
-                        <span>{formatRelativeTime(session.updated_at)}</span>
-                        <span>•</span>
-                        <span>{session.owner_runner_id ?? 'unassigned runner'}</span>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </aside>
-
-        <div className="flex min-h-screen min-w-0 flex-1 flex-col">
-          <header className="border-b border-[#e5ddcf] bg-white/90 px-4 py-4 backdrop-blur sm:px-6">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex min-w-0 items-center gap-3">
-                <button
-                  type="button"
-                  className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-[#ddd4c5] bg-[#faf6ef] text-slate-700 lg:hidden"
-                  onClick={() => setSidebarOpen(true)}
-                >
-                  <Menu size={18} />
-                </button>
-                <div className="min-w-0">
-                  <div className="truncate text-lg font-semibold text-slate-900">
-                    {activeSession ? sessionTitle(activeSession) : 'Select a remote session'}
-                  </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-500">
-                    <span>{truncateMiddle(baseUrl, 48)}</span>
-                    {activeSession && (
-                      <>
-                        <span>•</span>
-                        <span>{activeSession.workspace_id}</span>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <ConnectionPill state={connectionState} />
-                {activeSession && <StatePill state={activeSession.state} compact />}
-              </div>
-            </div>
-          </header>
-
-          {errorMessage && (
-            <div className="border-b border-[#f1d2c9] bg-[#fff4f1] px-4 py-3 text-sm text-[#9b3b32] sm:px-6">
-              {errorMessage}
-            </div>
-          )}
-
-          {statusMessage && (
-            <div className="border-b border-[#d9eadf] bg-[#edf7ef] px-4 py-3 text-sm text-[#226140] sm:px-6">
-              {statusMessage}
-            </div>
-          )}
-
-          <main className="grid min-h-0 flex-1 gap-0 lg:grid-cols-[minmax(0,1fr)_340px]">
-            <section className="flex min-h-0 flex-col border-b border-[#e5ddcf] bg-[#f7f2e8] lg:border-b-0 lg:border-r">
-              {activeSession ? (
-                <div className="flex min-h-0 flex-1 flex-col">
-                  <div className="flex-1 overflow-y-auto px-4 py-5 sm:px-6">
-                    {eventsLoading ? (
-                      <div className="flex min-h-[280px] items-center justify-center">
-                        <div className="flex items-center gap-3 rounded-2xl bg-white px-4 py-3 text-sm text-slate-500 shadow-[0_12px_28px_rgba(34,32,28,0.06)]">
-                          <LoaderCircle size={16} className="animate-spin" />
-                          Loading session timeline...
-                        </div>
-                      </div>
-                    ) : deferredEvents.length === 0 ? (
-                      <div className="flex min-h-[280px] items-center justify-center">
-                        <EmptyCard
-                          title="Timeline Is Empty"
-                          description="Once the local runner starts streaming events, message deltas, approvals, tools, and artifacts appear here."
-                        />
-                      </div>
-                    ) : (
-                      <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
-                        {deferredEvents.map((event) => (
-                          <TimelineCard key={event.sequence} event={event} />
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="border-t border-[#e5ddcf] bg-[#f5efe4] px-4 py-4 sm:px-6">
-                    <div className="mx-auto max-w-5xl rounded-[28px] border border-[#ded4c4] bg-white shadow-[0_18px_44px_rgba(34,32,28,0.09)]">
-                      <div className="flex items-center justify-between gap-3 border-b border-[#efe6d9] px-4 py-3">
-                        <div className="inline-flex items-center gap-2 text-sm text-slate-600">
-                          <MessageSquareText size={15} />
-                          Follow-up control for the current session
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            void handleInterrupt();
-                          }}
-                          disabled={interrupting}
-                          className="inline-flex items-center gap-2 rounded-full border border-[#dccfc0] bg-[#faf6ef] px-3 py-1.5 text-sm text-slate-700 transition-colors hover:bg-[#f3ebdf] disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {interrupting ? (
-                            <LoaderCircle size={14} className="animate-spin" />
-                          ) : (
-                            <Square size={14} />
-                          )}
-                          Interrupt
-                        </button>
-                      </div>
-                      <div className="flex items-end gap-3 px-4 py-4">
-                        <textarea
-                          value={composer}
-                          onChange={(event) => setComposer(event.target.value)}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter' && !event.shiftKey) {
-                              event.preventDefault();
-                              void handleSendPrompt();
-                            }
-                          }}
-                          rows={1}
-                          placeholder="Send a follow-up prompt to the local runner. Shift+Enter inserts a newline."
-                          className="min-h-[88px] flex-1 resize-none bg-transparent text-[15px] leading-6 text-slate-800 outline-none placeholder:text-slate-400"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            void handleSendPrompt();
-                          }}
-                          disabled={sending || composer.trim().length === 0}
-                          className="inline-flex h-14 items-center justify-center rounded-2xl bg-[#17181a] px-5 text-sm font-medium text-white shadow-[0_10px_22px_rgba(23,24,26,0.2)] transition-colors hover:bg-[#282a2d] disabled:cursor-not-allowed disabled:bg-[#cbbfac] disabled:text-white/70"
-                        >
-                          {sending ? <LoaderCircle size={18} className="animate-spin" /> : 'Send'}
-                        </button>
-                      </div>
+    <RemoteShell
+      sessions={sessions}
+      sessionsLoading={sessionsLoading}
+      activeSessionId={activeSessionId}
+      activeSession={activeSession}
+      connectionState={connectionState}
+      sidebarOpen={sidebarOpen}
+      errorMessage={errorMessage}
+      statusMessage={statusMessage}
+      baseUrl={baseUrl}
+      copy={copy}
+      locale={locale}
+      onToggleSidebar={setSidebarOpen}
+      onSelectSession={(id) => {
+        setActiveSessionId(id);
+        setSidebarOpen(false);
+      }}
+      onRefreshSessions={() => {
+        void refreshSessions();
+      }}
+    >
+      <main className="grid min-h-0 flex-1 gap-0 lg:grid-cols-[minmax(0,1fr)_340px]">
+        {/* ── Timeline + Composer ── */}
+        <section className="flex min-h-0 flex-col border-b border-[#e5ddcf] bg-[#f7f2e8] lg:border-b-0 lg:border-r">
+          {activeSession ? (
+            <div className="flex min-h-0 flex-1 flex-col">
+              <div className="flex-1 overflow-y-auto px-4 py-5 sm:px-6">
+                {eventsLoading ? (
+                  <div className="flex min-h-[280px] items-center justify-center">
+                    <div className="flex items-center gap-3 rounded-2xl bg-white px-4 py-3 text-sm text-slate-500 shadow-[0_12px_28px_rgba(34,32,28,0.06)]">
+                      <LoaderCircle size={16} className="animate-spin" />
+                      {copy.loadingSessionTimeline}
                     </div>
                   </div>
-                </div>
-              ) : (
-                <div className="flex min-h-[420px] items-center justify-center px-6">
-                  <EmptyCard
-                    title="Pick A Session"
-                    description="The browser shell stays read-only until you attach to a session on the left."
-                  />
-                </div>
-              )}
-            </section>
-
-            <aside className="border-t border-[#e5ddcf] bg-[#f2ebdf] lg:border-t-0">
-              <div className="grid gap-4 px-4 py-5 sm:px-6 lg:sticky lg:top-0">
-                <section className="rounded-[24px] border border-[#e0d6c6] bg-white px-4 py-4 shadow-[0_12px_30px_rgba(34,32,28,0.06)]">
-                  <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-                    <Shield size={16} />
-                    Pending Approvals
+                ) : deferredEvents.length === 0 ? (
+                  <div className="flex min-h-[280px] items-center justify-center">
+                    <EmptyCard
+                      title={copy.timelineEmptyTitle}
+                      description={copy.timelineEmptyDescription}
+                    />
                   </div>
-                  <div className="mt-4 space-y-3">
-                    {pendingApprovals.length === 0 ? (
-                      <PanelHint>No pending approvals for the current session.</PanelHint>
-                    ) : (
-                      pendingApprovals.map((approval) => (
-                        <div
-                          key={approval.approval_id}
-                          className="rounded-2xl border border-[#ebe2d5] bg-[#faf7f1] px-3 py-3"
-                        >
-                          <div className="text-sm font-medium text-slate-900">{approval.title}</div>
-                          <div className="mt-1 text-sm leading-6 text-slate-600">
-                            {approval.description}
-                          </div>
-                          {approval.metadata.blocked_path && (
-                            <div className="mt-2 rounded-xl bg-white px-3 py-2 font-mono text-xs text-slate-500">
-                              {truncateMiddle(approval.metadata.blocked_path, 56)}
-                            </div>
-                          )}
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            {APPROVAL_DECISIONS.map((item) => (
-                              <button
-                                key={item.decision}
-                                type="button"
-                                onClick={() => {
-                                  void handleApprovalDecision(approval.approval_id, item.decision);
-                                }}
-                                disabled={approvingId === approval.approval_id}
-                                className={cn(
-                                  'rounded-full px-3 py-1.5 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-60',
-                                  item.className,
-                                )}
-                              >
-                                {approvingId === approval.approval_id ? (
-                                  <span className="inline-flex items-center gap-2">
-                                    <LoaderCircle size={14} className="animate-spin" />
-                                    Working...
-                                  </span>
-                                ) : (
-                                  item.label
-                                )}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      ))
-                    )}
+                ) : (
+                  <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
+                    {deferredEvents.map((event) => (
+                      <TimelineCard key={event.sequence} copy={copy} locale={locale} event={event} />
+                    ))}
                   </div>
-                </section>
-
-                <section className="rounded-[24px] border border-[#e0d6c6] bg-white px-4 py-4 shadow-[0_12px_30px_rgba(34,32,28,0.06)]">
-                  <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-                    <FileOutput size={16} />
-                    Artifacts
-                  </div>
-                  <div className="mt-4 space-y-3">
-                    {artifacts.length === 0 ? (
-                      <PanelHint>No artifacts have been published yet.</PanelHint>
-                    ) : (
-                      artifacts.map((artifact) => (
-                        <a
-                          key={artifact.artifact_id}
-                          href={buildArtifactDownloadUrl(baseUrl, artifact.artifact_id)}
-                          className="flex items-start justify-between gap-3 rounded-2xl border border-[#ebe2d5] bg-[#faf7f1] px-3 py-3 transition-colors hover:bg-white"
-                        >
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-medium text-slate-900">
-                              {artifact.name}
-                            </div>
-                            <div className="mt-1 text-xs text-slate-500">
-                              {artifact.file_name} • {formatBytes(artifact.size_bytes)}
-                            </div>
-                          </div>
-                          <Download size={16} className="mt-0.5 shrink-0 text-slate-500" />
-                        </a>
-                      ))
-                    )}
-                  </div>
-                </section>
+                )}
               </div>
-            </aside>
-          </main>
-        </div>
-      </div>
-    </RemoteFrame>
-  );
-}
 
-function RemoteAuthGate({
-  authErrorMessage,
-  authLoading,
-  bootstrapEnabled,
-  deviceName,
-  health,
-  manualAccessToken,
-  onBootstrapClaim,
-  onClearSavedToken,
-  onManualTokenSave,
-  onPairingAccept,
-  pairingOfferId,
-  pairingSecret,
-  setBootstrapSecret,
-  setDeviceName,
-  setManualAccessToken,
-  setPairingOfferId,
-  setPairingSecret,
-}: {
-  authErrorMessage: string | null;
-  authLoading: boolean;
-  bootstrapEnabled: boolean;
-  deviceName: string;
-  health: RemoteControlPlaneHealth;
-  manualAccessToken: string;
-  onBootstrapClaim: () => void;
-  onClearSavedToken: () => void;
-  onManualTokenSave: () => void;
-  onPairingAccept: () => void;
-  pairingOfferId: string;
-  pairingSecret: string;
-  setBootstrapSecret: (value: string) => void;
-  setDeviceName: (value: string) => void;
-  setManualAccessToken: (value: string) => void;
-  setPairingOfferId: (value: string) => void;
-  setPairingSecret: (value: string) => void;
-}) {
-  return (
-    <div className="mx-auto flex min-h-screen max-w-5xl items-center px-6 py-10">
-      <div className="grid w-full gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-        <section className="rounded-[36px] border border-[#ddd2c1] bg-white px-7 py-7 shadow-[0_30px_70px_rgba(52,45,34,0.1)]">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.32em] text-slate-400">
-            Remote Access
-          </div>
-          <div className="mt-3 text-3xl font-semibold text-slate-900">Authenticate This Device</div>
-          <div className="mt-4 max-w-2xl text-sm leading-7 text-slate-500">
-            The control plane is live, but this browser is not trusted yet. Claim the owner device
-            first, or accept a short-lived pairing offer generated from a device that is already
-            trusted.
-          </div>
-
-          {authErrorMessage && (
-            <div className="mt-5 flex items-start gap-3 rounded-3xl border border-[#f0d3c8] bg-[#fff2ed] px-4 py-4 text-sm leading-6 text-[#8d3f30]">
-              <AlertTriangle size={18} className="mt-0.5 shrink-0" />
-              <div>{authErrorMessage}</div>
+              <div className="border-t border-[#e5ddcf] bg-[#f5efe4] px-4 py-4 sm:px-6">
+                <div className="mx-auto max-w-5xl rounded-[28px] border border-[#ded4c4] bg-white shadow-[0_18px_44px_rgba(34,32,28,0.09)]">
+                  <div className="flex items-center justify-between gap-3 border-b border-[#efe6d9] px-4 py-3">
+                    <div className="inline-flex items-center gap-2 text-sm text-slate-600">
+                      <MessageSquareText size={15} />
+                      {copy.followUpControl}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void handleInterrupt();
+                      }}
+                      disabled={interrupting || !activeSessionControlStatus.canInterrupt}
+                      className="inline-flex items-center gap-2 rounded-full border border-[#dccfc0] bg-[#faf6ef] px-3 py-1.5 text-sm text-slate-700 transition-colors hover:bg-[#f3ebdf] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {interrupting ? (
+                        <LoaderCircle size={14} className="animate-spin" />
+                      ) : (
+                        <Square size={14} />
+                      )}
+                      {interrupting ? copy.interrupting : copy.interrupt}
+                    </button>
+                  </div>
+                  {activeSessionControlStatus.notice && (
+                    <div className="border-b border-[#f0dfbf] bg-[#fff7e8] px-4 py-3 text-sm leading-6 text-[#845612]">
+                      {activeSessionControlStatus.notice}
+                    </div>
+                  )}
+                  <div className="flex items-end gap-3 px-4 py-4">
+                    <textarea
+                      value={composer}
+                      onChange={(event) => setComposer(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' && !event.shiftKey) {
+                          event.preventDefault();
+                          void handleSendPrompt();
+                        }
+                      }}
+                      rows={1}
+                      disabled={!activeSessionControlStatus.canSendPrompt}
+                      placeholder={copy.followUpPlaceholder}
+                      className="min-h-[88px] flex-1 resize-none bg-transparent text-[15px] leading-6 text-slate-800 outline-none placeholder:text-slate-400 disabled:cursor-not-allowed disabled:text-slate-400"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void handleSendPrompt();
+                      }}
+                      disabled={
+                        sending ||
+                        composer.trim().length === 0 ||
+                        !activeSessionControlStatus.canSendPrompt
+                      }
+                      className="inline-flex h-14 items-center justify-center rounded-2xl bg-[#17181a] px-5 text-sm font-medium text-white shadow-[0_10px_22px_rgba(23,24,26,0.2)] transition-colors hover:bg-[#282a2d] disabled:cursor-not-allowed disabled:bg-[#cbbfac] disabled:text-white/70"
+                    >
+                      {sending ? <LoaderCircle size={18} className="animate-spin" /> : copy.send}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="flex min-h-[420px] items-center justify-center px-6">
+              <EmptyCard
+                title={copy.pickSessionTitle}
+                description={copy.pickSessionDescription}
+              />
             </div>
           )}
-
-          <div className="mt-6 space-y-5">
-            <label className="block">
-              <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-                Device Name
-              </div>
-              <input
-                value={deviceName}
-                onChange={(event) => setDeviceName(event.target.value)}
-                placeholder="My iPhone"
-                className="w-full rounded-2xl border border-[#dfd5c6] bg-[#fcfaf6] px-4 py-3 text-sm text-slate-800 outline-none transition-colors focus:border-[#a58a5e]"
-              />
-            </label>
-
-            {bootstrapEnabled && (
-              <div className="rounded-[28px] border border-[#e7dccd] bg-[#faf6ef] px-5 py-5">
-                <div className="text-sm font-semibold text-slate-900">Bootstrap owner claim</div>
-                <div className="mt-2 text-sm leading-6 text-slate-500">
-                  Use the bootstrap secret from the server to mint the first trusted device token.
-                </div>
-                <label className="mt-4 block">
-                  <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-                    Bootstrap Secret
-                  </div>
-                  <input
-                    type="password"
-                    onChange={(event) => setBootstrapSecret(event.target.value)}
-                    className="w-full rounded-2xl border border-[#dfd5c6] bg-white px-4 py-3 text-sm text-slate-800 outline-none transition-colors focus:border-[#a58a5e]"
-                  />
-                </label>
-                <button
-                  type="button"
-                  onClick={onBootstrapClaim}
-                  disabled={authLoading}
-                  className="mt-4 inline-flex items-center gap-2 rounded-full bg-[#1d6b45] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#145033] disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {authLoading ? <LoaderCircle size={15} className="animate-spin" /> : <Shield size={15} />}
-                  Claim Owner Device
-                </button>
-              </div>
-            )}
-
-            <div className="rounded-[28px] border border-[#e7dccd] bg-[#faf6ef] px-5 py-5">
-              <div className="text-sm font-semibold text-slate-900">Accept pairing offer</div>
-              <div className="mt-2 text-sm leading-6 text-slate-500">
-                Paste the offer id and pairing secret from a trusted device, or open the pairing
-                URL directly on this phone.
-              </div>
-              <div className="mt-4 grid gap-3">
-                <input
-                  value={pairingOfferId}
-                  onChange={(event) => setPairingOfferId(event.target.value)}
-                  placeholder="Offer ID"
-                  className="w-full rounded-2xl border border-[#dfd5c6] bg-white px-4 py-3 text-sm text-slate-800 outline-none transition-colors focus:border-[#a58a5e]"
-                />
-                <input
-                  value={pairingSecret}
-                  type="password"
-                  onChange={(event) => setPairingSecret(event.target.value)}
-                  placeholder="Pairing secret"
-                  className="w-full rounded-2xl border border-[#dfd5c6] bg-white px-4 py-3 text-sm text-slate-800 outline-none transition-colors focus:border-[#a58a5e]"
-                />
-              </div>
-              <button
-                type="button"
-                onClick={onPairingAccept}
-                disabled={authLoading}
-                className="mt-4 inline-flex items-center gap-2 rounded-full bg-[#174e8c] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#123b6b] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {authLoading ? <LoaderCircle size={15} className="animate-spin" /> : <Wifi size={15} />}
-                Accept Pairing Offer
-              </button>
-            </div>
-
-            <div className="rounded-[28px] border border-[#e7dccd] bg-[#faf6ef] px-5 py-5">
-              <div className="text-sm font-semibold text-slate-900">Use an existing token</div>
-              <div className="mt-2 text-sm leading-6 text-slate-500">
-                If you already minted a device token from the CLI, paste it here and store it in
-                this browser.
-              </div>
-              <textarea
-                value={manualAccessToken}
-                onChange={(event) => setManualAccessToken(event.target.value)}
-                rows={3}
-                placeholder="rcdt_..."
-                className="mt-4 w-full rounded-2xl border border-[#dfd5c6] bg-white px-4 py-3 text-sm text-slate-800 outline-none transition-colors focus:border-[#a58a5e]"
-              />
-              <div className="mt-4 flex flex-wrap gap-3">
-                <button
-                  type="button"
-                  onClick={onManualTokenSave}
-                  className="inline-flex items-center gap-2 rounded-full border border-[#cfbfaa] bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-[#fffaf2]"
-                >
-                  Save Token
-                </button>
-                <button
-                  type="button"
-                  onClick={onClearSavedToken}
-                  className="inline-flex items-center gap-2 rounded-full border border-[#eadccb] bg-transparent px-4 py-2 text-sm font-medium text-slate-500 transition-colors hover:bg-[#f4ecdf]"
-                >
-                  Clear Saved Token
-                </button>
-              </div>
-            </div>
-          </div>
         </section>
 
-        <aside className="rounded-[36px] border border-[#ddd2c1] bg-[#f8f2e7] px-6 py-6 shadow-[0_24px_60px_rgba(52,45,34,0.08)]">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.32em] text-slate-400">
-            Control Plane
-          </div>
-          <div className="mt-3 text-xl font-semibold text-slate-900">{health.service}</div>
-          <div className="mt-5 space-y-3 text-sm leading-6 text-slate-600">
-            <div className="rounded-2xl bg-white/80 px-4 py-3">
-              Owner claimed: {health.owner_claimed ? 'yes' : 'no'}
-            </div>
-            <div className="rounded-2xl bg-white/80 px-4 py-3">
-              Trusted devices: {health.device_count}
-            </div>
-            <div className="rounded-2xl bg-white/80 px-4 py-3">
-              Available runners: {health.available_runner_count}
-            </div>
-            <div className="rounded-2xl bg-white/80 px-4 py-3">
-              Active sessions: {health.session_count}
-            </div>
-            <div className="rounded-2xl bg-white/80 px-4 py-3">
-              Bootstrap configured: {health.bootstrap_secret_configured ? 'yes' : 'no'}
-            </div>
-          </div>
-          <div className="mt-6 rounded-3xl border border-dashed border-[#d4c4ac] bg-white/70 px-4 py-4 text-sm leading-6 text-slate-500">
-            The browser only stores the device access token locally. Session content still stays
-            on your local machine; the control plane only brokers access to the runner.
+        {/* ── Desktop: Approvals + Artifacts side panel (always rendered; mobile also has floating FABs) ── */}
+        <aside className="border-t border-[#e5ddcf] bg-[#f2ebdf] lg:border-t-0">
+          <div className="grid gap-4 px-4 py-5 sm:px-6 lg:sticky lg:top-0">
+            <ApprovalPanel
+              title={copy.pendingApprovals}
+              icon={<Shield size={16} />}
+              emptyText={copy.noPendingApprovals}
+              items={pendingApprovals}
+              actions={approvalActions}
+              approvingId={approvingId}
+              loadingText={copy.loading}
+              onDecision={(approvalId, decision) => {
+                void handleApprovalDecision(approvalId, decision as RemoteApprovalDecision);
+              }}
+            />
+
+            <ArtifactPanel
+              title={copy.artifacts}
+              icon={<FileOutput size={16} />}
+              emptyText={copy.noArtifacts}
+              items={artifacts}
+              buildDownloadUrl={(artifactId) => buildArtifactDownloadUrl(baseUrl, artifactId)}
+            />
           </div>
         </aside>
-      </div>
-    </div>
+
+        {/* ── Mobile: Floating action buttons + bottom sheets ── */}
+        <div className="fixed bottom-6 right-4 z-40 flex flex-col gap-3 lg:hidden">
+          {/* Approval bottom sheet */}
+          <Dialog.Root>
+            <Dialog.Trigger asChild>
+              <button
+                type="button"
+                aria-label={copy.pendingApprovals}
+                className="relative inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-[#17181a] text-white shadow-[0_10px_22px_rgba(23,24,26,0.25)] transition-transform active:scale-95"
+              >
+                <Shield size={20} />
+                {pendingApprovals.length > 0 && (
+                  <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[11px] font-bold text-white">
+                    {pendingApprovals.length}
+                  </span>
+                )}
+              </button>
+            </Dialog.Trigger>
+            <Dialog.Portal>
+              <Dialog.Overlay className="fixed inset-0 z-50 bg-slate-950/40 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0" />
+              <Dialog.Content className="fixed inset-x-0 bottom-0 z-50 max-h-[80vh] rounded-t-[28px] border-t border-[#e0d6c6] bg-white px-5 py-5 shadow-[0_-12px_40px_rgba(34,32,28,0.12)] focus:outline-none data-[state=open]:animate-in data-[state=open]:slide-in-from-bottom data-[state=closed]:animate-out data-[state=closed]:slide-out-to-bottom">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Dialog.Title className="text-lg font-semibold text-slate-900">
+                      {copy.pendingApprovals}
+                    </Dialog.Title>
+                    <Dialog.Description className="sr-only">
+                      {copy.noPendingApprovals}
+                    </Dialog.Description>
+                    {pendingApprovals.length > 0 && (
+                      <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-[#fbf3df] px-2 text-xs font-semibold text-[#7c5d12]">
+                        {pendingApprovals.length}
+                      </span>
+                    )}
+                  </div>
+                  <Dialog.Close asChild>
+                    <button
+                      type="button"
+                      aria-label="Close"
+                      className="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-[#e5ddd4] bg-[#faf6ef] text-slate-700 transition-colors hover:bg-white"
+                    >
+                      <X size={16} />
+                    </button>
+                  </Dialog.Close>
+                </div>
+                <div className="mt-4 max-h-[calc(80vh-80px)] overflow-y-auto">
+                  <ApprovalPanel
+                    title={copy.pendingApprovals}
+                    icon={<Shield size={16} />}
+                    emptyText={copy.noPendingApprovals}
+                    items={pendingApprovals}
+                    actions={approvalActions}
+                    approvingId={approvingId}
+                    loadingText={copy.loading}
+                    hideTitle
+                    onDecision={(approvalId, decision) => {
+                      void handleApprovalDecision(approvalId, decision as RemoteApprovalDecision);
+                    }}
+                  />
+                </div>
+                <div className="absolute left-1/2 top-2 h-1 w-10 -translate-x-1/2 rounded-full bg-slate-300" />
+              </Dialog.Content>
+            </Dialog.Portal>
+          </Dialog.Root>
+
+          {/* Artifact bottom sheet */}
+          <Dialog.Root>
+            <Dialog.Trigger asChild>
+              <button
+                type="button"
+                aria-label={copy.artifacts}
+                className="relative inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-[#17181a] text-white shadow-[0_10px_22px_rgba(23,24,26,0.25)] transition-transform active:scale-95"
+              >
+                <FileOutput size={20} />
+                {artifacts.length > 0 && (
+                  <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-500 px-1 text-[11px] font-bold text-white">
+                    {artifacts.length}
+                  </span>
+                )}
+              </button>
+            </Dialog.Trigger>
+            <Dialog.Portal>
+              <Dialog.Overlay className="fixed inset-0 z-50 bg-slate-950/40 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0" />
+              <Dialog.Content className="fixed inset-x-0 bottom-0 z-50 max-h-[80vh] rounded-t-[28px] border-t border-[#e0d6c6] bg-white px-5 py-5 shadow-[0_-12px_40px_rgba(34,32,28,0.12)] focus:outline-none data-[state=open]:animate-in data-[state=open]:slide-in-from-bottom data-[state=closed]:animate-out data-[state=closed]:slide-out-to-bottom">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Dialog.Title className="text-lg font-semibold text-slate-900">
+                      {copy.artifacts}
+                    </Dialog.Title>
+                    <Dialog.Description className="sr-only">
+                      {copy.noArtifacts}
+                    </Dialog.Description>
+                    {artifacts.length > 0 && (
+                      <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-[#fbf3df] px-2 text-xs font-semibold text-[#7c5d12]">
+                        {artifacts.length}
+                      </span>
+                    )}
+                  </div>
+                  <Dialog.Close asChild>
+                    <button
+                      type="button"
+                      aria-label="Close"
+                      className="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-[#e5ddd4] bg-[#faf6ef] text-slate-700 transition-colors hover:bg-white"
+                    >
+                      <X size={16} />
+                    </button>
+                  </Dialog.Close>
+                </div>
+                <div className="mt-4 max-h-[calc(80vh-80px)] overflow-y-auto">
+                  <ArtifactPanel
+                    title={copy.artifacts}
+                    icon={<FileOutput size={16} />}
+                    emptyText={copy.noArtifacts}
+                    items={artifacts}
+                    buildDownloadUrl={(artifactId) => buildArtifactDownloadUrl(baseUrl, artifactId)}
+                    hideTitle
+                  />
+                </div>
+                <div className="absolute left-1/2 top-2 h-1 w-10 -translate-x-1/2 rounded-full bg-slate-300" />
+              </Dialog.Content>
+            </Dialog.Portal>
+          </Dialog.Root>
+        </div>
+      </main>
+    </RemoteShell>
   );
 }
 
-function TimelineCard({ event }: { event: RemoteTimelineEvent }) {
+// ═══════════════════════════════════════════════════════════════════════════
+// Timeline rendering
+// ═══════════════════════════════════════════════════════════════════════════
+
+function TimelineCard({
+  copy,
+  event,
+  locale,
+}: {
+  copy: ReturnType<typeof getRemoteCopy>;
+  event: RemoteTimelineEvent;
+  locale: ReturnType<typeof resolveRemoteLocale>;
+}) {
   const { detail } = event;
+  const ts = formatRemoteRelativeTime(event.recorded_at, locale, copy);
 
   if (detail.kind === 'message_committed') {
     return (
-      <MessageCard
-        role={detail.role}
-        header={detail.role === 'assistant' ? 'Assistant' : detail.role === 'user' ? 'User' : 'System'}
-      >
+      <TimelineMessageCard role={detail.role} header={copy.messageHeaders[detail.role]}>
         {detail.role === 'assistant' ? (
-          <Suspense fallback={<div className="text-sm text-slate-500">Rendering response...</div>}>
+          <Suspense fallback={<div className="text-sm text-slate-500">{copy.renderResponse}</div>}>
             <LazyMarkdownRenderer content={detail.text} />
           </Suspense>
         ) : (
@@ -1161,22 +977,22 @@ function TimelineCard({ event }: { event: RemoteTimelineEvent }) {
             {detail.text}
           </div>
         )}
-      </MessageCard>
+      </TimelineMessageCard>
     );
   }
 
   if (detail.kind === 'message_delta') {
     return (
-      <EventCard
-        eyebrow="Streaming"
+      <TimelineEventCard
+        eyebrow={copy.eventEyebrows.streaming}
         accent="text-amber-700"
         icon={<LoaderCircle size={16} className="animate-spin" />}
-        timestamp={event.recorded_at}
+        timestampLabel={ts}
       >
         <div className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-700">
           {detail.delta}
         </div>
-      </EventCard>
+      </TimelineEventCard>
     );
   }
 
@@ -1186,320 +1002,158 @@ function TimelineCard({ event }: { event: RemoteTimelineEvent }) {
     detail.kind === 'tool_progress'
   ) {
     return (
-      <EventCard
-        eyebrow="Tool"
+      <TimelineEventCard
+        eyebrow={copy.eventEyebrows.tool}
         accent={detail.kind === 'tool_finished' && detail.is_error ? 'text-rose-700' : 'text-emerald-700'}
         icon={<Bot size={16} />}
-        timestamp={event.recorded_at}
+        timestampLabel={ts}
       >
         <div className="space-y-2 text-sm text-slate-700">
           <div className="font-medium text-slate-900">{toolLabel(detail)}</div>
           <div className="rounded-2xl bg-[#f7f2e8] px-3 py-2 text-sm leading-6 text-slate-600">
-            {toolSummary(detail)}
+            {toolSummary(detail, copy)}
           </div>
         </div>
-      </EventCard>
+      </TimelineEventCard>
     );
   }
 
   if (detail.kind === 'approval_requested' || detail.kind === 'approval_resolved') {
     return (
-      <EventCard
-        eyebrow="Approval"
+      <TimelineEventCard
+        eyebrow={copy.eventEyebrows.approval}
         accent="text-[#7f4f19]"
         icon={<Shield size={16} />}
-        timestamp={event.recorded_at}
+        timestampLabel={ts}
       >
         <div className="space-y-2 text-sm leading-6 text-slate-700">
-          <div className="font-medium text-slate-900">{approvalSummary(detail)}</div>
+          <div className="font-medium text-slate-900">{approvalSummary(detail, copy)}</div>
           {'responder' in detail && detail.responder && (
             <div className="text-xs uppercase tracking-[0.18em] text-slate-400">
-              Responder: {detail.responder}
+              {copy.responderLabel}: {detail.responder}
             </div>
           )}
         </div>
-      </EventCard>
+      </TimelineEventCard>
     );
   }
 
   if (detail.kind === 'artifact_created' || detail.kind === 'artifact_manifest') {
     return (
-      <EventCard
-        eyebrow="Artifact"
+      <TimelineEventCard
+        eyebrow={copy.eventEyebrows.artifact}
         accent="text-sky-700"
         icon={<FileOutput size={16} />}
-        timestamp={event.recorded_at}
+        timestampLabel={ts}
       >
-        <div className="text-sm leading-6 text-slate-700">{artifactSummary(detail)}</div>
-      </EventCard>
+        <div className="text-sm leading-6 text-slate-700">{artifactSummary(detail, copy)}</div>
+      </TimelineEventCard>
     );
   }
 
   if (detail.kind === 'runtime_error') {
     return (
-      <EventCard
-        eyebrow="Runtime"
+      <TimelineEventCard
+        eyebrow={copy.eventEyebrows.runtime}
         accent="text-rose-700"
         icon={<AlertTriangle size={16} />}
-        timestamp={event.recorded_at}
+        timestampLabel={ts}
       >
         <div className="text-sm leading-6 text-rose-700">{detail.message}</div>
-      </EventCard>
+      </TimelineEventCard>
     );
   }
 
   if (detail.kind === 'daemon_presence_changed') {
     return (
-      <EventCard
-        eyebrow="Daemon"
+      <TimelineEventCard
+        eyebrow={copy.eventEyebrows.daemon}
         accent="text-slate-700"
         icon={detail.state === 'online' ? <Wifi size={16} /> : <WifiOff size={16} />}
-        timestamp={event.recorded_at}
+        timestampLabel={ts}
       >
-        <div className="text-sm text-slate-700">Daemon is now {detail.state.replace('_', ' ')}.</div>
-      </EventCard>
+        <div className="text-sm text-slate-700">{copy.daemonNow(copy.daemonStates[detail.state])}</div>
+      </TimelineEventCard>
     );
   }
 
   if (detail.kind === 'session_created' || detail.kind === 'session_state_changed') {
     return (
-      <EventCard
-        eyebrow="Session"
+      <TimelineEventCard
+        eyebrow={copy.eventEyebrows.session}
         accent="text-slate-700"
         icon={<MessageSquareText size={16} />}
-        timestamp={event.recorded_at}
+        timestampLabel={ts}
       >
-        <div className="text-sm text-slate-700">{sessionEventSummary(detail)}</div>
-      </EventCard>
+        <div className="text-sm text-slate-700">{sessionEventSummary(detail, copy)}</div>
+      </TimelineEventCard>
     );
   }
 
   return (
-    <EventCard
-      eyebrow="Runner"
+    <TimelineEventCard
+      eyebrow={copy.eventEyebrows.runner}
       accent="text-slate-700"
       icon={<Bot size={16} />}
-      timestamp={event.recorded_at}
+      timestampLabel={ts}
     >
-      <div className="text-sm text-slate-700">{runnerEventSummary(detail)}</div>
-    </EventCard>
+      <div className="text-sm text-slate-700">{runnerEventSummary(detail, copy)}</div>
+    </TimelineEventCard>
   );
 }
 
-function RemoteFrame({ children }: { children: ReactNode }) {
-  return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#fbf6ec,transparent_28%),linear-gradient(180deg,#f4efe4_0%,#efe8db_100%)] text-slate-900">
-      {children}
-    </div>
-  );
+// ═══════════════════════════════════════════════════════════════════════════
+// Pure helpers
+// ═══════════════════════════════════════════════════════════════════════════
+
+function sessionCanAcceptCommands(session: RemoteSessionRecord | null): boolean {
+  return Boolean(session?.owner_runner_id) && session?.owner_runner_available !== false;
 }
 
-function EmptyCard({
-  title,
-  description,
-}: {
-  title: string;
-  description: string;
-}) {
-  return (
-    <div className="max-w-md rounded-[28px] border border-[#e1d7c8] bg-white px-6 py-6 text-center shadow-[0_16px_38px_rgba(34,32,28,0.08)]">
-      <div className="text-lg font-semibold text-slate-900">{title}</div>
-      <div className="mt-3 text-sm leading-6 text-slate-500">{description}</div>
-    </div>
-  );
-}
-
-function PanelHint({ children }: { children: ReactNode }) {
-  return (
-    <div className="rounded-2xl bg-[#faf7f1] px-3 py-3 text-sm leading-6 text-slate-500">
-      {children}
-    </div>
-  );
-}
-
-function MessageCard({
-  role,
-  header,
-  children,
-}: {
-  role: RemoteMessageRole;
-  header: string;
-  children: ReactNode;
-}) {
-  const isUser = role === 'user';
-  return (
-    <div className={cn('flex', isUser ? 'justify-end' : 'justify-start')}>
-      <div
-        className={cn(
-          'max-w-4xl rounded-[28px] px-5 py-4 shadow-[0_16px_34px_rgba(34,32,28,0.07)]',
-          isUser ? 'bg-[#17181a] text-white' : 'border border-[#e5ddcf] bg-white',
-        )}
-      >
-        <div
-          className={cn(
-            'mb-3 text-xs font-semibold uppercase tracking-[0.22em]',
-            isUser ? 'text-white/60' : 'text-slate-400',
-          )}
-        >
-          {header}
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function EventCard({
-  eyebrow,
-  accent,
-  icon,
-  timestamp,
-  children,
-}: {
-  eyebrow: string;
-  accent: string;
-  icon: ReactNode;
-  timestamp: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="rounded-[24px] border border-[#e5ddcf] bg-white px-5 py-4 shadow-[0_14px_32px_rgba(34,32,28,0.06)]">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div
-          className={cn(
-            'inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.22em]',
-            accent,
-          )}
-        >
-          {icon}
-          {eyebrow}
-        </div>
-        <div className="text-xs text-slate-400">{formatRelativeTime(timestamp)}</div>
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function StatePill({
-  state,
-  compact = false,
-}: {
-  state: RemoteSessionState;
-  compact?: boolean;
-}) {
-  return (
-    <div
-      className={cn(
-        'rounded-full border px-3 py-1 text-xs font-medium',
-        sessionStateClassName(state),
-        compact && 'px-2.5 py-1',
-      )}
-    >
-      {SESSION_STATE_LABELS[state]}
-    </div>
-  );
-}
-
-function ConnectionPill({ state }: { state: ConnectionState }) {
-  return (
-    <div
-      className={cn(
-        'inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm',
-        connectionClassName(state),
-      )}
-    >
-      {state === 'open' ? <Wifi size={14} /> : state === 'error' ? <X size={14} /> : <WifiOff size={14} />}
-      {connectionLabel(state)}
-    </div>
-  );
-}
-
-function hydrateTimeline(events: RemoteTimelineEvent[]): RemoteTimelineEvent[] {
-  return [...events]
-    .sort((left, right) => left.sequence - right.sequence)
-    .reduce<RemoteTimelineEvent[]>((current, event) => appendTimelineEvent(current, event), []);
-}
-
-function appendTimelineEvent(
-  current: RemoteTimelineEvent[],
-  nextEvent: RemoteTimelineEvent,
-): RemoteTimelineEvent[] {
-  if (current.some((event) => event.sequence === nextEvent.sequence)) {
-    return current;
+function describeSessionControl(
+  session: RemoteSessionRecord | null,
+  locale: ReturnType<typeof resolveRemoteLocale>,
+  copy: ReturnType<typeof getRemoteCopy>,
+): {
+  canSendPrompt: boolean;
+  canInterrupt: boolean;
+  notice: string | null;
+} {
+  if (!session) {
+    return {
+      canSendPrompt: false,
+      canInterrupt: false,
+      notice: null,
+    };
   }
 
-  if (nextEvent.detail.kind === 'message_committed') {
-    const committedDetail = nextEvent.detail;
-    const filtered = current.filter((event) => {
-      if (event.detail.kind !== 'message_delta') {
-        return true;
-      }
-      return !sameMessageStream(event.detail, committedDetail);
-    });
-    return [...filtered, nextEvent].sort((left, right) => left.sequence - right.sequence);
+  if (!session.owner_runner_id) {
+    return {
+      canSendPrompt: false,
+      canInterrupt: false,
+      notice: copy.controlUnavailableUnassigned,
+    };
   }
 
-  if (nextEvent.detail.kind === 'message_delta') {
-    const deltaDetail = nextEvent.detail;
-    const last = current[current.length - 1];
-    if (last?.detail.kind === 'message_delta' && sameMessageStream(last.detail, deltaDetail)) {
-      const merged: RemoteTimelineEvent = {
-        ...nextEvent,
-        detail: {
-          ...deltaDetail,
-          delta: `${last.detail.delta}${deltaDetail.delta}`,
-        },
-      };
-      return [...current.slice(0, -1), merged];
-    }
+  if (session.owner_runner_available === false) {
+    return {
+      canSendPrompt: false,
+      canInterrupt: false,
+      notice: copy.controlUnavailableRunnerOffline(
+        session.owner_runner_id,
+        session.owner_runner_last_seen_at
+          ? formatRemoteRelativeTime(session.owner_runner_last_seen_at, locale, copy)
+          : null,
+      ),
+    };
   }
 
-  if (nextEvent.detail.kind === 'tool_progress') {
-    const progressDetail = nextEvent.detail;
-    const last = current[current.length - 1];
-    if (last?.detail.kind === 'tool_progress' && sameToolProgress(last.detail, progressDetail)) {
-      const mergedDelta = `${last.detail.delta ?? ''}${progressDetail.delta ?? ''}`.trim();
-      const merged: RemoteTimelineEvent = {
-        ...nextEvent,
-        detail: {
-          ...progressDetail,
-          delta: mergedDelta || undefined,
-          elapsed_time_seconds: progressDetail.elapsed_time_seconds ?? last.detail.elapsed_time_seconds,
-        },
-      };
-      return [...current.slice(0, -1), merged];
-    }
-  }
-
-  return [...current, nextEvent].sort((left, right) => left.sequence - right.sequence);
-}
-
-function sameMessageStream(
-  left: Extract<RemoteTimelineEventDetail, { kind: 'message_delta' | 'message_committed' }>,
-  right: Extract<RemoteTimelineEventDetail, { kind: 'message_delta' | 'message_committed' }>,
-): boolean {
-  if (left.message_id && right.message_id) {
-    return left.message_id === right.message_id;
-  }
-  return left.role === right.role;
-}
-
-function sameToolProgress(
-  left: Extract<RemoteTimelineEventDetail, { kind: 'tool_progress' }>,
-  right: Extract<RemoteTimelineEventDetail, { kind: 'tool_progress' }>,
-): boolean {
-  const leftKey = left.tool_call_id ?? left.tool_name ?? '';
-  const rightKey = right.tool_call_id ?? right.tool_name ?? '';
-  return leftKey.length > 0 && leftKey === rightKey;
-}
-
-function sessionTitle(session: RemoteSessionRecord): string {
-  const title = session.metadata.title?.trim();
-  if (title) {
-    return title;
-  }
-  return session.workspace_id;
+  const interactive = sessionCanAcceptCommands(session);
+  return {
+    canSendPrompt: interactive,
+    canInterrupt: interactive,
+    notice: null,
+  };
 }
 
 function toolLabel(
@@ -1519,139 +1173,75 @@ function toolSummary(
     | Extract<RemoteTimelineEventDetail, { kind: 'tool_started' }>
     | Extract<RemoteTimelineEventDetail, { kind: 'tool_progress' }>
     | Extract<RemoteTimelineEventDetail, { kind: 'tool_finished' }>,
+  copy: ReturnType<typeof getRemoteCopy>,
 ): string {
   if (detail.kind === 'tool_started') {
-    return `Started tool call ${detail.tool_call_id}.`;
+    return copy.toolStarted(detail.tool_call_id);
   }
   if (detail.kind === 'tool_progress') {
     if (detail.delta) {
       return detail.delta;
     }
     if (detail.elapsed_time_seconds != null) {
-      return `Elapsed ${detail.elapsed_time_seconds}s.`;
+      return copy.toolElapsed(detail.elapsed_time_seconds);
     }
-    return 'Tool is still running.';
+    return copy.toolRunning;
   }
   if (detail.summary) {
     return detail.summary;
   }
-  return detail.is_error ? 'Tool failed without a summary.' : 'Tool completed.';
+  return detail.is_error ? copy.toolFailedWithoutSummary : copy.toolCompleted;
 }
 
 function approvalSummary(
   detail:
     | Extract<RemoteTimelineEventDetail, { kind: 'approval_requested' }>
     | Extract<RemoteTimelineEventDetail, { kind: 'approval_resolved' }>,
+  copy: ReturnType<typeof getRemoteCopy>,
 ): string {
   if (detail.kind === 'approval_requested') {
-    return `${detail.title} is waiting for a decision.`;
+    return copy.approvalWaiting(detail.title);
   }
-  return `Approval ${detail.approval_id} is now ${detail.state}.`;
+  return copy.approvalResolved(detail.approval_id, copy.approvalStateLabels[detail.state]);
 }
 
 function artifactSummary(
   detail:
     | Extract<RemoteTimelineEventDetail, { kind: 'artifact_created' }>
     | Extract<RemoteTimelineEventDetail, { kind: 'artifact_manifest' }>,
+  copy: ReturnType<typeof getRemoteCopy>,
 ): string {
   if (detail.kind === 'artifact_created') {
-    return `${detail.name} (${detail.file_name}) published as ${formatBytes(detail.size_bytes)}.`;
+    return copy.artifactCreated(detail.name, detail.file_name, formatBytes(detail.size_bytes));
   }
-  return `${detail.artifact_ids.length} artifact reference(s) published to the session.`;
+  return copy.artifactManifest(detail.artifact_ids.length);
 }
 
 function sessionEventSummary(
   detail:
     | Extract<RemoteTimelineEventDetail, { kind: 'session_created' }>
     | Extract<RemoteTimelineEventDetail, { kind: 'session_state_changed' }>,
+  copy: ReturnType<typeof getRemoteCopy>,
 ): string {
   if (detail.kind === 'session_created') {
-    return `Session created for workspace ${detail.workspace_id}.`;
+    return copy.sessionCreated(detail.workspace_id);
   }
-  return `Session moved from ${SESSION_STATE_LABELS[detail.previous_state]} to ${SESSION_STATE_LABELS[detail.state]}.`;
+  return copy.sessionMoved(
+    copy.sessionStateLabels[detail.previous_state],
+    copy.sessionStateLabels[detail.state],
+  );
 }
 
 function runnerEventSummary(
   detail:
     | Extract<RemoteTimelineEventDetail, { kind: 'runner_registered' }>
     | Extract<RemoteTimelineEventDetail, { kind: 'runner_heartbeat' }>,
+  copy: ReturnType<typeof getRemoteCopy>,
 ): string {
   if (detail.kind === 'runner_registered') {
-    return `Runner registered ${detail.workspace_ids.length} workspace(s) with a ${detail.lease_ttl_secs}s lease.`;
+    return copy.runnerRegistered(detail.workspace_ids.length, detail.lease_ttl_secs);
   }
-  return `Runner heartbeat: ${detail.active_sessions} active, ${detail.queued_sessions} queued.`;
-}
-
-function sessionStateClassName(state: RemoteSessionState): string {
-  switch (state) {
-    case 'running':
-      return 'border-[#cfe4d7] bg-[#edf7ef] text-[#236342]';
-    case 'waiting_approval':
-      return 'border-[#ead9b7] bg-[#fbf3df] text-[#7c5d12]';
-    case 'completed':
-      return 'border-[#d9e7ef] bg-[#eef7fb] text-[#265f7a]';
-    case 'failed':
-      return 'border-[#f0d2ce] bg-[#fff3f1] text-[#9b3b32]';
-    case 'cancelled':
-      return 'border-[#e5ddd4] bg-[#f6f1eb] text-slate-600';
-    default:
-      return 'border-[#e5ddd4] bg-[#f6f1eb] text-slate-600';
-  }
-}
-
-function connectionClassName(state: ConnectionState): string {
-  switch (state) {
-    case 'open':
-      return 'border-[#cfe4d7] bg-[#edf7ef] text-[#236342]';
-    case 'error':
-      return 'border-[#f0d2ce] bg-[#fff3f1] text-[#9b3b32]';
-    case 'connecting':
-    case 'reconnecting':
-      return 'border-[#ead9b7] bg-[#fbf3df] text-[#7c5d12]';
-    default:
-      return 'border-[#e5ddd4] bg-[#f6f1eb] text-slate-600';
-  }
-}
-
-function connectionLabel(state: ConnectionState): string {
-  switch (state) {
-    case 'open':
-      return 'Live';
-    case 'connecting':
-      return 'Connecting';
-    case 'reconnecting':
-      return 'Reconnecting';
-    case 'error':
-      return 'Stream Error';
-    default:
-      return 'Idle';
-  }
-}
-
-function formatRelativeTime(iso: string): string {
-  const diffMs = Date.now() - new Date(iso).getTime();
-  const diffMinutes = Math.floor(diffMs / 60_000);
-  if (diffMinutes < 1) {
-    return 'just now';
-  }
-  if (diffMinutes < 60) {
-    return `${diffMinutes}m ago`;
-  }
-  const diffHours = Math.floor(diffMinutes / 60);
-  if (diffHours < 24) {
-    return `${diffHours}h ago`;
-  }
-  return new Date(iso).toLocaleDateString();
-}
-
-function formatBytes(sizeBytes: number): string {
-  if (sizeBytes < 1024) {
-    return `${sizeBytes} B`;
-  }
-  if (sizeBytes < 1024 * 1024) {
-    return `${(sizeBytes / 1024).toFixed(1)} KB`;
-  }
-  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+  return copy.runnerHeartbeat(detail.active_sessions, detail.queued_sessions);
 }
 
 function extractErrorMessage(error: unknown): string {
