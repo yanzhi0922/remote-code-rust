@@ -24,6 +24,7 @@ use rc_tools::{
     ProgressCallback, ToolExecutionContext,
     agent::{DelegateProgressEvent, parse_delegate_progress_event},
     builtin_tool_specs, execute_tool_call,
+    mcp_runtime::discover_runtime_mcp_servers,
     tasks::load_persisted_ui_task_snapshots,
 };
 use rc_ui_bridge::UiTaskNode;
@@ -34,7 +35,6 @@ use crate::hooks::{
     HookRunState, RuntimeHookDiscovery, apply_post_tool_hooks, apply_pre_tool_use_hooks,
     discover_runtime_hooks, ensure_session_start_hooks,
 };
-use crate::mcp_runtime::discover_runtime_mcp_servers;
 use crate::query_engine_compat::run_prompt_with_query_engine_compat;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]

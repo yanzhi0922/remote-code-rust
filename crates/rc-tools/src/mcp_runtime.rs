@@ -4,22 +4,24 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, anyhow};
 use rc_config::{RuntimeConfig, SettingSource};
 
+use crate::{RuntimeMcpServerPolicyEntry, ToolRuntimePolicy};
+
 #[derive(Debug, Clone)]
-pub(crate) struct RuntimeMcpServerEntry {
-    pub(crate) origin_kind: &'static str,
-    pub(crate) origin_name: String,
-    pub(crate) config_path: PathBuf,
-    pub(crate) server: rc_mcp::McpServerConfig,
+pub struct RuntimeMcpServerEntry {
+    pub origin_kind: &'static str,
+    pub origin_name: String,
+    pub config_path: PathBuf,
+    pub server: rc_mcp::McpServerConfig,
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct RuntimeMcpDiscovery {
-    pub(crate) servers: Vec<RuntimeMcpServerEntry>,
-    pub(crate) warnings: Vec<String>,
+pub struct RuntimeMcpDiscovery {
+    pub servers: Vec<RuntimeMcpServerEntry>,
+    pub warnings: Vec<String>,
 }
 
 impl RuntimeMcpDiscovery {
-    pub(crate) fn enabled_server_names(&self) -> Vec<String> {
+    pub fn enabled_server_names(&self) -> Vec<String> {
         self.servers
             .iter()
             .filter(|entry| entry.server.enabled)
@@ -29,7 +31,7 @@ impl RuntimeMcpDiscovery {
             .collect()
     }
 
-    pub(crate) fn disabled_server_names(&self) -> Vec<String> {
+    pub fn disabled_server_names(&self) -> Vec<String> {
         self.servers
             .iter()
             .filter(|entry| !entry.server.enabled)
@@ -38,15 +40,83 @@ impl RuntimeMcpDiscovery {
             .into_iter()
             .collect()
     }
+
+    pub fn into_policy_entries(self) -> Vec<RuntimeMcpServerPolicyEntry> {
+        self.servers
+            .into_iter()
+            .map(|entry| RuntimeMcpServerPolicyEntry {
+                origin_kind: entry.origin_kind.to_owned(),
+                origin_name: entry.origin_name,
+                config_path: entry.config_path,
+                server: entry.server,
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct RuntimeMcpResolution {
-    pub(crate) entry: RuntimeMcpServerEntry,
-    pub(crate) warnings: Vec<String>,
+pub struct RuntimeMcpResolution {
+    pub entry: RuntimeMcpServerEntry,
+    pub warnings: Vec<String>,
 }
 
-pub(crate) fn resolve_runtime_mcp_server(
+pub fn runtime_mcp_policy_entries(
+    config: &RuntimeConfig,
+    extra_config_paths: &[PathBuf],
+) -> Vec<RuntimeMcpServerPolicyEntry> {
+    discover_runtime_mcp_servers(config, extra_config_paths).into_policy_entries()
+}
+
+pub fn resolve_runtime_policy_mcp_server(
+    policy: &ToolRuntimePolicy,
+    server_name: &str,
+) -> Result<RuntimeMcpServerPolicyEntry> {
+    if policy.mcp_servers.is_empty() {
+        return Err(anyhow!(
+            "MCP runtime inventory is not configured for the current process"
+        ));
+    }
+
+    let matches = policy
+        .mcp_servers
+        .iter()
+        .filter(|entry| entry.server.name == server_name)
+        .cloned()
+        .collect::<Vec<_>>();
+    match matches.len() {
+        0 => Err(anyhow!(
+            "MCP server '{server_name}' is not available in the current runtime inventory"
+        )),
+        1 => {
+            let entry = matches.into_iter().next().expect("single match");
+            if !entry.server.enabled {
+                return Err(anyhow!(
+                    "MCP server '{server_name}' is disabled by the current runtime inventory"
+                ));
+            }
+            Ok(entry)
+        }
+        _ => {
+            let candidates = matches
+                .into_iter()
+                .map(|entry| {
+                    format!(
+                        "{}:{} ({})",
+                        entry.origin_kind,
+                        entry.origin_name,
+                        entry.config_path.display()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(anyhow!(
+                "MCP server '{server_name}' is ambiguous across: {candidates}"
+            ))
+        }
+    }
+}
+
+pub fn resolve_runtime_mcp_server(
     config: &RuntimeConfig,
     server_name: &str,
     extra_config_paths: &[PathBuf],
@@ -88,7 +158,7 @@ pub(crate) fn resolve_runtime_mcp_server(
     }
 }
 
-pub(crate) fn discover_runtime_mcp_servers(
+pub fn discover_runtime_mcp_servers(
     config: &RuntimeConfig,
     extra_config_paths: &[PathBuf],
 ) -> RuntimeMcpDiscovery {

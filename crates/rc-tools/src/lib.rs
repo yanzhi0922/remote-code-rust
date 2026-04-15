@@ -11,6 +11,7 @@ pub mod file_ops;
 pub mod git;
 pub mod hooks;
 pub mod lsp;
+pub mod mcp_runtime;
 pub mod mcp_tools;
 pub mod memory_tools;
 pub mod misc;
@@ -55,11 +56,22 @@ static TOOL_RUNTIME_POLICY: Lazy<Mutex<ToolRuntimePolicy>> =
     Lazy::new(|| Mutex::new(ToolRuntimePolicy::default()));
 
 /// Process-scoped runtime policy for tool exposure and task artifacts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeMcpServerPolicyEntry {
+    pub origin_kind: String,
+    pub origin_name: String,
+    pub config_path: PathBuf,
+    pub server: rc_mcp::McpServerConfig,
+}
+
+/// Process-scoped runtime policy for tool exposure and task artifacts.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolRuntimePolicy {
     pub allowed_tools: Vec<String>,
     pub disallowed_tools: Vec<String>,
     pub task_output_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub mcp_servers: Vec<RuntimeMcpServerPolicyEntry>,
     #[serde(default)]
     pub shell_policy: shell::ShellExecutionPolicy,
 }
@@ -445,6 +457,18 @@ fn normalize_tool_runtime_policy(mut policy: ToolRuntimePolicy) -> ToolRuntimePo
         .collect::<Vec<_>>();
     policy.disallowed_tools.sort();
     policy.disallowed_tools.dedup();
+
+    policy.mcp_servers.sort_by(|left, right| {
+        left.server
+            .name
+            .cmp(&right.server.name)
+            .then_with(|| left.origin_kind.cmp(&right.origin_kind))
+            .then_with(|| left.origin_name.cmp(&right.origin_name))
+            .then_with(|| left.config_path.cmp(&right.config_path))
+    });
+    policy.mcp_servers.dedup_by(|left, right| {
+        left.config_path == right.config_path && left.server == right.server
+    });
     policy
 }
 
@@ -464,13 +488,19 @@ fn tool_allowed_by_policy(tool_name: &str, policy: &ToolRuntimePolicy) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        CommandHookExecutionRequest, HookShell, ToolExecutionContext, builtin_tool_specs,
-        execute_command_hook, execute_tool_call,
+        CommandHookExecutionRequest, HookShell, RuntimeMcpServerPolicyEntry, ToolExecutionContext,
+        ToolRuntimePolicy, builtin_tool_specs, configure_tool_runtime_policy, execute_command_hook,
+        execute_tool_call,
     };
+    use once_cell::sync::Lazy;
     use rc_core::{HookEvent, PermissionMode, ToolCall};
+    use rc_mcp::{McpCapabilityMatrix, McpServerConfig, McpTransportConfig};
     use rc_permissions::StaticPermissionBroker;
     use serde_json::json;
+    use std::sync::Mutex;
     use tempfile::tempdir;
+
+    static RUNTIME_POLICY_TEST_MUTEX: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
     #[tokio::test]
     async fn read_and_search_tools_work() {
@@ -2063,6 +2093,201 @@ mod tests {
         let parsed: serde_json::Value =
             serde_json::from_str(&status_result.content).expect("should be valid JSON");
         assert_eq!(parsed["status"], "authenticated");
+    }
+
+    #[tokio::test]
+    async fn mcp_call_uses_runtime_inventory_from_policy() {
+        let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX
+            .lock()
+            .expect("runtime policy test mutex");
+        let tempdir = tempdir().expect("tempdir");
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+
+        let original_policy = super::current_tool_runtime_policy();
+        configure_tool_runtime_policy(ToolRuntimePolicy {
+            allowed_tools: Vec::new(),
+            disallowed_tools: Vec::new(),
+            task_output_dir: None,
+            mcp_servers: vec![RuntimeMcpServerPolicyEntry {
+                origin_kind: "profile".to_owned(),
+                origin_name: "profile".to_owned(),
+                config_path: tempdir.path().join("mcp.toml"),
+                server: McpServerConfig {
+                    name: "demo".to_owned(),
+                    enabled: false,
+                    transport: McpTransportConfig::Stdio {
+                        command: "python".to_owned(),
+                        args: Vec::new(),
+                        cwd: None,
+                        env: Default::default(),
+                    },
+                    capabilities: McpCapabilityMatrix::default(),
+                    startup_timeout_secs: None,
+                    request_timeout_secs: None,
+                    metadata: Default::default(),
+                },
+            }],
+            shell_policy: Default::default(),
+        })
+        .expect("set runtime policy");
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "mcp_call".to_owned(),
+                input: json!({"server": "demo", "tool": "search", "arguments": {"q": "rust"}}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("mcp_call should return a tool result");
+
+        configure_tool_runtime_policy(original_policy).expect("restore runtime policy");
+
+        assert!(
+            result.is_error,
+            "mcp_call should fail for disabled inventory"
+        );
+        assert!(
+            result
+                .content
+                .contains("disabled by the current runtime inventory"),
+            "unexpected error: {}",
+            result.content
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_call_requires_runtime_inventory_in_policy() {
+        let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX
+            .lock()
+            .expect("runtime policy test mutex");
+        let tempdir = tempdir().expect("tempdir");
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+
+        let original_policy = super::current_tool_runtime_policy();
+        configure_tool_runtime_policy(ToolRuntimePolicy {
+            allowed_tools: Vec::new(),
+            disallowed_tools: Vec::new(),
+            task_output_dir: None,
+            mcp_servers: Vec::new(),
+            shell_policy: Default::default(),
+        })
+        .expect("set runtime policy");
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "mcp_call".to_owned(),
+                input: json!({"server": "demo", "tool": "search", "arguments": {"q": "rust"}}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("mcp_call should return a tool result");
+
+        configure_tool_runtime_policy(original_policy).expect("restore runtime policy");
+
+        assert!(
+            result.is_error,
+            "mcp_call should fail without runtime inventory"
+        );
+        assert!(
+            result
+                .content
+                .contains("MCP runtime inventory is not configured"),
+            "unexpected error: {}",
+            result.content
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_call_rejects_ambiguous_runtime_inventory_entries() {
+        let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX
+            .lock()
+            .expect("runtime policy test mutex");
+        let tempdir = tempdir().expect("tempdir");
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+
+        let original_policy = super::current_tool_runtime_policy();
+        let demo_server =
+            |origin_kind: &str, origin_name: &str, config_name: &str| RuntimeMcpServerPolicyEntry {
+                origin_kind: origin_kind.to_owned(),
+                origin_name: origin_name.to_owned(),
+                config_path: tempdir.path().join(config_name),
+                server: McpServerConfig {
+                    name: "demo".to_owned(),
+                    enabled: true,
+                    transport: McpTransportConfig::Stdio {
+                        command: "python".to_owned(),
+                        args: Vec::new(),
+                        cwd: None,
+                        env: Default::default(),
+                    },
+                    capabilities: McpCapabilityMatrix::default(),
+                    startup_timeout_secs: None,
+                    request_timeout_secs: None,
+                    metadata: Default::default(),
+                },
+            };
+        configure_tool_runtime_policy(ToolRuntimePolicy {
+            allowed_tools: Vec::new(),
+            disallowed_tools: Vec::new(),
+            task_output_dir: None,
+            mcp_servers: vec![
+                demo_server("cwd", "workspace", "cwd-mcp.toml"),
+                demo_server("profile", "profile", "profile-mcp.toml"),
+            ],
+            shell_policy: Default::default(),
+        })
+        .expect("set runtime policy");
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "mcp_call".to_owned(),
+                input: json!({"server": "demo", "tool": "search", "arguments": {"q": "rust"}}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("mcp_call should return a tool result");
+
+        configure_tool_runtime_policy(original_policy).expect("restore runtime policy");
+
+        assert!(
+            result.is_error,
+            "mcp_call should fail for ambiguous runtime inventory"
+        );
+        assert!(
+            result.content.contains("ambiguous across"),
+            "unexpected error: {}",
+            result.content
+        );
     }
 
     #[tokio::test]

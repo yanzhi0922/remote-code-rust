@@ -7,7 +7,6 @@ mod headless;
 mod hooks;
 mod interactive;
 mod mcp_cli;
-mod mcp_runtime;
 mod plugins;
 mod query_engine_compat;
 mod remote;
@@ -25,6 +24,7 @@ use anyhow::Result;
 use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
 use rc_session::SessionStore;
 use rc_telemetry::install_tracing;
+use rc_tools::mcp_runtime::runtime_mcp_policy_entries;
 use rc_tools::shell::ShellExecutionPolicy;
 use rc_tools::{ToolRuntimePolicy, configure_tool_runtime_policy};
 use uuid::Uuid;
@@ -231,6 +231,7 @@ fn configure_runtime_policy(config: &rc_config::RuntimeConfig) -> Result<()> {
                     .join(config.session_id.to_string()),
             ),
         },
+        mcp_servers: runtime_mcp_policy_entries(config, &[]),
     })
 }
 
@@ -406,7 +407,6 @@ mod tests {
     use crate::agents::{default_task_for_objective, parse_agent_spec, parse_task_spec};
     use crate::cli::{McpCallArgs, McpListArgs, RemoteEventKindValue};
     use crate::mcp_cli::{build_mcp_call_output, build_mcp_list_output, parse_mcp_call_arguments};
-    use crate::mcp_runtime::{discover_runtime_mcp_servers, resolve_runtime_mcp_server};
     use crate::remote::{
         RemoteFollowControl, StateLabel, build_remote_http_url, build_remote_ws_request_with_token,
         build_remote_ws_url, default_artifact_file_name, default_artifact_name,
@@ -431,6 +431,7 @@ mod tests {
     use chrono::{DateTime, Utc};
     use futures::SinkExt;
     use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
+    use rc_tools::mcp_runtime::{discover_runtime_mcp_servers, resolve_runtime_mcp_server};
     use std::{
         collections::BTreeSet,
         fs,

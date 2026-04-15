@@ -32,7 +32,9 @@ use rc_skills::discover_skills;
 use rc_tools::shell::ShellExecutionPolicy;
 use rc_tools::{
     agent::{parse_delegate_progress_event, DelegateProgressEvent},
-    configure_tool_runtime_policy, execute_tool_call, runtime_builtin_tool_specs,
+    configure_tool_runtime_policy, execute_tool_call,
+    mcp_runtime::runtime_mcp_policy_entries,
+    runtime_builtin_tool_specs,
     tasks::load_persisted_ui_task_snapshots,
     ToolExecutionContext, ToolRuntimePolicy,
 };
@@ -1765,6 +1767,7 @@ fn configure_runtime_policy_for_config(config: &RuntimeConfig) -> Result<()> {
         allowed_tools: config.allowed_tools.clone(),
         disallowed_tools: config.disallowed_tools.clone(),
         task_output_dir: Some(task_dir_for_paths(&config.paths, config.session_id)),
+        mcp_servers: runtime_mcp_policy_entries(config, &[]),
         shell_policy: ShellExecutionPolicy {
             block_inline_cwd: true,
             allow_background: true,
@@ -3520,8 +3523,14 @@ mod tests {
     use serde_json::json;
     use std::collections::BTreeMap;
     use std::fs;
+    use std::sync::{Mutex, OnceLock};
     use tempfile::tempdir;
     use uuid::Uuid;
+
+    fn runtime_policy_test_mutex() -> &'static Mutex<()> {
+        static RUNTIME_POLICY_TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+        RUNTIME_POLICY_TEST_MUTEX.get_or_init(|| Mutex::new(()))
+    }
 
     fn test_runtime_config(project_dir: &Path, profile_dir: &Path) -> RuntimeConfig {
         load_runtime_config(
@@ -3650,6 +3659,75 @@ mod tests {
         assert_eq!(snapshot.allowed_tools, vec!["read_file"]);
         assert_eq!(snapshot.disallowed_tools, vec!["bash_command"]);
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn configure_runtime_policy_for_config_populates_runtime_mcp_inventory() {
+        let _runtime_policy_guard = runtime_policy_test_mutex()
+            .lock()
+            .expect("runtime policy test mutex");
+        let original_policy = rc_tools::current_tool_runtime_policy();
+        let temp = tempdir().expect("tempdir should work");
+        let project_dir = temp.path().join("project");
+        let profile_dir = temp.path().join(".remote-code-rust");
+        let plugin_root = profile_dir.join("plugins").join("sample");
+        fs::create_dir_all(&project_dir).expect("project dir should exist");
+        fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("plugin dir");
+        fs::write(
+            plugin_root.join(".codex-plugin").join("plugin.json"),
+            r#"{"name":"sample","version":"0.1.0","mcp":"./mcp.toml"}"#,
+        )
+        .expect("plugin manifest write");
+
+        let mut plugin_mcp = McpConfig::default();
+        plugin_mcp.servers.insert(
+            "plugin-demo".to_owned(),
+            sample_stdio_mcp_server("plugin-demo", true, "plugin-cmd"),
+        );
+        plugin_mcp
+            .save(plugin_root.join(DEFAULT_MCP_CONFIG_FILE))
+            .expect("plugin MCP config should save");
+
+        let mut profile_mcp = McpConfig::default();
+        profile_mcp.servers.insert(
+            "profile-demo".to_owned(),
+            sample_stdio_mcp_server("profile-demo", true, "profile-cmd"),
+        );
+        profile_mcp
+            .save(profile_dir.join(DEFAULT_MCP_CONFIG_FILE))
+            .expect("profile MCP config should save");
+
+        let mut project_mcp = McpConfig::default();
+        project_mcp.servers.insert(
+            "project-demo".to_owned(),
+            sample_stdio_mcp_server("project-demo", true, "project-cmd"),
+        );
+        project_mcp
+            .save(project_dir.join(DEFAULT_MCP_CONFIG_FILE))
+            .expect("project MCP config should save");
+
+        let config = test_runtime_config(&project_dir, &profile_dir);
+        configure_runtime_policy_for_config(&config).expect("runtime policy should configure");
+
+        let policy = rc_tools::current_tool_runtime_policy();
+        let names = policy
+            .mcp_servers
+            .iter()
+            .map(|entry| entry.server.name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            names,
+            std::collections::BTreeSet::from(["plugin-demo", "profile-demo", "project-demo"])
+        );
+        assert!(policy
+            .mcp_servers
+            .iter()
+            .any(|entry| entry.server.name == "plugin-demo"
+                && entry.origin_kind == "plugin"
+                && entry.origin_name == "sample"));
+
+        rc_tools::configure_tool_runtime_policy(original_policy)
+            .expect("runtime policy should restore");
     }
 
     #[tokio::test]

@@ -27,9 +27,11 @@ tokio.workspace = true
 urlencoding = "2"
 walkdir.workspace = true
 rc-agents = { path = "../rc-agents" }
+rc-config = { path = "../rc-config" }
 rc-core = { path = "../rc-core" }
 rc-mcp = { path = "../rc-mcp" }
 rc-permissions = { path = "../rc-permissions" }
+rc-plugins = { path = "../rc-plugins" }
 rc-session = { path = "../rc-session" }
 rc-skills = { path = "../rc-skills" }
 rc-ui-bridge = { path = "../rc-ui-bridge" }

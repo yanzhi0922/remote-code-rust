@@ -4,13 +4,13 @@ use std::process::Stdio;
 
 use anyhow::{Result, anyhow};
 use rc_config::{RUNTIME_VERSION, RuntimeConfig};
+use rc_tools::mcp_runtime::{
+    RuntimeMcpResolution, discover_runtime_mcp_servers, resolve_runtime_mcp_server,
+};
 
 use crate::cli::{
     McpAddArgs, McpCallArgs, McpCommand, McpGetArgs, McpListArgs, McpRemoveArgs, McpResetArgs,
     McpServeArgs, McpToggleArgs,
-};
-use crate::mcp_runtime::{
-    RuntimeMcpResolution, discover_runtime_mcp_servers, resolve_runtime_mcp_server,
 };
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -808,7 +808,7 @@ mod tests {
         parse_string_map, run_mcp_add, run_mcp_remove, run_mcp_reset, run_mcp_toggle,
     };
     use crate::cli::{McpAddArgs, McpRemoveArgs, McpResetArgs, McpToggleArgs};
-    use crate::mcp_runtime::{discover_runtime_mcp_servers, resolve_runtime_mcp_server};
+    use rc_tools::mcp_runtime::{discover_runtime_mcp_servers, resolve_runtime_mcp_server};
 
     fn test_config() -> (tempfile::TempDir, rc_config::RuntimeConfig) {
         let tempdir = tempdir().expect("tempdir");

@@ -3,7 +3,8 @@
 use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
 
-use super::ToolExecutionContext;
+use super::{ToolExecutionContext, current_tool_runtime_policy};
+use crate::mcp_runtime::resolve_runtime_policy_mcp_server;
 
 pub(crate) fn mcp_auth_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
     let server = input["server"]
@@ -81,9 +82,12 @@ pub(crate) fn read_mcp_resource_tool(input: &Value) -> Result<String> {
 
 /// Call a tool on an MCP server directly.
 ///
-/// Loads the MCP configuration, finds the specified server, connects via
-/// stdio transport, and invokes the named tool with the provided arguments.
-pub(crate) async fn mcp_call_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
+/// Uses the configured runtime MCP inventory, finds the specified server,
+/// and invokes the named tool with the provided arguments.
+pub(crate) async fn mcp_call_tool(
+    input: &Value,
+    _context: &ToolExecutionContext,
+) -> Result<String> {
     let server_name = input["server"]
         .as_str()
         .ok_or_else(|| anyhow!("server is required"))?;
@@ -92,33 +96,8 @@ pub(crate) async fn mcp_call_tool(input: &Value, context: &ToolExecutionContext)
         .ok_or_else(|| anyhow!("tool is required"))?;
     let arguments = input.get("arguments").cloned().unwrap_or(json!({}));
 
-    // Discover MCP config files in the workspace.
-    let config_candidates = [
-        context.cwd.join(".mcp.json"),
-        context.cwd.join(".remote-code-rust").join("mcp.json"),
-    ];
-
-    let mut server_config: Option<rc_mcp::McpServerConfig> = None;
-    for candidate in &config_candidates {
-        if candidate.exists()
-            && let Ok(config) = rc_mcp::McpConfig::load(candidate)
-            && let Some(srv) = config.servers.get(server_name)
-        {
-            server_config = Some(srv.clone());
-            break;
-        }
-    }
-
-    let server = server_config.ok_or_else(|| {
-        anyhow!(
-            "MCP server '{server_name}' not found. Checked: {}",
-            config_candidates
-                .iter()
-                .map(|p| p.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    })?;
+    let runtime_policy = current_tool_runtime_policy();
+    let server = resolve_runtime_policy_mcp_server(&runtime_policy, server_name)?.server;
 
     let client_info = rc_mcp::McpClientInfo::new("remote-code-rust", env!("CARGO_PKG_VERSION"));
     let response = rc_mcp::call_tool(&server, &client_info, tool_name, arguments).await?;
