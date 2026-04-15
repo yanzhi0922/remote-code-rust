@@ -4,6 +4,38 @@
 //! capabilities, and invokes plugin actions over JSON-RPC. Supports both
 //! stdio and HTTP transports.
 
+pub mod autoupdate;
+pub mod blocklist;
+pub mod dependency;
+pub mod directories;
+pub mod flagging;
+pub mod git_availability;
+pub mod hint_recommendation;
+pub mod identifier;
+pub mod installation;
+pub mod loader;
+pub mod load_agents;
+pub mod load_commands;
+pub mod load_hooks;
+pub mod load_output_styles;
+pub mod managed;
+pub mod markdown_walker;
+pub mod marketplace;
+pub mod mcp_integration;
+pub mod mcpb_handler;
+pub mod lsp_integration;
+pub mod options_storage;
+pub mod orphan_filter;
+pub mod policy;
+pub mod reconciler;
+pub mod refresh;
+pub mod schemas;
+pub mod startup_check;
+pub mod telemetry;
+pub mod validate;
+pub mod versioning;
+pub mod zip_cache;
+
 use std::{
     collections::BTreeMap,
     fs,

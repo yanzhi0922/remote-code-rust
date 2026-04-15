@@ -12,12 +12,18 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+directories.workspace = true
+once_cell.workspace = true
 rc-mcp = { path = "../rc-mcp" }
 rc-skills = { path = "../rc-skills" }
+regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 walkdir.workspace = true
 
 [dev-dependencies]
