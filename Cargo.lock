@@ -3973,6 +3973,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "rc-permissions-v2"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "rc-core",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "rc-plugins"
 version = "0.1.0"
 dependencies = [
