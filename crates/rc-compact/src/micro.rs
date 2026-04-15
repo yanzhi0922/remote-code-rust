@@ -262,6 +262,7 @@ pub fn estimate_messages_tokens(messages: &[Message]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rc_core::message::UserMessage;
 
     #[test]
     fn is_compactable_tool_known() {
