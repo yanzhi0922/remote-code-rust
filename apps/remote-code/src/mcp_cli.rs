@@ -3,32 +3,15 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use anyhow::{Result, anyhow};
-use rc_config::{RUNTIME_VERSION, RuntimeConfig, SettingSource};
+use rc_config::{RUNTIME_VERSION, RuntimeConfig};
 
 use crate::cli::{
     McpAddArgs, McpCallArgs, McpCommand, McpGetArgs, McpListArgs, McpRemoveArgs, McpResetArgs,
     McpServeArgs, McpToggleArgs,
 };
-
-#[derive(Debug, Clone)]
-pub(crate) struct RuntimeMcpServerEntry {
-    pub(crate) origin_kind: &'static str,
-    pub(crate) origin_name: String,
-    pub(crate) config_path: PathBuf,
-    pub(crate) server: rc_mcp::McpServerConfig,
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct RuntimeMcpDiscovery {
-    pub(crate) servers: Vec<RuntimeMcpServerEntry>,
-    pub(crate) warnings: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RuntimeMcpResolution {
-    pub(crate) entry: RuntimeMcpServerEntry,
-    pub(crate) warnings: Vec<String>,
-}
+use crate::mcp_runtime::{
+    RuntimeMcpResolution, discover_runtime_mcp_servers, resolve_runtime_mcp_server,
+};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct McpListOutput {
@@ -755,185 +738,6 @@ fn load_managed_mcp_config(path: &Path) -> Result<rc_mcp::McpConfig> {
     }
 }
 
-pub(crate) fn resolve_runtime_mcp_server(
-    config: &RuntimeConfig,
-    server_name: &str,
-    extra_config_paths: &[PathBuf],
-) -> Result<RuntimeMcpResolution> {
-    let mut discovery = discover_runtime_mcp_servers(config, extra_config_paths);
-    let mut matches = discovery
-        .servers
-        .iter()
-        .filter(|entry| entry.server.name == server_name)
-        .cloned()
-        .collect::<Vec<_>>();
-
-    match matches.len() {
-        0 => Err(anyhow!("No MCP server named `{server_name}` was found")),
-        1 => Ok(RuntimeMcpResolution {
-            entry: matches.pop().expect("single server match must exist"),
-            warnings: discovery.warnings,
-        }),
-        _ => {
-            let candidates = matches
-                .into_iter()
-                .map(|entry| {
-                    format!(
-                        "{}:{} ({})",
-                        entry.origin_kind,
-                        entry.origin_name,
-                        entry.config_path.display()
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            discovery.warnings.push(format!(
-                "Multiple MCP servers named `{server_name}` were discovered; use a unique config layout"
-            ));
-            Err(anyhow!(
-                "MCP server `{server_name}` is ambiguous across: {candidates}"
-            ))
-        }
-    }
-}
-
-pub(crate) fn discover_runtime_mcp_servers(
-    config: &RuntimeConfig,
-    extra_config_paths: &[PathBuf],
-) -> RuntimeMcpDiscovery {
-    let mut discovery = RuntimeMcpDiscovery::default();
-    let mut loaded_paths = BTreeSet::new();
-    if setting_source_enabled(config, SettingSource::Project) {
-        load_runtime_mcp_file(
-            &mut discovery,
-            &mut loaded_paths,
-            "cwd",
-            &config.cwd.display().to_string(),
-            &config.cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
-        );
-    }
-    if setting_source_enabled(config, SettingSource::User) {
-        load_runtime_mcp_file(
-            &mut discovery,
-            &mut loaded_paths,
-            "profile",
-            &config.paths.profile_dir.display().to_string(),
-            &config
-                .paths
-                .profile_dir
-                .join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
-        );
-    }
-    for path in extra_config_paths {
-        let candidate = if path.is_dir() {
-            path.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE)
-        } else {
-            path.clone()
-        };
-        load_runtime_mcp_file(
-            &mut discovery,
-            &mut loaded_paths,
-            "explicit",
-            &path.display().to_string(),
-            &candidate,
-        );
-    }
-
-    if setting_source_enabled(config, SettingSource::User) && config.paths.plugins_dir.exists() {
-        match rc_plugins::discover_plugins(&config.paths.plugins_dir) {
-            Ok(plugins) => {
-                for plugin in plugins {
-                    if let Some(path) = plugin.mcp_config_path() {
-                        if !loaded_paths.insert(path.clone()) {
-                            continue;
-                        }
-                        match rc_mcp::McpConfig::load(&path) {
-                            Ok(config) => push_runtime_mcp_servers(
-                                &mut discovery.servers,
-                                "plugin",
-                                &plugin.manifest.name,
-                                &path,
-                                config,
-                            ),
-                            Err(error) => discovery.warnings.push(format!(
-                                "Failed to load plugin MCP config for {}: {error}",
-                                plugin.manifest.name
-                            )),
-                        }
-                    }
-                }
-            }
-            Err(error) => discovery.warnings.push(format!(
-                "Failed to discover plugins for MCP inspection: {error}"
-            )),
-        }
-    }
-
-    discovery.servers.sort_by(|left, right| {
-        left.server
-            .name
-            .cmp(&right.server.name)
-            .then_with(|| left.origin_kind.cmp(right.origin_kind))
-            .then_with(|| left.origin_name.cmp(&right.origin_name))
-    });
-    discovery
-}
-
-fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool {
-    config.allowed_setting_sources.contains(&source)
-}
-
-fn load_runtime_mcp_file(
-    discovery: &mut RuntimeMcpDiscovery,
-    loaded_paths: &mut BTreeSet<PathBuf>,
-    origin_kind: &'static str,
-    origin_name: &str,
-    path: &Path,
-) {
-    if !path.exists() {
-        if origin_kind == "explicit" {
-            discovery.warnings.push(format!(
-                "Explicit MCP config {} was not found",
-                path.display()
-            ));
-        }
-        return;
-    }
-    if !loaded_paths.insert(path.to_path_buf()) {
-        return;
-    }
-    match rc_mcp::McpConfig::load(path) {
-        Ok(config) => push_runtime_mcp_servers(
-            &mut discovery.servers,
-            origin_kind,
-            origin_name,
-            path,
-            config,
-        ),
-        Err(error) => discovery.warnings.push(format!(
-            "Failed to load MCP config {}: {error}",
-            path.display()
-        )),
-    }
-}
-
-fn push_runtime_mcp_servers(
-    servers: &mut Vec<RuntimeMcpServerEntry>,
-    origin_kind: &'static str,
-    origin_name: &str,
-    config_path: &Path,
-    config: rc_mcp::McpConfig,
-) {
-    for server in config.servers.into_values() {
-        servers.push(RuntimeMcpServerEntry {
-            origin_kind,
-            origin_name: origin_name.to_string(),
-            config_path: config_path.to_path_buf(),
-            server,
-        });
-    }
-}
-
 fn mcp_serve_output_from_resolution(resolution: &RuntimeMcpResolution) -> McpServeOutput {
     let (command, args, cwd, env_keys) = match &resolution.entry.server.transport {
         rc_mcp::McpTransportConfig::Stdio {
@@ -1000,11 +804,11 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        discover_runtime_mcp_servers, load_managed_mcp_config, managed_mcp_config_path,
-        mcp_serve_output_from_resolution, parse_string_map, resolve_runtime_mcp_server,
-        run_mcp_add, run_mcp_remove, run_mcp_reset, run_mcp_toggle,
+        load_managed_mcp_config, managed_mcp_config_path, mcp_serve_output_from_resolution,
+        parse_string_map, run_mcp_add, run_mcp_remove, run_mcp_reset, run_mcp_toggle,
     };
     use crate::cli::{McpAddArgs, McpRemoveArgs, McpResetArgs, McpToggleArgs};
+    use crate::mcp_runtime::{discover_runtime_mcp_servers, resolve_runtime_mcp_server};
 
     fn test_config() -> (tempfile::TempDir, rc_config::RuntimeConfig) {
         let tempdir = tempdir().expect("tempdir");
@@ -1402,5 +1206,93 @@ args = ["profile.py"]"#,
         )
         .expect("unfiltered config");
         assert!(resolve_runtime_mcp_server(&unfiltered, "shared", &[]).is_err());
+    }
+
+    #[test]
+    fn runtime_mcp_discovery_deduplicates_same_config_path_across_sources() {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        fs::create_dir_all(&cwd).expect("cwd");
+        fs::create_dir_all(&profile).expect("profile");
+        fs::write(
+            cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            r#"[mcp_servers.project]
+command = "python""#,
+        )
+        .expect("write project mcp");
+
+        let config = load_runtime_config(
+            Some(cwd.clone()),
+            Some(profile),
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+            RuntimeOverrides::default(),
+        )
+        .expect("config");
+
+        let discovery =
+            discover_runtime_mcp_servers(&config, &[cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE)]);
+        assert_eq!(discovery.servers.len(), 1);
+        assert_eq!(discovery.servers[0].server.name, "project");
+        assert!(discovery.warnings.is_empty());
+    }
+
+    #[test]
+    fn runtime_mcp_discovery_warns_on_missing_or_invalid_explicit_config_but_continues() {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        let broken = tempdir.path().join("broken-mcp.toml");
+        let missing = tempdir.path().join("missing-mcp.toml");
+        fs::create_dir_all(&cwd).expect("cwd");
+        fs::create_dir_all(&profile).expect("profile");
+        fs::write(
+            profile.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            r#"[mcp_servers.profile]
+command = "python""#,
+        )
+        .expect("write profile mcp");
+        fs::write(&broken, "not valid toml = [").expect("write broken mcp");
+
+        let config = load_runtime_config(
+            Some(cwd),
+            Some(profile),
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+            RuntimeOverrides::default(),
+        )
+        .expect("config");
+
+        let discovery = discover_runtime_mcp_servers(&config, &[missing, broken]);
+        let names = discovery
+            .servers
+            .iter()
+            .map(|entry| entry.server.name.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["profile".to_owned()]);
+        assert_eq!(discovery.warnings.len(), 2);
+        assert!(discovery.warnings.iter().any(|warning| {
+            warning.contains("Explicit MCP config") && warning.contains("missing-mcp.toml")
+        }));
+        assert!(discovery.warnings.iter().any(|warning| {
+            warning.contains("Failed to load MCP config") && warning.contains("broken-mcp.toml")
+        }));
     }
 }

@@ -175,6 +175,10 @@ fn print_text_report(report: &DoctorReport) {
     println!("  disabled plugins: {}", report.extensions.disabled_plugins);
     println!("  plugin runtimes: {}", report.extensions.plugin_runtimes);
     println!("  mcp servers:    {}", report.extensions.mcp_servers);
+    println!(
+        "  disabled mcp:   {}",
+        report.extensions.disabled_mcp_servers
+    );
     println!("  hooks:          {}", report.extensions.hooks);
 
     if let Some(network) = &report.network {

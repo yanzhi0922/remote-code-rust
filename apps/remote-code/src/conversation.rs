@@ -34,6 +34,7 @@ use crate::hooks::{
     HookRunState, RuntimeHookDiscovery, apply_post_tool_hooks, apply_pre_tool_use_hooks,
     discover_runtime_hooks, ensure_session_start_hooks,
 };
+use crate::mcp_runtime::discover_runtime_mcp_servers;
 use crate::query_engine_compat::run_prompt_with_query_engine_compat;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -57,6 +58,7 @@ pub(crate) struct RuntimeExtensionDiscovery {
     pub(crate) plugins: Vec<String>,
     pub(crate) plugin_runtimes: Vec<String>,
     pub(crate) mcp_servers: Vec<String>,
+    pub(crate) disabled_mcp_servers: Vec<String>,
     pub(crate) warnings: Vec<String>,
 }
 
@@ -462,10 +464,8 @@ pub(crate) fn discover_runtime_extensions(config: &RuntimeConfig) -> RuntimeExte
     let mut skills = BTreeSet::new();
     let mut plugins = BTreeSet::new();
     let mut plugin_runtimes = BTreeSet::new();
-    let mut mcp_servers = BTreeSet::new();
     let mut warnings = Vec::new();
     let user_sources_enabled = setting_source_enabled(config, SettingSource::User);
-    let project_sources_enabled = setting_source_enabled(config, SettingSource::Project);
 
     if user_sources_enabled && config.paths.skills_dir.exists() {
         collect_skill_names(
@@ -490,48 +490,23 @@ pub(crate) fn discover_runtime_extensions(config: &RuntimeConfig) -> RuntimeExte
                         &mut warnings,
                         &format!("plugin {}", plugin.manifest.name),
                     );
-                    match plugin.load_mcp_config() {
-                        Ok(Some(mcp)) => {
-                            mcp_servers.extend(mcp.servers.keys().cloned());
-                        }
-                        Ok(None) => {}
-                        Err(error) => warnings.push(format!(
-                            "Failed to load plugin MCP config for {}: {error}",
-                            plugin.manifest.name
-                        )),
-                    }
                 }
             }
             Err(error) => warnings.push(format!("Failed to discover plugins: {error}")),
         }
     }
 
-    for (enabled, root) in [
-        (project_sources_enabled, &config.cwd),
-        (user_sources_enabled, &config.paths.profile_dir),
-    ] {
-        if enabled {
-            let candidate = root.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE);
-            if !candidate.exists() {
-                continue;
-            }
-            match rc_mcp::McpConfig::load(&candidate) {
-                Ok(config) => {
-                    mcp_servers.extend(config.servers.keys().cloned());
-                }
-                Err(error) => warnings.push(format!(
-                    "Failed to load MCP config {}: {error}",
-                    candidate.display()
-                )),
-            }
-        }
-    }
+    let mcp_discovery = discover_runtime_mcp_servers(config, &[]);
+    let mcp_servers = mcp_discovery.enabled_server_names();
+    let disabled_mcp_servers = mcp_discovery.disabled_server_names();
+    warnings.extend(mcp_discovery.warnings);
 
     RuntimeExtensionDiscovery {
         skills: skills.into_iter().collect(),
         plugins: plugins.into_iter().collect(),
         plugin_runtimes: plugin_runtimes.into_iter().collect(),
-        mcp_servers: mcp_servers.into_iter().collect(),
+        mcp_servers,
+        disabled_mcp_servers,
         warnings,
     }
 }
@@ -1143,6 +1118,7 @@ pub(crate) fn run_doctor(config: &RuntimeConfig) -> Result<()> {
         format!("  plugins:        {}", discovery.plugins.len()),
         format!("  plugin runtimes: {}", discovery.plugin_runtimes.len()),
         format!("  mcp servers:    {}", discovery.mcp_servers.len()),
+        format!("  disabled mcp:   {}", discovery.disabled_mcp_servers.len()),
         format!("  hooks:          {}", hooks.list(None).len()),
         String::new(),
         "[Readiness]".to_owned(),
@@ -1637,7 +1613,12 @@ mod tests {
             profile.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
             r#"[servers.profile]
 command = "python"
-args = ["profile.py"]"#,
+args = ["profile.py"]
+
+[servers.disabled]
+command = "python"
+args = ["disabled.py"]
+enabled = false"#,
         )
         .expect("write profile mcp");
         fs::write(
@@ -1699,6 +1680,7 @@ args = ["plugin.py"]"#,
         assert!(discovery.plugins.is_empty());
         assert!(discovery.plugin_runtimes.is_empty());
         assert_eq!(discovery.mcp_servers, vec!["project".to_owned()]);
+        assert!(discovery.disabled_mcp_servers.is_empty());
 
         let user_only = load_runtime_config(
             Some(cwd),
@@ -1730,5 +1712,6 @@ args = ["plugin.py"]"#,
             discovery.mcp_servers,
             vec!["plugin".to_owned(), "profile".to_owned()]
         );
+        assert_eq!(discovery.disabled_mcp_servers, vec!["disabled".to_owned()]);
     }
 }

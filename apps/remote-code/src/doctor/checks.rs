@@ -82,6 +82,7 @@ pub(crate) struct ExtensionsSection {
     pub disabled_plugins: usize,
     pub plugin_runtimes: usize,
     pub mcp_servers: usize,
+    pub disabled_mcp_servers: usize,
     pub hooks: usize,
 }
 
@@ -245,6 +246,7 @@ pub(crate) async fn collect_report(
         disabled_plugins,
         plugin_runtimes: discovery.plugin_runtimes.len(),
         mcp_servers: discovery.mcp_servers.len(),
+        disabled_mcp_servers: discovery.disabled_mcp_servers.len(),
         hooks: hooks.list(None).len(),
     };
     let env_providers = args.include_env_providers.then(env_provider_summaries);
