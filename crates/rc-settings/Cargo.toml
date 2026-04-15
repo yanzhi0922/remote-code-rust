@@ -1,0 +1,21 @@
+[package]
+name = "rc-settings"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Settings schema, validation, and layered loading — covers settings/types.ts"
+
+[dependencies]
+rc-core = { path = "../rc-core" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
