@@ -42,6 +42,28 @@ fn print_text_report(report: &DoctorReport) {
             report.runtime.allowed_setting_sources.join(", ")
         }
     );
+    println!(
+        "  settings files: {}",
+        if report.runtime.settings_files.is_empty() {
+            "(auto discovery only)".to_owned()
+        } else {
+            report
+                .runtime
+                .settings_files
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    );
+    println!(
+        "  setting sources: {}",
+        if report.runtime.setting_sources.is_empty() {
+            "(defaults)".to_owned()
+        } else {
+            report.runtime.setting_sources.join(", ")
+        }
+    );
 
     println!();
     println!("[Install]");

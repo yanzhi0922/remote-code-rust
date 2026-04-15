@@ -22,7 +22,7 @@ use rc_permissions::{
     auto_allows, classify_tool, load_layered_rules, rules::summarize_rule_sources,
     LayeredPermissionBroker, PermissionBroker, PermissionDecision, PermissionRequest,
 };
-use rc_plugins::{discover_plugins, PluginBundle, PLUGIN_DISABLED_MARKER};
+use rc_plugins::{discover_plugins_including_disabled, PluginBundle};
 use rc_provider::context::ContextWindowManager;
 use rc_provider::model_info::{get_model_info, ModelCapability};
 use rc_provider::streaming::StreamingCallbacks;
@@ -1176,8 +1176,8 @@ async fn build_gui_doctor_report(
     } else {
         Vec::new()
     };
-    let plugins = if user_sources_enabled {
-        match discover_plugins(&config.paths.plugins_dir) {
+    let all_plugins = if user_sources_enabled {
+        match discover_plugins_including_disabled(&config.paths.plugins_dir) {
             Ok(plugins) => plugins,
             Err(error) => {
                 warnings.push(format!("Failed to discover plugins: {error}"));
@@ -1187,10 +1187,14 @@ async fn build_gui_doctor_report(
     } else {
         Vec::new()
     };
-    let disabled_plugins = plugins
+    let disabled_plugins = all_plugins
         .iter()
-        .filter(|plugin| plugin.root.join(PLUGIN_DISABLED_MARKER).exists())
+        .filter(|plugin| plugin.is_disabled())
         .count();
+    let plugins = all_plugins
+        .into_iter()
+        .filter(|plugin| !plugin.is_disabled())
+        .collect::<Vec<_>>();
     let managed_mcp_servers = if user_sources_enabled {
         count_managed_mcp_servers(
             &config.paths.profile_dir.join(DEFAULT_MCP_CONFIG_FILE),

@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
-use rc_config::{RUNTIME_VERSION, RuntimeConfig};
+use rc_config::{RUNTIME_VERSION, RuntimeConfig, SettingSource};
 
 use crate::cli::{
     PluginsCommand, PluginsInspectArgs, PluginsInstallArgs, PluginsInvokeArgs, PluginsListArgs,
@@ -601,7 +601,11 @@ async fn build_plugins_list_output(
         }
         let has_runtime = entry.bundle.runtime_config().is_some();
         let live = if args.connect {
-            if has_runtime {
+            if entry.bundle.is_disabled() {
+                Some(PluginLiveRecord::skipped(
+                    "plugin is currently disabled by marker file",
+                ))
+            } else if has_runtime {
                 Some(
                     match rc_plugins::inspect_runtime(
                         &entry.bundle,
@@ -643,7 +647,11 @@ async fn build_plugins_inspect_output(
 ) -> Result<PluginInspectOutput> {
     let resolution = resolve_runtime_plugin(config, &args.plugin, &args.plugin_roots)?;
     let has_runtime = resolution.entry.bundle.runtime_config().is_some();
-    let live = if has_runtime {
+    let live = if resolution.entry.bundle.is_disabled() {
+        Some(PluginLiveRecord::skipped(
+            "plugin is currently disabled by marker file",
+        ))
+    } else if has_runtime {
         Some(
             match rc_plugins::inspect_runtime(
                 &resolution.entry.bundle,
@@ -672,6 +680,9 @@ async fn build_plugins_invoke_output(
     args: &PluginsInvokeArgs,
 ) -> Result<PluginInvokeOutput> {
     let resolution = resolve_runtime_plugin(config, &args.plugin, &args.plugin_roots)?;
+    if resolution.entry.bundle.is_disabled() {
+        return Err(anyhow!("Plugin `{}` is currently disabled", args.plugin));
+    }
     let has_runtime = resolution.entry.bundle.runtime_config().is_some();
     if !has_runtime {
         return Err(anyhow!(
@@ -706,13 +717,15 @@ pub(crate) fn discover_runtime_plugins(
 ) -> RuntimePluginDiscovery {
     let mut discovery = RuntimePluginDiscovery::default();
     let mut seen_manifest_paths = BTreeSet::new();
-    load_runtime_plugins_root(
-        &mut discovery,
-        &mut seen_manifest_paths,
-        "profile",
-        &config.paths.plugins_dir.display().to_string(),
-        &config.paths.plugins_dir,
-    );
+    if setting_source_enabled(config, SettingSource::User) {
+        load_runtime_plugins_root(
+            &mut discovery,
+            &mut seen_manifest_paths,
+            "profile",
+            &config.paths.plugins_dir.display().to_string(),
+            &config.paths.plugins_dir,
+        );
+    }
     for root in extra_plugin_roots {
         load_runtime_plugins_root(
             &mut discovery,
@@ -734,6 +747,10 @@ pub(crate) fn discover_runtime_plugins(
     discovery
 }
 
+fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool {
+    config.allowed_setting_sources.contains(&source)
+}
+
 fn load_runtime_plugins_root(
     discovery: &mut RuntimePluginDiscovery,
     seen_manifest_paths: &mut BTreeSet<PathBuf>,
@@ -750,7 +767,7 @@ fn load_runtime_plugins_root(
         }
         return;
     }
-    match rc_plugins::discover_plugins(root) {
+    match rc_plugins::discover_plugins_including_disabled(root) {
         Ok(plugins) => {
             for plugin in plugins {
                 if !seen_manifest_paths.insert(plugin.manifest_path.clone()) {
@@ -823,11 +840,7 @@ fn plugin_record_from_entry(
         has_runtime,
         has_skills: entry.bundle.skills_root().is_some(),
         has_mcp: entry.bundle.mcp_config_path().is_some(),
-        disabled: entry
-            .bundle
-            .root
-            .join(rc_plugins::PLUGIN_DISABLED_MARKER)
-            .exists(),
+        disabled: entry.bundle.is_disabled(),
         origin_kind: entry.origin_kind.to_owned(),
         origin_name: entry.origin_name.clone(),
         root: entry.bundle.root.clone(),
@@ -903,11 +916,17 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
-    use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
+    use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
     use tempfile::tempdir;
 
-    use super::{build_plugins_list_output, run_plugins_toggle, run_plugins_update};
-    use crate::cli::{PluginsListArgs, PluginsToggleArgs, PluginsUpdateArgs};
+    use super::{
+        build_plugins_inspect_output, build_plugins_invoke_output, build_plugins_list_output,
+        discover_runtime_plugins, resolve_runtime_plugin, run_plugins_toggle, run_plugins_update,
+    };
+    use crate::cli::{
+        PluginsInspectArgs, PluginsInvokeArgs, PluginsListArgs, PluginsToggleArgs,
+        PluginsUpdateArgs,
+    };
 
     fn test_config() -> (tempfile::TempDir, rc_config::RuntimeConfig) {
         let tempdir = tempdir().expect("tempdir");
@@ -940,6 +959,23 @@ mod tests {
             root.join(rc_plugins::PLUGIN_MANIFEST_DIR)
                 .join(rc_plugins::PLUGIN_MANIFEST_FILE),
             format!(r#"{{"name":"demo","version":"{version}"}}"#),
+        )
+        .expect("manifest");
+        for (relative, content) in extra_files {
+            let path = root.join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("parent");
+            }
+            fs::write(path, content).expect("file");
+        }
+    }
+
+    fn write_plugin_manifest(root: &Path, manifest: &str, extra_files: &[(&str, &str)]) {
+        fs::create_dir_all(root.join(rc_plugins::PLUGIN_MANIFEST_DIR)).expect("manifest dir");
+        fs::write(
+            root.join(rc_plugins::PLUGIN_MANIFEST_DIR)
+                .join(rc_plugins::PLUGIN_MANIFEST_FILE),
+            manifest,
         )
         .expect("manifest");
         for (relative, content) in extra_files {
@@ -1049,5 +1085,186 @@ mod tests {
 
         assert_eq!(output.plugins.len(), 1);
         assert!(output.plugins[0].disabled);
+    }
+
+    #[tokio::test]
+    async fn plugin_list_connect_skips_disabled_runtime_inspection() {
+        let (_tempdir, config) = test_config();
+        let plugin_root = config.paths.plugins_dir.join("demo");
+        write_plugin_manifest(
+            &plugin_root,
+            r#"{
+                "name":"demo",
+                "version":"0.1.0",
+                "runtime":{"command":"definitely-not-a-real-plugin-runtime"}
+            }"#,
+            &[],
+        );
+        fs::write(
+            plugin_root.join(rc_plugins::PLUGIN_DISABLED_MARKER),
+            b"disabled\n",
+        )
+        .expect("disabled marker");
+
+        let output = build_plugins_list_output(
+            &config,
+            &PluginsListArgs {
+                connect: true,
+                json: false,
+                plugins: Vec::new(),
+                plugin_roots: Vec::new(),
+            },
+        )
+        .await
+        .expect("list output");
+
+        let live = output.plugins[0].live.as_ref().expect("live record");
+        assert_eq!(live.status, "skipped");
+        assert_eq!(
+            live.error.as_deref(),
+            Some("plugin is currently disabled by marker file")
+        );
+    }
+
+    #[tokio::test]
+    async fn plugin_inspect_skips_runtime_for_disabled_plugin() {
+        let (_tempdir, config) = test_config();
+        let plugin_root = config.paths.plugins_dir.join("demo");
+        write_plugin_manifest(
+            &plugin_root,
+            r#"{
+                "name":"demo",
+                "version":"0.1.0",
+                "runtime":{"command":"definitely-not-a-real-plugin-runtime"}
+            }"#,
+            &[],
+        );
+        fs::write(
+            plugin_root.join(rc_plugins::PLUGIN_DISABLED_MARKER),
+            b"disabled\n",
+        )
+        .expect("disabled marker");
+
+        let output = build_plugins_inspect_output(
+            &config,
+            &PluginsInspectArgs {
+                plugin: "demo".to_owned(),
+                json: false,
+                plugin_roots: Vec::new(),
+            },
+        )
+        .await
+        .expect("inspect output");
+
+        let live = output.plugin.live.as_ref().expect("live record");
+        assert!(output.plugin.disabled);
+        assert_eq!(live.status, "skipped");
+        assert_eq!(
+            live.error.as_deref(),
+            Some("plugin is currently disabled by marker file")
+        );
+    }
+
+    #[tokio::test]
+    async fn plugin_invoke_refuses_disabled_plugin() {
+        let (_tempdir, config) = test_config();
+        let plugin_root = config.paths.plugins_dir.join("demo");
+        write_plugin_manifest(
+            &plugin_root,
+            r#"{
+                "name":"demo",
+                "version":"0.1.0",
+                "runtime":{"command":"definitely-not-a-real-plugin-runtime"}
+            }"#,
+            &[],
+        );
+        fs::write(
+            plugin_root.join(rc_plugins::PLUGIN_DISABLED_MARKER),
+            b"disabled\n",
+        )
+        .expect("disabled marker");
+
+        let error = build_plugins_invoke_output(
+            &config,
+            &PluginsInvokeArgs {
+                plugin: "demo".to_owned(),
+                action: "ping".to_owned(),
+                json: false,
+                args: Vec::new(),
+                input_json: None,
+                plugin_roots: Vec::new(),
+            },
+        )
+        .await
+        .expect_err("disabled plugin should not invoke");
+
+        assert!(
+            error
+                .to_string()
+                .contains("Plugin `demo` is currently disabled")
+        );
+    }
+
+    #[tokio::test]
+    async fn plugin_discovery_respects_user_setting_sources_but_keeps_explicit_roots() {
+        let (_tempdir, mut config) = test_config();
+        let profile_plugin = config.paths.plugins_dir.join("demo");
+        write_plugin(&profile_plugin, "0.1.0", &[]);
+
+        let explicit_root = config.cwd.join("extra-plugins");
+        let explicit_plugin = explicit_root.join("explicit");
+        write_plugin(&explicit_plugin, "0.2.0", &[]);
+
+        let output = build_plugins_list_output(
+            &config,
+            &PluginsListArgs {
+                connect: false,
+                json: false,
+                plugins: Vec::new(),
+                plugin_roots: vec![explicit_root.clone()],
+            },
+        )
+        .await
+        .expect("list output");
+        assert_eq!(output.plugins.len(), 2);
+
+        config.allowed_setting_sources = vec![SettingSource::Local];
+        let discovery = discover_runtime_plugins(&config, &[explicit_root.clone()]);
+        assert_eq!(discovery.plugins.len(), 1);
+        assert_eq!(discovery.plugins[0].origin_kind, "explicit");
+        assert_eq!(discovery.plugins[0].bundle.manifest.version, "0.2.0");
+
+        let output = build_plugins_list_output(
+            &config,
+            &PluginsListArgs {
+                connect: false,
+                json: false,
+                plugins: Vec::new(),
+                plugin_roots: vec![explicit_root.clone()],
+            },
+        )
+        .await
+        .expect("filtered list output");
+        assert_eq!(output.plugins.len(), 1);
+        assert_eq!(output.plugins[0].origin_kind, "explicit");
+        assert_eq!(output.plugins[0].version, "0.2.0");
+    }
+
+    #[test]
+    fn runtime_plugin_resolution_uses_setting_source_filtering() {
+        let (_tempdir, mut config) = test_config();
+        let profile_plugin = config.paths.plugins_dir.join("demo");
+        write_plugin(&profile_plugin, "0.1.0", &[]);
+
+        config.allowed_setting_sources = vec![SettingSource::Local];
+        assert!(resolve_runtime_plugin(&config, "demo", &[]).is_err());
+
+        let explicit_root = config.cwd.join("extra-plugins");
+        let explicit_plugin = explicit_root.join("demo");
+        write_plugin(&explicit_plugin, "0.2.0", &[]);
+        let resolution =
+            resolve_runtime_plugin(&config, "demo", &[explicit_root]).expect("explicit resolve");
+        assert_eq!(resolution.entry.origin_kind, "explicit");
+        assert_eq!(resolution.entry.bundle.manifest.version, "0.2.0");
     }
 }

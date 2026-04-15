@@ -235,8 +235,49 @@ fn configure_runtime_policy(config: &rc_config::RuntimeConfig) -> Result<()> {
 
 fn print_setting_sources(config: &rc_config::RuntimeConfig) {
     println!("Setting sources:");
-    for source in &config.setting_sources {
-        println!("  {source}");
+    if config.setting_sources.is_empty() {
+        println!("  (defaults)");
+    } else {
+        for source in &config.setting_sources {
+            println!("  {source}");
+        }
+    }
+    println!(
+        "Allowed setting sources: {}",
+        if config.allowed_setting_sources.is_empty() {
+            "(none)".to_owned()
+        } else {
+            config
+                .allowed_setting_sources
+                .iter()
+                .map(|source| source.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    );
+    println!(
+        "Settings files: {}",
+        if config.settings_files.is_empty() {
+            "(auto discovery only)".to_owned()
+        } else {
+            config
+                .settings_files
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    );
+    if !config.cli_settings_files.is_empty() {
+        println!(
+            "Explicit settings mode: {}",
+            config
+                .cli_settings_files
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
     }
 }
 

@@ -267,7 +267,7 @@ fn discover_visible_plugins(
     if !setting_source_enabled(config, SettingSource::User) {
         return Ok(Vec::new());
     }
-    rc_plugins::discover_plugins(&config.paths.plugins_dir)
+    rc_plugins::discover_plugins_including_disabled(&config.paths.plugins_dir)
 }
 
 fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool {

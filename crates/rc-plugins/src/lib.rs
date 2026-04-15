@@ -201,6 +201,13 @@ pub struct PluginBundle {
     pub root: PathBuf,
 }
 
+impl PluginBundle {
+    #[must_use]
+    pub fn is_disabled(&self) -> bool {
+        self.root.join(PLUGIN_DISABLED_MARKER).exists()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct PluginValidationReport {
     pub plugin_name: String,
@@ -437,6 +444,17 @@ struct PluginRuntimeSession {
 }
 
 pub fn discover_plugins(root: &Path) -> Result<Vec<PluginBundle>, PluginError> {
+    discover_plugins_with_mode(root, false)
+}
+
+pub fn discover_plugins_including_disabled(root: &Path) -> Result<Vec<PluginBundle>, PluginError> {
+    discover_plugins_with_mode(root, true)
+}
+
+fn discover_plugins_with_mode(
+    root: &Path,
+    include_disabled: bool,
+) -> Result<Vec<PluginBundle>, PluginError> {
     let mut plugins = WalkDir::new(root)
         .into_iter()
         .filter_map(Result::ok)
@@ -444,6 +462,10 @@ pub fn discover_plugins(root: &Path) -> Result<Vec<PluginBundle>, PluginError> {
         .filter(|entry| entry.file_name() == PLUGIN_MANIFEST_FILE)
         .map(|entry| load_plugin(entry.path()))
         .collect::<Result<Vec<_>, _>>()?;
+
+    if !include_disabled {
+        plugins.retain(|plugin| !plugin.is_disabled());
+    }
 
     plugins.sort_by(|left, right| left.manifest.name.cmp(&right.manifest.name));
     Ok(plugins)
@@ -491,7 +513,7 @@ pub fn validate_plugin_bundle(plugin: &PluginBundle) -> PluginValidationReport {
             .errors
             .push("plugin version must not be empty".to_owned());
     }
-    if plugin.root.join(PLUGIN_DISABLED_MARKER).exists() {
+    if plugin.is_disabled() {
         report
             .warnings
             .push("plugin is currently disabled by marker file".to_owned());
@@ -1087,6 +1109,37 @@ mod tests {
         assert_eq!(plugins.len(), 2);
         assert_eq!(plugins[0].manifest.name, "alpha");
         assert_eq!(plugins[1].manifest.name, "zeta");
+    }
+
+    #[test]
+    fn discover_plugins_skips_disabled_unless_requested() {
+        let temp = ok(tempdir());
+        let alpha = temp.path().join("alpha");
+        let disabled = temp.path().join("disabled");
+        ok(fs::create_dir_all(alpha.join(PLUGIN_MANIFEST_DIR)));
+        ok(fs::create_dir_all(disabled.join(PLUGIN_MANIFEST_DIR)));
+        ok(fs::write(
+            alpha.join(PLUGIN_MANIFEST_DIR).join(PLUGIN_MANIFEST_FILE),
+            r#"{"name":"alpha","version":"0.1.0"}"#,
+        ));
+        ok(fs::write(
+            disabled
+                .join(PLUGIN_MANIFEST_DIR)
+                .join(PLUGIN_MANIFEST_FILE),
+            r#"{"name":"disabled","version":"0.1.0"}"#,
+        ));
+        ok(fs::write(
+            disabled.join(PLUGIN_DISABLED_MARKER),
+            b"disabled\n",
+        ));
+
+        let enabled_only = ok(discover_plugins(temp.path()));
+        assert_eq!(enabled_only.len(), 1);
+        assert_eq!(enabled_only[0].manifest.name, "alpha");
+
+        let with_disabled = ok(discover_plugins_including_disabled(temp.path()));
+        assert_eq!(with_disabled.len(), 2);
+        assert!(with_disabled.iter().any(|plugin| plugin.is_disabled()));
     }
 
     #[test]

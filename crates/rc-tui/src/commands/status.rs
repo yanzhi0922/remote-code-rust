@@ -77,6 +77,19 @@ pub fn render(
             .join(", ")
     );
     println!(
+        "Settings files: {}",
+        if config.settings_files.is_empty() {
+            "(auto discovery only)".to_owned()
+        } else {
+            config
+                .settings_files
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    );
+    println!(
         "Permission rules: {} loaded, {} decisions recorded",
         broker.layered_rules().len(),
         broker.audit_records().len()
