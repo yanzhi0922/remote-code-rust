@@ -101,6 +101,38 @@ pub struct UiRuntimeMcpOriginCounts {
     pub plugin: usize,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum UiRuntimeMcpServerStatus {
+    Connected,
+    Failed,
+    NeedsAuth,
+    Pending,
+    Disabled,
+}
+
+impl UiRuntimeMcpServerStatus {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Connected => "connected",
+            Self::Failed => "failed",
+            Self::NeedsAuth => "needs-auth",
+            Self::Pending => "pending",
+            Self::Disabled => "disabled",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct UiRuntimeMcpStatusCounts {
+    pub connected: usize,
+    pub failed: usize,
+    pub needs_auth: usize,
+    pub pending: usize,
+    pub disabled: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct UiRuntimeMcpInventorySummary {
     pub total_servers: usize,
@@ -110,6 +142,7 @@ pub struct UiRuntimeMcpInventorySummary {
     pub ambiguous_server_names: usize,
     pub warning_count: usize,
     pub origins: UiRuntimeMcpOriginCounts,
+    pub status_counts: UiRuntimeMcpStatusCounts,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -661,6 +694,13 @@ mod tests {
                         explicit: 0,
                         plugin: 2,
                     },
+                    status_counts: UiRuntimeMcpStatusCounts {
+                        connected: 0,
+                        failed: 0,
+                        needs_auth: 0,
+                        pending: 3,
+                        disabled: 1,
+                    },
                 },
             },
         };
@@ -675,6 +715,8 @@ mod tests {
                 assert_eq!(snapshot.mcp.total_servers, 4);
                 assert_eq!(snapshot.mcp.ambiguous_server_names, 1);
                 assert_eq!(snapshot.mcp.origins.plugin, 2);
+                assert_eq!(snapshot.mcp.status_counts.pending, 3);
+                assert_eq!(snapshot.mcp.status_counts.disabled, 1);
             }
             _ => panic!("Expected StatusSnapshot variant"),
         }

@@ -34,14 +34,17 @@ use rc_tools::{
     agent::{parse_delegate_progress_event, DelegateProgressEvent},
     configure_tool_runtime_policy, execute_tool_call,
     mcp_runtime::{
-        discover_runtime_mcp_servers, runtime_mcp_inventory_summary, runtime_mcp_policy_entries,
-        RuntimeMcpServerEntry,
+        observe_runtime_mcp_servers, runtime_mcp_inventory_summary, runtime_mcp_policy_entries,
+        RuntimeMcpServerObservation,
     },
     runtime_builtin_tool_specs,
     tasks::load_persisted_ui_task_snapshots,
     ToolExecutionContext, ToolRuntimePolicy,
 };
-use rc_ui_bridge::{UiProviderStatusSnapshot, UiRuntimeStatusSnapshot};
+use rc_ui_bridge::{
+    UiProviderStatusSnapshot, UiRuntimeMcpInventorySummary, UiRuntimeMcpServerStatus,
+    UiRuntimeStatusSnapshot,
+};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_dialog::DialogExt;
@@ -496,6 +499,7 @@ struct GuiDoctorReportDto {
     tools: GuiDoctorToolsDto,
     permissions: GuiDoctorPermissionsDto,
     extensions: GuiDoctorExtensionsDto,
+    mcp_runtime: GuiDoctorMcpRuntimeDto,
     network: Vec<GuiDoctorProbeDto>,
     env_providers: Vec<GuiDoctorEnvProviderDto>,
     issues: Vec<String>,
@@ -560,6 +564,25 @@ struct GuiDoctorExtensionsDto {
     disabled_plugins: usize,
     managed_mcp_servers: usize,
     plugin_mcp_servers: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct GuiDoctorMcpRuntimeDto {
+    probed: bool,
+    summary: UiRuntimeMcpInventorySummary,
+    servers: Vec<GuiDoctorMcpRuntimeServerDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct GuiDoctorMcpRuntimeServerDto {
+    name: String,
+    status: UiRuntimeMcpServerStatus,
+    enabled: bool,
+    origin_kind: String,
+    origin_name: String,
+    config_path: String,
+    tool_count: usize,
+    error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -637,6 +660,7 @@ struct McpToolInfoDto {
 struct RuntimeMcpInventoryDto {
     effective_cwd: String,
     warnings: Vec<String>,
+    summary: UiRuntimeMcpInventorySummary,
     servers: Vec<RuntimeMcpServerDto>,
 }
 
@@ -1182,6 +1206,7 @@ async fn build_gui_doctor_report(
     config: &RuntimeConfig,
     probe_network: bool,
     probe_provider: bool,
+    probe_mcp: bool,
     include_env_providers: bool,
 ) -> Result<GuiDoctorReportDto> {
     let validation = validate_provider_config(&config.provider);
@@ -1192,6 +1217,13 @@ async fn build_gui_doctor_report(
         &config.settings_files,
         &config.cli_settings_files,
     )?;
+    let mcp_runtime = observe_runtime_mcp_servers(
+        config,
+        &[],
+        probe_mcp,
+        &McpClientInfo::new("remote-code-gui", env!("CARGO_PKG_VERSION")),
+    )
+    .await;
 
     let mut warnings = Vec::new();
     let mut issues = validation.issues.clone();
@@ -1245,6 +1277,7 @@ async fn build_gui_doctor_report(
     } else {
         0
     };
+    extend_unique_strings(&mut warnings, mcp_runtime.warnings.clone());
 
     let provider_probe = if probe_provider {
         if let Some(url) = provider_endpoint_url(&config.provider) {
@@ -1326,6 +1359,27 @@ async fn build_gui_doctor_report(
     } else {
         Vec::new()
     };
+    let mcp_runtime = GuiDoctorMcpRuntimeDto {
+        probed: probe_mcp,
+        summary: mcp_runtime.inventory_summary(),
+        servers: mcp_runtime
+            .servers
+            .into_iter()
+            .map(|server| GuiDoctorMcpRuntimeServerDto {
+                name: server.entry.server.name,
+                status: server.status,
+                enabled: server.entry.server.enabled,
+                origin_kind: server.entry.origin_kind.to_owned(),
+                origin_name: server.entry.origin_name,
+                config_path: server.entry.config_path.display().to_string(),
+                tool_count: server
+                    .inspection
+                    .as_ref()
+                    .map_or(0, |inspection| inspection.tools.len()),
+                error: server.error,
+            })
+            .collect(),
+    };
 
     Ok(GuiDoctorReportDto {
         ok: issues.is_empty(),
@@ -1389,11 +1443,20 @@ async fn build_gui_doctor_report(
             managed_mcp_servers,
             plugin_mcp_servers,
         },
+        mcp_runtime,
         network,
         env_providers,
         issues,
         warnings,
     })
+}
+
+fn extend_unique_strings(target: &mut Vec<String>, items: Vec<String>) {
+    for item in items {
+        if !target.contains(&item) {
+            target.push(item);
+        }
+    }
 }
 
 fn mcp_config_path_for_scope(
@@ -1434,7 +1497,7 @@ fn load_managed_mcp_config_or_default(path: &Path) -> Result<McpConfig> {
 
 fn mcp_live_to_dto(inspection: McpServerInspection) -> McpServerLiveDto {
     McpServerLiveDto {
-        status: "ok".to_owned(),
+        status: UiRuntimeMcpServerStatus::Connected.as_str().to_owned(),
         protocol_version: Some(inspection.protocol_version),
         peer_name: inspection
             .server_info
@@ -1454,6 +1517,21 @@ fn mcp_live_to_dto(inspection: McpServerInspection) -> McpServerLiveDto {
             })
             .collect(),
         error: None,
+    }
+}
+
+fn runtime_mcp_failed_live_to_dto(
+    status: UiRuntimeMcpServerStatus,
+    error: String,
+) -> McpServerLiveDto {
+    McpServerLiveDto {
+        status: status.as_str().to_owned(),
+        protocol_version: None,
+        peer_name: None,
+        peer_version: None,
+        tool_count: 0,
+        tools: Vec::new(),
+        error: Some(error),
     }
 }
 
@@ -1526,24 +1604,19 @@ fn mcp_server_to_dto(
     }
 }
 
-fn runtime_mcp_status_label(server: &McpServerConfig) -> String {
-    if server.enabled {
-        "pending".to_owned()
-    } else {
-        "disabled".to_owned()
-    }
-}
-
-fn runtime_mcp_server_to_dto(
-    entry: RuntimeMcpServerEntry,
-    live: Option<McpServerLiveDto>,
-) -> RuntimeMcpServerDto {
+fn runtime_mcp_server_to_dto(observation: RuntimeMcpServerObservation) -> RuntimeMcpServerDto {
+    let entry = observation.entry;
     let (command, url, args, cwd, env_keys) = mcp_server_transport_fields(&entry.server);
     let mut metadata_keys = entry.server.metadata.keys().cloned().collect::<Vec<_>>();
     metadata_keys.sort();
+    let live = match (observation.inspection, observation.error) {
+        (Some(inspection), _) => Some(mcp_live_to_dto(inspection)),
+        (None, Some(error)) => Some(runtime_mcp_failed_live_to_dto(observation.status, error)),
+        (None, None) => None,
+    };
     RuntimeMcpServerDto {
         name: entry.server.name.clone(),
-        status: runtime_mcp_status_label(&entry.server),
+        status: observation.status.as_str().to_owned(),
         enabled: entry.server.enabled,
         origin_kind: entry.origin_kind.to_owned(),
         origin_name: entry.origin_name,
@@ -1597,7 +1670,7 @@ async fn build_mcp_server_list(
             {
                 Ok(inspection) => Some(mcp_live_to_dto(inspection)),
                 Err(error) => Some(McpServerLiveDto {
-                    status: "error".to_owned(),
+                    status: UiRuntimeMcpServerStatus::Failed.as_str().to_owned(),
                     protocol_version: None,
                     peer_name: None,
                     peer_version: None,
@@ -1639,34 +1712,20 @@ async fn build_runtime_mcp_inventory(
         effective_config.cwd = normalize_existing_path(Path::new(project_path))?;
     }
 
-    let discovery = discover_runtime_mcp_servers(&effective_config, &[]);
+    let observation = observe_runtime_mcp_servers(
+        &effective_config,
+        &[],
+        connect,
+        &McpClientInfo::new("remote-code-gui", env!("CARGO_PKG_VERSION")),
+    )
+    .await;
+    let summary = observation.inventory_summary();
     let mut servers = Vec::new();
-    for entry in discovery.servers {
-        if !entry.server.enabled && !include_disabled {
+    for server in observation.servers {
+        if !server.entry.server.enabled && !include_disabled {
             continue;
         }
-        let live = if connect && entry.server.enabled {
-            match inspect_server(
-                &entry.server,
-                &McpClientInfo::new("remote-code-gui", env!("CARGO_PKG_VERSION")),
-            )
-            .await
-            {
-                Ok(inspection) => Some(mcp_live_to_dto(inspection)),
-                Err(error) => Some(McpServerLiveDto {
-                    status: "error".to_owned(),
-                    protocol_version: None,
-                    peer_name: None,
-                    peer_version: None,
-                    tool_count: 0,
-                    tools: Vec::new(),
-                    error: Some(error.to_string()),
-                }),
-            }
-        } else {
-            None
-        };
-        servers.push(runtime_mcp_server_to_dto(entry, live));
+        servers.push(runtime_mcp_server_to_dto(server));
     }
 
     servers.sort_by(|left, right| {
@@ -1679,7 +1738,8 @@ async fn build_runtime_mcp_inventory(
 
     Ok(RuntimeMcpInventoryDto {
         effective_cwd: effective_config.cwd.display().to_string(),
-        warnings: discovery.warnings,
+        warnings: observation.warnings,
+        summary,
         servers,
     })
 }
@@ -3058,6 +3118,7 @@ async fn run_doctor_report(
     state: State<'_, AppState>,
     probe_network: bool,
     probe_provider: bool,
+    probe_mcp: bool,
     include_env_providers: bool,
 ) -> std::result::Result<GuiDoctorReportDto, String> {
     let runtime = state.runtime.lock().await;
@@ -3065,6 +3126,7 @@ async fn run_doctor_report(
         &runtime.config,
         probe_network,
         probe_provider,
+        probe_mcp,
         include_env_providers,
     )
     .await
@@ -3878,6 +3940,9 @@ mod tests {
 
         assert_eq!(inventory.effective_cwd, project_dir.display().to_string());
         assert_eq!(inventory.warnings.len(), 0);
+        assert_eq!(inventory.summary.total_servers, 4);
+        assert_eq!(inventory.summary.status_counts.pending, 3);
+        assert_eq!(inventory.summary.status_counts.disabled, 1);
         assert_eq!(inventory.servers.len(), 4);
         assert!(inventory
             .servers
@@ -4006,13 +4071,16 @@ mod tests {
             .save(project_dir.join(DEFAULT_MCP_CONFIG_FILE))
             .expect("project MCP config should save");
 
-        let report = build_gui_doctor_report(&config, false, false, false)
+        let report = build_gui_doctor_report(&config, false, false, false, false)
             .await
             .expect("doctor report should build");
 
         assert!(report.ok);
         assert_eq!(report.extensions.managed_mcp_servers, 2);
         assert_eq!(report.extensions.plugin_mcp_servers, 0);
+        assert_eq!(report.mcp_runtime.summary.total_servers, 2);
+        assert_eq!(report.mcp_runtime.summary.status_counts.pending, 2);
+        assert_eq!(report.mcp_runtime.summary.status_counts.failed, 0);
         assert!(report.network.is_empty());
         assert!(report.env_providers.is_empty());
     }
@@ -4065,7 +4133,7 @@ mod tests {
 
         let mut project_only = test_runtime_config(&project_dir, &profile_dir);
         project_only.allowed_setting_sources = vec![SettingSource::Project];
-        let report = build_gui_doctor_report(&project_only, false, false, false)
+        let report = build_gui_doctor_report(&project_only, false, false, false, false)
             .await
             .expect("project-only doctor report");
         assert_eq!(report.runtime.allowed_setting_sources, vec!["project"]);
@@ -4074,10 +4142,11 @@ mod tests {
         assert_eq!(report.extensions.disabled_plugins, 0);
         assert_eq!(report.extensions.managed_mcp_servers, 1);
         assert_eq!(report.extensions.plugin_mcp_servers, 0);
+        assert_eq!(report.mcp_runtime.summary.total_servers, 1);
 
         let mut user_only = test_runtime_config(&project_dir, &profile_dir);
         user_only.allowed_setting_sources = vec![SettingSource::User];
-        let report = build_gui_doctor_report(&user_only, false, false, false)
+        let report = build_gui_doctor_report(&user_only, false, false, false, false)
             .await
             .expect("user-only doctor report");
         assert_eq!(report.runtime.allowed_setting_sources, vec!["user"]);
@@ -4085,6 +4154,7 @@ mod tests {
         assert_eq!(report.extensions.plugins, 1);
         assert_eq!(report.extensions.managed_mcp_servers, 1);
         assert_eq!(report.extensions.plugin_mcp_servers, 1);
+        assert_eq!(report.mcp_runtime.summary.total_servers, 2);
     }
 
     #[tokio::test]
