@@ -3993,13 +3993,19 @@ dependencies = [
 name = "rc-plugins"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "chrono",
+ "directories 6.0.0",
+ "once_cell",
  "rc-mcp",
  "rc-skills",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "walkdir",
 ]
 
