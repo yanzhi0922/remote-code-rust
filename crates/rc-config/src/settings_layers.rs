@@ -1,11 +1,37 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use rc_core::ProviderProtocol;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::tool_filters::{merge_tool_filters, normalize_tool_filters};
+
+/// Allowed startup setting sources, mirroring the upstream user/project/local split.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SettingSource {
+    User,
+    Project,
+    Local,
+}
+
+impl SettingSource {
+    #[must_use]
+    pub const fn all() -> [Self; 3] {
+        [Self::User, Self::Project, Self::Local]
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Project => "project",
+            Self::Local => "local",
+        }
+    }
+}
 
 /// Runtime-only overrides layered on top of environment variables and settings files.
 #[derive(Debug, Clone, Default)]
@@ -13,6 +39,7 @@ pub struct RuntimeOverrides {
     pub session_name: Option<String>,
     pub settings_files: Vec<PathBuf>,
     pub show_setting_sources: bool,
+    pub allowed_setting_sources: Option<Vec<SettingSource>>,
     pub allowed_tools: Vec<String>,
     pub disallowed_tools: Vec<String>,
     pub effort: Option<String>,
@@ -37,6 +64,13 @@ pub struct ResolvedRuntimeSettings {
     pub fallback_model: Option<String>,
     pub setting_sources: Vec<String>,
     pub auth_source: Option<String>,
+}
+
+/// A standard runtime settings source discovered from the local filesystem.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSettingsSource {
+    pub kind: &'static str,
+    pub path: PathBuf,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -73,6 +107,82 @@ struct SettingsProvider {
     max_output_tokens: Option<u32>,
     #[serde(default)]
     thinking_budget: Option<u32>,
+}
+
+/// Discover the standard runtime settings files in low-to-high precedence order.
+#[must_use]
+pub fn discover_runtime_settings_sources(
+    cwd: &Path,
+    profile_dir: &Path,
+    profiles_dir: &Path,
+    allowed_sources: &[SettingSource],
+) -> Vec<RuntimeSettingsSource> {
+    [
+        (
+            "legacy-import",
+            profiles_dir.join("legacy-import").join("settings.json"),
+        ),
+        ("profile", profile_dir.join("settings.json")),
+        ("project", cwd.join(".remote-code").join("settings.json")),
+        (
+            "local",
+            cwd.join(".remote-code").join("settings.local.json"),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(kind, path)| {
+        (path.exists() && is_runtime_settings_source_enabled(kind, allowed_sources))
+            .then_some(RuntimeSettingsSource { kind, path })
+    })
+    .collect()
+}
+
+/// Resolve the effective runtime settings file list.
+///
+/// Explicit CLI files fully override auto-discovery. When no explicit files are
+/// provided, the standard runtime settings sources are discovered in
+/// low-to-high precedence order.
+#[must_use]
+pub fn resolve_runtime_settings_files(
+    cwd: &Path,
+    profile_dir: &Path,
+    profiles_dir: &Path,
+    explicit_files: &[PathBuf],
+    allowed_sources: &[SettingSource],
+) -> Vec<PathBuf> {
+    if !explicit_files.is_empty() {
+        let mut seen = BTreeSet::new();
+        return explicit_files
+            .iter()
+            .filter_map(|path| {
+                let normalized = path.clone();
+                seen.insert(normalized.clone()).then_some(normalized)
+            })
+            .collect();
+    }
+
+    discover_runtime_settings_sources(cwd, profile_dir, profiles_dir, allowed_sources)
+        .into_iter()
+        .map(|source| source.path)
+        .collect()
+}
+
+#[must_use]
+pub fn is_setting_source_enabled(
+    allowed_sources: &[SettingSource],
+    candidate: SettingSource,
+) -> bool {
+    allowed_sources.contains(&candidate)
+}
+
+fn is_runtime_settings_source_enabled(kind: &str, allowed_sources: &[SettingSource]) -> bool {
+    let source = match kind {
+        "legacy-import" | "profile" => SettingSource::User,
+        "project" => SettingSource::Project,
+        "local" => SettingSource::Local,
+        _ => return false,
+    };
+    is_setting_source_enabled(allowed_sources, source)
 }
 
 /// Load and merge runtime settings files from lowest priority to highest priority.
@@ -179,7 +289,10 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RuntimeOverrides, load_runtime_settings};
+    use super::{
+        RuntimeOverrides, SettingSource, discover_runtime_settings_sources, load_runtime_settings,
+        resolve_runtime_settings_files,
+    };
     use std::fs;
     use tempfile::tempdir;
 
@@ -256,5 +369,106 @@ base_url = "https://example.com/v1"
                 .is_some_and(|source| source.starts_with("settings:"))
         );
         assert!(resolved.allowed_tools.contains(&"glob".to_owned()));
+    }
+
+    #[test]
+    fn discover_runtime_settings_files_returns_explicit_files_verbatim() {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join("profile");
+        let profiles = profile.join("profiles");
+        fs::create_dir_all(cwd.join(".remote-code")).expect("workspace dir");
+        fs::create_dir_all(&profiles).expect("profiles dir");
+        let explicit = tempdir.path().join("custom.json");
+        fs::write(cwd.join(".remote-code").join("settings.json"), "{}").expect("workspace");
+        fs::write(&explicit, "{}").expect("explicit");
+
+        let resolved = resolve_runtime_settings_files(
+            &cwd,
+            &profile,
+            &profiles,
+            &[explicit.clone()],
+            &SettingSource::all(),
+        );
+        assert_eq!(resolved, vec![explicit]);
+    }
+
+    #[test]
+    fn discover_runtime_settings_files_discovers_sources_in_override_order() {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join("profile");
+        let profiles = profile.join("profiles");
+        fs::create_dir_all(cwd.join(".remote-code")).expect("workspace dir");
+        fs::create_dir_all(profiles.join("legacy-import")).expect("legacy dir");
+        fs::create_dir_all(&profile).expect("profile dir");
+
+        let legacy = profiles.join("legacy-import").join("settings.json");
+        let user = profile.join("settings.json");
+        let project = cwd.join(".remote-code").join("settings.json");
+        let local = cwd.join(".remote-code").join("settings.local.json");
+        fs::write(&legacy, "{}").expect("legacy");
+        fs::write(&user, "{}").expect("user");
+        fs::write(&project, "{}").expect("project");
+        fs::write(&local, "{}").expect("local");
+
+        let discovered =
+            discover_runtime_settings_sources(&cwd, &profile, &profiles, &SettingSource::all());
+        assert_eq!(
+            discovered
+                .iter()
+                .map(|source| source.kind)
+                .collect::<Vec<_>>(),
+            vec!["legacy-import", "profile", "project", "local"]
+        );
+        assert_eq!(
+            discovered
+                .into_iter()
+                .map(|source| source.path)
+                .collect::<Vec<_>>(),
+            vec![legacy, user, project, local]
+        );
+    }
+
+    #[test]
+    fn discover_runtime_settings_files_skips_missing_files() {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join("profile");
+        let profiles = profile.join("profiles");
+        fs::create_dir_all(cwd.join(".remote-code")).expect("workspace dir");
+        fs::create_dir_all(profiles.join("legacy-import")).expect("legacy dir");
+        fs::create_dir_all(&profile).expect("profile dir");
+        let project = cwd.join(".remote-code").join("settings.json");
+        fs::write(&project, "{}").expect("project");
+
+        let resolved =
+            resolve_runtime_settings_files(&cwd, &profile, &profiles, &[], &SettingSource::all());
+        assert_eq!(resolved, vec![project]);
+    }
+
+    #[test]
+    fn discover_runtime_settings_files_can_limit_to_local_scope() {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join("profile");
+        let profiles = profile.join("profiles");
+        fs::create_dir_all(cwd.join(".remote-code")).expect("workspace dir");
+        fs::create_dir_all(profiles.join("legacy-import")).expect("legacy dir");
+        fs::create_dir_all(&profile).expect("profile dir");
+
+        let legacy = profiles.join("legacy-import").join("settings.json");
+        let user = profile.join("settings.json");
+        let project = cwd.join(".remote-code").join("settings.json");
+        let local = cwd.join(".remote-code").join("settings.local.json");
+        fs::write(&legacy, "{}").expect("legacy");
+        fs::write(&user, "{}").expect("user");
+        fs::write(&project, "{}").expect("project");
+        fs::write(&local, "{}").expect("local");
+
+        let resolved =
+            resolve_runtime_settings_files(&cwd, &profile, &profiles, &[], &[SettingSource::Local]);
+
+        assert_eq!(resolved, vec![local]);
     }
 }

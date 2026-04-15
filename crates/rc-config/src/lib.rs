@@ -7,7 +7,7 @@
 pub mod settings_layers;
 pub mod tool_filters;
 
-pub use crate::settings_layers::RuntimeOverrides;
+pub use crate::settings_layers::{RuntimeOverrides, SettingSource};
 
 use std::collections::BTreeMap;
 use std::env;
@@ -24,7 +24,9 @@ use rc_core::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::settings_layers::{ResolvedRuntimeSettings, load_runtime_settings};
+use crate::settings_layers::{
+    ResolvedRuntimeSettings, load_runtime_settings, resolve_runtime_settings_files,
+};
 use crate::tool_filters::merge_tool_filters;
 
 pub const RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -244,8 +246,12 @@ pub struct RuntimeConfig {
     pub session_name: Option<String>,
     /// Explanation of which settings layers were applied.
     pub setting_sources: Vec<String>,
+    /// Enabled user/project/local setting scopes for startup discovery.
+    pub allowed_setting_sources: Vec<SettingSource>,
     /// Concrete settings files loaded for this runtime.
     pub settings_files: Vec<PathBuf>,
+    /// Settings files explicitly supplied by CLI/runtime overrides.
+    pub cli_settings_files: Vec<PathBuf>,
     /// Tool allow-list applied to the current process.
     pub allowed_tools: Vec<String>,
     /// Tool deny-list applied to the current process.
@@ -296,8 +302,19 @@ pub fn load_runtime_config(
     };
     let paths = AppPaths::discover(profile_dir_override)?;
     paths.ensure_exists()?;
+    let allowed_setting_sources = runtime_overrides
+        .allowed_setting_sources
+        .clone()
+        .unwrap_or_else(|| SettingSource::all().to_vec());
 
-    let settings = load_runtime_settings(&runtime_overrides.settings_files)?;
+    let resolved_settings_files = resolve_runtime_settings_files(
+        &cwd,
+        &paths.profile_dir,
+        &paths.profiles_dir,
+        &runtime_overrides.settings_files,
+        &allowed_setting_sources,
+    );
+    let settings = load_runtime_settings(&resolved_settings_files)?;
     let provider_overrides = overrides.clone();
     let mut provider = load_provider_config(overrides, session_id_override, &settings)?;
     let effort = runtime_overrides
@@ -319,11 +336,7 @@ pub fn load_runtime_config(
         provider.thinking_budget = Some(budget);
     }
     let mut setting_sources = settings.setting_sources.clone();
-    setting_sources.extend(cli_setting_sources(
-        &runtime_overrides,
-        &provider,
-        &provider_overrides,
-    ));
+    setting_sources.extend(cli_setting_sources(&runtime_overrides, &provider_overrides));
     setting_sources.extend(env_setting_sources());
     if setting_sources.is_empty() {
         setting_sources.push("defaults".to_owned());
@@ -351,12 +364,14 @@ pub fn load_runtime_config(
         max_turns: max_turns.max(1),
         session_name,
         setting_sources,
-        settings_files: runtime_overrides.settings_files.clone(),
+        allowed_setting_sources,
+        settings_files: resolved_settings_files,
+        cli_settings_files: runtime_overrides.settings_files.clone(),
         allowed_tools,
         disallowed_tools,
         effort,
         fallback_model,
-        auth_source: resolve_auth_source(&provider_overrides, &settings),
+        auth_source: resolve_auth_source(&provider_overrides, &settings, &provider),
         provider,
         paths,
     })
@@ -670,7 +685,6 @@ fn read_env_first(keys: &[&str]) -> Option<String> {
 
 fn cli_setting_sources(
     runtime_overrides: &RuntimeOverrides,
-    provider: &ProviderConfig,
     overrides: &ProviderOverrides,
 ) -> Vec<String> {
     let mut sources = Vec::new();
@@ -704,7 +718,7 @@ fn cli_setting_sources(
     if runtime_overrides.fallback_model.is_some() {
         sources.push("cli:fallback-model".to_owned());
     }
-    if runtime_overrides.show_setting_sources && provider.api_key.is_some() {
+    if runtime_overrides.allowed_setting_sources.is_some() {
         sources.push("cli:setting-sources".to_owned());
     }
     sources
@@ -730,6 +744,58 @@ fn env_setting_sources() -> Vec<String> {
             "REMOTE_CODE_FALLBACK_MODEL",
             "env:REMOTE_CODE_FALLBACK_MODEL",
         ),
+        ("GLM_API_KEY", "env:GLM_API_KEY"),
+        ("GLM_CODING_PLAN_API_KEY", "env:GLM_CODING_PLAN_API_KEY"),
+        (
+            "MINIMAX_TOKEN_PLAN_API_KEY",
+            "env:MINIMAX_TOKEN_PLAN_API_KEY",
+        ),
+        (
+            "MINIMAX_TOKEN_PLAN_BASE_URL",
+            "env:MINIMAX_TOKEN_PLAN_BASE_URL",
+        ),
+        ("MINIMAX_TOKEN_PLAN_MODEL", "env:MINIMAX_TOKEN_PLAN_MODEL"),
+        (
+            "MINIMAX_CODING_PLAN_API_KEY",
+            "env:MINIMAX_CODING_PLAN_API_KEY",
+        ),
+        (
+            "ALIYUN_CODING_PLAN_API_KEY",
+            "env:ALIYUN_CODING_PLAN_API_KEY",
+        ),
+        ("ALIYUN_CODING_MODEL", "env:ALIYUN_CODING_MODEL"),
+        (
+            "TENCENT_CODING_PLAN_API_KEY",
+            "env:TENCENT_CODING_PLAN_API_KEY",
+        ),
+        ("TENCENT_CODING_MODEL", "env:TENCENT_CODING_MODEL"),
+        (
+            "QIANFAN_CODING_PLAN_API_KEY",
+            "env:QIANFAN_CODING_PLAN_API_KEY",
+        ),
+        ("QIANFAN_CODING_MODEL", "env:QIANFAN_CODING_MODEL"),
+        ("KIMI_CODING_PLAN_API_KEY", "env:KIMI_CODING_PLAN_API_KEY"),
+        ("KIMI_CODING_MODEL", "env:KIMI_CODING_MODEL"),
+        (
+            "VOLCENGINE_CODING_PLAN_API_KEY",
+            "env:VOLCENGINE_CODING_PLAN_API_KEY",
+        ),
+        (
+            "VOLCENGINE_CODING_BASE_URL",
+            "env:VOLCENGINE_CODING_BASE_URL",
+        ),
+        ("VOLCENGINE_CODING_MODEL", "env:VOLCENGINE_CODING_MODEL"),
+        ("BEDROCK_MODEL", "env:BEDROCK_MODEL"),
+        ("AWS_ACCESS_KEY_ID", "env:AWS_ACCESS_KEY_ID"),
+        ("AWS_SECRET_ACCESS_KEY", "env:AWS_SECRET_ACCESS_KEY"),
+        ("AWS_REGION", "env:AWS_REGION"),
+        (
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "env:GOOGLE_APPLICATION_CREDENTIALS",
+        ),
+        ("VERTEX_PROJECT", "env:VERTEX_PROJECT"),
+        ("VERTEX_REGION", "env:VERTEX_REGION"),
+        ("VERTEX_MODEL", "env:VERTEX_MODEL"),
     ];
     ENV_KEYS
         .iter()
@@ -740,17 +806,100 @@ fn env_setting_sources() -> Vec<String> {
 fn resolve_auth_source(
     overrides: &ProviderOverrides,
     settings: &ResolvedRuntimeSettings,
+    provider: &ProviderConfig,
 ) -> Option<String> {
+    resolve_auth_source_with_lookup(overrides, settings, provider, &mut |keys| {
+        read_env_first(keys)
+    })
+}
+
+fn resolve_auth_source_with_lookup<F>(
+    overrides: &ProviderOverrides,
+    settings: &ResolvedRuntimeSettings,
+    provider: &ProviderConfig,
+    lookup: &mut F,
+) -> Option<String>
+where
+    F: FnMut(&[&str]) -> Option<String>,
+{
     if overrides.api_key.is_some() {
         return Some("cli:api-key".to_owned());
     }
-    if env::var("REMOTE_CODE_API_KEY").is_ok() {
+
+    if let Some(api_key) = lookup(&["REMOTE_CODE_API_KEY"])
+        && provider.api_key.as_deref() == Some(api_key.as_str())
+    {
         return Some("env:REMOTE_CODE_API_KEY".to_owned());
     }
-    if env::var("OPENAI_API_KEY").is_ok() {
+    if let Some(api_key) = lookup(&["OPENAI_API_KEY"])
+        && provider.api_key.as_deref() == Some(api_key.as_str())
+    {
         return Some("env:OPENAI_API_KEY".to_owned());
     }
-    settings.auth_source.clone()
+
+    if let Some(settings_api_key) = settings.api_key.as_deref()
+        && provider.api_key.as_deref() == Some(settings_api_key)
+    {
+        return settings.auth_source.clone();
+    }
+
+    provider_auth_source_from_lookup(provider, lookup).or_else(|| settings.auth_source.clone())
+}
+
+fn provider_auth_source_from_lookup<F>(provider: &ProviderConfig, lookup: &mut F) -> Option<String>
+where
+    F: FnMut(&[&str]) -> Option<String>,
+{
+    let candidate_sources: &[(&[&str], &str)] = match provider.name.as_str() {
+        "glm" => &[(&["GLM_API_KEY"], "env:GLM_API_KEY")],
+        "glm-coding" => &[(&["GLM_CODING_PLAN_API_KEY"], "env:GLM_CODING_PLAN_API_KEY")],
+        "minimax-token-plan" => &[(
+            &["MINIMAX_TOKEN_PLAN_API_KEY"],
+            "env:MINIMAX_TOKEN_PLAN_API_KEY",
+        )],
+        "minimax-coding" => &[(
+            &["MINIMAX_CODING_PLAN_API_KEY"],
+            "env:MINIMAX_CODING_PLAN_API_KEY",
+        )],
+        "aliyun-coding" => &[(
+            &["ALIYUN_CODING_PLAN_API_KEY"],
+            "env:ALIYUN_CODING_PLAN_API_KEY",
+        )],
+        "tencent-coding" => &[(
+            &["TENCENT_CODING_PLAN_API_KEY"],
+            "env:TENCENT_CODING_PLAN_API_KEY",
+        )],
+        "qianfan-coding" => &[(
+            &["QIANFAN_CODING_PLAN_API_KEY"],
+            "env:QIANFAN_CODING_PLAN_API_KEY",
+        )],
+        "kimi-coding" => &[(
+            &["KIMI_CODING_PLAN_API_KEY"],
+            "env:KIMI_CODING_PLAN_API_KEY",
+        )],
+        "volcengine-coding" => &[(
+            &["VOLCENGINE_CODING_PLAN_API_KEY"],
+            "env:VOLCENGINE_CODING_PLAN_API_KEY",
+        )],
+        "bedrock" => &[(&["AWS_ACCESS_KEY_ID"], "env:AWS_ACCESS_KEY_ID")],
+        "vertex" => &[
+            (
+                &["GOOGLE_APPLICATION_CREDENTIALS"],
+                "env:GOOGLE_APPLICATION_CREDENTIALS",
+            ),
+            (&["VERTEX_PROJECT"], "env:VERTEX_PROJECT"),
+        ],
+        _ => &[],
+    };
+
+    candidate_sources.iter().find_map(|(keys, source)| {
+        let value = lookup(keys)?;
+        if provider.api_key.is_none() || provider.api_key.as_deref() == Some(value.as_str()) {
+            Some((*source).to_owned())
+        } else {
+            None
+        }
+    })
 }
 
 fn effort_to_thinking_budget(effort: &str) -> Option<u32> {
@@ -1305,10 +1454,12 @@ mod tests {
         ProviderConfig, default_provider_max_retries, default_provider_respect_retry_after,
         default_provider_retry_initial_backoff_ms, default_provider_retry_max_backoff_ms,
         discover_minimax_token_plan_provider, hydrate_provider_from_discovered, load_hooks_file,
-        load_settings_hooks, normalize_base_url, normalize_protocol,
+        load_runtime_config, load_settings_hooks, normalize_base_url, normalize_protocol,
+        resolve_auth_source_with_lookup,
     };
-    use rc_core::HookEvent;
-    use rc_core::ProviderProtocol;
+    use crate::ProviderOverrides;
+    use crate::settings_layers::{ResolvedRuntimeSettings, RuntimeOverrides, SettingSource};
+    use rc_core::{HookEvent, InputFormat, OutputFormat, PermissionMode, ProviderProtocol};
     use tempfile::tempdir;
 
     #[test]
@@ -1409,6 +1560,265 @@ mod tests {
 
         let hooks = load_settings_hooks(&path).expect("settings hooks should load");
         assert_eq!(hooks, BTreeMap::new());
+    }
+
+    #[test]
+    fn load_runtime_config_auto_discovers_settings_when_cli_empty() {
+        let temp = tempdir().expect("tempdir should work");
+        let cwd = temp.path().join("workspace");
+        let profile_dir = temp.path().join("profile");
+        fs::create_dir_all(cwd.join(".remote-code")).expect("workspace settings dir");
+        fs::create_dir_all(profile_dir.join("profiles").join("legacy-import"))
+            .expect("legacy settings dir");
+
+        let legacy = profile_dir
+            .join("profiles")
+            .join("legacy-import")
+            .join("settings.json");
+        let profile = profile_dir.join("settings.json");
+        let project = cwd.join(".remote-code").join("settings.json");
+        let local = cwd.join(".remote-code").join("settings.local.json");
+        fs::write(&legacy, r#"{"session_name":"legacy"}"#).expect("write legacy");
+        fs::write(&profile, r#"{"session_name":"profile"}"#).expect("write profile");
+        fs::write(&project, r#"{"session_name":"project"}"#).expect("write project");
+        fs::write(
+            &local,
+            r#"{
+                "session_name":"local",
+                "provider":{"api_key":"local-secret"}
+            }"#,
+        )
+        .expect("write local");
+
+        let config = load_runtime_config(
+            Some(cwd.clone()),
+            Some(profile_dir.clone()),
+            None,
+            PermissionMode::Default,
+            InputFormat::Text,
+            OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            8,
+            ProviderOverrides {
+                provider: Some("mock".to_owned()),
+                ..ProviderOverrides::default()
+            },
+            RuntimeOverrides::default(),
+        )
+        .expect("config should load");
+
+        assert_eq!(config.session_name.as_deref(), Some("local"));
+        assert_eq!(config.provider.api_key.as_deref(), Some("local-secret"));
+        assert_eq!(
+            config.auth_source.as_deref(),
+            Some(format!("settings:{}", local.display()).as_str())
+        );
+        assert_eq!(
+            config.settings_files,
+            vec![
+                legacy.clone(),
+                profile.clone(),
+                project.clone(),
+                local.clone()
+            ]
+        );
+        assert!(config.cli_settings_files.is_empty());
+        assert_eq!(
+            config
+                .setting_sources
+                .iter()
+                .filter(|source| source.starts_with("settings:"))
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec![
+                format!("settings:{}", legacy.display()),
+                format!("settings:{}", profile.display()),
+                format!("settings:{}", project.display()),
+                format!("settings:{}", local.display()),
+            ]
+        );
+    }
+
+    #[test]
+    fn load_runtime_config_explicit_settings_disable_autodiscovery() {
+        let temp = tempdir().expect("tempdir should work");
+        let cwd = temp.path().join("workspace");
+        let profile_dir = temp.path().join("profile");
+        fs::create_dir_all(cwd.join(".remote-code")).expect("workspace settings dir");
+        fs::create_dir_all(&profile_dir).expect("profile dir");
+
+        let auto = cwd.join(".remote-code").join("settings.json");
+        let explicit = temp.path().join("explicit.json");
+        fs::write(&auto, r#"{"session_name":"auto"}"#).expect("write auto");
+        fs::write(&explicit, r#"{"session_name":"explicit"}"#).expect("write explicit");
+
+        let config = load_runtime_config(
+            Some(cwd),
+            Some(profile_dir),
+            None,
+            PermissionMode::Default,
+            InputFormat::Text,
+            OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            8,
+            ProviderOverrides {
+                provider: Some("mock".to_owned()),
+                ..ProviderOverrides::default()
+            },
+            RuntimeOverrides {
+                settings_files: vec![explicit.clone()],
+                ..RuntimeOverrides::default()
+            },
+        )
+        .expect("config should load");
+
+        assert_eq!(config.session_name.as_deref(), Some("explicit"));
+        assert_eq!(config.settings_files, vec![explicit.clone()]);
+        assert_eq!(config.cli_settings_files, vec![explicit.clone()]);
+        assert_eq!(
+            config
+                .setting_sources
+                .iter()
+                .filter(|source| source.starts_with("settings:"))
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec![format!("settings:{}", explicit.display())]
+        );
+    }
+
+    #[test]
+    fn load_runtime_config_with_no_discovered_settings_keeps_file_list_empty() {
+        let temp = tempdir().expect("tempdir should work");
+        let cwd = temp.path().join("workspace");
+        let profile_dir = temp.path().join("profile");
+        fs::create_dir_all(&cwd).expect("workspace dir");
+
+        let config = load_runtime_config(
+            Some(cwd),
+            Some(profile_dir),
+            None,
+            PermissionMode::Default,
+            InputFormat::Text,
+            OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            8,
+            ProviderOverrides {
+                provider: Some("mock".to_owned()),
+                ..ProviderOverrides::default()
+            },
+            RuntimeOverrides::default(),
+        )
+        .expect("config should load");
+
+        assert!(config.settings_files.is_empty());
+        assert!(config.cli_settings_files.is_empty());
+        assert_eq!(config.setting_sources, vec!["cli:provider".to_owned()]);
+    }
+
+    #[test]
+    fn load_runtime_config_can_limit_discovery_to_local_sources() {
+        let temp = tempdir().expect("tempdir should work");
+        let cwd = temp.path().join("workspace");
+        let profile_dir = temp.path().join("profile");
+        fs::create_dir_all(cwd.join(".remote-code")).expect("workspace settings dir");
+        fs::create_dir_all(profile_dir.join("profiles").join("legacy-import"))
+            .expect("legacy settings dir");
+
+        let legacy = profile_dir
+            .join("profiles")
+            .join("legacy-import")
+            .join("settings.json");
+        let profile = profile_dir.join("settings.json");
+        let project = cwd.join(".remote-code").join("settings.json");
+        let local = cwd.join(".remote-code").join("settings.local.json");
+        fs::write(&legacy, r#"{"session_name":"legacy"}"#).expect("write legacy");
+        fs::write(&profile, r#"{"session_name":"profile"}"#).expect("write profile");
+        fs::write(&project, r#"{"session_name":"project"}"#).expect("write project");
+        fs::write(&local, r#"{"session_name":"local"}"#).expect("write local");
+
+        let config = load_runtime_config(
+            Some(cwd),
+            Some(profile_dir),
+            None,
+            PermissionMode::Default,
+            InputFormat::Text,
+            OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            8,
+            ProviderOverrides {
+                provider: Some("mock".to_owned()),
+                ..ProviderOverrides::default()
+            },
+            RuntimeOverrides {
+                allowed_setting_sources: Some(vec![SettingSource::Local]),
+                ..RuntimeOverrides::default()
+            },
+        )
+        .expect("config should load");
+
+        assert_eq!(config.allowed_setting_sources, vec![SettingSource::Local]);
+        assert_eq!(config.settings_files, vec![local.clone()]);
+        assert!(config.cli_settings_files.is_empty());
+        assert_eq!(config.session_name.as_deref(), Some("local"));
+        assert_eq!(
+            config
+                .setting_sources
+                .iter()
+                .filter(|source| source.starts_with("settings:"))
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec![format!("settings:{}", local.display())]
+        );
+    }
+
+    #[test]
+    fn resolve_auth_source_prefers_settings_when_provider_env_was_not_used() {
+        let provider = ProviderConfig {
+            name: "glm-coding".to_owned(),
+            base_url: Some("https://open.bigmodel.cn/api/anthropic/v1/messages".to_owned()),
+            api_key: Some("settings-secret".to_owned()),
+            model: Some("glm-5.1".to_owned()),
+            protocol: ProviderProtocol::Anthropic,
+            timeout_ms: 600_000,
+            max_output_tokens: 8_192,
+            max_retries: default_provider_max_retries(),
+            retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+            retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+            respect_retry_after: default_provider_respect_retry_after(),
+            request_header_overrides: BTreeMap::new(),
+            request_metadata: BTreeMap::new(),
+            thinking_budget: None,
+        };
+        let settings = ResolvedRuntimeSettings {
+            api_key: Some("settings-secret".to_owned()),
+            auth_source: Some("settings:/tmp/profile/settings.json".to_owned()),
+            ..ResolvedRuntimeSettings::default()
+        };
+        let env_values = HashMap::from([("GLM_CODING_PLAN_API_KEY", "env-secret".to_owned())]);
+
+        let auth_source = resolve_auth_source_with_lookup(
+            &ProviderOverrides::default(),
+            &settings,
+            &provider,
+            &mut |keys| keys.iter().find_map(|key| env_values.get(*key).cloned()),
+        );
+
+        assert_eq!(
+            auth_source.as_deref(),
+            Some("settings:/tmp/profile/settings.json")
+        );
     }
 
     #[test]

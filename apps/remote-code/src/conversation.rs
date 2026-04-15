@@ -6,7 +6,8 @@ use std::time::Instant;
 
 use anyhow::{Result, anyhow};
 use rc_config::{
-    RuntimeConfig, import_legacy_profile, normalize_base_url, validate_provider_config,
+    RuntimeConfig, SettingSource, import_legacy_profile, normalize_base_url,
+    validate_provider_config,
 };
 use rc_core::{ConversationEntry, ConversationRole, PermissionMode};
 use rc_permissions::{
@@ -437,8 +438,10 @@ pub(crate) fn discover_runtime_extensions(config: &RuntimeConfig) -> RuntimeExte
     let mut plugin_runtimes = BTreeSet::new();
     let mut mcp_servers = BTreeSet::new();
     let mut warnings = Vec::new();
+    let user_sources_enabled = setting_source_enabled(config, SettingSource::User);
+    let project_sources_enabled = setting_source_enabled(config, SettingSource::Project);
 
-    if config.paths.skills_dir.exists() {
+    if user_sources_enabled && config.paths.skills_dir.exists() {
         collect_skill_names(
             rc_skills::discover_skills(&config.paths.skills_dir),
             &mut skills,
@@ -447,7 +450,7 @@ pub(crate) fn discover_runtime_extensions(config: &RuntimeConfig) -> RuntimeExte
         );
     }
 
-    if config.paths.plugins_dir.exists() {
+    if user_sources_enabled && config.paths.plugins_dir.exists() {
         match rc_plugins::discover_plugins(&config.paths.plugins_dir) {
             Ok(discovered_plugins) => {
                 for plugin in discovered_plugins {
@@ -477,19 +480,24 @@ pub(crate) fn discover_runtime_extensions(config: &RuntimeConfig) -> RuntimeExte
         }
     }
 
-    for root in [&config.cwd, &config.paths.profile_dir] {
-        let candidate = root.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE);
-        if !candidate.exists() {
-            continue;
-        }
-        match rc_mcp::McpConfig::load(&candidate) {
-            Ok(config) => {
-                mcp_servers.extend(config.servers.keys().cloned());
+    for (enabled, root) in [
+        (project_sources_enabled, &config.cwd),
+        (user_sources_enabled, &config.paths.profile_dir),
+    ] {
+        if enabled {
+            let candidate = root.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE);
+            if !candidate.exists() {
+                continue;
             }
-            Err(error) => warnings.push(format!(
-                "Failed to load MCP config {}: {error}",
-                candidate.display()
-            )),
+            match rc_mcp::McpConfig::load(&candidate) {
+                Ok(config) => {
+                    mcp_servers.extend(config.servers.keys().cloned());
+                }
+                Err(error) => warnings.push(format!(
+                    "Failed to load MCP config {}: {error}",
+                    candidate.display()
+                )),
+            }
         }
     }
 
@@ -500,6 +508,10 @@ pub(crate) fn discover_runtime_extensions(config: &RuntimeConfig) -> RuntimeExte
         mcp_servers: mcp_servers.into_iter().collect(),
         warnings,
     }
+}
+
+fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool {
+    config.allowed_setting_sources.contains(&source)
 }
 
 fn collect_skill_names(
@@ -967,6 +979,7 @@ pub(crate) async fn run_oneshot_text(
             &config.cwd,
             &config.paths.profile_dir,
             &config.settings_files,
+            &config.cli_settings_files,
         )?,
     ));
     let discovery = discover_runtime_hooks(config, &[]);
@@ -1005,6 +1018,7 @@ pub(crate) fn run_doctor(config: &RuntimeConfig) -> Result<()> {
         &config.cwd,
         &config.paths.profile_dir,
         &config.settings_files,
+        &config.cli_settings_files,
     )?;
     let api_key_state = if config.provider.api_key.is_some() {
         "present"
@@ -1356,8 +1370,13 @@ fn read_line_prompt(prompt: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::PromptStreamEvent;
+    use std::fs;
+
+    use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
     use rc_protocol::{MessageRole, RuntimeEventDetail};
+    use tempfile::tempdir;
+
+    use super::{PromptStreamEvent, discover_runtime_extensions};
 
     #[test]
     fn prompt_stream_event_maps_message_delta_to_shared_runtime_event() {
@@ -1385,5 +1404,118 @@ mod tests {
         };
 
         assert_eq!(event.runtime_event_detail(), None);
+    }
+
+    #[test]
+    fn discover_runtime_extensions_respects_setting_sources() {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        let plugin_root = profile.join("plugins").join("sample");
+        fs::create_dir_all(cwd.join(".remote-code")).expect("workspace dir");
+        fs::create_dir_all(profile.join("skills").join("demo")).expect("profile skills");
+        fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("plugin dir");
+        fs::write(
+            profile.join("skills").join("demo").join("SKILL.md"),
+            "# Demo\n\nSummary.\n",
+        )
+        .expect("write skill");
+        fs::write(
+            profile.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            r#"[servers.profile]
+command = "python"
+args = ["profile.py"]"#,
+        )
+        .expect("write profile mcp");
+        fs::write(
+            cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            r#"[servers.project]
+command = "python"
+args = ["project.py"]"#,
+        )
+        .expect("write project mcp");
+        fs::write(
+            plugin_root.join(".codex-plugin").join("plugin.json"),
+            r#"{
+                "name": "sample",
+                "version": "0.1.0",
+                "skills": "./skills",
+                "mcp": "./mcp.toml",
+                "runtime": {
+                    "command": "python",
+                    "cwd": "."
+                }
+            }"#,
+        )
+        .expect("write plugin manifest");
+        fs::create_dir_all(plugin_root.join("skills").join("bundled")).expect("plugin skills");
+        fs::write(
+            plugin_root.join("skills").join("bundled").join("SKILL.md"),
+            "# Bundled\n\nSummary.\n",
+        )
+        .expect("write plugin skill");
+        fs::write(
+            plugin_root.join("mcp.toml"),
+            r#"[servers.plugin]
+command = "python"
+args = ["plugin.py"]"#,
+        )
+        .expect("write plugin mcp");
+
+        let project_only = load_runtime_config(
+            Some(cwd.clone()),
+            Some(profile.clone()),
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+            RuntimeOverrides {
+                allowed_setting_sources: Some(vec![SettingSource::Project]),
+                ..RuntimeOverrides::default()
+            },
+        )
+        .expect("project config");
+        let discovery = discover_runtime_extensions(&project_only);
+        assert!(discovery.skills.is_empty());
+        assert!(discovery.plugins.is_empty());
+        assert!(discovery.plugin_runtimes.is_empty());
+        assert_eq!(discovery.mcp_servers, vec!["project".to_owned()]);
+
+        let user_only = load_runtime_config(
+            Some(cwd),
+            Some(profile),
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+            RuntimeOverrides {
+                allowed_setting_sources: Some(vec![SettingSource::User]),
+                ..RuntimeOverrides::default()
+            },
+        )
+        .expect("user config");
+        let discovery = discover_runtime_extensions(&user_only);
+        assert_eq!(
+            discovery.skills,
+            vec!["bundled".to_owned(), "demo".to_owned()]
+        );
+        assert_eq!(discovery.plugins, vec!["sample".to_owned()]);
+        assert_eq!(discovery.plugin_runtimes, vec!["sample".to_owned()]);
+        assert_eq!(
+            discovery.mcp_servers,
+            vec!["plugin".to_owned(), "profile".to_owned()]
+        );
     }
 }

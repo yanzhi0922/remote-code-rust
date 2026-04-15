@@ -345,7 +345,7 @@ pub enum McpRuntimeError {
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct RawMcpConfig {
-    #[serde(default, rename = "mcp_servers")]
+    #[serde(default, rename = "mcp_servers", alias = "servers")]
     servers: BTreeMap<String, RawMcpServer>,
 }
 

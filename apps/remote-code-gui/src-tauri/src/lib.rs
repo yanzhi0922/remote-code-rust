@@ -1151,6 +1151,7 @@ async fn build_gui_doctor_report(
         &config.cwd,
         &config.paths.profile_dir,
         &config.settings_files,
+        &config.cli_settings_files,
     )?;
 
     let mut warnings = Vec::new();
@@ -2380,6 +2381,7 @@ async fn run_gui_prompt(
             &config.cwd,
             &config.paths.profile_dir,
             &config.settings_files,
+            &config.cli_settings_files,
         )?,
     );
 
@@ -3487,6 +3489,7 @@ mod tests {
                 session_name: Some("Parity".to_owned()),
                 settings_files: Vec::new(),
                 show_setting_sources: true,
+                allowed_setting_sources: None,
                 allowed_tools: vec!["read_file".to_owned()],
                 disallowed_tools: vec!["bash_command".to_owned()],
                 effort: Some("medium".to_owned()),

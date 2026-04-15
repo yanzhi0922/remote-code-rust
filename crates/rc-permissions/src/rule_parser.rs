@@ -25,15 +25,20 @@ struct PermissionLists {
 pub fn discover_permission_rule_files(
     cwd: &Path,
     profile_dir: &Path,
+    settings_files: &[PathBuf],
     cli_settings_files: &[PathBuf],
 ) -> Vec<(PathBuf, RuleSource)> {
+    let explicit_cli_paths = cli_settings_files
+        .iter()
+        .map(|path| normalize_rule_path(cwd, path))
+        .collect::<Vec<_>>();
     let mut files = Vec::new();
-    files.extend(
-        cli_settings_files
-            .iter()
-            .cloned()
-            .map(|path| (path, RuleSource::Cli)),
-    );
+    files.extend(settings_files.iter().cloned().map(|path| {
+        (
+            path.clone(),
+            classify_settings_rule_source(&path, cwd, profile_dir, &explicit_cli_paths),
+        )
+    }));
 
     for candidate in [
         cwd.join(".remote-code-rust").join("settings.toml"),
@@ -53,6 +58,52 @@ pub fn discover_permission_rule_files(
         }
     }
     files
+}
+
+fn classify_settings_rule_source(
+    path: &Path,
+    cwd: &Path,
+    profile_dir: &Path,
+    explicit_cli_paths: &[PathBuf],
+) -> RuleSource {
+    if explicit_cli_paths
+        .iter()
+        .any(|candidate| candidate == &normalize_rule_path(cwd, path))
+    {
+        return RuleSource::Cli;
+    }
+
+    let project_paths = [
+        cwd.join(".remote-code").join("settings.json"),
+        cwd.join(".remote-code").join("settings.local.json"),
+        cwd.join(".remote-code-rust").join("settings.toml"),
+        cwd.join(".remote-code-rust").join("settings.json"),
+    ];
+    if project_paths.iter().any(|candidate| candidate == path) {
+        return RuleSource::Project;
+    }
+
+    let user_paths = [
+        profile_dir.join("settings.toml"),
+        profile_dir.join("settings.json"),
+        profile_dir
+            .join("profiles")
+            .join("legacy-import")
+            .join("settings.json"),
+    ];
+    if user_paths.iter().any(|candidate| candidate == path) {
+        return RuleSource::User;
+    }
+
+    RuleSource::Cli
+}
+
+fn normalize_rule_path(cwd: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    }
 }
 
 pub fn load_permission_rules_from_file(
@@ -128,7 +179,10 @@ mod tests {
 
     use crate::rules::{RuleAction, RuleSource};
 
-    use super::{discover_permission_rule_files, load_permission_rules_from_file};
+    use super::{
+        classify_settings_rule_source, discover_permission_rule_files,
+        load_permission_rules_from_file,
+    };
 
     #[test]
     fn loads_json_permission_rules() {
@@ -159,7 +213,72 @@ mod tests {
         fs::write(cwd.join(".remote-code-rust").join("settings.json"), "{}").expect("project");
         fs::write(profile.join("settings.toml"), "").expect("user");
 
-        let files = discover_permission_rule_files(&cwd, &profile, &[cli]);
+        let files = discover_permission_rule_files(&cwd, &profile, &[cli], &[]);
         assert_eq!(files.len(), 3);
+    }
+
+    #[test]
+    fn classifies_runtime_settings_paths_by_scope() {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join("profile");
+        let cli = tempdir.path().join("custom.json");
+
+        assert_eq!(
+            classify_settings_rule_source(
+                &cwd.join(".remote-code").join("settings.json"),
+                &cwd,
+                &profile,
+                &[]
+            ),
+            RuleSource::Project
+        );
+        assert_eq!(
+            classify_settings_rule_source(
+                &cwd.join(".remote-code").join("settings.local.json"),
+                &cwd,
+                &profile,
+                &[]
+            ),
+            RuleSource::Project
+        );
+        assert_eq!(
+            classify_settings_rule_source(&profile.join("settings.json"), &cwd, &profile, &[]),
+            RuleSource::User
+        );
+        assert_eq!(
+            classify_settings_rule_source(
+                &profile
+                    .join("profiles")
+                    .join("legacy-import")
+                    .join("settings.json"),
+                &cwd,
+                &profile,
+                &[]
+            ),
+            RuleSource::User
+        );
+        assert_eq!(
+            classify_settings_rule_source(&cli, &cwd, &profile, &[]),
+            RuleSource::Cli
+        );
+    }
+
+    #[test]
+    fn explicit_cli_settings_paths_keep_cli_priority_even_for_standard_locations() {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join("profile");
+        let project_settings = cwd.join(".remote-code").join("settings.local.json");
+
+        assert_eq!(
+            classify_settings_rule_source(
+                &project_settings,
+                &cwd,
+                &profile,
+                std::slice::from_ref(&project_settings)
+            ),
+            RuleSource::Cli
+        );
     }
 }

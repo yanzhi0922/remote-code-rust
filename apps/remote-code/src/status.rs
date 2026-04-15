@@ -277,6 +277,7 @@ mod tests {
                 session_name: Some("Parity".to_owned()),
                 settings_files: Vec::new(),
                 show_setting_sources: true,
+                allowed_setting_sources: None,
                 allowed_tools: vec!["read_file".to_owned()],
                 disallowed_tools: vec!["bash_command".to_owned()],
                 effort: Some("medium".to_owned()),
@@ -329,6 +330,7 @@ model = "glm-5.1"
             RuntimeOverrides {
                 settings_files: vec![settings.clone()],
                 show_setting_sources: true,
+                allowed_setting_sources: None,
                 fallback_model: Some("glm-5-turbo".to_owned()),
                 ..RuntimeOverrides::default()
             },

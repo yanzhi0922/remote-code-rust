@@ -1,15 +1,17 @@
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use rc_config::{RuntimeConfig, load_hooks_file, load_settings_hooks};
+use rc_config::{RuntimeConfig, SettingSource, load_hooks_file, load_settings_hooks};
 use rc_core::{CommandHook, ConversationEntry, HookEvent, HookShell, ToolCall};
 use rc_tools::{CommandHookExecutionRequest, CommandHookExecutionResult, execute_command_hook};
 use serde::Serialize;
 use serde_json::Value;
 
 const WORKSPACE_SETTINGS_DIR: &str = ".remote-code";
+const WORKSPACE_HOOKS_FILE: &str = "hooks.json";
 const WORKSPACE_SETTINGS_FILE: &str = "settings.json";
 const WORKSPACE_LOCAL_SETTINGS_FILE: &str = "settings.local.json";
+const PROFILE_HOOKS_FILE: &str = "hooks.json";
 const PROFILE_SETTINGS_FILE: &str = "settings.json";
 const LEGACY_IMPORT_SETTINGS_PATH: &[&str] = &["legacy-import", "settings.json"];
 
@@ -119,43 +121,34 @@ impl HookRuntime {
     pub(crate) fn discover(config: &RuntimeConfig) -> Self {
         let mut runtime = Self::default();
         let mut seen_paths = BTreeSet::new();
+        let user_sources_enabled = setting_source_enabled(config, SettingSource::User);
+        let project_sources_enabled = setting_source_enabled(config, SettingSource::Project);
 
-        runtime.load_settings_source(
-            "profile",
-            config.paths.profile_dir.display().to_string(),
-            config.paths.profile_dir.join(PROFILE_SETTINGS_FILE),
-            &mut seen_paths,
-        );
-        runtime.load_settings_source(
-            "legacy-import",
-            config.paths.profiles_dir.display().to_string(),
-            LEGACY_IMPORT_SETTINGS_PATH
-                .iter()
-                .fold(config.paths.profiles_dir.clone(), |path, segment| {
-                    path.join(segment)
-                }),
-            &mut seen_paths,
-        );
-        runtime.load_settings_source(
-            "project",
-            config.cwd.display().to_string(),
-            config
-                .cwd
-                .join(WORKSPACE_SETTINGS_DIR)
-                .join(WORKSPACE_SETTINGS_FILE),
-            &mut seen_paths,
-        );
-        runtime.load_settings_source(
-            "local",
-            config.cwd.display().to_string(),
-            config
-                .cwd
-                .join(WORKSPACE_SETTINGS_DIR)
-                .join(WORKSPACE_LOCAL_SETTINGS_FILE),
-            &mut seen_paths,
-        );
+        if user_sources_enabled {
+            runtime.load_hook_file_source(
+                "profile",
+                "profile hooks".to_owned(),
+                config.paths.profile_dir.join(PROFILE_HOOKS_FILE),
+                &mut seen_paths,
+            );
+        }
+        if project_sources_enabled {
+            runtime.load_hook_file_source(
+                "project",
+                "project hooks".to_owned(),
+                config
+                    .cwd
+                    .join(WORKSPACE_SETTINGS_DIR)
+                    .join(WORKSPACE_HOOKS_FILE),
+                &mut seen_paths,
+            );
+        }
+        for path in &config.settings_files {
+            let (origin_kind, origin_name) = classify_settings_source(config, path);
+            runtime.load_settings_source(origin_kind, origin_name, path.clone(), &mut seen_paths);
+        }
 
-        if config.paths.plugins_dir.exists() {
+        if user_sources_enabled && config.paths.plugins_dir.exists() {
             match rc_plugins::discover_plugins(&config.paths.plugins_dir) {
                 Ok(plugins) => {
                     for plugin in plugins {
@@ -466,6 +459,52 @@ impl HookRuntime {
     }
 }
 
+fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool {
+    config.allowed_setting_sources.contains(&source)
+}
+
+fn classify_settings_source(config: &RuntimeConfig, path: &Path) -> (&'static str, String) {
+    if config
+        .cli_settings_files
+        .iter()
+        .any(|candidate| candidate == path)
+    {
+        return ("explicit", path.display().to_string());
+    }
+
+    let legacy = LEGACY_IMPORT_SETTINGS_PATH
+        .iter()
+        .fold(config.paths.profiles_dir.clone(), |path, segment| {
+            path.join(segment)
+        });
+    if path == legacy {
+        return ("legacy-import", "legacy import settings".to_owned());
+    }
+
+    let profile = config.paths.profile_dir.join(PROFILE_SETTINGS_FILE);
+    if path == profile {
+        return ("profile", "profile settings".to_owned());
+    }
+
+    let project = config
+        .cwd
+        .join(WORKSPACE_SETTINGS_DIR)
+        .join(WORKSPACE_SETTINGS_FILE);
+    if path == project {
+        return ("project", "project settings".to_owned());
+    }
+
+    let local = config
+        .cwd
+        .join(WORKSPACE_SETTINGS_DIR)
+        .join(WORKSPACE_LOCAL_SETTINGS_FILE);
+    if path == local {
+        return ("local", "local settings".to_owned());
+    }
+
+    ("settings", path.display().to_string())
+}
+
 #[derive(Debug, Clone, Default)]
 struct ParsedHookBatch {
     decision: Option<HookDecision>,
@@ -730,7 +769,7 @@ mod tests {
         HookDecision, HookRuntime, append_hook_context_entries, condition_matches, matcher_matches,
         wildcard_match,
     };
-    use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
+    use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
     use rc_core::{ConversationRole, HookEvent};
     use serde_json::json;
     use tempfile::tempdir;
@@ -832,6 +871,114 @@ mod tests {
         assert_eq!(hooks.len(), 2);
         assert!(hooks.iter().any(|hook| hook.event == HookEvent::PreToolUse));
         assert!(hooks.iter().any(|hook| hook.origin_kind == "plugin"));
+    }
+
+    #[tokio::test]
+    async fn discovery_respects_setting_sources_and_explicit_settings() {
+        let temp = tempdir().expect("tempdir should work");
+        let cwd = temp.path().join("workspace");
+        let profile = temp.path().join("profile");
+        std::fs::create_dir_all(cwd.join(".remote-code")).expect("workspace dir should exist");
+        std::fs::create_dir_all(profile.join("plugins")).expect("plugins dir should exist");
+
+        std::fs::write(
+            profile.join("hooks.json"),
+            r#"{
+                "SessionStart": [
+                    {
+                        "hooks": [{"type": "command", "command": "echo profile"}]
+                    }
+                ]
+            }"#,
+        )
+        .expect("profile hooks write should work");
+        std::fs::write(
+            cwd.join(".remote-code").join("hooks.json"),
+            r#"{
+                "PreToolUse": [
+                    {
+                        "hooks": [{"type": "command", "command": "echo project"}]
+                    }
+                ]
+            }"#,
+        )
+        .expect("project hooks write should work");
+        std::fs::write(
+            cwd.join(".remote-code").join("settings.local.json"),
+            r#"{
+                "hooks": {
+                    "PostToolUse": [
+                        {
+                            "hooks": [{"type": "command", "command": "echo local"}]
+                        }
+                    ]
+                }
+            }"#,
+        )
+        .expect("local settings write should work");
+
+        let local_only = load_runtime_config(
+            Some(cwd.clone()),
+            Some(profile.clone()),
+            Some(Uuid::nil()),
+            rc_core::PermissionMode::BypassPermissions,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            1,
+            ProviderOverrides::default(),
+            RuntimeOverrides {
+                allowed_setting_sources: Some(vec![SettingSource::Local]),
+                ..RuntimeOverrides::default()
+            },
+        )
+        .expect("local-only config should load");
+        let hooks = HookRuntime::discover(&local_only).list(None);
+        assert_eq!(hooks.len(), 1);
+        assert_eq!(hooks[0].event, HookEvent::PostToolUse);
+        assert_eq!(hooks[0].origin_kind, "local");
+
+        let explicit = temp.path().join("explicit-settings.json");
+        std::fs::write(
+            &explicit,
+            r#"{
+                "hooks": {
+                    "PostToolUseFailure": [
+                        {
+                            "hooks": [{"type": "command", "command": "echo explicit"}]
+                        }
+                    ]
+                }
+            }"#,
+        )
+        .expect("explicit settings write should work");
+        let explicit_config = load_runtime_config(
+            Some(cwd),
+            Some(profile),
+            Some(Uuid::nil()),
+            rc_core::PermissionMode::BypassPermissions,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            1,
+            ProviderOverrides::default(),
+            RuntimeOverrides {
+                settings_files: vec![explicit],
+                allowed_setting_sources: Some(vec![SettingSource::Local]),
+                ..RuntimeOverrides::default()
+            },
+        )
+        .expect("explicit config should load");
+        let hooks = HookRuntime::discover(&explicit_config).list(None);
+        assert_eq!(hooks.len(), 1);
+        assert_eq!(hooks[0].event, HookEvent::PostToolUseFailure);
+        assert_eq!(hooks[0].origin_kind, "explicit");
     }
 
     #[test]

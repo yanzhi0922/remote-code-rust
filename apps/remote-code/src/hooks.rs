@@ -2,14 +2,14 @@ use std::{
     collections::{BTreeSet, hash_map::DefaultHasher},
     fs,
     hash::{Hash, Hasher},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Stdio,
     time::Instant,
 };
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Args, Subcommand, ValueEnum};
-use rc_config::RuntimeConfig;
+use rc_config::{RuntimeConfig, SettingSource};
 use rc_core::{ConversationEntry, ToolCall, ToolResult};
 use rc_session::SessionStore;
 use serde::{Deserialize, Serialize};
@@ -336,46 +336,37 @@ pub fn discover_runtime_hooks(
 ) -> RuntimeHookDiscovery {
     let mut discovery = RuntimeHookDiscovery::default();
     let mut sources = Vec::new();
+    let user_sources_enabled = setting_source_enabled(config, SettingSource::User);
+    let project_sources_enabled = setting_source_enabled(config, SettingSource::Project);
 
-    push_source_if_exists(
-        &mut sources,
-        "profile",
-        "profile hooks",
-        config.paths.profile_dir.join("hooks.json"),
-        None,
-    );
-    push_source_if_exists(
-        &mut sources,
-        "profile",
-        "profile settings",
-        config.paths.profile_dir.join("settings.json"),
-        None,
-    );
+    if user_sources_enabled {
+        push_source_if_exists(
+            &mut sources,
+            "profile",
+            "profile hooks",
+            config.paths.profile_dir.join("hooks.json"),
+            None,
+        );
+    }
 
-    let workspace_dir = config.cwd.join(".remote-code");
-    push_source_if_exists(
-        &mut sources,
-        "workspace",
-        "workspace hooks",
-        workspace_dir.join("hooks.json"),
-        None,
-    );
-    push_source_if_exists(
-        &mut sources,
-        "workspace",
-        "workspace settings",
-        workspace_dir.join("settings.json"),
-        None,
-    );
-    push_source_if_exists(
-        &mut sources,
-        "workspace",
-        "workspace local settings",
-        workspace_dir.join("settings.local.json"),
-        None,
-    );
+    if project_sources_enabled {
+        push_source_if_exists(
+            &mut sources,
+            "project",
+            "project hooks",
+            config.cwd.join(".remote-code").join("hooks.json"),
+            None,
+        );
+    }
 
-    let mut roots = vec![config.paths.plugins_dir.clone()];
+    for path in &config.settings_files {
+        push_settings_source(&mut sources, config, path);
+    }
+
+    let mut roots = Vec::new();
+    if user_sources_enabled {
+        roots.push(config.paths.plugins_dir.clone());
+    }
     roots.extend(plugin_roots.iter().cloned());
     dedupe_paths(&mut roots);
     let mut seen_plugins = BTreeSet::new();
@@ -417,6 +408,55 @@ pub fn discover_runtime_hooks(
         }
     }
     discovery
+}
+
+fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool {
+    config.allowed_setting_sources.contains(&source)
+}
+
+fn push_settings_source(
+    sources: &mut Vec<HookSourceDescriptor>,
+    config: &RuntimeConfig,
+    path: &Path,
+) {
+    let (source_kind, source_name) = classify_settings_source(config, path);
+    push_source_if_exists(sources, source_kind, &source_name, path.to_path_buf(), None);
+}
+
+fn classify_settings_source(config: &RuntimeConfig, path: &Path) -> (&'static str, String) {
+    if config
+        .cli_settings_files
+        .iter()
+        .any(|candidate| candidate == path)
+    {
+        return ("explicit", path.display().to_string());
+    }
+
+    let legacy = config
+        .paths
+        .profiles_dir
+        .join("legacy-import")
+        .join("settings.json");
+    if path == legacy {
+        return ("legacy-import", "legacy import settings".to_owned());
+    }
+
+    let profile = config.paths.profile_dir.join("settings.json");
+    if path == profile {
+        return ("profile", "profile settings".to_owned());
+    }
+
+    let project = config.cwd.join(".remote-code").join("settings.json");
+    if path == project {
+        return ("project", "project settings".to_owned());
+    }
+
+    let local = config.cwd.join(".remote-code").join("settings.local.json");
+    if path == local {
+        return ("local", "local settings".to_owned());
+    }
+
+    ("settings", path.display().to_string())
 }
 
 pub fn build_hooks_list_output(
@@ -1266,7 +1306,7 @@ fn format_source(hook: &HookRecord) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
+    use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
     use tempfile::tempdir;
 
     fn json_emitting_hook(json_body: &str) -> (String, String) {
@@ -1317,14 +1357,19 @@ mod tests {
     }
 
     #[test]
-    fn discovers_profile_workspace_and_plugin_hooks() {
-        let (_tempdir, config, _store) = config_and_store();
+    fn discovers_profile_project_and_plugin_hooks() {
+        let tempdir = tempdir().unwrap_or_else(|error| panic!("tempdir failed: {error}"));
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        fs::create_dir_all(&cwd).unwrap_or_else(|error| panic!("cwd create failed: {error}"));
+        fs::create_dir_all(&profile)
+            .unwrap_or_else(|error| panic!("profile create failed: {error}"));
         fs::write(
-            config.paths.profile_dir.join("hooks.json"),
+            profile.join("hooks.json"),
             r#"{"session_start":[{"hooks":[{"type":"command","command":"echo profile"}]}]}"#,
         )
         .unwrap_or_else(|error| panic!("profile hooks write failed: {error}"));
-        let workspace_dir = config.cwd.join(".remote-code");
+        let workspace_dir = cwd.join(".remote-code");
         fs::create_dir_all(&workspace_dir)
             .unwrap_or_else(|error| panic!("workspace dir create failed: {error}"));
         fs::write(
@@ -1332,7 +1377,7 @@ mod tests {
             r#"{"hooks":{"PreToolUse":[{"matcher":"write","hooks":[{"type":"command","command":"echo workspace"}]}]}}"#,
         )
         .unwrap_or_else(|error| panic!("workspace settings write failed: {error}"));
-        let plugin_root = config.paths.plugins_dir.join("demo-plugin");
+        let plugin_root = profile.join("plugins").join("demo-plugin");
         fs::create_dir_all(plugin_root.join(".codex-plugin"))
             .unwrap_or_else(|error| panic!("plugin dir create failed: {error}"));
         fs::write(
@@ -1346,6 +1391,22 @@ mod tests {
         )
         .unwrap_or_else(|error| panic!("plugin hooks write failed: {error}"));
 
+        let config = load_runtime_config(
+            Some(cwd),
+            Some(profile),
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+            RuntimeOverrides::default(),
+        )
+        .unwrap_or_else(|error| panic!("config load failed: {error}"));
         let discovery = discover_runtime_hooks(&config, &[]);
         let names = discovery
             .hooks
@@ -1356,9 +1417,65 @@ mod tests {
             names,
             BTreeSet::from([
                 ("post_tool_use_failure".to_owned(), "plugin".to_owned()),
-                ("pre_tool_use".to_owned(), "workspace".to_owned()),
+                ("pre_tool_use".to_owned(), "project".to_owned()),
                 ("session_start".to_owned(), "profile".to_owned()),
             ])
+        );
+    }
+
+    #[test]
+    fn discover_runtime_hooks_respects_setting_sources_and_explicit_settings() {
+        let (_tempdir, mut config, _store) = config_and_store();
+        fs::write(
+            config.paths.profile_dir.join("hooks.json"),
+            r#"{"session_start":[{"hooks":[{"type":"command","command":"echo profile"}]}]}"#,
+        )
+        .unwrap_or_else(|error| panic!("profile hooks write failed: {error}"));
+        let workspace_dir = config.cwd.join(".remote-code");
+        fs::create_dir_all(&workspace_dir)
+            .unwrap_or_else(|error| panic!("workspace dir create failed: {error}"));
+        fs::write(
+            workspace_dir.join("hooks.json"),
+            r#"{"pre_tool_use":[{"hooks":[{"type":"command","command":"echo project"}]}]}"#,
+        )
+        .unwrap_or_else(|error| panic!("project hooks write failed: {error}"));
+        fs::write(
+            workspace_dir.join("settings.local.json"),
+            r#"{"hooks":{"PostToolUse":[{"hooks":[{"type":"command","command":"echo local"}]}]}}"#,
+        )
+        .unwrap_or_else(|error| panic!("local settings write failed: {error}"));
+
+        config.allowed_setting_sources = vec![SettingSource::Local];
+        config.settings_files = vec![workspace_dir.join("settings.local.json")];
+        let discovery = discover_runtime_hooks(&config, &[]);
+        let names = discovery
+            .hooks
+            .iter()
+            .map(|hook| (hook.event.as_str().to_owned(), hook.source_kind.clone()))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            names,
+            BTreeSet::from([("post_tool_use".to_owned(), "local".to_owned())])
+        );
+
+        let explicit = workspace_dir.join("extra-settings.json");
+        fs::write(
+            &explicit,
+            r#"{"hooks":{"PermissionDenied":[{"hooks":[{"type":"command","command":"echo explicit"}]}]}}"#,
+        )
+        .unwrap_or_else(|error| panic!("explicit settings write failed: {error}"));
+        config.allowed_setting_sources = vec![SettingSource::Local];
+        config.settings_files = vec![explicit.clone()];
+        config.cli_settings_files = vec![explicit];
+        let discovery = discover_runtime_hooks(&config, &[]);
+        let names = discovery
+            .hooks
+            .iter()
+            .map(|hook| (hook.event.as_str().to_owned(), hook.source_kind.clone()))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            names,
+            BTreeSet::from([("permission_denied".to_owned(), "explicit".to_owned())])
         );
     }
 

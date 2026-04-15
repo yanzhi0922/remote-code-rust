@@ -347,9 +347,12 @@ pub fn load_layered_rules(
     cwd: &std::path::Path,
     profile_dir: &std::path::Path,
     settings_files: &[std::path::PathBuf],
+    cli_settings_files: &[std::path::PathBuf],
 ) -> Result<Vec<SourceAwarePermissionRule>> {
     let mut rules = Vec::new();
-    for (path, source) in discover_permission_rule_files(cwd, profile_dir, settings_files) {
+    for (path, source) in
+        discover_permission_rule_files(cwd, profile_dir, settings_files, cli_settings_files)
+    {
         rules.extend(load_permission_rules_from_file(&path, source)?);
     }
     Ok(rules)

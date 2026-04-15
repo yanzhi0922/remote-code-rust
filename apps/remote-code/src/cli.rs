@@ -46,8 +46,11 @@ pub struct Cli {
     #[arg(long = "settings")]
     pub settings_files: Vec<PathBuf>,
 
-    #[arg(long = "setting-sources")]
-    pub setting_sources: bool,
+    #[arg(long = "setting-sources", value_delimiter = ',')]
+    pub setting_sources: Vec<SettingSourceArgValue>,
+
+    #[arg(long = "show-setting-sources")]
+    pub show_setting_sources: bool,
 
     #[arg(long, value_delimiter = ',')]
     pub allowed_tools: Vec<String>,
@@ -152,6 +155,13 @@ pub enum UpdateCommand {
     Check,
     /// Download and install the latest version.
     Run,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingSourceArgValue {
+    User,
+    Project,
+    Local,
 }
 
 #[derive(Subcommand, Debug)]
@@ -1259,4 +1269,28 @@ pub struct SshArgs {
 pub enum ExportFormat {
     Ndjson,
     Json,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, SettingSourceArgValue};
+    use clap::Parser;
+
+    #[test]
+    fn parses_setting_source_filters_and_show_flag_independently() {
+        let cli = Cli::try_parse_from([
+            "remote-code",
+            "--setting-sources",
+            "user,local",
+            "--show-setting-sources",
+            "status",
+        ])
+        .expect("cli should parse");
+
+        assert_eq!(
+            cli.setting_sources,
+            vec![SettingSourceArgValue::User, SettingSourceArgValue::Local]
+        );
+        assert!(cli.show_setting_sources);
+    }
 }

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use anyhow::{Result, anyhow};
-use rc_config::{RUNTIME_VERSION, RuntimeConfig};
+use rc_config::{RUNTIME_VERSION, RuntimeConfig, SettingSource};
 
 use crate::cli::{
     McpAddArgs, McpCallArgs, McpCommand, McpGetArgs, McpListArgs, McpRemoveArgs, McpResetArgs,
@@ -803,23 +803,27 @@ pub(crate) fn discover_runtime_mcp_servers(
 ) -> RuntimeMcpDiscovery {
     let mut discovery = RuntimeMcpDiscovery::default();
     let mut loaded_paths = BTreeSet::new();
-    load_runtime_mcp_file(
-        &mut discovery,
-        &mut loaded_paths,
-        "cwd",
-        &config.cwd.display().to_string(),
-        &config.cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
-    );
-    load_runtime_mcp_file(
-        &mut discovery,
-        &mut loaded_paths,
-        "profile",
-        &config.paths.profile_dir.display().to_string(),
-        &config
-            .paths
-            .profile_dir
-            .join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
-    );
+    if setting_source_enabled(config, SettingSource::Project) {
+        load_runtime_mcp_file(
+            &mut discovery,
+            &mut loaded_paths,
+            "cwd",
+            &config.cwd.display().to_string(),
+            &config.cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+        );
+    }
+    if setting_source_enabled(config, SettingSource::User) {
+        load_runtime_mcp_file(
+            &mut discovery,
+            &mut loaded_paths,
+            "profile",
+            &config.paths.profile_dir.display().to_string(),
+            &config
+                .paths
+                .profile_dir
+                .join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+        );
+    }
     for path in extra_config_paths {
         let candidate = if path.is_dir() {
             path.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE)
@@ -835,7 +839,7 @@ pub(crate) fn discover_runtime_mcp_servers(
         );
     }
 
-    if config.paths.plugins_dir.exists() {
+    if setting_source_enabled(config, SettingSource::User) && config.paths.plugins_dir.exists() {
         match rc_plugins::discover_plugins(&config.paths.plugins_dir) {
             Ok(plugins) => {
                 for plugin in plugins {
@@ -873,6 +877,10 @@ pub(crate) fn discover_runtime_mcp_servers(
             .then_with(|| left.origin_name.cmp(&right.origin_name))
     });
     discovery
+}
+
+fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool {
+    config.allowed_setting_sources.contains(&source)
 }
 
 fn load_runtime_mcp_file(
@@ -988,13 +996,13 @@ pub(crate) fn format_mcp_call_source(server: &McpCallServerRecord) -> String {
 mod tests {
     use std::fs;
 
-    use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
+    use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
     use tempfile::tempdir;
 
     use super::{
-        load_managed_mcp_config, managed_mcp_config_path, mcp_serve_output_from_resolution,
-        parse_string_map, resolve_runtime_mcp_server, run_mcp_add, run_mcp_remove, run_mcp_reset,
-        run_mcp_toggle,
+        discover_runtime_mcp_servers, load_managed_mcp_config, managed_mcp_config_path,
+        mcp_serve_output_from_resolution, parse_string_map, resolve_runtime_mcp_server,
+        run_mcp_add, run_mcp_remove, run_mcp_reset, run_mcp_toggle,
     };
     use crate::cli::{McpAddArgs, McpRemoveArgs, McpResetArgs, McpToggleArgs};
 
@@ -1197,5 +1205,202 @@ mod tests {
         assert_eq!(launch.args, vec!["server.py".to_owned()]);
         assert_eq!(launch.env_keys, vec!["TOKEN".to_owned()]);
         assert_eq!(launch.cwd, Some(config.cwd.clone()));
+    }
+
+    #[test]
+    fn runtime_mcp_discovery_respects_setting_sources_but_keeps_explicit_paths() {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        let plugin_root = profile.join("plugins").join("sample");
+        let extra_root = tempdir.path().join("external");
+        fs::create_dir_all(&cwd).expect("cwd");
+        fs::create_dir_all(&profile).expect("profile");
+        fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("plugin dir");
+        fs::create_dir_all(&extra_root).expect("extra root");
+        fs::write(
+            cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            r#"[servers.project]
+command = "python"
+args = ["project.py"]"#,
+        )
+        .expect("write project mcp");
+        fs::write(
+            profile.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            r#"[servers.profile]
+command = "python"
+args = ["profile.py"]"#,
+        )
+        .expect("write profile mcp");
+        fs::write(
+            plugin_root.join(".codex-plugin").join("plugin.json"),
+            r#"{"name":"sample","version":"0.1.0","mcp":"./mcp.toml"}"#,
+        )
+        .expect("write plugin manifest");
+        fs::write(
+            plugin_root.join("mcp.toml"),
+            r#"[servers.plugin]
+command = "python"
+args = ["plugin.py"]"#,
+        )
+        .expect("write plugin mcp");
+        fs::write(
+            extra_root.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            r#"[servers.explicit]
+command = "python"
+args = ["explicit.py"]"#,
+        )
+        .expect("write explicit mcp");
+
+        let project_only = load_runtime_config(
+            Some(cwd.clone()),
+            Some(profile.clone()),
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+            RuntimeOverrides {
+                allowed_setting_sources: Some(vec![SettingSource::Project]),
+                ..RuntimeOverrides::default()
+            },
+        )
+        .expect("project config");
+        let discovery = discover_runtime_mcp_servers(&project_only, &[]);
+        assert_eq!(
+            discovery
+                .servers
+                .iter()
+                .map(|entry| entry.server.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["project".to_owned()]
+        );
+
+        let user_only = load_runtime_config(
+            Some(cwd.clone()),
+            Some(profile.clone()),
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+            RuntimeOverrides {
+                allowed_setting_sources: Some(vec![SettingSource::User]),
+                ..RuntimeOverrides::default()
+            },
+        )
+        .expect("user config");
+        let discovery = discover_runtime_mcp_servers(&user_only, &[]);
+        assert_eq!(
+            discovery
+                .servers
+                .iter()
+                .map(|entry| entry.server.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["plugin".to_owned(), "profile".to_owned()]
+        );
+
+        let local_only = load_runtime_config(
+            Some(cwd),
+            Some(profile),
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+            RuntimeOverrides {
+                allowed_setting_sources: Some(vec![SettingSource::Local]),
+                ..RuntimeOverrides::default()
+            },
+        )
+        .expect("local config");
+        let discovery = discover_runtime_mcp_servers(&local_only, &[extra_root.clone()]);
+        assert_eq!(
+            discovery
+                .servers
+                .iter()
+                .map(|entry| entry.server.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["explicit".to_owned()]
+        );
+    }
+
+    #[test]
+    fn runtime_mcp_resolution_uses_setting_source_filtering() {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        fs::create_dir_all(&cwd).expect("cwd");
+        fs::create_dir_all(&profile).expect("profile");
+        fs::write(
+            cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            r#"[servers.shared]
+command = "python"
+args = ["project.py"]"#,
+        )
+        .expect("write project mcp");
+        fs::write(
+            profile.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            r#"[servers.shared]
+command = "python"
+args = ["profile.py"]"#,
+        )
+        .expect("write profile mcp");
+
+        let filtered = load_runtime_config(
+            Some(cwd.clone()),
+            Some(profile.clone()),
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+            RuntimeOverrides {
+                allowed_setting_sources: Some(vec![SettingSource::Project]),
+                ..RuntimeOverrides::default()
+            },
+        )
+        .expect("filtered config");
+        let resolution =
+            resolve_runtime_mcp_server(&filtered, "shared", &[]).expect("filtered resolve");
+        assert_eq!(resolution.entry.origin_kind, "cwd");
+
+        let unfiltered = load_runtime_config(
+            Some(cwd),
+            Some(profile),
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+            RuntimeOverrides::default(),
+        )
+        .expect("unfiltered config");
+        assert!(resolve_runtime_mcp_server(&unfiltered, "shared", &[]).is_err());
     }
 }

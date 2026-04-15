@@ -21,7 +21,7 @@ mod updater;
 mod worktree_cli;
 
 use anyhow::Result;
-use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
+use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
 use rc_session::SessionStore;
 use rc_telemetry::install_tracing;
 use rc_tools::shell::ShellExecutionPolicy;
@@ -30,7 +30,7 @@ use uuid::Uuid;
 
 use agents::run_agents;
 use clap::Parser;
-use cli::{Cli, Commands};
+use cli::{Cli, Commands, SettingSourceArgValue};
 use conversation::{
     reapply_cli_overrides, restore_session_context, run_first_run_wizard, run_migrate,
     run_oneshot_text,
@@ -78,7 +78,8 @@ async fn main() -> Result<()> {
         RuntimeOverrides {
             session_name: cli.name.clone(),
             settings_files: cli.settings_files.clone(),
-            show_setting_sources: cli.setting_sources,
+            show_setting_sources: cli.show_setting_sources,
+            allowed_setting_sources: setting_sources_from_cli(&cli.setting_sources),
             allowed_tools: cli.allowed_tools.clone(),
             disallowed_tools: cli.disallowed_tools.clone(),
             effort: None,
@@ -91,7 +92,7 @@ async fn main() -> Result<()> {
         reapply_cli_overrides(&cli, &mut config);
     }
     configure_runtime_policy(&config)?;
-    if cli.setting_sources && !should_run_headless(&config) {
+    if cli.show_setting_sources && !should_run_headless(&config) {
         print_setting_sources(&config);
     }
 
@@ -177,6 +178,7 @@ fn resolve_resume_session(cli: &Cli) -> Result<Option<Uuid>> {
                     session_name: None,
                     settings_files: cli.settings_files.clone(),
                     show_setting_sources: false,
+                    allowed_setting_sources: setting_sources_from_cli(&cli.setting_sources),
                     allowed_tools: Vec::new(),
                     disallowed_tools: Vec::new(),
                     effort: None,
@@ -189,6 +191,19 @@ fn resolve_resume_session(cli: &Cli) -> Result<Option<Uuid>> {
                 .map(|summary| summary.session_id))
         }
     }
+}
+
+fn setting_sources_from_cli(values: &[SettingSourceArgValue]) -> Option<Vec<SettingSource>> {
+    (!values.is_empty()).then(|| {
+        values
+            .iter()
+            .map(|value| match value {
+                SettingSourceArgValue::User => SettingSource::User,
+                SettingSourceArgValue::Project => SettingSource::Project,
+                SettingSourceArgValue::Local => SettingSource::Local,
+            })
+            .collect()
+    })
 }
 
 fn configure_runtime_policy(config: &rc_config::RuntimeConfig) -> Result<()> {

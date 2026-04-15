@@ -47,11 +47,13 @@ pub(crate) async fn run_headless(
     {
         let mut emitter_guard = emitter.lock().await;
         emitter_guard.emit_init(InitPayload {
-            api_key_source: if config.provider.api_key.is_some() {
-                "user".to_owned()
-            } else {
-                "missing".to_owned()
-            },
+            api_key_source: config.auth_source.clone().unwrap_or_else(|| {
+                if config.provider.api_key.is_some() {
+                    "user".to_owned()
+                } else {
+                    "missing".to_owned()
+                }
+            }),
             version: RUNTIME_VERSION.to_owned(),
             cwd: config.cwd.display().to_string(),
             tools: runtime_builtin_tool_specs()
@@ -85,6 +87,7 @@ pub(crate) async fn run_headless(
             &config.cwd,
             &config.paths.profile_dir,
             &config.settings_files,
+            &config.cli_settings_files,
         )?,
     ));
     let (prompt_tx, mut prompt_rx) = mpsc::channel::<String>(8);

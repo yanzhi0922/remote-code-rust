@@ -178,6 +178,7 @@ pub async fn run_tui_app(config: RuntimeConfig, store: &SessionStore) -> Result<
             &config.cwd,
             &config.paths.profile_dir,
             &config.settings_files,
+            &config.cli_settings_files,
         )?,
     );
 
