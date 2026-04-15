@@ -4102,6 +4102,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rc-settings"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "rc-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "rc-skills"
 version = "0.1.0"
 dependencies = [
