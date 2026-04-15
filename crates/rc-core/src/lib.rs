@@ -508,6 +508,9 @@ pub struct ProviderResponse {
     /// Tool calls requested by the assistant.
     #[serde(default)]
     pub tool_calls: Vec<ToolCall>,
+    /// Provider request / response identifier when surfaced by the backend.
+    #[serde(default)]
+    pub request_id: Option<String>,
     /// Token usage statistics.
     #[serde(default)]
     pub usage: UsageSummary,

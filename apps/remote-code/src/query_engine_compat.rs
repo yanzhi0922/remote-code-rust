@@ -31,6 +31,7 @@ struct CompatSharedState {
     hook_state: Mutex<HookRunState>,
     streamed_tool_calls: Mutex<HashSet<String>>,
     latest_streaming_usage: Mutex<Option<UsagePayload>>,
+    latest_request_id: Mutex<Option<String>>,
 }
 
 struct CompatObserver {
@@ -193,7 +194,12 @@ impl QueryObserver for CompatObserver {
                 stop_reason,
                 turn,
                 usage,
+                request_id,
             } => {
+                {
+                    let mut latest_request_id = self.shared.latest_request_id.lock().await;
+                    *latest_request_id = request_id.clone();
+                }
                 let assistant_entry = assistant_entry_from_message(&message)?;
                 self.store
                     .append_conversation_entry(self.config.session_id, &assistant_entry)?;
@@ -207,6 +213,7 @@ impl QueryObserver for CompatObserver {
                             "input_tokens": usage.input_tokens,
                             "output_tokens": usage.output_tokens,
                         },
+                        "request_id": request_id,
                         "tool_calls": assistant_entry.tool_calls.len(),
                         "text_preview": truncate_preview(&assistant_entry.text, 160),
                     }),
@@ -499,6 +506,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
         hook_state: Mutex::new(std::mem::take(hook_state)),
         streamed_tool_calls: Mutex::new(HashSet::new()),
         latest_streaming_usage: Mutex::new(None),
+        latest_request_id: Mutex::new(None),
     });
     let observer = Arc::new(CompatObserver {
         config: config.clone(),
@@ -571,6 +579,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
         *hook_state = std::mem::take(&mut *shared_hook_state);
     }
 
+    let latest_request_id = shared.latest_request_id.lock().await.clone();
     let usage = effective_usage(
         UsagePayload {
             input_tokens: engine.state().usage.input_tokens,
@@ -594,6 +603,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
         "protocol": config.provider.protocol.as_str(),
         "turns": engine.state().turn,
         "tool_calls": total_tool_calls,
+        "request_id": latest_request_id,
     });
 
     match result {
@@ -624,6 +634,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
                     "total_cost_usd": outcome.total_cost_usd,
                     "model_usage": outcome.model_usage.clone(),
                     "permission_denials": outcome.permission_denials.clone(),
+                    "request_id": outcome.model_usage.get("request_id").cloned().unwrap_or(serde_json::Value::Null),
                 }),
             )?;
             Ok(outcome)
@@ -650,6 +661,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
                     "total_cost_usd": 0.0,
                     "model_usage": model_usage.clone(),
                     "permission_denials": permission_denials.clone(),
+                    "request_id": model_usage.get("request_id").cloned().unwrap_or(serde_json::Value::Null),
                     "error": error.to_string(),
                 }),
             )?;
@@ -671,6 +683,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
                     "total_cost_usd": 0.0,
                     "model_usage": model_usage,
                     "permission_denials": permission_denials,
+                    "request_id": latest_request_id,
                     "error": error.to_string(),
                 }),
             )?;
@@ -860,6 +873,7 @@ mod tests {
                 thinking: None,
                 content_blocks: Vec::new(),
                 tool_calls: Vec::new(),
+                request_id: None,
                 usage: UsageSummary::default(),
                 stop_reason: "end_turn".to_owned(),
             })
@@ -882,6 +896,7 @@ mod tests {
                 thinking: None,
                 content_blocks: Vec::new(),
                 tool_calls: Vec::new(),
+                request_id: None,
                 usage: UsageSummary::default(),
                 stop_reason: "end_turn".to_owned(),
             })
@@ -904,6 +919,7 @@ mod tests {
                 thinking: None,
                 content_blocks: Vec::new(),
                 tool_calls: Vec::new(),
+                request_id: None,
                 usage: UsageSummary::default(),
                 stop_reason: "end_turn".to_owned(),
             })
@@ -968,6 +984,7 @@ mod tests {
                         input: serde_json::json!({"command": "echo hi"}),
                     }]
                 },
+                request_id: None,
                 usage: UsageSummary::default(),
                 stop_reason: "end_turn".to_owned(),
             })
@@ -1021,6 +1038,37 @@ mod tests {
                 .any(|event| event.event_type == "assistant_turn")
         );
         assert!(events.iter().any(|event| event.event_type == "result"));
+        let assistant_turn = events
+            .iter()
+            .find(|event| event.event_type == "assistant_turn")
+            .expect("assistant_turn event");
+        assert_eq!(
+            assistant_turn
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("request_id"))
+                .and_then(serde_json::Value::as_str),
+            Some("mock-request-id")
+        );
+        let result = events
+            .iter()
+            .find(|event| event.event_type == "result")
+            .expect("result event");
+        assert_eq!(
+            result
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("request_id"))
+                .and_then(serde_json::Value::as_str),
+            Some("mock-request-id")
+        );
+        assert_eq!(
+            outcome
+                .model_usage
+                .get("request_id")
+                .and_then(serde_json::Value::as_str),
+            Some("mock-request-id")
+        );
         assert!(
             conversation
                 .iter()
@@ -1084,6 +1132,7 @@ mod tests {
                 hook_state: tokio::sync::Mutex::new(HookRunState::default()),
                 streamed_tool_calls: tokio::sync::Mutex::new(std::collections::HashSet::new()),
                 latest_streaming_usage: tokio::sync::Mutex::new(None),
+                latest_request_id: tokio::sync::Mutex::new(None),
             }),
             event_sink: Some(event_sink),
             include_partial_messages: true,

@@ -1913,6 +1913,7 @@ fn provider_config_to_runtime(
         retry_max_backoff_ms: current.retry_max_backoff_ms,
         respect_retry_after: current.respect_retry_after,
         request_header_overrides: current.request_header_overrides.clone(),
+        request_metadata: current.request_metadata.clone(),
         thinking_budget: current.thinking_budget,
     })
 }

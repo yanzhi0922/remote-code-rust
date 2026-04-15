@@ -326,6 +326,7 @@ impl ProviderClient {
             "max_tokens": provider.max_output_tokens,
             "stream": false,
         });
+        apply_anthropic_request_metadata(&mut body, provider);
         // Enable extended thinking if a budget is configured.
         if let Some(budget) = provider.thinking_budget {
             body["thinking"] = json!({
@@ -381,7 +382,7 @@ impl ProviderClient {
 
         // Build Anthropic-format body for Claude models on Bedrock.
         let (system, messages) = to_anthropic_messages(conversation);
-        let body = json!({
+        let mut body = json!({
             "anthropic_version": "bedrock-2023-05-31",
             "system": system,
             "messages": messages,
@@ -391,6 +392,7 @@ impl ProviderClient {
                 .collect::<Vec<_>>(),
             "max_tokens": provider.max_output_tokens,
         });
+        apply_anthropic_request_metadata(&mut body, provider);
         let payload =
             serde_json::to_vec(&body).context("failed to serialise Bedrock request body")?;
 
@@ -522,7 +524,7 @@ impl ProviderClient {
 
         // Build Anthropic-format body for Claude models on Vertex AI.
         let (system, messages) = to_anthropic_messages(conversation);
-        let body = json!({
+        let mut body = json!({
             "anthropic_version": "vertex-2023-10-16",
             "system": system,
             "messages": messages,
@@ -532,6 +534,7 @@ impl ProviderClient {
                 .collect::<Vec<_>>(),
             "max_tokens": provider.max_output_tokens,
         });
+        apply_anthropic_request_metadata(&mut body, provider);
 
         // Construct Vertex AI URL.
         let url = format!(
@@ -730,6 +733,17 @@ fn load_vertex_access_token() -> Option<String> {
     }
 
     None
+}
+
+pub(crate) fn apply_anthropic_request_metadata(body: &mut Value, provider: &ProviderConfig) {
+    if provider.request_metadata.is_empty() {
+        return;
+    }
+    let user_id =
+        serde_json::to_string(&provider.request_metadata).unwrap_or_else(|_| "{}".to_owned());
+    body["metadata"] = json!({
+        "user_id": user_id,
+    });
 }
 
 fn build_headers(provider: &ProviderConfig) -> Result<HeaderMap> {
@@ -976,6 +990,10 @@ fn parse_openai_response(status: u16, raw_text: String) -> Result<ProviderRespon
         thinking: reasoning_text,
         content_blocks: Vec::new(),
         tool_calls,
+        request_id: payload
+            .get("id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
         usage: UsageSummary {
             input_tokens: usage
                 .get("prompt_tokens")
@@ -1047,6 +1065,10 @@ fn parse_anthropic_response(status: u16, raw_text: String) -> Result<ProviderRes
         },
         content_blocks: blocks,
         tool_calls,
+        request_id: payload
+            .get("id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
         usage: UsageSummary {
             input_tokens: usage
                 .get("input_tokens")
@@ -1156,6 +1178,7 @@ fn mock_response(conversation: &[ConversationEntry]) -> ProviderResponse {
         } else {
             Vec::new()
         },
+        request_id: Some("mock-request-id".to_owned()),
         usage: UsageSummary {
             input_tokens: 16,
             output_tokens: 12,
@@ -1412,8 +1435,8 @@ pub fn is_prompt_too_long(error: &ProviderError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        ProviderClient, mock_response, parse_openai_response, strip_reasoning_tags,
-        to_openai_messages,
+        ProviderClient, apply_anthropic_request_metadata, mock_response, parse_anthropic_response,
+        parse_openai_response, strip_reasoning_tags, to_openai_messages,
     };
     use axum::{Json, Router, extract::State, routing::post};
     use rc_core::ConversationEntry;
@@ -1438,6 +1461,7 @@ mod tests {
             retry_max_backoff_ms: 20,
             respect_retry_after: false,
             request_header_overrides: Default::default(),
+            request_metadata: Default::default(),
             thinking_budget: None,
         }
     }
@@ -1467,6 +1491,51 @@ mod tests {
         let parsed = parsed.unwrap_or_else(|error| panic!("parse failed: {error}"));
         assert_eq!(parsed.text, "hello");
         assert_eq!(parsed.usage.output_tokens, 2);
+    }
+
+    #[test]
+    fn openai_response_parser_captures_request_id() {
+        let raw = r#"{"id":"chatcmpl-123","choices":[{"message":{"content":"hello"}}],"usage":{"prompt_tokens":1,"completion_tokens":2}}"#;
+        let parsed =
+            parse_openai_response(200, raw.to_owned()).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(parsed.request_id.as_deref(), Some("chatcmpl-123"));
+    }
+
+    #[test]
+    fn anthropic_response_parser_captures_request_id() {
+        let raw = r#"{"id":"msg_123","type":"message","role":"assistant","content":[{"type":"text","text":"hello"}],"usage":{"input_tokens":3,"output_tokens":4},"stop_reason":"end_turn"}"#;
+        let parsed = parse_anthropic_response(200, raw.to_owned())
+            .unwrap_or_else(|error| panic!("parse failed: {error}"));
+        assert_eq!(parsed.request_id.as_deref(), Some("msg_123"));
+        assert_eq!(parsed.text, "hello");
+    }
+
+    #[test]
+    fn anthropic_request_metadata_is_serialized_into_user_id() {
+        let mut provider = test_provider_config("https://api.anthropic.com/v1/messages".to_owned());
+        provider.protocol = rc_core::ProviderProtocol::Anthropic;
+        provider
+            .request_metadata
+            .insert("session_id".to_owned(), "session-123".to_owned());
+        provider
+            .request_metadata
+            .insert("client".to_owned(), "remote-code-rust".to_owned());
+        let mut body = json!({
+            "model": "claude-test",
+            "messages": [],
+        });
+
+        apply_anthropic_request_metadata(&mut body, &provider);
+
+        let metadata = body
+            .get("metadata")
+            .and_then(|value| value.get("user_id"))
+            .and_then(serde_json::Value::as_str)
+            .expect("metadata.user_id");
+        let parsed = serde_json::from_str::<serde_json::Value>(metadata)
+            .unwrap_or_else(|error| panic!("invalid metadata json: {error}"));
+        assert_eq!(parsed["session_id"], "session-123");
+        assert_eq!(parsed["client"], "remote-code-rust");
     }
 
     #[tokio::test]

@@ -130,6 +130,8 @@ pub enum QueryObserverEvent {
         stop_reason: String,
         turn: u32,
         usage: Usage,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
     },
     ToolCallStarted {
         tool_call: ToolCall,

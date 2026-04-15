@@ -133,6 +133,7 @@ pub async fn run_query_loop(
                         + response.usage.cache_creation_input_tokens
                         + response.usage.cache_read_input_tokens,
                 },
+                request_id: response.request_id.clone(),
             })
             .await;
         config.event_stream.emit(EngineEvent::StateUpdated {

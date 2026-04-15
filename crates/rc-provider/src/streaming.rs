@@ -174,6 +174,7 @@ impl ProviderClient {
         let mut tool_calls_map: HashMap<usize, OpenAiToolCallAccumulator> = HashMap::new();
         let mut finish_reason = "stop".to_owned();
         let mut usage = UsageSummary::default();
+        let mut request_id: Option<String> = None;
 
         let mut stream = response.bytes_stream();
         let mut sse_buffer = String::new();
@@ -199,6 +200,12 @@ impl ProviderClient {
                         Ok(v) => v,
                         Err(_) => continue,
                     };
+                    if request_id.is_none() {
+                        request_id = parsed
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .map(ToOwned::to_owned);
+                    }
 
                     if let Some(choice) = parsed
                         .get("choices")
@@ -304,6 +311,7 @@ impl ProviderClient {
             thinking: None,
             content_blocks: Vec::new(),
             tool_calls,
+            request_id,
             usage,
             stop_reason: finish_reason,
         })
@@ -328,6 +336,7 @@ impl ProviderClient {
             "max_tokens": provider.max_output_tokens,
             "stream": true,
         });
+        crate::apply_anthropic_request_metadata(&mut body, provider);
         // Enable extended thinking if a budget is configured.
         if let Some(budget) = provider.thinking_budget {
             body["thinking"] = json!({
@@ -360,6 +369,7 @@ impl ProviderClient {
         let mut usage = UsageSummary::default();
         let mut stop_reason = "end_turn".to_owned();
         let mut thinking_parts: Vec<String> = Vec::new();
+        let mut request_id: Option<String> = None;
 
         let mut stream = response.bytes_stream();
         let mut sse_buffer = String::new();
@@ -390,24 +400,30 @@ impl ProviderClient {
 
                     match event_type {
                         "message_start" => {
-                            if let Some(msg) = event.get("message")
-                                && let Some(u) = msg.get("usage")
-                            {
-                                let inp =
-                                    u.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
-                                usage.input_tokens = inp;
-                                usage.cache_read_input_tokens = u
-                                    .get("cache_read_input_tokens")
-                                    .and_then(Value::as_u64)
-                                    .unwrap_or(0);
-                                usage.cache_creation_input_tokens = u
-                                    .get("cache_creation_input_tokens")
-                                    .and_then(Value::as_u64)
-                                    .unwrap_or(0);
-                                if let Some(cb) =
-                                    callbacks.as_ref().and_then(|c| c.on_usage.as_ref())
-                                {
-                                    cb(inp, 0);
+                            if let Some(msg) = event.get("message") {
+                                if request_id.is_none() {
+                                    request_id = msg
+                                        .get("id")
+                                        .and_then(Value::as_str)
+                                        .map(ToOwned::to_owned);
+                                }
+                                if let Some(u) = msg.get("usage") {
+                                    let inp =
+                                        u.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
+                                    usage.input_tokens = inp;
+                                    usage.cache_read_input_tokens = u
+                                        .get("cache_read_input_tokens")
+                                        .and_then(Value::as_u64)
+                                        .unwrap_or(0);
+                                    usage.cache_creation_input_tokens = u
+                                        .get("cache_creation_input_tokens")
+                                        .and_then(Value::as_u64)
+                                        .unwrap_or(0);
+                                    if let Some(cb) =
+                                        callbacks.as_ref().and_then(|c| c.on_usage.as_ref())
+                                    {
+                                        cb(inp, 0);
+                                    }
                                 }
                             }
                         }
@@ -591,6 +607,7 @@ impl ProviderClient {
             thinking: thinking_text,
             content_blocks,
             tool_calls,
+            request_id,
             usage,
             stop_reason,
         })

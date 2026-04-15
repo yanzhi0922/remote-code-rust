@@ -417,6 +417,7 @@ mod tests {
                     name: "bash_command".to_owned(),
                     input: serde_json::json!({"command": "echo hi"}),
                 }],
+                request_id: None,
                 usage: UsageSummary {
                     input_tokens: 10,
                     output_tokens: 5,
@@ -431,6 +432,7 @@ mod tests {
                 thinking: None,
                 content_blocks: Vec::new(),
                 tool_calls: Vec::new(),
+                request_id: None,
                 usage: UsageSummary {
                     input_tokens: 3,
                     output_tokens: 7,
@@ -606,6 +608,7 @@ mod tests {
                         name: "bash_command".to_owned(),
                         input: serde_json::json!({"command": "echo hi"}),
                     }],
+                    request_id: None,
                     usage: UsageSummary {
                         input_tokens: 10,
                         output_tokens: 5,
@@ -620,6 +623,7 @@ mod tests {
                     thinking: None,
                     content_blocks: Vec::new(),
                     tool_calls: Vec::new(),
+                    request_id: None,
                     usage: UsageSummary {
                         input_tokens: 2,
                         output_tokens: 4,
@@ -713,6 +717,7 @@ mod tests {
             thinking: None,
             content_blocks: Vec::new(),
             tool_calls: Vec::new(),
+            request_id: None,
             usage: UsageSummary {
                 input_tokens: 1,
                 output_tokens: 1,

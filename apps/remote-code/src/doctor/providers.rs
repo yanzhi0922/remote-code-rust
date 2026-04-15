@@ -92,6 +92,7 @@ mod tests {
             retry_max_backoff_ms: 1_000,
             respect_retry_after: true,
             request_header_overrides: BTreeMap::new(),
+            request_metadata: BTreeMap::new(),
             thinking_budget: None,
         }
     }

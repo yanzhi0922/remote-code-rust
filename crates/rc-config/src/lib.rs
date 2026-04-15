@@ -182,6 +182,9 @@ pub struct ProviderConfig {
     /// Additional HTTP headers to send with every request.
     #[serde(default)]
     pub request_header_overrides: BTreeMap<String, String>,
+    /// Additional API metadata to send with requests when the provider supports it.
+    #[serde(default)]
+    pub request_metadata: BTreeMap<String, String>,
     /// Token budget for extended thinking/reasoning (Anthropic Claude only).
     /// When set, enables extended thinking with the specified token budget.
     /// Must be less than `max_output_tokens`.
@@ -424,6 +427,7 @@ pub fn load_provider_config(
             !matches!(value.to_ascii_lowercase().as_str(), "0" | "false" | "no")
         });
     let request_header_overrides = build_request_header_overrides(session_id);
+    let request_metadata = build_request_metadata(session_id);
     let mut provider = ProviderConfig {
         name: provider_name,
         base_url: normalized_base_url,
@@ -443,6 +447,7 @@ pub fn load_provider_config(
         retry_max_backoff_ms,
         respect_retry_after,
         request_header_overrides,
+        request_metadata,
         thinking_budget: settings.thinking_budget,
     };
     let discovered = discover_env_providers();
@@ -615,6 +620,39 @@ fn build_request_header_overrides(session_id: Option<Uuid>) -> BTreeMap<String, 
         filtered.insert(name, resolved);
     }
     filtered
+}
+
+fn build_request_metadata(session_id: Option<Uuid>) -> BTreeMap<String, String> {
+    let mut metadata = BTreeMap::from([
+        ("client".to_owned(), "remote-code-rust".to_owned()),
+        ("version".to_owned(), RUNTIME_VERSION.to_owned()),
+    ]);
+    if let Some(session_id) = session_id {
+        metadata.insert("session_id".to_owned(), session_id.to_string());
+    }
+
+    if let Some(raw) = read_env_first(&[
+        "REMOTE_CODE_REQUEST_METADATA_JSON",
+        "REMOTE_CODE_EXTRA_METADATA_JSON",
+    ]) && let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw)
+        && let Some(object) = value.as_object()
+    {
+        for (name, raw_value) in object {
+            let normalized = match raw_value {
+                serde_json::Value::String(value) => Some(value.trim().to_owned()),
+                serde_json::Value::Number(value) => Some(value.to_string()),
+                serde_json::Value::Bool(value) => Some(value.to_string()),
+                _ => None,
+            };
+            if let Some(value) = normalized
+                && !value.is_empty()
+            {
+                metadata.insert(name.trim().to_owned(), value);
+            }
+        }
+    }
+
+    metadata
 }
 
 fn read_env_first(keys: &[&str]) -> Option<String> {
@@ -799,6 +837,7 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            request_metadata: BTreeMap::new(),
             thinking_budget: None,
         });
     }
@@ -822,6 +861,7 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            request_metadata: BTreeMap::new(),
             thinking_budget: None,
         });
     }
@@ -845,6 +885,7 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            request_metadata: BTreeMap::new(),
             thinking_budget: None,
         });
     }
@@ -868,6 +909,7 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            request_metadata: BTreeMap::new(),
             thinking_budget: None,
         });
     }
@@ -894,6 +936,7 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            request_metadata: BTreeMap::new(),
             thinking_budget: None,
         });
     }
@@ -928,6 +971,7 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            request_metadata: BTreeMap::new(),
             thinking_budget: None,
         });
     }
@@ -959,6 +1003,7 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            request_metadata: BTreeMap::new(),
             thinking_budget: None,
         });
     }
@@ -984,6 +1029,7 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            request_metadata: BTreeMap::new(),
             thinking_budget: None,
         });
     }
@@ -1010,6 +1056,7 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            request_metadata: BTreeMap::new(),
             thinking_budget: None,
         });
     }
@@ -1036,6 +1083,7 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            request_metadata: BTreeMap::new(),
             thinking_budget: None,
         });
     }
@@ -1060,6 +1108,7 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            request_metadata: BTreeMap::new(),
             thinking_budget: None,
         });
     }
@@ -1083,6 +1132,7 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            request_metadata: BTreeMap::new(),
             thinking_budget: None,
         });
     }
@@ -1113,6 +1163,7 @@ where
         retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
         respect_retry_after: default_provider_respect_retry_after(),
         request_header_overrides: BTreeMap::new(),
+        request_metadata: BTreeMap::new(),
         thinking_budget: None,
     })
 }
@@ -1397,6 +1448,7 @@ mod tests {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            request_metadata: BTreeMap::new(),
             thinking_budget: None,
         };
         let discovered = vec![ProviderConfig {
@@ -1412,6 +1464,7 @@ mod tests {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            request_metadata: BTreeMap::new(),
             thinking_budget: None,
         }];
 
@@ -1442,6 +1495,7 @@ mod tests {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            request_metadata: BTreeMap::new(),
             thinking_budget: None,
         };
         let discovered = vec![ProviderConfig {
@@ -1457,6 +1511,7 @@ mod tests {
             retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
             respect_retry_after: default_provider_respect_retry_after(),
             request_header_overrides: BTreeMap::new(),
+            request_metadata: BTreeMap::new(),
             thinking_budget: None,
         }];
 

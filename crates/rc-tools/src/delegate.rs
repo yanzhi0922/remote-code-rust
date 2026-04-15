@@ -681,6 +681,7 @@ mod tests {
                 history_text: Some(String::new()),
                 content_blocks: Vec::new(),
                 thinking: None,
+                request_id: None,
             })
         }
     }
@@ -722,6 +723,7 @@ mod tests {
                     history_text: Some(String::new()),
                     content_blocks: Vec::new(),
                     thinking: None,
+                    request_id: None,
                 })
             }
         }

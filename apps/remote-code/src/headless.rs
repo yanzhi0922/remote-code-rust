@@ -587,6 +587,7 @@ mod tests {
                 thinking: None,
                 content_blocks: Vec::new(),
                 tool_calls: Vec::new(),
+                request_id: None,
                 usage: UsageSummary::default(),
                 stop_reason: "end_turn".to_owned(),
             })
@@ -609,6 +610,7 @@ mod tests {
                 thinking: None,
                 content_blocks: Vec::new(),
                 tool_calls: Vec::new(),
+                request_id: None,
                 usage: UsageSummary {
                     input_tokens: 9,
                     output_tokens: 2,
@@ -639,6 +641,7 @@ mod tests {
                 thinking: None,
                 content_blocks: Vec::new(),
                 tool_calls: Vec::new(),
+                request_id: None,
                 usage: UsageSummary {
                     input_tokens: 12,
                     output_tokens: 3,
