@@ -26,6 +26,7 @@
 - 已继续把 [`apps/remote-code/src/conversation.rs`](../apps/remote-code/src/conversation.rs) 迁移到 app 层 compat adapter：新增 [`query_engine_compat.rs`](../apps/remote-code/src/query_engine_compat.rs)，当前 `run_prompt()` 默认已切到 compat path；当存在 `event_sink` 时，compat adapter 会将 `rc-query-engine` 切到 `ProviderInvocationMode::Streaming`，并把 streaming observer 事件翻译回 `PromptStreamEvent`，同时继续由 app 层承担 transcript、named events、resume boundary、hook/tool side effects 映射。
 - 当前 cutover 策略已进一步推进：`conversation.rs` 默认走 `rc-query-engine` compat adapter，legacy prompt loop 仅作为 `REMOTE_CODE_FORCE_LEGACY_PROMPT_LOOP` 回退开关保留；[`apps/remote-code/src/headless.rs`](../apps/remote-code/src/headless.rs) 已通过同一 `run_prompt()` 进入 compat path，并继续保留 `ChannelPermissionBroker` 审批链路与 `stream-json` 事件发射。
 - 当前验证结果：`cargo test -p rc-query-engine`、`cargo test -p remote-code`、`cargo test --workspace` 均通过；使用 MiniMax anthropic-compatible provider 实测 `--print` 路径返回 `OK`，`--output-format stream-json --include-partial-messages` 路径成功发出 `message_delta` / `message_committed` 并返回预期结果。
+- 当前 tranche 已继续补上几项直接影响官方行为拟合度的 hardening：headless error result 复用 compat 落盘元数据；approval 响应后显式回到 `running`；compat error 路径保留最近一次 streaming usage；`permission_denials` 带上 `tool_input`；provider streaming 在工具活动已开始后不再自动 fallback 到 non-streaming 重跑。
 
 这意味着 Phase 1 的契约冻结与 Phase 2 的最小可运行引擎都已进入主干骨架阶段；当前主线重点已经从“搭骨架”进入“默认 compat + parity hardening”：
 
@@ -33,6 +34,14 @@
 - 把 observer/checkpoint 与 streaming observer 事件完整翻译回 `SessionStore`、`PromptStreamEvent`、named events、resume state。
 - 继续补齐 `headless` / remote 所需的 runtime event fidelity 与 parity hardening，而不是再等待 provider streaming seam 落地。
 - 在默认 compat 路径稳定后，再推进 usage 流、更多 host outcome 粒度与 legacy shim 收缩。
+
+最新研究已把“parity hardening”的验收口径进一步收紧：
+
+- 目标不再是“Anthropic SDK 兼容即可”，而是尽量复刻官方 Claude Code 的真实运行行为；后续 provider、启动链路、协议输出与 prompt/system 组织方式，均需同时参考本机官方 CLI 实测与 `.research/claude-code-rev` 的源码证据。
+- 对本机官方 `claude` CLI `2.1.39` 的本地显式代理观察显示，官方启动阶段会先发生插件缓存、外部插件 `git clone`、MCP 建连等真实网络活动；因此 Rust 侧不能把启动抽象成单一模型请求，而要把插件/MCP/缓存预热纳入 parity 范围。
+- 同一观察也确认 `--setting-sources local` 下存在无 auth 的纯本地启动路径；这意味着“本地配置/插件发现/MCP 预连接”与“远端鉴权/模型调用”在官方实现里是可分离的，Rust 路线也应保持这一分层，避免错误耦合。
+- `.research/claude-code-rev` 已证明官方关键语义包括动态 beta/header 组合、streaming usage/`stop_reason` 最终化、谨慎的 streaming -> non-streaming fallback、以及 rich result/protocol 字段；这些都必须进入下一轮 compat cutover 的硬性清单，而不是留作后续细节优化。
+- 以上结论来自“官方 CLI 代理实测 + 逆向源码对照”的行为边界，不等价于我们已经完成完整报文级复刻；当前只是把最影响正确性与风控特征的几处缺口先收口到主干。
 
 ---
 
@@ -2881,6 +2890,7 @@ crates/rc-context/src/
 | 会话恢复格式不兼容 | 低 | 高 | `rc-migrate` 自动转换工具 |
 | 长期并行分支导致主线漂移 | 高 | 高 | `main-only` + feature flags + compat shims + milestone tags |
 | 把 parity 误做成机械搬运，导致架构扭曲 | 中 | 高 | 以行为 / 边界 / 契约审计为准，静态关键文案逐段比对，动态实现做等价映射 |
+| 只做到 SDK 兼容而未复刻官方启动/协议语义，触发第三方平台风控或行为偏差 | 高 | 高 | 以官方 CLI 代理实测 + `.research/claude-code-rev` 双证据维护 parity ledger，优先对齐启动链路、动态 headers/betas、streaming usage/stop_reason 最终化与 fallback 策略 |
 
 ---
 

@@ -16,12 +16,27 @@
 - `apps/remote-code` 已继续推进到 app 层 compat adapter：`query_engine_compat.rs` 现已承接默认 prompt 主路径；当存在 `event_sink` 时，会显式启用 `rc-query-engine` 的 streaming provider mode，并把 streaming observer 事件翻译回 `PromptStreamEvent`。
 - `headless` 已不再停留在独立 legacy streaming loop；它通过 `run_prompt()` 进入 compat path，同时保留 `ChannelPermissionBroker` + `LayeredPermissionBroker` 的审批链路与现有 `stream-json` 协议输出。legacy prompt loop 仅作为 `REMOTE_CODE_FORCE_LEGACY_PROMPT_LOOP` 回退开关保留。
 - 当前 Rust 工作区回归已重新验证全绿：`cargo test -p remote-code`、`cargo test --workspace` 通过；MiniMax anthropic-compatible `--print` 与 `stream-json` 冒烟通过。
+- 本轮已继续把 parity hardening 落到代码：headless error result 会复用 compat 落盘结果元数据；permission approval 响应后会显式重新发出 `session_state_changed: running`；compat error 路径会保留最新 streaming usage；`permission_denials` 现已补入 `tool_input`；provider streaming 在已观测到工具活动后会拒绝自动 fallback 到 non-streaming 重跑。
 
 当前执行焦点：
 
 - 稳定 `conversation.rs -> query_engine_compat.rs -> rc-query-engine` 的默认 compat 主路径，并继续保留可控的 legacy escape hatch。
 - 用 observer/checkpoint 与 streaming observer seam 补全 app 宿主侧的落盘、事件转译、恢复边界与 headless runtime event fidelity。
 - 在默认 compat 主路径已经切换完成的前提下，继续做 headless / remote 事件保真、usage 透传和 legacy shim 收缩，而不是再把 headless cutover 作为前置阻塞项。
+
+最新研究结论已收敛为新的 parity 约束：
+
+- 复刻目标必须从“Anthropic SDK 兼容”上调为“官方 Claude Code 真实行为等价”；后续 provider、prompt、协议与宿主启动链路的验收，都要以官方 CLI 与 `.research/claude-code-rev` 的组合证据为准，而不是只看接口可调用。
+- 基于本机官方 `claude` CLI `2.1.39` 的本地显式代理实测，官方启动阶段会先触发插件缓存、外部插件 `git clone`、MCP 连接建立等真实网络活动；这意味着 remote-code 不能把启动期简化成单一模型请求，插件/MCP/缓存预热也要纳入 parity 范围。
+- 同一实测也确认，在 `--setting-sources local` 下存在无 auth 的纯本地启动路径；这为后续拆分“本地配置加载/插件发现/MCP 预连接”和“远端鉴权/模型调用”提供了可验证基线，避免把所有启动行为错误绑死到联网登录态。
+- `.research/claude-code-rev` 已进一步坐实官方关键语义不止于请求体 schema：包括动态 beta/header 组合、streaming usage 与 `stop_reason` 的最终化、谨慎的 streaming -> non-streaming fallback，以及 rich result / protocol 字段完备性；这些都应成为 app compat、headless stream-json 与 provider adapter 的下一轮硬性对齐项。
+
+下一步收口方向：
+
+- 先把“启动阶段行为”纳入 parity ledger：插件缓存、外部插件拉取、MCP 建连、`--setting-sources local` 纯本地路径，都要形成可回归的行为矩阵。
+- 再把“流式最终化语义”纳入默认 compat 主路径：usage、`stop_reason`、fallback 原因与 rich result 字段要能从 engine 透传到 headless / remote 协议输出，而不是只保证文本 delta 可见。
+- 上述约束目前属于新的验收边界而非“已全部完成”的事项：当前已补齐 error-side usage 保真、approval running-state 与 denial 结构，但 live usage 对外事件、dynamic headers/betas/request body、以及启动期插件/MCP 行为矩阵仍待继续收口。
+- 风险判断同步上调：如果继续停留在 SDK 兼容层，MiniMax / GLM 等平台对“非官方工具行为特征”的风控会直接反噬产品可用性，因此官方行为拟合度已从“体验优化项”提升为“可用性与封禁风险控制项”。
 
 ---
 

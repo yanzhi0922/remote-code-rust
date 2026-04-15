@@ -30,6 +30,7 @@ struct CompatSharedState {
     conversation: Mutex<Vec<ConversationEntry>>,
     hook_state: Mutex<HookRunState>,
     streamed_tool_calls: Mutex<HashSet<String>>,
+    latest_streaming_usage: Mutex<Option<UsagePayload>>,
 }
 
 struct CompatObserver {
@@ -166,7 +167,27 @@ impl QueryObserver for CompatObserver {
                     });
                 }
             }
-            QueryObserverEvent::StreamingUsageUpdated { .. } => {}
+            QueryObserverEvent::StreamingUsageUpdated { turn, usage } => {
+                let usage = UsagePayload {
+                    input_tokens: usage.input_tokens,
+                    output_tokens: usage.output_tokens,
+                };
+                {
+                    let mut latest_usage = self.shared.latest_streaming_usage.lock().await;
+                    *latest_usage = Some(usage.clone());
+                }
+                self.store.append_named_event(
+                    self.config.session_id,
+                    "streaming_usage",
+                    serde_json::json!({
+                        "turn": turn,
+                        "usage": {
+                            "input_tokens": usage.input_tokens,
+                            "output_tokens": usage.output_tokens,
+                        },
+                    }),
+                )?;
+            }
             QueryObserverEvent::AssistantMessageCommitted {
                 message,
                 stop_reason,
@@ -355,16 +376,14 @@ impl ToolRunner for CompatToolRunner {
             )?;
         }
 
-        let is_permission_denied = raw_result.is_error
-            && raw_result
-                .content
-                .to_ascii_lowercase()
-                .contains("permission denied");
+        let is_permission_denied =
+            raw_result.is_error && is_permission_denied_message(&raw_result.content);
         let permission_denial =
             (is_permission_denied || prepared.blocked_reason.is_some()).then(|| {
                 serde_json::json!({
                     "tool_name": effective_tool_call.name,
                     "tool_use_id": effective_tool_call.id,
+                    "tool_input": effective_tool_call.input.clone(),
                     "message": raw_result.content.clone(),
                 })
             });
@@ -479,6 +498,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
         conversation: Mutex::new(conversation.clone()),
         hook_state: Mutex::new(std::mem::take(hook_state)),
         streamed_tool_calls: Mutex::new(HashSet::new()),
+        latest_streaming_usage: Mutex::new(None),
     });
     let observer = Arc::new(CompatObserver {
         config: config.clone(),
@@ -551,10 +571,13 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
         *hook_state = std::mem::take(&mut *shared_hook_state);
     }
 
-    let usage = UsagePayload {
-        input_tokens: engine.state().usage.input_tokens,
-        output_tokens: engine.state().usage.output_tokens,
-    };
+    let usage = effective_usage(
+        UsagePayload {
+            input_tokens: engine.state().usage.input_tokens,
+            output_tokens: engine.state().usage.output_tokens,
+        },
+        shared.latest_streaming_usage.lock().await.clone(),
+    );
     let total_tool_calls = conversation
         .iter()
         .map(|entry| entry.tool_calls.len())
@@ -598,6 +621,9 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
                     },
                     "duration_ms": duration_ms,
                     "num_turns": outcome.num_turns,
+                    "total_cost_usd": outcome.total_cost_usd,
+                    "model_usage": outcome.model_usage.clone(),
+                    "permission_denials": outcome.permission_denials.clone(),
                 }),
             )?;
             Ok(outcome)
@@ -621,6 +647,9 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
                     },
                     "duration_ms": duration_ms,
                     "num_turns": engine.state().turn,
+                    "total_cost_usd": 0.0,
+                    "model_usage": model_usage.clone(),
+                    "permission_denials": permission_denials.clone(),
                     "error": error.to_string(),
                 }),
             )?;
@@ -639,6 +668,9 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
                     },
                     "duration_ms": duration_ms,
                     "num_turns": engine.state().turn,
+                    "total_cost_usd": 0.0,
+                    "model_usage": model_usage,
+                    "permission_denials": permission_denials,
                     "error": error.to_string(),
                 }),
             )?;
@@ -653,6 +685,23 @@ fn parse_effort(effort: Option<&str>) -> EffortLevel {
         "high" => EffortLevel::High,
         _ => EffortLevel::Medium,
     }
+}
+
+fn effective_usage(
+    usage: UsagePayload,
+    latest_streaming_usage: Option<UsagePayload>,
+) -> UsagePayload {
+    if usage.input_tokens == 0 && usage.output_tokens == 0 {
+        latest_streaming_usage.unwrap_or(usage)
+    } else {
+        usage
+    }
+}
+
+fn is_permission_denied_message(message: &str) -> bool {
+    let lowered = message.to_ascii_lowercase();
+    lowered.contains("permission denied")
+        || (lowered.contains("permission") && lowered.contains("denied"))
 }
 
 fn assistant_entry_from_message(message: &Message) -> Result<ConversationEntry> {
@@ -722,7 +771,10 @@ mod tests {
         ConversationEntry, ConversationRole, InputFormat, OutputFormat, PermissionMode,
         ProviderProtocol, ProviderResponse, SubAgentCompletion, ToolCall, UsageSummary,
     };
-    use rc_permissions::{LayeredPermissionBroker, PermissionBroker, StaticPermissionBroker};
+    use rc_permissions::{
+        LayeredPermissionBroker, PermissionBroker, PermissionDecision, PermissionRequest,
+        StaticPermissionBroker,
+    };
     use rc_provider::{ConversationBackend, ProviderCompatBackend, StreamingCallbacks};
     use rc_query_engine::{QueryObserver, QueryObserverEvent};
     use rc_session::SessionStore;
@@ -770,6 +822,24 @@ mod tests {
             StaticPermissionBroker::new(config.permission_mode),
             Vec::new(),
         ))
+    }
+
+    #[derive(Default)]
+    struct DenyCommandBroker;
+
+    #[async_trait::async_trait]
+    impl PermissionBroker for DenyCommandBroker {
+        fn mode(&self) -> PermissionMode {
+            PermissionMode::Default
+        }
+
+        async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
+            if request.tool_name == "bash_command" {
+                PermissionDecision::deny("Permission denied for bash_command.")
+            } else {
+                PermissionDecision::allow()
+            }
+        }
     }
 
     fn mock_provider_backend(config: &RuntimeConfig) -> Arc<dyn ConversationBackend> {
@@ -837,6 +907,78 @@ mod tests {
                 usage: UsageSummary::default(),
                 stop_reason: "end_turn".to_owned(),
             })
+        }
+
+        fn sub_agent_completion(&self) -> Arc<dyn SubAgentCompletion> {
+            Arc::new(DummySubAgentCompletion)
+        }
+    }
+
+    struct FailingUsageStreamingBackend;
+
+    #[async_trait::async_trait]
+    impl ConversationBackend for FailingUsageStreamingBackend {
+        async fn complete(&self, _conversation: &[ConversationEntry]) -> Result<ProviderResponse> {
+            Err(anyhow::anyhow!("streaming backend failed"))
+        }
+
+        async fn complete_streaming(
+            &self,
+            _conversation: &[ConversationEntry],
+            callbacks: Option<StreamingCallbacks>,
+        ) -> Result<ProviderResponse> {
+            if let Some(callbacks) = callbacks
+                && let Some(on_usage) = callbacks.on_usage.as_ref()
+            {
+                on_usage(7, 4);
+            }
+            Err(anyhow::anyhow!("streaming backend failed"))
+        }
+
+        fn sub_agent_completion(&self) -> Arc<dyn SubAgentCompletion> {
+            Arc::new(DummySubAgentCompletion)
+        }
+    }
+
+    struct PermissionDeniedCommandBackend;
+
+    #[async_trait::async_trait]
+    impl ConversationBackend for PermissionDeniedCommandBackend {
+        async fn complete(&self, conversation: &[ConversationEntry]) -> Result<ProviderResponse> {
+            let has_tool_result_after_latest_user = conversation
+                .iter()
+                .rev()
+                .take_while(|entry| entry.role != ConversationRole::User)
+                .any(|entry| entry.role == ConversationRole::Tool);
+            Ok(ProviderResponse {
+                text: if has_tool_result_after_latest_user {
+                    "mock provider observed the denial".to_owned()
+                } else {
+                    "attempting command".to_owned()
+                },
+                history_text: None,
+                thinking: None,
+                content_blocks: Vec::new(),
+                tool_calls: if has_tool_result_after_latest_user {
+                    Vec::new()
+                } else {
+                    vec![ToolCall {
+                        id: "tool-denied-1".to_owned(),
+                        name: "bash_command".to_owned(),
+                        input: serde_json::json!({"command": "echo hi"}),
+                    }]
+                },
+                usage: UsageSummary::default(),
+                stop_reason: "end_turn".to_owned(),
+            })
+        }
+
+        async fn complete_streaming(
+            &self,
+            conversation: &[ConversationEntry],
+            _callbacks: Option<StreamingCallbacks>,
+        ) -> Result<ProviderResponse> {
+            self.complete(conversation).await
         }
 
         fn sub_agent_completion(&self) -> Arc<dyn SubAgentCompletion> {
@@ -941,6 +1083,7 @@ mod tests {
                 conversation: tokio::sync::Mutex::new(Vec::new()),
                 hook_state: tokio::sync::Mutex::new(HookRunState::default()),
                 streamed_tool_calls: tokio::sync::Mutex::new(std::collections::HashSet::new()),
+                latest_streaming_usage: tokio::sync::Mutex::new(None),
             }),
             event_sink: Some(event_sink),
             include_partial_messages: true,
@@ -1060,5 +1203,75 @@ mod tests {
             event,
             PromptStreamEvent::MessageCommitted { text } if text == "streaming-backend"
         )));
+    }
+
+    #[tokio::test]
+    async fn compat_run_persists_latest_streaming_usage_on_error() {
+        let (_tempdir, mut config, store) = mock_config_and_store();
+        config.include_partial_messages = true;
+        let discovery = RuntimeHookDiscovery::default();
+        let mut conversation =
+            initialize_conversation(&store, &config, Some("streaming")).expect("conversation");
+        let mut hook_state = HookRunState::load(&store, config.session_id).expect("hook state");
+        let event_sink: PromptEventSink = Arc::new(|_| {});
+
+        let error = run_prompt_with_query_engine_compat(
+            &config,
+            &store,
+            Arc::new(FailingUsageStreamingBackend),
+            mock_broker(&config),
+            Some(event_sink),
+            &discovery,
+            &mut hook_state,
+            &mut conversation,
+            "streaming",
+        )
+        .await
+        .expect_err("compat streaming run should fail");
+
+        assert!(error.to_string().contains("streaming backend failed"));
+        let transcript = store
+            .load_transcript(config.session_id)
+            .expect("load transcript");
+        let result = transcript
+            .latest_named_event_payload("result")
+            .expect("result payload");
+        assert_eq!(result["usage"]["input_tokens"], 7);
+        assert_eq!(result["usage"]["output_tokens"], 4);
+        let streaming_usage = transcript
+            .latest_named_event_payload("streaming_usage")
+            .expect("streaming usage payload");
+        assert_eq!(streaming_usage["usage"]["input_tokens"], 7);
+        assert_eq!(streaming_usage["usage"]["output_tokens"], 4);
+    }
+
+    #[tokio::test]
+    async fn compat_run_permission_denials_include_tool_input() {
+        let (_tempdir, config, store) = mock_config_and_store();
+        let discovery = RuntimeHookDiscovery::default();
+        let mut conversation =
+            initialize_conversation(&store, &config, Some("run command")).expect("conversation");
+        let mut hook_state = HookRunState::load(&store, config.session_id).expect("hook state");
+
+        let outcome = run_prompt_with_query_engine_compat(
+            &config,
+            &store,
+            Arc::new(PermissionDeniedCommandBackend),
+            Arc::new(DenyCommandBroker),
+            None,
+            &discovery,
+            &mut hook_state,
+            &mut conversation,
+            "run command",
+        )
+        .await
+        .expect("compat run should recover from denied command");
+
+        assert_eq!(outcome.permission_denials.len(), 1);
+        assert_eq!(outcome.permission_denials[0]["tool_name"], "bash_command");
+        assert_eq!(
+            outcome.permission_denials[0]["tool_input"]["command"],
+            "echo hi"
+        );
     }
 }

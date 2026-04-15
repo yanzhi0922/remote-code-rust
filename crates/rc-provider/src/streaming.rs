@@ -15,6 +15,10 @@ use rc_core::{
 use rc_tools::runtime_builtin_tool_specs;
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 
 use crate::{ProviderClient, build_headers, to_anthropic_messages, to_openai_messages};
@@ -85,13 +89,17 @@ impl ProviderClient {
             return Ok(crate::mock_response(conversation));
         }
 
+        let streamed_tool_activity = Arc::new(AtomicBool::new(false));
+        let tracked_callbacks =
+            wrap_streaming_callbacks(callbacks, Arc::clone(&streamed_tool_activity));
+
         let result = match provider.protocol {
             ProviderProtocol::OpenAi => {
-                self.complete_streaming_openai(provider, conversation, callbacks.as_ref())
+                self.complete_streaming_openai(provider, conversation, Some(&tracked_callbacks))
                     .await
             }
             ProviderProtocol::Anthropic => {
-                self.complete_streaming_anthropic(provider, conversation, callbacks.as_ref())
+                self.complete_streaming_anthropic(provider, conversation, Some(&tracked_callbacks))
                     .await
             }
             // Native Bedrock/Vertex use non-streaming for now (SSE event-stream
@@ -99,7 +107,7 @@ impl ProviderClient {
             // (proxy mode) we fall back to OpenAI-compatible streaming.
             ProviderProtocol::Bedrock | ProviderProtocol::Vertex => {
                 if provider.base_url.is_some() {
-                    self.complete_streaming_openai(provider, conversation, callbacks.as_ref())
+                    self.complete_streaming_openai(provider, conversation, Some(&tracked_callbacks))
                         .await
                 } else {
                     // Native mode — fall back to non-streaming completion.
@@ -114,20 +122,20 @@ impl ProviderClient {
         match result {
             Ok(response) => Ok(response),
             Err(streaming_error) => {
-                let err_str = format!("{streaming_error:#}");
-                let is_streaming_error = err_str.contains("streaming")
-                    || err_str.contains("chunk")
-                    || err_str.contains("connection")
-                    || err_str.contains("broken pipe")
-                    || err_str.contains("reset")
-                    || err_str.contains("unexpected eof");
-
-                if is_streaming_error {
+                if should_fallback_after_streaming_error(
+                    &streaming_error,
+                    streamed_tool_activity.load(Ordering::Relaxed),
+                ) {
                     tracing::warn!(
                         "Streaming failed, falling back to non-streaming: {streaming_error:#}"
                     );
                     self.complete(provider, conversation).await
                 } else {
+                    if streamed_tool_activity.load(Ordering::Relaxed) {
+                        tracing::warn!(
+                            "Streaming failed after tool activity; refusing non-streaming fallback: {streaming_error:#}"
+                        );
+                    }
                     Err(streaming_error)
                 }
             }
@@ -661,6 +669,56 @@ fn is_retryable_http_status(status: u16) -> bool {
     matches!(status, 408 | 429 | 500 | 502 | 503 | 504)
 }
 
+fn wrap_streaming_callbacks(
+    callbacks: Option<StreamingCallbacks>,
+    streamed_tool_activity: Arc<AtomicBool>,
+) -> StreamingCallbacks {
+    let callbacks = callbacks.unwrap_or_default();
+    let StreamingCallbacks {
+        on_text_delta,
+        on_tool_call_start,
+        on_tool_call_delta,
+        on_usage,
+    } = callbacks;
+
+    let start_activity = Arc::clone(&streamed_tool_activity);
+    let tracked_tool_call_start = Box::new(move |tool_call_id: &str, tool_name: &str| {
+        start_activity.store(true, Ordering::Relaxed);
+        if let Some(callback) = on_tool_call_start.as_ref() {
+            callback(tool_call_id, tool_name);
+        }
+    });
+
+    let delta_activity = Arc::clone(&streamed_tool_activity);
+    let tracked_tool_call_delta = Box::new(move |tool_call_id: &str, delta: &str| {
+        delta_activity.store(true, Ordering::Relaxed);
+        if let Some(callback) = on_tool_call_delta.as_ref() {
+            callback(tool_call_id, delta);
+        }
+    });
+
+    StreamingCallbacks {
+        on_text_delta,
+        on_tool_call_start: Some(tracked_tool_call_start),
+        on_tool_call_delta: Some(tracked_tool_call_delta),
+        on_usage,
+    }
+}
+
+fn should_fallback_after_streaming_error(
+    error: &anyhow::Error,
+    streamed_tool_activity: bool,
+) -> bool {
+    let err_str = format!("{error:#}").to_ascii_lowercase();
+    let is_streaming_error = err_str.contains("streaming")
+        || err_str.contains("chunk")
+        || err_str.contains("connection")
+        || err_str.contains("broken pipe")
+        || err_str.contains("reset")
+        || err_str.contains("unexpected eof");
+    is_streaming_error && !streamed_tool_activity
+}
+
 fn is_retryable_transport_error(error: &reqwest::Error) -> bool {
     error.is_timeout() || error.is_connect()
 }
@@ -700,6 +758,37 @@ struct OpenAiToolCallAccumulator {
     id: Option<String>,
     name: Option<String>,
     arguments: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::anyhow;
+
+    use super::should_fallback_after_streaming_error;
+
+    #[test]
+    fn streaming_errors_fallback_before_tool_activity() {
+        assert!(should_fallback_after_streaming_error(
+            &anyhow!("streaming connection reset by peer"),
+            false,
+        ));
+    }
+
+    #[test]
+    fn streaming_errors_do_not_fallback_after_tool_activity() {
+        assert!(!should_fallback_after_streaming_error(
+            &anyhow!("streaming connection reset by peer"),
+            true,
+        ));
+    }
+
+    #[test]
+    fn non_streaming_errors_do_not_trigger_fallback() {
+        assert!(!should_fallback_after_streaming_error(
+            &anyhow!("provider request failed (401): unauthorized"),
+            false,
+        ));
+    }
 }
 
 struct AnthropicToolUseAccumulator {

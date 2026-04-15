@@ -315,18 +315,20 @@ fn record_permission_denial(
     tool_call: &rc_core::ToolCall,
     tool_result: &ToolResult,
 ) {
-    if tool_result.is_error
-        && tool_result
-            .content
-            .to_ascii_lowercase()
-            .contains("permission denied")
-    {
+    if tool_result.is_error && is_permission_denied_message(&tool_result.content) {
         state.permission_denials.push(json!({
             "tool_name": tool_call.name,
             "tool_use_id": tool_call.id,
+            "tool_input": tool_call.input,
             "message": tool_result.content,
         }));
     }
+}
+
+fn is_permission_denied_message(message: &str) -> bool {
+    let lowered = message.to_ascii_lowercase();
+    lowered.contains("permission denied")
+        || (lowered.contains("permission") && lowered.contains("denied"))
 }
 
 fn state_snapshot(state: &EngineState, tool_call_count: usize) -> EngineStateSnapshot {

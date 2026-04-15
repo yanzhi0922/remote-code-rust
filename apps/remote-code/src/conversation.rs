@@ -218,6 +218,12 @@ fn emit_task_snapshot_if_available(event_sink: &PromptEventSink, task_dir: &Path
     }
 }
 
+fn is_permission_denied_message(message: &str) -> bool {
+    let lowered = message.to_ascii_lowercase();
+    lowered.contains("permission denied")
+        || (lowered.contains("permission") && lowered.contains("denied"))
+}
+
 pub(crate) fn build_prompt_progress_callback(
     config: &RuntimeConfig,
     event_sink: &PromptEventSink,
@@ -869,15 +875,13 @@ async fn run_prompt_legacy(
                     serde_json::to_value(&audit)?,
                 )?;
             }
-            let is_permission_denied = tool_result.is_error
-                && tool_result
-                    .content
-                    .to_ascii_lowercase()
-                    .contains("permission denied");
+            let is_permission_denied =
+                tool_result.is_error && is_permission_denied_message(&tool_result.content);
             if is_permission_denied || prepared.blocked_reason.is_some() {
                 permission_denials.push(serde_json::json!({
                     "tool_name": effective_tool_call.name,
                     "tool_use_id": effective_tool_call.id,
+                    "tool_input": effective_tool_call.input.clone(),
                     "message": tool_result.content.clone(),
                 }));
             }
