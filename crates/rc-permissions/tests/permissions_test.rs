@@ -1,88 +1,62 @@
-use rc_core::PermissionMode;
 use rc_permissions::{
-    PermissionBroker, PermissionClass, PermissionDecision, StaticPermissionBroker, auto_allows,
-    classify_tool,
+    PermissionBroker, PermissionClass, PermissionDecision, PermissionRequest,
+    StaticPermissionBroker, LayeredPermissionBroker, SourceAwarePermissionRule,
+    RuleAction, RuleSource, classify_tool, rule_matches_pattern,
 };
 
+// ── classify_tool tests ───────────────────────────────────────
+
 #[test]
-fn classify_tool_returns_read_for_list_directory() {
-    assert_eq!(classify_tool("list_directory"), PermissionClass::Read);
+fn classify_tool_returns_read_for_read() {
+    assert_eq!(classify_tool("Read"), PermissionClass::Read);
 }
 
 #[test]
-fn classify_tool_returns_read_for_read_file() {
-    assert_eq!(classify_tool("read_file"), PermissionClass::Read);
+fn classify_tool_returns_read_for_glob() {
+    assert_eq!(classify_tool("Glob"), PermissionClass::Read);
 }
 
 #[test]
-fn classify_tool_returns_read_for_search_text() {
-    assert_eq!(classify_tool("search_text"), PermissionClass::Read);
+fn classify_tool_returns_read_for_ls() {
+    assert_eq!(classify_tool("LS"), PermissionClass::Read);
 }
 
 #[test]
-fn classify_tool_returns_edit_for_write_file() {
-    assert_eq!(classify_tool("write_file"), PermissionClass::Edit);
+fn classify_tool_returns_edit_for_edit() {
+    assert_eq!(classify_tool("Edit"), PermissionClass::Edit);
 }
 
 #[test]
-fn classify_tool_returns_edit_for_replace_in_file() {
-    assert_eq!(classify_tool("replace_in_file"), PermissionClass::Edit);
+fn classify_tool_returns_edit_for_write() {
+    assert_eq!(classify_tool("Write"), PermissionClass::Edit);
 }
 
 #[test]
-fn classify_tool_returns_edit_for_edit_file() {
-    assert_eq!(classify_tool("edit_file"), PermissionClass::Edit);
+fn classify_tool_returns_edit_for_multi_edit() {
+    assert_eq!(classify_tool("MultiEdit"), PermissionClass::Edit);
 }
 
 #[test]
-fn classify_tool_returns_command_for_bash() {
-    assert_eq!(classify_tool("bash_command"), PermissionClass::Command);
+fn classify_tool_returns_bash_for_bash() {
+    assert_eq!(classify_tool("Bash"), PermissionClass::Bash);
 }
 
 #[test]
-fn classify_tool_returns_command_for_arbitrary_name() {
-    assert_eq!(classify_tool("custom_tool"), PermissionClass::Command);
+fn classify_tool_returns_mcp_for_mcp() {
+    assert_eq!(classify_tool("mcp"), PermissionClass::Mcp);
 }
 
 #[test]
-fn auto_allows_bypass_permissions_allows_everything() {
-    let mode = PermissionMode::BypassPermissions;
-    assert!(auto_allows(mode, PermissionClass::Read));
-    assert!(auto_allows(mode, PermissionClass::Edit));
-    assert!(auto_allows(mode, PermissionClass::Command));
+fn classify_tool_returns_agent_for_agent() {
+    assert_eq!(classify_tool("Agent"), PermissionClass::Agent);
 }
 
 #[test]
-fn auto_allows_accept_edits_allows_read_and_edit() {
-    let mode = PermissionMode::AcceptEdits;
-    assert!(auto_allows(mode, PermissionClass::Read));
-    assert!(auto_allows(mode, PermissionClass::Edit));
-    assert!(!auto_allows(mode, PermissionClass::Command));
+fn classify_tool_returns_read_for_unknown() {
+    assert_eq!(classify_tool("custom_tool"), PermissionClass::Read);
 }
 
-#[test]
-fn auto_allows_default_only_allows_read() {
-    let mode = PermissionMode::Default;
-    assert!(auto_allows(mode, PermissionClass::Read));
-    assert!(!auto_allows(mode, PermissionClass::Edit));
-    assert!(!auto_allows(mode, PermissionClass::Command));
-}
-
-#[test]
-fn auto_allows_dont_ask_only_allows_read() {
-    let mode = PermissionMode::DontAsk;
-    assert!(auto_allows(mode, PermissionClass::Read));
-    assert!(!auto_allows(mode, PermissionClass::Edit));
-    assert!(!auto_allows(mode, PermissionClass::Command));
-}
-
-#[test]
-fn auto_allows_plan_only_allows_read() {
-    let mode = PermissionMode::Plan;
-    assert!(auto_allows(mode, PermissionClass::Read));
-    assert!(!auto_allows(mode, PermissionClass::Edit));
-    assert!(!auto_allows(mode, PermissionClass::Command));
-}
+// ── PermissionDecision tests ──────────────────────────────────
 
 #[test]
 fn permission_decision_allow() {
@@ -98,17 +72,19 @@ fn permission_decision_deny() {
     assert_eq!(decision.message.as_deref(), Some("test reason"));
 }
 
+// ── StaticPermissionBroker tests ──────────────────────────────
+
 #[tokio::test]
-async fn static_broker_auto_allows_read_in_default_mode() {
-    let broker = StaticPermissionBroker::new(PermissionMode::Default);
-    assert_eq!(broker.mode(), PermissionMode::Default);
+async fn static_broker_allow_all_permits_read() {
+    let broker = StaticPermissionBroker::new(true);
     let decision = broker
-        .decide(rc_permissions::PermissionRequest {
-            tool_name: "read_file".to_owned(),
-            tool_use_id: "test-id".to_owned(),
-            title: "Read".to_owned(),
-            description: "Read a file".to_owned(),
-            input: serde_json::json!({}),
+        .decide(PermissionRequest {
+            tool_name: "Read".to_owned(),
+            tool_input: serde_json::json!({"path": "/tmp/a"}),
+            working_directory: None,
+            tool_use_id: None,
+            title: None,
+            description: None,
             blocked_path: None,
         })
         .await;
@@ -116,15 +92,16 @@ async fn static_broker_auto_allows_read_in_default_mode() {
 }
 
 #[tokio::test]
-async fn static_broker_denies_edit_in_default_mode() {
-    let broker = StaticPermissionBroker::new(PermissionMode::Default);
+async fn static_broker_deny_all_rejects_edit() {
+    let broker = StaticPermissionBroker::new(false);
     let decision = broker
-        .decide(rc_permissions::PermissionRequest {
-            tool_name: "write_file".to_owned(),
-            tool_use_id: "test-id".to_owned(),
-            title: "Write".to_owned(),
-            description: "Write a file".to_owned(),
-            input: serde_json::json!({}),
+        .decide(PermissionRequest {
+            tool_name: "Edit".to_owned(),
+            tool_input: serde_json::json!({"path": "/tmp/a"}),
+            working_directory: None,
+            tool_use_id: None,
+            title: None,
+            description: None,
             blocked_path: None,
         })
         .await;
@@ -132,15 +109,36 @@ async fn static_broker_denies_edit_in_default_mode() {
 }
 
 #[tokio::test]
-async fn static_broker_allows_all_in_bypass_mode() {
-    let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+async fn static_broker_allow_all_permits_bash() {
+    let broker = StaticPermissionBroker::new(true);
     let decision = broker
-        .decide(rc_permissions::PermissionRequest {
-            tool_name: "bash_command".to_owned(),
-            tool_use_id: "test-id".to_owned(),
-            title: "Bash".to_owned(),
-            description: "Run command".to_owned(),
-            input: serde_json::json!({}),
+        .decide(PermissionRequest {
+            tool_name: "Bash".to_owned(),
+            tool_input: serde_json::json!({"command": "ls"}),
+            working_directory: None,
+            tool_use_id: None,
+            title: None,
+            description: None,
+            blocked_path: None,
+        })
+        .await;
+    assert!(decision.allowed);
+}
+
+// ── LayeredPermissionBroker tests ─────────────────────────────
+
+#[tokio::test]
+async fn layered_broker_falls_through_to_fallback() {
+    let fallback = StaticPermissionBroker::new(true);
+    let layered = LayeredPermissionBroker::new(fallback, vec![]);
+    let decision = layered
+        .decide(PermissionRequest {
+            tool_name: "Read".to_owned(),
+            tool_input: serde_json::json!({"path": "/tmp/a"}),
+            working_directory: None,
+            tool_use_id: None,
+            title: None,
+            description: None,
             blocked_path: None,
         })
         .await;
@@ -148,17 +146,140 @@ async fn static_broker_allows_all_in_bypass_mode() {
 }
 
 #[tokio::test]
-async fn static_broker_allows_edit_in_accept_edits_mode() {
-    let broker = StaticPermissionBroker::new(PermissionMode::AcceptEdits);
-    let decision = broker
-        .decide(rc_permissions::PermissionRequest {
-            tool_name: "write_file".to_owned(),
-            tool_use_id: "test-id".to_owned(),
-            title: "Write".to_owned(),
-            description: "Write a file".to_owned(),
-            input: serde_json::json!({}),
+async fn layered_broker_deny_rule_overrides_fallback() {
+    let fallback = StaticPermissionBroker::new(true);
+    let rules = vec![SourceAwarePermissionRule {
+        tool_pattern: "Bash".to_owned(),
+        action: RuleAction::Deny,
+        source: RuleSource::Project,
+    }];
+    let layered = LayeredPermissionBroker::new(fallback, rules);
+    let decision = layered
+        .decide(PermissionRequest {
+            tool_name: "Bash".to_owned(),
+            tool_input: serde_json::json!({"command": "ls"}),
+            working_directory: None,
+            tool_use_id: None,
+            title: None,
+            description: None,
+            blocked_path: None,
+        })
+        .await;
+    assert!(!decision.allowed);
+}
+
+#[tokio::test]
+async fn layered_broker_allow_rule_overrides_deny_fallback() {
+    let fallback = StaticPermissionBroker::new(false);
+    let rules = vec![SourceAwarePermissionRule {
+        tool_pattern: "Read".to_owned(),
+        action: RuleAction::Allow,
+        source: RuleSource::User,
+    }];
+    let layered = LayeredPermissionBroker::new(fallback, rules);
+    let decision = layered
+        .decide(PermissionRequest {
+            tool_name: "Read".to_owned(),
+            tool_input: serde_json::json!({"path": "/tmp/a"}),
+            working_directory: None,
+            tool_use_id: None,
+            title: None,
+            description: None,
             blocked_path: None,
         })
         .await;
     assert!(decision.allowed);
+}
+
+#[tokio::test]
+async fn layered_broker_session_rule_highest_priority() {
+    let fallback = StaticPermissionBroker::new(false);
+    // Persistent rule allows Bash
+    let rules = vec![SourceAwarePermissionRule {
+        tool_pattern: "Bash".to_owned(),
+        action: RuleAction::Allow,
+        source: RuleSource::User,
+    }];
+    let layered = LayeredPermissionBroker::new(fallback, rules);
+    // Session rule denies Bash
+    layered.add_session_rule(RuleAction::Deny, "Bash".to_owned()).unwrap();
+    let decision = layered
+        .decide(PermissionRequest {
+            tool_name: "Bash".to_owned(),
+            tool_input: serde_json::json!({"command": "ls"}),
+            working_directory: None,
+            tool_use_id: None,
+            title: None,
+            description: None,
+            blocked_path: None,
+        })
+        .await;
+    assert!(!decision.allowed);
+}
+
+#[test]
+fn layered_broker_clear_session_rules_returns_count() {
+    let fallback = StaticPermissionBroker::new(true);
+    let layered = LayeredPermissionBroker::new(fallback, vec![]);
+    layered.add_session_rule(RuleAction::Allow, "Read".to_owned()).unwrap();
+    layered.add_session_rule(RuleAction::Deny, "Bash".to_owned()).unwrap();
+    let count = layered.clear_session_rules().unwrap();
+    assert_eq!(count, 2);
+}
+
+#[tokio::test]
+async fn layered_broker_tracks_audit_records() {
+    let fallback = StaticPermissionBroker::new(true);
+    let rules = vec![SourceAwarePermissionRule {
+        tool_pattern: "Read".to_owned(),
+        action: RuleAction::Allow,
+        source: RuleSource::Project,
+    }];
+    let layered = LayeredPermissionBroker::new(fallback, rules);
+    let _ = layered
+        .decide(PermissionRequest {
+            tool_name: "Read".to_owned(),
+            tool_input: serde_json::json!({"path": "/tmp"}),
+            working_directory: None,
+            tool_use_id: None,
+            title: None,
+            description: None,
+            blocked_path: None,
+        })
+        .await;
+    let records = layered.audit_records();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].tool_name, "Read");
+    assert!(records[0].final_allowed);
+}
+
+// ── rule_matches_pattern tests ────────────────────────────────
+
+#[test]
+fn rule_matches_pattern_exact_match() {
+    assert!(rule_matches_pattern("Bash", "Bash"));
+    assert!(!rule_matches_pattern("Bash", "Read"));
+}
+
+#[test]
+fn rule_matches_pattern_star_matches_everything() {
+    assert!(rule_matches_pattern("*", "anything"));
+}
+
+#[test]
+fn rule_matches_pattern_prefix_wildcard() {
+    assert!(rule_matches_pattern("Read*", "ReadFile"));
+    assert!(!rule_matches_pattern("Read*", "WriteFile"));
+}
+
+#[test]
+fn rule_matches_pattern_suffix_wildcard() {
+    assert!(rule_matches_pattern("*File", "ReadFile"));
+    assert!(!rule_matches_pattern("*File", "ReadDir"));
+}
+
+#[test]
+fn rule_matches_pattern_middle_wildcard() {
+    assert!(rule_matches_pattern("Read*File", "ReadMyFile"));
+    assert!(!rule_matches_pattern("Read*File", "WriteMyFile"));
 }

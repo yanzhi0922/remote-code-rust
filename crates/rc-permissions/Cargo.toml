@@ -1,6 +1,6 @@
 [package]
 name = "rc-permissions"
-description = "Permission system with wildcard matching and rule-based brokering"
+description = "Permission system with wildcard matching, rule-based brokering, YOLO classifier, and Auto Mode"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -18,6 +18,9 @@ serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
 rc-core = { path = "../rc-core" }
+chrono = { workspace = true }
+sha2 = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile.workspace = true

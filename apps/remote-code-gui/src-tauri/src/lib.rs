@@ -1216,7 +1216,7 @@ async fn build_gui_doctor_report(
         &config.paths.profile_dir,
         &config.settings_files,
         &config.cli_settings_files,
-    )?;
+    );
     let mcp_runtime = observe_runtime_mcp_servers(
         config,
         &[],
@@ -2400,6 +2400,7 @@ fn store_provider_selection(state: &mut RuntimeState, config: &RuntimeProviderCo
     state.gui_settings.provider_protocol = Some(config.protocol.as_str().to_owned());
 }
 
+#[derive(Debug)]
 struct GuiPermissionBroker {
     mode: PermissionMode,
     app: AppHandle,
@@ -2408,8 +2409,8 @@ struct GuiPermissionBroker {
 
 #[async_trait]
 impl PermissionBroker for GuiPermissionBroker {
-    fn mode(&self) -> PermissionMode {
-        self.mode
+    fn mode(&self) -> Option<PermissionMode> {
+        Some(self.mode)
     }
 
     async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
@@ -2443,11 +2444,11 @@ impl PermissionBroker for GuiPermissionBroker {
         let payload = PermissionRequestDto {
             request_id: request_id.clone(),
             tool_name: request.tool_name.clone(),
-            tool_use_id: request.tool_use_id.clone(),
-            title: request.title.clone(),
-            description: request.description.clone(),
-            input: request.input.clone(),
-            blocked_path: request.blocked_path.clone(),
+            tool_use_id: request.tool_use_id.unwrap_or_default(),
+            title: request.title.unwrap_or_default(),
+            description: request.description.unwrap_or_default(),
+            input: request.tool_input.clone(),
+            blocked_path: request.blocked_path,
         };
 
         if self
@@ -2641,7 +2642,7 @@ async fn run_gui_prompt(
             &config.paths.profile_dir,
             &config.settings_files,
             &config.cli_settings_files,
-        )?,
+        ),
     );
 
     let mut usage = UsageSummary::default();

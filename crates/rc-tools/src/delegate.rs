@@ -657,7 +657,7 @@ fn emit_completed(
 mod tests {
     use super::*;
     use crate::ToolExecutionContext;
-    use rc_core::{PermissionMode, ProviderResponse};
+    use rc_core::ProviderResponse;
     use rc_permissions::StaticPermissionBroker;
     use std::sync::Mutex;
 
@@ -744,9 +744,7 @@ mod tests {
 
     /// Helper: create a default broker for tests (bypass all permissions).
     fn test_broker() -> Arc<dyn PermissionBroker> {
-        Arc::new(StaticPermissionBroker::new(
-            PermissionMode::BypassPermissions,
-        ))
+        Arc::new(StaticPermissionBroker::new(true))
     }
 
     #[tokio::test]

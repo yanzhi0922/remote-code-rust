@@ -381,7 +381,7 @@ mod tests {
         let (config, store) = build_test_config();
         let context_manager = ContextWindowManager::for_model("glm-5.1");
         let cost_tracker = CostTracker::new();
-        let broker = StaticPermissionBroker::new(PermissionMode::Default);
+        let broker = StaticPermissionBroker::new(false);
         let mut theme = Theme::dark();
         let mut conversation = vec![
             ConversationEntry::system("system prompt"),
@@ -412,7 +412,7 @@ mod tests {
         let (config, store) = build_test_config();
         let context_manager = ContextWindowManager::for_model("glm-5.1");
         let cost_tracker = CostTracker::new();
-        let broker = StaticPermissionBroker::new(PermissionMode::Default);
+        let broker = StaticPermissionBroker::new(false);
         let mut theme = Theme::dark();
         let mut conversation = vec![ConversationEntry::system("system prompt")];
 

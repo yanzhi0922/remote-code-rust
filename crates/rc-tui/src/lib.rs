@@ -173,13 +173,13 @@ pub async fn run_tui_app(config: RuntimeConfig, store: &SessionStore) -> Result<
     let provider_client = Arc::new(ProviderClient::new()?);
     let backend = ProviderCompatBackend::new(Arc::clone(&provider_client), &config.provider);
     let broker = LayeredPermissionBroker::new(
-        StaticPermissionBroker::new(config.permission_mode),
+        StaticPermissionBroker::from_mode(config.permission_mode),
         load_layered_rules(
             &config.cwd,
             &config.paths.profile_dir,
             &config.settings_files,
             &config.cli_settings_files,
-        )?,
+        ),
     );
 
     let model_name = config.provider.model.as_deref().unwrap_or("unknown");

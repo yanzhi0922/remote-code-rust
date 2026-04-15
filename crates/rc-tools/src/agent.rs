@@ -8,7 +8,7 @@ use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use rc_core::{PermissionMode, SubAgentCompletion};
+use rc_core::SubAgentCompletion;
 use rc_permissions::{PermissionBroker, StaticPermissionBroker};
 
 use super::ToolExecutionContext;
@@ -153,7 +153,7 @@ async fn run_single_delegation(
     let engine = DelegationEngine::new(DelegationConfig::default());
 
     let broker: Arc<dyn PermissionBroker> = Arc::new(StaticPermissionBroker::new(
-        PermissionMode::BypassPermissions,
+        true,
     ));
 
     let delegation_ctx = DelegationContext {
@@ -209,7 +209,7 @@ async fn run_batch_delegation(
     let progress_cb = build_progress_callback(context);
 
     let broker: Arc<dyn PermissionBroker> = Arc::new(StaticPermissionBroker::new(
-        PermissionMode::BypassPermissions,
+        true,
     ));
 
     let (batch_depth, parent_task_id) = {

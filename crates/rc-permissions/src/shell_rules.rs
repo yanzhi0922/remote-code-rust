@@ -12,10 +12,10 @@ pub fn rule_matches_request(pattern: &str, request: &PermissionRequest) -> bool 
         return true;
     };
 
-    if let Some(command) = extract_shell_command(&request.input) {
+    if let Some(command) = extract_shell_command(&request.tool_input) {
         return wildcard_match(input_pattern, command);
     }
-    wildcard_match_values(input_pattern, &request.input)
+    wildcard_match_values(input_pattern, &request.tool_input)
 }
 
 fn split_pattern(pattern: &str) -> (&str, Option<&str>) {
@@ -36,7 +36,7 @@ fn name_matches(pattern: &str, tool_name: &str) -> bool {
         "powershell" => tool_name.eq_ignore_ascii_case("powershell"),
         "read" => classify_tool(tool_name) == PermissionClass::Read,
         "edit" => classify_tool(tool_name) == PermissionClass::Edit,
-        "command" => classify_tool(tool_name) == PermissionClass::Command,
+        "command" => classify_tool(tool_name) == PermissionClass::Bash,
         _ => pattern.eq_ignore_ascii_case(tool_name),
     }
 }
@@ -97,10 +97,11 @@ mod tests {
     fn request(tool_name: &str, input: serde_json::Value) -> PermissionRequest {
         PermissionRequest {
             tool_name: tool_name.to_owned(),
-            tool_use_id: "1".to_owned(),
-            title: tool_name.to_owned(),
-            description: String::new(),
-            input,
+            tool_input: input,
+            working_directory: None,
+            tool_use_id: None,
+            title: None,
+            description: None,
             blocked_path: None,
         }
     }

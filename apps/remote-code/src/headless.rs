@@ -88,7 +88,7 @@ pub(crate) async fn run_headless(
             &config.paths.profile_dir,
             &config.settings_files,
             &config.cli_settings_files,
-        )?,
+        ),
     ));
     let (prompt_tx, mut prompt_rx) = mpsc::channel::<String>(8);
 
@@ -457,10 +457,18 @@ struct ChannelPermissionBroker {
     pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
 }
 
+impl std::fmt::Debug for ChannelPermissionBroker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChannelPermissionBroker")
+            .field("mode", &self.mode)
+            .finish_non_exhaustive()
+    }
+}
+
 #[async_trait::async_trait]
 impl PermissionBroker for ChannelPermissionBroker {
-    fn mode(&self) -> PermissionMode {
-        self.mode
+    fn mode(&self) -> Option<PermissionMode> {
+        Some(self.mode)
     }
 
     async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
@@ -478,11 +486,11 @@ impl PermissionBroker for ChannelPermissionBroker {
             if let Err(error) = emitter.emit_permission_request(PermissionRequestPayload {
                 request_id: request_id.clone(),
                 tool_name: request.tool_name.clone(),
-                tool_use_id: request.tool_use_id.clone(),
-                title: request.title.clone(),
-                description: request.description.clone(),
-                input: request.input.clone(),
-                blocked_path: request.blocked_path.clone(),
+                tool_use_id: request.tool_use_id.unwrap_or_default(),
+                title: request.title.unwrap_or_default(),
+                description: request.description.unwrap_or_default(),
+                input: request.tool_input.clone(),
+                blocked_path: request.blocked_path,
                 permission_suggestions: Vec::new(),
             }) {
                 warn!("failed to emit permission request: {error}");
@@ -557,7 +565,7 @@ mod tests {
 
     fn mock_broker(config: &RuntimeConfig) -> Arc<dyn PermissionBroker> {
         Arc::new(LayeredPermissionBroker::new(
-            StaticPermissionBroker::new(config.permission_mode),
+            StaticPermissionBroker::from_mode(config.permission_mode),
             Vec::new(),
         ))
     }
