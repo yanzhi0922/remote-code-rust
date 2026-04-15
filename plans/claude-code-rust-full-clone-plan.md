@@ -4847,90 +4847,91 @@ async fn test_minimax_mcp_tool_call() {
 
 ---
 
-## §23 GitHub 工作流：使用 `gh api` 替代 `git push`
+## §23 GitHub 工作流：使用 `gh api` 直接操作 main 分支
 
-> **策略**：由于 `main` 分支为受保护分支（禁止 force-push），所有代码变更通过 **feature 分支 + PR + merge** 的方式合入 main。使用 `gh` CLI（GitHub官方命令行工具）完成推送、PR 创建和合并，不直接使用 `git push origin main`。
+> **核心原则**：**不使用 `git` 命令**，所有远程仓库操作通过 `gh api repos/yanzhi0922/remote-code-rust` 完成。**只使用 `main` 这一个分支**，不创建任何 feature 分支。
 
-### §23.1 标准工作流
+### §23.1 更新/推送文件到 main（Contents API）
 
-```bash
-# 1. 从最新 origin/main 创建 feature 分支
-git fetch origin
-git checkout -b feat/<branch-name> origin/main
+```powershell
+# === 更新单个文件到 main 分支 ===
+# 步骤1: 获取文件当前 SHA（必须，用于覆盖）
+$filePath = "plans/claude-code-rust-full-clone-plan.md"
+$apiPath = "repos/yanzhi0922/remote-code-rust/contents/$filePath"
+$sha = (gh api $apiPath --jq '.sha')
 
-# 2. 开发、提交
-git add -A
-git commit -m "feat: 描述"
+# 步骤2: Base64 编码文件内容
+$bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $filePath))
+$b64 = [Convert]::ToBase64String($bytes)
 
-# 3. 推送 feature 分支到远程
-git push origin HEAD:feat/<branch-name>
+# 步骤3: 通过 API 推送更新
+gh api $apiPath -X PUT -f message="docs: 更新计划文件" -f content="$b64" -f sha="$sha"
 
-# 4. 创建 PR（通过 gh CLI）
-gh pr create \
-  --base main \
-  --head feat/<branch-name> \
-  --title "feat: PR标题" \
-  --body "## 概述\n\n变更描述..."
-
-# 5. 合并 PR（使用 --admin 跳过 CI 检查）
-gh pr merge <PR_NUMBER> --merge --admin
-
-# 6. 同步本地 main
-git checkout main
-git pull origin main
-
-# 7. 清理 feature 分支
-git branch -d feat/<branch-name>
-git push origin --delete feat/<branch-name>
+# === 创建新文件到 main 分支 ===
+gh api repos/yanzhi0922/remote-code-rust/contents/path/to/newfile.rs `
+  -X PUT `
+  -f message="feat: 添加新模块" `
+  -f content="$b64"
 ```
 
-### §23.2 使用 `gh api` 直接操作仓库
+### §23.2 查询仓库信息
 
-```bash
+```powershell
 # 查看仓库信息
 gh api repos/yanzhi0922/remote-code-rust
 
-# 列出所有 PR
-gh api repos/yanzhi0922/remote-code-rust/pulls
+# 查看 main 最新 commit
+gh api repos/yanzhi0922/remote-code-rust/commits/main --jq '{sha: .sha, message: .commit.message, date: .commit.committer.date}'
 
-# 获取文件内容（通过 Contents API）
-gh api repos/yanzhi0922/remote-code-rust/contents/plans/claude-code-rust-full-clone-plan.md
+# 列出目录内容
+gh api "repos/yanzhi0922/remote-code-rust/contents/crates/rc-tools/src" --jq '.[].name'
 
-# 更新单个文件（通过 Contents API，需要 base64 编码 + SHA）
-$Content = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes("path/to/file"))
-$Sha = (gh api repos/yanzhi0922/remote-code-rust/contents/path/to/file --jq '.sha')
-gh api repos/yanzhi0922/remote-code-rust/contents/path/to/file \
-  -X PUT \
-  -f message="update: file description" \
-  -f content="$Content" \
-  -f sha="$Sha"
-
-# 查看 main 分支最新 commit
-gh api repos/yanzhi0922/remote-code-rust/commits/main --jq '.sha'
+# 获取文件内容（文本）
+gh api repos/yanzhi0922/remote-code-rust/contents/Cargo.toml --jq '.content' | `
+  %{ [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) }
 
 # 查看分支保护规则
 gh api repos/yanzhi0922/remote-code-rust/branches/main/protection
+
+# 列出所有分支
+gh api repos/yanzhi0922/remote-code-rust/branches --jq '.[].name'
+
+# 删除远程分支（仅用于清理意外创建的分支）
+gh api repos/yanzhi0922/remote-code-rust/git/refs/heads/feat/xxx -X DELETE
 ```
 
-### §23.3 冲突解决策略
+### §23.3 批量更新多个文件
 
-当 feature 分支与 main 有冲突时：
+```powershell
+# 使用 Git Data API 批量更新（创建 tree + commit）
+# 步骤1: 获取最新 commit SHA
+$latestSha = (gh api repos/yanzhi0922/remote-code-rust/commits/main --jq '.sha')
 
-```bash
-# 方案A：在本地 rebase 后重新推送
-git fetch origin
-git rebase origin/main
-# 解决冲突...
-git add -A && git rebase --continue
-git push origin feat/<branch-name> --force
+# 步骤2: 创建 blob（每个文件一个）
+$blob1 = (gh api repos/yanzhi0922/remote-code-rust/git/blobs `
+  -X POST -f encoding="base64" -f content="$b64_file1" --jq '.sha')
 
-# 方案B：从 origin/main 创建干净分支，cherry-pick 独有 commit
-git checkout -b feat/<branch-name>-clean origin/main
-git cherry-pick <commit-sha>
-# 解决冲突（对非关键文件使用 --ours）
-git checkout --ours <conflicted-files>
-git add -A && git cherry-pick --continue
-git push origin feat/<branch-name>-clean:feat/<branch-name> --force
+# 步骤3: 创建 tree
+$tree = (gh api repos/yanzhi0922/remote-code-rust/git/trees `
+  -X POST `
+  -f base_tree="$latestSha" `
+  -f "tree[][path]=path/to/file1.rs" `
+  -f "tree[][mode]=100644" `
+  -f "tree[][type]=blob" `
+  -f "tree[][sha]=$blob1" `
+  --jq '.sha')
+
+# 步骤4: 创建 commit
+$newCommit = (gh api repos/yanzhi0922/remote-code-rust/git/commits `
+  -X POST `
+  -f message="feat: 批量更新" `
+  -f tree="$tree" `
+  -f parent="$latestSha" `
+  --jq '.sha')
+
+# 步骤5: 更新 main ref
+gh api repos/yanzhi0922/remote-code-rust/git/refs/heads/main `
+  -X PATCH -f sha="$newCommit"
 ```
 
 ### §23.4 仓库配置
@@ -4938,10 +4939,11 @@ git push origin feat/<branch-name>-clean:feat/<branch-name> --force
 | 配置项 | 值 |
 |-------|---|
 | 仓库 | `yanzhi0922/remote-code-rust` |
-| 默认分支 | `main`（受保护） |
-| 推送方式 | feature 分支 + PR + `gh pr merge --admin` |
+| 唯一分支 | `main`（受保护，禁止 force-push） |
+| 推送方式 | `gh api` Contents API / Git Data API（不使用 git 命令） |
 | API 基础路径 | `repos/yanzhi0922/remote-code-rust` |
 | CLI 工具 | `gh`（GitHub CLI） |
+| 本地同步 | `git pull origin main`（仅用于拉取，不用于推送） |
 
 ---
 
