@@ -1,8 +1,11 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use rc_config::{RuntimeConfig, SettingSource, validate_provider_config};
+use rc_config::{RUNTIME_VERSION, RuntimeConfig, SettingSource, validate_provider_config};
+use rc_mcp::McpClientInfo;
 use rc_permissions::{load_layered_rules, rules::summarize_rule_sources};
+use rc_tools::mcp_runtime::observe_runtime_mcp_servers;
+use rc_ui_bridge::{UiRuntimeMcpInventorySummary, UiRuntimeMcpServerStatus};
 use serde::Serialize;
 
 use super::install::{InstallSource, detect_install_source, release_repository_slug};
@@ -87,6 +90,25 @@ pub(crate) struct ExtensionsSection {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub(crate) struct McpRuntimeServerSection {
+    pub name: String,
+    pub status: UiRuntimeMcpServerStatus,
+    pub enabled: bool,
+    pub origin_kind: String,
+    pub origin_name: String,
+    pub config_path: PathBuf,
+    pub tool_count: usize,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct McpRuntimeSection {
+    pub probed: bool,
+    pub summary: UiRuntimeMcpInventorySummary,
+    pub servers: Vec<McpRuntimeServerSection>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct DoctorReport {
     pub ok: bool,
     pub runtime: RuntimeSection,
@@ -95,6 +117,7 @@ pub(crate) struct DoctorReport {
     pub tools: ToolsSection,
     pub permissions: PermissionsSection,
     pub extensions: ExtensionsSection,
+    pub mcp_runtime: McpRuntimeSection,
     pub network: Option<Vec<ProbeResult>>,
     pub env_providers: Option<Vec<EnvProviderSummary>>,
     pub issues: Vec<String>,
@@ -118,11 +141,19 @@ pub(crate) async fn collect_report(
         config.provider.model.as_deref().unwrap_or("unknown"),
     );
     let install_source = detect_install_source();
+    let mcp_runtime = observe_runtime_mcp_servers(
+        config,
+        &[],
+        args.probe_mcp,
+        &McpClientInfo::new("remote-code-rust", RUNTIME_VERSION),
+    )
+    .await;
 
     let mut issues = validation.issues.clone();
     let mut warnings = Vec::new();
-    warnings.extend(discovery.warnings.clone());
-    warnings.extend(hooks.warnings().to_vec());
+    extend_unique_strings(&mut warnings, discovery.warnings.clone());
+    extend_unique_strings(&mut warnings, hooks.warnings().to_vec());
+    extend_unique_strings(&mut warnings, mcp_runtime.warnings.clone());
     let disabled_plugins = if config
         .allowed_setting_sources
         .contains(&SettingSource::User)
@@ -249,6 +280,27 @@ pub(crate) async fn collect_report(
         disabled_mcp_servers: discovery.disabled_mcp_servers.len(),
         hooks: hooks.list(None).len(),
     };
+    let mcp_runtime = McpRuntimeSection {
+        probed: args.probe_mcp,
+        summary: mcp_runtime.inventory_summary(),
+        servers: mcp_runtime
+            .servers
+            .into_iter()
+            .map(|server| McpRuntimeServerSection {
+                name: server.entry.server.name,
+                status: server.status,
+                enabled: server.entry.server.enabled,
+                origin_kind: server.entry.origin_kind.to_owned(),
+                origin_name: server.entry.origin_name,
+                config_path: server.entry.config_path,
+                tool_count: server
+                    .inspection
+                    .as_ref()
+                    .map_or(0, |inspection| inspection.tools.len()),
+                error: server.error,
+            })
+            .collect(),
+    };
     let env_providers = args.include_env_providers.then(env_provider_summaries);
 
     Ok(DoctorReport {
@@ -259,11 +311,20 @@ pub(crate) async fn collect_report(
         tools,
         permissions,
         extensions,
+        mcp_runtime,
         network,
         env_providers,
         issues,
         warnings,
     })
+}
+
+fn extend_unique_strings(target: &mut Vec<String>, items: Vec<String>) {
+    for item in items {
+        if !target.contains(&item) {
+            target.push(item);
+        }
+    }
 }
 
 fn build_install_section(install_source: &InstallSource) -> InstallSection {
@@ -273,5 +334,92 @@ fn build_install_section(install_source: &InstallSource) -> InstallSection {
         executable: install_source.executable.clone(),
         repository_url: install_source.repository_url.clone(),
         repository_slug: install_source.repository_slug.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
+    use rc_core::{InputFormat, OutputFormat, PermissionMode};
+    use tempfile::tempdir;
+
+    use super::collect_report;
+    use crate::cli::DoctorArgs;
+
+    fn test_config() -> (tempfile::TempDir, rc_config::RuntimeConfig) {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        fs::create_dir_all(&cwd).expect("cwd");
+        fs::create_dir_all(&profile).expect("profile");
+        (
+            tempdir,
+            load_runtime_config(
+                Some(cwd),
+                Some(profile),
+                None,
+                PermissionMode::Default,
+                InputFormat::Text,
+                OutputFormat::Text,
+                false,
+                false,
+                false,
+                false,
+                4,
+                ProviderOverrides::default(),
+                RuntimeOverrides::default(),
+            )
+            .expect("config"),
+        )
+    }
+
+    #[tokio::test]
+    async fn doctor_report_includes_runtime_mcp_summary_without_probe() {
+        let (_tempdir, config) = test_config();
+        fs::write(
+            config.cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            concat!(
+                "[mcp_servers.pending]\ncommand = \"python\"\n",
+                "[mcp_servers.disabled]\ncommand = \"python\"\nenabled = false\n"
+            ),
+        )
+        .expect("write mcp config");
+
+        let report = collect_report(&config, &DoctorArgs::default())
+            .await
+            .expect("doctor report");
+        assert!(!report.mcp_runtime.probed);
+        assert_eq!(report.mcp_runtime.summary.total_servers, 2);
+        assert_eq!(report.mcp_runtime.summary.status_counts.pending, 1);
+        assert_eq!(report.mcp_runtime.summary.status_counts.disabled, 1);
+        assert_eq!(report.mcp_runtime.summary.status_counts.failed, 0);
+    }
+
+    #[tokio::test]
+    async fn doctor_report_probe_mcp_marks_failed_servers() {
+        let (_tempdir, config) = test_config();
+        fs::write(
+            config.cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            "[mcp_servers.failing]\ncommand = \"command-that-does-not-exist-remote-code\"\n",
+        )
+        .expect("write mcp config");
+
+        let report = collect_report(
+            &config,
+            &DoctorArgs {
+                probe_mcp: true,
+                ..DoctorArgs::default()
+            },
+        )
+        .await
+        .expect("doctor report");
+        assert!(report.mcp_runtime.probed);
+        assert_eq!(report.mcp_runtime.summary.status_counts.failed, 1);
+        assert_eq!(report.mcp_runtime.summary.status_counts.pending, 0);
+        assert!(report.mcp_runtime.servers.iter().any(|server| server.status
+            == rc_ui_bridge::UiRuntimeMcpServerStatus::Failed
+            && server.error.as_deref().is_some()));
     }
 }

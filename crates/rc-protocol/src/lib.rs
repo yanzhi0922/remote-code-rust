@@ -976,6 +976,13 @@ mod tests {
                         explicit: 0,
                         plugin: 0,
                     },
+                    status_counts: rc_ui_bridge::UiRuntimeMcpStatusCounts {
+                        connected: 0,
+                        failed: 0,
+                        needs_auth: 0,
+                        pending: 1,
+                        disabled: 1,
+                    },
                 },
             })
             .expect("emit_status_snapshot should succeed");
@@ -987,6 +994,7 @@ mod tests {
         assert_eq!(events[0]["snapshot"]["allowed_setting_sources"][0], "user");
         assert_eq!(events[0]["snapshot"]["permission_mode"], "default");
         assert_eq!(events[0]["snapshot"]["mcp"]["enabled_servers"], 1);
+        assert_eq!(events[0]["snapshot"]["mcp"]["status_counts"]["pending"], 1);
     }
 
     #[test]

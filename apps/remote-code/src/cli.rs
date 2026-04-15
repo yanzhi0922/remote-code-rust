@@ -263,6 +263,9 @@ pub struct DoctorArgs {
     pub probe_provider: bool,
 
     #[arg(long)]
+    pub probe_mcp: bool,
+
+    #[arg(long)]
     pub include_env_providers: bool,
 }
 

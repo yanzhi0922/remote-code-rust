@@ -221,6 +221,14 @@ fn print_runtime_status(report: &RuntimeStatusReport) {
         "  mcp inventory:   {} total / {} enabled / {} disabled",
         report.mcp.total_servers, report.mcp.enabled_servers, report.mcp.disabled_servers
     );
+    println!(
+        "  mcp states:      connected={} failed={} needs-auth={} pending={} disabled={}",
+        report.mcp.status_counts.connected,
+        report.mcp.status_counts.failed,
+        report.mcp.status_counts.needs_auth,
+        report.mcp.status_counts.pending,
+        report.mcp.status_counts.disabled
+    );
     if report.mcp.ambiguous_server_names > 0 || report.mcp.warning_count > 0 {
         println!(
             "  mcp health:      {} ambiguous / {} warnings",
@@ -330,6 +338,8 @@ mod tests {
         assert_eq!(snapshot.mcp.total_servers, 0);
         assert_eq!(snapshot.mcp.enabled_servers, 0);
         assert_eq!(snapshot.mcp.disabled_servers, 0);
+        assert_eq!(snapshot.mcp.status_counts.pending, 0);
+        assert_eq!(snapshot.mcp.status_counts.disabled, 0);
     }
 
     #[test]
@@ -418,6 +428,7 @@ model = "glm-5.1"
             vec!["project".to_owned(), "local".to_owned()]
         );
         assert_eq!(report.mcp.total_servers, 0);
+        assert_eq!(report.mcp.status_counts.pending, 0);
         assert_eq!(report.session.title.as_deref(), Some("status-test"));
         assert_eq!(report.session.pending_tool_calls, 1);
         assert_eq!(

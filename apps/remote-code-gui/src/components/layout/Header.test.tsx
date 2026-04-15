@@ -61,6 +61,13 @@ describe('Header', () => {
             explicit: 0,
             plugin: 2,
           },
+          status_counts: {
+            connected: 0,
+            failed: 0,
+            needs_auth: 0,
+            pending: 3,
+            disabled: 1,
+          },
         },
       },
       sessions: [

@@ -5,8 +5,10 @@ use std::process::Stdio;
 use anyhow::{Result, anyhow};
 use rc_config::{RUNTIME_VERSION, RuntimeConfig};
 use rc_tools::mcp_runtime::{
-    RuntimeMcpResolution, discover_runtime_mcp_servers, resolve_runtime_mcp_server,
+    RuntimeMcpResolution, RuntimeMcpServerObservation, observe_runtime_mcp_servers,
+    resolve_runtime_mcp_server,
 };
+use rc_ui_bridge::UiRuntimeMcpServerStatus;
 
 use crate::cli::{
     McpAddArgs, McpCallArgs, McpCommand, McpGetArgs, McpListArgs, McpRemoveArgs, McpResetArgs,
@@ -22,6 +24,7 @@ pub(crate) struct McpListOutput {
 #[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct McpServerRecord {
     pub(crate) name: String,
+    pub(crate) status: UiRuntimeMcpServerStatus,
     pub(crate) enabled: bool,
     pub(crate) transport: rc_mcp::McpTransport,
     pub(crate) origin_kind: String,
@@ -43,7 +46,7 @@ pub(crate) struct McpLiveRecord {
 impl McpLiveRecord {
     pub(crate) fn from_inspection(inspection: rc_mcp::McpServerInspection) -> Self {
         Self {
-            status: "ok".to_owned(),
+            status: UiRuntimeMcpServerStatus::Connected.as_str().to_owned(),
             protocol_version: Some(inspection.protocol_version),
             server_info: inspection.server_info,
             tool_count: inspection.tools.len(),
@@ -54,7 +57,7 @@ impl McpLiveRecord {
 
     pub(crate) fn skipped(reason: impl Into<String>) -> Self {
         Self {
-            status: "skipped".to_owned(),
+            status: UiRuntimeMcpServerStatus::Disabled.as_str().to_owned(),
             protocol_version: None,
             server_info: None,
             tool_count: 0,
@@ -65,7 +68,7 @@ impl McpLiveRecord {
 
     pub(crate) fn failed(error: &impl ToString) -> Self {
         Self {
-            status: "error".to_owned(),
+            status: UiRuntimeMcpServerStatus::Failed.as_str().to_owned(),
             protocol_version: None,
             server_info: None,
             tool_count: 0,
@@ -149,17 +152,13 @@ async fn run_mcp_list(config: &RuntimeConfig, args: McpListArgs) -> Result<()> {
         println!(
             "{}  {}  {}  {}",
             server.name,
-            if server.enabled {
-                "enabled"
-            } else {
-                "disabled"
-            },
+            server.status.as_str(),
             format_mcp_transport(server.transport),
             format_mcp_source(server)
         );
         if let Some(live) = &server.live {
             match live.status.as_str() {
-                "ok" => {
+                "connected" => {
                     let peer = live.server_info.as_ref().map_or_else(
                         || "unknown-server".to_owned(),
                         |info| match &info.version {
@@ -179,15 +178,15 @@ async fn run_mcp_list(config: &RuntimeConfig, args: McpListArgs) -> Result<()> {
                         }
                     }
                 }
-                "skipped" => {
+                "disabled" => {
                     println!(
-                        "  connect: skipped  {}",
+                        "  connect: disabled  {}",
                         live.error.as_deref().unwrap_or("inspection not attempted")
                     );
                 }
                 _ => {
                     println!(
-                        "  connect: error  {}",
+                        "  connect: failed  {}",
                         live.error
                             .as_deref()
                             .unwrap_or("inspection failed without details")
@@ -223,6 +222,7 @@ async fn run_mcp_get(config: &RuntimeConfig, args: McpGetArgs) -> Result<()> {
         println!("warning: {warning}");
     }
     println!("server: {}", server.name);
+    println!("status: {}", server.status.as_str());
     println!("enabled: {}", server.enabled);
     println!("transport: {}", format_mcp_transport(server.transport));
     println!("source: {}", format_mcp_source(server));
@@ -565,43 +565,30 @@ pub(crate) async fn build_mcp_list_output(
     config: &RuntimeConfig,
     args: &McpListArgs,
 ) -> Result<McpListOutput> {
-    let discovery = discover_runtime_mcp_servers(config, &args.config_paths);
+    let observation = observe_runtime_mcp_servers(
+        config,
+        &args.config_paths,
+        args.connect,
+        &rc_mcp::McpClientInfo::new("remote-code-rust", RUNTIME_VERSION),
+    )
+    .await;
     let filters = args.servers.iter().cloned().collect::<BTreeSet<_>>();
     let mut servers = Vec::new();
 
-    for entry in discovery.servers {
-        if !filters.is_empty() && !filters.contains(&entry.server.name) {
+    for server in observation.servers {
+        if !filters.is_empty() && !filters.contains(&server.entry.server.name) {
             continue;
         }
-        let live = if args.connect {
-            if !entry.server.enabled && !args.include_disabled {
-                Some(McpLiveRecord::skipped(
-                    "server is disabled (pass --include-disabled to force inspection)",
-                ))
-            } else {
-                Some(
-                    match rc_mcp::inspect_server(
-                        &entry.server,
-                        &rc_mcp::McpClientInfo::new("remote-code-rust", RUNTIME_VERSION),
-                    )
-                    .await
-                    {
-                        Ok(inspection) => McpLiveRecord::from_inspection(inspection),
-                        Err(error) => McpLiveRecord::failed(&error),
-                    },
-                )
-            }
-        } else {
-            None
-        };
+        let live = mcp_live_record_from_observation(&server, args.connect, args.include_disabled);
 
         servers.push(McpServerRecord {
-            name: entry.server.name.clone(),
-            enabled: entry.server.enabled,
-            transport: entry.server.transport.kind(),
-            origin_kind: entry.origin_kind.to_owned(),
-            origin_name: entry.origin_name,
-            config_path: entry.config_path,
+            name: server.entry.server.name.clone(),
+            status: server.status,
+            enabled: server.entry.server.enabled,
+            transport: server.entry.server.transport.kind(),
+            origin_kind: server.entry.origin_kind.to_owned(),
+            origin_name: server.entry.origin_name.clone(),
+            config_path: server.entry.config_path.clone(),
             live,
         });
     }
@@ -614,9 +601,31 @@ pub(crate) async fn build_mcp_list_output(
     }
 
     Ok(McpListOutput {
-        warnings: discovery.warnings,
+        warnings: observation.warnings,
         servers,
     })
+}
+
+fn mcp_live_record_from_observation(
+    observation: &RuntimeMcpServerObservation,
+    connect: bool,
+    include_disabled: bool,
+) -> Option<McpLiveRecord> {
+    if !connect {
+        return None;
+    }
+    if let Some(inspection) = &observation.inspection {
+        return Some(McpLiveRecord::from_inspection(inspection.clone()));
+    }
+    if let Some(error) = &observation.error {
+        return Some(McpLiveRecord::failed(error));
+    }
+    if observation.status == UiRuntimeMcpServerStatus::Disabled && !include_disabled {
+        return Some(McpLiveRecord::skipped(
+            "server is disabled (pass --include-disabled to force inspection)",
+        ));
+    }
+    None
 }
 
 pub(crate) async fn build_mcp_call_output(

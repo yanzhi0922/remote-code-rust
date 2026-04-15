@@ -1,10 +1,12 @@
 use std::path::{Path, PathBuf};
 
-use rc_config::{RuntimeConfig, SettingSource};
+use rc_config::RuntimeConfig;
+use rc_tools::mcp_runtime::{RuntimeMcpServerEntry, discover_runtime_mcp_servers};
 
 #[derive(Debug, Clone)]
 struct McpServerView {
     name: String,
+    status: String,
     enabled: bool,
     transport: rc_mcp::McpTransport,
     origin_kind: &'static str,
@@ -13,6 +15,15 @@ struct McpServerView {
     startup_timeout_secs: Option<u64>,
     request_timeout_secs: Option<u64>,
     metadata_keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct McpStateSummary {
+    connected: usize,
+    failed: usize,
+    needs_auth: usize,
+    pending: usize,
+    disabled: usize,
 }
 
 pub fn dispatch(input: &str, config: &RuntimeConfig) {
@@ -60,7 +71,7 @@ pub fn dispatch(input: &str, config: &RuntimeConfig) {
 }
 
 pub fn render(config: &RuntimeConfig) {
-    let (warnings, mut servers) = discover_mcp_servers(config);
+    let (warnings, summary, mut servers) = discover_mcp_servers(config);
     if servers.is_empty() {
         println!("MCP servers: none discovered.");
         for warning in warnings {
@@ -77,6 +88,10 @@ pub fn render(config: &RuntimeConfig) {
     });
 
     println!("MCP servers ({}):", servers.len());
+    println!(
+        "  states: connected={} failed={} needs-auth={} pending={} disabled={}",
+        summary.connected, summary.failed, summary.needs_auth, summary.pending, summary.disabled
+    );
     for warning in &warnings {
         println!("  warning: {warning}");
     }
@@ -84,11 +99,7 @@ pub fn render(config: &RuntimeConfig) {
         println!(
             "  {}  {}  {}  {}",
             server.name,
-            if server.enabled {
-                "enabled"
-            } else {
-                "disabled"
-            },
+            server.status,
             transport_label(server.transport),
             source_label(server.origin_kind, &server.origin_name, &server.config_path)
         );
@@ -97,7 +108,7 @@ pub fn render(config: &RuntimeConfig) {
 }
 
 fn render_server(config: &RuntimeConfig, server_name: &str) {
-    let (warnings, servers) = discover_mcp_servers(config);
+    let (warnings, _summary, servers) = discover_mcp_servers(config);
     let matches = servers
         .into_iter()
         .filter(|server| server.name == server_name)
@@ -123,6 +134,7 @@ fn render_server(config: &RuntimeConfig, server_name: &str) {
 
     let server = &matches[0];
     println!("MCP server: {}", server.name);
+    println!("  status: {}", server.status);
     println!("  enabled: {}", server.enabled);
     println!("  transport: {}", transport_label(server.transport));
     println!(
@@ -201,97 +213,47 @@ fn reset_managed_config(config: &RuntimeConfig, project: bool) {
     }
 }
 
-fn discover_mcp_servers(config: &RuntimeConfig) -> (Vec<String>, Vec<McpServerView>) {
-    let mut warnings = Vec::new();
-    let mut servers = Vec::new();
-
-    if setting_source_enabled(config, SettingSource::Project) {
-        load_mcp_servers_from_path(
-            &mut warnings,
-            &mut servers,
-            "cwd",
-            &config.cwd.display().to_string(),
-            &config.cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
-        );
-    }
-    if setting_source_enabled(config, SettingSource::User) {
-        load_mcp_servers_from_path(
-            &mut warnings,
-            &mut servers,
-            "profile",
-            &config.paths.profile_dir.display().to_string(),
-            &config
-                .paths
-                .profile_dir
-                .join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
-        );
-    }
-
-    if setting_source_enabled(config, SettingSource::User) && config.paths.plugins_dir.exists() {
-        match rc_plugins::discover_plugins(&config.paths.plugins_dir) {
-            Ok(plugins) => {
-                for plugin in plugins {
-                    if let Some(path) = plugin.mcp_config_path() {
-                        load_mcp_servers_from_path(
-                            &mut warnings,
-                            &mut servers,
-                            "plugin",
-                            &plugin.manifest.name,
-                            &path,
-                        );
-                    }
-                }
-            }
-            Err(error) => warnings.push(format!(
-                "Failed to discover plugins in {}: {error}",
-                config.paths.plugins_dir.display()
-            )),
-        }
-    }
-
-    (warnings, servers)
+fn discover_mcp_servers(
+    config: &RuntimeConfig,
+) -> (Vec<String>, McpStateSummary, Vec<McpServerView>) {
+    let discovery = discover_runtime_mcp_servers(config, &[]);
+    let summary = discovery.inventory_summary();
+    let servers = discovery
+        .servers
+        .into_iter()
+        .map(mcp_server_view_from_entry)
+        .collect();
+    (
+        discovery.warnings,
+        McpStateSummary {
+            connected: summary.status_counts.connected,
+            failed: summary.status_counts.failed,
+            needs_auth: summary.status_counts.needs_auth,
+            pending: summary.status_counts.pending,
+            disabled: summary.status_counts.disabled,
+        },
+        servers,
+    )
 }
 
-fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool {
-    config.allowed_setting_sources.contains(&source)
-}
-
-pub(crate) fn discovered_server_count(config: &RuntimeConfig) -> usize {
-    discover_mcp_servers(config).1.len()
-}
-
-fn load_mcp_servers_from_path(
-    warnings: &mut Vec<String>,
-    servers: &mut Vec<McpServerView>,
-    origin_kind: &'static str,
-    origin_name: &str,
-    path: &Path,
-) {
-    if !path.exists() {
-        return;
-    }
-    match rc_mcp::McpConfig::load(path) {
-        Ok(config) => {
-            for server in config.servers.into_values() {
-                let mut metadata_keys = server.metadata.keys().cloned().collect::<Vec<_>>();
-                metadata_keys.sort();
-                servers.push(McpServerView {
-                    name: server.name,
-                    enabled: server.enabled,
-                    transport: server.transport.kind(),
-                    origin_kind,
-                    origin_name: origin_name.to_owned(),
-                    config_path: path.to_path_buf(),
-                    startup_timeout_secs: server.startup_timeout_secs,
-                    request_timeout_secs: server.request_timeout_secs,
-                    metadata_keys,
-                });
-            }
-        }
-        Err(error) => warnings.push(format!(
-            "Failed to load MCP config {}: {error}",
-            path.display()
-        )),
+fn mcp_server_view_from_entry(entry: RuntimeMcpServerEntry) -> McpServerView {
+    let mut metadata_keys = entry.server.metadata.keys().cloned().collect::<Vec<_>>();
+    metadata_keys.sort();
+    McpServerView {
+        name: entry.server.name.clone(),
+        status: if entry.server.enabled {
+            "pending".to_owned()
+        } else {
+            "disabled".to_owned()
+        },
+        enabled: entry.server.enabled,
+        transport: entry.server.transport.kind(),
+        origin_kind: entry.origin_kind,
+        origin_name: entry.origin_name,
+        config_path: entry.config_path,
+        startup_timeout_secs: entry.server.startup_timeout_secs,
+        request_timeout_secs: entry.server.request_timeout_secs,
+        metadata_keys,
     }
 }
 

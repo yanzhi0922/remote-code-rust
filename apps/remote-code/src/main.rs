@@ -1075,7 +1075,7 @@ mod tests {
             .live
             .as_ref()
             .unwrap_or_else(|| panic!("expected live inspection metadata"));
-        assert_eq!(live.status, "skipped");
+        assert_eq!(live.status, "disabled");
         assert!(
             live.error
                 .as_deref()
