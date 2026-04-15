@@ -26,6 +26,11 @@ struct McpStateSummary {
     disabled: usize,
 }
 
+/// Return the number of MCP servers discovered from the runtime config.
+pub fn discovered_server_count(config: &RuntimeConfig) -> usize {
+    discover_runtime_mcp_servers(config, &[]).servers.len()
+}
+
 pub fn dispatch(input: &str, config: &RuntimeConfig) {
     let remainder = input.trim().strip_prefix("/mcp").unwrap_or_default().trim();
     if remainder.is_empty() || remainder == "list" {
