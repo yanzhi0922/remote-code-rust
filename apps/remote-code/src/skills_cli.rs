@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
-use rc_config::RuntimeConfig;
+use rc_config::{RuntimeConfig, SettingSource};
 use rc_skills::{DEFAULT_SKILL_LOCK_FILE, SkillMetadata, load_skill_lock_file};
 
 use crate::cli::{SkillsCommand, SkillsIndexArgs, SkillsListArgs, SkillsLockArgs, SkillsShowArgs};
@@ -261,8 +261,9 @@ fn build_skills_list_output(config: &RuntimeConfig, include_plugins: bool) -> Sk
     let mut warnings = Vec::new();
     let mut skills = Vec::new();
     let mut seen = BTreeSet::new();
+    let user_sources_enabled = setting_source_enabled(config, SettingSource::User);
 
-    if config.paths.skills_dir.exists() {
+    if user_sources_enabled && config.paths.skills_dir.exists() {
         match rc_skills::discover_skills(&config.paths.skills_dir) {
             Ok(discovered) => {
                 for skill in discovered {
@@ -278,7 +279,7 @@ fn build_skills_list_output(config: &RuntimeConfig, include_plugins: bool) -> Sk
         }
     }
 
-    if include_plugins && config.paths.plugins_dir.exists() {
+    if include_plugins && user_sources_enabled && config.paths.plugins_dir.exists() {
         match rc_plugins::discover_plugins(&config.paths.plugins_dir) {
             Ok(plugins) => {
                 for plugin in plugins {
@@ -415,8 +416,9 @@ fn build_skill_show_output(
 ) -> Result<SkillShowOutput> {
     let mut warnings = Vec::new();
     let mut matches = Vec::new();
+    let user_sources_enabled = setting_source_enabled(config, SettingSource::User);
 
-    if config.paths.skills_dir.exists() {
+    if user_sources_enabled && config.paths.skills_dir.exists() {
         match rc_skills::discover_skills(&config.paths.skills_dir) {
             Ok(discovered) => {
                 matches.extend(
@@ -430,7 +432,7 @@ fn build_skill_show_output(
         }
     }
 
-    if include_plugins && config.paths.plugins_dir.exists() {
+    if include_plugins && user_sources_enabled && config.paths.plugins_dir.exists() {
         match rc_plugins::discover_plugins(&config.paths.plugins_dir) {
             Ok(plugins) => {
                 for plugin in plugins {
@@ -503,11 +505,15 @@ fn skill_record(
     }
 }
 
+fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool {
+    config.allowed_setting_sources.contains(&source)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
 
-    use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
+    use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
     use rc_skills::DEFAULT_SKILL_LOCK_FILE;
     use tempfile::tempdir;
 
@@ -519,11 +525,40 @@ mod tests {
         let profile = tempdir.path().join(".remote-code-rust");
         fs::create_dir_all(cwd.join(".")).expect("cwd");
         fs::create_dir_all(profile.join("skills").join("demo")).expect("skills");
+        fs::create_dir_all(profile.join("plugins").join("sample").join(".codex-plugin"))
+            .expect("plugin dir");
+        fs::create_dir_all(
+            profile
+                .join("plugins")
+                .join("sample")
+                .join("skills")
+                .join("extra"),
+        )
+        .expect("plugin skills");
         fs::write(
             profile.join("skills").join("demo").join("SKILL.md"),
             "# Demo\n\nSummary.\n",
         )
         .expect("write skill");
+        fs::write(
+            profile
+                .join("plugins")
+                .join("sample")
+                .join(".codex-plugin")
+                .join("plugin.json"),
+            r#"{"name":"sample","version":"0.1.0","skills":"./skills"}"#,
+        )
+        .expect("write plugin manifest");
+        fs::write(
+            profile
+                .join("plugins")
+                .join("sample")
+                .join("skills")
+                .join("extra")
+                .join("SKILL.md"),
+            "# Extra\n\nPlugin summary.\n",
+        )
+        .expect("write plugin skill");
         let config = load_runtime_config(
             Some(cwd),
             Some(profile),
@@ -560,6 +595,18 @@ mod tests {
         assert_eq!(output.skill.references.len(), 0);
         assert_eq!(output.skill.scripts.len(), 0);
         assert_eq!(output.skill.assets.len(), 0);
+    }
+
+    #[test]
+    fn skills_outputs_respect_user_setting_sources() {
+        let (_tempdir, mut config) = test_config();
+        let output = build_skills_list_output(&config, true);
+        assert_eq!(output.skills.len(), 2);
+
+        config.allowed_setting_sources = vec![SettingSource::Local];
+        let output = build_skills_list_output(&config, true);
+        assert!(output.skills.is_empty());
+        assert!(build_skill_show_output(&config, "demo", true, false).is_err());
     }
 
     #[test]

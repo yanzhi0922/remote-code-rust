@@ -15,6 +15,7 @@ struct RuntimeStatusReport {
     provider: UiProviderStatusSnapshot,
     permission_mode: String,
     setting_sources: Vec<String>,
+    allowed_setting_sources: Vec<String>,
     settings_files: Vec<String>,
     allowed_tools: Vec<String>,
     disallowed_tools: Vec<String>,
@@ -68,6 +69,11 @@ pub(crate) fn build_runtime_status_snapshot(config: &RuntimeConfig) -> UiRuntime
         },
         permission_mode: config.permission_mode.as_legacy_str().to_owned(),
         setting_sources: config.setting_sources.clone(),
+        allowed_setting_sources: config
+            .allowed_setting_sources
+            .iter()
+            .map(|source| source.as_str().to_owned())
+            .collect(),
         allowed_tools: config.allowed_tools.clone(),
         disallowed_tools: config.disallowed_tools.clone(),
     }
@@ -94,6 +100,7 @@ fn collect_runtime_status(
         provider: snapshot.provider,
         permission_mode: snapshot.permission_mode,
         setting_sources: snapshot.setting_sources,
+        allowed_setting_sources: snapshot.allowed_setting_sources,
         settings_files: config
             .settings_files
             .iter()
@@ -186,6 +193,14 @@ fn print_runtime_status(report: &RuntimeStatusReport) {
         }
     );
     println!(
+        "  allowed sources: {}",
+        if report.allowed_setting_sources.is_empty() {
+            "(none)".to_owned()
+        } else {
+            report.allowed_setting_sources.join(", ")
+        }
+    );
+    println!(
         "  tool filters:    allow={} deny={}",
         report.allowed_tools.len(),
         report.disallowed_tools.len()
@@ -245,7 +260,7 @@ fn print_runtime_status(report: &RuntimeStatusReport) {
 #[cfg(test)]
 mod tests {
     use super::{build_runtime_status_snapshot, collect_runtime_status};
-    use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
+    use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
     use rc_core::{ConversationEntry, InputFormat, OutputFormat, PermissionMode, ProviderProtocol};
     use rc_session::SessionStore;
     use rc_session::resume_state::{PendingToolCall, ResumeState};
@@ -290,6 +305,10 @@ mod tests {
         assert_eq!(snapshot.provider.name, "glm-coding");
         assert_eq!(snapshot.provider.effort.as_deref(), Some("medium"));
         assert_eq!(snapshot.permission_mode, "acceptEdits");
+        assert_eq!(
+            snapshot.allowed_setting_sources,
+            vec!["user", "project", "local"]
+        );
         assert_eq!(snapshot.allowed_tools, vec!["read_file"]);
         assert_eq!(snapshot.disallowed_tools, vec!["bash_command"]);
     }
@@ -330,7 +349,7 @@ model = "glm-5.1"
             RuntimeOverrides {
                 settings_files: vec![settings.clone()],
                 show_setting_sources: true,
-                allowed_setting_sources: None,
+                allowed_setting_sources: Some(vec![SettingSource::Project, SettingSource::Local]),
                 fallback_model: Some("glm-5-turbo".to_owned()),
                 ..RuntimeOverrides::default()
             },
@@ -374,6 +393,10 @@ model = "glm-5.1"
         assert_eq!(
             report.provider.fallback_model.as_deref(),
             Some("glm-5-turbo")
+        );
+        assert_eq!(
+            report.allowed_setting_sources,
+            vec!["project".to_owned(), "local".to_owned()]
         );
         assert_eq!(report.session.title.as_deref(), Some("status-test"));
         assert_eq!(report.session.pending_tool_calls, 1);

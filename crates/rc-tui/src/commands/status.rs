@@ -68,6 +68,15 @@ pub fn render(
         }
     }
     println!(
+        "Allowed setting sources: {}",
+        config
+            .allowed_setting_sources
+            .iter()
+            .map(|source| source.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    println!(
         "Permission rules: {} loaded, {} decisions recorded",
         broker.layered_rules().len(),
         broker.audit_records().len()

@@ -960,6 +960,7 @@ mod tests {
                 },
                 permission_mode: "default".to_owned(),
                 setting_sources: vec!["env:REMOTE_CODE_MODEL".to_owned()],
+                allowed_setting_sources: vec!["user".to_owned(), "project".to_owned()],
                 allowed_tools: vec!["read_file".to_owned()],
                 disallowed_tools: vec!["bash_command".to_owned()],
             })
@@ -969,6 +970,7 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["type"], "status_snapshot");
         assert_eq!(events[0]["snapshot"]["provider"]["name"], "glm-coding");
+        assert_eq!(events[0]["snapshot"]["allowed_setting_sources"][0], "user");
         assert_eq!(events[0]["snapshot"]["permission_mode"], "default");
     }
 

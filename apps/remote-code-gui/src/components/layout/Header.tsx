@@ -110,6 +110,14 @@ export function Header() {
               settings {runtimeStatus.setting_sources.length}
             </div>
           )}
+          {runtimeStatus && runtimeStatus.allowed_setting_sources.length > 0 && (
+            <div
+              className="rounded-full border border-[#e2dbcf] bg-[#fbfaf7] px-3 py-1.5 text-xs text-slate-500"
+              title={runtimeStatus.allowed_setting_sources.join('\n')}
+            >
+              scope {runtimeStatus.allowed_setting_sources.join('/')}
+            </div>
+          )}
           {runtimeStatus && (runtimeStatus.allowed_tools.length > 0 || runtimeStatus.disallowed_tools.length > 0) && (
             <div className="rounded-full border border-[#e2dbcf] bg-[#fbfaf7] px-3 py-1.5 text-xs text-slate-500">
               tools +{runtimeStatus.allowed_tools.length} / -{runtimeStatus.disallowed_tools.length}

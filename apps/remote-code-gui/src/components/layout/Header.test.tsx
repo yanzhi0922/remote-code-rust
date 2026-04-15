@@ -45,6 +45,7 @@ describe('Header', () => {
         },
         permission_mode: 'acceptEdits',
         setting_sources: ['settings:runtime.toml', 'cli:model', 'env:GLM_API_KEY'],
+        allowed_setting_sources: ['user', 'project'],
         allowed_tools: ['read_file'],
         disallowed_tools: ['bash_command'],
       },
@@ -67,6 +68,7 @@ describe('Header', () => {
 
     expect(screen.getByText('fallback glm-5-turbo')).toBeInTheDocument();
     expect(screen.getByText('settings 3')).toBeInTheDocument();
+    expect(screen.getByText('scope user/project')).toBeInTheDocument();
     expect(screen.getByText('tools +1 / -1')).toBeInTheDocument();
     expect(screen.getByText('acceptEdits')).toBeInTheDocument();
   });

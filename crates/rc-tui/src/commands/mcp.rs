@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use rc_config::RuntimeConfig;
+use rc_config::{RuntimeConfig, SettingSource};
 
 #[derive(Debug, Clone)]
 struct McpServerView {
@@ -205,25 +205,29 @@ fn discover_mcp_servers(config: &RuntimeConfig) -> (Vec<String>, Vec<McpServerVi
     let mut warnings = Vec::new();
     let mut servers = Vec::new();
 
-    load_mcp_servers_from_path(
-        &mut warnings,
-        &mut servers,
-        "cwd",
-        &config.cwd.display().to_string(),
-        &config.cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
-    );
-    load_mcp_servers_from_path(
-        &mut warnings,
-        &mut servers,
-        "profile",
-        &config.paths.profile_dir.display().to_string(),
-        &config
-            .paths
-            .profile_dir
-            .join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
-    );
+    if setting_source_enabled(config, SettingSource::Project) {
+        load_mcp_servers_from_path(
+            &mut warnings,
+            &mut servers,
+            "cwd",
+            &config.cwd.display().to_string(),
+            &config.cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+        );
+    }
+    if setting_source_enabled(config, SettingSource::User) {
+        load_mcp_servers_from_path(
+            &mut warnings,
+            &mut servers,
+            "profile",
+            &config.paths.profile_dir.display().to_string(),
+            &config
+                .paths
+                .profile_dir
+                .join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+        );
+    }
 
-    if config.paths.plugins_dir.exists() {
+    if setting_source_enabled(config, SettingSource::User) && config.paths.plugins_dir.exists() {
         match rc_plugins::discover_plugins(&config.paths.plugins_dir) {
             Ok(plugins) => {
                 for plugin in plugins {
@@ -246,6 +250,10 @@ fn discover_mcp_servers(config: &RuntimeConfig) -> (Vec<String>, Vec<McpServerVi
     }
 
     (warnings, servers)
+}
+
+fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool {
+    config.allowed_setting_sources.contains(&source)
 }
 
 pub(crate) fn discovered_server_count(config: &RuntimeConfig) -> usize {

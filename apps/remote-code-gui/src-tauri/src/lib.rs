@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use rc_config::{
     discover_env_providers, load_runtime_config, normalize_base_url, validate_provider_config,
     AppPaths, ProviderConfig as RuntimeProviderConfig, ProviderOverrides, RuntimeConfig,
-    RuntimeOverrides,
+    RuntimeOverrides, SettingSource,
 };
 use rc_core::{
     ConversationEntry, ConversationRole, PermissionMode, ProviderProtocol, ToolCall, UsageSummary,
@@ -506,6 +506,7 @@ struct GuiDoctorRuntimeDto {
     session_name: Option<String>,
     permission_mode: String,
     setting_sources: Vec<String>,
+    allowed_setting_sources: Vec<String>,
     settings_files: Vec<String>,
 }
 
@@ -964,6 +965,11 @@ fn runtime_status_snapshot_from_config(config: &RuntimeConfig) -> UiRuntimeStatu
         },
         permission_mode: config.permission_mode.as_legacy_str().to_owned(),
         setting_sources: config.setting_sources.clone(),
+        allowed_setting_sources: config
+            .allowed_setting_sources
+            .iter()
+            .map(|source| source.as_str().to_owned())
+            .collect(),
         allowed_tools: config.allowed_tools.clone(),
         disallowed_tools: config.disallowed_tools.clone(),
     }
@@ -1156,31 +1162,52 @@ async fn build_gui_doctor_report(
 
     let mut warnings = Vec::new();
     let mut issues = validation.issues.clone();
+    let user_sources_enabled = setting_source_enabled(config, SettingSource::User);
+    let project_sources_enabled = setting_source_enabled(config, SettingSource::Project);
 
-    let skills = match discover_skills(&config.paths.skills_dir) {
-        Ok(skills) => skills,
-        Err(error) => {
-            warnings.push(format!("Failed to discover skills: {error}"));
-            Vec::new()
+    let skills = if user_sources_enabled {
+        match discover_skills(&config.paths.skills_dir) {
+            Ok(skills) => skills,
+            Err(error) => {
+                warnings.push(format!("Failed to discover skills: {error}"));
+                Vec::new()
+            }
         }
+    } else {
+        Vec::new()
     };
-    let plugins = match discover_plugins(&config.paths.plugins_dir) {
-        Ok(plugins) => plugins,
-        Err(error) => {
-            warnings.push(format!("Failed to discover plugins: {error}"));
-            Vec::new()
+    let plugins = if user_sources_enabled {
+        match discover_plugins(&config.paths.plugins_dir) {
+            Ok(plugins) => plugins,
+            Err(error) => {
+                warnings.push(format!("Failed to discover plugins: {error}"));
+                Vec::new()
+            }
         }
+    } else {
+        Vec::new()
     };
     let disabled_plugins = plugins
         .iter()
         .filter(|plugin| plugin.root.join(PLUGIN_DISABLED_MARKER).exists())
         .count();
-    let managed_mcp_servers =
+    let managed_mcp_servers = if user_sources_enabled {
         count_managed_mcp_servers(
             &config.paths.profile_dir.join(DEFAULT_MCP_CONFIG_FILE),
             &mut warnings,
-        ) + count_managed_mcp_servers(&config.cwd.join(DEFAULT_MCP_CONFIG_FILE), &mut warnings);
-    let plugin_mcp_servers = count_plugin_mcp_servers(&plugins, &mut warnings);
+        )
+    } else {
+        0
+    } + if project_sources_enabled {
+        count_managed_mcp_servers(&config.cwd.join(DEFAULT_MCP_CONFIG_FILE), &mut warnings)
+    } else {
+        0
+    };
+    let plugin_mcp_servers = if user_sources_enabled {
+        count_plugin_mcp_servers(&plugins, &mut warnings)
+    } else {
+        0
+    };
 
     let provider_probe = if probe_provider {
         if let Some(url) = provider_endpoint_url(&config.provider) {
@@ -1273,6 +1300,11 @@ async fn build_gui_doctor_report(
             session_name: config.session_name.clone(),
             permission_mode: config.permission_mode.as_legacy_str().to_owned(),
             setting_sources: config.setting_sources.clone(),
+            allowed_setting_sources: config
+                .allowed_setting_sources
+                .iter()
+                .map(|source| source.as_str().to_owned())
+                .collect(),
             settings_files: config
                 .settings_files
                 .iter()
@@ -1341,6 +1373,17 @@ fn mcp_config_path_for_scope(
             let project_root = normalize_existing_path(Path::new(project_path))?;
             Ok(project_root.join(DEFAULT_MCP_CONFIG_FILE))
         }
+    }
+}
+
+fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool {
+    config.allowed_setting_sources.contains(&source)
+}
+
+fn mcp_scope_enabled(config: &RuntimeConfig, scope: ConfigScopeDto) -> bool {
+    match scope {
+        ConfigScopeDto::Profile => setting_source_enabled(config, SettingSource::User),
+        ConfigScopeDto::Project => setting_source_enabled(config, SettingSource::Project),
     }
 }
 
@@ -1438,6 +1481,17 @@ async fn build_mcp_server_list(
     include_disabled: bool,
 ) -> Result<McpServerListDto> {
     let config_path = mcp_config_path_for_scope(config, scope, project_path)?;
+    if !mcp_scope_enabled(config, scope) {
+        return Ok(McpServerListDto {
+            scope: scope.label().to_owned(),
+            config_path: config_path.display().to_string(),
+            warnings: vec![format!(
+                "{} MCP discovery is disabled by active setting sources",
+                scope.label()
+            )],
+            servers: Vec::new(),
+        });
+    }
     let mcp_config = load_managed_mcp_config_or_default(&config_path)?;
     let mut warnings = Vec::new();
     let mut servers = Vec::new();
@@ -3585,6 +3639,10 @@ mod tests {
         assert_eq!(snapshot.provider.name, "glm-coding");
         assert_eq!(snapshot.provider.effort.as_deref(), Some("medium"));
         assert_eq!(snapshot.permission_mode, "acceptEdits");
+        assert_eq!(
+            snapshot.allowed_setting_sources,
+            vec!["user", "project", "local"]
+        );
         assert_eq!(snapshot.allowed_tools, vec!["read_file"]);
         assert_eq!(snapshot.disallowed_tools, vec!["bash_command"]);
         let _ = std::fs::remove_dir_all(&temp);
@@ -3626,6 +3684,125 @@ mod tests {
         assert_eq!(report.extensions.plugin_mcp_servers, 0);
         assert!(report.network.is_empty());
         assert!(report.env_providers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn build_gui_doctor_report_respects_setting_sources() {
+        let temp = tempdir().expect("tempdir should work");
+        let project_dir = temp.path().join("project");
+        let profile_dir = temp.path().join(".remote-code-rust");
+        let plugin_root = profile_dir.join("plugins").join("sample");
+        fs::create_dir_all(&project_dir).expect("project dir should exist");
+        fs::create_dir_all(profile_dir.join("skills").join("demo")).expect("profile skills");
+        fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("plugin dir");
+        fs::write(
+            profile_dir.join("skills").join("demo").join("SKILL.md"),
+            "# Demo\n\nSummary.\n",
+        )
+        .expect("profile skill write");
+        fs::write(
+            plugin_root.join(".codex-plugin").join("plugin.json"),
+            r#"{"name":"sample","version":"0.1.0","mcp":"./mcp.toml"}"#,
+        )
+        .expect("plugin manifest write");
+        let mut plugin_mcp = McpConfig::default();
+        plugin_mcp.servers.insert(
+            "plugin-demo".to_owned(),
+            sample_stdio_mcp_server("plugin-demo", true, "plugin-cmd"),
+        );
+        plugin_mcp
+            .save(plugin_root.join(DEFAULT_MCP_CONFIG_FILE))
+            .expect("plugin MCP config should save");
+
+        let mut profile_mcp = McpConfig::default();
+        profile_mcp.servers.insert(
+            "profile-demo".to_owned(),
+            sample_stdio_mcp_server("profile-demo", true, "profile-cmd"),
+        );
+        profile_mcp
+            .save(profile_dir.join(DEFAULT_MCP_CONFIG_FILE))
+            .expect("profile MCP config should save");
+
+        let mut project_mcp = McpConfig::default();
+        project_mcp.servers.insert(
+            "project-demo".to_owned(),
+            sample_stdio_mcp_server("project-demo", true, "project-cmd"),
+        );
+        project_mcp
+            .save(project_dir.join(DEFAULT_MCP_CONFIG_FILE))
+            .expect("project MCP config should save");
+
+        let mut project_only = test_runtime_config(&project_dir, &profile_dir);
+        project_only.allowed_setting_sources = vec![SettingSource::Project];
+        let report = build_gui_doctor_report(&project_only, false, false, false)
+            .await
+            .expect("project-only doctor report");
+        assert_eq!(report.runtime.allowed_setting_sources, vec!["project"]);
+        assert_eq!(report.extensions.skills, 0);
+        assert_eq!(report.extensions.plugins, 0);
+        assert_eq!(report.extensions.disabled_plugins, 0);
+        assert_eq!(report.extensions.managed_mcp_servers, 1);
+        assert_eq!(report.extensions.plugin_mcp_servers, 0);
+
+        let mut user_only = test_runtime_config(&project_dir, &profile_dir);
+        user_only.allowed_setting_sources = vec![SettingSource::User];
+        let report = build_gui_doctor_report(&user_only, false, false, false)
+            .await
+            .expect("user-only doctor report");
+        assert_eq!(report.runtime.allowed_setting_sources, vec!["user"]);
+        assert_eq!(report.extensions.skills, 1);
+        assert_eq!(report.extensions.plugins, 1);
+        assert_eq!(report.extensions.managed_mcp_servers, 1);
+        assert_eq!(report.extensions.plugin_mcp_servers, 1);
+    }
+
+    #[tokio::test]
+    async fn build_mcp_server_list_respects_setting_sources() {
+        let temp = tempdir().expect("tempdir should work");
+        let project_dir = temp.path().join("project");
+        let profile_dir = temp.path().join(".remote-code-rust");
+        fs::create_dir_all(&project_dir).expect("project dir should exist");
+
+        let mut profile_mcp = McpConfig::default();
+        profile_mcp.servers.insert(
+            "profile-demo".to_owned(),
+            sample_stdio_mcp_server("profile-demo", true, "profile-cmd"),
+        );
+        profile_mcp
+            .save(profile_dir.join(DEFAULT_MCP_CONFIG_FILE))
+            .expect("profile MCP config should save");
+
+        let mut project_mcp = McpConfig::default();
+        project_mcp.servers.insert(
+            "project-demo".to_owned(),
+            sample_stdio_mcp_server("project-demo", true, "project-cmd"),
+        );
+        project_mcp
+            .save(project_dir.join(DEFAULT_MCP_CONFIG_FILE))
+            .expect("project MCP config should save");
+
+        let mut user_only = test_runtime_config(&project_dir, &profile_dir);
+        user_only.allowed_setting_sources = vec![SettingSource::User];
+        let list = build_mcp_server_list(
+            &user_only,
+            ConfigScopeDto::Project,
+            Some(project_dir.to_str().expect("utf8 project path")),
+            false,
+            false,
+        )
+        .await
+        .expect("project list should build");
+        assert!(list.servers.is_empty());
+        assert_eq!(list.warnings.len(), 1);
+
+        let mut project_only = test_runtime_config(&project_dir, &profile_dir);
+        project_only.allowed_setting_sources = vec![SettingSource::Project];
+        let list =
+            build_mcp_server_list(&project_only, ConfigScopeDto::Profile, None, false, false)
+                .await
+                .expect("profile list should build");
+        assert!(list.servers.is_empty());
+        assert_eq!(list.warnings.len(), 1);
     }
 
     #[tokio::test]

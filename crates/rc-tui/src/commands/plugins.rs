@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use rc_config::RuntimeConfig;
+use rc_config::{RuntimeConfig, SettingSource};
 
 pub fn dispatch(input: &str, config: &RuntimeConfig) {
     let remainder = input
@@ -51,7 +51,7 @@ pub fn dispatch(input: &str, config: &RuntimeConfig) {
 }
 
 pub fn render(config: &RuntimeConfig) {
-    match rc_plugins::discover_plugins(&config.paths.plugins_dir) {
+    match discover_visible_plugins(config) {
         Ok(mut plugins) => {
             if plugins.is_empty() {
                 println!(
@@ -88,7 +88,7 @@ pub fn render(config: &RuntimeConfig) {
 }
 
 pub(crate) fn discovered_plugin_count(config: &RuntimeConfig) -> usize {
-    match rc_plugins::discover_plugins(&config.paths.plugins_dir) {
+    match discover_visible_plugins(config) {
         Ok(plugins) => plugins.len(),
         Err(_) => 0,
     }
@@ -156,7 +156,7 @@ fn render_plugin(config: &RuntimeConfig, name: &str) {
 }
 
 fn validate_plugin(config: &RuntimeConfig, name: Option<&str>) {
-    let plugins = match rc_plugins::discover_plugins(&config.paths.plugins_dir) {
+    let plugins = match discover_visible_plugins(config) {
         Ok(plugins) => plugins,
         Err(error) => {
             eprintln!(
@@ -242,7 +242,7 @@ fn set_plugin_enabled(config: &RuntimeConfig, name: &str, enabled: bool) {
 }
 
 fn resolve_plugin(config: &RuntimeConfig, name: &str) -> anyhow::Result<rc_plugins::PluginBundle> {
-    let plugins = rc_plugins::discover_plugins(&config.paths.plugins_dir)?;
+    let plugins = discover_visible_plugins(config)?;
     let mut matches = plugins
         .into_iter()
         .filter(|plugin| plugin.manifest.name == name)
@@ -259,6 +259,19 @@ fn resolve_plugin(config: &RuntimeConfig, name: &str) -> anyhow::Result<rc_plugi
             anyhow::bail!("Plugin `{name}` is ambiguous across: {locations}");
         }
     }
+}
+
+fn discover_visible_plugins(
+    config: &RuntimeConfig,
+) -> Result<Vec<rc_plugins::PluginBundle>, rc_plugins::PluginError> {
+    if !setting_source_enabled(config, SettingSource::User) {
+        return Ok(Vec::new());
+    }
+    rc_plugins::discover_plugins(&config.paths.plugins_dir)
+}
+
+fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool {
+    config.allowed_setting_sources.contains(&source)
 }
 
 fn yes_no(value: bool) -> &'static str {

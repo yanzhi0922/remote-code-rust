@@ -267,6 +267,12 @@ export function OperationsTab() {
                       : '(defaults)'}
                   </div>
                   <div>
+                    <span className="font-medium text-slate-700">Allowed setting sources:</span>{' '}
+                    {doctor.runtime.allowed_setting_sources.length > 0
+                      ? doctor.runtime.allowed_setting_sources.join(', ')
+                      : '(none)'}
+                  </div>
+                  <div>
                     <span className="font-medium text-slate-700">Allowed tools:</span>{' '}
                     {doctor.tools.allowed_tools.length > 0 ? doctor.tools.allowed_tools.join(', ') : '(all)'}
                   </div>

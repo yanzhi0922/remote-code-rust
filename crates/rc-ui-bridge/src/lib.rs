@@ -99,6 +99,7 @@ pub struct UiRuntimeStatusSnapshot {
     pub provider: UiProviderStatusSnapshot,
     pub permission_mode: String,
     pub setting_sources: Vec<String>,
+    pub allowed_setting_sources: Vec<String>,
     pub allowed_tools: Vec<String>,
     pub disallowed_tools: Vec<String>,
 }
@@ -624,6 +625,7 @@ mod tests {
                 },
                 permission_mode: "default".to_owned(),
                 setting_sources: vec!["env:REMOTE_CODE_MODEL".to_owned()],
+                allowed_setting_sources: vec!["user".to_owned(), "project".to_owned()],
                 allowed_tools: vec!["read_file".to_owned()],
                 disallowed_tools: vec!["bash_command".to_owned()],
             },
@@ -633,6 +635,7 @@ mod tests {
         match parsed {
             UiEvent::StatusSnapshot { snapshot } => {
                 assert_eq!(snapshot.provider.name, "glm-coding");
+                assert_eq!(snapshot.allowed_setting_sources, vec!["user", "project"]);
                 assert_eq!(snapshot.allowed_tools, vec!["read_file"]);
                 assert_eq!(snapshot.disallowed_tools, vec!["bash_command"]);
             }

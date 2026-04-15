@@ -1,4 +1,4 @@
-use rc_config::RuntimeConfig;
+use rc_config::{RuntimeConfig, SettingSource};
 
 pub fn dispatch(input: &str, config: &RuntimeConfig) {
     let remainder = input
@@ -241,8 +241,9 @@ struct SkillView {
 fn discover_skills(config: &RuntimeConfig) -> (Vec<String>, Vec<SkillView>) {
     let mut warnings = Vec::new();
     let mut skills = Vec::new();
+    let user_sources_enabled = setting_source_enabled(config, SettingSource::User);
 
-    if config.paths.skills_dir.exists() {
+    if user_sources_enabled && config.paths.skills_dir.exists() {
         match rc_skills::discover_skills(&config.paths.skills_dir) {
             Ok(discovered) => {
                 for skill in discovered {
@@ -260,7 +261,7 @@ fn discover_skills(config: &RuntimeConfig) -> (Vec<String>, Vec<SkillView>) {
         }
     }
 
-    if config.paths.plugins_dir.exists() {
+    if user_sources_enabled && config.paths.plugins_dir.exists() {
         match rc_plugins::discover_plugins(&config.paths.plugins_dir) {
             Ok(plugins) => {
                 for plugin in plugins {
@@ -289,6 +290,10 @@ fn discover_skills(config: &RuntimeConfig) -> (Vec<String>, Vec<SkillView>) {
     }
 
     (warnings, skills)
+}
+
+fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool {
+    config.allowed_setting_sources.contains(&source)
 }
 
 pub(crate) fn discovered_skill_count(config: &RuntimeConfig) -> usize {

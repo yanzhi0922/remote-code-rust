@@ -30,6 +30,7 @@ pub(crate) struct RuntimeSection {
     pub input_format: String,
     pub output_format: String,
     pub setting_sources: Vec<String>,
+    pub allowed_setting_sources: Vec<String>,
     pub settings_files: Vec<PathBuf>,
 }
 
@@ -180,6 +181,11 @@ pub(crate) async fn collect_report(
         input_format: format!("{:?}", config.input_format),
         output_format: format!("{:?}", config.output_format),
         setting_sources: config.setting_sources.clone(),
+        allowed_setting_sources: config
+            .allowed_setting_sources
+            .iter()
+            .map(|source| source.as_str().to_owned())
+            .collect(),
         settings_files: config.settings_files.clone(),
     };
     let install = build_install_section(&install_source);

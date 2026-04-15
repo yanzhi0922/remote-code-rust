@@ -19,7 +19,7 @@
 - 本轮已继续把 parity hardening 落到代码：headless error result 会复用 compat 落盘结果元数据；permission approval 响应后会显式重新发出 `session_state_changed: running`；compat error 路径会保留最新 streaming usage；`permission_denials` 现已补入 `tool_input`；provider streaming 在已观测到工具活动后会拒绝自动 fallback 到 non-streaming 重跑。
 - 新一轮 provider / compat continuity 也已进入主干：`rc-config` 会为支持 Anthropic 协议的请求生成安全的 `request_metadata`（默认包含 `client` / `version` / `session_id`，并可叠加显式 env JSON）；`rc-provider` 会把它编码进 Anthropic-compatible `metadata.user_id`，并在 OpenAI / Anthropic 的 buffered 与 streaming 路径上采集服务端 `request_id`。
 - `query_engine_compat` 与 `headless` 当前已不再把这条 request continuity 丢掉：`assistant_turn`、`result`、`model_usage` 与 compat 持久化元数据都已落下 `request_id`，并新增了对应回归测试，保证后续 rich result / 远端协议桥接不会再退化成“只有文本无请求链路”。
-- 本轮已继续把启动期的 settings/auth/source-policy 往主干推进：`rc-config` 在未显式传 `--settings` 时会自动发现并按 `legacy-import -> profile -> workspace -> local` 顺序装配 runtime settings；显式 `--settings` 仍保持最高优先级并禁用自动发现；`--setting-sources` 也已可把启动期 discovery 收窄到 `user/project/local` 指定范围。更关键的是，这个 source policy 现在不再只停留在 settings 装配层：`hooks` / `runtime_hooks` / runtime extensions / MCP discovery 均已接入同一套 gating，`doctor`、`headless init`、`mcp list/get/call/serve` 也会复用解析后的 `auth_source` / `setting_sources` / `settings_files`。同时 provider-aware env auth/source 识别已补齐到 MiniMax / GLM / 腾讯 / 百炼等路径。这说明启动期 settings/auth layering 已明显前进一步，但仍不代表官方启动期 parity 已完成：插件缓存与外部插件拉取、MCP 预连接、GUI/TUI/skills 可见面统一 source-policy、以及完整 source precedence matrix 仍待继续收口。
+- 本轮已继续把启动期的 settings/auth/source-policy 往主干推进：`rc-config` 在未显式传 `--settings` 时会自动发现并按 `legacy-import -> profile -> workspace -> local` 顺序装配 runtime settings；显式 `--settings` 仍保持最高优先级并禁用自动发现；`--setting-sources` 也已可把启动期 discovery 收窄到 `user/project/local` 指定范围。更关键的是，这个 source policy 现在不再只停留在 settings 装配层：`hooks` / `runtime_hooks` / runtime extensions / MCP discovery 均已接入同一套 gating，而面向用户的可见面也已同步收口到同一语义，包括 `skills_cli`、TUI `/skills`、TUI `/mcp`、TUI `/plugins`、GUI doctor、GUI MCP list。`doctor`、`headless init`、`mcp list/get/call/serve` 以及上述 GUI/TUI 可见面也会复用解析后的 `auth_source` / `setting_sources` / `settings_files`；共享 runtime status / UI snapshot / doctor runtime 现在也会显式暴露 `allowed_setting_sources`，便于解释为什么某个 skill/plugin/MCP surface 被隐藏。同时 provider-aware env auth/source 识别已补齐到 MiniMax / GLM / 腾讯 / 百炼等路径。这说明启动期 settings/auth layering 与 source-policy parity 已明显前进一步，但仍不代表官方启动期 parity 已完成：插件缓存、外部插件拉取、MCP 预连接、以及完整 source precedence matrix 仍待继续收口。
 
 当前执行焦点：
 
@@ -36,7 +36,7 @@
 
 下一步收口方向：
 
-- 先把“启动阶段行为”继续纳入 parity ledger：虽然 settings/hook/MCP/extensions 的主启动链已经 obey `--setting-sources`，但插件缓存、外部插件拉取、MCP 预连接、GUI/TUI/skills 可见面，以及完整 settings/auth/plugin/MCP source precedence matrix 仍需形成可回归的行为矩阵。
+- 先把“启动阶段行为”继续纳入 parity ledger：虽然 settings/hook/MCP/extensions 的主启动链已经 obey `--setting-sources`，`skills_cli`、TUI `/skills`、TUI `/mcp`、TUI `/plugins`、GUI doctor、GUI MCP list，以及 runtime status / UI snapshot / doctor runtime 的 source policy 暴露都已并入同一语义，但插件缓存、外部插件拉取、MCP 预连接、以及完整 settings/auth/plugin/MCP source precedence matrix 仍需形成可回归的行为矩阵。
 - 再把“流式最终化语义”纳入默认 compat 主路径：live usage、`stop_reason`、fallback 原因与 richer runtime/control-plane 字段要能从 engine 透传到 headless / remote 协议输出，而不是只保证结果面 usage / request_id 已落盘。
 - 上述约束目前属于新的验收边界而非“已全部完成”的事项：当前已补齐 error-side usage 保真、approval running-state、denial 结构、request metadata / request_id continuity，以及启动期 settings/auth source 分层基础设施；但 live usage 对外事件、dynamic headers/betas/previousRequestId、以及启动期插件/MCP 行为矩阵仍待继续收口。
 - 风险判断同步上调：如果继续停留在 SDK 兼容层，MiniMax / GLM 等平台对“非官方工具行为特征”的风控会直接反噬产品可用性，因此官方行为拟合度已从“体验优化项”提升为“可用性与封禁风险控制项”。

@@ -20,6 +20,7 @@ export interface RuntimeStatusInfo {
   provider: RuntimeProviderStatus;
   permission_mode: string;
   setting_sources: string[];
+  allowed_setting_sources: string[];
   allowed_tools: string[];
   disallowed_tools: string[];
 }
@@ -57,6 +58,7 @@ export interface DoctorRuntimeInfo {
   session_name: string | null;
   permission_mode: string;
   setting_sources: string[];
+  allowed_setting_sources: string[];
   settings_files: string[];
 }
 

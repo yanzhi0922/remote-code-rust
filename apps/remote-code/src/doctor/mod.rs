@@ -34,6 +34,14 @@ fn print_text_report(report: &DoctorReport) {
     println!("  permission mode: {}", report.runtime.permission_mode);
     println!("  input format:   {}", report.runtime.input_format);
     println!("  output format:  {}", report.runtime.output_format);
+    println!(
+        "  allowed sources: {}",
+        if report.runtime.allowed_setting_sources.is_empty() {
+            "(none)".to_owned()
+        } else {
+            report.runtime.allowed_setting_sources.join(", ")
+        }
+    );
 
     println!();
     println!("[Install]");
