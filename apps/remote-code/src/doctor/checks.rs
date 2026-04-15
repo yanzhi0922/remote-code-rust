@@ -136,7 +136,7 @@ pub(crate) async fn collect_report(
         &config.paths.profile_dir,
         &config.settings_files,
         &config.cli_settings_files,
-    )?;
+    );
     let model_info = rc_provider::model_info::get_model_info(
         config.provider.model.as_deref().unwrap_or("unknown"),
     );

@@ -3978,20 +3978,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "rc-core",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "toml 0.9.12+spec-1.1.0",
-]
-
-[[package]]
-name = "rc-permissions-v2"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
  "chrono",
  "rc-core",
  "serde",
@@ -3999,6 +3985,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
+ "toml 0.9.12+spec-1.1.0",
  "tracing",
 ]
 

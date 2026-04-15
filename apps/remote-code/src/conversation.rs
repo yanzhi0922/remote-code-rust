@@ -975,13 +975,13 @@ pub(crate) async fn run_oneshot_text(
         &config.provider,
     );
     let broker: Arc<dyn PermissionBroker> = Arc::new(LayeredPermissionBroker::new(
-        StaticPermissionBroker::new(config.permission_mode),
+        StaticPermissionBroker::from_mode(config.permission_mode),
         load_layered_rules(
             &config.cwd,
             &config.paths.profile_dir,
             &config.settings_files,
             &config.cli_settings_files,
-        )?,
+        ),
     ));
     let discovery = discover_runtime_hooks(config, &[]);
     let mut conversation = initialize_conversation(store, config, Some(&prompt))?;
@@ -1020,7 +1020,7 @@ pub(crate) fn run_doctor(config: &RuntimeConfig) -> Result<()> {
         &config.paths.profile_dir,
         &config.settings_files,
         &config.cli_settings_files,
-    )?;
+    );
     let api_key_state = if config.provider.api_key.is_some() {
         "present"
     } else {

@@ -336,28 +336,35 @@ pub async fn execute_tool_call(
         });
     }
 
-    if spec.requires_permission && !auto_allows(broker.mode(), classify_tool(&spec.name)) {
-        let decision = broker
-            .decide(PermissionRequest {
-                tool_name: spec.name.clone(),
-                tool_use_id: call.id.clone(),
-                title: format!("Allow {}", spec.protocol_name),
-                description: spec.description.clone(),
-                input: call.input.clone(),
-                blocked_path: call
-                    .input
-                    .get("path")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned),
-            })
-            .await;
-        if !decision.allowed {
-            return Ok(ToolResult {
-                content: decision
-                    .message
-                    .unwrap_or_else(|| format!("Permission denied for {}.", spec.name)),
-                is_error: true,
-            });
+    if spec.requires_permission {
+        // Fast-path: if the broker exposes a mode and auto_allows covers this class, skip.
+        let broker_mode = broker.mode();
+        let tool_class = classify_tool(&spec.permission_tool_name);
+        let skip_broker = broker_mode.map_or(false, |m| auto_allows(m, tool_class));
+        if !skip_broker {
+            let decision = broker
+                .decide(PermissionRequest {
+                    tool_name: spec.name.clone(),
+                    tool_input: call.input.clone(),
+                    working_directory: None,
+                    tool_use_id: Some(call.id.clone()),
+                    title: Some(format!("Allow {}", spec.protocol_name)),
+                    description: Some(spec.description.clone()),
+                    blocked_path: call
+                        .input
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                })
+                .await;
+            if !decision.allowed {
+                return Ok(ToolResult {
+                    content: decision
+                        .message
+                        .unwrap_or_else(|| format!("Permission denied for {}.", spec.name)),
+                    is_error: true,
+                });
+            }
         }
     }
 
@@ -493,7 +500,7 @@ mod tests {
         execute_tool_call,
     };
     use once_cell::sync::Lazy;
-    use rc_core::{HookEvent, PermissionMode, ToolCall};
+    use rc_core::{HookEvent, ToolCall};
     use rc_mcp::{McpCapabilityMatrix, McpServerConfig, McpTransportConfig};
     use rc_permissions::StaticPermissionBroker;
     use serde_json::json;
@@ -519,7 +526,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let read = execute_tool_call(
             &ToolCall {
@@ -606,7 +613,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -650,7 +657,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         // Search with file_pattern filter
         let result = execute_tool_call(
@@ -693,7 +700,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -723,7 +730,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -763,7 +770,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -812,7 +819,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         // Set a config value
         let set_result = execute_tool_call(
@@ -884,7 +891,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -928,7 +935,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -972,7 +979,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -1010,7 +1017,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -1048,7 +1055,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         // Create a task
         let create_result = execute_tool_call(
@@ -1194,7 +1201,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -1239,7 +1246,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -1276,7 +1283,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let enter_result = execute_tool_call(
             &ToolCall {
@@ -1335,7 +1342,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -1369,7 +1376,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -1422,7 +1429,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -1507,7 +1514,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -1549,7 +1556,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -1581,7 +1588,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -1614,7 +1621,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -1650,7 +1657,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -1684,7 +1691,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let create_result = execute_tool_call(
             &ToolCall {
@@ -1747,7 +1754,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -1780,7 +1787,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let enter_result = execute_tool_call(
             &ToolCall {
@@ -1840,7 +1847,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let long_content: String = "x".repeat(1000);
         let result = execute_tool_call(
@@ -1878,7 +1885,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -1911,7 +1918,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -1950,7 +1957,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -1981,7 +1988,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -2014,7 +2021,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -2053,7 +2060,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let login_result = execute_tool_call(
             &ToolCall {
@@ -2108,7 +2115,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let original_policy = super::current_tool_runtime_policy();
         configure_tool_runtime_policy(ToolRuntimePolicy {
@@ -2178,7 +2185,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let original_policy = super::current_tool_runtime_policy();
         configure_tool_runtime_policy(ToolRuntimePolicy {
@@ -2230,7 +2237,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let original_policy = super::current_tool_runtime_policy();
         let demo_server =
@@ -2303,7 +2310,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -2337,7 +2344,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -2371,7 +2378,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -2405,7 +2412,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
         };
-        let broker = StaticPermissionBroker::new(PermissionMode::BypassPermissions);
+        let broker = StaticPermissionBroker::new(true);
 
         let start_result = execute_tool_call(
             &ToolCall {

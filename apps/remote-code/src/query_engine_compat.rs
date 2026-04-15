@@ -832,7 +832,7 @@ mod tests {
 
     fn mock_broker(config: &RuntimeConfig) -> Arc<dyn PermissionBroker> {
         Arc::new(LayeredPermissionBroker::new(
-            StaticPermissionBroker::new(config.permission_mode),
+            StaticPermissionBroker::from_mode(config.permission_mode),
             Vec::new(),
         ))
     }
@@ -842,8 +842,8 @@ mod tests {
 
     #[async_trait::async_trait]
     impl PermissionBroker for DenyCommandBroker {
-        fn mode(&self) -> PermissionMode {
-            PermissionMode::Default
+        fn mode(&self) -> Option<PermissionMode> {
+            Some(PermissionMode::Default)
         }
 
         async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
