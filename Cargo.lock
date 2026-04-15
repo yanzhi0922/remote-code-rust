@@ -3814,6 +3814,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "rc-auth"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "hmac",
+ "rc-core",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "rc-config"
 version = "0.1.0"
 dependencies = [
@@ -3826,6 +3845,18 @@ dependencies = [
  "toml 0.9.12+spec-1.1.0",
  "uuid",
  "walkdir",
+]
+
+[[package]]
+name = "rc-context"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
@@ -3898,6 +3929,17 @@ dependencies = [
  "tokio",
  "toml 0.9.12+spec-1.1.0",
  "walkdir",
+]
+
+[[package]]
+name = "rc-model"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
