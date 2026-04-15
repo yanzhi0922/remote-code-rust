@@ -5,8 +5,8 @@ pub mod query_loop;
 pub mod token_budget;
 
 pub use config::{
-    EffortLevel, ProcessUserInputContext, QueryEngineConfig, QuerySource, TaskBudget,
-    ThinkingConfig, ToolRunResult, ToolRunner,
+    EffortLevel, ProcessUserInputContext, ProviderInvocationMode, QueryEngineConfig, QuerySource,
+    TaskBudget, ThinkingConfig, ToolRunResult, ToolRunner,
 };
 pub use engine::{EngineError, EngineState, QueryEngine, QueryResult};
 pub use observer::{

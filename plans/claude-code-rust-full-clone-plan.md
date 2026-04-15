@@ -22,16 +22,17 @@
 - 已为 [`rc-session`](../crates/rc-session/src/lib.rs) 接入 transcript V2 兼容层：新增 `append_transcript_entry()`、`load_transcript_v2()`、`transcript_storage()`，保持现有 `StoredEvent` 主路径不破坏。
 - 已新增 [`rc-query-engine`](../crates/rc-query-engine/src/lib.rs) compat 内核，先抽出“回合推进 + budget + tool loop + legacy backend seam”，并通过最小闭环测试。
 - 已为 [`rc-query-engine`](../crates/rc-query-engine/src/lib.rs) 补齐 host observer / checkpoint seam：新增 `QueryObserver`、`QueryObserverEvent`、`QueryCheckpoint`，query loop 现在会显式发出消息追加、budget 评估/超限、context compaction、assistant commit、tool batch checkpoint create/clear 等生命周期事件。
-- 已开始把 [`apps/remote-code/src/conversation.rs`](../apps/remote-code/src/conversation.rs) 迁移到 app 层 compat adapter：新增 [`query_engine_compat.rs`](../apps/remote-code/src/query_engine_compat.rs)，当前以 `run_prompt_with_query_engine_compat()` 承接 non-streaming prompt 路径，把 transcript / named events / resume boundary / tool side effects 继续保留在宿主层翻译。
-- 当前 cutover 策略已明确：普通 non-streaming 路径先走 `rc-query-engine` compat adapter；[`apps/remote-code/src/headless.rs`](../apps/remote-code/src/headless.rs) 继续停留在 legacy streaming loop，等 query engine 补齐 streaming provider seam 与更丰富的 host tool outcome 后再切换。
-- 当前验证结果：`cargo test -p rc-core`、`cargo test -p rc-engine-events`、`cargo test -p rc-transcript`、`cargo test -p rc-session`、`cargo test -p rc-query-engine`、`cargo test --workspace` 均通过。
+- 已为 [`rc-query-engine`](../crates/rc-query-engine/src/lib.rs) 补齐默认关闭的 provider streaming seam：新增 `ProviderInvocationMode::{Buffered, Streaming}`；opt-in 后 query loop 会走 `complete_with_streaming_observer(...)`，并向宿主发出 `StreamingTextDelta`、`StreamingToolCallStarted`、`StreamingToolCallDelta`、`StreamingUsageUpdated`。
+- 已继续把 [`apps/remote-code/src/conversation.rs`](../apps/remote-code/src/conversation.rs) 迁移到 app 层 compat adapter：新增 [`query_engine_compat.rs`](../apps/remote-code/src/query_engine_compat.rs)，当前 `run_prompt()` 默认已切到 compat path；当存在 `event_sink` 时，compat adapter 会将 `rc-query-engine` 切到 `ProviderInvocationMode::Streaming`，并把 streaming observer 事件翻译回 `PromptStreamEvent`，同时继续由 app 层承担 transcript、named events、resume boundary、hook/tool side effects 映射。
+- 当前 cutover 策略已进一步推进：`conversation.rs` 默认走 `rc-query-engine` compat adapter，legacy prompt loop 仅作为 `REMOTE_CODE_FORCE_LEGACY_PROMPT_LOOP` 回退开关保留；[`apps/remote-code/src/headless.rs`](../apps/remote-code/src/headless.rs) 已通过同一 `run_prompt()` 进入 compat path，并继续保留 `ChannelPermissionBroker` 审批链路与 `stream-json` 事件发射。
+- 当前验证结果：`cargo test -p rc-query-engine`、`cargo test -p remote-code`、`cargo test --workspace` 均通过；使用 MiniMax anthropic-compatible provider 实测 `--print` 路径返回 `OK`，`--output-format stream-json --include-partial-messages` 路径成功发出 `message_delta` / `message_committed` 并返回预期结果。
 
-这意味着 Phase 1 的契约冻结与 Phase 2 的最小可运行引擎都已进入主干骨架阶段；当前主线重点已经从“搭骨架”进入“app compat 接线”：
+这意味着 Phase 1 的契约冻结与 Phase 2 的最小可运行引擎都已进入主干骨架阶段；当前主线重点已经从“搭骨架”进入“默认 compat + parity hardening”：
 
-- 稳定 `conversation.rs -> query_engine_compat.rs -> rc-query-engine` 的 non-streaming 主路径。
-- 把 observer/checkpoint 事件完整翻译回 `SessionStore`、`PromptStreamEvent`、named events、resume state。
-- 保持 `headless` 继续使用 legacy streaming loop，直到 query engine 具备 streaming provider seam 与等价 runtime event 粒度。
-- 在 app 层 cutover 完成后，再推进 streaming observer、resume boundary 编排、compaction orchestration 的默认切换。
+- 稳定 `conversation.rs -> query_engine_compat.rs -> rc-query-engine` 的默认主路径，并保留 env-based legacy escape hatch。
+- 把 observer/checkpoint 与 streaming observer 事件完整翻译回 `SessionStore`、`PromptStreamEvent`、named events、resume state。
+- 继续补齐 `headless` / remote 所需的 runtime event fidelity 与 parity hardening，而不是再等待 provider streaming seam 落地。
+- 在默认 compat 路径稳定后，再推进 usage 流、更多 host outcome 粒度与 legacy shim 收缩。
 
 ---
 

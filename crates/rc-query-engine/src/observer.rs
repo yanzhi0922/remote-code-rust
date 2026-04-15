@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use rc_core::{Message, SessionId, ToolCall, ToolResult};
 use rc_engine_events::Usage;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use uuid::Uuid;
 
 /// Checkpoint categories surfaced by the compat engine.
@@ -105,6 +106,25 @@ pub enum QueryObserverEvent {
         estimated_tokens_before: u64,
         estimated_tokens_after: u64,
     },
+    StreamingTextDelta {
+        turn: u32,
+        delta: String,
+        accumulated_text: String,
+    },
+    StreamingToolCallStarted {
+        turn: u32,
+        tool_call_id: String,
+        tool_name: String,
+    },
+    StreamingToolCallDelta {
+        turn: u32,
+        tool_call_id: String,
+        delta: String,
+    },
+    StreamingUsageUpdated {
+        turn: u32,
+        usage: Usage,
+    },
     AssistantMessageCommitted {
         message: Message,
         stop_reason: String,
@@ -143,6 +163,23 @@ pub enum QueryObserverEvent {
     },
 }
 
+/// Sync-friendly provider streaming event surface used during in-flight callbacks.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum QueryStreamingEvent {
+    AssistantMessageDelta {
+        delta: String,
+    },
+    ToolCallStarted {
+        tool_call_id: String,
+        tool_name: String,
+    },
+    ToolCallDelta {
+        tool_call_id: String,
+        delta: String,
+    },
+}
+
 impl QueryObserverEvent {
     #[must_use]
     pub fn kind(&self) -> &'static str {
@@ -153,6 +190,10 @@ impl QueryObserverEvent {
             Self::BudgetExceeded { .. } => "budget_exceeded",
             Self::ContextBudgetEvaluated { .. } => "context_budget_evaluated",
             Self::ContextCompactionApplied { .. } => "context_compaction_applied",
+            Self::StreamingTextDelta { .. } => "streaming_text_delta",
+            Self::StreamingToolCallStarted { .. } => "streaming_tool_call_started",
+            Self::StreamingToolCallDelta { .. } => "streaming_tool_call_delta",
+            Self::StreamingUsageUpdated { .. } => "streaming_usage_updated",
             Self::AssistantMessageCommitted { .. } => "assistant_message_committed",
             Self::ToolCallStarted { .. } => "tool_call_started",
             Self::ToolResultCommitted { .. } => "tool_result_committed",
@@ -169,6 +210,8 @@ impl QueryObserverEvent {
 pub trait QueryObserver: Send + Sync {
     async fn on_event(&self, event: QueryObserverEvent) -> Result<()>;
 }
+
+pub type QueryStreamingEventSink = Arc<dyn Fn(QueryStreamingEvent) + Send + Sync>;
 
 /// Default observer used when hosts do not need local lifecycle callbacks.
 #[derive(Debug, Default)]

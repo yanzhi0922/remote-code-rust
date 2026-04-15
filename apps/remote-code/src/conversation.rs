@@ -20,7 +20,7 @@ use rc_session::resume_state::{PendingToolCall, ResumeState};
 use rc_session::{SessionStore, conversation::ensure_conversation_initialized};
 use rc_skills::SkillDocument;
 use rc_tools::{
-    ToolExecutionContext,
+    ProgressCallback, ToolExecutionContext,
     agent::{DelegateProgressEvent, parse_delegate_progress_event},
     builtin_tool_specs, execute_tool_call,
     tasks::load_persisted_ui_task_snapshots,
@@ -216,6 +216,75 @@ fn emit_task_snapshot_if_available(event_sink: &PromptEventSink, task_dir: &Path
     if let Ok(tasks) = load_persisted_ui_task_snapshots(task_dir) {
         event_sink(PromptStreamEvent::TaskSnapshot { tasks });
     }
+}
+
+pub(crate) fn build_prompt_progress_callback(
+    config: &RuntimeConfig,
+    event_sink: &PromptEventSink,
+) -> Arc<ProgressCallback> {
+    let event_sink = event_sink.clone();
+    let task_dir = session_task_dir(config);
+    Arc::new(move |message: &str| {
+        let Some(event) = parse_delegate_progress_event(message) else {
+            return;
+        };
+        match event {
+            DelegateProgressEvent::SubtaskStarted {
+                task_id,
+                parent_task_id,
+                description,
+                depth,
+            } => {
+                event_sink(PromptStreamEvent::SubtaskStarted {
+                    task_id,
+                    parent_task_id,
+                    description,
+                    depth,
+                });
+                emit_task_snapshot_if_available(&event_sink, &task_dir);
+            }
+            DelegateProgressEvent::SubtaskProgress {
+                task_id,
+                turn,
+                max_turns,
+                summary,
+            } => {
+                event_sink(PromptStreamEvent::SubtaskProgress {
+                    task_id,
+                    turn,
+                    max_turns,
+                    summary,
+                });
+                emit_task_snapshot_if_available(&event_sink, &task_dir);
+            }
+            DelegateProgressEvent::SubtaskCompleted {
+                task_id,
+                success,
+                output_preview,
+                turns_used,
+            } => {
+                event_sink(PromptStreamEvent::SubtaskCompleted {
+                    task_id,
+                    success,
+                    output_preview,
+                    turns_used,
+                });
+                emit_task_snapshot_if_available(&event_sink, &task_dir);
+            }
+            DelegateProgressEvent::BatchProgress {
+                total,
+                completed,
+                running,
+            } => {
+                event_sink(PromptStreamEvent::BatchProgress {
+                    total,
+                    completed,
+                    running,
+                });
+                emit_task_snapshot_if_available(&event_sink, &task_dir);
+            }
+        }
+    })
 }
 
 fn build_streaming_callbacks(
@@ -472,15 +541,15 @@ pub(crate) fn initialize_conversation(
 pub(crate) async fn run_prompt(
     config: &RuntimeConfig,
     store: &SessionStore,
-    backend: &dyn ConversationBackend,
-    broker: &dyn PermissionBroker,
+    backend: Arc<dyn ConversationBackend>,
+    broker: Arc<dyn PermissionBroker>,
     event_sink: Option<PromptEventSink>,
     discovery: &RuntimeHookDiscovery,
     hook_state: &mut HookRunState,
     conversation: &mut Vec<ConversationEntry>,
     prompt: &str,
 ) -> Result<PromptRunOutcome> {
-    if event_sink.is_some() {
+    if env::var_os("REMOTE_CODE_FORCE_LEGACY_PROMPT_LOOP").is_some() {
         return run_prompt_legacy(
             config,
             store,
@@ -494,8 +563,18 @@ pub(crate) async fn run_prompt(
         )
         .await;
     }
-    run_prompt_with_query_engine_compat(config, store, discovery, hook_state, conversation, prompt)
-        .await
+    run_prompt_with_query_engine_compat(
+        config,
+        store,
+        backend,
+        broker,
+        event_sink,
+        discovery,
+        hook_state,
+        conversation,
+        prompt,
+    )
+    .await
 }
 
 #[allow(clippy::too_many_lines)]
@@ -503,8 +582,8 @@ pub(crate) async fn run_prompt(
 async fn run_prompt_legacy(
     config: &RuntimeConfig,
     store: &SessionStore,
-    backend: &dyn ConversationBackend,
-    broker: &dyn PermissionBroker,
+    backend: Arc<dyn ConversationBackend>,
+    broker: Arc<dyn PermissionBroker>,
     event_sink: Option<PromptEventSink>,
     discovery: &RuntimeHookDiscovery,
     hook_state: &mut HookRunState,
@@ -538,72 +617,9 @@ async fn run_prompt_legacy(
     store.append_conversation_entry(config.session_id, &user_entry)?;
     conversation.push(user_entry);
 
-    let task_dir = session_task_dir(config);
-    let progress_cb = event_sink.as_ref().map(|event_sink| {
-        let event_sink = event_sink.clone();
-        let task_dir = task_dir.clone();
-        Arc::new(move |message: &str| {
-            let Some(event) = parse_delegate_progress_event(message) else {
-                return;
-            };
-            match event {
-                DelegateProgressEvent::SubtaskStarted {
-                    task_id,
-                    parent_task_id,
-                    description,
-                    depth,
-                } => {
-                    event_sink(PromptStreamEvent::SubtaskStarted {
-                        task_id,
-                        parent_task_id,
-                        description,
-                        depth,
-                    });
-                    emit_task_snapshot_if_available(&event_sink, &task_dir);
-                }
-                DelegateProgressEvent::SubtaskProgress {
-                    task_id,
-                    turn,
-                    max_turns,
-                    summary,
-                } => {
-                    event_sink(PromptStreamEvent::SubtaskProgress {
-                        task_id,
-                        turn,
-                        max_turns,
-                        summary,
-                    });
-                    emit_task_snapshot_if_available(&event_sink, &task_dir);
-                }
-                DelegateProgressEvent::SubtaskCompleted {
-                    task_id,
-                    success,
-                    output_preview,
-                    turns_used,
-                } => {
-                    event_sink(PromptStreamEvent::SubtaskCompleted {
-                        task_id,
-                        success,
-                        output_preview,
-                        turns_used,
-                    });
-                    emit_task_snapshot_if_available(&event_sink, &task_dir);
-                }
-                DelegateProgressEvent::BatchProgress {
-                    total,
-                    completed,
-                    running,
-                } => {
-                    event_sink(PromptStreamEvent::BatchProgress {
-                        total,
-                        completed,
-                        running,
-                    });
-                    emit_task_snapshot_if_available(&event_sink, &task_dir);
-                }
-            }
-        }) as Arc<dyn Fn(&str) + Send + Sync>
-    });
+    let progress_cb = event_sink
+        .as_ref()
+        .map(|event_sink| build_prompt_progress_callback(config, event_sink));
 
     let tool_context = ToolExecutionContext {
         cwd: config.cwd.clone(),
@@ -818,7 +834,8 @@ async fn run_prompt_legacy(
                 // Capture tool execution errors as error tool results instead of
                 // propagating, to keep conversation state consistent for the next
                 // provider call.  This matches the TUI error-recovery pattern.
-                match execute_tool_call(&effective_tool_call, &tool_context, broker).await {
+                match execute_tool_call(&effective_tool_call, &tool_context, broker.as_ref()).await
+                {
                     Ok(result) => result,
                     Err(error) => {
                         let tool_name = effective_tool_call.name.clone();
@@ -940,14 +957,14 @@ pub(crate) async fn run_oneshot_text(
         Arc::new(rc_provider::ProviderClient::new()?),
         &config.provider,
     );
-    let broker = LayeredPermissionBroker::new(
+    let broker: Arc<dyn PermissionBroker> = Arc::new(LayeredPermissionBroker::new(
         StaticPermissionBroker::new(config.permission_mode),
         load_layered_rules(
             &config.cwd,
             &config.paths.profile_dir,
             &config.settings_files,
         )?,
-    );
+    ));
     let discovery = discover_runtime_hooks(config, &[]);
     let mut conversation = initialize_conversation(store, config, Some(&prompt))?;
     let mut hook_state = HookRunState::load(store, config.session_id)?;
@@ -962,8 +979,8 @@ pub(crate) async fn run_oneshot_text(
     let response = run_prompt(
         config,
         store,
-        &backend,
-        &broker,
+        Arc::new(backend),
+        broker,
         None,
         &discovery,
         &mut hook_state,

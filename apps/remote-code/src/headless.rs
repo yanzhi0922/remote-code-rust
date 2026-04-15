@@ -195,10 +195,11 @@ pub(crate) async fn run_headless(
     });
     let processor_event_tx = event_tx.clone();
     let processor = tokio::spawn(async move {
-        let backend = ProviderCompatBackend::new(
-            Arc::new(rc_provider::ProviderClient::new()?),
-            &processor_config.provider,
-        );
+        let backend: Arc<dyn crate::conversation_backend::ConversationBackend> =
+            Arc::new(ProviderCompatBackend::new(
+                Arc::new(rc_provider::ProviderClient::new()?),
+                &processor_config.provider,
+            ));
         let discovery = discover_runtime_hooks(&processor_config, &[]);
         let mut conversation = initialize_conversation(&processor_store, &processor_config, None)?;
         let mut hook_state = HookRunState::load(&processor_store, processor_config.session_id)?;
@@ -226,8 +227,8 @@ pub(crate) async fn run_headless(
             let result = run_prompt(
                 &processor_config,
                 &processor_store,
-                &backend,
-                processor_broker.as_ref(),
+                backend.clone(),
+                processor_broker.clone(),
                 Some(event_sink.clone()),
                 &discovery,
                 &mut hook_state,

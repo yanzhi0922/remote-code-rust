@@ -1,9 +1,9 @@
 # Remote Code Rust — 项目状态与路线图
 
 > 更新日期: 2026-04-15
-> 当前阶段: Phase 4 — Remote Beta Hardening
+> 当前阶段: Phase 4 — Remote Beta Hardening（并行推进 Claude parity compat / streaming hardening）
 > 代码规模: ~53,000 行 (Rust + TypeScript)
-> 当前验证基线: `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings` / `apps/remote-code-gui npm test` / `apps/remote-code-mobile npm test` / GUI & mobile build 全部通过
+> 当前验证基线: `cargo test -p remote-code` / `cargo test --workspace` 通过；MiniMax anthropic-compatible headless `--print` 与 `stream-json --include-partial-messages` 冒烟通过。GUI/mobile/clippy 维持上一轮稳定基线。
 
 ## Claude Parity Track
 
@@ -12,16 +12,16 @@
 - 已新增 `rc-transcript`、`rc-query-engine`，并升级 `rc-engine-events` 为“运行时兼容事件 + EngineEvent/EventStream”双层结构。
 - 已为 `rc-core` 补齐 v2 类型层（品牌 ID、Message 联合类型、AppState、Usage/Cost、扩展 hook 类型）。
 - 已为 `rc-session` 接入 transcript V2 兼容读写 API，保持现有 session/NDJSON 主路径稳定。
-- `rc-query-engine` 已补齐 host observer / checkpoint seam：`QueryObserver`、`QueryObserverEvent`、`QueryCheckpoint` 已进入主干，query loop 会向宿主发出 budget、context、assistant commit、tool batch、resume boundary 等生命周期事件。
-- `apps/remote-code` 已开始迁移到 app 层 compat adapter：新增 `query_engine_compat.rs`，当前目标是让 non-streaming prompt 路径通过 `rc-query-engine` 运行，同时由 app 层继续承担 transcript、named events、hook/tool side effects 与 resume state 映射。
-- `headless` 当前仍保持 legacy streaming loop，不与 compat cutover 混切；等 query engine 补齐 streaming provider seam 与等价事件粒度后再迁移。
-- 当前 Rust 工作区回归仍保持全绿：`cargo test --workspace` 通过。
+- `rc-query-engine` 已补齐 host observer / checkpoint seam 与 provider streaming seam：`QueryObserver`、`QueryObserverEvent`、`QueryCheckpoint`、`ProviderInvocationMode` 已进入主干；query loop 现可向宿主发出 `StreamingTextDelta`、`StreamingToolCallStarted`、`StreamingToolCallDelta`、`StreamingUsageUpdated`。
+- `apps/remote-code` 已继续推进到 app 层 compat adapter：`query_engine_compat.rs` 现已承接默认 prompt 主路径；当存在 `event_sink` 时，会显式启用 `rc-query-engine` 的 streaming provider mode，并把 streaming observer 事件翻译回 `PromptStreamEvent`。
+- `headless` 已不再停留在独立 legacy streaming loop；它通过 `run_prompt()` 进入 compat path，同时保留 `ChannelPermissionBroker` + `LayeredPermissionBroker` 的审批链路与现有 `stream-json` 协议输出。legacy prompt loop 仅作为 `REMOTE_CODE_FORCE_LEGACY_PROMPT_LOOP` 回退开关保留。
+- 当前 Rust 工作区回归已重新验证全绿：`cargo test -p remote-code`、`cargo test --workspace` 通过；MiniMax anthropic-compatible `--print` 与 `stream-json` 冒烟通过。
 
 当前执行焦点：
 
-- 收敛 `conversation.rs` 到 compat adapter façade，保留调用面稳定。
-- 用 observer/checkpoint seam 补全 app 宿主侧的落盘、事件转译和恢复边界。
-- 在 non-streaming 路径稳定后，再推进 headless streaming cutover，而不是提前混并执行链路。
+- 稳定 `conversation.rs -> query_engine_compat.rs -> rc-query-engine` 的默认 compat 主路径，并继续保留可控的 legacy escape hatch。
+- 用 observer/checkpoint 与 streaming observer seam 补全 app 宿主侧的落盘、事件转译、恢复边界与 headless runtime event fidelity。
+- 在默认 compat 主路径已经切换完成的前提下，继续做 headless / remote 事件保真、usage 透传和 legacy shim 收缩，而不是再把 headless cutover 作为前置阻塞项。
 
 ---
 

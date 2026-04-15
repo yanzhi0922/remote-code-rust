@@ -221,6 +221,7 @@ pub(crate) fn budget_stop_message(reason: impl Into<String>) -> Message {
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     use anyhow::{Result, anyhow};
@@ -235,7 +236,10 @@ mod tests {
     use tokio::sync::broadcast::Receiver;
 
     use super::QueryEngine;
-    use crate::config::{ProcessUserInputContext, QueryEngineConfig, ToolRunResult, ToolRunner};
+    use crate::config::{
+        ProcessUserInputContext, ProviderInvocationMode, QueryEngineConfig, ToolRunResult,
+        ToolRunner,
+    };
     use crate::observer::{QueryCheckpointKind, QueryObserver, QueryObserverEvent};
 
     struct DummyCompletion;
@@ -250,13 +254,48 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Clone)]
+    enum MockStreamingEvent {
+        TextDelta(&'static str),
+        ToolCallStart(&'static str, &'static str),
+        ToolCallDelta(&'static str, &'static str),
+        Usage(u64, u64),
+    }
+
     struct MockBackend {
         responses: Mutex<VecDeque<ProviderResponse>>,
+        stream_scripts: Mutex<VecDeque<Vec<MockStreamingEvent>>>,
+        complete_calls: AtomicUsize,
+        complete_streaming_calls: AtomicUsize,
+    }
+
+    impl MockBackend {
+        fn new(responses: Vec<ProviderResponse>) -> Self {
+            Self {
+                responses: Mutex::new(VecDeque::from(responses)),
+                stream_scripts: Mutex::new(VecDeque::new()),
+                complete_calls: AtomicUsize::new(0),
+                complete_streaming_calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn with_stream_scripts(
+            responses: Vec<ProviderResponse>,
+            stream_scripts: Vec<Vec<MockStreamingEvent>>,
+        ) -> Self {
+            Self {
+                responses: Mutex::new(VecDeque::from(responses)),
+                stream_scripts: Mutex::new(VecDeque::from(stream_scripts)),
+                complete_calls: AtomicUsize::new(0),
+                complete_streaming_calls: AtomicUsize::new(0),
+            }
+        }
     }
 
     #[async_trait]
     impl ConversationBackend for MockBackend {
         async fn complete(&self, _conversation: &[ConversationEntry]) -> Result<ProviderResponse> {
+            self.complete_calls.fetch_add(1, Ordering::SeqCst);
             self.responses
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -267,9 +306,46 @@ mod tests {
         async fn complete_streaming(
             &self,
             conversation: &[ConversationEntry],
-            _callbacks: Option<StreamingCallbacks>,
+            callbacks: Option<StreamingCallbacks>,
         ) -> Result<ProviderResponse> {
-            self.complete(conversation).await
+            self.complete_streaming_calls.fetch_add(1, Ordering::SeqCst);
+            if let Some(script) = self
+                .stream_scripts
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .pop_front()
+                && let Some(callbacks) = callbacks.as_ref()
+            {
+                for event in script {
+                    match event {
+                        MockStreamingEvent::TextDelta(delta) => {
+                            if let Some(callback) = callbacks.on_text_delta.as_ref() {
+                                callback(delta);
+                            }
+                        }
+                        MockStreamingEvent::ToolCallStart(tool_call_id, tool_name) => {
+                            if let Some(callback) = callbacks.on_tool_call_start.as_ref() {
+                                callback(tool_call_id, tool_name);
+                            }
+                        }
+                        MockStreamingEvent::ToolCallDelta(tool_call_id, delta) => {
+                            if let Some(callback) = callbacks.on_tool_call_delta.as_ref() {
+                                callback(tool_call_id, delta);
+                            }
+                        }
+                        MockStreamingEvent::Usage(input_tokens, output_tokens) => {
+                            if let Some(callback) = callbacks.on_usage.as_ref() {
+                                callback(input_tokens, output_tokens);
+                            }
+                        }
+                    }
+                }
+            }
+            self.responses
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .pop_front()
+                .ok_or_else(|| anyhow!("no more responses for streaming call {conversation:?}"))
         }
 
         fn sub_agent_completion(&self) -> Arc<dyn SubAgentCompletion> {
@@ -330,42 +406,40 @@ mod tests {
     async fn query_engine_completes_basic_tool_round_trip() {
         let session_id = SessionId::new();
         let observer = Arc::new(RecordingObserver::default());
-        let backend = Arc::new(MockBackend {
-            responses: Mutex::new(VecDeque::from([
-                ProviderResponse {
-                    text: String::new(),
-                    history_text: None,
-                    thinking: None,
-                    content_blocks: Vec::new(),
-                    tool_calls: vec![ToolCall {
-                        id: "tool-1".to_owned(),
-                        name: "bash_command".to_owned(),
-                        input: serde_json::json!({"command": "echo hi"}),
-                    }],
-                    usage: UsageSummary {
-                        input_tokens: 10,
-                        output_tokens: 5,
-                        cache_read_input_tokens: 0,
-                        cache_creation_input_tokens: 0,
-                    },
-                    stop_reason: "tool_use".to_owned(),
+        let backend = Arc::new(MockBackend::new(vec![
+            ProviderResponse {
+                text: String::new(),
+                history_text: None,
+                thinking: None,
+                content_blocks: Vec::new(),
+                tool_calls: vec![ToolCall {
+                    id: "tool-1".to_owned(),
+                    name: "bash_command".to_owned(),
+                    input: serde_json::json!({"command": "echo hi"}),
+                }],
+                usage: UsageSummary {
+                    input_tokens: 10,
+                    output_tokens: 5,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
                 },
-                ProviderResponse {
-                    text: "done".to_owned(),
-                    history_text: None,
-                    thinking: None,
-                    content_blocks: Vec::new(),
-                    tool_calls: Vec::new(),
-                    usage: UsageSummary {
-                        input_tokens: 3,
-                        output_tokens: 7,
-                        cache_read_input_tokens: 0,
-                        cache_creation_input_tokens: 0,
-                    },
-                    stop_reason: "end_turn".to_owned(),
+                stop_reason: "tool_use".to_owned(),
+            },
+            ProviderResponse {
+                text: "done".to_owned(),
+                history_text: None,
+                thinking: None,
+                content_blocks: Vec::new(),
+                tool_calls: Vec::new(),
+                usage: UsageSummary {
+                    input_tokens: 3,
+                    output_tokens: 7,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
                 },
-            ])),
-        });
+                stop_reason: "end_turn".to_owned(),
+            },
+        ]));
         let config = QueryEngineConfig::new(
             session_id.clone(),
             "mock-model",
@@ -460,9 +534,7 @@ mod tests {
     async fn query_engine_reports_budget_stop_to_observer_and_event_stream() {
         let session_id = SessionId::new();
         let observer = Arc::new(RecordingObserver::default());
-        let backend = Arc::new(MockBackend {
-            responses: Mutex::new(VecDeque::new()),
-        });
+        let backend = Arc::new(MockBackend::new(Vec::new()));
         let config = QueryEngineConfig::new(
             session_id.clone(),
             "mock-model",
@@ -519,25 +591,136 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn query_engine_emits_streaming_observer_events_when_opted_in() {
+        let session_id = SessionId::new();
+        let observer = Arc::new(RecordingObserver::default());
+        let backend = Arc::new(MockBackend::with_stream_scripts(
+            vec![
+                ProviderResponse {
+                    text: String::new(),
+                    history_text: None,
+                    thinking: None,
+                    content_blocks: Vec::new(),
+                    tool_calls: vec![ToolCall {
+                        id: "tool-1".to_owned(),
+                        name: "bash_command".to_owned(),
+                        input: serde_json::json!({"command": "echo hi"}),
+                    }],
+                    usage: UsageSummary {
+                        input_tokens: 10,
+                        output_tokens: 5,
+                        cache_read_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
+                    },
+                    stop_reason: "tool_use".to_owned(),
+                },
+                ProviderResponse {
+                    text: "done".to_owned(),
+                    history_text: None,
+                    thinking: None,
+                    content_blocks: Vec::new(),
+                    tool_calls: Vec::new(),
+                    usage: UsageSummary {
+                        input_tokens: 2,
+                        output_tokens: 4,
+                        cache_read_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
+                    },
+                    stop_reason: "end_turn".to_owned(),
+                },
+            ],
+            vec![
+                vec![
+                    MockStreamingEvent::ToolCallStart("tool-1", "bash_command"),
+                    MockStreamingEvent::ToolCallDelta("tool-1", "{\"command\":\"echo"),
+                    MockStreamingEvent::ToolCallDelta("tool-1", " hi\"}"),
+                    MockStreamingEvent::Usage(10, 5),
+                ],
+                vec![
+                    MockStreamingEvent::TextDelta("do"),
+                    MockStreamingEvent::TextDelta("ne"),
+                    MockStreamingEvent::Usage(2, 4),
+                ],
+            ],
+        ));
+        let config = QueryEngineConfig::new(
+            session_id.clone(),
+            "mock-model",
+            Arc::clone(&backend) as Arc<dyn ConversationBackend>,
+            Arc::new(MockToolRunner),
+            rc_engine_events::EventStream::new(32),
+        )
+        .with_observer(observer.clone())
+        .with_provider_invocation_mode(ProviderInvocationMode::Streaming);
+        let mut engine = QueryEngine::new(
+            config,
+            vec![rc_core::Message::from(ConversationEntry::system("sys"))],
+        );
+        let context =
+            ProcessUserInputContext::new(session_id, PermissionMode::Default, "mock-model");
+
+        let result = engine
+            .submit_message(
+                vec![rc_core::Message::from(ConversationEntry::user("hello"))],
+                context,
+            )
+            .await
+            .expect("streaming query should succeed");
+
+        assert_eq!(result.final_text.as_deref(), Some("done"));
+        assert_eq!(backend.complete_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(backend.complete_streaming_calls.load(Ordering::SeqCst), 2);
+
+        let observer_events = observer.snapshot();
+        assert!(observer_events.iter().any(|event| matches!(
+            event,
+            QueryObserverEvent::StreamingToolCallStarted {
+                tool_call_id,
+                tool_name,
+                ..
+            } if tool_call_id == "tool-1" && tool_name == "bash_command"
+        )));
+        assert!(observer_events.iter().any(|event| matches!(
+            event,
+            QueryObserverEvent::StreamingToolCallDelta {
+                tool_call_id,
+                delta,
+                ..
+            } if tool_call_id == "tool-1" && delta.contains("echo")
+        )));
+        assert!(observer_events.iter().any(|event| matches!(
+            event,
+            QueryObserverEvent::StreamingTextDelta {
+                delta,
+                accumulated_text,
+                ..
+            } if delta == "ne" && accumulated_text == "done"
+        )));
+        assert!(observer_events.iter().any(|event| matches!(
+            event,
+            QueryObserverEvent::StreamingUsageUpdated { usage, .. }
+                if usage.input_tokens == 2 && usage.output_tokens == 4
+        )));
+    }
+
+    #[tokio::test]
     async fn query_engine_emits_compaction_events_to_observer_and_stream() {
         let session_id = SessionId::new();
         let observer = Arc::new(RecordingObserver::default());
-        let backend = Arc::new(MockBackend {
-            responses: Mutex::new(VecDeque::from([ProviderResponse {
-                text: "done".to_owned(),
-                history_text: None,
-                thinking: None,
-                content_blocks: Vec::new(),
-                tool_calls: Vec::new(),
-                usage: UsageSummary {
-                    input_tokens: 1,
-                    output_tokens: 1,
-                    cache_read_input_tokens: 0,
-                    cache_creation_input_tokens: 0,
-                },
-                stop_reason: "end_turn".to_owned(),
-            }])),
-        });
+        let backend = Arc::new(MockBackend::new(vec![ProviderResponse {
+            text: "done".to_owned(),
+            history_text: None,
+            thinking: None,
+            content_blocks: Vec::new(),
+            tool_calls: Vec::new(),
+            usage: UsageSummary {
+                input_tokens: 1,
+                output_tokens: 1,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 0,
+            },
+            stop_reason: "end_turn".to_owned(),
+        }]));
         let mut config = QueryEngineConfig::new(
             session_id.clone(),
             "mock-model",

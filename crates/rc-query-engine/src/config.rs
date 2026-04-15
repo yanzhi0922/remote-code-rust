@@ -35,6 +35,15 @@ pub enum QuerySource {
     Agent,
 }
 
+/// Provider invocation mode for a compat query run.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderInvocationMode {
+    #[default]
+    Buffered,
+    Streaming,
+}
+
 /// Thinking/extended reasoning controls.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ThinkingConfig {
@@ -150,6 +159,7 @@ pub struct QueryEngineConfig {
     pub tool_runner: Arc<dyn ToolRunner>,
     pub observer: Arc<dyn QueryObserver>,
     pub event_stream: rc_engine_events::EventStream,
+    pub provider_invocation_mode: ProviderInvocationMode,
     pub max_turns: u32,
     pub context_manager: ContextWindowManager,
     pub failure_threshold: usize,
@@ -175,6 +185,7 @@ impl QueryEngineConfig {
             tool_runner,
             observer: Arc::new(NoopQueryObserver),
             event_stream,
+            provider_invocation_mode: ProviderInvocationMode::Buffered,
             max_turns: 8,
             failure_threshold: 3,
             metadata: Value::Null,
@@ -184,6 +195,12 @@ impl QueryEngineConfig {
     #[must_use]
     pub fn with_observer(mut self, observer: Arc<dyn QueryObserver>) -> Self {
         self.observer = observer;
+        self
+    }
+
+    #[must_use]
+    pub fn with_provider_invocation_mode(mut self, mode: ProviderInvocationMode) -> Self {
+        self.provider_invocation_mode = mode;
         self
     }
 }

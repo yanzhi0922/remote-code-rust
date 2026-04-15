@@ -6,12 +6,12 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use rc_config::{RuntimeConfig, validate_provider_config};
 use rc_core::{ConversationEntry, ConversationRole, Message, ToolCall, ToolResult};
-use rc_permissions::{LayeredPermissionBroker, StaticPermissionBroker, load_layered_rules};
+use rc_permissions::PermissionBroker;
 use rc_protocol::UsagePayload;
-use rc_provider::{ConversationBackend, ProviderCompatBackend};
+use rc_provider::ConversationBackend;
 use rc_query_engine::{
-    EffortLevel, ProcessUserInputContext, QueryCheckpointKind, QueryEngine, QueryEngineConfig,
-    QueryObserver, QueryObserverEvent, ToolRunResult, ToolRunner,
+    EffortLevel, ProcessUserInputContext, ProviderInvocationMode, QueryCheckpointKind, QueryEngine,
+    QueryEngineConfig, QueryObserver, QueryObserverEvent, ToolRunResult, ToolRunner,
 };
 use rc_session::SessionStore;
 use rc_session::resume_state::{PendingToolCall, ResumeState};
@@ -19,8 +19,8 @@ use rc_tools::{ToolExecutionContext, builtin_tool_specs, execute_tool_call};
 use tokio::sync::Mutex;
 
 use crate::conversation::{
-    PromptEventSink, PromptRunOutcome, PromptStreamEvent, discover_runtime_extensions,
-    truncate_preview,
+    PromptEventSink, PromptRunOutcome, PromptStreamEvent, build_prompt_progress_callback,
+    discover_runtime_extensions, truncate_preview,
 };
 use crate::hooks::{
     HookRunState, RuntimeHookDiscovery, apply_post_tool_hooks, apply_pre_tool_use_hooks,
@@ -29,6 +29,7 @@ use crate::hooks::{
 struct CompatSharedState {
     conversation: Mutex<Vec<ConversationEntry>>,
     hook_state: Mutex<HookRunState>,
+    streamed_tool_calls: Mutex<HashSet<String>>,
 }
 
 struct CompatObserver {
@@ -36,6 +37,20 @@ struct CompatObserver {
     store: Arc<SessionStore>,
     shared: Arc<CompatSharedState>,
     event_sink: Option<PromptEventSink>,
+    include_partial_messages: bool,
+}
+
+impl CompatObserver {
+    async fn mark_tool_started_if_new(&self, tool_call_id: &str) -> bool {
+        if tool_call_id.is_empty() {
+            return false;
+        }
+        self.shared
+            .streamed_tool_calls
+            .lock()
+            .await
+            .insert(tool_call_id.to_owned())
+    }
 }
 
 #[async_trait]
@@ -112,6 +127,46 @@ impl QueryObserver for CompatObserver {
                     });
                 }
             }
+            QueryObserverEvent::StreamingTextDelta { delta, .. } => {
+                if self.include_partial_messages
+                    && !delta.is_empty()
+                    && let Some(event_sink) = self.event_sink.as_ref()
+                {
+                    event_sink(PromptStreamEvent::MessageDelta { delta });
+                }
+            }
+            QueryObserverEvent::StreamingToolCallStarted {
+                tool_call_id,
+                tool_name,
+                ..
+            } => {
+                if !tool_name.is_empty()
+                    && self.mark_tool_started_if_new(&tool_call_id).await
+                    && let Some(event_sink) = self.event_sink.as_ref()
+                {
+                    event_sink(PromptStreamEvent::ToolStarted {
+                        tool_call_id,
+                        tool_name,
+                    });
+                }
+            }
+            QueryObserverEvent::StreamingToolCallDelta {
+                tool_call_id,
+                delta,
+                ..
+            } => {
+                if !tool_call_id.is_empty()
+                    && !delta.is_empty()
+                    && let Some(event_sink) = self.event_sink.as_ref()
+                {
+                    event_sink(PromptStreamEvent::ToolProgress {
+                        tool_call_id: Some(tool_call_id),
+                        delta: Some(delta),
+                        elapsed_time_seconds: None,
+                    });
+                }
+            }
+            QueryObserverEvent::StreamingUsageUpdated { .. } => {}
             QueryObserverEvent::AssistantMessageCommitted {
                 message,
                 stop_reason,
@@ -165,7 +220,10 @@ impl QueryObserver for CompatObserver {
                 }
             }
             QueryObserverEvent::ToolCallStarted { tool_call, .. } => {
-                if let Some(event_sink) = self.event_sink.as_ref() {
+                if !tool_call.name.is_empty()
+                    && self.mark_tool_started_if_new(&tool_call.id).await
+                    && let Some(event_sink) = self.event_sink.as_ref()
+                {
                     event_sink(PromptStreamEvent::ToolStarted {
                         tool_call_id: tool_call.id,
                         tool_name: tool_call.name,
@@ -207,7 +265,7 @@ struct CompatToolRunner {
     store: Arc<SessionStore>,
     discovery: RuntimeHookDiscovery,
     shared: Arc<CompatSharedState>,
-    broker: LayeredPermissionBroker<StaticPermissionBroker>,
+    broker: Arc<dyn PermissionBroker>,
     tool_context: ToolExecutionContext,
 }
 
@@ -254,7 +312,13 @@ impl ToolRunner for CompatToolRunner {
                 is_error: true,
             }
         } else {
-            match execute_tool_call(&effective_tool_call, &self.tool_context, &self.broker).await {
+            match execute_tool_call(
+                &effective_tool_call,
+                &self.tool_context,
+                self.broker.as_ref(),
+            )
+            .await
+            {
                 Ok(result) => result,
                 Err(error) => {
                     tracing::warn!(
@@ -370,6 +434,9 @@ impl ToolRunner for CompatToolRunner {
 pub(crate) async fn run_prompt_with_query_engine_compat(
     config: &RuntimeConfig,
     store: &SessionStore,
+    backend: Arc<dyn ConversationBackend>,
+    broker: Arc<dyn PermissionBroker>,
+    event_sink: Option<PromptEventSink>,
     discovery: &RuntimeHookDiscovery,
     hook_state: &mut HookRunState,
     conversation: &mut Vec<ConversationEntry>,
@@ -408,38 +475,31 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
     conversation.push(user_entry);
 
     let compat_store = Arc::new(SessionStore::open(config.paths.clone())?);
-    let backend = Arc::new(ProviderCompatBackend::new(
-        Arc::new(rc_provider::ProviderClient::new()?),
-        &config.provider,
-    ));
     let shared = Arc::new(CompatSharedState {
         conversation: Mutex::new(conversation.clone()),
         hook_state: Mutex::new(std::mem::take(hook_state)),
+        streamed_tool_calls: Mutex::new(HashSet::new()),
     });
     let observer = Arc::new(CompatObserver {
         config: config.clone(),
         store: compat_store.clone(),
         shared: shared.clone(),
-        event_sink: None,
+        event_sink: event_sink.clone(),
+        include_partial_messages: config.include_partial_messages,
     });
     let tool_runner = Arc::new(CompatToolRunner {
         config: config.clone(),
         store: compat_store.clone(),
         discovery: discovery.clone(),
         shared: shared.clone(),
-        broker: LayeredPermissionBroker::new(
-            StaticPermissionBroker::new(config.permission_mode),
-            load_layered_rules(
-                &config.cwd,
-                &config.paths.profile_dir,
-                &config.settings_files,
-            )?,
-        ),
+        broker,
         tool_context: ToolExecutionContext {
             cwd: config.cwd.clone(),
             timeout_ms: config.provider.timeout_ms,
             sub_agent: Some(backend.sub_agent_completion()),
-            progress_cb: None,
+            progress_cb: event_sink
+                .as_ref()
+                .map(|event_sink| build_prompt_progress_callback(config, event_sink)),
             task_stack: Arc::new(std::sync::Mutex::new(
                 rc_core::task_stack::TaskStack::default(),
             )),
@@ -471,6 +531,10 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
         rc_engine_events::EventStream::new(64),
     )
     .with_observer(observer);
+    if event_sink.is_some() {
+        query_config =
+            query_config.with_provider_invocation_mode(ProviderInvocationMode::Streaming);
+    }
     query_config.max_turns = u32::try_from(config.max_turns).unwrap_or(u32::MAX);
 
     let mut engine = QueryEngine::new(query_config, existing_messages);
@@ -649,14 +713,23 @@ fn message_kind(message: &Message) -> &'static str {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex as StdMutex};
 
+    use anyhow::Result;
     use rc_config::{ProviderOverrides, RuntimeConfig, RuntimeOverrides, load_runtime_config};
-    use rc_core::{ConversationRole, InputFormat, OutputFormat, PermissionMode, ProviderProtocol};
+    use rc_core::{
+        ConversationEntry, ConversationRole, InputFormat, OutputFormat, PermissionMode,
+        ProviderProtocol, ProviderResponse, SubAgentCompletion, ToolCall, UsageSummary,
+    };
+    use rc_permissions::{LayeredPermissionBroker, PermissionBroker, StaticPermissionBroker};
+    use rc_provider::{ConversationBackend, ProviderCompatBackend, StreamingCallbacks};
+    use rc_query_engine::{QueryObserver, QueryObserverEvent};
     use rc_session::SessionStore;
     use tempfile::{TempDir, tempdir};
 
-    use super::run_prompt_with_query_engine_compat;
-    use crate::conversation::initialize_conversation;
+    use super::{CompatObserver, CompatSharedState, run_prompt_with_query_engine_compat};
+    use crate::conversation::{PromptEventSink, PromptStreamEvent, initialize_conversation};
     use crate::hooks::{HookRunState, RuntimeHookDiscovery};
 
     fn mock_config_and_store() -> (TempDir, RuntimeConfig, SessionStore) {
@@ -692,6 +765,85 @@ mod tests {
         (tempdir, config, store)
     }
 
+    fn mock_broker(config: &RuntimeConfig) -> Arc<dyn PermissionBroker> {
+        Arc::new(LayeredPermissionBroker::new(
+            StaticPermissionBroker::new(config.permission_mode),
+            Vec::new(),
+        ))
+    }
+
+    fn mock_provider_backend(config: &RuntimeConfig) -> Arc<dyn ConversationBackend> {
+        Arc::new(ProviderCompatBackend::new(
+            Arc::new(rc_provider::ProviderClient::new().expect("provider client")),
+            &config.provider,
+        ))
+    }
+
+    struct DummySubAgentCompletion;
+
+    #[async_trait::async_trait]
+    impl SubAgentCompletion for DummySubAgentCompletion {
+        async fn complete(&self, _conversation: &[ConversationEntry]) -> Result<ProviderResponse> {
+            Ok(ProviderResponse {
+                text: "subagent".to_owned(),
+                history_text: None,
+                thinking: None,
+                content_blocks: Vec::new(),
+                tool_calls: Vec::new(),
+                usage: UsageSummary::default(),
+                stop_reason: "end_turn".to_owned(),
+            })
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingStreamingBackend {
+        complete_calls: AtomicUsize,
+        complete_streaming_calls: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl ConversationBackend for RecordingStreamingBackend {
+        async fn complete(&self, _conversation: &[ConversationEntry]) -> Result<ProviderResponse> {
+            self.complete_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(ProviderResponse {
+                text: "buffered".to_owned(),
+                history_text: None,
+                thinking: None,
+                content_blocks: Vec::new(),
+                tool_calls: Vec::new(),
+                usage: UsageSummary::default(),
+                stop_reason: "end_turn".to_owned(),
+            })
+        }
+
+        async fn complete_streaming(
+            &self,
+            _conversation: &[ConversationEntry],
+            callbacks: Option<StreamingCallbacks>,
+        ) -> Result<ProviderResponse> {
+            self.complete_streaming_calls.fetch_add(1, Ordering::SeqCst);
+            if let Some(callbacks) = callbacks
+                && let Some(on_text_delta) = callbacks.on_text_delta.as_ref()
+            {
+                on_text_delta("streaming-backend");
+            }
+            Ok(ProviderResponse {
+                text: "streaming-backend".to_owned(),
+                history_text: None,
+                thinking: None,
+                content_blocks: Vec::new(),
+                tool_calls: Vec::new(),
+                usage: UsageSummary::default(),
+                stop_reason: "end_turn".to_owned(),
+            })
+        }
+
+        fn sub_agent_completion(&self) -> Arc<dyn SubAgentCompletion> {
+            Arc::new(DummySubAgentCompletion)
+        }
+    }
+
     #[tokio::test]
     async fn compat_run_persists_basic_mock_result() {
         let (_tempdir, config, store) = mock_config_and_store();
@@ -703,6 +855,9 @@ mod tests {
         let outcome = run_prompt_with_query_engine_compat(
             &config,
             &store,
+            mock_provider_backend(&config),
+            mock_broker(&config),
+            None,
             &discovery,
             &mut hook_state,
             &mut conversation,
@@ -742,6 +897,9 @@ mod tests {
         let outcome = run_prompt_with_query_engine_compat(
             &config,
             &store,
+            mock_provider_backend(&config),
+            mock_broker(&config),
+            None,
             &discovery,
             &mut hook_state,
             &mut conversation,
@@ -763,5 +921,144 @@ mod tests {
         assert!(resume_state.pending_tool_calls.is_empty());
         let events = store.load_events(config.session_id).expect("events");
         assert!(events.iter().any(|event| event.event_type == "tool_result"));
+    }
+
+    #[tokio::test]
+    async fn compat_observer_translates_streaming_events_without_duplicate_tool_started() {
+        let (_tempdir, config, _store) = mock_config_and_store();
+        let captured = Arc::new(StdMutex::new(Vec::<PromptStreamEvent>::new()));
+        let captured_sink = Arc::clone(&captured);
+        let event_sink: PromptEventSink = Arc::new(move |event| {
+            captured_sink
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(event);
+        });
+        let observer = CompatObserver {
+            config: config.clone(),
+            store: Arc::new(SessionStore::open(config.paths.clone()).expect("store")),
+            shared: Arc::new(CompatSharedState {
+                conversation: tokio::sync::Mutex::new(Vec::new()),
+                hook_state: tokio::sync::Mutex::new(HookRunState::default()),
+                streamed_tool_calls: tokio::sync::Mutex::new(std::collections::HashSet::new()),
+            }),
+            event_sink: Some(event_sink),
+            include_partial_messages: true,
+        };
+
+        observer
+            .on_event(QueryObserverEvent::StreamingToolCallStarted {
+                turn: 1,
+                tool_call_id: "tool-1".to_owned(),
+                tool_name: "bash_command".to_owned(),
+            })
+            .await
+            .expect("streaming tool start");
+        observer
+            .on_event(QueryObserverEvent::ToolCallStarted {
+                turn: 1,
+                batch_size: 1,
+                batch_index: 0,
+                tool_call: ToolCall {
+                    id: "tool-1".to_owned(),
+                    name: "bash_command".to_owned(),
+                    input: serde_json::json!({"command": "echo hi"}),
+                },
+            })
+            .await
+            .expect("buffered tool start");
+        observer
+            .on_event(QueryObserverEvent::StreamingToolCallDelta {
+                turn: 1,
+                tool_call_id: "tool-1".to_owned(),
+                delta: "{\"command\":\"echo hi\"}".to_owned(),
+            })
+            .await
+            .expect("streaming tool delta");
+        observer
+            .on_event(QueryObserverEvent::StreamingTextDelta {
+                turn: 1,
+                delta: "OK".to_owned(),
+                accumulated_text: "OK".to_owned(),
+            })
+            .await
+            .expect("streaming text delta");
+
+        let events = captured
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(
+                    event,
+                    PromptStreamEvent::ToolStarted { tool_call_id, tool_name }
+                        if tool_call_id == "tool-1" && tool_name == "bash_command"
+                ))
+                .count(),
+            1
+        );
+        assert!(events.iter().any(|event| matches!(
+            event,
+            PromptStreamEvent::ToolProgress {
+                tool_call_id: Some(tool_call_id),
+                delta: Some(delta),
+                elapsed_time_seconds: None,
+            } if tool_call_id == "tool-1" && delta.contains("echo hi")
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            PromptStreamEvent::MessageDelta { delta } if delta == "OK"
+        )));
+    }
+
+    #[tokio::test]
+    async fn compat_run_reuses_caller_backend_for_streaming_event_sink_path() {
+        let (_tempdir, mut config, store) = mock_config_and_store();
+        config.include_partial_messages = true;
+        let discovery = RuntimeHookDiscovery::default();
+        let mut conversation =
+            initialize_conversation(&store, &config, Some("streaming")).expect("conversation");
+        let mut hook_state = HookRunState::load(&store, config.session_id).expect("hook state");
+        let backend = Arc::new(RecordingStreamingBackend::default());
+        let captured = Arc::new(StdMutex::new(Vec::<PromptStreamEvent>::new()));
+        let captured_sink = Arc::clone(&captured);
+        let event_sink: PromptEventSink = Arc::new(move |event| {
+            captured_sink
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(event);
+        });
+
+        let outcome = run_prompt_with_query_engine_compat(
+            &config,
+            &store,
+            backend.clone(),
+            mock_broker(&config),
+            Some(event_sink),
+            &discovery,
+            &mut hook_state,
+            &mut conversation,
+            "streaming",
+        )
+        .await
+        .expect("compat streaming run should succeed");
+
+        assert_eq!(outcome.text, "streaming-backend");
+        assert_eq!(backend.complete_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(backend.complete_streaming_calls.load(Ordering::SeqCst), 1);
+        let events = captured
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            PromptStreamEvent::MessageDelta { delta } if delta == "streaming-backend"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            PromptStreamEvent::MessageCommitted { text } if text == "streaming-backend"
+        )));
     }
 }

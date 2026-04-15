@@ -1,12 +1,19 @@
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
+
 use anyhow::{Result, anyhow};
 use rc_core::{ConversationEntry, Message, ToolResult};
 use rc_engine_events::{
     CompactionResult, EngineEvent, EngineStateSnapshot, ToolError, ToolResult as EventToolResult,
     Usage,
 };
+use rc_provider::StreamingCallbacks;
 use serde_json::json;
+use tokio::sync::mpsc;
 
-use crate::config::{ProcessUserInputContext, QueryEngineConfig, ToolRunResult};
+use crate::config::{
+    ProcessUserInputContext, ProviderInvocationMode, QueryEngineConfig, ToolRunResult,
+};
 use crate::engine::{
     EngineError, EngineState, QueryResult, assistant_message_from_response, budget_stop_message,
     tool_result_message, usage_from_accumulator,
@@ -89,14 +96,18 @@ pub async fn run_query_loop(
         let mut legacy_conversation = state.legacy_conversation();
         maybe_compact_conversation(config, state, &mut legacy_conversation).await;
 
-        let response = config
-            .backend
-            .complete(&legacy_conversation)
-            .await
-            .map_err(|error| {
-                state.consecutive_failures += 1;
-                EngineError::Other(error)
-            })?;
+        let response = if matches!(
+            config.provider_invocation_mode,
+            ProviderInvocationMode::Streaming
+        ) {
+            complete_with_streaming_observer(config, &legacy_conversation, state.turn + 1).await
+        } else {
+            config.backend.complete(&legacy_conversation).await
+        }
+        .map_err(|error| {
+            state.consecutive_failures += 1;
+            EngineError::Other(error)
+        })?;
         state.consecutive_failures = 0;
         state.turn += 1;
         state.usage.record_summary(&response.usage);
@@ -358,6 +369,104 @@ fn checkpoints_for_tool_batch(
             state.messages.len(),
         ),
     ]
+}
+
+async fn complete_with_streaming_observer(
+    config: &QueryEngineConfig,
+    conversation: &[ConversationEntry],
+    turn: u32,
+) -> anyhow::Result<rc_core::ProviderResponse> {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let observer = Arc::clone(&config.observer);
+    let forwarder = tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            let _ = observer.on_event(event).await;
+        }
+    });
+
+    let response = config
+        .backend
+        .complete_streaming(
+            conversation,
+            Some(build_streaming_callbacks(tx.clone(), turn)),
+        )
+        .await;
+
+    drop(tx);
+    let _ = forwarder.await;
+    response
+}
+
+fn build_streaming_callbacks(
+    tx: mpsc::UnboundedSender<QueryObserverEvent>,
+    turn: u32,
+) -> StreamingCallbacks {
+    let accumulated_text = Arc::new(Mutex::new(String::new()));
+    let started_tool_calls = Arc::new(Mutex::new(HashSet::<String>::new()));
+
+    let text_tx = tx.clone();
+    let text_accumulated = Arc::clone(&accumulated_text);
+    let on_text_delta = Box::new(move |delta: &str| {
+        let accumulated_text = {
+            let mut accumulated = text_accumulated
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            accumulated.push_str(delta);
+            accumulated.clone()
+        };
+        let _ = text_tx.send(QueryObserverEvent::StreamingTextDelta {
+            turn,
+            delta: delta.to_owned(),
+            accumulated_text,
+        });
+    });
+
+    let tool_start_tx = tx.clone();
+    let tool_started = Arc::clone(&started_tool_calls);
+    let on_tool_call_start = Box::new(move |tool_call_id: &str, tool_name: &str| {
+        let should_emit = {
+            let mut started = tool_started
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            started.insert(tool_call_id.to_owned())
+        };
+        if should_emit {
+            let _ = tool_start_tx.send(QueryObserverEvent::StreamingToolCallStarted {
+                turn,
+                tool_call_id: tool_call_id.to_owned(),
+                tool_name: tool_name.to_owned(),
+            });
+        }
+    });
+
+    let tool_delta_tx = tx.clone();
+    let on_tool_call_delta = Box::new(move |tool_call_id: &str, delta: &str| {
+        let _ = tool_delta_tx.send(QueryObserverEvent::StreamingToolCallDelta {
+            turn,
+            tool_call_id: tool_call_id.to_owned(),
+            delta: delta.to_owned(),
+        });
+    });
+
+    let on_usage = Box::new(move |input_tokens: u64, output_tokens: u64| {
+        let _ = tx.send(QueryObserverEvent::StreamingUsageUpdated {
+            turn,
+            usage: Usage {
+                input_tokens,
+                output_tokens,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+                total_tokens: input_tokens + output_tokens,
+            },
+        });
+    });
+
+    StreamingCallbacks {
+        on_text_delta: Some(on_text_delta),
+        on_tool_call_start: Some(on_tool_call_start),
+        on_tool_call_delta: Some(on_tool_call_delta),
+        on_usage: Some(on_usage),
+    }
 }
 
 #[allow(dead_code)]
