@@ -30,6 +30,7 @@
 - 当前 tranche 也已补上安全的 request continuity 基础设施：[`rc-config`](../crates/rc-config/src/lib.rs) 会生成可扩展的 `request_metadata`；[`rc-provider`](../crates/rc-provider/src/lib.rs) / [`streaming.rs`](../crates/rc-provider/src/streaming.rs) 会在 Anthropic-compatible 请求中写入 `metadata.user_id`，并从 OpenAI / Anthropic 的 buffered 与 streaming 响应中提取 `request_id`；[`apps/remote-code/src/query_engine_compat.rs`](../apps/remote-code/src/query_engine_compat.rs) 会把该 `request_id` 持久化到 `assistant_turn` / `result` / `model_usage`。
 - 相关回归测试已补齐：provider 侧新增 `metadata.user_id` 编码与 `request_id` 解析测试；compat 侧新增 `mock-request-id` 持久化断言；当前 `cargo test -p rc-provider`、`cargo test -p remote-code`、`cargo test --workspace` 全部通过。
 - 当前 tranche 也已继续把启动期 settings/auth/source-policy 往主干推进：[`rc-config`](../crates/rc-config/src/settings_layers.rs) 在未显式传 `--settings` 时会自动发现 `legacy-import -> profile -> workspace -> local` 四层 runtime settings，并将其装配进 runtime config；显式 `--settings` 仍保持权威优先级并关闭自动发现；`--setting-sources` 也已可把 startup discovery 收窄到 `user/project/local` 指定范围。更关键的是，这个 source policy 现在不再只停留在 settings 层：[`apps/remote-code/src/hooks.rs`](../apps/remote-code/src/hooks.rs)、[`apps/remote-code/src/runtime_hooks.rs`](../apps/remote-code/src/runtime_hooks.rs)、[`apps/remote-code/src/conversation.rs`](../apps/remote-code/src/conversation.rs)、[`apps/remote-code/src/mcp_cli.rs`](../apps/remote-code/src/mcp_cli.rs) 都已接入统一 gating，因此 runtime hooks、doctor/headless 的 hook 统计、runtime extensions，以及 `mcp list/get/call/serve` 的隐式配置发现都会 obey 同一套 `allowed_setting_sources`。本轮又继续把剩余启动期可见面往同一语义收口：`skills_cli`、TUI `/skills`、TUI `/mcp`、TUI `/plugins`、GUI doctor、GUI MCP list 已补齐对应 gating，不再绕过 `config.allowed_setting_sources` 直接统计 user/project 侧 skills、plugins、managed MCP、plugin MCP 或对应 scope 的 MCP 列表；同时插件可见性也已进一步分层：默认 runtime discovery 会跳过带 `.remote-code-disabled` marker 的插件，避免 disabled 插件继续参与 runtime hooks / runtime extensions / skills / plugin MCP 等启动期 surface，但 `/plugins`、TUI `/plugins`、GUI doctor 等管理面仍保留 disabled 插件可见性，并把 disabled 与 enabled 统计分离；其中 `plugins --connect` / `plugins inspect` 对 disabled 插件会显式跳过 runtime inspection，`plugins invoke` 则直接拒绝执行。`first_run_wizard` 也已从“旁路 profile JSON 写盘”收口到 active settings 语义：它现在会写出与 `rc-config` loader 一致的嵌套 provider schema，优先写入 explicit `--settings` target，否则按当前允许的 local -> project -> user precedence 选择 settings 文件，并在当前进程里同步更新 normalized base URL、`auth_source`、`settings_files` 与 `setting_sources`。共享 runtime status / UI snapshot / doctor runtime 也已开始显式暴露 `allowed_setting_sources`，`--show-setting-sources`、CLI doctor text、TUI `/status`、GUI OperationsTab 现在也会把 `settings_files` 与 disabled plugin 统计一并展示，便于解释某些 surface 为什么被 source policy、explicit settings mode 或 disabled marker 隐藏。[`apps/remote-code/src/headless.rs`](../apps/remote-code/src/headless.rs) 与 runtime status 现也会直接复用解析后的 `auth_source` / `setting_sources`，同时 provider-aware env auth/source 识别已扩展到 MiniMax / GLM / 腾讯 / 百炼等现有路径。本轮又把 MCP startup/runtime discovery plan 进一步收口到共享主干：runtime MCP inventory/resolve 契约现已正式沉到 [`crates/rc-tools/src/mcp_runtime.rs`](../crates/rc-tools/src/mcp_runtime.rs)，`mcp_cli`、`discover_runtime_extensions()`、headless init、CLI doctor，以及 GUI 进程内 `ToolRuntimePolicy` 注入都会复用同一份运行时 inventory；startup surfaces 只暴露 enabled MCP 名称，doctor 同时显式统计 disabled MCP 数量，并新增 config-path 去重与显式路径 warning 的回归测试。随后又把工具执行面最明显的绕路彻底收口：[`crates/rc-tools/src/mcp_tools.rs`](../crates/rc-tools/src/mcp_tools.rs) 的内置 `mcp_call` 已改成只消费 runtime policy 注入的共享 MCP inventory，没有 inventory 会直接报错，disabled/ambiguous server 也会被拒绝；并新增缺失 inventory、disabled server、重名歧义三类回归测试。在此基础上，本轮又把共享 runtime MCP inventory 明确接入到共享 status 面：[`crates/rc-ui-bridge/src/lib.rs`](../crates/rc-ui-bridge/src/lib.rs) 的 `UiRuntimeStatusSnapshot`、[`apps/remote-code/src/status.rs`](../apps/remote-code/src/status.rs) 的 CLI `status`，以及 GUI 运行时状态桥接现在都会带上 `mcp` inventory summary（至少 `total/enabled/disabled/ambiguous/warnings` 与 `cwd/profile/explicit/plugin` 来源计数）；[`apps/remote-code-gui/src/components/layout/McpTab.tsx`](../apps/remote-code-gui/src/components/layout/McpTab.tsx) 也新增了与 managed-config CRUD 分层的 `Runtime-discovered inventory` 只读视图，用来展示当前进程真实纳入 runtime policy 的 server、来源与可选 live inspection，并补了 GUI 侧“runtime inventory 加载失败不拖垮 managed MCP 管理面”的回归测试。这表明启动期 settings/auth source 分层已经前进一步，但还不等价于官方 startup parity 已完成：按 `.research/claude-code-rev` 暴露的行为矩阵，后续仍需继续补 runtime inventory 的连接状态/生命周期、interactive 非阻塞与 headless eager-init 分叉、plugin cache / external plugin fetch、MCP preconnect、完整 source precedence matrix，以及 GUI 侧从 inventory parity 走向真正 lifecycle parity 的后续切片。
+- 新 tranche 又继续把“runtime inventory parity”推进到真正的跨-surface observability 收口：[`crates/rc-ui-bridge/src/lib.rs`](../crates/rc-ui-bridge/src/lib.rs) 现已为 shared MCP summary 补齐 canonical `status_counts`（`connected / failed / needs-auth / pending / disabled`）；[`apps/remote-code/src/doctor/checks.rs`](../apps/remote-code/src/doctor/checks.rs) 与 [`apps/remote-code/src/doctor/mod.rs`](../apps/remote-code/src/doctor/mod.rs) 现已新增 read-only `MCP Runtime` section，并通过 `--probe-mcp` 复用 [`crates/rc-tools/src/mcp_runtime.rs`](../crates/rc-tools/src/mcp_runtime.rs) 的 `observe_runtime_mcp_servers(...)` 输出 connect-aware summary/server rows；[`apps/remote-code-gui/src-tauri/src/lib.rs`](../apps/remote-code-gui/src-tauri/src/lib.rs) 的 GUI doctor 与 GUI runtime inventory 也已停止各自直接 `discover + inspect + fake pending/disabled`，转而统一消费同一份 shared observation，并把 `status_counts` 暴露给 [`apps/remote-code-gui/src/components/layout/OperationsTab.tsx`](../apps/remote-code-gui/src/components/layout/OperationsTab.tsx) / [`apps/remote-code-gui/src/components/layout/McpTab.tsx`](../apps/remote-code-gui/src/components/layout/McpTab.tsx)；[`crates/rc-tui/src/commands/mcp.rs`](../crates/rc-tui/src/commands/mcp.rs) 与 [`crates/rc-tui/src/commands/status.rs`](../crates/rc-tui/src/commands/status.rs) 也已改为复用共享 runtime discovery/summary，不再自建一套 MCP 发现逻辑。这个 tranche 明确只做 runtime observability parity，而不伪造官方 lifecycle 细节：`needs-auth` 虽然已进入共享类型/计数，但在缺少真实 auth/OAuth 证据时仍不会被伪造；preconnect/reconnect/OAuth/elicitation 仍属于后续 MCP lifecycle tranche。
 
 这意味着 Phase 1 的契约冻结与 Phase 2 的最小可运行引擎都已进入主干骨架阶段；当前主线重点已经从“搭骨架”进入“默认 compat + parity hardening”：
 
@@ -2918,3 +2919,1928 @@ crates/rc-context/src/
 - [ ] **会话恢复**: 崩溃后可恢复会话
 - [ ] **性能**: 10,000 消息长对话不卡顿
 - [ ] **测试覆盖**: 单元测试 > 80%，集成测试覆盖所有关键路径
+
+---
+
+## 21. 全量覆盖差距清单（基于 `.research/claude-code-rev` 完整逆向分析）
+
+> **分析日期**: 2026-04-15
+> **分析范围**: `.research/claude-code-rev` 全量源码（2,048 文件，~200,000 行 TS/TSX）
+> **对比基准**: `remote-code-rust` 当前 `main` 分支（~53,000 行 Rust + TypeScript）
+> **结论**: 工具层面覆盖度约 85%，系统提示词约 15%，命令体系约 35%，高级运行时特性约 20%
+
+---
+
+### 21.1 缺失工具（Tool Gap Analysis）
+
+#### 21.1.1 完全缺失的工具
+
+| # | Claude Code 工具 | 源码位置 | 功能描述 | 优先级 | remote-code 状态 |
+|---|-----------------|---------|---------|--------|-----------------|
+| 1 | `TaskOutputTool` | `src/tools/TaskOutputTool/` | 获取已完成异步 agent 的输出结果；是 agent 结果回传机制的核心——coordinator 模式下 worker 完成后通过此工具获取结果 | 🔴 P0 | ❌ 完全缺失 |
+| 2 | `TeamDeleteTool` | `src/tools/TeamDeleteTool/` | 删除多代理团队；coordinator 模式下清理团队资源 | 🟡 P1 | ❌ 完全缺失（仅有 `team_create` 和 `team_status`） |
+| 3 | `DiscoverSkillsTool` | `src/tools/DiscoverSkillsTool/` | 智能技能搜索（BM25 + embedding 向量搜索），远超简单 `skill_discover` 的目录扫描；支持按任务描述动态发现相关技能 | 🔴 P0 | ❌ 完全缺失（现有 `skill_discover` 仅做目录扫描） |
+| 4 | `SendUserFileTool` | `src/tools/SendUserFileTool/` | 向用户发送文件（日志、截图、导出数据等）；远程模式下用户无法直接访问文件系统时的关键工具 | 🟡 P1 | ❌ 完全缺失 |
+| 5 | `ReviewArtifactTool` | `src/tools/ReviewArtifactTool/` | 审查远程架构中的 artifact；远程审批流的关键工具 | 🟡 P1 | ❌ 完全缺失 |
+| 6 | `BriefTool` | `src/tools/BriefTool/` | Brief 模式下的输出控制工具；Kairos feature flag 控制，用于自主/简报模式下的输出截断 | 🟡 P1 | ❌ 完全缺失（现有 `brief` 工具仅做内容截断，不是模式控制） |
+| 7 | `VerifyPlanExecutionTool` | `src/tools/VerifyPlanExecutionTool/` | Agent 级别的计划验证工具；与现有 `verify_plan` 不同，这是 agent 系统内部的验证机制 | 🟡 P1 | ❌ 完全缺失 |
+| 8 | `ConfigTool` | `src/tools/ConfigTool/` | 运行时配置读写工具；允许 agent 在对话中读取和修改运行时配置 | 🟡 P1 | 🟡 部分覆盖（现有 `config_read` 仅支持 get/set，缺少完整 config schema） |
+
+#### 21.1.2 已有但功能不完整的工具
+
+| # | 工具 | 当前状态 | 缺失能力 |
+|---|------|---------|---------|
+| 1 | `agent` | 基础 sub-agent | ❌ 缺少 `subagent_type` 参数（worker/explore/plan/verification）；❌ 缺少 fork 模式（后台执行，不污染主上下文）；❌ 缺少 `model` 参数；❌ 缺少 agent 结果的 `task-notification` XML 格式 |
+| 2 | `bash_command` | 基础 shell 执行 | ❌ 缺少 tool result 持久化（大输出写磁盘，模型只收预览）；❌ 缺少 per-message budget 限制（`MAX_TOOL_RESULTS_PER_MESSAGE_CHARS = 200,000`）；❌ 缺少 `DEFAULT_MAX_RESULT_SIZE_CHARS = 50,000` 截断 |
+| 3 | `send_message` | 基础消息发送 | ❌ 缺少与 coordinator 模式的集成（`to` 字段应为 agent ID）；❌ 缺少 `team_create`/`team_delete` 的团队消息路由 |
+| 4 | `skill_execute` | 基础技能执行 | ❌ 缺少 user-invocable skill 的 `/skill-name` 快捷方式映射；❌ 缺少 skill argument 传递的完整 schema |
+| 5 | `mcp_call` | 基础 MCP 调用 | ❌ 缺少 MCP tool 的 deferred schema 注入；❌ 缺少 MCP server 的 OAuth 认证流程；❌ 缺少 Elicitation 处理 |
+| 6 | `enter_plan_mode` / `exit_plan_mode` | 基础计划模式 | ❌ 缺少 plan mode 下的 read-only 强制执行；❌ 缺少 plan 文件持久化 |
+| 7 | `enter_worktree` / `exit_worktree` | 基础 worktree | ❌ 缺少 worktree session 隔离；❌ 缺少 worktree 与主仓库的路径映射 |
+| 8 | `sleep` | 基础 sleep | ❌ 最大 30 秒限制过短（Claude Code proactive 模式需要更长 sleep）；❌ 缺少与 proactive tick 的集成 |
+
+---
+
+### 21.2 系统提示词缺失（System Prompt Gap Analysis）
+
+这是**最大的差距**。Claude Code 的 [`getSystemPrompt()`](.research/claude-code-rev/src/constants/prompts.ts:444) 构建了一个约 915 行的模块化提示词系统，remote-code **完全没有等价的系统提示词组装机制**。
+
+#### 21.2.1 Claude Code 系统提示词完整结构
+
+Claude Code 的系统提示词由以下段落组成，每个段落都是独立计算的：
+
+| # | 段落名称 | 源码函数 | 内容摘要 | 优先级 | remote-code 状态 |
+|---|---------|---------|---------|--------|-----------------|
+| 1 | **Intro** | `getSimpleIntroSection()` | "You are an interactive agent that helps users with software engineering tasks." + Cyber Risk Instruction + URL 安全警告 | 🔴 P0 | ❌ 完全缺失 |
+| 2 | **System** | `getSimpleSystemSection()` | 6 条核心规则：工具执行在权限模式下、system-reminder 标签说明、hooks 反馈处理、上下文自动压缩 | 🔴 P0 | ❌ 完全缺失 |
+| 3 | **Doing Tasks** | `getSimpleDoingTasksSection()` | 12+ 条任务指南：不添加未请求的功能、不过度错误处理、不创建不必要的抽象、先读后改、安全意识、失败诊断、忠实报告结果 | 🔴 P0 | ❌ 完全缺失 |
+| 4 | **Actions with Care** | `getActionsSection()` | 可逆性评估、blast radius 分析、用户确认策略；列举了破坏性/不可逆/共享状态/第三方上传等风险场景 | 🔴 P0 | ❌ 完全缺失 |
+| 5 | **Using Your Tools** | `getUsingYourToolsSection()` | 优先使用专用工具而非 bash、并行执行指导、task/todo 管理指导 | 🔴 P0 | ❌ 完全缺失 |
+| 6 | **Tone and Style** | `getSimpleToneAndStyleSection()` | 不用 emoji、file:line 引用格式、GitHub owner/repo#123 格式、工具调用前不用冒号 | 🟡 P1 | ❌ 完全缺失 |
+| 7 | **Output Efficiency** | `getOutputEfficiencySection()` | Ant 内部版：25 词工具间输出、100 词最终回复、流畅散文、倒金字塔结构；外部版：简洁直接 | 🟡 P1 | ❌ 完全缺失 |
+| 8 | **Session Guidance** | `getSessionSpecificGuidanceSection()` | Agent tool 使用指导、explore agent 指导、skill 调用指导、verification agent 指导 | 🔴 P0 | ❌ 完全缺失 |
+| 9 | **Memory** | `loadMemoryPrompt()` | 从 CLAUDE.md / RC.md 加载持久记忆 | 🟡 P1 | 🟡 部分覆盖（有 memory_read 但无自动注入系统提示词） |
+| 10 | **Environment Info** | `computeSimpleEnvInfo()` | CWD、git、platform、model ID + marketing name、knowledge cutoff、最新模型家族 ID、Claude Code 可用平台、Fast mode 说明 | 🔴 P0 | ❌ 完全缺失 |
+| 11 | **Language** | `getLanguageSection()` | 用户语言偏好设置 | 🟡 P1 | ❌ 完全缺失 |
+| 12 | **Output Style** | `getOutputStyleSection()` | 可定制输出风格 | 🟢 P2 | ❌ 完全缺失 |
+| 13 | **MCP Instructions** | `getMcpInstructionsSection()` | 已连接 MCP server 的 instructions 自动注入 | 🟡 P1 | ❌ 完全缺失 |
+| 14 | **Scratchpad** | `getScratchpadInstructions()` | 会话级临时目录，无需权限提示，替代 `/tmp` | 🟡 P1 | ❌ 完全缺失 |
+| 15 | **Function Result Clearing** | `getFunctionResultClearingSection()` | 自动清理旧工具结果，保留最近 N 条 | 🟡 P1 | ❌ 完全缺失 |
+| 16 | **Summarize Tool Results** | `SUMMARIZE_TOOL_RESULTS_SECTION` | 工具结果清理前先记录重要信息 | 🟡 P1 | ❌ 完全缺失 |
+| 17 | **Token Budget** | feature-gated section | Token 目标管理指导 | 🟢 P2 | ❌ 完全缺失 |
+| 18 | **Brief/Proactive** | `getBriefSection()` / `getProactiveSection()` | 自主工作模式、tick 驱动、sleep 控制、终端焦点感知 | 🟢 P2 | ❌ 完全缺失 |
+| 19 | **Hooks Section** | `getHooksSection()` | "Users may configure hooks..." 反馈处理 | 🟡 P1 | ❌ 完全缺失 |
+| 20 | **System Reminders** | `getSystemRemindersSection()` | system-reminder 标签说明 + 无限上下文通过自动摘要 | 🟡 P1 | ❌ 完全缺失 |
+| 21 | **Agent Prompt** | `DEFAULT_AGENT_PROMPT` | Sub-agent 的默认提示词："You are an agent for Claude Code..." | 🔴 P0 | ❌ 完全缺失 |
+| 22 | **Agent Env Enhancement** | `enhanceSystemPromptWithEnvDetails()` | Sub-agent 的环境信息增强 + 绝对路径要求 + 无 emoji + 工具调用前不用冒号 | 🔴 P0 | ❌ 完全缺失 |
+| 23 | **Coordinator System Prompt** | `getCoordinatorSystemPrompt()` | Coordinator 模式的完整提示词：角色定义、工具说明、worker 管理、任务工作流、XML 通知格式 | 🔴 P0 | ❌ 完全缺失 |
+
+#### 21.2.2 Prompt Cache 架构缺失
+
+Claude Code 的系统提示词有一个关键的缓存架构：
+
+```typescript
+// 静态/动态分界线
+export const SYSTEM_PROMPT_DYNAMIC_BOUNDARY = '__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__'
+
+// 缓存策略
+systemPromptSection()          // 计算一次，缓存直到 /clear 或 /compact
+DANGEROUS_uncachedSystemPromptSection()  // 每轮重新计算，会破坏缓存
+resolveSystemPromptSections()  // 解析所有段落，返回字符串
+clearSystemPromptSections()    // /clear 或 /compact 时清除缓存 + beta header latches
+```
+
+remote-code **完全缺失**：
+- ❌ 静态/动态段落分离机制
+- ❌ `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` 缓存分界线
+- ❌ `systemPromptSection()` 缓存计算
+- ❌ `DANGEROUS_uncachedSystemPromptSection()` 易变段落标记
+- ❌ `resolveSystemPromptSections()` 段落解析器
+- ❌ `clearSystemPromptSections()` 缓存清除
+- ❌ Blake2b 前缀哈希用于缓存作用域
+- ❌ `shouldUseGlobalCacheScope()` 全局缓存作用域判断
+
+---
+
+### 21.3 命令体系缺失（Slash Commands Gap Analysis）
+
+#### 21.3.1 Claude Code 完整 Slash Commands 列表（80+ 个）
+
+以下列出 Claude Code 的所有 slash commands，标注 remote-code 的覆盖状态：
+
+**核心交互命令**：
+
+| # | 命令 | 功能 | remote-code 状态 |
+|---|------|------|-----------------|
+| 1 | `/clear` | 清除当前对话 | ❌ 缺失（无 TUI slash command） |
+| 2 | `/compact` | 压缩上下文 | ❌ 缺失 |
+| 3 | `/resume` | 恢复会话 | 🟡 CLI `resume` 子命令存在但非 slash command |
+| 4 | `/exit` | 退出 | 🟡 TUI 有退出但非 slash command |
+| 5 | `/help` | 帮助 | 🟡 TUI `/help` 存在 |
+
+**会话管理命令**：
+
+| # | 命令 | 功能 | remote-code 状态 |
+|---|------|------|-----------------|
+| 6 | `/session` | 会话管理 | 🟡 CLI `sessions` 子命令存在 |
+| 7 | `/rename` | 重命名会话 | ❌ 缺失 |
+| 8 | `/rewind` | 回退到历史点继续 | ❌ 完全缺失（关键体验） |
+| 9 | `/export` | 导出会话 | 🟡 CLI `export` 子命令存在 |
+| 10 | `/share` | 分享会话（生成 ccshare 链接） | ❌ 完全缺失 |
+| 11 | `/summary` | 会话摘要 | ❌ 缺失 |
+| 12 | `/teleport` | 会话迁移 | ❌ 完全缺失 |
+| 13 | `/tag` | 标记会话 | ❌ 缺失 |
+
+**配置命令**：
+
+| # | 命令 | 功能 | remote-code 状态 |
+|---|------|------|-----------------|
+| 14 | `/config` | 运行时配置管理 | ❌ 完全缺失 |
+| 15 | `/model` | 切换模型 | 🟡 TUI `/model` 存在 |
+| 16 | `/provider` | 切换 provider | 🟡 TUI `/provider` 存在 |
+| 17 | `/outputStyle` | 输出风格切换 | ❌ 完全缺失 |
+| 18 | `/effort` | 努力级别调节（low/medium/high） | ❌ 完全缺失 |
+| 19 | `/fast` | 快速模式切换 | ❌ 完全缺失 |
+| 20 | `/theme` | 主题切换 | ❌ 缺失 |
+| 21 | `/color` | 颜色方案 | ❌ 缺失 |
+
+**权限命令**：
+
+| # | 命令 | 功能 | remote-code 状态 |
+|---|------|------|-----------------|
+| 22 | `/permissions` | 权限管理 | 🟡 TUI `/permissions` 存在 |
+| 23 | `/privacySettings` | 隐私设置 | ❌ 完全缺失 |
+| 24 | `/passes` | 权限通行证管理 | ❌ 完全缺失 |
+
+**工具/MCP 命令**：
+
+| # | 命令 | 功能 | remote-code 状态 |
+|---|------|------|-----------------|
+| 25 | `/mcp` | MCP 管理 | 🟡 TUI `/mcp` + CLI `mcp` 存在 |
+| 26 | `/plugin` | 插件管理 | 🟡 CLI `plugins` 存在 |
+| 27 | `/reloadPlugins` | 重载插件 | ❌ 缺失 |
+| 28 | `/skills` | 技能管理 | 🟡 CLI `skills` + TUI `/skills` 存在 |
+
+**代码命令**：
+
+| # | 命令 | 功能 | remote-code 状态 |
+|---|------|------|-----------------|
+| 29 | `/commit` | 一键提交（核心体验） | ❌ 完全缺失 |
+| 30 | `/review` | 代码审查 | 🟡 CLI `review` 存在 |
+| 31 | `/diff` | 查看代码变更 | ❌ 完全缺失 |
+| 32 | `/pr_comments` | PR 评论 | ❌ 缺失 |
+| 33 | `/branch` | 分支管理 | ❌ 缺失 |
+| 34 | `/autofix-pr` | 自动修复 PR | ❌ 完全缺失 |
+
+**诊断命令**：
+
+| # | 命令 | 功能 | remote-code 状态 |
+|---|------|------|-----------------|
+| 35 | `/doctor` | 环境诊断 | 🟡 CLI `doctor` 存在 |
+| 36 | `/status` | 运行时状态 | 🟡 CLI `status` + TUI `/status` 存在 |
+| 37 | `/cost` | 成本查看 | ❌ 完全缺失 |
+| 38 | `/usage` | 用量统计 | ❌ 完全缺失 |
+| 39 | `/extraUsage` | 额外用量 | ❌ 缺失 |
+| 40 | `/stats` | 统计信息 | ❌ 缺失 |
+| 41 | `/insights` | 会话分析报告 | ❌ 完全缺失 |
+
+**代理命令**：
+
+| # | 命令 | 功能 | remote-code 状态 |
+|---|------|------|-----------------|
+| 42 | `/agents` | 代理管理 | 🟡 CLI `agents` 存在 |
+| 43 | `/tasks` | 任务管理 | 🟡 CLI `tasks` + TUI `/tasks` 存在 |
+| 44 | `/fork` | Fork 子代理 | ❌ 完全缺失 |
+| 45 | `/peers` | 对等代理列表 | ❌ 完全缺失 |
+
+**IDE/桌面命令**：
+
+| # | 命令 | 功能 | remote-code 状态 |
+|---|------|------|-----------------|
+| 46 | `/ide` | IDE 集成 | ❌ 完全缺失 |
+| 47 | `/desktop` | 桌面模式 | ❌ 完全缺失 |
+| 48 | `/mobile` | 移动端 | ❌ 完全缺失 |
+| 49 | `/chrome` | Chrome 扩展 | ❌ 完全缺失 |
+
+**登录命令**：
+
+| # | 命令 | 功能 | remote-code 状态 |
+|---|------|------|-----------------|
+| 50 | `/login` | 登录 | ❌ 完全缺失（remote-code 用 env auth） |
+| 51 | `/logout` | 登出 | ❌ 完全缺失 |
+| 52 | `/installGitHubApp` | 安装 GitHub App | ❌ 完全缺失 |
+| 53 | `/installSlackApp` | 安装 Slack App | ❌ 完全缺失 |
+
+**高级模式命令**：
+
+| # | 命令 | 功能 | remote-code 状态 |
+|---|------|------|-----------------|
+| 54 | `/plan` | 计划模式 | ❌ 完全缺失 |
+| 55 | `/thinkback` | 思维回放 | ❌ 完全缺失 |
+| 56 | `/thinkbackPlay` | 思维回放播放 | ❌ 完全缺失 |
+| 57 | `/voice` | 语音模式 | ❌ 完全缺失 |
+| 58 | `/proactive` | 自主模式 | ❌ 完全缺失 |
+| 59 | `/brief` | 简报模式 | ❌ 完全缺失 |
+| 60 | `/assistant` | 助手模式 | ❌ 完全缺失 |
+| 61 | `/bridge` | 桥接模式 | ❌ 完全缺失 |
+| 62 | `/workflows` | 工作流管理 | ❌ 完全缺失 |
+| 63 | `/torch` | Torch 模式 | ❌ 完全缺失 |
+| 64 | `/buddy` | 伙伴系统 | ❌ 完全缺失 |
+
+**安全命令**：
+
+| # | 命令 | 功能 | remote-code 状态 |
+|---|------|------|-----------------|
+| 65 | `/securityReview` | 安全审查 | ❌ 完全缺失 |
+| 66 | `/sandboxToggle` | 沙箱切换 | ❌ 完全缺失 |
+
+**其他命令**：
+
+| # | 命令 | 功能 | remote-code 状态 |
+|---|------|------|-----------------|
+| 67 | `/hooks` | Hook 管理 | 🟡 CLI `hooks` 存在 |
+| 68 | `/files` | 文件管理 | ❌ 缺失 |
+| 69 | `/memory` | 记忆管理 | 🟡 TUI `/memory` 存在 |
+| 70 | `/keybindings` | 快捷键管理 | ❌ 缺失 |
+| 71 | `/terminalSetup` | 终端设置 | ❌ 缺失 |
+| 72 | `/upgrade` | 升级 | 🟡 CLI `update` 存在 |
+| 73 | `/init` | 初始化 | ❌ 缺失 |
+| 74 | `/add-dir` | 添加工作目录 | ❌ 缺失 |
+| 75 | `/context` | 上下文管理 | ❌ 缺失 |
+| 76 | `/copy` | 复制内容 | ❌ 缺失 |
+| 77 | `/advisor` | 顾问建议 | ❌ 缺失 |
+| 78 | `/env` | 环境变量 | ❌ 缺失 |
+| 79 | `/remoteEnv` | 远程环境 | ❌ 缺失 |
+| 80 | `/feedback` | 反馈 | ❌ 缺失 |
+| 81 | `/releaseNotes` | 发布说明 | ❌ 缺失 |
+| 82 | `/rateLimitOptions` | 速率限制选项 | ❌ 缺失 |
+| 83 | `/statusline` | 状态栏 | ❌ 缺失 |
+| 84 | `/debugToolCall` | 调试工具调用 | ❌ 缺失 |
+| 85 | `/heapDump` | 堆转储 | ❌ 缺失 |
+
+**Feature-gated 命令（内部/实验性）**：
+
+| # | 命令 | 功能 | remote-code 状态 |
+|---|------|------|-----------------|
+| 86 | `/remoteControlServer` | 远程控制服务器 | ❌ 完全缺失 |
+| 87 | `/remote-setup` | 远程设置 | ❌ 完全缺失 |
+| 88 | `/subscribe-pr` | 订阅 PR 活动 | ❌ 完全缺失 |
+| 89 | `/ultraplan` | 超级计划 | ❌ 完全缺失 |
+| 90 | `/stickers` | 贴纸 | ❌ 缺失 |
+
+---
+
+### 21.4 高级运行时特性缺失
+
+#### 21.4.1 Coordinator/Worker 模式
+
+**源码**: [`src/coordinator/coordinatorMode.ts`](.research/claude-code-rev/src/coordinator/coordinatorMode.ts) (370 行)
+
+Claude Code 有一个完整的协调者/工人模式：
+
+- **Coordinator** 只能使用 4 个工具：`AgentTool`、`SendMessage`、`TaskStop`、`SyntheticOutput`
+- **Worker** 使用 `ASYNC_AGENT_ALLOWED_TOOLS` 集合中的所有工具
+- Coordinator 通过 XML 格式的 `<task-notification>` 接收 worker 结果
+- Worker 有 `IN_PROCESS_TEAMMATE_ALLOWED_TOOLS` 额外工具集
+- Coordinator 系统提示词包含完整的角色定义、工具说明、worker 管理、任务工作流
+
+remote-code **完全缺失**：
+- ❌ `isCoordinatorMode()` 检测
+- ❌ `matchSessionMode()` 会话模式匹配
+- ❌ `getCoordinatorUserContext()` 协调者上下文
+- ❌ `getCoordinatorSystemPrompt()` 协调者系统提示词
+- ❌ `COORDINATOR_MODE_ALLOWED_TOOLS` 工具白名单
+- ❌ `INTERNAL_WORKER_TOOLS` 内部 worker 工具
+- ❌ `<task-notification>` XML 结果格式
+- ❌ Worker 生命周期管理
+
+#### 21.4.2 Fork Subagent
+
+**源码**: `src/tools/AgentTool/forkSubagent.ts`
+
+Fork 是一种特殊的子代理，在后台运行，工具输出不污染主上下文：
+
+- 主线程可以继续与用户对话，同时 fork 在后台工作
+- Fork 完成后通过 `<task-notification>` 通知主线程
+- 系统提示词中有专门的 fork 指导："If you ARE the fork — execute directly; do not re-delegate."
+
+remote-code **完全缺失**。
+
+#### 21.4.3 Verification Agent
+
+**源码**: `src/tools/AgentTool/built-in/` (exploreAgent, verification agent)
+
+独立的对抗性验证代理：
+- 非平凡实现（3+ 文件编辑、后端/API 变更、基础设施变更）必须经过验证
+- 验证者独立运行，不能自我验证
+- 结果为 PASS/FAIL/PARTIAL
+- FAIL 时修复后重新验证，循环直到 PASS
+
+remote-code **完全缺失**。
+
+#### 21.4.4 Explore Agent
+
+**源码**: `src/tools/AgentTool/built-in/exploreAgent.ts`
+
+深度代码库探索代理：
+- 用于需要超过 `EXPLORE_AGENT_MIN_QUERIES` 次查询的复杂搜索
+- 比直接用 grep/glob 慢，但适合深度研究
+- 系统提示词中有专门的指导："For broader codebase exploration and deep research, use the Agent tool with subagent_type=explore"
+
+remote-code **完全缺失**。
+
+#### 21.4.5 Proactive/Autonomous Mode
+
+**源码**: `src/proactive/` + `src/constants/prompts.ts:getProactiveSection()`
+
+自主工作模式：
+- 通过 `<tick>` 提示驱动（包含当前本地时间）
+- Sleep 工具控制节奏
+- 终端焦点感知（focused/unfocused）
+- 偏向行动而非询问
+- 首次唤醒时问候用户
+- 无事可做时必须调用 sleep
+
+remote-code **完全缺失**。
+
+#### 21.4.6 Dynamic Beta Headers
+
+**源码**: [`src/constants/betas.ts`](.research/claude-code-rev/src/constants/betas.ts)
+
+Claude Code 管理了 15+ 个动态 beta header：
+
+| Beta Header | 值 | 用途 |
+|---|---|---|
+| `CLAUDE_CODE_20250219_BETA_HEADER` | `claude-code-20250219` | Claude Code 标识 |
+| `INTERLEAVED_THINKING_BETA_HEADER` | `interleaved-thinking-2025-05-14` | 交错思考 |
+| `CONTEXT_1M_BETA_HEADER` | `context-1m-2025-08-07` | 1M 上下文 |
+| `CONTEXT_MANAGEMENT_BETA_HEADER` | `context-management-2025-06-27` | 上下文管理 |
+| `STRUCTURED_OUTPUTS_BETA_HEADER` | `structured-outputs-2025-12-15` | 结构化输出 |
+| `WEB_SEARCH_BETA_HEADER` | `web-search-2025-03-05` | Web 搜索 |
+| `TOOL_SEARCH_BETA_HEADER_1P` | `advanced-tool-use-2025-11-20` | 工具搜索（1P） |
+| `TOOL_SEARCH_BETA_HEADER_3P` | `tool-search-tool-2025-10-19` | 工具搜索（3P） |
+| `EFFORT_BETA_HEADER` | `effort-2025-11-24` | 努力级别 |
+| `TASK_BUDGETS_BETA_HEADER` | `task-budgets-2026-03-13` | 任务预算 |
+| `PROMPT_CACHING_SCOPE_BETA_HEADER` | `prompt-caching-scope-2026-01-05` | 提示缓存作用域 |
+| `FAST_MODE_BETA_HEADER` | `fast-mode-2026-02-01` | 快速模式 |
+| `REDACT_THINKING_BETA_HEADER` | `redact-thinking-2026-02-12` | 编辑思考 |
+| `TOKEN_EFFICIENT_TOOLS_BETA_HEADER` | `token-efficient-tools-2026-03-28` | Token 高效工具 |
+| `AFK_MODE_BETA_HEADER` | `afk-mode-2026-01-31` | AFK 模式 |
+| `CLI_INTERNAL_BETA_HEADER` | `cli-internal-2026-02-09` | CLI 内部 |
+| `ADVISOR_BETA_HEADER` | `advisor-tool-2026-03-01` | 顾问工具 |
+
+还有 Bedrock/Vertex 特定的处理：
+- `BEDROCK_EXTRA_PARAMS_HEADERS` — Bedrock 需要通过 extraBodyParams 而非 headers 传递的 beta
+- `VERTEX_COUNT_TOKENS_ALLOWED_BETAS` — Vertex countTokens API 允许的 beta 子集
+
+remote-code **完全缺失**所有 beta header 管理。
+
+#### 21.4.7 Attribution Header
+
+**源码**: [`src/constants/system.ts:getAttributionHeader()`](.research/claude-code-rev/src/constants/system.ts:73)
+
+```typescript
+// 格式：x-anthropic-billing-header: cc_version={version}.{fingerprint}; cc_entrypoint={entrypoint}; cch=00000; cc_workload={workload}
+```
+
+包含：
+- 版本号 + 指纹
+- 入口点（CLI/SDK/daemon-worker 等）
+- Native client attestation（Bun HTTP 栈自动替换 cch=00000 为真实哈希）
+- Workload 类型（interactive/cron 等）
+
+remote-code **完全缺失**。
+
+#### 21.4.8 SDK Mode
+
+**源码**: [`src/entrypoints/sdk/`](.research/claude-code-rev/src/entrypoints/sdk/)
+
+完整的 SDK 类型系统：
+- `coreTypes.ts` — 核心类型 + 54 种 HOOK_EVENTS + EXIT_REASONS
+- `coreSchemas.ts` — Zod 运行时验证 schema
+- `controlTypes.ts` — 控制请求/响应类型（initialize/cancel/permission）
+- `controlSchemas.ts` — 控制请求 Zod schema
+- `runtimeTypes.ts` — 运行时类型
+- `settingsTypes.generated.ts` — 设置类型
+- `toolTypes.ts` — 工具类型
+- `sdkUtilityTypes.ts` — SDK 工具类型
+
+remote-code **完全缺失** SDK 类型系统。
+
+#### 21.4.9 Tool Result 持久化与预览
+
+**源码**: [`src/constants/toolLimits.ts`](.research/claude-code-rev/src/constants/toolLimits.ts)
+
+Claude Code 有完整的工具结果大小管理：
+
+| 常量 | 值 | 用途 |
+|---|---|---|
+| `DEFAULT_MAX_RESULT_SIZE_CHARS` | 50,000 | 单个工具结果最大字符数 |
+| `MAX_TOOL_RESULT_TOKENS` | 100,000 | 单个工具结果最大 token 数 |
+| `MAX_TOOL_RESULT_BYTES` | 400,000 | 单个工具结果最大字节数 |
+| `MAX_TOOL_RESULTS_PER_MESSAGE_CHARS` | 200,000 | 单轮所有工具结果总字符数 |
+| `BYTES_PER_TOKEN` | 4 | 字节/token 估算比 |
+| `TOOL_SUMMARY_MAX_LENGTH` | 50 | 工具摘要最大长度 |
+
+超出限制时：
+1. 结果持久化到磁盘文件
+2. 模型只收到文件路径 + 预览
+3. 单轮内多个并行工具结果超出 per-message budget 时，最大的几个被持久化
+
+remote-code **完全缺失**工具结果持久化与预览机制。
+
+#### 21.4.10 API Limits（媒体限制）
+
+**源码**: [`src/constants/apiLimits.ts`](.research/claude-code-rev/src/constants/apiLimits.ts)
+
+| 常量 | 值 | 用途 |
+|---|---|---|
+| `API_IMAGE_MAX_BASE64_SIZE` | 5 MB | 最大 base64 图片大小 |
+| `IMAGE_TARGET_RAW_SIZE` | 3.75 MB | 目标原始图片大小 |
+| `IMAGE_MAX_WIDTH` | 2000 | 最大图片宽度 |
+| `IMAGE_MAX_HEIGHT` | 2000 | 最大图片高度 |
+| `PDF_TARGET_RAW_SIZE` | 20 MB | 最大 PDF 大小 |
+| `API_PDF_MAX_PAGES` | 100 | 最大 PDF 页数 |
+| `PDF_EXTRACT_SIZE_THRESHOLD` | 3 MB | PDF 提取阈值 |
+| `PDF_MAX_EXTRACT_SIZE` | 100 MB | 最大 PDF 提取大小 |
+| `PDF_MAX_PAGES_PER_READ` | 20 | 单次读取最大 PDF 页数 |
+| `PDF_AT_MENTION_INLINE_THRESHOLD` | 10 | PDF @mention 内联阈值 |
+| `API_MAX_MEDIA_PER_REQUEST` | 100 | 单请求最大媒体数 |
+
+remote-code **完全缺失**媒体限制管理。
+
+#### 21.4.11 Scratchpad
+
+**源码**: `src/constants/prompts.ts:getScratchpadInstructions()`
+
+会话级临时目录：
+- 路径由 `getScratchpadDir()` 生成
+- 替代 `/tmp` 用于所有临时文件需求
+- 无需权限提示
+- 用于中间结果、临时脚本、分析输出等
+
+remote-code **完全缺失**。
+
+#### 21.4.12 Session Rewind
+
+回退到会话历史中的任意点继续对话。这是 Claude Code 的核心体验之一。
+
+remote-code **完全缺失**。
+
+#### 21.4.13 Session Share / Teleport
+
+- `/share` — 生成 ccshare 链接分享会话
+- `/teleport` — 将会话迁移到另一个环境
+
+remote-code **完全缺失**。
+
+#### 21.4.14 Fast Mode / Effort Level
+
+- **Fast Mode** — 同模型快速输出，不是切换到更小的模型
+- **Effort Level** — low/medium/high 努力程度调节
+- 都有对应的 beta header 和 API 参数
+
+remote-code **完全缺失**。
+
+#### 21.4.15 Output Styles
+
+**源码**: `src/constants/outputStyles.ts`
+
+可定制的输出风格系统，每种风格有 name + prompt。
+
+remote-code **完全缺失**。
+
+#### 21.4.16 IDE Integration
+
+**源码**: `src/hooks/useIDEIntegration.tsx`
+
+VS Code / JetBrains IDE 集成：
+- 文件跳转
+- 诊断信息
+- 选择引用
+- @-mention 文件
+- Diff 查看
+
+remote-code **完全缺失**。
+
+#### 21.4.17 Chrome Extension / Computer Use
+
+**源码**: `src/entrypoints/cli.tsx` + `shims/ant-computer-use-*`
+
+- Claude in Chrome MCP server + native host
+- Computer Use MCP server（屏幕交互）
+- Audio capture NAPI
+- Image processor NAPI
+
+remote-code **完全缺失**。
+
+#### 21.4.18 Plugin Autoupdate
+
+**源码**: `src/hooks/notifs/usePluginAutoupdateNotification.tsx`
+
+插件自动更新通知和安装。
+
+remote-code **完全缺失**。
+
+---
+
+### 21.5 Hook 事件缺失
+
+#### 21.5.1 Claude Code 完整 HOOK_EVENTS（54 种）
+
+```typescript
+export const HOOK_EVENTS = [
+  'PreToolUse', 'PostToolUse', 'PostToolUseFailure',
+  'Notification', 'UserPromptSubmit', 'SessionStart', 'SessionEnd',
+  'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop',
+  'PreCompact', 'PostCompact', 'PermissionRequest', 'PermissionDenied',
+  'Setup', 'TeammateIdle', 'TaskCreated', 'TaskCompleted',
+  'Elicitation', 'ElicitationResult', 'ConfigChange',
+  'WorktreeCreate', 'WorktreeRemove', 'InstructionsLoaded',
+  'CwdChanged', 'FileChanged',
+] as const
+```
+
+#### 21.5.2 remote-code 缺失的 Hook 事件
+
+| # | Hook 事件 | 用途 | remote-code 状态 |
+|---|----------|------|-----------------|
+| 1 | `SubagentStart` | 子代理启动 | ❌ 缺失 |
+| 2 | `SubagentStop` | 子代理停止 | ❌ 缺失 |
+| 3 | `PreCompact` | 压缩前 | ❌ 缺失 |
+| 4 | `PostCompact` | 压缩后 | ❌ 缺失 |
+| 5 | `TeammateIdle` | 队友空闲 | ❌ 缺失 |
+| 6 | `Elicitation` | MCP Elicitation 请求 | ❌ 缺失 |
+| 7 | `ElicitationResult` | MCP Elicitation 结果 | ❌ 缺失 |
+| 8 | `ConfigChange` | 配置变更 | ❌ 缺失 |
+| 9 | `WorktreeCreate` | Worktree 创建 | ❌ 缺失 |
+| 10 | `WorktreeRemove` | Worktree 移除 | ❌ 缺失 |
+| 11 | `InstructionsLoaded` | 指令加载完成 | ❌ 缺失 |
+| 12 | `CwdChanged` | 工作目录变更 | ❌ 缺失 |
+| 13 | `FileChanged` | 文件变更 | ❌ 缺失 |
+| 14 | `Stop` | 正常停止 | ❌ 缺失 |
+| 15 | `StopFailure` | 异常停止 | ❌ 缺失 |
+| 16 | `Setup` | 初始设置 | ❌ 缺失 |
+| 17 | `TaskCreated` | 任务创建 | ❌ 缺失 |
+| 18 | `TaskCompleted` | 任务完成 | ❌ 缺失 |
+
+#### 21.5.3 EXIT_REASONS 缺失
+
+Claude Code 定义了退出原因：
+```typescript
+export const EXIT_REASONS = [
+  'clear', 'resume', 'logout', 'prompt_input_exit', 'other',
+  'bypass_permissions_disabled',
+] as const
+```
+
+remote-code **完全缺失**退出原因追踪。
+
+---
+
+### 21.6 Provider/API 层缺失
+
+#### 21.6.1 缺失的 Provider 能力
+
+| # | 能力 | Claude Code 实现 | remote-code 状态 |
+|---|------|-----------------|-----------------|
+| 1 | Prompt Caching | `cache_control` 断点管理 + `shouldUseGlobalCacheScope()` + Blake2b 前缀哈希 | ❌ 完全缺失 |
+| 2 | Dynamic Beta Headers | 15+ 个 beta header 动态组合 | ❌ 完全缺失 |
+| 3 | Thinking Blocks | `thinking` + `signature` delta 解析 | ❌ 完全缺失 |
+| 4 | Server Tool Use | `server_tool_use` blocks（web_search 等） | ❌ 完全缺失 |
+| 5 | Tool Search Integration | deferred tool schema 注入 | ❌ 完全缺失 |
+| 6 | Advisor Integration | advisor model + beta header | ❌ 完全缺失 |
+| 7 | Effort Parameter | low/medium/high effort API 参数 | ❌ 完全缺失 |
+| 8 | Task Budget | token budget tracking API 参数 | ❌ 完全缺失 |
+| 9 | Media Stripping | 超出限制的媒体自动移除 | ❌ 完全缺失 |
+| 10 | Model-specific Max Tokens | 每个模型不同的输出限制 | ❌ 完全缺失 |
+| 11 | Previous Request ID | `previous_request_id` 请求链追踪 | 🟡 部分覆盖（已有 request_id 但缺 previous_request_id） |
+| 12 | MCP Tools in API | `mcpTools` 选项 | ❌ 完全缺失 |
+| 13 | Agent Types | `allowedAgentTypes` 参数 | ❌ 完全缺失 |
+| 14 | Fast Mode | `fastMode` API 参数 | ❌ 完全缺失 |
+| 15 | Query Source | `compact/session_memory/agent` 来源标记 | ❌ 完全缺失 |
+| 16 | Content Block Types | `tool_use/text/thinking/signature` 完整类型 | 🟡 部分覆盖 |
+| 17 | Attribution Header | `x-anthropic-billing-header` | ❌ 完全缺失 |
+| 18 | Native Client Attestation | Bun HTTP 栈自动替换 cch 哈希 | ❌ 完全缺失 |
+| 19 | Workload Context | `cc_workload` 路由标记 | ❌ 完全缺失 |
+
+---
+
+### 21.7 优先级总结
+
+#### 🔴 P0 — 必须立即补齐（影响基本行为等价）
+
+1. **系统提示词组装系统** — 23 个段落 + 缓存架构 + 静态/动态分离
+2. **Coordinator/Worker 模式** — 完整的协调者/工人架构
+3. **Fork Subagent** — 后台 fork 执行
+4. **TaskOutputTool** — Agent 结果回传
+5. **Tool Result 持久化与预览** — 大结果写磁盘 + per-message budget
+6. **Function Result Clearing** — 自动清理旧工具结果
+7. **Environment Info 段** — CWD/git/platform/model/knowledge cutoff
+8. **Dynamic Beta Headers** — 15+ 个 beta header 管理
+9. **Attribution Header** — 客户端标识 + 指纹 + 入口点
+10. **DiscoverSkillsTool** — 智能技能搜索
+11. **Verification Agent** — 独立对抗性验证
+12. **Explore Agent** — 深度代码库探索
+13. **Coordinator System Prompt** — 完整的协调者提示词
+14. **Agent Prompt** — Sub-agent 默认提示词
+15. **SDK 类型系统** — 核心类型 + 控制类型 + Zod schema
+
+#### 🟡 P1 — 重要（影响用户体验等价）
+
+1. `/compact` 命令
+2. `/rewind` 命令（会话历史回退）
+3. `/commit` 命令（一键提交）
+4. `/diff` 命令（代码变更查看）
+5. `/config` / `/model` / `/provider` 命令（运行时配置切换）
+6. `/cost` / `/usage` / `/stats` 命令（成本/用量统计）
+7. `/share` / `/teleport` 命令（会话分享与迁移）
+8. Scratchpad（会话级临时目录）
+9. Hook 事件补齐（17 种缺失事件）
+10. EXIT_REASONS 追踪
+11. TeamDeleteTool
+12. SendUserFileTool
+13. ReviewArtifactTool
+14. BriefTool（模式控制）
+15. MCP Instructions 自动注入
+16. MCP OAuth 认证流程
+17. MCP Elicitation 处理
+18. Plugin Autoupdate
+19. API Limits（媒体限制管理）
+
+#### 🟢 P2 — 增强（差异化竞争）
+
+1. Proactive/Autonomous Mode（自主工作）
+2. Voice Mode（语音模式）
+3. IDE Integration（VS Code / JetBrains）
+4. Chrome Extension（Claude in Chrome）
+5. Computer Use（屏幕交互）
+6. Fast Mode / Effort Level
+7. Output Styles（可定制输出风格）
+8. Privacy Settings
+9. Rate Limit Options
+10. Token Budget 管理
+11. `/plan` 命令
+12. `/voice` 命令
+13. `/bridge` 命令
+14. `/workflows` 命令
+15. `/securityReview` 命令
+16. Native Client Attestation
+17. Workload Context 路由
+
+---
+
+### 21.8 深度扫描补充遗漏（逐文件/逐目录分析）
+
+> 以下内容来自对 `.research/claude-code-rev/src/` 每个目录和关键文件的逐行扫描，补充 §21.1–21.7 未覆盖的遗漏。
+
+#### 21.8.1 Task 类型系统缺失
+
+**源码**: `src/Task.ts` (126 行)
+
+Claude Code 定义了 7 种任务类型：
+
+```typescript
+export type TaskType =
+  | 'local_bash' | 'local_agent' | 'remote_agent'
+  | 'in_process_teammate' | 'local_workflow' | 'monitor_mcp' | 'dream'
+```
+
+remote-code 的任务系统仅有简单的 `task_create/task_get/task_list/task_stop/task_update`，**完全缺失**：
+- ❌ `TaskType` 分类（7 种 vs 我们的 1 种通用类型）
+- ❌ `TaskHandle` 和 `cleanup()` 生命周期
+- ❌ `TaskContext`（abortController + getAppState + setAppState）
+- ❌ `TaskStateBase`（outputFile + outputOffset + notified + totalPausedMs）
+- ❌ `LocalShellSpawnInput`（kind: 'bash' | 'monitor'）
+- ❌ `generateTaskId()` 带 type prefix 的 ID 生成（b/a/r/t/w/m/d 前缀）
+- ❌ `isTerminalTaskStatus()` 终态判断
+- ❌ `in_process_teammate` 进程内队友任务类型
+- ❌ `dream` 自动 Dream 任务类型
+
+#### 21.8.2 MCP 连接类型缺失
+
+**源码**: `src/services/mcp/types.ts` (259 行)
+
+Claude Code 支持 **6 种 MCP 传输类型** + **7 种 Config Scope**：
+
+| 传输类型 | 说明 | remote-code 状态 |
+|---------|------|-----------------|
+| `stdio` | 标准输入输出 | ✅ 已有 |
+| `sse` | Server-Sent Events + OAuth | 🟡 部分覆盖 |
+| `sse-ide` | IDE 扩展 SSE | ❌ 缺失 |
+| `http` | HTTP 流式 + OAuth | 🟡 部分覆盖 |
+| `ws` | WebSocket | ✅ 已有 |
+| `ws-ide` | IDE 扩展 WebSocket | ❌ 缺失 |
+| `sdk` | SDK 控制传输 | ❌ 缺失 |
+
+**Config Scopes**：`local | user | project | dynamic | enterprise | claudeai | managed`
+
+remote-code **缺失** `dynamic`、`enterprise`、`claudeai`、`managed` 四种 scope。
+
+**MCP OAuth 配置**（含 XAA Cross-App Access / SEP-990）：
+
+```typescript
+type McpOAuthConfig = {
+  clientId?: string; callbackPort?: number;
+  authServerMetadataUrl?: string; // 必须 https://
+  xaa?: boolean; // Cross-App Access
+}
+```
+
+remote-code **完全缺失** MCP OAuth 和 XAA。
+
+**MCP Connection Manager**（24 文件）：`MCPConnectionManager.tsx`、`useManageMCPConnections.ts`、`reconnectMcpServer()`、`toggleMcpServer()`、`elicitationHandler.ts`、`channelAllowlist.ts`、`channelPermissions.ts`、`channelNotification.ts`、`headersHelper.ts`、`InProcessTransport.ts`、`SdkControlTransport.ts`、`officialRegistry.ts`、`vscodeSdkMcp.ts`、`xaa.ts`、`xaaIdpLogin.ts`
+
+remote-code **完全缺失** MCP 动态连接管理、Elicitation、Channel 权限、XAA。
+
+#### 21.8.3 权限模式缺失
+
+**源码**: `src/types/permissions.ts` (442 行)
+
+Claude Code 有 **7 种权限模式**：`acceptEdits | bypassPermissions | default | dontAsk | plan | auto | bubble`
+
+remote-code 有 5 种，**缺失**：`acceptEdits`、`dontAsk`、`bubble`、`auto`（TRANSCRIPT_CLASSIFIER feature flag）
+
+**Permission Rule Sources**（8 种）：`userSettings | projectSettings | localSettings | flagSettings | policySettings | cliArg | command | session`
+
+remote-code **缺失** `flagSettings`、`policySettings`、`command`、`session` 四种来源。
+
+**Permission Update Destinations**（5 种）：remote-code **缺失** 权限更新持久化目标管理。
+
+#### 21.8.4 消息类型系统缺失
+
+**源码**: `src/types/message.ts` (135 行)
+
+Claude Code 定义了 **20+ 种消息类型**，remote-code 仅覆盖 3-4 种：
+
+**完全缺失的消息类型**：`AttachmentMessage`、`ProgressMessage`、`SystemLocalCommandMessage`、`SystemBridgeStatusMessage`、`SystemTurnDurationMessage`、`SystemThinkingMessage`、`SystemMemorySavedMessage`、`SystemStopHookSummaryMessage`、`SystemCompactBoundaryMessage`、`SystemMicrocompactBoundaryMessage`、`SystemPermissionRetryMessage`、`SystemScheduledTaskFireMessage`、`SystemAwaySummaryMessage`、`SystemAgentsKilledMessage`、`SystemApiMetricsMessage`、`SystemAPIErrorMessage`、`SystemFileSnapshotMessage`、`HookResultMessage`、`ToolUseSummaryMessage`、`TombstoneMessage`
+
+**Tool Progress Types**（10 种）：`ShellProgress`、`BashProgress`、`PowerShellProgress`、`MCPProgress`、`SkillToolProgress`、`TaskOutputProgress`、`WebSearchProgress`、`AgentToolProgress`、`REPLToolProgress`、`SdkWorkflowProgress`
+
+remote-code **完全缺失** 工具进度类型系统。
+
+#### 21.8.5 Bridge 系统缺失
+
+**源码**: `src/bridge/` (34 文件)
+
+Claude Code 有完整的 Bridge 系统用于 IDE/远程集成，包含：`bridgeApi.ts`、`bridgeConfig.ts`、`bridgeDebug.ts`、`bridgeEnabled.ts`、`bridgeMain.ts`、`bridgeMessaging.ts`、`bridgePermissionCallbacks.ts`、`bridgePointer.ts`、`bridgeStatusUtil.ts`、`bridgeUI.ts`、`capacityWake.ts`、`codeSessionApi.ts`、`createSession.ts`、`debugUtils.ts`、`envLessBridgeConfig.ts`、`flushGate.ts`、`inboundAttachments.ts`、`inboundMessages.ts`、`initReplBridge.ts`、`jwtUtils.ts`、`peerSessions.ts`、`pollConfig.ts`、`pollConfigDefaults.ts`、`remoteBridgeCore.ts`、`replBridge.ts`、`replBridgeHandle.ts`、`replBridgeTransport.ts`、`sessionIdCompat.ts`、`sessionRunner.ts`、`trustedDevice.ts`、`webhookSanitizer.ts`、`workSecret.ts`
+
+remote-code **完全缺失** Bridge 系统。
+
+#### 21.8.6 Compact 策略缺失
+
+**源码**: `src/services/compact/` (13 文件)
+
+| 文件 | 功能 | remote-code 状态 |
+|------|------|-----------------|
+| `autoCompact.ts` | 自动压缩（LLM 摘要） | ❌ 缺失 |
+| `compact.ts` | 压缩主入口 | ❌ 缺失 |
+| `compactWarningHook.ts` | 压缩警告 Hook | ❌ 缺失 |
+| `compactWarningState.ts` | 压缩警告状态 | ❌ 缺失 |
+| `grouping.ts` | 消息分组 | ❌ 缺失 |
+| `microCompact.ts` | 微压缩（缓存编辑） | ❌ 缺失 |
+| `postCompactCleanup.ts` | 压缩后清理 | ❌ 缺失 |
+| `prompt.ts` | 压缩提示词 | ❌ 缺失 |
+| `reactiveCompact.ts` | 响应式压缩 | ❌ 缺失 |
+| `sessionMemoryCompact.ts` | 会话记忆压缩 | ❌ 缺失 |
+| `snipCompact.ts` | 裁剪压缩 | ❌ 缺失 |
+| `snipProjection.ts` | 裁剪投影 | ❌ 缺失 |
+| `cachedMCConfig.ts` | 缓存 MC 配置 | ❌ 缺失 |
+| `timeBasedMCConfig.ts` | 基于时间的 MC 配置 | ❌ 缺失 |
+| `apiMicrocompact.ts` | API 微压缩 | ❌ 缺失 |
+
+#### 21.8.7 Services 层缺失
+
+**源码**: `src/services/` (28 个子目录 + 16 个独立文件)
+
+**完全缺失的服务子目录**：
+
+| 服务 | 功能 |
+|------|------|
+| `analytics/` (9 文件) | GrowthBook feature flags + Datadog + 事件日志 |
+| `autoDream/` | 自动 Dream 任务 |
+| `contextCollapse/` | 上下文折叠 |
+| `extractMemories/` | 记忆提取 |
+| `MagicDocs/` | MagicDocs 文档处理 |
+| `oauth/` | OAuth 认证 |
+| `policyLimits/` | 策略限制 |
+| `PromptSuggestion/` | 提示建议 |
+| `remoteManagedSettings/` | 远程托管设置 |
+| `SessionMemory/` | 会话记忆 |
+| `settingsSync/` | 设置同步 |
+| `skillSearch/` | 技能搜索 (BM25 + embedding) |
+| `teamMemorySync/` | 团队记忆同步 |
+| `tips/` | 提示系统 |
+| `toolUseSummary/` | 工具使用摘要生成 |
+| `AgentSummary/` | Agent 摘要 |
+
+**完全缺失的独立服务文件**：`awaySummary.ts`、`claudeAiLimits.ts`、`claudeAiLimitsHook.ts`、`diagnosticTracking.ts`、`internalLogging.ts`、`mcpServerApproval.tsx`、`mockRateLimits.ts`、`notifier.ts`、`preventSleep.ts`、`rateLimitMessages.ts`、`rateLimitMocking.ts`、`vcr.ts`、`voice.ts`、`voiceKeyterms.ts`、`voiceStreamSTT.ts`
+
+#### 21.8.8 API 客户端子模块缺失
+
+**源码**: `src/services/api/` (22 文件)
+
+**完全缺失的 API 子模块**：`adminRequests.ts`、`bootstrap.ts`、`dumpPrompts.ts`、`emptyUsage.ts`、`errorUtils.ts`、`filesApi.ts`、`firstTokenDate.ts`、`grove.ts`、`logging.ts`、`metricsOptOut.ts`、`overageCreditGrant.ts`、`promptCacheBreakDetection.ts`、`referral.ts`、`sessionIngress.ts`、`ultrareviewQuota.ts`
+
+#### 21.8.9 Tool Trait 系统缺失
+
+**源码**: `src/Tool.ts` (793 行)
+
+Claude Code 的 Tool trait 远比 remote-code 的 `ToolSpec` 复杂，**完全缺失**：`QueryChainTracking`、`ValidationResult`、`ToolProgressData`（10 种）、`ToolUseContext`、`ThinkingConfig`、`FileHistoryState`、`FileStateCache`、`DenialTrackingState`、`ContentReplacementState`、`AttributionState`、`SystemPrompt` 类型、`AgentDefinition`、`SpinnerMode`、`QuerySource`、`SDKStatus`、`HookProgress`、`PromptRequest/Response`、`DeepImmutable`
+
+#### 21.8.10 State 管理缺失
+
+**源码**: `src/state/` (6 文件)
+
+Claude Code 有完整的全局状态管理系统（类似 Redux）：`AppStateStore.ts`、`AppState.tsx`、`store.ts`、`selectors.ts`、`onChangeAppState.ts`、`teammateViewHelpers.ts`
+
+remote-code **完全缺失** Claude Code 级别的全局状态管理系统。
+
+#### 21.8.11 Tool Orchestration 缺失
+
+**源码**: `src/services/tools/` (4 文件)
+
+| 文件 | 功能 | remote-code 状态 |
+|------|------|-----------------|
+| `StreamingToolExecutor.ts` | 流式工具执行器 | ❌ 完全缺失 |
+| `toolExecution.ts` (1,746 行) | 工具执行管线 | ❌ 完全缺失 |
+| `toolHooks.ts` | 工具 Hook 集成 | ❌ 完全缺失 |
+| `toolOrchestration.ts` | 工具编排（并行/串行调度） | ❌ 完全缺失 |
+
+#### 21.8.12 QueryEngine 深度缺失
+
+**源码**: `src/QueryEngine.ts` (1,296 行) + `src/query.ts` (1,730 行)
+
+remote-code **缺失**以下 QueryEngine/QueryLoop 关键能力（共 50+ 项）：
+
+**QueryEngine 缺失**：`ProcessUserInputContext`（30+ 字段）、`FileHistoryState` + `fileHistoryMakeSnapshot()`、`FileStateCache` + `cloneFileStateCache()`、`ThinkingConfig` + `shouldEnableThinkingByDefault()`、`FastModeState` + `getFastModeState()`、`ScratchpadDir` + `getScratchpadDir()`、`SDKMessage` 消息格式、`SDKCompactBoundaryMessage`、`SDKPermissionDenial`、`SDKUserMessageReplay`、`MessageSelector`、`accumulateUsage()` + `updateUsage()`、`loadAllPluginsCacheOnly()`、`fetchSystemPromptParts()`、`headlessProfilerCheckpoint()`、`registerStructuredOutputEnforcement()`、`buildSystemInitMessage()`、`sdkCompatToolName()`、`categorizeRetryableAPIError()`、`getSlashCommandToolSkills()`
+
+**Query Loop 缺失**：`StreamingToolExecutor`、`runTools()`、`applyToolResultBudget()`、`recordContentReplacement()`、`generateToolUseSummary()`、`prependUserContext()` + `appendSystemContext()`、`createAttachmentMessage()`、`filterDuplicateMemoryAttachments()`、`getAttachmentMessages()`、`startRelevantMemoryPrefetch()`、`skillPrefetch`、`jobClassifier`、`removeFromQueue()` + `getCommandsByMaxPriority()`、`notifyCommandLifecycle()`、`executePostSamplingHooks()`、`executeStopFailureHooks()`、`createDumpPromptsFetch()`、`queryCheckpoint()`、`calculateTokenWarningState()`、`isAutoCompactEnabled()`、`AutoCompactTrackingState`、`buildPostCompactMessages()`、`reactiveCompact`、`contextCollapse`、`doesMostRecentAssistantMessageExceed200k()`、`finalContextTokensFromLastResponse()`、`tokenCountWithEstimation()`、`ESCALATED_MAX_TOKENS`、`stripSignatureBlocks()`、`createMicrocompactBoundaryMessage()`、`createToolUseSummaryMessage()`、`createUserInterruptionMessage()`、`normalizeMessagesForAPI()`、`FallbackTriggeredError`、`ImageSizeError` + `ImageResizeError`、`TombstoneMessage` 处理、`promptCacheBreakDetection`
+
+#### 21.8.13 其他目录缺失
+
+| 目录 | 文件数 | 功能 | remote-code 状态 |
+|------|--------|------|-----------------|
+| `assistant/` | 3 | 助手功能 | ❌ 完全缺失 |
+| `bootstrap/` | 多文件 | 启动引导（状态、配置、宏） | ❌ 完全缺失 |
+| `buddy/` | 6 | 伙伴系统 | ❌ 完全缺失 |
+| `context/` | 9 | React Context providers | ❌ 完全缺失 |
+| `ink/` | 100 | Ink TUI 框架适配层 | ❌ 完全缺失 |
+| `jobs/` | 多文件 | 后台任务分类器 | ❌ 完全缺失 |
+| `keybindings/` | 15 | 快捷键系统 | ❌ 完全缺失 |
+| `moreright/` | 多文件 | MoreRight 功能 | ❌ 完全缺失 |
+| `native-ts/` | 4 | 原生绑定 | ❌ 完全缺失 |
+| `outputStyles/` | 多文件 | 输出风格 | ❌ 完全缺失 |
+| `proactive/` | 2 | 主动模式 | ❌ 完全缺失 |
+| `schemas/` | 多文件 | JSON Schema | ❌ 完全缺失 |
+| `screens/` | 3 | 全屏视图 | ❌ 完全缺失 |
+| `server/` | 3 | HTTP 服务器 | ❌ 完全缺失 |
+| `upstreamproxy/` | 2 | 上游代理 | ❌ 完全缺失 |
+| `voice/` | 多文件 | 语音系统 | ❌ 完全缺失 |
+
+#### 21.8.14 根级文件缺失
+
+| 文件 | 行数 | 功能 | remote-code 状态 |
+|------|------|------|-----------------|
+| `query.ts` | 1,730 | 核心查询循环 | ❌ 完全缺失 |
+| `QueryEngine.ts` | 1,296 | 查询引擎状态机 | ❌ 完全缺失 |
+| `Tool.ts` | 793 | Tool trait 定义 | ❌ 完全缺失 |
+| `Task.ts` | 126 | 任务类型系统 | ❌ 完全缺失 |
+| `setup.ts` | - | 初始设置 | ❌ 缺失 |
+| `history.ts` | - | 历史管理 | ❌ 缺失 |
+| `ink.ts` | - | Ink 框架入口 | ❌ 缺失 |
+| `context.ts` | - | 上下文管理 | ❌ 缺失 |
+| `costHook.ts` | - | 成本 Hook | ❌ 缺失 |
+| `dialogLaunchers.tsx` | - | 对话启动器 | ❌ 缺失 |
+| `interactiveHelpers.tsx` | - | 交互辅助 | ❌ 缺失 |
+| `replLauncher.tsx` | - | REPL 启动器 | ❌ 缺失 |
+| `projectOnboardingState.ts` | - | 项目引导状态 | ❌ 缺失 |
+| `bootstrap-entry.ts` | - | 引导入口 | ❌ 缺失 |
+| `bootstrapMacro.ts` | - | 引导宏 | ❌ 缺失 |
+| `dev-entry.ts` | - | 开发入口 | ❌ 缺失 |
+
+### 21.9 终极深度扫描遗漏（utils/hooks/components/services/types/tools 全覆盖）
+
+#### 21.9.1 Utils 基础设施层缺失（200+ 文件）
+
+| 文件 | 行数 | 功能描述 | remote-code 状态 |
+|------|------|---------|-----------------|
+| `utils/auth.ts` | 2,053 | 完整认证系统：OAuth 刷新、API Key Helper（5min TTL 缓存）、AWS STS 校验、Bedrock/Vertex 认证、macOS Keychain 集成、Secure Storage 抽象层、Managed OAuth Context 检测 | ❌ 完全缺失 |
+| `utils/fileHistory.ts` | 1,116 | 文件检查点系统：备份快照（MAX_SNAPSHOTS=100）、DiffStats 计算、fileHistoryTrackEdit、speculative write 处理、VSCode 通知集成 | ❌ 完全缺失 |
+| `utils/teleport.tsx` | 1,226 | Session 传送：跨机器恢复会话、Git Bundle 创建上传、Haiku 生成标题+分支名、OAuth Headers、Session Ingress API | ❌ 完全缺失 |
+| `utils/worktree.ts` | 1,520 | Git Worktree 管理：slug 验证、symlink 目录（node_modules 等）、Hook 执行、设置同步、平台检测 | ❌ 完全缺失 |
+| `utils/fastMode.ts` | 533 | Fast Mode：订阅等级检查（free/preference/extra_usage_disabled）、GrowthBook 开关、bundled mode 检测、SDK 模式豁免 | ❌ 完全缺失 |
+| `utils/imageResizer.ts` | 881 | 图片处理：Sharp 集成、base64 编解码、8 种错误分类（MODULE_LOAD/PROCESSING/PIXEL_LIMIT/MEMORY/TIMEOUT/VIPS/PERMISSION/UNKNOWN）、尺寸限制、格式转换 | ❌ 完全缺失 |
+| `utils/effort.ts` | 330 | Effort Level 系统：low/medium/high/max 四级、模型支持检测、3P 模型覆盖、持久化规则、数值型 effort | ❌ 完全缺失 |
+| `utils/context.ts` | 228 | 上下文窗口管理：1M Context 检测、模型能力查询、CAPPED_DEFAULT_MAX_TOKENS=8000、ESCALATED_MAX_TOKENS=64000、环境变量覆盖 | ❌ 完全缺失 |
+| `utils/markdown.ts` | 382 | 终端 Markdown 渲染：marked 集成、语法高亮、blockquote 渲染、代码块处理、主题适配、超链接支持 | ❌ 完全缺失 |
+| `utils/cron.ts` | 309 | Cron 表达式解析：5 字段解析器、step/range/list 语法、nextRun 计算、Jitter 配置 | ❌ 完全缺失 |
+| `utils/diff.ts` | 178 | 结构化 Diff：hunk 行号调整、&/$ 转义、行数统计、LOC 追踪、analytics 事件 | ❌ 完全缺失 |
+| `utils/codeIndexing.ts` | 207 | 代码索引检测：30+ 工具识别（Sourcegraph/Cody/Aider/Cursor/Copilot 等）、CLI 命令映射、MCP Server 模式匹配 | ❌ 完全缺失 |
+| `utils/agentSwarmsEnabled.ts` | 45 | Agent Teams 功能门控：ant 内部默认开启、外部需 opt-in + GrowthBook killswitch | ❌ 完全缺失 |
+| `utils/standaloneAgent.ts` | 24 | 独立 Agent 上下文（name/color）、与 swarm team 互斥 | ❌ 完全缺失 |
+
+#### 21.9.2 Utils 子目录缺失
+
+| 子目录 | 文件数 | 功能描述 | remote-code 状态 |
+|--------|--------|---------|-----------------|
+| `utils/model/` | 16 | 模型管理子系统：model.ts（默认模型选择）、modelCapabilities.ts（能力查询）、modelStrings.ts（模型字符串）、providers.ts（Provider 检测）、providerConfig.ts（配置）、antModels.ts（内部模型）、bedrock.ts（Bedrock 适配）、configs.ts（配置管理）、aliases.ts（模型别名）、deprecation.ts（弃用警告）、validateModel.ts（校验）、modelAllowlist.ts（白名单）、check1mAccess.ts（1M 权限）、contextWindowUpgradeCheck.ts、modelOptions.ts、modelSupportOverrides.ts | ❌ 完全缺失（rc-provider 仅有基础 model_info） |
+| `utils/permissions/` | 25+ | 完整权限系统：PermissionMode.ts（7 种模式）、permissions.ts（核心逻辑）、PermissionRule.ts（规则引擎）、permissionRuleParser.ts（规则解析）、yoloClassifier.ts（YOLO 分类器）、bashClassifier.ts（Bash 分类器）、autoModeState.ts（Auto 模式状态）、dangerousPatterns.ts（危险模式）、denialTracking.ts（拒绝追踪）、permissionExplainer.ts（解释器）、PermissionResult.ts（结果类型）、PermissionUpdate.ts/Schema.ts（更新系统）、permissionsLoader.ts（加载器）、permissionSetup.ts（设置）、filesystem.ts（文件权限）、pathValidation.ts（路径验证）、shellRuleMatching.ts（Shell 规则匹配）、getNextPermissionMode.ts、classifierDecision.ts、classifierShared.ts、bypassPermissionsKillswitch.ts、shadowedRuleDetection.ts、yolo-classifier-prompts/ | ❌ 大部分缺失（rc-permissions 仅有基础规则） |
+| `utils/settings/` | 15+ | 设置管理：settings.ts（读写）、types.ts（类型）、validation.ts（校验）、validateEditTool.ts（编辑工具验证）、constants.ts（常量）、applySettingsChange.ts（变更应用）、changeDetector.ts（变更检测）、internalWrites.ts（内部写入）、managedPath.ts（托管路径）、permissionValidation.ts（权限验证）、pluginOnlyPolicy.ts（插件策略）、schemaOutput.ts（Schema 输出）、settingsCache.ts（缓存）、toolValidationConfig.ts、validationTips.ts、mdm/（MDM 企业管理） | ❌ 完全缺失（rc-config 仅有基础 settings_layers） |
+| `utils/git/` | 3 | Git 文件系统：gitConfigParser.ts（配置解析）、gitFilesystem.ts（文件系统操作、worktree HEAD SHA 读取、ref 解析、common dir）、gitignore.ts（gitignore 处理） | ❌ 完全缺失 |
+| `utils/swarm/` | 10+ | Swarm/Team 管理：constants.ts、inProcessRunner.ts、It2SetupPrompt.tsx、leaderPermissionBridge.ts、permissionSync.ts、reconnection.ts、spawnInProcess.ts、spawnUtils.ts、teamHelpers.ts、teammateInit.ts、teammateLayoutManager.ts、teammateModel.ts、teammatePromptAddendum.ts、backends/（9 文件：detection.ts、InProcessBackend.ts、it2Setup.ts、ITermBackend.ts、PaneBackendExecutor.ts、registry.ts、teammateModeSnapshot.ts、TmuxBackend.ts、types.ts） | ❌ 完全缺失 |
+| `utils/memory/` | 2 | Memory 类型系统：types.ts（MEMORY_TYPE_VALUES）、versions.ts（版本管理） | ❌ 完全缺失 |
+| `utils/teleport/` | 3 | Teleport 基础：api.ts（Session 资源获取、OAuth Headers）、environments.ts（环境列表）、environmentSelection.ts（环境选择）、gitBundle.ts（Git Bundle 创建上传） | ❌ 完全缺失 |
+| `utils/background/remote/` | 2 | 远程后台：preconditions.ts（前置检查、GitHub App 安装检测）、remoteSession.ts（远程会话管理） | ❌ 完全缺失 |
+| `utils/secureStorage/` | 7 | 安全存储：index.ts（抽象层）、macOsKeychainStorage.ts（macOS Keychain）、macOsKeychainHelpers.ts（Keychain 辅助）、keychainPrefetch.ts（预取）、plainTextStorage.ts（纯文本后备）、fallbackStorage.ts（降级存储）、types.ts | ❌ 完全缺失 |
+| `utils/plugins/` | 40+ | 插件系统：pluginLoader.ts（加载器）、schemas.ts（Schema）、marketplaceManager.ts（市场管理）、officialMarketplace.ts（官方市场）、officialMarketplaceGcs.ts（GCS 存储）、pluginInstallationHelpers.ts（安装辅助）、PluginInstallationManager.ts（安装管理器）、pluginAutoupdate.ts（自动更新）、pluginBlocklist.ts（黑名单）、pluginFlagging.ts（标记）、pluginPolicy.ts（策略）、pluginVersioning.ts（版本管理）、dependencyResolver.ts（依赖解析）、reconciler.ts（协调器）、refresh.ts（刷新）、validatePlugin.ts（验证）、walkPluginMarkdown.ts（Markdown 解析）、zipCache.ts/Adapters.ts（ZIP 缓存）、mcpPluginIntegration.ts（MCP 集成）、lspPluginIntegration.ts（LSP 集成）、loadPluginCommands.ts/Hooks.ts/Agents.ts/OutputStyles.ts（组件加载）、managedPlugins.ts（托管插件）、installCounts.ts（安装计数）、hintRecommendation.ts（推荐）、headlessPluginInstall.ts（无头安装）、gitAvailability.ts（Git 检测）、fetchTelemetry.ts（遥测）、pluginDirectories.ts（目录管理）、pluginIdentifier.ts（标识符）、pluginOptionsStorage.ts（选项存储）、pluginStartupCheck.ts/performStartupChecks.tsx（启动检查）、orphanedPluginFilter.ts（孤儿过滤）、parseMarketplaceInput.ts（输入解析）、mcpbHandler.ts（MCPB 处理）、addDirPluginSettings.ts、cacheUtils.ts、marketplaceHelpers.ts、officialMarketplaceStartupCheck.ts | ❌ 完全缺失（rc-plugins 仅有骨架） |
+
+#### 21.9.3 Hooks 系统缺失（105 文件）
+
+**核心 Hook 文件（80+）：**
+
+| Hook 文件 | 功能描述 | remote-code 状态 |
+|-----------|---------|-----------------|
+| `hooks/useCanUseTool.tsx` | 工具权限检查核心 Hook | ❌ 缺失 |
+| `hooks/useVoice.ts` / `useVoiceEnabled.ts` / `useVoiceIntegration.tsx` | 语音输入集成 | ❌ 缺失 |
+| `hooks/useDiffData.ts` / `useDiffInIDE.ts` | Diff 数据和 IDE 集成 | ❌ 缺失 |
+| `hooks/useIDEIntegration.tsx` / `useIdeConnectionStatus.ts` / `useIdeAtMentioned.ts` / `useIdeSelection.ts` / `useIdeLogging.ts` | IDE 集成全套 | ❌ 缺失 |
+| `hooks/useSwarmInitialization.ts` / `useSwarmPermissionPoller.ts` | Swarm 初始化和权限轮询 | ❌ 缺失 |
+| `hooks/useMergedClients.ts` / `useMergedCommands.ts` / `useMergedTools.ts` | MCP 合并客户端/命令/工具 | ❌ 缺失 |
+| `hooks/useTasksV2.ts` / `useTaskListWatcher.ts` / `useBackgroundTaskNavigation.ts` | 任务系统 V2 | ❌ 缺失 |
+| `hooks/useSettings.ts` / `useSettingsChange.ts` | 设置管理 | ❌ 缺失 |
+| `hooks/useGlobalKeybindings.tsx` / `useCommandKeybindings.tsx` | 快捷键系统 | ❌ 缺失 |
+| `hooks/useVirtualScroll.ts` | 虚拟滚动列表 | ❌ 缺失 |
+| `hooks/useVimInput.ts` / `useTextInput.ts` | Vim/文本输入模式 | ❌ 缺失 |
+| `hooks/useClipboardImageHint.ts` / `usePasteHandler.ts` | 剪贴板和粘贴处理 | ❌ 缺失 |
+| `hooks/useHistorySearch.ts` / `useArrowKeyHistory.tsx` / `useAssistantHistory.ts` | 历史搜索和导航 | ❌ 缺失 |
+| `hooks/useDirectConnect.ts` / `useRemoteSession.ts` / `useSSHSession.ts` | 远程连接和 SSH | ❌ 缺失 |
+| `hooks/useMailboxBridge.ts` / `useInboxPoller.ts` | 邮箱桥接和轮询 | ❌ 缺失 |
+| `hooks/useReplBridge.tsx` | REPL 桥接 | ❌ 缺失 |
+| `hooks/useScheduledTasks.ts` / `useQueueProcessor.ts` | 定时任务和队列处理 | ❌ 缺失 |
+| `hooks/usePromptSuggestion.ts` / `useTypeahead.tsx` | 提示建议和自动补全 | ❌ 缺失 |
+| `hooks/useMainLoopModel.ts` | 主循环模型选择 | ❌ 缺失 |
+| `hooks/useTurnDiffs.ts` | Turn 级 Diff | ❌ 缺失 |
+| `hooks/usePrStatus.ts` | PR 状态检查 | ❌ 缺失 |
+| `hooks/useSessionBackgrounding.ts` | Session 后台化 | ❌ 缺失 |
+| `hooks/useTeleportResume.tsx` | Teleport 恢复 | ❌ 缺失 |
+| `hooks/useManagePlugins.ts` | 插件管理 | ❌ 缺失 |
+| `hooks/useSkillsChange.ts` / `useSkillImprovementSurvey.ts` | Skills 变更和改进调查 | ❌ 缺失 |
+| `hooks/useUpdateNotification.ts` | 更新通知 | ❌ 缺失 |
+| `hooks/useMemoryUsage.ts` | 内存使用监控 | ❌ 缺失 |
+| `hooks/useElapsedTime.ts` | 经过时间追踪 | ❌ 缺失 |
+| `hooks/useTerminalSize.ts` | 终端尺寸适配 | ❌ 缺失 |
+| `hooks/useDynamicConfig.ts` | 动态配置 | ❌ 缺失 |
+| `hooks/useLogMessages.ts` | 日志消息 | ❌ 缺失 |
+| `hooks/useSearchInput.ts` | 搜索输入 | ❌ 缺失 |
+| `hooks/useFileHistorySnapshotInit.ts` | 文件历史快照初始化 | ❌ 缺失 |
+| `hooks/useTeammateViewAutoExit.ts` | Teammate 视图自动退出 | ❌ 缺失 |
+
+**权限处理 Hooks（6 文件）：**
+
+| 文件 | 功能 | remote-code 状态 |
+|------|------|-----------------|
+| `hooks/toolPermission/PermissionContext.ts` | 权限上下文 Provider | ❌ 缺失 |
+| `hooks/toolPermission/permissionLogging.ts` | 权限日志 | ❌ 缺失 |
+| `hooks/toolPermission/handlers/coordinatorHandler.ts` | Coordinator 权限处理 | ❌ 缺失 |
+| `hooks/toolPermission/handlers/interactiveHandler.ts` | 交互式权限处理 | ❌ 缺失 |
+| `hooks/toolPermission/handlers/swarmWorkerHandler.ts` | Swarm Worker 权限处理 | ❌ 缺失 |
+
+**通知 Hooks（17 文件）：**
+
+| 文件 | 功能 | remote-code 状态 |
+|------|------|-----------------|
+| `hooks/notifs/useRateLimitWarningNotification.tsx` | 速率限制警告 | ❌ 缺失 |
+| `hooks/notifs/useFastModeNotification.tsx` | Fast Mode 通知 | ❌ 缺失 |
+| `hooks/notifs/usePluginAutoupdateNotification.tsx` | 插件自动更新通知 | ❌ 缺失 |
+| `hooks/notifs/usePluginInstallationStatus.tsx` | 插件安装状态 | ❌ 缺失 |
+| `hooks/notifs/useLspInitializationNotification.tsx` | LSP 初始化通知 | ❌ 缺失 |
+| `hooks/notifs/useMcpConnectivityStatus.tsx` | MCP 连接状态 | ❌ 缺失 |
+| `hooks/notifs/useModelMigrationNotifications.tsx` | 模型迁移通知 | ❌ 缺失 |
+| `hooks/notifs/useNpmDeprecationNotification.tsx` | NPM 弃用通知 | ❌ 缺失 |
+| `hooks/notifs/useAntOrgWarningNotification.ts` | Ant 组织警告 | ❌ 缺失 |
+| `hooks/notifs/useAutoModeUnavailableNotification.ts` | Auto Mode 不可用通知 | ❌ 缺失 |
+| `hooks/notifs/useCanSwitchToExistingSubscription.tsx` | 订阅切换 | ❌ 缺失 |
+| `hooks/notifs/useDeprecationWarningNotification.tsx` | 弃用警告 | ❌ 缺失 |
+| `hooks/notifs/useIDEStatusIndicator.tsx` | IDE 状态指示 | ❌ 缺失 |
+| `hooks/notifs/useInstallMessages.tsx` | 安装消息 | ❌ 缺失 |
+| `hooks/notifs/useOfficialMarketplaceNotification.tsx` | 官方市场通知 | ❌ 缺失 |
+| `hooks/notifs/useSettingsErrors.tsx` | 设置错误 | ❌ 缺失 |
+| `hooks/notifs/useStartupNotification.ts` | 启动通知 | ❌ 缺失 |
+| `hooks/notifs/useTeammateShutdownNotification.ts` | Teammate 关闭通知 | ❌ 缺失 |
+
+#### 21.9.4 Components 组件系统缺失（407 文件）
+
+**Claude Code 使用 React/Ink TUI 框架，remote-code 使用 ratatui。以下列出关键组件映射：**
+
+**120+ 顶层组件（关键缺失）：**
+
+| 组件 | 功能描述 | remote-code 状态 |
+|------|---------|-----------------|
+| `components/App.tsx` | 主应用入口，路由所有视图 | ❌ 缺失（rc-tui 有基础框架） |
+| `components/Message.tsx` / `Messages.tsx` / `MessageRow.tsx` / `MessageResponse.tsx` | 消息渲染系统 | ❌ 缺失 |
+| `components/TextInput.tsx` / `BaseTextInput.tsx` / `VimTextInput.tsx` | 文本输入（含 Vim 模式） | ❌ 缺失 |
+| `components/Markdown.tsx` / `MarkdownTable.tsx` | Markdown 渲染 | ❌ 缺失 |
+| `components/StatusLine.tsx` / `StatusNotices.tsx` | 状态栏和通知 | ❌ 缺失 |
+| `components/ModelPicker.tsx` / `ProviderPicker.tsx` | 模型和 Provider 选择器 | ❌ 缺失 |
+| `components/TokenWarning.tsx` | Token 用量警告 | ❌ 缺失 |
+| `components/CostThresholdDialog.tsx` | 成本阈值对话框 | ❌ 缺失 |
+| `components/CompactSummary.tsx` | Compact 摘要显示 | ❌ 缺失 |
+| `components/VirtualMessageList.tsx` | 虚拟消息列表（性能优化） | ❌ 缺失 |
+| `components/StructuredDiff.tsx` / `StructuredDiffList.tsx` | 结构化 Diff 显示 | ❌ 缺失 |
+| `components/FileEditToolDiff.tsx` / `FileEditToolUpdatedMessage.tsx` | 文件编辑 Diff | ❌ 缺失 |
+| `components/Onboarding.tsx` | 新用户引导 | ❌ 缺失 |
+| `components/GlobalSearchDialog.tsx` / `HistorySearchDialog.tsx` | 全局搜索和历史搜索 | ❌ 缺失 |
+| `components/TeleportProgress.tsx` / `TeleportError.tsx` / `TeleportStash.tsx` | Teleport UI | ❌ 缺失 |
+| `components/CoordinatorAgentStatus.tsx` | Coordinator 状态显示 | ❌ 缺失 |
+| `components/TaskListV2.tsx` / `ResumeTask.tsx` | 任务列表和恢复 | ❌ 缺失 |
+| `components/ContextVisualization.tsx` / `ContextSuggestions.tsx` | 上下文可视化 | ❌ 缺失 |
+| `components/MCPServerApprovalDialog.tsx` / `MCPServerMultiselectDialog.tsx` | MCP 服务器审批 | ❌ 缺失 |
+| `components/ExportDialog.tsx` | 导出对话框 | ❌ 缺失 |
+| `components/Feedback.tsx` | 反馈收集 | ❌ 缺失 |
+| `components/ThinkingToggle.tsx` | 思考模式切换 | ❌ 缺失 |
+| `components/EffortIndicator.ts` / `EffortCallout.tsx` | Effort Level 指示器 | ❌ 缺失 |
+| `components/BypassPermissionsModeDialog.tsx` | 绕过权限模式对话框 | ❌ 缺失 |
+| `components/AutoModeOptInDialog.tsx` | Auto Mode 选择对话框 | ❌ 缺失 |
+| `components/DevBar.tsx` | 开发者工具栏 | ❌ 缺失 |
+| `components/FullscreenLayout.tsx` | 全屏布局 | ❌ 缺失 |
+| `components/ThemePicker.tsx` / `LanguagePicker.tsx` / `OutputStylePicker.tsx` | 主题/语言/输出风格选择 | ❌ 缺失 |
+| `components/QuickOpenDialog.tsx` | 快速打开 | ❌ 缺失 |
+| `components/AutoUpdater.tsx` / `AutoUpdaterWrapper.tsx` / `NativeAutoUpdater.tsx` | 自动更新 UI | ❌ 缺失 |
+| `components/SentryErrorBoundary.ts` | Sentry 错误边界 | ❌ 缺失 |
+| `components/SessionPreview.tsx` / `SessionBackgroundHint.tsx` | Session 预览 | ❌ 缺失 |
+
+**组件子目录（关键缺失）：**
+
+| 子目录 | 文件数 | 功能描述 | remote-code 状态 |
+|--------|--------|---------|-----------------|
+| `components/agents/` | 20+ | Agent 创建向导：CreateAgentWizard（10 步骤：Color/Confirm/Description/Generate/Location/Memory/Method/Model/Prompt/Tools/Type）、AgentEditor、AgentsList、AgentsMenu、ColorPicker、ModelSelector、ToolSelector、validateAgent、generateAgent | ❌ 完全缺失 |
+| `components/design-system/` | 多文件 | 设计系统：颜色、间距、排版 | ❌ 完全缺失 |
+| `components/diff/` | 多文件 | Diff 渲染组件 | ❌ 完全缺失 |
+| `components/FeedbackSurvey/` | 多文件 | 反馈调查 | ❌ 完全缺失 |
+| `components/grove/` | 多文件 | Grove 功能 | ❌ 完全缺失 |
+| `components/HelpV2/` | 多文件 | 帮助系统 V2 | ❌ 完全缺失 |
+| `components/memory/` | 多文件 | Memory 管理 UI | ❌ 完全缺失 |
+| `components/messages/` | 多文件 | 消息渲染子系统 | ❌ 完全缺失 |
+| `components/permissions/` | 多文件 | 权限 UI | ❌ 完全缺失 |
+| `components/PromptInput/` | 多文件 | 提示输入组件 | ❌ 完全缺失 |
+| `components/sandbox/` | 多文件 | 沙箱 UI | ❌ 完全缺失 |
+| `components/skills/` | 多文件 | Skills UI | ❌ 完全缺失 |
+| `components/tasks/` | 多文件 | 任务 UI | ❌ 完全缺失 |
+| `components/teams/` | 多文件 | 团队 UI | ❌ 完全缺失 |
+| `components/TrustDialog/` | 多文件 | 信任对话框 | ❌ 完全缺失 |
+| `components/ui/` | 多文件 | 通用 UI 组件库 | ❌ 完全缺失 |
+| `components/wizard/` | 多文件 | 向导框架 | ❌ 完全缺失 |
+| `components/HighlightedCode/` | 多文件 | 代码高亮 | ❌ 完全缺失 |
+| `components/ClaudeCodeHint/` | 多文件 | Claude Code 提示 | ❌ 完全缺失 |
+| `components/CustomSelect/` | 多文件 | 自定义选择器 | ❌ 完全缺失 |
+| `components/DesktopUpsell/` | 多文件 | 桌面版升级 | ❌ 完全缺失 |
+| `components/LspRecommendation/` | 多文件 | LSP 推荐 | ❌ 完全缺失 |
+| `components/ManagedSettingsSecurityDialog/` | 多文件 | 托管设置安全对话框 | ❌ 完全缺失 |
+| `components/mcp/` | 多文件 | MCP 管理 UI | ❌ 完全缺失 |
+| `components/Spinner/` | 多文件 | 加载动画 | ❌ 完全缺失 |
+| `components/StructuredDiff/` | 多文件 | 结构化 Diff | ❌ 完全缺失 |
+| `components/Passes/` | 多文件 | Passes 功能 | ❌ 完全缺失 |
+| `components/Settings/` | 多文件 | 设置面板 | ❌ 完全缺失 |
+| `components/shell/` | 多文件 | Shell UI | ❌ 完全缺失 |
+| `components/LogoV2/` | 多文件 | Logo V2 | ❌ 完全缺失 |
+
+#### 21.9.5 Services 子目录深度缺失（28 子目录 + 16 独立文件）
+
+**API 客户端子模块（22 文件）：**
+
+| 文件 | 行数 | 功能描述 | remote-code 状态 |
+|------|------|---------|-----------------|
+| `services/api/claude.ts` | 3,420 | 核心 API 客户端：流式消息、工具 Schema 转换、Cache 优化、Beta Headers 合并、Effort Level、Max Output Tokens 升级（8000→64000）、Attribution Header、Fingerprint 计算、Auto Mode State、Cache Editing Header、Fast Mode Header、AFK Mode Header | ❌ 完全缺失（rc-provider 仅有基础 streaming） |
+| `services/api/client.ts` | - | Anthropic SDK 客户端初始化 | ❌ 缺失 |
+| `services/api/bootstrap.ts` | - | API 引导配置 | ❌ 缺失 |
+| `services/api/errors.ts` / `errorUtils.ts` | - | API 错误处理和工具 | ❌ 缺失 |
+| `services/api/withRetry.ts` | - | 重试逻辑 | ❌ 缺失 |
+| `services/api/openaiCompatibleClient.ts` | - | OpenAI 兼容客户端 | ❌ 缺失 |
+| `services/api/grove.ts` | - | Grove API 集成 | ❌ 缺失 |
+| `services/api/sessionIngress.ts` | - | Session Ingress API | ❌ 缺失 |
+| `services/api/filesApi.ts` | - | 文件 API | ❌ 缺失 |
+| `services/api/usage.ts` | - | 用量查询 | ❌ 缺失 |
+| `services/api/referral.ts` | - | 推荐系统 | ❌ 缺失 |
+| `services/api/overageCreditGrant.ts` | - | 超额信用授予 | ❌ 缺失 |
+| `services/api/ultrareviewQuota.ts` | - | Ultra Review 配额 | ❌ 缺失 |
+| `services/api/adminRequests.ts` | - | 管理请求 | ❌ 缺失 |
+| `services/api/dumpPrompts.ts` | - | Prompt 转储 | ❌ 缺失 |
+| `services/api/firstTokenDate.ts` | - | 首 Token 时间 | ❌ 缺失 |
+| `services/api/logging.ts` | - | API 日志 | ❌ 缺失 |
+| `services/api/metricsOptOut.ts` | - | 指标退出 | ❌ 缺失 |
+| `services/api/promptCacheBreakDetection.ts` | - | Prompt Cache 中断检测 | ❌ 缺失 |
+| `services/api/emptyUsage.ts` | - | 空用量处理 | ❌ 缺失 |
+
+**Compact 服务（14 文件）：**
+
+| 文件 | 行数 | 功能描述 | remote-code 状态 |
+|------|------|---------|-----------------|
+| `services/compact/compact.ts` | 1,706 | Compact 主引擎：5 种策略（auto/micro/snip/reactive/sessionMemory）、Forked Agent、Pre/Post Compact Hooks、Tool Search 集成、File Read Delta、MCP Delta、Agent Listing Delta | ❌ 完全缺失 |
+| `services/compact/autoCompact.ts` | - | 自动 Compact 触发 | ❌ 缺失 |
+| `services/compact/microCompact.ts` | - | Micro Compact（Cache Editing） | ❌ 缺失 |
+| `services/compact/snipCompact.ts` / `snipProjection.ts` | - | Snip Compact | ❌ 缺失 |
+| `services/compact/reactiveCompact.ts` | - | Reactive Compact | ❌ 缺失 |
+| `services/compact/sessionMemoryCompact.ts` | - | Session Memory Compact | ❌ 缺失 |
+| `services/compact/apiMicrocompact.ts` | - | API Microcompact | ❌ 缺失 |
+| `services/compact/cachedMCConfig.ts` / `timeBasedMCConfig.ts` | - | MC 配置 | ❌ 缺失 |
+| `services/compact/grouping.ts` | - | 消息分组 | ❌ 缺失 |
+| `services/compact/prompt.ts` | - | Compact Prompt | ❌ 缺失 |
+| `services/compact/postCompactCleanup.ts` | - | 后 Compact 清理 | ❌ 缺失 |
+| `services/compact/compactWarningHook.ts` / `compactWarningState.ts` | - | Compact 警告 | ❌ 缺失 |
+
+**Analytics 服务（9 文件）：**
+
+| 文件 | 行数 | 功能描述 | remote-code 状态 |
+|------|------|---------|-----------------|
+| `services/analytics/growthbook.ts` | 1,156 | GrowthBook A/B 测试：Feature Flag、Remote Eval、Experiment Exposure、Security Gate、User Attributes（15+ 字段）、Re-initialization、Feature Refresh Listeners | ❌ 完全缺失 |
+| `services/analytics/index.ts` | - | Analytics 事件系统 | ❌ 缺失 |
+| `services/analytics/datadog.ts` | - | Datadog 集成 | ❌ 缺失 |
+| `services/analytics/firstPartyEventLogger.ts` | - | 第一方事件日志 | ❌ 缺失 |
+| `services/analytics/firstPartyEventLoggingExporter.ts` | - | 事件导出 | ❌ 缺失 |
+| `services/analytics/config.ts` | - | Analytics 配置 | ❌ 缺失 |
+| `services/analytics/metadata.ts` | - | Analytics 元数据 | ❌ 缺失 |
+| `services/analytics/sink.ts` / `sinkKillswitch.ts` | - | 事件 Sink 和 Killswitch | ❌ 缺失 |
+
+**其他 Services 子目录：**
+
+| 子目录 | 文件数 | 功能描述 | remote-code 状态 |
+|--------|--------|---------|-----------------|
+| `services/oauth/` | 6 | OAuth 流程：client.ts（Token 刷新/过期检测）、auth-code-listener.ts（本地 HTTP 服务器接收授权码）、crypto.ts（PKCE）、getOauthProfile.ts（Profile 获取）、types.ts（Token/Subscription 类型）、index.ts | ❌ 完全缺失 |
+| `services/plugins/` | 3 | 插件安装：PluginInstallationManager.ts、pluginOperations.ts、pluginCliCommands.ts | ❌ 完全缺失 |
+| `services/policyLimits/` | 2 | 策略限制：index.ts、types.ts | ❌ 完全缺失 |
+| `services/MagicDocs/` | 2 | MagicDocs：magicDocs.ts、prompts.ts | ❌ 完全缺失 |
+| `services/contextCollapse/` | 3 | 上下文折叠：index.ts、operations.ts、persist.ts | ❌ 完全缺失 |
+| `services/extractMemories/` | 2 | 记忆提取：extractMemories.ts、prompts.ts | ❌ 完全缺失 |
+| `services/SessionMemory/` | 3 | Session 记忆：sessionMemory.ts、sessionMemoryUtils.ts、prompts.ts | ❌ 完全缺失 |
+| `services/skillSearch/` | 7 | Skill 搜索：localSearch.ts、remoteSkillLoader.ts、remoteSkillState.ts、prefetch.ts、featureCheck.ts、signals.ts、telemetry.ts | ❌ 完全缺失 |
+| `services/teamMemorySync/` | 5 | 团队记忆同步：index.ts、secretScanner.ts、teamMemSecretGuard.ts、types.ts、watcher.ts | ❌ 完全缺失 |
+| `services/PromptSuggestion/` | 2 | 提示建议：promptSuggestion.ts、speculation.ts | ❌ 完全缺失 |
+| `services/toolUseSummary/` | 1 | 工具使用摘要：toolUseSummaryGenerator.ts | ❌ 完全缺失 |
+| `services/settingsSync/` | 2 | 设置同步：index.ts、types.ts | ❌ 完全缺失 |
+| `services/remoteManagedSettings/` | 6 | 远程托管设置：index.ts、securityCheck.tsx、syncCache.ts、syncCacheState.ts、types.ts | ❌ 完全缺失 |
+| `services/autoDream/` | 4 | Auto Dream：autoDream.ts、config.ts、consolidationLock.ts、consolidationPrompt.ts | ❌ 完全缺失 |
+| `services/lsp/` | 8 | LSP 服务：LSPClient.ts、LSPServerInstance.ts、LSPServerManager.ts、LSPDiagnosticRegistry.ts、manager.ts、config.ts、types.ts、passiveFeedback.ts | ❌ 完全缺失 |
+| `services/voice/` | 多文件 | 语音服务（在 services/voice/ 或 services/ 下） | ❌ 完全缺失 |
+
+**Services 独立文件（16 文件）：**
+
+| 文件 | 功能描述 | remote-code 状态 |
+|------|---------|-----------------|
+| `services/awaySummary.ts` | 离开摘要 | ❌ 缺失 |
+| `services/claudeAiLimits.ts` / `claudeAiLimitsHook.ts` | Claude.ai 限制检查 | ❌ 缺失 |
+| `services/diagnosticTracking.ts` | 诊断追踪 | ❌ 缺失 |
+| `services/internalLogging.ts` | 内部日志 | ❌ 缺失 |
+| `services/mcpServerApproval.tsx` | MCP 服务器审批 | ❌ 缺失 |
+| `services/mockRateLimits.ts` | 模拟速率限制 | ❌ 缺失 |
+| `services/notifier.ts` | 通知系统 | ❌ 缺失 |
+| `services/preventSleep.ts` | 防止休眠 | ❌ 缺失 |
+| `services/rateLimitMessages.ts` / `rateLimitMocking.ts` | 速率限制消息 | ❌ 缺失 |
+| `services/tokenEstimation.ts` | Token 估算 | ❌ 缺失 |
+| `services/vcr.ts` | VCR 录制/回放 | ❌ 缺失 |
+| `services/voice.ts` / `voiceKeyterms.ts` / `voiceStreamSTT.ts` | 语音服务 | ❌ 缺失 |
+
+#### 21.9.6 Types 类型系统缺失（19 文件 + generated/）
+
+| 文件 | 行数 | 功能描述 | remote-code 状态 |
+|------|------|---------|-----------------|
+| `types/ids.ts` | 45 | Branded 类型系统：SessionId（`string & {readonly __brand: 'SessionId'}`）、AgentId（`string & {readonly __brand: 'AgentId'}`）、asSessionId/asAgentId 转换、toAgentId 验证（`/^a(?:.+-)?[0-9a-f]{16}$/`） | ❌ 完全缺失（rc-core/ids.rs 有基础 ID 但无 branded type） |
+| `types/hooks.ts` | 291 | Hook 类型系统：Zod Schema（syncHookResponseSchema、promptRequestSchema）、PromptRequest/Response、HookSpecificOutput 联合类型（PreToolUse/UserPromptSubmit/SessionStart/Setup/SubagentStart 等 6 种）、HookJSONOutput、AsyncHookJSONOutput、SyncHookJSONOutput | ❌ 完全缺失 |
+| `types/plugin.ts` | 364 | 插件类型：BuiltinPluginDefinition（name/description/version/skills/hooks/mcpServers/isAvailable/defaultEnabled）、PluginRepository、PluginConfig、LoadedPlugin（15+ 字段）、PluginComponent（5 种）、PluginErrorType（12 种判别联合） | ❌ 完全缺失 |
+| `types/permissions.ts` | 442 | 权限类型：7 种 PermissionMode、8 种 PermissionRuleSource、PermissionRule/Value/Update、PermissionDecision（Allow/Deny/Ask 3 种）、PermissionResult、PermissionDecisionReason（18 种）、ClassifierResult、YoloClassifierResult、ToolPermissionContext | ❌ 大部分缺失 |
+| `types/message.ts` | 135 | 消息类型：MessageOrigin、MessageBase、20+ 消息类型（Attachment/User/Assistant/Progress/System/StreamEvent/ToolUseSummary/SystemCompactBoundary/Tombstone/HookResult 等）、NormalizedMessage | ❌ 部分缺失 |
+| `types/tools.ts` | 16 | 工具进度：ToolProgressData（10 种子类型） | ❌ 缺失 |
+| `types/command.ts` | - | 命令类型定义 | ❌ 缺失 |
+| `types/connectorText.ts` | - | Connector 文本块类型 | ❌ 缺失 |
+| `types/fileSuggestion.ts` | - | 文件建议类型 | ❌ 缺失 |
+| `types/logs.ts` | - | 日志类型 | ❌ 缺失 |
+| `types/messageQueueTypes.ts` | - | 消息队列类型 | ❌ 缺失 |
+| `types/notebook.ts` | 2 | Notebook 单元格类型 | ❌ 缺失 |
+| `types/statusLine.ts` | - | 状态栏类型 | ❌ 缺失 |
+| `types/textInputTypes.ts` | - | 文本输入类型 | ❌ 缺失 |
+| `types/utils.ts` | - | 工具类型 | ❌ 缺失 |
+| `types/generated/` | 多文件 | 自动生成的类型 | ❌ 缺失 |
+
+#### 21.9.7 Tools 工具实现缺失（50+ 子目录）
+
+Claude Code 的每个工具都有独立子目录，包含实现、Prompt、类型定义。remote-code 的工具实现集中在 `crates/rc-tools/src/` 的平面文件中。
+
+**完全缺失的工具子目录（remote-code 无对应实现）：**
+
+| 工具子目录 | 功能描述 | remote-code 状态 |
+|-----------|---------|-----------------|
+| `tools/AgentTool/` | Agent 工具：loadAgentsDir、AgentDefinition、prompt 生成 | ❌ 缺失（rc-tools/agent.rs 有基础） |
+| `tools/AskUserQuestionTool/` | 用户提问工具 | ❌ 缺失 |
+| `tools/BriefTool/` | Brief 工具 | ❌ 缺失 |
+| `tools/ConfigTool/` | 配置工具 | ❌ 缺失 |
+| `tools/DiscoverSkillsTool/` | Skill 发现工具 | ❌ 缺失 |
+| `tools/EnterPlanModeTool/` / `ExitPlanModeTool/` | Plan Mode 切换 | ❌ 缺失 |
+| `tools/EnterWorktreeTool/` / `ExitWorktreeTool/` | Worktree 切换 | ❌ 缺失 |
+| `tools/GlobTool/` | Glob 搜索（独立实现） | ❌ 缺失 |
+| `tools/GrepTool/` | Grep 搜索（独立实现） | ❌ 缺失 |
+| `tools/ListMcpResourcesTool/` / `ReadMcpResourceTool/` | MCP 资源读写 | ❌ 缺失 |
+| `tools/McpAuthTool/` | MCP 认证 | ❌ 缺失 |
+| `tools/MCPTool/` | MCP 调用工具 | ❌ 缺失 |
+| `tools/MonitorTool/` | 监控工具 | ❌ 缺失 |
+| `tools/NotebookEditTool/` | Notebook 编辑 | ❌ 缺失 |
+| `tools/OverflowTestTool/` / `SyntheticOutputTool/` | 测试工具 | ❌ 缺失 |
+| `tools/PowerShellTool/` | PowerShell 工具 | ❌ 缺失 |
+| `tools/REPLTool/` | REPL 工具 | ❌ 缺失 |
+| `tools/ReviewArtifactTool/` | Review Artifact | ❌ 缺失 |
+| `tools/ScheduleCronTool/` | Cron 调度 | ❌ 缺失 |
+| `tools/SendMessageTool/` | 消息发送 | ❌ 缺失 |
+| `tools/SendUserFileTool/` | 用户文件发送 | ❌ 缺失 |
+| `tools/Shared/` | 共享工具代码 | ❌ 缺失 |
+| `tools/SkillTool/` | Skill 工具 | ❌ 缺失 |
+| `tools/SleepTool/` | Sleep 工具 | ❌ 缺失 |
+| `tools/SnipTool/` | Snip 工具 | ❌ 缺失 |
+| `tools/TaskCreateTool/` / `TaskGetTool/` / `TaskListTool/` / `TaskOutputTool/` / `TaskStopTool/` / `TaskUpdateTool/` | 任务 CRUD | ❌ 缺失 |
+| `tools/TeamCreateTool/` / `TeamDeleteTool/` | 团队管理 | ❌ 缺失 |
+| `tools/TerminalCaptureTool/` | 终端捕获 | ❌ 缺失 |
+| `tools/TodoWriteTool/` | Todo 写入 | ❌ 缺失 |
+| `tools/ToolSearchTool/` | 工具搜索 | ❌ 缺失 |
+| `tools/TungstenTool/` | Tungsten 工具 | ❌ 缺失 |
+| `tools/VerifyPlanExecutionTool/` | Plan 验证 | ❌ 缺失 |
+| `tools/WebBrowserTool/` | Web 浏览器 | ❌ 缺失 |
+| `tools/WebFetchTool/` | Web 获取 | ❌ 缺失 |
+| `tools/WebSearchTool/` | Web 搜索 | ❌ 缺失 |
+| `tools/WorkflowTool/` | 工作流 | ❌ 缺失 |
+| `tools/testing/` | 测试工具集 | ❌ 缺失 |
+
+**已有但实现深度不足的工具子目录：**
+
+| 工具子目录 | Claude Code 实现 | remote-code 状态 |
+|-----------|-----------------|-----------------|
+| `tools/BashTool/` | 完整 Bash 工具含 Prompt（370 行）、background、git safety、readonly、semantics | 🟡 rc-tools/shell/ 有部分实现 |
+| `tools/FileEditTool/` | 完整编辑工具含 types、prompt、image processor | 🟡 rc-tools/file_ops.rs 有基础 |
+| `tools/FileReadTool/` | 完整读取工具含 image processor、prompt | 🟡 rc-tools/file_ops.rs 有基础 |
+| `tools/FileWriteTool/` | 完整写入工具 | 🟡 rc-tools/file_ops.rs 有基础 |
+| `tools/LSPTool/` | LSP 工具含 definitions/references/hover/completion | 🟡 rc-tools/lsp.rs 有基础 |
+
+#### 21.9.8 关键发现总结
+
+**规模对比：**
+
+| 维度 | Claude Code | remote-code | 覆盖率 |
+|------|------------|-------------|--------|
+| 总文件数 | ~2,048 | ~350 | ~17% |
+| 总代码行 | ~200,000 | ~53,000 | ~27% |
+| Utils 文件 | 200+ | ~10 | ~5% |
+| Hooks 文件 | 105 | 0 | 0% |
+| Components 文件 | 407 | 0 (不同框架) | N/A |
+| Services 子目录 | 28 | 0 | 0% |
+| Types 文件 | 19 | ~5 | ~26% |
+| Tools 子目录 | 50+ | 0 (平面文件) | N/A |
+| Permission 系统文件 | 25+ | 6 | ~24% |
+| Plugin 系统文件 | 40+ | 1 | ~2.5% |
+| Model 管理文件 | 16 | 1 | ~6% |
+| Settings 管理文件 | 15+ | 2 | ~13% |
+
+**最关键的缺失（按影响排序）：**
+
+1. **API 客户端深度**（`services/api/claude.ts` 3,420 行）：Effort Level、Max Output Token 升级、Cache Editing Header、Fast Mode Header、AFK Mode Header、Fingerprint 计算等 15+ 个请求参数动态构建
+2. **认证系统**（`utils/auth.ts` 2,053 行）：OAuth 刷新、API Key Helper、AWS STS、Secure Storage、macOS Keychain 等 7 种认证方式
+3. **Compact 引擎**（`services/compact/compact.ts` 1,706 行）：5 种策略、Forked Agent、Pre/Post Hooks
+4. **GrowthBook A/B 测试**（`services/analytics/growthbook.ts` 1,156 行）：Feature Flag、Remote Eval、Security Gate
+5. **文件检查点**（`utils/fileHistory.ts` 1,116 行）：快照、备份、Diff 统计
+6. **Teleport 系统**（`utils/teleport.tsx` 1,226 行）：跨机器会话恢复
+7. **Worktree 管理**（`utils/worktree.ts` 1,520 行）：Git Worktree 完整生命周期
+8. **图片处理**（`utils/imageResizer.ts` 881 行）：Sharp 集成、8 种错误分类
+9. **Fast Mode**（`utils/fastMode.ts` 533 行）：订阅检查、GrowthBook 开关
+10. **Effort Level**（`utils/effort.ts` 330 行）：4 级努力度、模型支持检测
+11. **权限系统**（`utils/permissions/` 25+ 文件）：YOLO 分类器、Bash 分类器、Auto Mode State、Shadowed Rule Detection
+12. **插件系统**（`utils/plugins/` 40+ 文件）：Marketplace、ZIP Cache、Dependency Resolver、Versioning
+13. **Swarm 系统**（`utils/swarm/` 10+ 文件 + `backends/` 9 文件）：InProcess/ITerm/Tmux/Pane 4 种后端
+14. **Hook 类型系统**（`types/hooks.ts` 291 行）：6 种 HookSpecificOutput、Zod Schema 验证
+15. **通知系统**（`hooks/notifs/` 17 文件）：Rate Limit、Fast Mode、Plugin、LSP、MCP 等 17 种通知
+
+---
+
+## 22. Rust 实现细化方案（基于 §21 全量差距分析）
+
+> 本节将 §21 发现的所有差距映射到具体的 Rust crate 结构、文件清单和实现规范。
+> 所有实现遵循 Rust 惯例：强类型、零成本抽象、async/await、trait 对象、serde 序列化。
+
+### 22.1 新增 Crate 架构
+
+基于 §21 差距分析，需要新增以下 crate：
+
+| 新 Crate | 对应 Claude Code | 职责 | 依赖 |
+|----------|-----------------|------|------|
+| `rc-auth` | `utils/auth.ts` (2,053 行) + `utils/secureStorage/` (7 文件) + `services/oauth/` (6 文件) | 认证系统：OAuth2 PKCE、API Key Helper、AWS STS、macOS Keychain、Secure Storage 抽象 | rc-core, reqwest, oauth2, keyring |
+| `rc-model` | `utils/model/` (16 文件) | 模型管理：能力查询、别名、弃用、白名单、1M 权限、Provider 配置 | rc-core, rc-config |
+| `rc-settings` | `utils/settings/` (15+ 文件) + `utils/settings/mdm/` | 设置管理：Schema 验证、变更检测、MDM 企业管理、插件策略 | rc-core, rc-config, serde_json |
+| `rc-permissions-v2` | `utils/permissions/` (25+ 文件) | 权限系统 V2：YOLO 分类器、Bash 分类器、Auto Mode、Shadowed Rule | rc-core, rc-permissions |
+| `rc-compact` | `services/compact/` (14 文件) | Compact 引擎：auto/micro/snip/reactive/sessionMemory 5 种策略 | rc-core, rc-provider, rc-query-engine |
+| `rc-plugins` | `utils/plugins/` (40+ 文件) + `services/plugins/` (3 文件) | 插件系统：Marketplace、ZIP Cache、依赖解析、版本管理 | rc-core, rc-config, rc-mcp |
+| `rc-swarm` | `utils/swarm/` (10+ 文件) + `backends/` (9 文件) | Swarm/Team：InProcess/ITerm/Tmux/Pane 后端、权限同步 | rc-core, rc-agents, rc-permissions-v2 |
+| `rc-teleport` | `utils/teleport.tsx` (1,226 行) + `utils/teleport/` (3 文件) | Session 传送：Git Bundle、环境选择、跨机器恢复 | rc-core, rc-session, rc-auth |
+| `rc-file-history` | `utils/fileHistory.ts` (1,116 行) | 文件检查点：快照、备份、Diff 统计 | rc-core, rc-session |
+| `rc-image` | `utils/imageResizer.ts` (881 行) | 图片处理：缩放、格式转换、base64、错误分类 | image, base64 |
+| `rc-analytics` | `services/analytics/` (9 文件) | 分析系统：GrowthBook A/B、Datadog、1P 事件日志 | rc-core, reqwest |
+| `rc-skill-search` | `services/skillSearch/` (7 文件) | Skill 搜索：本地索引、远程加载、预取 | rc-skills, rc-core |
+| `rc-context` | `utils/context.ts` (228 行) + `services/contextCollapse/` (3 文件) | 上下文管理：窗口计算、1M 检测、折叠 | rc-core, rc-model |
+| `rc-cron` | `utils/cron.ts` (309 行) + `utils/cronScheduler.ts` + `utils/cronTasks.ts` | Cron 调度：表达式解析、任务执行、Jitter | cron, tokio |
+| `rc-voice` | `services/voice.ts` + `utils/voiceStreamSTT.ts` | 语音：STT 流、关键词检测 | rc-core, reqwest |
+| `rc-markdown-tui` | `utils/markdown.ts` (382 行) | 终端 Markdown 渲染：marked 等价、语法高亮、主题 | rc-tui, syntect |
+| `rc-ide` | `utils/ide.ts` + `utils/jetbrains.ts` + `bridge/` (34 文件) | IDE 集成：VSCode/JetBrains 连接、路径转换 | rc-core, rc-ui-bridge |
+| `rc-team-memory` | `services/teamMemorySync/` (5 文件) + `services/SessionMemory/` (3 文件) | 团队记忆同步：Secret Scanner、Watch | rc-core, rc-session |
+| `rc-managed-settings` | `services/remoteManagedSettings/` (6 文件) + `services/settingsSync/` (2 文件) | 远程托管设置：安全检查、同步缓存 | rc-settings, rc-auth |
+
+### 22.2 核心 Rust 文件映射（按子系统）
+
+#### 22.2.1 认证系统 → `crates/rc-auth/`
+
+```
+crates/rc-auth/
+├── Cargo.toml
+├── src/
+│   ├── lib.rs                    # 公共 API 导出
+│   ├── oauth/
+│   │   ├── mod.rs                # OAuth2 模块入口
+│   │   ├── client.rs             # OAuth 客户端（token 刷新/过期检测）
+│   │   ├── pkce.rs               # PKCE challenge/verifier 生成
+│   │   ├── auth_code_listener.rs # 本地 HTTP 服务器接收授权码
+│   │   ├── profile.rs            # OAuth Profile 获取
+│   │   └── types.rs              # OAuthTokens, SubscriptionType
+│   ├── api_key/
+│   │   ├── mod.rs                # API Key 模块
+│   │   ├── helper.rs             # API Key Helper（5min TTL 缓存）
+│   │   └── file_descriptor.rs    # 文件描述符读取
+│   ├── aws/
+│   │   ├── mod.rs                # AWS 认证
+│   │   ├── sts.rs                # STS Caller Identity 校验
+│   │   └── ini_cache.rs          # AWS INI 缓存
+│   ├── secure_storage/
+│   │   ├── mod.rs                # Secure Storage trait
+│   │   ├── keychain.rs           # macOS Keychain (keyring crate)
+│   │   ├── plaintext.rs          # 纯文本后备
+│   │   ├── fallback.rs           # 降级存储
+│   │   └── prefetch.rs           # Keychain 预取
+│   ├── provider_auth.rs          # Provider 认证分发（first-party/bedrock/vertex）
+│   ├── managed_context.rs        # Managed OAuth Context 检测
+│   └── subscription.rs           # 订阅等级检查（free/pro/max/team）
+```
+
+**关键 trait 设计：**
+
+```rust
+/// 认证提供者 trait
+#[async_trait]
+pub trait AuthProvider: Send + Sync {
+    /// 获取认证 headers（用于 API 请求）
+    async fn auth_headers(&self) -> Result<Vec<(String, String)>>;
+    /// 检查是否需要刷新
+    async fn needs_refresh(&self) -> bool;
+    /// 刷新认证凭据
+    async fn refresh(&self) -> Result<()>;
+    /// 获取订阅类型
+    fn subscription_type(&self) -> SubscriptionType;
+}
+
+/// 安全存储 trait
+pub trait SecureStorage: Send + Sync {
+    fn get(&self, key: &str) -> Result<Option<String>>;
+    fn set(&self, key: &str, value: &str) -> Result<()>;
+    fn delete(&self, key: &str) -> Result<()>;
+}
+```
+
+#### 22.2.2 模型管理 → `crates/rc-model/`
+
+```
+crates/rc-model/
+├── Cargo.toml
+├── src/
+│   ├── lib.rs                    # 公共 API
+│   ├── model.rs                  # 模型选择逻辑（getDefaultSonnetModel/getDefaultOpusModel/getSmallFastModel）
+│   ├── capabilities.rs           # ModelCapability（max_input_tokens/effort/cache_editing 支持）
+│   ├── strings.rs                # 模型字符串规范化
+│   ├── aliases.rs                # 模型别名映射
+│   ├── ant_models.rs             # 内部模型定义
+│   ├── bedrock.rs                # Bedrock 模型适配
+│   ├── configs.rs                # 模型配置管理
+│   ├── deprecation.rs            # 弃用警告系统
+│   ├── allowlist.rs              # 模型白名单
+│   ├── validate.rs               # 模型名称校验
+│   ├── check_1m.rs               # 1M Context 权限检查
+│   ├── context_window_upgrade.rs # 上下文窗口升级检查
+│   ├── options.rs                # ModelOptions
+│   ├── support_overrides.rs      # 3P 模型能力覆盖
+│   ├── provider_config.rs        # Provider 配置
+│   └── providers.rs              # Provider 检测（first-party/bedrock/vertex/openai-compatible）
+```
+
+**关键类型：**
+
+```rust
+/// 模型能力描述
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelCapability {
+    pub max_input_tokens: Option<u32>,
+    pub max_output_tokens: Option<u32>,
+    pub supports_effort: bool,
+    pub supports_max_effort: bool,
+    pub supports_cache_editing: bool,
+    pub supports_1m_context: bool,
+    pub context_window: u32,
+}
+
+/// Effort Level（对应 utils/effort.ts）
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EffortLevel {
+    Low,
+    Medium,
+    High,
+    Max,
+}
+```
+
+#### 22.2.3 权限系统 V2 → `crates/rc-permissions-v2/`
+
+```
+crates/rc-permissions-v2/
+├── Cargo.toml
+├── src/
+│   ├── lib.rs
+│   ├── mode.rs                   # PermissionMode（7 种：acceptEdits/bypassPermissions/default/dontAsk/plan/auto/bubble）
+│   ├── rule.rs                   # PermissionRule + PermissionRuleValue
+│   ├── rule_parser.rs            # 规则解析器
+│   ├── decision.rs               # PermissionDecision（Allow/Deny/Ask）
+│   ├── result.rs                 # PermissionResult
+│   ├── explainer.rs              # 权限解释器（向用户解释为什么被允许/拒绝）
+│   ├── update.rs                 # PermissionUpdate 系统
+│   ├── setup.rs                  # 权限初始化设置
+│   ├── loader.rs                 # 权限规则加载器
+│   ├── classifier/
+│   │   ├── mod.rs                # 分类器 trait
+│   │   ├── yolo.rs               # YOLO 分类器（自动批准安全操作）
+│   │   ├── bash.rs               # Bash 命令分类器
+│   │   ├── shared.rs             # 共享分类逻辑
+│   │   └── prompts/              # 分类器提示词
+│   │       ├── yolo_allow.md
+│   │       └── yolo_deny.md
+│   ├── auto_mode.rs              # Auto Mode 状态管理
+│   ├── dangerous_patterns.rs     # 危险模式检测
+│   ├── denial_tracking.rs        # 拒绝追踪
+│   ├── filesystem.rs             # 文件系统权限检查
+│   ├── path_validation.rs        # 路径验证
+│   ├── shell_matching.rs         # Shell 命令规则匹配
+│   ├── shadowed_detection.rs     # Shadowed Rule 检测
+│   ├── bypass_killswitch.rs      # Bypass Permissions Killswitch
+│   └── handler/
+│       ├── mod.rs                # 权限处理 trait
+│       ├── interactive.rs        # 交互式处理
+│       ├── coordinator.rs        # Coordinator 处理
+│       └── swarm_worker.rs       # Swarm Worker 处理
+```
+
+#### 22.2.4 Compact 引擎 → `crates/rc-compact/`
+
+```
+crates/rc-compact/
+├── Cargo.toml
+├── src/
+│   ├── lib.rs
+│   ├── engine.rs                 # Compact 主引擎（对应 compact.ts 1,706 行）
+│   ├── strategy.rs               # CompactStrategy trait
+│   ├── auto.rs                   # Auto Compact（LLM 摘要）
+│   ├── micro.rs                  # Micro Compact（Cache Editing）
+│   ├── snip.rs                   # Snip Compact
+│   ├── snip_projection.rs        # Snip 投影
+│   ├── reactive.rs               # Reactive Compact
+│   ├── session_memory.rs         # Session Memory Compact
+│   ├── api_micro.rs              # API Microcompact
+│   ├── mc_config.rs              # MC 配置（cached + time-based）
+│   ├── grouping.rs               # 消息分组逻辑
+│   ├── prompt.rs                 # Compact Prompt 模板
+│   ├── post_cleanup.rs           # 后 Compact 清理
+│   ├── warning.rs                # Compact 警告 Hook + State
+│   └── forked_agent.rs           # Forked Agent 执行
+```
+
+**关键 trait：**
+
+```rust
+/// Compact 策略 trait
+#[async_trait]
+pub trait CompactStrategy: Send + Sync {
+    /// 策略名称
+    fn name(&self) -> &str;
+    /// 执行 compact
+    async fn compact(&self, ctx: &CompactContext) -> Result<CompactResult>;
+    /// 估算 compact 后的 token 数
+    fn estimate_tokens(&self, messages: &[Message]) -> u32;
+}
+
+/// Compact 上下文
+pub struct CompactContext {
+    pub messages: Vec<Message>,
+    pub tools: Vec<ToolDef>,
+    pub system_prompt: String,
+    pub max_output_tokens: u32,
+    pub can_use_tool: Box<dyn CanUseToolFn>,
+    pub file_history_state: FileHistoryState,
+}
+```
+
+#### 22.2.5 插件系统 → `crates/rc-plugins/`
+
+```
+crates/rc-plugins/
+├── Cargo.toml
+├── src/
+│   ├── lib.rs
+│   ├── loader.rs                 # 插件加载器
+│   ├── schemas.rs                # PluginManifest Schema
+│   ├── marketplace/
+│   │   ├── mod.rs
+│   │   ├── manager.rs            # 市场管理器
+│   │   ├── official.rs           # 官方市场
+│   │   ├── gcs.rs                # GCS 存储
+│   │   ├── helpers.rs            # 市场辅助
+│   │   ├── startup_check.rs      # 启动检查
+│   │   └── input_parser.rs       # 输入解析
+│   ├── installation/
+│   │   ├── mod.rs
+│   │   ├── manager.rs            # 安装管理器
+│   │   ├── helpers.rs            # 安装辅助
+│   │   ├── headless.rs           # 无头安装
+│   │   └── counts.rs             # 安装计数
+│   ├── autoupdate.rs             # 自动更新
+│   ├── blocklist.rs              # 黑名单
+│   ├── flagging.rs               # 插件标记
+│   ├── policy.rs                 # 插件策略
+│   ├── versioning.rs             # 版本管理
+│   ├── dependency.rs             # 依赖解析
+│   ├── reconciler.rs             # 协调器
+│   ├── refresh.rs                # 刷新
+│   ├── validate.rs               # 验证
+│   ├── markdown_walker.rs        # Markdown 解析
+│   ├── zip_cache.rs              # ZIP 缓存
+│   ├── directories.rs            # 目录管理
+│   ├── identifier.rs             # 标识符
+│   ├── options_storage.rs        # 选项存储
+│   ├── startup_check.rs          # 启动检查
+│   ├── orphan_filter.rs          # 孤儿过滤
+│   ├── git_availability.rs       # Git 检测
+│   ├── telemetry.rs              # 遥测
+│   ├── hint_recommendation.rs    # 推荐提示
+│   ├── managed.rs                # 托管插件
+│   ├── mcpb_handler.rs           # MCPB 处理
+│   ├── load_commands.rs          # 命令加载
+│   ├── load_hooks.rs             # Hook 加载
+│   ├── load_agents.rs            # Agent 加载
+│   ├── load_output_styles.rs     # 输出风格加载
+│   ├── mcp_integration.rs        # MCP 集成
+│   └── lsp_integration.rs        # LSP 集成
+```
+
+#### 22.2.6 Swarm 系统 → `crates/rc-swarm/`
+
+```
+crates/rc-swarm/
+├── Cargo.toml
+├── src/
+│   ├── lib.rs
+│   ├── constants.rs              # 常量
+│   ├── team_helpers.rs           # 团队辅助
+│   ├── teammate_init.rs          # Teammate 初始化
+│   ├── teammate_model.rs         # Teammate 模型
+│   ├── teammate_prompt.rs        # Teammate Prompt 附加
+│   ├── teammate_layout.rs        # Teammate 布局管理
+│   ├── permission_sync.rs        # 权限同步
+│   ├── reconnection.rs           # 重连逻辑
+│   ├── spawn_utils.rs            # Spawn 工具
+│   ├── leader_bridge.rs          # Leader 权限桥接
+│   ├── in_process_runner.rs      # In-Process 运行器
+│   ├── it2_setup.rs              # iTerm2 设置 Prompt
+│   └── backends/
+│       ├── mod.rs                # Backend trait
+│       ├── types.rs              # Backend 类型
+│       ├── registry.rs           # Backend 注册表
+│       ├── detection.rs          # 终端检测
+│       ├── in_process.rs         # In-Process Backend
+│       ├── iterm.rs              # iTerm Backend
+│       ├── tmux.rs               # Tmux Backend
+│       ├── pane.rs               # Pane Backend Executor
+│       └── teammate_snapshot.rs  # Teammate 模式快照
+```
+
+#### 22.2.7 设置管理 → `crates/rc-settings/`
+
+```
+crates/rc-settings/
+├── Cargo.toml
+├── src/
+│   ├── lib.rs
+│   ├── types.rs                  # Settings 类型定义
+│   ├── settings.rs               # 读写操作
+│   ├── validation.rs             # Schema 验证
+│   ├── validate_edit.rs          # Edit 工具验证
+│   ├── apply_change.rs           # 变更应用
+│   ├── change_detector.rs        # 变更检测
+│   ├── internal_writes.rs        # 内部写入
+│   ├── managed_path.rs           # 托管路径
+│   ├── permission_validation.rs  # 权限验证
+│   ├── plugin_policy.rs          # 插件策略
+│   ├── schema_output.rs          # Schema 输出
+│   ├── cache.rs                  # 设置缓存
+│   ├── tool_validation.rs        # 工具验证配置
+│   ├── validation_tips.rs        # 验证提示
+│   ├── constants.rs              # 常量
+│   ├── all_errors.rs             # 错误收集
+│   └── mdm/
+│       ├── mod.rs                # MDM 企业管理
+│       └── profile.rs            # MDM Profile
+```
+
+#### 22.2.8 API 客户端增强 → `crates/rc-provider/` 扩展
+
+```
+crates/rc-provider/src/
+├── ... (existing files)
+├── api_client.rs                 # 新增：完整 API 客户端（对应 claude.ts 3,420 行）
+├── effort.rs                     # 新增：Effort Level 请求参数构建
+├── max_tokens.rs                 # 新增：Max Output Token 升级逻辑（8000→64000）
+├── cache_headers.rs              # 新增：Cache Editing / Fast Mode / AFK Mode Headers
+├── fingerprint.rs                # 新增：消息指纹计算
+├── attribution.rs                # 新增：Attribution Header 构建
+├── beta_headers.rs               # 新增：动态 Beta Headers 合并
+├── retry.rs                      # 新增：重试逻辑
+├── openai_compat.rs              # 新增：OpenAI 兼容客户端
+├── session_ingress.rs            # 新增：Session Ingress API
+├── grove.rs                      # 新增：Grove API
+├── files_api.rs                  # 新增：文件 API
+├── usage.rs                      # 新增：用量查询
+├── referral.rs                   # 新增：推荐系统
+├── overage_credit.rs             # 新增：超额信用
+├── admin.rs                      # 新增：管理请求
+├── prompt_dump.rs                # 新增：Prompt 转储
+├── cache_break.rs                # 新增：Cache 中断检测
+└── metrics_optout.rs             # 新增：指标退出
+```
+
+### 22.3 更新后的 Phase 执行计划
+
+基于 §21 差距分析，更新 Phase 1-8 的具体文件清单：
+
+#### Phase 1 更新：核心类型 + 认证 + 模型管理（4-5 周）
+
+**新增文件：**
+
+| 文件 | 对应 Claude Code | 功能 |
+|------|-----------------|------|
+| `crates/rc-auth/src/lib.rs` | `utils/auth.ts` | 认证系统入口 |
+| `crates/rc-auth/src/oauth/client.rs` | `services/oauth/client.ts` | OAuth 客户端 |
+| `crates/rc-auth/src/oauth/pkce.rs` | `services/oauth/crypto.ts` | PKCE |
+| `crates/rc-auth/src/oauth/auth_code_listener.rs` | `services/oauth/auth-code-listener.ts` | 授权码监听 |
+| `crates/rc-auth/src/oauth/types.rs` | `services/oauth/types.ts` | OAuth 类型 |
+| `crates/rc-auth/src/secure_storage/mod.rs` | `utils/secureStorage/index.ts` | 安全存储 trait |
+| `crates/rc-auth/src/secure_storage/keychain.rs` | `utils/secureStorage/macOsKeychainStorage.ts` | macOS Keychain |
+| `crates/rc-auth/src/provider_auth.rs` | `utils/auth.ts:100-200` | Provider 认证分发 |
+| `crates/rc-auth/src/subscription.rs` | `utils/auth.ts` 部分 | 订阅等级 |
+| `crates/rc-model/src/lib.rs` | `utils/model/` | 模型管理入口 |
+| `crates/rc-model/src/model.rs` | `utils/model/model.ts` | 模型选择 |
+| `crates/rc-model/src/capabilities.rs` | `utils/model/modelCapabilities.ts` | 能力查询 |
+| `crates/rc-model/src/providers.rs` | `utils/model/providers.ts` | Provider 检测 |
+| `crates/rc-model/src/aliases.rs` | `utils/model/aliases.ts` | 模型别名 |
+| `crates/rc-model/src/validate.rs` | `utils/model/validateModel.ts` | 校验 |
+| `crates/rc-model/src/allowlist.rs` | `utils/model/modelAllowlist.ts` | 白名单 |
+| `crates/rc-model/src/check_1m.rs` | `utils/model/check1mAccess.ts` | 1M 权限 |
+| `crates/rc-context/src/lib.rs` | `utils/context.ts` | 上下文管理 |
+| `crates/rc-context/src/window.rs` | `utils/context.ts:51-98` | 窗口计算 |
+| `crates/rc-context/src/effort.rs` | `utils/effort.ts` | Effort Level |
+| `crates/rc-context/src/fast_mode.rs` | `utils/fastMode.ts` | Fast Mode |
+| `crates/rc-core/src/ids.rs` 更新 | `types/ids.ts` | Branded SessionId/AgentId |
+| `crates/rc-core/src/message.rs` 更新 | `types/message.ts` | 20+ 消息类型 |
+
+**Phase 1 验证标准：**
+- [ ] OAuth PKCE 流程可完成认证
+- [ ] API Key Helper 可缓存 5 分钟
+- [ ] 模型能力查询返回正确结果
+- [ ] Effort Level 支持 low/medium/high/max
+- [ ] Context Window 正确计算（含 1M 检测）
+- [ ] Fast Mode 可根据订阅等级启用/禁用
+- [ ] Branded ID 类型编译时检查
+
+#### Phase 2 更新：Query Engine V2 + Compact（5-6 周）
+
+**新增文件：**
+
+| 文件 | 对应 Claude Code | 功能 |
+|------|-----------------|------|
+| `crates/rc-compact/src/engine.rs` | `services/compact/compact.ts` (1,706 行) | Compact 主引擎 |
+| `crates/rc-compact/src/strategy.rs` | Compact Strategy trait | 策略接口 |
+| `crates/rc-compact/src/auto.rs` | `services/compact/autoCompact.ts` | Auto Compact |
+| `crates/rc-compact/src/micro.rs` | `services/compact/microCompact.ts` | Micro Compact |
+| `crates/rc-compact/src/snip.rs` | `services/compact/snipCompact.ts` | Snip Compact |
+| `crates/rc-compact/src/reactive.rs` | `services/compact/reactiveCompact.ts` | Reactive Compact |
+| `crates/rc-compact/src/session_memory.rs` | `services/compact/sessionMemoryCompact.ts` | Session Memory |
+| `crates/rc-compact/src/prompt.rs` | `services/compact/prompt.ts` | Compact Prompt |
+| `crates/rc-compact/src/forked_agent.rs` | `utils/forkedAgent.ts` | Forked Agent |
+| `crates/rc-provider/src/api_client.rs` | `services/api/claude.ts` (3,420 行) | 完整 API 客户端 |
+| `crates/rc-provider/src/effort.rs` | Effort 请求参数 | |
+| `crates/rc-provider/src/max_tokens.rs` | Token 升级逻辑 | |
+| `crates/rc-provider/src/cache_headers.rs` | Cache Headers | |
+| `crates/rc-provider/src/fingerprint.rs` | 消息指纹 | |
+| `crates/rc-provider/src/attribution.rs` | Attribution Header | |
+| `crates/rc-provider/src/beta_headers.rs` | Beta Headers | |
+| `crates/rc-provider/src/retry.rs` | 重试逻辑 | |
+
+**Phase 2 验证标准：**
+- [ ] Auto Compact 可在 token 超限时自动触发
+- [ ] Micro Compact 可通过 Cache Editing 减少 token
+- [ ] Snip Compact 可正确裁剪消息
+- [ ] API 客户端支持 Effort Level 参数
+- [ ] API 客户端支持 Max Output Token 升级
+- [ ] API 客户端支持 Cache Editing Header
+- [ ] Fingerprint 计算与 Claude Code 一致
+- [ ] Beta Headers 正确合并（含 Bedrock/Vertex 特殊处理）
+
+#### Phase 3 更新：权限 + 设置 + 插件（5-6 周）
+
+**新增文件：**
+
+| 文件 | 对应 Claude Code | 功能 |
+|------|-----------------|------|
+| `crates/rc-permissions-v2/src/` (25+ 文件) | `utils/permissions/` | 完整权限系统 V2 |
+| `crates/rc-settings/src/` (15+ 文件) | `utils/settings/` | 设置管理 |
+| `crates/rc-plugins/src/` (40+ 文件) | `utils/plugins/` | 插件系统 |
+| `crates/rc-file-history/src/lib.rs` | `utils/fileHistory.ts` (1,116 行) | 文件检查点 |
+| `crates/rc-file-history/src/snapshot.rs` | FileHistorySnapshot | 快照管理 |
+| `crates/rc-file-history/src/backup.rs` | FileHistoryBackup | 备份管理 |
+| `crates/rc-file-history/src/diff_stats.rs` | DiffStats | Diff 统计 |
+
+**Phase 3 验证标准：**
+- [ ] 7 种 Permission Mode 全部可用
+- [ ] YOLO 分类器可自动批准安全操作
+- [ ] Bash 分类器可识别危险命令
+- [ ] Auto Mode 可根据规则自动决策
+- [ ] 设置变更可持久化并触发回调
+- [ ] MDM 企业设置可强制覆盖
+- [ ] 插件可从 Marketplace 安装/更新/卸载
+- [ ] 文件检查点可在编辑前自动备份
+- [ ] Diff 统计可正确计算行数变更
+
+#### Phase 4 更新：System Prompt + Swarm + Teleport（5-6 周）
+
+**新增文件：**
+
+| 文件 | 对应 Claude Code | 功能 |
+|------|-----------------|------|
+| `crates/rc-swarm/src/` (20+ 文件) | `utils/swarm/` + `backends/` | Swarm 系统 |
+| `crates/rc-teleport/src/lib.rs` | `utils/teleport.tsx` (1,226 行) | Session 传送 |
+| `crates/rc-teleport/src/git_bundle.rs` | `utils/teleport/gitBundle.ts` | Git Bundle |
+| `crates/rc-teleport/src/environments.rs` | `utils/teleport/environments.ts` | 环境选择 |
+| `crates/rc-teleport/src/api.rs` | `utils/teleport/api.ts` | Teleport API |
+| System Prompt 23 个 section | `constants/prompts.ts` (915 行) | 完整系统提示词 |
+
+**Phase 4 验证标准：**
+- [ ] Swarm 可创建 In-Process/ITerm/Tmux 后端
+- [ ] Teammate 可独立运行并同步权限
+- [ ] Teleport 可跨机器恢复会话
+- [ ] Git Bundle 可正确创建和上传
+- [ ] System Prompt 23 个 section 全部可组装
+- [ ] Prompt Cache 架构正确（static/dynamic boundary）
+
+#### Phase 5-8 保持不变，但增加以下验证项：
+
+**Phase 5 TUI 验证：**
+- [ ] 120+ 顶层组件全部有 ratatui 等价实现
+- [ ] 30 个子目录组件全部映射
+- [ ] Agent 创建向导 10 步骤全部可用
+- [ ] 虚拟滚动列表可处理 10,000+ 消息
+- [ ] Vim 输入模式可用
+- [ ] Markdown 渲染支持语法高亮
+
+**Phase 6 MCP/Agent/Hook 验证：**
+- [ ] 54 个 Hook 事件全部触发
+- [ ] 6 种 HookSpecificOutput 全部处理
+- [ ] 7 种 MCP Transport 全部连接
+- [ ] 17 种通知 Hook 全部显示
+- [ ] Coordinator/Worker 模式可用
+- [ ] Fork Subagent 可独立运行
+
+**Phase 7 CLI/Skills/Memory 验证：**
+- [ ] 80+ Slash Commands 全部注册
+- [ ] Skill 搜索（本地+远程）可用
+- [ ] 团队记忆同步含 Secret Scanner
+- [ ] Session Memory Compact 可用
+- [ ] Auto Dream Consolidation 可用
+
+**Phase 8 集成测试验证：**
+- [ ] 使用 MiniMax Provider (minimax-m2.7) 端到端测试
+- [ ] 使用 MiniMax MCP Server 测试工具调用
+- [ ] 所有 50+ 工具单元测试通过
+- [ ] 所有 7 种 Permission Mode 集成测试通过
+- [ ] 所有 5 种 Compact 策略集成测试通过
+- [ ] Swarm 4 种后端集成测试通过
+
+### 22.4 测试配置
+
+#### 22.4.1 MiniMax Provider 测试配置
+
+在 `crates/rc-config/src/lib.rs` 或环境变量中配置：
+
+```toml
+# .remote-code-profile/test-minimax.toml
+[provider]
+name = "minimax"
+base_url = "https://api.minimaxi.com/anthropic"
+api_key = "sk-cp-LwRmRL7DyMsvEVVYBo4t8ZQ_8tgy9_Pm5iQ2SZMyLOOjFVYeKeEX6rz97GY6um4VftEwLkyaXOnLJbftnGW13DkLyUjV9Pdq37uKS8IVEeLaEIpt4Vcey6o"
+protocol = "anthropic"
+model = "minimax-m2.7"
+```
+
+或通过环境变量：
+```bash
+export ANTHROPIC_API_KEY="sk-cp-LwRmRL7DyMsvEVVYBo4t8ZQ_8tgy9_Pm5iQ2SZMyLOOjFVYeKeEX6rz97GY6um4VftEwLkyaXOnLJbftnGW13DkLyUjV9Pdq37uKS8IVEeLaEIpt4Vcey6o"
+export ANTHROPIC_BASE_URL="https://api.minimaxi.com/anthropic"
+export REMOTE_CODE_MODEL="minimax-m2.7"
+```
+
+#### 22.4.2 MiniMax MCP Server 测试配置
+
+在 `.remote-code/mcp.json` 中配置：
+
+```json
+{
+  "mcpServers": {
+    "MiniMax": {
+      "command": "uvx",
+      "args": ["minimax-coding-plan-mcp", "-y"],
+      "env": {
+        "MINIMAX_API_KEY": "sk-cp-LwRmRL7DyMsvEVVYBo4t8ZQ_8tgy9_Pm5iQ2SZMyLOOjFVYeKeEX6rz97GY6um4VftEwLkyaXOnLJbftnGW13DkLyUjV9Pdq37uKS8IVEeLaEIpt4Vcey6o",
+        "MINIMAX_API_HOST": "https://api.minimaxi.com"
+      }
+    }
+  }
+}
+```
+
+#### 22.4.3 集成测试用例
+
+```rust
+// tests/integration/minimax_provider_test.rs
+#[tokio::test]
+async fn test_minimax_provider_basic_query() {
+    let config = ProviderConfig::new()
+        .base_url("https://api.minimaxi.com/anthropic")
+        .api_key("sk-cp-...")
+        .model("minimax-m2.7")
+        .protocol(Protocol::Anthropic);
+
+    let provider = Provider::new(config);
+    let response = provider.query("Hello, world!").await;
+    assert!(response.is_ok());
+}
+
+#[tokio::test]
+async fn test_minimax_mcp_tool_call() {
+    let mcp_config = McpConfig::from_file(".remote-code/mcp.json");
+    let client = McpClient::connect(&mcp_config.servers["MiniMax"]).await;
+    let tools = client.list_tools().await;
+    assert!(!tools.is_empty());
+}
+```
+
+### 22.5 实施优先级（修订版）
+
+基于 §21 差距分析和实际影响，修订实施优先级：
+
+#### 🔴 P0 — 第一批（核心行为等价，Phase 1-2）
+
+1. **认证系统** `rc-auth` — 无认证则无法使用任何 Provider
+2. **模型管理** `rc-model` — 无模型选择则无法发送请求
+3. **API 客户端增强** `rc-provider` 扩展 — Effort/MaxTokens/Cache Headers
+4. **Compact 引擎** `rc-compact` — 无 Compact 则长会话不可用
+5. **上下文管理** `rc-context` — Context Window/Effort/Fast Mode
+6. **Branded ID 类型** `rc-core/ids.rs` — 类型安全基础
+7. **消息类型系统** `rc-core/message.rs` — 20+ 消息类型
+8. **System Prompt 23 Section** — 无完整 Prompt 则行为不等价
+
+#### 🟡 P1 — 第二批（用户体验等价，Phase 3-4）
+
+9. **权限系统 V2** `rc-permissions-v2` — YOLO/Auto Mode
+10. **设置管理** `rc-settings` — Schema/MDM
+11. **文件检查点** `rc-file-history` — 快照/备份
+12. **插件系统** `rc-plugins` — Marketplace
+13. **Swarm 系统** `rc-swarm` — 多 Agent
+14. **Teleport** `rc-teleport` — 跨机器恢复
+15. **Hook 类型系统** — 54 事件 + 6 HookSpecificOutput
+
+#### 🟢 P2 — 第三批（差异化竞争，Phase 5-8）
+
+16. **TUI 120+ 组件** — 完整 UI 复刻
+17. **图片处理** `rc-image` — Sharp 等价
+18. **语音系统** `rc-voice` — STT
+19. **GrowthBook A/B** `rc-analytics` — Feature Flag
+20. **团队记忆同步** `rc-team-memory` — Secret Scanner
+21. **Skill 搜索** `rc-skill-search` — 远程加载
+22. **通知系统** — 17 种通知
+23. **Cron 调度** `rc-cron` — 定时任务
+24. **IDE 集成** `rc-ide` — VSCode/JetBrains
+25. **Worktree 管理** — 完整生命周期
+26. **Markdown TUI** `rc-markdown-tui` — 终端渲染

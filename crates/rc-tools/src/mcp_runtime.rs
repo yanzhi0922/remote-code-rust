@@ -3,7 +3,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 use rc_config::{RuntimeConfig, SettingSource};
-use rc_ui_bridge::{UiRuntimeMcpInventorySummary, UiRuntimeMcpOriginCounts};
+use rc_mcp::{McpClientInfo, McpServerInspection, inspect_server};
+use rc_ui_bridge::{
+    UiRuntimeMcpInventorySummary, UiRuntimeMcpOriginCounts, UiRuntimeMcpServerStatus,
+    UiRuntimeMcpStatusCounts,
+};
 
 use crate::{RuntimeMcpServerPolicyEntry, ToolRuntimePolicy};
 
@@ -18,6 +22,20 @@ pub struct RuntimeMcpServerEntry {
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeMcpDiscovery {
     pub servers: Vec<RuntimeMcpServerEntry>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeMcpServerObservation {
+    pub entry: RuntimeMcpServerEntry,
+    pub status: UiRuntimeMcpServerStatus,
+    pub inspection: Option<McpServerInspection>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeMcpObservation {
+    pub servers: Vec<RuntimeMcpServerObservation>,
     pub warnings: Vec<String>,
 }
 
@@ -56,30 +74,42 @@ impl RuntimeMcpDiscovery {
 
     #[must_use]
     pub fn inventory_summary(&self) -> UiRuntimeMcpInventorySummary {
+        summarize_runtime_mcp(&self.servers, &self.warnings, |entry| {
+            base_runtime_mcp_status(&entry.server)
+        })
+    }
+}
+
+impl RuntimeMcpObservation {
+    #[must_use]
+    pub fn inventory_summary(&self) -> UiRuntimeMcpInventorySummary {
         let unique_server_names = self
             .servers
             .iter()
-            .map(|entry| entry.server.name.as_str())
+            .map(|server| server.entry.server.name.as_str())
             .collect::<BTreeSet<_>>();
         let ambiguous_server_names = unique_server_names
             .iter()
             .filter(|name| {
                 self.servers
                     .iter()
-                    .filter(|entry| entry.server.name == **name)
+                    .filter(|server| server.entry.server.name == **name)
                     .nth(1)
                     .is_some()
             })
             .count();
         let mut origins = UiRuntimeMcpOriginCounts::default();
-        for entry in &self.servers {
-            match entry.origin_kind {
+        let mut status_counts = UiRuntimeMcpStatusCounts::default();
+
+        for server in &self.servers {
+            match server.entry.origin_kind {
                 "cwd" => origins.cwd += 1,
                 "profile" => origins.profile += 1,
                 "explicit" => origins.explicit += 1,
                 "plugin" => origins.plugin += 1,
                 _ => {}
             }
+            accumulate_runtime_mcp_status_count(&mut status_counts, server.status);
         }
 
         UiRuntimeMcpInventorySummary {
@@ -87,17 +117,18 @@ impl RuntimeMcpDiscovery {
             enabled_servers: self
                 .servers
                 .iter()
-                .filter(|entry| entry.server.enabled)
+                .filter(|server| server.entry.server.enabled)
                 .count(),
             disabled_servers: self
                 .servers
                 .iter()
-                .filter(|entry| !entry.server.enabled)
+                .filter(|server| !server.entry.server.enabled)
                 .count(),
             unique_server_names: unique_server_names.len(),
             ambiguous_server_names,
             warning_count: self.warnings.len(),
             origins,
+            status_counts,
         }
     }
 }
@@ -121,6 +152,45 @@ pub fn runtime_mcp_inventory_summary(
     extra_config_paths: &[PathBuf],
 ) -> UiRuntimeMcpInventorySummary {
     discover_runtime_mcp_servers(config, extra_config_paths).inventory_summary()
+}
+
+pub async fn observe_runtime_mcp_servers(
+    config: &RuntimeConfig,
+    extra_config_paths: &[PathBuf],
+    connect: bool,
+    client_info: &McpClientInfo,
+) -> RuntimeMcpObservation {
+    let discovery = discover_runtime_mcp_servers(config, extra_config_paths);
+    let mut servers = Vec::with_capacity(discovery.servers.len());
+
+    for entry in discovery.servers {
+        let mut observation = RuntimeMcpServerObservation {
+            status: base_runtime_mcp_status(&entry.server),
+            entry,
+            inspection: None,
+            error: None,
+        };
+
+        if connect && observation.entry.server.enabled {
+            match inspect_server(&observation.entry.server, client_info).await {
+                Ok(inspection) => {
+                    observation.status = UiRuntimeMcpServerStatus::Connected;
+                    observation.inspection = Some(inspection);
+                }
+                Err(error) => {
+                    observation.status = UiRuntimeMcpServerStatus::Failed;
+                    observation.error = Some(error.to_string());
+                }
+            }
+        }
+
+        servers.push(observation);
+    }
+
+    RuntimeMcpObservation {
+        servers,
+        warnings: discovery.warnings,
+    }
 }
 
 pub fn resolve_runtime_policy_mcp_server(
@@ -300,6 +370,72 @@ fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool
     config.allowed_setting_sources.contains(&source)
 }
 
+fn base_runtime_mcp_status(server: &rc_mcp::McpServerConfig) -> UiRuntimeMcpServerStatus {
+    if server.enabled {
+        UiRuntimeMcpServerStatus::Pending
+    } else {
+        UiRuntimeMcpServerStatus::Disabled
+    }
+}
+
+fn accumulate_runtime_mcp_status_count(
+    counts: &mut UiRuntimeMcpStatusCounts,
+    status: UiRuntimeMcpServerStatus,
+) {
+    match status {
+        UiRuntimeMcpServerStatus::Connected => counts.connected += 1,
+        UiRuntimeMcpServerStatus::Failed => counts.failed += 1,
+        UiRuntimeMcpServerStatus::NeedsAuth => counts.needs_auth += 1,
+        UiRuntimeMcpServerStatus::Pending => counts.pending += 1,
+        UiRuntimeMcpServerStatus::Disabled => counts.disabled += 1,
+    }
+}
+
+fn summarize_runtime_mcp(
+    servers: &[RuntimeMcpServerEntry],
+    warnings: &[String],
+    status_for_server: impl Fn(&RuntimeMcpServerEntry) -> UiRuntimeMcpServerStatus,
+) -> UiRuntimeMcpInventorySummary {
+    let unique_server_names = servers
+        .iter()
+        .map(|entry| entry.server.name.as_str())
+        .collect::<BTreeSet<_>>();
+    let ambiguous_server_names = unique_server_names
+        .iter()
+        .filter(|name| {
+            servers
+                .iter()
+                .filter(|entry| entry.server.name == **name)
+                .nth(1)
+                .is_some()
+        })
+        .count();
+    let mut origins = UiRuntimeMcpOriginCounts::default();
+    let mut status_counts = UiRuntimeMcpStatusCounts::default();
+
+    for entry in servers {
+        match entry.origin_kind {
+            "cwd" => origins.cwd += 1,
+            "profile" => origins.profile += 1,
+            "explicit" => origins.explicit += 1,
+            "plugin" => origins.plugin += 1,
+            _ => {}
+        }
+        accumulate_runtime_mcp_status_count(&mut status_counts, status_for_server(entry));
+    }
+
+    UiRuntimeMcpInventorySummary {
+        total_servers: servers.len(),
+        enabled_servers: servers.iter().filter(|entry| entry.server.enabled).count(),
+        disabled_servers: servers.iter().filter(|entry| !entry.server.enabled).count(),
+        unique_server_names: unique_server_names.len(),
+        ambiguous_server_names,
+        warning_count: warnings.len(),
+        origins,
+        status_counts,
+    }
+}
+
 fn load_runtime_mcp_file(
     discovery: &mut RuntimeMcpDiscovery,
     loaded_paths: &mut BTreeSet<PathBuf>,
@@ -353,9 +489,11 @@ fn push_runtime_mcp_servers(
 
 #[cfg(test)]
 mod tests {
-    use super::runtime_mcp_inventory_summary;
+    use super::{observe_runtime_mcp_servers, runtime_mcp_inventory_summary};
     use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
     use rc_core::{InputFormat, OutputFormat, PermissionMode};
+    use rc_mcp::McpClientInfo;
+    use rc_ui_bridge::UiRuntimeMcpServerStatus;
     use std::fs;
     use tempfile::tempdir;
 
@@ -418,6 +556,8 @@ mod tests {
         assert_eq!(summary.origins.cwd, 2);
         assert_eq!(summary.origins.profile, 1);
         assert_eq!(summary.origins.plugin, 1);
+        assert_eq!(summary.status_counts.pending, 3);
+        assert_eq!(summary.status_counts.disabled, 1);
     }
 
     #[test]
@@ -474,5 +614,72 @@ mod tests {
         assert_eq!(summary.origins.cwd, 1);
         assert_eq!(summary.origins.profile, 0);
         assert_eq!(summary.origins.plugin, 0);
+        assert_eq!(summary.status_counts.pending, 1);
+        assert_eq!(summary.status_counts.disabled, 0);
+    }
+
+    #[tokio::test]
+    async fn observe_runtime_mcp_servers_reports_failed_status_after_connect_attempt() {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        fs::create_dir_all(&cwd).expect("cwd");
+        fs::write(
+            cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            concat!(
+                "[mcp_servers.pending]\ncommand = \"command-that-does-not-exist-remote-code\"\n",
+                "[mcp_servers.disabled]\ncommand = \"command-that-does-not-exist-remote-code\"\nenabled = false\n"
+            ),
+        )
+        .expect("cwd mcp");
+
+        let config = load_runtime_config(
+            Some(cwd),
+            Some(profile),
+            None,
+            PermissionMode::Default,
+            InputFormat::Text,
+            OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+            RuntimeOverrides::default(),
+        )
+        .expect("config");
+
+        let pending_only = observe_runtime_mcp_servers(
+            &config,
+            &[],
+            false,
+            &McpClientInfo::new("remote-code-rust", "test"),
+        )
+        .await;
+        let pending_summary = pending_only.inventory_summary();
+        assert_eq!(pending_summary.status_counts.pending, 1);
+        assert_eq!(pending_summary.status_counts.disabled, 1);
+        assert_eq!(pending_summary.status_counts.failed, 0);
+
+        let connected = observe_runtime_mcp_servers(
+            &config,
+            &[],
+            true,
+            &McpClientInfo::new("remote-code-rust", "test"),
+        )
+        .await;
+        let connected_summary = connected.inventory_summary();
+        assert_eq!(connected_summary.status_counts.connected, 0);
+        assert_eq!(connected_summary.status_counts.failed, 1);
+        assert_eq!(connected_summary.status_counts.disabled, 1);
+        assert_eq!(connected_summary.status_counts.pending, 0);
+        assert!(
+            connected
+                .servers
+                .iter()
+                .any(|server| server.status == UiRuntimeMcpServerStatus::Failed
+                    && server.error.as_deref().is_some())
+        );
     }
 }
