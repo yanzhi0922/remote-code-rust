@@ -3935,6 +3935,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rc-file-history"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "rc-core",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "rc-mcp"
 version = "0.1.0"
 dependencies = [
