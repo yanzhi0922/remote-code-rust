@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 use rc_config::{RuntimeConfig, SettingSource};
+use rc_ui_bridge::{UiRuntimeMcpInventorySummary, UiRuntimeMcpOriginCounts};
 
 use crate::{RuntimeMcpServerPolicyEntry, ToolRuntimePolicy};
 
@@ -52,6 +53,53 @@ impl RuntimeMcpDiscovery {
             })
             .collect()
     }
+
+    #[must_use]
+    pub fn inventory_summary(&self) -> UiRuntimeMcpInventorySummary {
+        let unique_server_names = self
+            .servers
+            .iter()
+            .map(|entry| entry.server.name.as_str())
+            .collect::<BTreeSet<_>>();
+        let ambiguous_server_names = unique_server_names
+            .iter()
+            .filter(|name| {
+                self.servers
+                    .iter()
+                    .filter(|entry| entry.server.name == **name)
+                    .nth(1)
+                    .is_some()
+            })
+            .count();
+        let mut origins = UiRuntimeMcpOriginCounts::default();
+        for entry in &self.servers {
+            match entry.origin_kind {
+                "cwd" => origins.cwd += 1,
+                "profile" => origins.profile += 1,
+                "explicit" => origins.explicit += 1,
+                "plugin" => origins.plugin += 1,
+                _ => {}
+            }
+        }
+
+        UiRuntimeMcpInventorySummary {
+            total_servers: self.servers.len(),
+            enabled_servers: self
+                .servers
+                .iter()
+                .filter(|entry| entry.server.enabled)
+                .count(),
+            disabled_servers: self
+                .servers
+                .iter()
+                .filter(|entry| !entry.server.enabled)
+                .count(),
+            unique_server_names: unique_server_names.len(),
+            ambiguous_server_names,
+            warning_count: self.warnings.len(),
+            origins,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +113,14 @@ pub fn runtime_mcp_policy_entries(
     extra_config_paths: &[PathBuf],
 ) -> Vec<RuntimeMcpServerPolicyEntry> {
     discover_runtime_mcp_servers(config, extra_config_paths).into_policy_entries()
+}
+
+#[must_use]
+pub fn runtime_mcp_inventory_summary(
+    config: &RuntimeConfig,
+    extra_config_paths: &[PathBuf],
+) -> UiRuntimeMcpInventorySummary {
+    discover_runtime_mcp_servers(config, extra_config_paths).inventory_summary()
 }
 
 pub fn resolve_runtime_policy_mcp_server(
@@ -292,5 +348,131 @@ fn push_runtime_mcp_servers(
             config_path: config_path.to_path_buf(),
             server,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::runtime_mcp_inventory_summary;
+    use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
+    use rc_core::{InputFormat, OutputFormat, PermissionMode};
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn runtime_mcp_inventory_summary_counts_origins_and_duplicates() {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        let plugin_root = profile.join("plugins").join("sample");
+        fs::create_dir_all(&cwd).expect("cwd");
+        fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("plugin dir");
+        fs::write(
+            plugin_root.join(".codex-plugin").join("plugin.json"),
+            r#"{"name":"sample","version":"0.1.0","mcp":"./mcp.toml"}"#,
+        )
+        .expect("plugin manifest");
+
+        fs::write(
+            cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            concat!(
+                "[mcp_servers.shared]\ncommand = \"python\"\n",
+                "[mcp_servers.disabled]\ncommand = \"python\"\nenabled = false\n"
+            ),
+        )
+        .expect("cwd mcp");
+        fs::write(
+            profile.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            "[mcp_servers.shared]\ncommand = \"python\"\n",
+        )
+        .expect("profile mcp");
+        fs::write(
+            plugin_root.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            "[mcp_servers.plugin]\ncommand = \"python\"\n",
+        )
+        .expect("plugin mcp");
+
+        let config = load_runtime_config(
+            Some(cwd),
+            Some(profile),
+            None,
+            PermissionMode::Default,
+            InputFormat::Text,
+            OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+            RuntimeOverrides::default(),
+        )
+        .expect("config");
+
+        let summary = runtime_mcp_inventory_summary(&config, &[]);
+        assert_eq!(summary.total_servers, 4);
+        assert_eq!(summary.enabled_servers, 3);
+        assert_eq!(summary.disabled_servers, 1);
+        assert_eq!(summary.unique_server_names, 3);
+        assert_eq!(summary.ambiguous_server_names, 1);
+        assert_eq!(summary.origins.cwd, 2);
+        assert_eq!(summary.origins.profile, 1);
+        assert_eq!(summary.origins.plugin, 1);
+    }
+
+    #[test]
+    fn runtime_mcp_inventory_summary_obeys_allowed_setting_sources() {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        let plugin_root = profile.join("plugins").join("sample");
+        fs::create_dir_all(&cwd).expect("cwd");
+        fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("plugin dir");
+        fs::write(
+            plugin_root.join(".codex-plugin").join("plugin.json"),
+            r#"{"name":"sample","version":"0.1.0","mcp":"./mcp.toml"}"#,
+        )
+        .expect("plugin manifest");
+        fs::write(
+            cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            "[mcp_servers.project]\ncommand = \"python\"\n",
+        )
+        .expect("cwd mcp");
+        fs::write(
+            profile.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            "[mcp_servers.profile]\ncommand = \"python\"\n",
+        )
+        .expect("profile mcp");
+        fs::write(
+            plugin_root.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            "[mcp_servers.plugin]\ncommand = \"python\"\n",
+        )
+        .expect("plugin mcp");
+
+        let mut config = load_runtime_config(
+            Some(cwd),
+            Some(profile),
+            None,
+            PermissionMode::Default,
+            InputFormat::Text,
+            OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+            RuntimeOverrides::default(),
+        )
+        .expect("config");
+        config.allowed_setting_sources = vec![SettingSource::Project];
+
+        let summary = runtime_mcp_inventory_summary(&config, &[]);
+        assert_eq!(summary.total_servers, 1);
+        assert_eq!(summary.enabled_servers, 1);
+        assert_eq!(summary.disabled_servers, 0);
+        assert_eq!(summary.origins.cwd, 1);
+        assert_eq!(summary.origins.profile, 0);
+        assert_eq!(summary.origins.plugin, 0);
     }
 }

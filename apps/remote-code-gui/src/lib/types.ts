@@ -15,6 +15,23 @@ export interface RuntimeProviderStatus {
   fallback_model: string | null;
 }
 
+export interface RuntimeMcpOriginCounts {
+  cwd: number;
+  profile: number;
+  explicit: number;
+  plugin: number;
+}
+
+export interface RuntimeMcpInventorySummary {
+  total_servers: number;
+  enabled_servers: number;
+  disabled_servers: number;
+  unique_server_names: number;
+  ambiguous_server_names: number;
+  warning_count: number;
+  origins: RuntimeMcpOriginCounts;
+}
+
 export interface RuntimeStatusInfo {
   session_name: string | null;
   provider: RuntimeProviderStatus;
@@ -23,6 +40,7 @@ export interface RuntimeStatusInfo {
   allowed_setting_sources: string[];
   allowed_tools: string[];
   disallowed_tools: string[];
+  mcp: RuntimeMcpInventorySummary;
 }
 
 export type ConfigScope = 'profile' | 'project';
@@ -161,6 +179,31 @@ export interface McpServerListInfo {
   config_path: string;
   warnings: string[];
   servers: McpServerInfo[];
+}
+
+export interface RuntimeMcpServerInfo {
+  name: string;
+  status: string;
+  enabled: boolean;
+  origin_kind: string;
+  origin_name: string;
+  config_path: string;
+  transport: string;
+  command: string | null;
+  url: string | null;
+  args: string[];
+  cwd: string | null;
+  env_keys: string[];
+  metadata_keys: string[];
+  startup_timeout_secs: number | null;
+  request_timeout_secs: number | null;
+  live: McpServerLiveInfo | null;
+}
+
+export interface RuntimeMcpInventoryInfo {
+  effective_cwd: string;
+  warnings: string[];
+  servers: RuntimeMcpServerInfo[];
 }
 
 export interface McpMutationResult {

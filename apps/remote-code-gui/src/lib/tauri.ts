@@ -20,6 +20,7 @@ import type {
   ProviderConfig,
   ProviderConfigList,
   ProviderInfo,
+  RuntimeMcpInventoryInfo,
   RuntimeStatusInfo,
   SessionExportFormat,
   SessionExportResult,
@@ -97,6 +98,18 @@ export function listMcpServers(
 ): Promise<McpServerListInfo> {
   return invoke<McpServerListInfo>('list_mcp_servers', {
     scope,
+    projectPath: projectPath ?? null,
+    connect,
+    includeDisabled,
+  });
+}
+
+export function listRuntimeMcpInventory(
+  projectPath: string | null,
+  connect = false,
+  includeDisabled = true,
+): Promise<RuntimeMcpInventoryInfo> {
+  return invoke<RuntimeMcpInventoryInfo>('list_runtime_mcp_inventory', {
     projectPath: projectPath ?? null,
     connect,
     includeDisabled,

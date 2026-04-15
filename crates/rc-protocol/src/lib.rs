@@ -963,6 +963,20 @@ mod tests {
                 allowed_setting_sources: vec!["user".to_owned(), "project".to_owned()],
                 allowed_tools: vec!["read_file".to_owned()],
                 disallowed_tools: vec!["bash_command".to_owned()],
+                mcp: rc_ui_bridge::UiRuntimeMcpInventorySummary {
+                    total_servers: 2,
+                    enabled_servers: 1,
+                    disabled_servers: 1,
+                    unique_server_names: 2,
+                    ambiguous_server_names: 0,
+                    warning_count: 0,
+                    origins: rc_ui_bridge::UiRuntimeMcpOriginCounts {
+                        cwd: 1,
+                        profile: 1,
+                        explicit: 0,
+                        plugin: 0,
+                    },
+                },
             })
             .expect("emit_status_snapshot should succeed");
 
@@ -972,6 +986,7 @@ mod tests {
         assert_eq!(events[0]["snapshot"]["provider"]["name"], "glm-coding");
         assert_eq!(events[0]["snapshot"]["allowed_setting_sources"][0], "user");
         assert_eq!(events[0]["snapshot"]["permission_mode"], "default");
+        assert_eq!(events[0]["snapshot"]["mcp"]["enabled_servers"], 1);
     }
 
     #[test]

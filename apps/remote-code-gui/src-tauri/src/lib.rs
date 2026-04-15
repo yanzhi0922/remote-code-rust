@@ -33,7 +33,10 @@ use rc_tools::shell::ShellExecutionPolicy;
 use rc_tools::{
     agent::{parse_delegate_progress_event, DelegateProgressEvent},
     configure_tool_runtime_policy, execute_tool_call,
-    mcp_runtime::runtime_mcp_policy_entries,
+    mcp_runtime::{
+        discover_runtime_mcp_servers, runtime_mcp_inventory_summary, runtime_mcp_policy_entries,
+        RuntimeMcpServerEntry,
+    },
     runtime_builtin_tool_specs,
     tasks::load_persisted_ui_task_snapshots,
     ToolExecutionContext, ToolRuntimePolicy,
@@ -630,6 +633,33 @@ struct McpToolInfoDto {
     description: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct RuntimeMcpInventoryDto {
+    effective_cwd: String,
+    warnings: Vec<String>,
+    servers: Vec<RuntimeMcpServerDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RuntimeMcpServerDto {
+    name: String,
+    status: String,
+    enabled: bool,
+    origin_kind: String,
+    origin_name: String,
+    config_path: String,
+    transport: String,
+    command: Option<String>,
+    url: Option<String>,
+    args: Vec<String>,
+    cwd: Option<String>,
+    env_keys: Vec<String>,
+    metadata_keys: Vec<String>,
+    startup_timeout_secs: Option<u64>,
+    request_timeout_secs: Option<u64>,
+    live: Option<McpServerLiveDto>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct McpServerUpsertRequestDto {
     scope: ConfigScopeDto,
@@ -974,6 +1004,7 @@ fn runtime_status_snapshot_from_config(config: &RuntimeConfig) -> UiRuntimeStatu
             .collect(),
         allowed_tools: config.allowed_tools.clone(),
         disallowed_tools: config.disallowed_tools.clone(),
+        mcp: runtime_mcp_inventory_summary(config, &[]),
     }
 }
 
@@ -1426,12 +1457,25 @@ fn mcp_live_to_dto(inspection: McpServerInspection) -> McpServerLiveDto {
     }
 }
 
-fn mcp_server_to_dto(
-    config_path: &Path,
-    server: McpServerConfig,
-    live: Option<McpServerLiveDto>,
-) -> McpServerDto {
-    let (command, url, args, cwd, env_keys) = match &server.transport {
+fn mcp_transport_to_display(transport: McpTransport) -> String {
+    match transport {
+        McpTransport::Stdio => "stdio",
+        McpTransport::Http => "http",
+        McpTransport::WebSocket => "websocket",
+    }
+    .to_owned()
+}
+
+fn mcp_server_transport_fields(
+    server: &McpServerConfig,
+) -> (
+    Option<String>,
+    Option<String>,
+    Vec<String>,
+    Option<String>,
+    Vec<String>,
+) {
+    match &server.transport {
         McpTransportConfig::Stdio {
             command,
             args,
@@ -1454,18 +1498,21 @@ fn mcp_server_to_dto(
             env_keys.sort();
             (None, Some(url.clone()), Vec::new(), None, env_keys)
         }
-    };
+    }
+}
+
+fn mcp_server_to_dto(
+    config_path: &Path,
+    server: McpServerConfig,
+    live: Option<McpServerLiveDto>,
+) -> McpServerDto {
+    let (command, url, args, cwd, env_keys) = mcp_server_transport_fields(&server);
     let mut metadata_keys = server.metadata.keys().cloned().collect::<Vec<_>>();
     metadata_keys.sort();
     McpServerDto {
         name: server.name,
         enabled: server.enabled,
-        transport: match server.transport.kind() {
-            McpTransport::Stdio => "stdio",
-            McpTransport::Http => "http",
-            McpTransport::WebSocket => "websocket",
-        }
-        .to_owned(),
+        transport: mcp_transport_to_display(server.transport.kind()),
         config_path: config_path.display().to_string(),
         command,
         url,
@@ -1475,6 +1522,41 @@ fn mcp_server_to_dto(
         metadata_keys,
         startup_timeout_secs: server.startup_timeout_secs,
         request_timeout_secs: server.request_timeout_secs,
+        live,
+    }
+}
+
+fn runtime_mcp_status_label(server: &McpServerConfig) -> String {
+    if server.enabled {
+        "pending".to_owned()
+    } else {
+        "disabled".to_owned()
+    }
+}
+
+fn runtime_mcp_server_to_dto(
+    entry: RuntimeMcpServerEntry,
+    live: Option<McpServerLiveDto>,
+) -> RuntimeMcpServerDto {
+    let (command, url, args, cwd, env_keys) = mcp_server_transport_fields(&entry.server);
+    let mut metadata_keys = entry.server.metadata.keys().cloned().collect::<Vec<_>>();
+    metadata_keys.sort();
+    RuntimeMcpServerDto {
+        name: entry.server.name.clone(),
+        status: runtime_mcp_status_label(&entry.server),
+        enabled: entry.server.enabled,
+        origin_kind: entry.origin_kind.to_owned(),
+        origin_name: entry.origin_name,
+        config_path: entry.config_path.display().to_string(),
+        transport: mcp_transport_to_display(entry.server.transport.kind()),
+        command,
+        url,
+        args,
+        cwd,
+        env_keys,
+        metadata_keys,
+        startup_timeout_secs: entry.server.startup_timeout_secs,
+        request_timeout_secs: entry.server.request_timeout_secs,
         live,
     }
 }
@@ -1542,6 +1624,62 @@ async fn build_mcp_server_list(
         scope: scope.label().to_owned(),
         config_path: config_path.display().to_string(),
         warnings,
+        servers,
+    })
+}
+
+async fn build_runtime_mcp_inventory(
+    config: &RuntimeConfig,
+    project_path: Option<&str>,
+    connect: bool,
+    include_disabled: bool,
+) -> Result<RuntimeMcpInventoryDto> {
+    let mut effective_config = config.clone();
+    if let Some(project_path) = project_path.filter(|value| !value.trim().is_empty()) {
+        effective_config.cwd = normalize_existing_path(Path::new(project_path))?;
+    }
+
+    let discovery = discover_runtime_mcp_servers(&effective_config, &[]);
+    let mut servers = Vec::new();
+    for entry in discovery.servers {
+        if !entry.server.enabled && !include_disabled {
+            continue;
+        }
+        let live = if connect && entry.server.enabled {
+            match inspect_server(
+                &entry.server,
+                &McpClientInfo::new("remote-code-gui", env!("CARGO_PKG_VERSION")),
+            )
+            .await
+            {
+                Ok(inspection) => Some(mcp_live_to_dto(inspection)),
+                Err(error) => Some(McpServerLiveDto {
+                    status: "error".to_owned(),
+                    protocol_version: None,
+                    peer_name: None,
+                    peer_version: None,
+                    tool_count: 0,
+                    tools: Vec::new(),
+                    error: Some(error.to_string()),
+                }),
+            }
+        } else {
+            None
+        };
+        servers.push(runtime_mcp_server_to_dto(entry, live));
+    }
+
+    servers.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.origin_kind.cmp(&right.origin_kind))
+            .then_with(|| left.origin_name.cmp(&right.origin_name))
+            .then_with(|| left.config_path.cmp(&right.config_path))
+    });
+
+    Ok(RuntimeMcpInventoryDto {
+        effective_cwd: effective_config.cwd.display().to_string(),
+        warnings: discovery.warnings,
         servers,
     })
 }
@@ -2966,6 +3104,24 @@ async fn list_mcp_servers(
 }
 
 #[tauri::command]
+async fn list_runtime_mcp_inventory(
+    state: State<'_, AppState>,
+    project_path: Option<String>,
+    connect: bool,
+    include_disabled: bool,
+) -> std::result::Result<RuntimeMcpInventoryDto, String> {
+    let runtime = state.runtime.lock().await;
+    build_runtime_mcp_inventory(
+        &runtime.config,
+        project_path.as_deref(),
+        connect,
+        include_disabled,
+    )
+    .await
+    .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
 async fn save_mcp_server(
     state: State<'_, AppState>,
     request: McpServerUpsertRequestDto,
@@ -3491,6 +3647,7 @@ pub fn run() {
             run_doctor_report,
             export_session_bundle,
             list_mcp_servers,
+            list_runtime_mcp_inventory,
             save_mcp_server,
             toggle_mcp_server,
             remove_mcp_server,
@@ -3658,7 +3815,99 @@ mod tests {
         );
         assert_eq!(snapshot.allowed_tools, vec!["read_file"]);
         assert_eq!(snapshot.disallowed_tools, vec!["bash_command"]);
+        assert_eq!(snapshot.mcp.total_servers, 0);
+        assert_eq!(snapshot.mcp.enabled_servers, 0);
+        assert_eq!(snapshot.mcp.disabled_servers, 0);
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn build_runtime_mcp_inventory_uses_project_override_and_runtime_origins() {
+        let temp = tempdir().expect("tempdir should work");
+        let project_dir = temp.path().join("project");
+        let profile_dir = temp.path().join(".remote-code-rust");
+        let plugin_root = profile_dir.join("plugins").join("sample");
+        fs::create_dir_all(&project_dir).expect("project dir should exist");
+        fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("plugin dir");
+        fs::write(
+            plugin_root.join(".codex-plugin").join("plugin.json"),
+            r#"{"name":"sample","version":"0.1.0","mcp":"./mcp.toml"}"#,
+        )
+        .expect("plugin manifest write");
+
+        let mut plugin_mcp = McpConfig::default();
+        plugin_mcp.servers.insert(
+            "plugin-demo".to_owned(),
+            sample_stdio_mcp_server("plugin-demo", true, "plugin-cmd"),
+        );
+        plugin_mcp
+            .save(plugin_root.join(DEFAULT_MCP_CONFIG_FILE))
+            .expect("plugin MCP config should save");
+
+        let mut profile_mcp = McpConfig::default();
+        profile_mcp.servers.insert(
+            "profile-demo".to_owned(),
+            sample_stdio_mcp_server("profile-demo", true, "profile-cmd"),
+        );
+        profile_mcp
+            .save(profile_dir.join(DEFAULT_MCP_CONFIG_FILE))
+            .expect("profile MCP config should save");
+
+        let mut project_mcp = McpConfig::default();
+        project_mcp.servers.insert(
+            "project-demo".to_owned(),
+            sample_stdio_mcp_server("project-demo", true, "project-cmd"),
+        );
+        project_mcp.servers.insert(
+            "disabled-demo".to_owned(),
+            sample_stdio_mcp_server("disabled-demo", false, "disabled-cmd"),
+        );
+        project_mcp
+            .save(project_dir.join(DEFAULT_MCP_CONFIG_FILE))
+            .expect("project MCP config should save");
+
+        let config = test_runtime_config(temp.path(), &profile_dir);
+        let inventory = build_runtime_mcp_inventory(
+            &config,
+            Some(project_dir.to_str().expect("utf8 project path")),
+            false,
+            true,
+        )
+        .await
+        .expect("runtime inventory should build");
+
+        assert_eq!(inventory.effective_cwd, project_dir.display().to_string());
+        assert_eq!(inventory.warnings.len(), 0);
+        assert_eq!(inventory.servers.len(), 4);
+        assert!(inventory
+            .servers
+            .iter()
+            .any(|server| server.name == "project-demo"
+                && server.status == "pending"
+                && server.origin_kind == "cwd"));
+        assert!(inventory
+            .servers
+            .iter()
+            .any(|server| server.name == "disabled-demo"
+                && server.status == "disabled"
+                && server.origin_kind == "cwd"));
+        assert!(inventory
+            .servers
+            .iter()
+            .any(|server| server.name == "profile-demo" && server.origin_kind == "profile"));
+        assert!(inventory
+            .servers
+            .iter()
+            .any(|server| server.name == "plugin-demo"
+                && server.origin_kind == "plugin"
+                && server.origin_name == "sample"));
+
+        let snapshot = runtime_status_snapshot_from_config(&config);
+        assert_eq!(snapshot.mcp.total_servers, 2);
+        assert_eq!(snapshot.mcp.enabled_servers, 2);
+        assert_eq!(snapshot.mcp.disabled_servers, 0);
+        assert_eq!(snapshot.mcp.origins.profile, 1);
+        assert_eq!(snapshot.mcp.origins.plugin, 1);
     }
 
     #[test]

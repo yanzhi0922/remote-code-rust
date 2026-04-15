@@ -93,6 +93,25 @@ pub struct UiProviderStatusSnapshot {
     pub fallback_model: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct UiRuntimeMcpOriginCounts {
+    pub cwd: usize,
+    pub profile: usize,
+    pub explicit: usize,
+    pub plugin: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct UiRuntimeMcpInventorySummary {
+    pub total_servers: usize,
+    pub enabled_servers: usize,
+    pub disabled_servers: usize,
+    pub unique_server_names: usize,
+    pub ambiguous_server_names: usize,
+    pub warning_count: usize,
+    pub origins: UiRuntimeMcpOriginCounts,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UiRuntimeStatusSnapshot {
     pub session_name: Option<String>,
@@ -102,6 +121,7 @@ pub struct UiRuntimeStatusSnapshot {
     pub allowed_setting_sources: Vec<String>,
     pub allowed_tools: Vec<String>,
     pub disallowed_tools: Vec<String>,
+    pub mcp: UiRuntimeMcpInventorySummary,
 }
 
 // ---------------------------------------------------------------------------
@@ -628,6 +648,20 @@ mod tests {
                 allowed_setting_sources: vec!["user".to_owned(), "project".to_owned()],
                 allowed_tools: vec!["read_file".to_owned()],
                 disallowed_tools: vec!["bash_command".to_owned()],
+                mcp: UiRuntimeMcpInventorySummary {
+                    total_servers: 4,
+                    enabled_servers: 3,
+                    disabled_servers: 1,
+                    unique_server_names: 3,
+                    ambiguous_server_names: 1,
+                    warning_count: 2,
+                    origins: UiRuntimeMcpOriginCounts {
+                        cwd: 1,
+                        profile: 1,
+                        explicit: 0,
+                        plugin: 2,
+                    },
+                },
             },
         };
         let json = serde_json::to_string(&event).expect("serialize should not fail");
@@ -638,6 +672,9 @@ mod tests {
                 assert_eq!(snapshot.allowed_setting_sources, vec!["user", "project"]);
                 assert_eq!(snapshot.allowed_tools, vec!["read_file"]);
                 assert_eq!(snapshot.disallowed_tools, vec!["bash_command"]);
+                assert_eq!(snapshot.mcp.total_servers, 4);
+                assert_eq!(snapshot.mcp.ambiguous_server_names, 1);
+                assert_eq!(snapshot.mcp.origins.plugin, 2);
             }
             _ => panic!("Expected StatusSnapshot variant"),
         }

@@ -2,7 +2,10 @@ use anyhow::Result;
 use rc_config::RuntimeConfig;
 use rc_session::SessionStore;
 use rc_session::resume_state::ResumeState;
-use rc_ui_bridge::{UiProviderStatusSnapshot, UiRuntimeStatusSnapshot};
+use rc_tools::mcp_runtime::runtime_mcp_inventory_summary;
+use rc_ui_bridge::{
+    UiProviderStatusSnapshot, UiRuntimeMcpInventorySummary, UiRuntimeStatusSnapshot,
+};
 use serde::Serialize;
 
 use crate::cli::StatusArgs;
@@ -19,6 +22,7 @@ struct RuntimeStatusReport {
     settings_files: Vec<String>,
     allowed_tools: Vec<String>,
     disallowed_tools: Vec<String>,
+    mcp: UiRuntimeMcpInventorySummary,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -76,6 +80,7 @@ pub(crate) fn build_runtime_status_snapshot(config: &RuntimeConfig) -> UiRuntime
             .collect(),
         allowed_tools: config.allowed_tools.clone(),
         disallowed_tools: config.disallowed_tools.clone(),
+        mcp: runtime_mcp_inventory_summary(config, &[]),
     }
 }
 
@@ -108,6 +113,7 @@ fn collect_runtime_status(
             .collect(),
         allowed_tools: snapshot.allowed_tools,
         disallowed_tools: snapshot.disallowed_tools,
+        mcp: snapshot.mcp,
     })
 }
 
@@ -211,6 +217,16 @@ fn print_runtime_status(report: &RuntimeStatusReport) {
     if !report.disallowed_tools.is_empty() {
         println!("  denied tools:    {}", report.disallowed_tools.join(", "));
     }
+    println!(
+        "  mcp inventory:   {} total / {} enabled / {} disabled",
+        report.mcp.total_servers, report.mcp.enabled_servers, report.mcp.disabled_servers
+    );
+    if report.mcp.ambiguous_server_names > 0 || report.mcp.warning_count > 0 {
+        println!(
+            "  mcp health:      {} ambiguous / {} warnings",
+            report.mcp.ambiguous_server_names, report.mcp.warning_count
+        );
+    }
 
     println!("Session state:");
     println!("  persisted:       {}", report.session.persisted);
@@ -311,6 +327,9 @@ mod tests {
         );
         assert_eq!(snapshot.allowed_tools, vec!["read_file"]);
         assert_eq!(snapshot.disallowed_tools, vec!["bash_command"]);
+        assert_eq!(snapshot.mcp.total_servers, 0);
+        assert_eq!(snapshot.mcp.enabled_servers, 0);
+        assert_eq!(snapshot.mcp.disabled_servers, 0);
     }
 
     #[test]
@@ -398,6 +417,7 @@ model = "glm-5.1"
             report.allowed_setting_sources,
             vec!["project".to_owned(), "local".to_owned()]
         );
+        assert_eq!(report.mcp.total_servers, 0);
         assert_eq!(report.session.title.as_deref(), Some("status-test"));
         assert_eq!(report.session.pending_tool_calls, 1);
         assert_eq!(

@@ -38,6 +38,7 @@ export function Header() {
   const activeContextCompaction = activeSessionId
     ? contextCompactionBySession[activeSessionId] ?? null
     : null;
+  const runtimeMcp = runtimeStatus?.mcp;
 
   return (
     <header className="border-b border-[#ebe6dd] bg-white/90 px-4 py-3 backdrop-blur sm:px-6">
@@ -121,6 +122,14 @@ export function Header() {
           {runtimeStatus && (runtimeStatus.allowed_tools.length > 0 || runtimeStatus.disallowed_tools.length > 0) && (
             <div className="rounded-full border border-[#e2dbcf] bg-[#fbfaf7] px-3 py-1.5 text-xs text-slate-500">
               tools +{runtimeStatus.allowed_tools.length} / -{runtimeStatus.disallowed_tools.length}
+            </div>
+          )}
+          {runtimeMcp && runtimeMcp.total_servers > 0 && (
+            <div
+              className="rounded-full border border-[#e2dbcf] bg-[#fbfaf7] px-3 py-1.5 text-xs text-slate-500"
+              title={`enabled ${runtimeMcp.enabled_servers}, disabled ${runtimeMcp.disabled_servers}, ambiguous ${runtimeMcp.ambiguous_server_names}`}
+            >
+              mcp {runtimeMcp.enabled_servers}/{runtimeMcp.total_servers}
             </div>
           )}
           {lastPromptResult && (

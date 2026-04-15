@@ -48,6 +48,20 @@ describe('Header', () => {
         allowed_setting_sources: ['user', 'project'],
         allowed_tools: ['read_file'],
         disallowed_tools: ['bash_command'],
+        mcp: {
+          total_servers: 4,
+          enabled_servers: 3,
+          disabled_servers: 1,
+          unique_server_names: 3,
+          ambiguous_server_names: 1,
+          warning_count: 2,
+          origins: {
+            cwd: 1,
+            profile: 1,
+            explicit: 0,
+            plugin: 2,
+          },
+        },
       },
       sessions: [
         {
@@ -70,6 +84,7 @@ describe('Header', () => {
     expect(screen.getByText('settings 3')).toBeInTheDocument();
     expect(screen.getByText('scope user/project')).toBeInTheDocument();
     expect(screen.getByText('tools +1 / -1')).toBeInTheDocument();
+    expect(screen.getByText('mcp 3/4')).toBeInTheDocument();
     expect(screen.getByText('acceptEdits')).toBeInTheDocument();
   });
 });

@@ -1,6 +1,11 @@
 import { Cable, PlugZap, RefreshCw, RotateCcw, Trash2 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
-import type { ConfigScope, McpServerDraft, McpServerInfo } from '../../lib/types';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type {
+  ConfigScope,
+  McpServerDraft,
+  McpServerInfo,
+  RuntimeMcpServerInfo,
+} from '../../lib/types';
 import * as tauri from '../../lib/tauri';
 import { useAppStore } from '../../stores/useAppStore';
 
@@ -70,7 +75,17 @@ function normalizeTimeout(value: string): number | null {
   return Math.floor(parsed);
 }
 
-function serverSummary(server: McpServerInfo): string {
+function formatErrorMessage(error: unknown): string {
+  return typeof error === 'string'
+    ? error
+    : error instanceof Error
+      ? error.message
+      : String(error);
+}
+
+function serverSummary(
+  server: Pick<McpServerInfo, 'transport' | 'command' | 'args' | 'url'>,
+): string {
   if (server.transport === 'stdio') {
     return [server.command, server.args.join(' ')].filter(Boolean).join(' ');
   }
@@ -88,27 +103,66 @@ export function McpTab() {
   const [warnings, setWarnings] = useState<string[]>([]);
   const [configPath, setConfigPath] = useState<string>('');
   const [servers, setServers] = useState<McpServerInfo[]>([]);
+  const [runtimeWarnings, setRuntimeWarnings] = useState<string[]>([]);
+  const [runtimeEffectiveCwd, setRuntimeEffectiveCwd] = useState<string>('');
+  const [runtimeServers, setRuntimeServers] = useState<RuntimeMcpServerInfo[]>([]);
   const [form, setForm] = useState<McpFormState>(emptyForm());
+  const loadRequestIdRef = useRef(0);
 
   const effectiveProjectPath = scope === 'project' ? activeProjectPath : null;
   const canUseProjectScope = scope === 'profile' || !!effectiveProjectPath;
 
   const loadServers = async () => {
-    if (!canUseProjectScope) {
-      setServers([]);
-      setWarnings(['请选择项目后再管理 project-scope MCP。']);
-      return;
-    }
+    const requestId = loadRequestIdRef.current + 1;
+    loadRequestIdRef.current = requestId;
     setLoading(true);
     setError(null);
-    try {
-      const result = await tauri.listMcpServers(scope, effectiveProjectPath, connect, true);
-      setServers(result.servers);
-      setWarnings(result.warnings);
-      setConfigPath(result.config_path);
-    } catch (loadError) {
-      setError(typeof loadError === 'string' ? loadError : String(loadError));
-    } finally {
+
+    const managedPromise = canUseProjectScope
+      ? tauri.listMcpServers(scope, effectiveProjectPath, connect, true)
+      : Promise.resolve({
+          scope,
+          config_path: '',
+          warnings: ['请选择项目后再管理 project-scope MCP。'],
+          servers: [] as McpServerInfo[],
+        });
+
+    const [managedResult, runtimeResult] = await Promise.allSettled([
+      managedPromise,
+      tauri.listRuntimeMcpInventory(activeProjectPath, connect, true),
+    ]);
+
+    if (loadRequestIdRef.current !== requestId) {
+      return;
+    }
+
+    if (managedResult.status === 'fulfilled') {
+      const managed = managedResult.value;
+      setServers(managed.servers);
+      setWarnings(managed.warnings);
+      setConfigPath(managed.config_path);
+      setError(null);
+    } else {
+      setServers([]);
+      setWarnings([]);
+      setConfigPath('');
+      setError(formatErrorMessage(managedResult.reason));
+    }
+
+    if (runtimeResult.status === 'fulfilled') {
+      const runtime = runtimeResult.value;
+      setRuntimeServers(runtime.servers);
+      setRuntimeWarnings(runtime.warnings);
+      setRuntimeEffectiveCwd(runtime.effective_cwd);
+    } else {
+      setRuntimeServers([]);
+      setRuntimeWarnings([
+        `无法加载 runtime inventory：${formatErrorMessage(runtimeResult.reason)}`,
+      ]);
+      setRuntimeEffectiveCwd(activeProjectPath ?? '');
+    }
+
+    if (loadRequestIdRef.current === requestId) {
       setLoading(false);
     }
   };
@@ -116,7 +170,7 @@ export function McpTab() {
   useEffect(() => {
     void loadServers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scope, effectiveProjectPath, connect]);
+  }, [scope, effectiveProjectPath, activeProjectPath, connect]);
 
   const saveServer = async () => {
     setSaving(true);
@@ -404,6 +458,97 @@ export function McpTab() {
             重置当前 scope
           </button>
         </div>
+      </section>
+
+      <section className="space-y-3">
+        <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+          <Cable size={15} />
+          Runtime-discovered inventory ({runtimeServers.length})
+        </div>
+
+        <div className="rounded-[24px] border border-[#ddd6c8] bg-white px-4 py-4 text-sm text-slate-600">
+          <div className="font-semibold text-slate-700">Runtime inventory</div>
+          <div className="mt-2 break-all text-xs text-slate-500">
+            cwd {runtimeEffectiveCwd || activeProjectPath || '加载中…'}
+          </div>
+          <div className="mt-2 text-xs text-slate-500">
+            enabled {runtimeServers.filter((server) => server.enabled).length} · disabled{' '}
+            {runtimeServers.filter((server) => !server.enabled).length}
+          </div>
+        </div>
+
+        {runtimeWarnings.length > 0 && (
+          <div className="rounded-[24px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            {runtimeWarnings.map((warning) => (
+              <div key={warning}>- {warning}</div>
+            ))}
+          </div>
+        )}
+
+        {runtimeServers.length === 0 ? (
+          <div className="rounded-[24px] border border-dashed border-[#ddd6c8] px-4 py-6 text-sm text-slate-500">
+            当前 runtime inventory 还没有发现 MCP server。
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {runtimeServers.map((server) => (
+              <div
+                key={`${server.origin_kind}-${server.origin_name}-${server.name}-${server.config_path}`}
+                className="rounded-[24px] border border-[#ddd6c8] bg-white px-4 py-4"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <div className="truncate text-sm font-semibold text-slate-800">{server.name}</div>
+                      <span
+                        className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                          server.enabled ? 'bg-amber-100 text-amber-700' : 'bg-slate-200 text-slate-600'
+                        }`}
+                      >
+                        {server.status}
+                      </span>
+                      <span className="inline-flex rounded-full bg-[#f4efe6] px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                        {server.transport}
+                      </span>
+                      <span className="inline-flex rounded-full bg-[#eef3fb] px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                        {server.origin_kind}
+                      </span>
+                    </div>
+                    <div className="mt-2 break-all text-xs text-slate-500">{serverSummary(server)}</div>
+                    <div className="mt-2 break-all text-xs text-slate-500">
+                      origin {server.origin_kind}:{server.origin_name}
+                    </div>
+                    <div className="mt-1 break-all text-xs text-slate-500">{server.config_path}</div>
+                    {server.live && (
+                      <div className="mt-2 text-xs text-slate-500">
+                        live {server.live.status}
+                        {server.live.tool_count > 0 ? ` · tools ${server.live.tool_count}` : ''}
+                        {server.live.peer_name ? ` · ${server.live.peer_name}` : ''}
+                        {server.live.peer_version ? ` ${server.live.peer_version}` : ''}
+                      </div>
+                    )}
+                    {server.live?.error && (
+                      <div className="mt-2 text-xs text-rose-600">{server.live.error}</div>
+                    )}
+                    {server.live && server.live.tools.length > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-1.5">
+                        {server.live.tools.map((tool) => (
+                          <span
+                            key={`${server.origin_kind}-${server.name}-${tool.name}`}
+                            className="inline-flex rounded-full bg-[#f7f4ed] px-2 py-1 text-[11px] text-slate-600"
+                            title={tool.description ?? tool.name}
+                          >
+                            {tool.name}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="space-y-3">
