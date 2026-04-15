@@ -172,6 +172,7 @@ fn print_text_report(report: &DoctorReport) {
     println!("[Extensions]");
     println!("  skills:         {}", report.extensions.skills);
     println!("  plugins:        {}", report.extensions.plugins);
+    println!("  disabled plugins: {}", report.extensions.disabled_plugins);
     println!("  plugin runtimes: {}", report.extensions.plugin_runtimes);
     println!("  mcp servers:    {}", report.extensions.mcp_servers);
     println!("  hooks:          {}", report.extensions.hooks);

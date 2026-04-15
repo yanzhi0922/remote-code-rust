@@ -87,10 +87,13 @@ pub fn render(config: &RuntimeConfig) {
     }
 }
 
-pub(crate) fn discovered_plugin_count(config: &RuntimeConfig) -> usize {
+pub(crate) fn discovered_plugin_counts(config: &RuntimeConfig) -> (usize, usize) {
     match discover_visible_plugins(config) {
-        Ok(plugins) => plugins.len(),
-        Err(_) => 0,
+        Ok(plugins) => {
+            let disabled = plugins.iter().filter(|plugin| plugin.is_disabled()).count();
+            (plugins.len().saturating_sub(disabled), disabled)
+        }
+        Err(_) => (0, 0),
     }
 }
 

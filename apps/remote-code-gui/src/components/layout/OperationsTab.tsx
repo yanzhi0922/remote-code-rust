@@ -237,7 +237,8 @@ export function OperationsTab() {
                   tools {doctor.tools.builtin_tools} · rules {doctor.permissions.layered_rules}
                 </div>
                 <div className="mt-2 text-xs text-slate-500">
-                  skills {doctor.extensions.skills} · plugins {doctor.extensions.plugins}
+                  skills {doctor.extensions.skills} · plugins {doctor.extensions.plugins} · disabled{' '}
+                  {doctor.extensions.disabled_plugins}
                 </div>
                 <div className="mt-1 text-xs text-slate-500">
                   mcp {doctor.extensions.managed_mcp_servers + doctor.extensions.plugin_mcp_servers}
@@ -271,6 +272,12 @@ export function OperationsTab() {
                     {doctor.runtime.allowed_setting_sources.length > 0
                       ? doctor.runtime.allowed_setting_sources.join(', ')
                       : '(none)'}
+                  </div>
+                  <div>
+                    <span className="font-medium text-slate-700">Settings files:</span>{' '}
+                    {doctor.runtime.settings_files.length > 0
+                      ? doctor.runtime.settings_files.join(', ')
+                      : '(auto discovery only)'}
                   </div>
                   <div>
                     <span className="font-medium text-slate-700">Allowed tools:</span>{' '}

@@ -14,6 +14,7 @@ pub fn render(
     cost_tracker: &CostTracker,
     broker: &dyn PermissionBroker,
 ) {
+    let (enabled_plugins, disabled_plugins) = plugins::discovered_plugin_counts(config);
     println!("Session:  {}", config.session_id);
     println!(
         "Name:     {}",
@@ -48,9 +49,10 @@ pub fn render(
     println!("Conversation entries: {}", conversation.len());
     println!("Tracked tasks: {}", task_snapshots().len());
     println!(
-        "Surface counts: mcp={} plugins={} skills={}",
+        "Surface counts: mcp={} plugins={} disabled_plugins={} skills={}",
         mcp::discovered_server_count(config),
-        plugins::discovered_plugin_count(config),
+        enabled_plugins,
+        disabled_plugins,
         skills::discovered_skill_count(config)
     );
     println!(

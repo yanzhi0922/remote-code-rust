@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use rc_config::{RuntimeConfig, validate_provider_config};
+use rc_config::{RuntimeConfig, SettingSource, validate_provider_config};
 use rc_permissions::{load_layered_rules, rules::summarize_rule_sources};
 use serde::Serialize;
 
@@ -79,6 +79,7 @@ pub(crate) struct PermissionsSection {
 pub(crate) struct ExtensionsSection {
     pub skills: usize,
     pub plugins: usize,
+    pub disabled_plugins: usize,
     pub plugin_runtimes: usize,
     pub mcp_servers: usize,
     pub hooks: usize,
@@ -121,6 +122,21 @@ pub(crate) async fn collect_report(
     let mut warnings = Vec::new();
     warnings.extend(discovery.warnings.clone());
     warnings.extend(hooks.warnings().to_vec());
+    let disabled_plugins = if config
+        .allowed_setting_sources
+        .contains(&SettingSource::User)
+        && config.paths.plugins_dir.exists()
+    {
+        match rc_plugins::discover_plugins_including_disabled(&config.paths.plugins_dir) {
+            Ok(plugins) => plugins.iter().filter(|plugin| plugin.is_disabled()).count(),
+            Err(error) => {
+                warnings.push(format!("Failed to inspect disabled plugins: {error}"));
+                0
+            }
+        }
+    } else {
+        0
+    };
 
     let provider_probe = if args.probe_provider {
         if let Some(spec) = provider_probe_spec(&config.provider) {
@@ -226,6 +242,7 @@ pub(crate) async fn collect_report(
     let extensions = ExtensionsSection {
         skills: discovery.skills.len(),
         plugins: discovery.plugins.len(),
+        disabled_plugins,
         plugin_runtimes: discovery.plugin_runtimes.len(),
         mcp_servers: discovery.mcp_servers.len(),
         hooks: hooks.list(None).len(),

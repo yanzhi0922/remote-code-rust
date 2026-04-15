@@ -73,6 +73,32 @@ pub(crate) struct PromptRunOutcome {
     pub(crate) permission_denials: Vec<serde_json::Value>,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+struct WizardSettingsDocument {
+    provider: WizardSettingsProvider,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct WizardSettingsProvider {
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    protocol: rc_core::ProviderProtocol,
+}
+
+#[derive(Debug, Clone)]
+struct WizardProviderSelection {
+    provider_name: String,
+    protocol: rc_core::ProviderProtocol,
+    base_url: Option<String>,
+    api_key: Option<String>,
+    model: Option<String>,
+}
+
 pub(crate) type PromptEventSink = Arc<dyn Fn(PromptStreamEvent) + Send + Sync>;
 
 #[derive(Debug, Clone)]
@@ -1176,31 +1202,24 @@ pub(crate) fn run_migrate(
 ///
 /// A first run is detected when:
 /// - No API key is configured (neither env var nor CLI override)
-/// - No `settings.json` exists in the profile directory
+/// - No active runtime settings files were loaded
 ///
 /// The wizard guides the user through:
 /// 1. Provider selection (Anthropic / OpenAI / DeepSeek / GLM / Custom)
 /// 2. API key entry
 /// 3. Model selection (with sensible defaults per provider)
-/// 4. Saves the configuration to `settings.json`
+/// 4. Saves the configuration to the active settings target
 pub(crate) fn run_first_run_wizard(config: &mut RuntimeConfig) -> Result<()> {
-    let settings_path = config.paths.profile_dir.join("settings.json");
-    let has_settings = settings_path.exists();
-    let has_api_key = config.provider.api_key.is_some();
-
-    // Not a first run if settings exist or API key is configured.
-    if has_settings && has_api_key {
+    if !should_run_first_run_wizard(config) {
         return Ok(());
     }
 
     // Only run the wizard when connected to a terminal (stdin is tty).
     // In headless / CI environments, skip silently.
     if !atty_check() {
-        if !has_api_key {
-            eprintln!(
-                "⚠ No API key configured. Set REMOTE_CODE_API_KEY or run interactively to set up."
-            );
-        }
+        eprintln!(
+            "⚠ No API key configured. Set REMOTE_CODE_API_KEY or run interactively to set up."
+        );
         return Ok(());
     }
 
@@ -1266,7 +1285,12 @@ pub(crate) fn run_first_run_wizard(config: &mut RuntimeConfig) -> Result<()> {
     // Step 2: Base URL
     let base_url = if default_base_url.is_empty() {
         let input = read_line_prompt("Enter base URL: ")?;
-        Some(input.trim().to_owned())
+        let trimmed = input.trim().to_owned();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
     } else {
         let input = read_line_prompt(&format!("Base URL [{default_base_url}]: "))?;
         let trimmed = input.trim().to_owned();
@@ -1314,35 +1338,25 @@ pub(crate) fn run_first_run_wizard(config: &mut RuntimeConfig) -> Result<()> {
         }
     };
 
-    // Step 5: Save to settings.json
-    let settings = serde_json::json!({
-        "provider": provider_name,
-        "baseUrl": base_url,
-        "apiKey": api_key,
-        "model": model,
-        "protocol": protocol.as_str(),
-    });
+    let selection = WizardProviderSelection {
+        provider_name: provider_name.to_owned(),
+        protocol,
+        base_url,
+        api_key,
+        model,
+    };
 
-    let settings_dir = &config.paths.profile_dir;
-    std::fs::create_dir_all(settings_dir)?;
-    let settings_file = std::fs::File::create(&settings_path)?;
-    serde_json::to_writer_pretty(settings_file, &settings)?;
+    // Step 5: Save to the currently-active settings target.
+    let settings_path = resolve_first_run_settings_path(config)?;
+    write_wizard_settings_file(&settings_path, &selection)?;
     println!();
     println!("  ✓ Configuration saved to {}", settings_path.display());
 
     // Step 6: Apply to current config
-    config.provider.name = provider_name.to_owned();
-    config.provider.protocol = protocol;
-    if let Some(url) = &base_url {
-        config.provider.base_url = Some(url.clone());
-    }
-    config.provider.api_key = api_key.clone();
-    if let Some(m) = &model {
-        config.provider.model = Some(m.clone());
-    }
+    apply_wizard_settings(config, &settings_path, &selection);
 
-    println!("  ✓ Provider: {provider_name}");
-    if let Some(m) = &model {
+    println!("  ✓ Provider: {}", selection.provider_name);
+    if let Some(m) = &selection.model {
         println!("  ✓ Model:    {m}");
     }
     println!();
@@ -1350,6 +1364,94 @@ pub(crate) fn run_first_run_wizard(config: &mut RuntimeConfig) -> Result<()> {
     println!();
 
     Ok(())
+}
+
+fn should_run_first_run_wizard(config: &RuntimeConfig) -> bool {
+    config.provider.api_key.is_none() && config.settings_files.is_empty()
+}
+
+fn resolve_first_run_settings_path(config: &RuntimeConfig) -> Result<PathBuf> {
+    if let Some(path) = config.cli_settings_files.last() {
+        return Ok(path.clone());
+    }
+
+    for source in [
+        SettingSource::Local,
+        SettingSource::Project,
+        SettingSource::User,
+    ] {
+        if config.allowed_setting_sources.contains(&source) {
+            return Ok(match source {
+                SettingSource::User => config.paths.profile_dir.join("settings.json"),
+                SettingSource::Project => config.cwd.join(".remote-code").join("settings.json"),
+                SettingSource::Local => config.cwd.join(".remote-code").join("settings.local.json"),
+            });
+        }
+    }
+
+    Err(anyhow!(
+        "No writable settings target is available; enable at least one of user/project/local or pass --settings"
+    ))
+}
+
+fn wizard_settings_document(selection: &WizardProviderSelection) -> WizardSettingsDocument {
+    WizardSettingsDocument {
+        provider: WizardSettingsProvider {
+            name: selection.provider_name.clone(),
+            base_url: selection.base_url.clone(),
+            api_key: selection.api_key.clone(),
+            model: selection.model.clone(),
+            protocol: selection.protocol,
+        },
+    }
+}
+
+fn write_wizard_settings_file(path: &Path, selection: &WizardProviderSelection) -> Result<()> {
+    let document = wizard_settings_document(selection);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if extension == "toml" {
+        std::fs::write(path, toml::to_string_pretty(&document)?)?;
+    } else {
+        let settings_file = std::fs::File::create(path)?;
+        serde_json::to_writer_pretty(settings_file, &document)?;
+    }
+    Ok(())
+}
+
+fn apply_wizard_settings(
+    config: &mut RuntimeConfig,
+    settings_path: &Path,
+    selection: &WizardProviderSelection,
+) {
+    config.provider.name = selection.provider_name.clone();
+    config.provider.protocol = selection.protocol;
+    config.provider.base_url = normalize_base_url(selection.base_url.clone(), selection.protocol);
+    config.provider.api_key = selection.api_key.clone();
+    config.provider.model = selection.model.clone();
+    config.auth_source = selection
+        .api_key
+        .as_ref()
+        .map(|_| format!("settings:{}", settings_path.display()));
+    config.settings_files = rc_config::settings_layers::resolve_runtime_settings_files(
+        &config.cwd,
+        &config.paths.profile_dir,
+        &config.paths.profiles_dir,
+        &config.cli_settings_files,
+        &config.allowed_setting_sources,
+    );
+    config.setting_sources = config
+        .settings_files
+        .iter()
+        .map(|path| format!("settings:{}", path.display()))
+        .collect();
 }
 
 /// Check if stdin is connected to a terminal (TTY).
@@ -1371,12 +1473,51 @@ fn read_line_prompt(prompt: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::PathBuf;
 
     use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
     use rc_protocol::{MessageRole, RuntimeEventDetail};
     use tempfile::tempdir;
 
-    use super::{PromptStreamEvent, discover_runtime_extensions};
+    use super::{
+        PromptStreamEvent, WizardProviderSelection, apply_wizard_settings,
+        discover_runtime_extensions, resolve_first_run_settings_path, should_run_first_run_wizard,
+        write_wizard_settings_file,
+    };
+
+    fn test_config() -> (tempfile::TempDir, rc_config::RuntimeConfig) {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        fs::create_dir_all(&cwd).expect("cwd");
+        let config = load_runtime_config(
+            Some(cwd),
+            Some(profile),
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+            RuntimeOverrides::default(),
+        )
+        .expect("config");
+        (tempdir, config)
+    }
+
+    fn sample_wizard_selection() -> WizardProviderSelection {
+        WizardProviderSelection {
+            provider_name: "glm".to_owned(),
+            protocol: rc_core::ProviderProtocol::OpenAi,
+            base_url: Some("https://open.bigmodel.cn/api/paas".to_owned()),
+            api_key: Some("secret".to_owned()),
+            model: Some("glm-5.1".to_owned()),
+        }
+    }
 
     #[test]
     fn prompt_stream_event_maps_message_delta_to_shared_runtime_event() {
@@ -1404,6 +1545,78 @@ mod tests {
         };
 
         assert_eq!(event.runtime_event_detail(), None);
+    }
+
+    #[test]
+    fn wizard_round_trips_loader_compatible_settings_schema() {
+        let (_tempdir, config) = test_config();
+        let settings_path = config.paths.profile_dir.join("settings.json");
+        let selection = sample_wizard_selection();
+
+        write_wizard_settings_file(&settings_path, &selection).expect("wizard settings");
+        let resolved = rc_config::settings_layers::load_runtime_settings(&[settings_path])
+            .expect("settings should load");
+
+        assert_eq!(resolved.provider_name.as_deref(), Some("glm"));
+        assert_eq!(
+            resolved.base_url.as_deref(),
+            Some("https://open.bigmodel.cn/api/paas")
+        );
+        assert_eq!(resolved.api_key.as_deref(), Some("secret"));
+        assert_eq!(resolved.model.as_deref(), Some("glm-5.1"));
+        assert_eq!(resolved.protocol, Some(rc_core::ProviderProtocol::OpenAi));
+    }
+
+    #[test]
+    fn wizard_prefers_explicit_settings_target_and_updates_runtime_metadata() {
+        let (_tempdir, mut config) = test_config();
+        let explicit = config.cwd.join("configs").join("wizard.toml");
+        config.cli_settings_files = vec![
+            config.cwd.join("configs").join("base.toml"),
+            explicit.clone(),
+        ];
+        let selection = sample_wizard_selection();
+
+        let target = resolve_first_run_settings_path(&config).expect("target path");
+        assert_eq!(target, explicit);
+
+        write_wizard_settings_file(&target, &selection).expect("write explicit settings");
+        apply_wizard_settings(&mut config, &target, &selection);
+
+        let rendered = fs::read_to_string(&target).expect("settings file");
+        assert!(rendered.contains("[provider]"));
+        assert!(rendered.contains("name = \"glm\""));
+        assert_eq!(config.settings_files, config.cli_settings_files);
+        assert_eq!(
+            config.setting_sources,
+            vec![
+                format!("settings:{}", config.cli_settings_files[0].display()),
+                format!("settings:{}", config.cli_settings_files[1].display())
+            ]
+        );
+        assert_eq!(
+            config.auth_source.as_deref(),
+            Some(format!("settings:{}", target.display()).as_str())
+        );
+    }
+
+    #[test]
+    fn wizard_target_uses_highest_allowed_scope_and_first_run_gate_is_strict() {
+        let (_tempdir, mut config) = test_config();
+        config.allowed_setting_sources = vec![SettingSource::Project, SettingSource::Local];
+
+        assert!(should_run_first_run_wizard(&config));
+        assert_eq!(
+            resolve_first_run_settings_path(&config).expect("target"),
+            config.cwd.join(".remote-code").join("settings.local.json")
+        );
+
+        config.settings_files = vec![PathBuf::from("visible-settings.json")];
+        assert!(!should_run_first_run_wizard(&config));
+        config.settings_files.clear();
+
+        config.provider.api_key = Some("env-key".to_owned());
+        assert!(!should_run_first_run_wizard(&config));
     }
 
     #[test]
