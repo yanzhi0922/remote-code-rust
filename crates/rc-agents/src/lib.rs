@@ -8,30 +8,36 @@
 //!
 //! 2. **Agent definitions & tools** — High-level agent types matching Claude
 //!    Code's `AgentTool/` system, including built-in agents, fork subagents,
-//!    prompt building, memory, and display.
+//!    prompt building, memory, display, coordinator/worker mode, and resume.
 //!
 //! # Module layout
 //!
-//! - [`definition`] — [`AgentDefinition`] struct and related types
-//! - [`constants`]   — Agent tool constants
-//! - [`builtins`]    — Built-in agent registry (6 agents)
-//! - [`prompt`]      — Agent tool prompt builder
-//! - [`fork`]        — Fork subagent support
-//! - [`runner`]      — Agent execution runner
-//! - [`memory`]      — Agent memory management
-//! - [`display`]     — Agent display/color management
-//! - [`loader`]      — Agent directory loader
+//! - [`definition`]   — [`AgentDefinition`] struct and related types
+//! - [`constants`]    — Agent tool constants
+//! - [`builtins`]     — Built-in agent registry (6 agents)
+//! - [`prompt`]       — Agent tool prompt builder
+//! - [`fork`]         — Fork subagent support
+//! - [`runner`]       — Agent execution runner
+//! - [`memory`]       — Agent memory management & snapshots
+//! - [`display`]      — Agent display/color management
+//! - [`loader`]       — Agent directory loader
+//! - [`coordinator`]  — Coordinator/Worker mode
+//! - [`worker`]       — Worker agent lifecycle
+//! - [`resume`]       — Agent checkpoint & resume
 
-// ── New modules ──────────────────────────────────────────────────────────
+// ── Modules ──────────────────────────────────────────────────────────────
 pub mod builtins;
 pub mod constants;
+pub mod coordinator;
 pub mod definition;
 pub mod display;
 pub mod fork;
 pub mod loader;
 pub mod memory;
 pub mod prompt;
+pub mod resume;
 pub mod runner;
+pub mod worker;
 
 // ── Existing scheduler types ─────────────────────────────────────────────
 
@@ -45,6 +51,9 @@ use uuid::Uuid;
 // Re-export key types from submodules at the crate root for backward compat.
 pub use definition::{AgentDefinition, AgentIsolation, AgentMemoryScope, AgentSource};
 pub use runner::{AgentRunConfig, AgentRunResult, AgentRunner, ConversationEntry, UsageSummary};
+pub use coordinator::{CoordinatorMode, TaskNotificationStatus, TaskUsage};
+pub use worker::{WorkerAgent, WorkerConfig, WorkerResult, WorkerStatus};
+pub use resume::{AgentCheckpoint, ResumableAgentState};
 
 /// Current state of an agent.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]

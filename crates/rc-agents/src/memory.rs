@@ -237,6 +237,152 @@ pub fn get_memory_scope_display(scope: &Option<AgentMemoryScope>, _base: &Path) 
     }
 }
 
+// ── Memory snapshot support ───────────────────────────────────────────────
+
+/// Base directory name for agent memory snapshots.
+const SNAPSHOT_BASE: &str = "agent-memory-snapshots";
+
+/// File name for the snapshot metadata.
+const SNAPSHOT_JSON: &str = "snapshot.json";
+
+/// A snapshot of an agent's memory at a point in time.
+///
+/// Snapshots allow agent memory to be saved, shared, and restored across
+/// sessions and team members. They capture the full set of facts along
+/// with metadata about when the snapshot was taken.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentMemorySnapshot {
+    /// The agent type this snapshot belongs to.
+    pub agent_type: String,
+    /// Facts captured in the snapshot.
+    pub facts: Vec<String>,
+    /// When the snapshot was created.
+    pub created_at: DateTime<Utc>,
+    /// When the snapshot was last updated.
+    pub updated_at: DateTime<Utc>,
+}
+
+impl AgentMemorySnapshot {
+    /// Create a new empty snapshot for the given agent type.
+    #[must_use]
+    pub fn new(agent_type: impl Into<String>) -> Self {
+        let now = Utc::now();
+        Self {
+            agent_type: agent_type.into(),
+            facts: Vec::new(),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    /// Create a snapshot from an existing [`AgentMemory`].
+    pub fn from_memory(memory: &AgentMemory) -> Self {
+        Self {
+            agent_type: memory.agent_type.clone(),
+            facts: memory.facts.clone(),
+            created_at: memory.last_updated,
+            updated_at: Utc::now(),
+        }
+    }
+
+    /// Number of facts in the snapshot.
+    pub fn fact_count(&self) -> usize {
+        self.facts.len()
+    }
+
+    /// Check if the snapshot is empty.
+    pub fn is_empty(&self) -> bool {
+        self.facts.is_empty()
+    }
+}
+
+/// Diff between two memory snapshots.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemorySnapshotDiff {
+    /// Facts added in the new snapshot.
+    pub added: Vec<String>,
+    /// Facts removed from the old snapshot.
+    pub removed: Vec<String>,
+    /// Facts present in both snapshots.
+    pub unchanged: Vec<String>,
+}
+
+/// Get the snapshot directory for an agent type within a project.
+///
+/// Returns `<base>/.claude/agent-memory-snapshots/<agent_type>/`.
+pub fn get_snapshot_dir(base: &Path, agent_type: &str) -> std::path::PathBuf {
+    let dir_name = sanitize_agent_type_for_path(agent_type);
+    base.join(".claude").join(SNAPSHOT_BASE).join(dir_name)
+}
+
+/// Get the snapshot file path.
+pub fn get_snapshot_path(base: &Path, agent_type: &str) -> std::path::PathBuf {
+    get_snapshot_dir(base, agent_type).join(SNAPSHOT_JSON)
+}
+
+/// Take a memory snapshot and save it to disk.
+///
+/// Creates the snapshot directory if it doesn't exist.
+pub fn take_memory_snapshot(base: &Path, memory: &AgentMemory) -> Result<()> {
+    let snapshot = AgentMemorySnapshot::from_memory(memory);
+    let dir = get_snapshot_dir(base, &memory.agent_type);
+    fs::create_dir_all(&dir)?;
+
+    let path = dir.join(SNAPSHOT_JSON);
+    let json = serde_json::to_string_pretty(&snapshot)?;
+    fs::write(path, json)?;
+
+    Ok(())
+}
+
+/// Load a memory snapshot from disk.
+///
+/// Returns `Ok(None)` if no snapshot exists for the given agent type.
+pub fn load_memory_snapshot(base: &Path, agent_type: &str) -> Result<Option<AgentMemorySnapshot>> {
+    let path = get_snapshot_path(base, agent_type);
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(&path)?;
+    let snapshot: AgentMemorySnapshot = serde_json::from_str(&content)?;
+    Ok(Some(snapshot))
+}
+
+/// Restore agent memory from a snapshot.
+///
+/// Creates a new [`AgentMemory`] populated with the snapshot's facts.
+pub fn restore_from_snapshot(snapshot: &AgentMemorySnapshot) -> AgentMemory {
+    let mut memory = AgentMemory::new(&snapshot.agent_type);
+    for fact in &snapshot.facts {
+        memory.add_fact(fact);
+    }
+    memory
+}
+
+/// Compute the diff between two memory snapshots.
+///
+/// Returns the facts added, removed, and unchanged.
+pub fn diff_snapshots(
+    old: &AgentMemorySnapshot,
+    new: &AgentMemorySnapshot,
+) -> MemorySnapshotDiff {
+    use std::collections::BTreeSet;
+
+    let old_set: BTreeSet<&str> = old.facts.iter().map(|s| s.as_str()).collect();
+    let new_set: BTreeSet<&str> = new.facts.iter().map(|s| s.as_str()).collect();
+
+    let added: Vec<String> = new_set.difference(&old_set).map(|s| (*s).to_owned()).collect();
+    let removed: Vec<String> = old_set.difference(&new_set).map(|s| (*s).to_owned()).collect();
+    let unchanged: Vec<String> = old_set.intersection(&new_set).map(|s| (*s).to_owned()).collect();
+
+    MemorySnapshotDiff {
+        added,
+        removed,
+        unchanged,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,5 +505,144 @@ mod tests {
         let content = "# Agent Memory\n\n- fact one\n- fact two\n\nSome other text\n";
         let facts = parse_memory_content(content);
         assert_eq!(facts, vec!["fact one", "fact two"]);
+    }
+
+    // ── Snapshot tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn snapshot_new_is_empty() {
+        let snap = AgentMemorySnapshot::new("test-agent");
+        assert_eq!(snap.agent_type, "test-agent");
+        assert!(snap.facts.is_empty());
+        assert!(snap.is_empty());
+        assert_eq!(snap.fact_count(), 0);
+    }
+
+    #[test]
+    fn snapshot_from_memory() {
+        let mut mem = AgentMemory::new("test-agent");
+        mem.add_fact("fact 1");
+        mem.add_fact("fact 2");
+        let snap = AgentMemorySnapshot::from_memory(&mem);
+        assert_eq!(snap.agent_type, "test-agent");
+        assert_eq!(snap.facts, vec!["fact 1", "fact 2"]);
+        assert_eq!(snap.fact_count(), 2);
+    }
+
+    #[test]
+    fn snapshot_serde_roundtrip() {
+        let mut mem = AgentMemory::new("serde-test");
+        mem.add_fact("fact");
+        let snap = AgentMemorySnapshot::from_memory(&mem);
+        let json = serde_json::to_string_pretty(&snap).expect("serialize");
+        let parsed: AgentMemorySnapshot = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.agent_type, "serde-test");
+        assert_eq!(parsed.facts, vec!["fact"]);
+    }
+
+    #[test]
+    fn get_snapshot_dir_path() {
+        let base = PathBuf::from("/project");
+        let dir = get_snapshot_dir(&base, "test-agent");
+        assert_eq!(
+            dir,
+            PathBuf::from("/project/.claude/agent-memory-snapshots/test-agent")
+        );
+    }
+
+    #[test]
+    fn get_snapshot_dir_sanitizes_colons() {
+        let base = PathBuf::from("/project");
+        let dir = get_snapshot_dir(&base, "plugin:agent");
+        assert_eq!(
+            dir,
+            PathBuf::from("/project/.claude/agent-memory-snapshots/plugin-agent")
+        );
+    }
+
+    #[test]
+    fn take_and_load_snapshot() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut mem = AgentMemory::new("snap-test");
+        mem.add_fact("fact 1");
+        mem.add_fact("fact 2");
+
+        take_memory_snapshot(dir.path(), &mem).expect("take snapshot");
+        let loaded = load_memory_snapshot(dir.path(), "snap-test")
+            .expect("load snapshot")
+            .expect("some");
+
+        assert_eq!(loaded.agent_type, "snap-test");
+        let facts: HashSet<_> = loaded.facts.into_iter().collect();
+        assert!(facts.contains("fact 1"));
+        assert!(facts.contains("fact 2"));
+    }
+
+    #[test]
+    fn load_snapshot_nonexistent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let result = load_memory_snapshot(dir.path(), "nonexistent").expect("load");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn restore_from_snapshot_creates_memory() {
+        let snap = AgentMemorySnapshot {
+            agent_type: "test".to_owned(),
+            facts: vec!["a".to_owned(), "b".to_owned()],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        let mem = restore_from_snapshot(&snap);
+        assert_eq!(mem.agent_type, "test");
+        assert_eq!(mem.facts.len(), 2);
+        assert!(mem.facts.contains(&"a".to_owned()));
+        assert!(mem.facts.contains(&"b".to_owned()));
+    }
+
+    #[test]
+    fn diff_snapshots_added() {
+        let old = AgentMemorySnapshot::new("test");
+        let mut new = AgentMemorySnapshot::new("test");
+        new.facts.push("new fact".to_owned());
+        let diff = diff_snapshots(&old, &new);
+        assert_eq!(diff.added, vec!["new fact"]);
+        assert!(diff.removed.is_empty());
+        assert!(diff.unchanged.is_empty());
+    }
+
+    #[test]
+    fn diff_snapshots_removed() {
+        let mut old = AgentMemorySnapshot::new("test");
+        old.facts.push("old fact".to_owned());
+        let new = AgentMemorySnapshot::new("test");
+        let diff = diff_snapshots(&old, &new);
+        assert!(diff.added.is_empty());
+        assert_eq!(diff.removed, vec!["old fact"]);
+        assert!(diff.unchanged.is_empty());
+    }
+
+    #[test]
+    fn diff_snapshots_unchanged() {
+        let mut old = AgentMemorySnapshot::new("test");
+        old.facts.push("shared".to_owned());
+        let mut new = AgentMemorySnapshot::new("test");
+        new.facts.push("shared".to_owned());
+        let diff = diff_snapshots(&old, &new);
+        assert!(diff.added.is_empty());
+        assert!(diff.removed.is_empty());
+        assert_eq!(diff.unchanged, vec!["shared"]);
+    }
+
+    #[test]
+    fn diff_snapshots_complex() {
+        let mut old = AgentMemorySnapshot::new("test");
+        old.facts = vec!["kept".to_owned(), "removed".to_owned()];
+        let mut new = AgentMemorySnapshot::new("test");
+        new.facts = vec!["kept".to_owned(), "added".to_owned()];
+        let diff = diff_snapshots(&old, &new);
+        assert_eq!(diff.added, vec!["added"]);
+        assert_eq!(diff.removed, vec!["removed"]);
+        assert_eq!(diff.unchanged, vec!["kept"]);
     }
 }

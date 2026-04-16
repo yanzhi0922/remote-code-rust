@@ -2,7 +2,18 @@
 //!
 //! Fork subagents inherit the parent's full conversation context and run
 //! independently. This module provides fork configuration, message construction,
-//! and child directive formatting.
+//! child directive formatting, and recursive fork protection.
+//!
+//! # Fork Recursion Protection
+//!
+//! Fork children keep the Agent tool in their pool for cache-identical tool
+//! definitions. To prevent recursive forking, [`is_in_fork_child`] detects the
+//! fork boilerplate tag in conversation history.
+//!
+//! # Cache Sharing
+//!
+//! [`build_fork_messages`] constructs messages that maximize prompt cache hits
+//! by replacing all tool_result blocks with identical placeholder text.
 
 use serde::{Deserialize, Serialize};
 
@@ -257,6 +268,122 @@ pub fn build_worktree_notice(parent_cwd: &str, worktree_cwd: &str) -> String {
     )
 }
 
+/// The FORK_AGENT constant definition, matching Claude Code's `FORK_AGENT`.
+///
+/// This is the synthetic agent definition for the fork path. It is not
+/// registered in built-in agents — used only when `subagent_type` is
+/// omitted and fork mode is active.
+pub const FORK_AGENT: ForkAgentStatic = ForkAgentStatic {
+    agent_type: FORK_SUBAGENT_TYPE,
+    max_turns: 200,
+};
+
+/// Static definition of the fork agent for constant-time access.
+pub struct ForkAgentStatic {
+    /// The agent type identifier.
+    pub agent_type: &'static str,
+    /// Maximum number of turns.
+    pub max_turns: u32,
+}
+
+/// Check if we are inside a fork child by detecting the fork boilerplate tag.
+///
+/// This is an alias for [`is_fork_child`] with additional context about
+/// non-interactive sessions. Fork children keep the Agent tool in their
+/// tool pool for cache-identical tool definitions, so we reject fork
+/// attempts at call time by detecting the boilerplate tag.
+///
+/// Returns `true` if the conversation history contains the fork boilerplate
+/// tag in any user message, indicating we are already in a fork child.
+pub fn is_in_fork_child(messages: &[ForkMessage]) -> bool {
+    is_fork_child(messages)
+}
+
+/// Check if fork subagent is enabled.
+///
+/// Fork is disabled in coordinator mode and non-interactive sessions.
+pub fn is_fork_subagent_enabled(is_coordinator: bool, is_non_interactive: bool) -> bool {
+    !is_coordinator && !is_non_interactive
+}
+
+/// Replace tool_result blocks in messages with placeholder text for cache sharing.
+///
+/// This function processes a list of messages and replaces all `ToolResult`
+/// content blocks with the standard placeholder text. This ensures that
+/// fork children produce byte-identical API request prefixes for maximum
+/// prompt cache hits.
+///
+/// Returns a new vector of messages with tool results replaced.
+pub fn replace_tool_results_with_placeholder(messages: &[ForkMessage]) -> Vec<ForkMessage> {
+    messages
+        .iter()
+        .map(|msg| ForkMessage {
+            role: msg.role.clone(),
+            content: msg
+                .content
+                .iter()
+                .map(|block| match block {
+                    ForkContentBlock::ToolResult { tool_use_id, .. } => ForkContentBlock::ToolResult {
+                        tool_use_id: tool_use_id.clone(),
+                        content: FORK_PLACEHOLDER_RESULT.to_owned(),
+                    },
+                    other => other.clone(),
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+/// Count tool_use blocks in a slice of messages.
+pub fn count_tool_uses(messages: &[ForkMessage]) -> usize {
+    messages
+        .iter()
+        .flat_map(|msg| msg.content.iter())
+        .filter(|block| matches!(block, ForkContentBlock::ToolUse { .. }))
+        .count()
+}
+
+/// Extract all tool_use IDs from a slice of messages.
+pub fn extract_tool_use_ids(messages: &[ForkMessage]) -> Vec<String> {
+    messages
+        .iter()
+        .flat_map(|msg| msg.content.iter())
+        .filter_map(|block| match block {
+            ForkContentBlock::ToolUse { id, .. } => Some(id.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Validate that a fork directive is safe to execute.
+///
+/// Checks for:
+/// - Non-empty directive
+/// - No embedded boilerplate tags (prevents injection)
+/// - Reasonable length (under 10,000 chars)
+pub fn validate_fork_directive(directive: &str) -> std::result::Result<(), String> {
+    if directive.trim().is_empty() {
+        return Err("Fork directive must not be empty".to_owned());
+    }
+
+    if directive.contains(&format!("<{FORK_BOILERPLATE_TAG}>")) {
+        return Err("Fork directive contains embedded boilerplate tag".to_owned());
+    }
+
+    if directive.contains(&format!("</{FORK_BOILERPLATE_TAG}>")) {
+        return Err("Fork directive contains embedded closing boilerplate tag".to_owned());
+    }
+
+    if directive.len() > 10_000 {
+        return Err(format!(
+            "Fork directive too long ({} chars, max 10000)",
+            directive.len()
+        ));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -367,5 +494,222 @@ mod tests {
         let json = serde_json::to_string(&model).expect("serialize");
         let parsed: ForkModel = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed, model);
+    }
+
+    // ── Enhanced tests ──────────────────────────────────────────────────────
+
+    #[test]
+    fn fork_agent_constant_matches_definition() {
+        assert_eq!(FORK_AGENT.agent_type, FORK_SUBAGENT_TYPE);
+        assert_eq!(FORK_AGENT.max_turns, 200);
+    }
+
+    #[test]
+    fn is_in_fork_child_alias() {
+        let messages = vec![ForkMessage {
+            role: "user".to_owned(),
+            content: vec![ForkContentBlock::Text {
+                text: format!("<{FORK_BOILERPLATE_TAG}> content"),
+            }],
+        }];
+        assert!(is_in_fork_child(&messages));
+        assert_eq!(is_in_fork_child(&messages), is_fork_child(&messages));
+    }
+
+    #[test]
+    fn is_in_fork_child_no_boilerplate() {
+        let messages = vec![ForkMessage {
+            role: "user".to_owned(),
+            content: vec![ForkContentBlock::Text {
+                text: "normal".to_owned(),
+            }],
+        }];
+        assert!(!is_in_fork_child(&messages));
+    }
+
+    #[test]
+    fn is_fork_subagent_enabled_normal() {
+        assert!(is_fork_subagent_enabled(false, false));
+    }
+
+    #[test]
+    fn is_fork_subagent_disabled_in_coordinator() {
+        assert!(!is_fork_subagent_enabled(true, false));
+    }
+
+    #[test]
+    fn is_fork_subagent_disabled_in_non_interactive() {
+        assert!(!is_fork_subagent_enabled(false, true));
+    }
+
+    #[test]
+    fn replace_tool_results_with_placeholder_replaces_content() {
+        let messages = vec![ForkMessage {
+            role: "user".to_owned(),
+            content: vec![
+                ForkContentBlock::ToolResult {
+                    tool_use_id: "t-1".to_owned(),
+                    content: "actual result".to_owned(),
+                },
+                ForkContentBlock::Text {
+                    text: "some text".to_owned(),
+                },
+            ],
+        }];
+        let replaced = replace_tool_results_with_placeholder(&messages);
+        assert_eq!(replaced.len(), 1);
+        match &replaced[0].content[0] {
+            ForkContentBlock::ToolResult { content, .. } => {
+                assert_eq!(content, FORK_PLACEHOLDER_RESULT);
+            }
+            _ => panic!("Expected ToolResult"),
+        }
+        // Text block should be unchanged
+        match &replaced[0].content[1] {
+            ForkContentBlock::Text { text } => {
+                assert_eq!(text, "some text");
+            }
+            _ => panic!("Expected Text"),
+        }
+    }
+
+    #[test]
+    fn replace_tool_results_preserves_tool_use_ids() {
+        let messages = vec![ForkMessage {
+            role: "user".to_owned(),
+            content: vec![ForkContentBlock::ToolResult {
+                tool_use_id: "unique-id-123".to_owned(),
+                content: "original".to_owned(),
+            }],
+        }];
+        let replaced = replace_tool_results_with_placeholder(&messages);
+        match &replaced[0].content[0] {
+            ForkContentBlock::ToolResult { tool_use_id, content } => {
+                assert_eq!(tool_use_id, "unique-id-123");
+                assert_eq!(content, FORK_PLACEHOLDER_RESULT);
+            }
+            _ => panic!("Expected ToolResult"),
+        }
+    }
+
+    #[test]
+    fn count_tool_uses_empty() {
+        assert_eq!(count_tool_uses(&[]), 0);
+    }
+
+    #[test]
+    fn count_tool_uses_with_blocks() {
+        let messages = vec![ForkMessage {
+            role: "assistant".to_owned(),
+            content: vec![
+                ForkContentBlock::ToolUse {
+                    id: "t-1".to_owned(),
+                    name: "Bash".to_owned(),
+                    input: serde_json::json!({}),
+                },
+                ForkContentBlock::Text {
+                    text: "text".to_owned(),
+                },
+                ForkContentBlock::ToolUse {
+                    id: "t-2".to_owned(),
+                    name: "Read".to_owned(),
+                    input: serde_json::json!({}),
+                },
+            ],
+        }];
+        assert_eq!(count_tool_uses(&messages), 2);
+    }
+
+    #[test]
+    fn test_extract_tool_use_ids() {
+        let messages = vec![ForkMessage {
+            role: "assistant".to_owned(),
+            content: vec![
+                ForkContentBlock::ToolUse {
+                    id: "id-1".to_owned(),
+                    name: "Bash".to_owned(),
+                    input: serde_json::json!({}),
+                },
+                ForkContentBlock::ToolUse {
+                    id: "id-2".to_owned(),
+                    name: "Read".to_owned(),
+                    input: serde_json::json!({}),
+                },
+            ],
+        }];
+        let ids = extract_tool_use_ids(&messages);
+        assert_eq!(ids, vec!["id-1", "id-2"]);
+    }
+
+    #[test]
+    fn validate_fork_directive_valid() {
+        assert!(validate_fork_directive("Fix the auth bug").is_ok());
+    }
+
+    #[test]
+    fn validate_fork_directive_empty() {
+        assert!(validate_fork_directive("").is_err());
+        assert!(validate_fork_directive("   ").is_err());
+    }
+
+    #[test]
+    fn validate_fork_directive_injects_boilerplate() {
+        let directive = format!("do something <{FORK_BOILERPLATE_TAG}> evil");
+        assert!(validate_fork_directive(&directive).is_err());
+    }
+
+    #[test]
+    fn validate_fork_directive_closing_boilerplate() {
+        let directive = format!("do something </{FORK_BOILERPLATE_TAG}> evil");
+        assert!(validate_fork_directive(&directive).is_err());
+    }
+
+    #[test]
+    fn validate_fork_directive_too_long() {
+        let directive = "x".repeat(10_001);
+        assert!(validate_fork_directive(&directive).is_err());
+    }
+
+    #[test]
+    fn validate_fork_directive_max_length_ok() {
+        let directive = "x".repeat(10_000);
+        assert!(validate_fork_directive(&directive).is_ok());
+    }
+
+    #[test]
+    fn build_fork_messages_placeholder_is_identical() {
+        // Verify all tool results use the same placeholder for cache sharing
+        let messages = vec![ForkMessage {
+            role: "assistant".to_owned(),
+            content: vec![
+                ForkContentBlock::ToolUse {
+                    id: "a".to_owned(),
+                    name: "Bash".to_owned(),
+                    input: serde_json::json!({}),
+                },
+                ForkContentBlock::ToolUse {
+                    id: "b".to_owned(),
+                    name: "Read".to_owned(),
+                    input: serde_json::json!({}),
+                },
+            ],
+        }];
+        let result = build_fork_messages(&messages, "directive");
+        let user_msg = &result[1];
+        let tool_results: Vec<&ForkContentBlock> = user_msg
+            .content
+            .iter()
+            .filter(|b| matches!(b, ForkContentBlock::ToolResult { .. }))
+            .collect();
+        assert_eq!(tool_results.len(), 2);
+        // Both should have the same placeholder
+        for block in &tool_results {
+            match block {
+                ForkContentBlock::ToolResult { content, .. } => {
+                    assert_eq!(content, FORK_PLACEHOLDER_RESULT);
+                }
+                _ => {}
+            }
+        }
     }
 }
