@@ -3,6 +3,7 @@
 use serde_json::json;
 
 use super::ToolSpec;
+use super::tool_prompts;
 
 #[must_use]
 fn builtin_tool_specs_core() -> Vec<ToolSpec> {
@@ -11,7 +12,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "list_directory".to_owned(),
             protocol_name: "ListDirectory".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "List files and directories relative to the current workspace.".to_owned(),
+            description: tool_prompts::LIST_DIRECTORY.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -27,7 +28,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "read_file".to_owned(),
             protocol_name: "ReadFile".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "Read a UTF-8 text file from the current workspace.".to_owned(),
+            description: tool_prompts::READ_FILE.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -45,7 +46,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "search_text".to_owned(),
             protocol_name: "SearchText".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "Search files for a text pattern or regular expression.".to_owned(),
+            description: tool_prompts::SEARCH_TEXT.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -62,7 +63,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "write_file".to_owned(),
             protocol_name: "WriteFile".to_owned(),
             permission_tool_name: "Edit".to_owned(),
-            description: "Create or overwrite a text file.".to_owned(),
+            description: tool_prompts::WRITE_FILE.to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -79,7 +80,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "replace_in_file".to_owned(),
             protocol_name: "ReplaceInFile".to_owned(),
             permission_tool_name: "Edit".to_owned(),
-            description: "Replace text in an existing file.".to_owned(),
+            description: tool_prompts::REPLACE_IN_FILE.to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -97,7 +98,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "edit_file".to_owned(),
             protocol_name: "EditFile".to_owned(),
             permission_tool_name: "Edit".to_owned(),
-            description: "Apply ordered search/replace edits to a text file.".to_owned(),
+            description: tool_prompts::EDIT_FILE.to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -126,7 +127,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "bash_command".to_owned(),
             protocol_name: "Bash".to_owned(),
             permission_tool_name: "Bash".to_owned(),
-            description: "Run a shell command in the current workspace. To run in a subdirectory, pass cwd instead of prefixing the command with cd or Set-Location.".to_owned(),
+            description: tool_prompts::BASH_COMMAND.to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -145,7 +146,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "glob".to_owned(),
             protocol_name: "Glob".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "Search for files using glob patterns (e.g. **/*.rs).".to_owned(),
+            description: tool_prompts::GLOB.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -161,7 +162,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "grep".to_owned(),
             protocol_name: "Grep".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "Search files for a regex pattern with context lines and file filtering.".to_owned(),
+            description: tool_prompts::GREP.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -179,7 +180,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "web_fetch".to_owned(),
             protocol_name: "WebFetch".to_owned(),
             permission_tool_name: "WebFetch".to_owned(),
-            description: "Fetch the content of a URL.".to_owned(),
+            description: tool_prompts::WEB_FETCH.to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -195,7 +196,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "ask_user".to_owned(),
             protocol_name: "AskUser".to_owned(),
             permission_tool_name: "AskUser".to_owned(),
-            description: "Ask the user a question and wait for a response.".to_owned(),
+            description: tool_prompts::ASK_USER.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -214,7 +215,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "todo_write".to_owned(),
             protocol_name: "TodoWrite".to_owned(),
             permission_tool_name: "TodoWrite".to_owned(),
-            description: "Manage a task list (create/update/delete todo items).".to_owned(),
+            description: tool_prompts::TODO_WRITE.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -241,7 +242,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "config_read".to_owned(),
             protocol_name: "Config".to_owned(),
             permission_tool_name: "Config".to_owned(),
-            description: "Read or modify runtime configuration.".to_owned(),
+            description: tool_prompts::CONFIG_READ.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -258,7 +259,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "agent".to_owned(),
             protocol_name: "Agent".to_owned(),
             permission_tool_name: "Agent".to_owned(),
-            description: "Spawn a sub-agent to complete a task. The sub-agent runs in its own context and returns the result.".to_owned(),
+            description: tool_prompts::AGENT.to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -278,7 +279,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "web_search".to_owned(),
             protocol_name: "WebSearch".to_owned(),
             permission_tool_name: "WebSearch".to_owned(),
-            description: "Search the web for information using a search API.".to_owned(),
+            description: tool_prompts::WEB_SEARCH.to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -295,7 +296,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "lsp".to_owned(),
             protocol_name: "LSP".to_owned(),
             permission_tool_name: "LSP".to_owned(),
-            description: "Language Server Protocol tool for code intelligence (definitions, references, hover, completion, diagnostics).".to_owned(),
+            description: tool_prompts::LSP.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -315,7 +316,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "task_create".to_owned(),
             protocol_name: "TaskCreate".to_owned(),
             permission_tool_name: "TaskCreate".to_owned(),
-            description: "Create a new background task.".to_owned(),
+            description: tool_prompts::TASK_CREATE.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -331,7 +332,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "task_get".to_owned(),
             protocol_name: "TaskGet".to_owned(),
             permission_tool_name: "TaskGet".to_owned(),
-            description: "Get details of a background task by ID.".to_owned(),
+            description: tool_prompts::TASK_GET.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -346,7 +347,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "task_list".to_owned(),
             protocol_name: "TaskList".to_owned(),
             permission_tool_name: "TaskList".to_owned(),
-            description: "List all background tasks.".to_owned(),
+            description: tool_prompts::TASK_LIST.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -358,7 +359,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "task_stop".to_owned(),
             protocol_name: "TaskStop".to_owned(),
             permission_tool_name: "TaskStop".to_owned(),
-            description: "Stop a running background task.".to_owned(),
+            description: tool_prompts::TASK_STOP.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -373,7 +374,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "task_update".to_owned(),
             protocol_name: "TaskUpdate".to_owned(),
             permission_tool_name: "TaskUpdate".to_owned(),
-            description: "Update the status or output of a background task.".to_owned(),
+            description: tool_prompts::TASK_UPDATE.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -391,7 +392,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "notebook_edit".to_owned(),
             protocol_name: "NotebookEdit".to_owned(),
             permission_tool_name: "Edit".to_owned(),
-            description: "Edit a cell in a Jupyter notebook (.ipynb) file.".to_owned(),
+            description: tool_prompts::NOTEBOOK_EDIT.to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -410,7 +411,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "skill_discover".to_owned(),
             protocol_name: "DiscoverSkills".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "Discover available skills in the current workspace.".to_owned(),
+            description: tool_prompts::SKILL_DISCOVER.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -422,7 +423,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "skill_execute".to_owned(),
             protocol_name: "ExecuteSkill".to_owned(),
             permission_tool_name: "ExecuteSkill".to_owned(),
-            description: "Load and return the instructions of a specific skill by slug. The skill content is injected into the conversation context for the agent to follow.".to_owned(),
+            description: tool_prompts::SKILL_EXECUTE.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -439,7 +440,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "send_message".to_owned(),
             protocol_name: "SendMessage".to_owned(),
             permission_tool_name: "SendMessage".to_owned(),
-            description: "Send a message to another agent in the multi-agent system.".to_owned(),
+            description: tool_prompts::SEND_MESSAGE.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -456,7 +457,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "enter_plan_mode".to_owned(),
             protocol_name: "EnterPlanMode".to_owned(),
             permission_tool_name: "EnterPlanMode".to_owned(),
-            description: "Enter plan mode (read-only, no tool execution).".to_owned(),
+            description: tool_prompts::ENTER_PLAN_MODE.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -471,7 +472,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "exit_plan_mode".to_owned(),
             protocol_name: "ExitPlanMode".to_owned(),
             permission_tool_name: "ExitPlanMode".to_owned(),
-            description: "Exit plan mode and resume normal execution.".to_owned(),
+            description: tool_prompts::EXIT_PLAN_MODE.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -484,7 +485,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "sleep".to_owned(),
             protocol_name: "Sleep".to_owned(),
             permission_tool_name: "Sleep".to_owned(),
-            description: "Sleep for a specified number of seconds (max 30).".to_owned(),
+            description: tool_prompts::SLEEP.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -500,7 +501,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "snip".to_owned(),
             protocol_name: "Snip".to_owned(),
             permission_tool_name: "Snip".to_owned(),
-            description: "Save a code snippet to the .remote-code-rust/snippets/ directory.".to_owned(),
+            description: tool_prompts::SNIP.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -517,7 +518,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "memory_read".to_owned(),
             protocol_name: "MemoryRead".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "Read persistent memory (RC.md) from global and/or project scope.".to_owned(),
+            description: tool_prompts::MEMORY_READ.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -531,7 +532,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "memory_write".to_owned(),
             protocol_name: "MemoryWrite".to_owned(),
             permission_tool_name: "Edit".to_owned(),
-            description: "Write or append to persistent memory (RC.md) in global or project scope.".to_owned(),
+            description: tool_prompts::MEMORY_WRITE.to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -548,7 +549,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "team_create".to_owned(),
             protocol_name: "TeamCreate".to_owned(),
             permission_tool_name: "TeamCreate".to_owned(),
-            description: "Create a multi-agent team with a lead and optional agent definitions.".to_owned(),
+            description: tool_prompts::TEAM_CREATE.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -576,7 +577,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "team_status".to_owned(),
             protocol_name: "TeamStatus".to_owned(),
             permission_tool_name: "TeamStatus".to_owned(),
-            description: "Get the current status of the multi-agent team.".to_owned(),
+            description: tool_prompts::TEAM_STATUS.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -588,7 +589,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "web_browser".to_owned(),
             protocol_name: "WebBrowser".to_owned(),
             permission_tool_name: "WebBrowser".to_owned(),
-            description: "Enhanced web browser: fetch URL content, extract links, extract text, or take a screenshot.".to_owned(),
+            description: tool_prompts::WEB_BROWSER.to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -604,7 +605,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "tool_search".to_owned(),
             protocol_name: "ToolSearch".to_owned(),
             permission_tool_name: "ToolSearch".to_owned(),
-            description: "Search available tools by keyword. Returns matching tool names and descriptions.".to_owned(),
+            description: tool_prompts::TOOL_SEARCH.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -620,7 +621,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "verify_plan".to_owned(),
             protocol_name: "VerifyPlan".to_owned(),
             permission_tool_name: "VerifyPlan".to_owned(),
-            description: "Verify a plan's execution status. Returns which items are incomplete.".to_owned(),
+            description: tool_prompts::VERIFY_PLAN.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -644,7 +645,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "terminal_capture".to_owned(),
             protocol_name: "TerminalCapture".to_owned(),
             permission_tool_name: "TerminalCapture".to_owned(),
-            description: "Execute a command and return formatted output with exit code information.".to_owned(),
+            description: tool_prompts::TERMINAL_CAPTURE.to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -660,7 +661,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "powershell".to_owned(),
             protocol_name: "PowerShell".to_owned(),
             permission_tool_name: "Bash".to_owned(),
-            description: "Execute a PowerShell command (Windows only). To run in a subdirectory, pass cwd instead of prefixing the command with cd or Set-Location.".to_owned(),
+            description: tool_prompts::POWERSHELL.to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -679,7 +680,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "repl".to_owned(),
             protocol_name: "REPL".to_owned(),
             permission_tool_name: "Bash".to_owned(),
-            description: "Execute code in a language REPL (python, node, or rust).".to_owned(),
+            description: tool_prompts::REPL.to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -695,7 +696,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "monitor".to_owned(),
             protocol_name: "Monitor".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "Monitor agents, tasks, or sessions and return a status snapshot.".to_owned(),
+            description: tool_prompts::MONITOR.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -711,7 +712,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "schedule_cron".to_owned(),
             protocol_name: "ScheduleCron".to_owned(),
             permission_tool_name: "Edit".to_owned(),
-            description: "Schedule a cron job that runs a command periodically. Supports create, list, and delete actions.".to_owned(),
+            description: tool_prompts::SCHEDULE_CRON.to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -730,7 +731,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "remote_trigger".to_owned(),
             protocol_name: "RemoteTrigger".to_owned(),
             permission_tool_name: "RemoteTrigger".to_owned(),
-            description: "Send an HTTP POST to trigger a remote event.".to_owned(),
+            description: tool_prompts::REMOTE_TRIGGER.to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -747,7 +748,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "workflow".to_owned(),
             protocol_name: "Workflow".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "Create, run, list, delete, or check status of a simple workflow with sequential step execution.".to_owned(),
+            description: tool_prompts::WORKFLOW.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -768,7 +769,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "suggest_pr".to_owned(),
             protocol_name: "SuggestPR".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "Analyze git diff and suggest a PR title and description.".to_owned(),
+            description: tool_prompts::SUGGEST_PR.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -780,7 +781,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "enter_worktree".to_owned(),
             protocol_name: "EnterWorktree".to_owned(),
             permission_tool_name: "Edit".to_owned(),
-            description: "Suggest a git worktree add command for a branch.".to_owned(),
+            description: tool_prompts::ENTER_WORKTREE.to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -795,7 +796,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "exit_worktree".to_owned(),
             protocol_name: "ExitWorktree".to_owned(),
             permission_tool_name: "Edit".to_owned(),
-            description: "Suggest a git worktree remove command for a branch.".to_owned(),
+            description: tool_prompts::EXIT_WORKTREE.to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -810,7 +811,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "list_worktrees".to_owned(),
             protocol_name: "ListWorktrees".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "List all git worktrees in the current repository.".to_owned(),
+            description: tool_prompts::LIST_WORKTREES.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -822,7 +823,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "brief".to_owned(),
             protocol_name: "Brief".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "Summarize or truncate content to a maximum length.".to_owned(),
+            description: tool_prompts::BRIEF.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -838,7 +839,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "ctx_inspect".to_owned(),
             protocol_name: "CtxInspect".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "Inspect current conversation context (tokens, messages, tools).".to_owned(),
+            description: tool_prompts::CTX_INSPECT.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -853,7 +854,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "list_peers".to_owned(),
             protocol_name: "ListPeers".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "List all registered agents in the multi-agent system.".to_owned(),
+            description: tool_prompts::LIST_PEERS.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -865,7 +866,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "tungsten".to_owned(),
             protocol_name: "Tungsten".to_owned(),
             permission_tool_name: "Bash".to_owned(),
-            description: "Smart build/test/run engine that detects project type and executes the right commands.".to_owned(),
+            description: tool_prompts::TUNGSTEN.to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -881,7 +882,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "overflow_test".to_owned(),
             protocol_name: "OverflowTest".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "Generate test data for verifying context management edge cases.".to_owned(),
+            description: tool_prompts::OVERFLOW_TEST.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -896,7 +897,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "synthetic_output".to_owned(),
             protocol_name: "SyntheticOutput".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "Generate synthetic test data in JSON, CSV, Markdown, or text format.".to_owned(),
+            description: tool_prompts::SYNTHETIC_OUTPUT.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -912,7 +913,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "mcp_auth".to_owned(),
             protocol_name: "McpAuth".to_owned(),
             permission_tool_name: "McpAuth".to_owned(),
-            description: "Manage authentication state for MCP servers.".to_owned(),
+            description: tool_prompts::MCP_AUTH.to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -928,7 +929,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "mcp_call".to_owned(),
             protocol_name: "McpCall".to_owned(),
             permission_tool_name: "McpCall".to_owned(),
-            description: "Call a tool on an MCP server directly. Loads the MCP config, connects to the specified server, and invokes the named tool with the given arguments.".to_owned(),
+            description: tool_prompts::MCP_CALL.to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -945,7 +946,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "list_mcp_resources".to_owned(),
             protocol_name: "ListMcpResources".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "List resources provided by MCP servers.".to_owned(),
+            description: tool_prompts::LIST_MCP_RESOURCES.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -959,7 +960,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "read_mcp_resource".to_owned(),
             protocol_name: "ReadMcpResource".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "Read the content of an MCP resource by URI.".to_owned(),
+            description: tool_prompts::READ_MCP_RESOURCE.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -974,7 +975,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "voice_input".to_owned(),
             protocol_name: "VoiceInput".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "Capture voice input via microphone, record audio, and transcribe to text using whisper.".to_owned(),
+            description: tool_prompts::VOICE_INPUT.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -989,7 +990,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "daemon".to_owned(),
             protocol_name: "Daemon".to_owned(),
             permission_tool_name: "Daemon".to_owned(),
-            description: "Manage background daemon processes: start (spawn background), stop (kill by id), status, list, restart, and logs.".to_owned(),
+            description: tool_prompts::DAEMON.to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -1021,7 +1022,7 @@ pub fn phase9_tool_specs() -> Vec<ToolSpec> {
             name: "discover_skills".to_owned(),
             protocol_name: "DiscoverSkills".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "Discover relevant skills using BM25 text search based on a task description query.".to_owned(),
+            description: tool_prompts::DISCOVER_SKILLS.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -1037,7 +1038,7 @@ pub fn phase9_tool_specs() -> Vec<ToolSpec> {
             name: "team_delete".to_owned(),
             protocol_name: "TeamDelete".to_owned(),
             permission_tool_name: "TeamDelete".to_owned(),
-            description: "Delete a multi-agent team and clean up associated resources (team file, worktree, mailbox).".to_owned(),
+            description: tool_prompts::TEAM_DELETE.to_owned(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -1052,7 +1053,7 @@ pub fn phase9_tool_specs() -> Vec<ToolSpec> {
             name: "team_list".to_owned(),
             protocol_name: "TeamList".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "List all multi-agent teams with their metadata.".to_owned(),
+            description: tool_prompts::TEAM_LIST.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -1064,7 +1065,7 @@ pub fn phase9_tool_specs() -> Vec<ToolSpec> {
             name: "broadcast_message".to_owned(),
             protocol_name: "BroadcastMessage".to_owned(),
             permission_tool_name: "SendMessage".to_owned(),
-            description: "Broadcast a message to all agents in the multi-agent system.".to_owned(),
+            description: tool_prompts::BROADCAST_MESSAGE.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -1086,7 +1087,7 @@ pub fn phase9_tool_specs() -> Vec<ToolSpec> {
             name: "review_artifact".to_owned(),
             protocol_name: "ReviewArtifact".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "Review an artifact: view diff, add comments, update status, or get review summary.".to_owned(),
+            description: tool_prompts::REVIEW_ARTIFACT.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -1111,7 +1112,7 @@ pub fn phase9_tool_specs() -> Vec<ToolSpec> {
             name: "send_user_file".to_owned(),
             protocol_name: "SendUserFile".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: "Send a file to the user (logs, screenshots, exported data). Supports base64 encoding and file type detection.".to_owned(),
+            description: tool_prompts::SEND_USER_FILE.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",

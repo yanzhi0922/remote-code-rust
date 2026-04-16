@@ -38,6 +38,7 @@ pub mod web;
 pub mod web_browser;
 pub mod worktree_tools;
 pub mod workflow;
+pub mod tool_prompts;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
