@@ -31,7 +31,10 @@ pub mod validation;
 pub mod worktree;
 
 pub use attribution::AttributionSettings;
-pub use hooks::HookSettings;
+pub use hooks::{
+    AgentHookConfig, BashCommandHookConfig, HookCommandConfig, HookEntry, HookMatcherConfig,
+    HookSettings, HookShellType, HttpHookConfig, PromptHookConfig,
+};
 pub use loader::{load_settings_from_file, load_settings_from_str};
 pub use mcp::{AllowedMcpServerEntry, DeniedMcpServerEntry, McpServerEntryMatcher};
 pub use merge::{merge_settings, SettingsLayer};

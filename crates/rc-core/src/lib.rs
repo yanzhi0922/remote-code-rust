@@ -7,6 +7,10 @@
 pub mod app_state;
 pub mod cost;
 pub mod exit_reasons;
+pub mod hook_executor;
+pub mod hook_matcher;
+pub mod hook_registry;
+pub mod hook_types;
 pub mod hooks;
 pub mod ids;
 pub mod message;
@@ -27,7 +31,26 @@ pub use app_state::{
 };
 pub use cost::CostTracker;
 pub use exit_reasons::{ExitReason, ExitReasonTracker, ExitRecord};
-pub use hooks::{HookDecision, HookEventEnvelope, HookEventKind, HookResponse, HookSpecificOutput};
+pub use hook_executor::{
+    HookBatchResult, HookExecutor, HookOutcome, format_blocking_message, is_url_safe_for_hook,
+};
+pub use hook_matcher::{
+    MatchedHooks, deduplicate_hooks, filter_hooks_by_managed,
+    filter_hooks_by_trust, is_hook_event as is_hook_event_match, match_hooks, match_tool_name,
+    parse_hook_event,
+};
+pub use hook_registry::{HookRegistry, HooksConfigSnapshot};
+pub use hook_types::{
+    AggregatedHookResult, HookCallback, HookCommand as HookCommandDef, HookDefinition,
+    HookFunction, HookHttp, HookInput, HookMatcherEntry, HookOutput, HookPrompt, HookResponse,
+    HookResponseDecision, HookSpecificOutputV2, HookType,
+    PermissionBehavior as HookPermissionBehavior,
+    PermissionRequestDecision, PermissionUpdate,
+};
+pub use hooks::{
+    HookDecision, HookEventEnvelope, HookEventKind, HookResponse as HookResponseV1,
+    HookSpecificOutput, HOOK_EVENTS, is_hook_event,
+};
 pub use ids::{AgentId, SessionId};
 pub use message::{
     AssistantContentBlock, AssistantMessage, AttachmentMessage, CollapsedReadSearchMessage,
