@@ -1,0 +1,399 @@
+//! Query Source marking for API requests.
+//!
+//! Provides types and utilities for tagging queries with their origin,
+//! enabling the API to route and handle requests differently based on source.
+
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+// ---------------------------------------------------------------------------
+// QuerySource enum
+// ---------------------------------------------------------------------------
+
+/// The origin of a query sent to the API.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum QuerySource {
+    /// Direct user input from the CLI or UI.
+    User,
+    /// Generated during conversation compaction.
+    Compact,
+    /// Restored from session memory.
+    SessionMemory,
+    /// Issued by a sub-agent or forked agent.
+    Agent,
+    /// Issued by the advisor system.
+    Advisor,
+    /// Issued by a background task.
+    BackgroundTask,
+}
+
+impl QuerySource {
+    /// Return the wire representation for the API header.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Compact => "compact",
+            Self::SessionMemory => "session_memory",
+            Self::Agent => "agent",
+            Self::Advisor => "advisor",
+            Self::BackgroundTask => "background_task",
+        }
+    }
+
+    /// All known query source values.
+    #[must_use]
+    pub fn all_values() -> &'static [QuerySource] {
+        &[
+            QuerySource::User,
+            QuerySource::Compact,
+            QuerySource::SessionMemory,
+            QuerySource::Agent,
+            QuerySource::Advisor,
+            QuerySource::BackgroundTask,
+        ]
+    }
+}
+
+impl std::fmt::Display for QuerySource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// QuerySourceContext
+// ---------------------------------------------------------------------------
+
+/// Additional context about the query source.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct QuerySourceContext {
+    /// The query source.
+    pub source: QuerySource,
+    /// Optional session ID associated with this query.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Optional agent ID if the source is an agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    /// Optional parent query ID for nested queries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_query_id: Option<String>,
+}
+
+impl QuerySourceContext {
+    /// Create a new query source context with the given source.
+    #[must_use]
+    pub fn new(source: QuerySource) -> Self {
+        Self {
+            source,
+            session_id: None,
+            agent_id: None,
+            parent_query_id: None,
+        }
+    }
+
+    /// Set the session ID.
+    #[must_use]
+    pub fn with_session_id(mut self, session_id: String) -> Self {
+        self.session_id = Some(session_id);
+        self
+    }
+
+    /// Set the agent ID.
+    #[must_use]
+    pub fn with_agent_id(mut self, agent_id: String) -> Self {
+        self.agent_id = Some(agent_id);
+        self
+    }
+
+    /// Set the parent query ID.
+    #[must_use]
+    pub fn with_parent_query_id(mut self, parent_query_id: String) -> Self {
+        self.parent_query_id = Some(parent_query_id);
+        self
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Header generation
+// ---------------------------------------------------------------------------
+
+/// HTTP header name for query source.
+pub const QUERY_SOURCE_HEADER: &str = "x-query-source";
+
+/// Generate the query source header value.
+///
+/// The header value encodes the source and optional context as a
+/// semicolon-separated key=value string.
+///
+/// # Arguments
+///
+/// * `ctx` — The query source context.
+///
+/// # Returns
+///
+/// The header value string.
+#[must_use]
+pub fn query_source_header(ctx: &QuerySourceContext) -> String {
+    let mut parts = vec![format!("source={}", ctx.source.as_str())];
+
+    if let Some(ref sid) = ctx.session_id {
+        parts.push(format!("session_id={sid}"));
+    }
+    if let Some(ref aid) = ctx.agent_id {
+        parts.push(format!("agent_id={aid}"));
+    }
+    if let Some(ref pid) = ctx.parent_query_id {
+        parts.push(format!("parent_query_id={pid}"));
+    }
+
+    parts.join(";")
+}
+
+/// Parse a query source header value back into a context.
+///
+/// # Arguments
+///
+/// * `header` — The header value string.
+///
+/// # Returns
+///
+/// The parsed `QuerySourceContext`, or `None` if invalid.
+pub fn parse_query_source_header(header: &str) -> Option<QuerySourceContext> {
+    let parts: Vec<&str> = header.split(';').collect();
+    let mut source = None;
+    let mut session_id = None;
+    let mut agent_id = None;
+    let mut parent_query_id = None;
+
+    for part in parts {
+        let part = part.trim();
+        if let Some((key, value)) = part.split_once('=') {
+            match key {
+                "source" => {
+                    source = match value {
+                        "user" => Some(QuerySource::User),
+                        "compact" => Some(QuerySource::Compact),
+                        "session_memory" => Some(QuerySource::SessionMemory),
+                        "agent" => Some(QuerySource::Agent),
+                        "advisor" => Some(QuerySource::Advisor),
+                        "background_task" => Some(QuerySource::BackgroundTask),
+                        _ => None,
+                    };
+                }
+                "session_id" => session_id = Some(value.to_string()),
+                "agent_id" => agent_id = Some(value.to_string()),
+                "parent_query_id" => parent_query_id = Some(value.to_string()),
+                _ => {}
+            }
+        }
+    }
+
+    source.map(|s| QuerySourceContext {
+        source: s,
+        session_id,
+        agent_id,
+        parent_query_id,
+    })
+}
+
+/// Convert a query source context to a JSON value for API body parameters.
+///
+/// # Arguments
+///
+/// * `ctx` — The query source context.
+///
+/// # Returns
+///
+/// A JSON object with the source metadata.
+#[must_use]
+pub fn query_source_to_json(ctx: &QuerySourceContext) -> Value {
+    let mut obj = json!({
+        "source": ctx.source.as_str(),
+    });
+    if let Some(ref sid) = ctx.session_id {
+        obj["session_id"] = json!(sid);
+    }
+    if let Some(ref aid) = ctx.agent_id {
+        obj["agent_id"] = json!(aid);
+    }
+    if let Some(ref pid) = ctx.parent_query_id {
+        obj["parent_query_id"] = json!(pid);
+    }
+    obj
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- QuerySource ---
+
+    #[test]
+    fn query_source_as_str() {
+        assert_eq!(QuerySource::User.as_str(), "user");
+        assert_eq!(QuerySource::Compact.as_str(), "compact");
+        assert_eq!(QuerySource::SessionMemory.as_str(), "session_memory");
+        assert_eq!(QuerySource::Agent.as_str(), "agent");
+        assert_eq!(QuerySource::Advisor.as_str(), "advisor");
+        assert_eq!(QuerySource::BackgroundTask.as_str(), "background_task");
+    }
+
+    #[test]
+    fn query_source_display() {
+        assert_eq!(QuerySource::User.to_string(), "user");
+        assert_eq!(QuerySource::Agent.to_string(), "agent");
+    }
+
+    #[test]
+    fn query_source_all_values() {
+        let values = QuerySource::all_values();
+        assert_eq!(values.len(), 6);
+    }
+
+    #[test]
+    fn query_source_serialization_roundtrip() {
+        for source in QuerySource::all_values() {
+            let json = serde_json::to_string(source).expect("serialize");
+            let deserialized: QuerySource = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(*source, deserialized);
+        }
+    }
+
+    // --- QuerySourceContext ---
+
+    #[test]
+    fn query_source_context_new() {
+        let ctx = QuerySourceContext::new(QuerySource::User);
+        assert_eq!(ctx.source, QuerySource::User);
+        assert!(ctx.session_id.is_none());
+        assert!(ctx.agent_id.is_none());
+        assert!(ctx.parent_query_id.is_none());
+    }
+
+    #[test]
+    fn query_source_context_builder() {
+        let ctx = QuerySourceContext::new(QuerySource::Agent)
+            .with_session_id("sess_123".to_string())
+            .with_agent_id("agent_456".to_string())
+            .with_parent_query_id("pq_789".to_string());
+        assert_eq!(ctx.session_id.as_ref().expect("session_id"), "sess_123");
+        assert_eq!(ctx.agent_id.as_ref().expect("agent_id"), "agent_456");
+        assert_eq!(
+            ctx.parent_query_id.as_ref().expect("parent_query_id"),
+            "pq_789"
+        );
+    }
+
+    #[test]
+    fn query_source_context_serialization_roundtrip() {
+        let ctx = QuerySourceContext::new(QuerySource::Compact)
+            .with_session_id("s1".to_string());
+        let json = serde_json::to_string(&ctx).expect("serialize");
+        let deserialized: QuerySourceContext =
+            serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(ctx, deserialized);
+    }
+
+    // --- query_source_header ---
+
+    #[test]
+    fn query_source_header_simple() {
+        let ctx = QuerySourceContext::new(QuerySource::User);
+        let header = query_source_header(&ctx);
+        assert_eq!(header, "source=user");
+    }
+
+    #[test]
+    fn query_source_header_with_session() {
+        let ctx = QuerySourceContext::new(QuerySource::Agent)
+            .with_session_id("sess_123".to_string());
+        let header = query_source_header(&ctx);
+        assert!(header.contains("source=agent"));
+        assert!(header.contains("session_id=sess_123"));
+    }
+
+    #[test]
+    fn query_source_header_full() {
+        let ctx = QuerySourceContext::new(QuerySource::Agent)
+            .with_session_id("s1".to_string())
+            .with_agent_id("a1".to_string())
+            .with_parent_query_id("p1".to_string());
+        let header = query_source_header(&ctx);
+        assert!(header.contains("source=agent"));
+        assert!(header.contains("session_id=s1"));
+        assert!(header.contains("agent_id=a1"));
+        assert!(header.contains("parent_query_id=p1"));
+    }
+
+    // --- parse_query_source_header ---
+
+    #[test]
+    fn parse_header_simple() {
+        let ctx = parse_query_source_header("source=user").expect("should parse");
+        assert_eq!(ctx.source, QuerySource::User);
+    }
+
+    #[test]
+    fn parse_header_with_context() {
+        let header = "source=agent;session_id=s1;agent_id=a1";
+        let ctx = parse_query_source_header(header).expect("should parse");
+        assert_eq!(ctx.source, QuerySource::Agent);
+        assert_eq!(ctx.session_id.as_ref().expect("session_id"), "s1");
+        assert_eq!(ctx.agent_id.as_ref().expect("agent_id"), "a1");
+    }
+
+    #[test]
+    fn parse_header_unknown_source() {
+        assert!(parse_query_source_header("source=unknown").is_none());
+    }
+
+    #[test]
+    fn parse_header_empty() {
+        assert!(parse_query_source_header("").is_none());
+    }
+
+    #[test]
+    fn parse_header_no_source() {
+        assert!(parse_query_source_header("session_id=s1").is_none());
+    }
+
+    #[test]
+    fn header_roundtrip() {
+        let ctx = QuerySourceContext::new(QuerySource::Advisor)
+            .with_session_id("s2".to_string());
+        let header = query_source_header(&ctx);
+        let parsed = parse_query_source_header(&header).expect("should parse");
+        assert_eq!(parsed.source, QuerySource::Advisor);
+        assert_eq!(parsed.session_id.as_ref().expect("session_id"), "s2");
+    }
+
+    // --- query_source_to_json ---
+
+    #[test]
+    fn query_source_to_json_simple() {
+        let ctx = QuerySourceContext::new(QuerySource::User);
+        let json = query_source_to_json(&ctx);
+        assert_eq!(json["source"], "user");
+        assert!(json.get("session_id").is_none());
+    }
+
+    #[test]
+    fn query_source_to_json_full() {
+        let ctx = QuerySourceContext::new(QuerySource::Agent)
+            .with_session_id("s1".to_string())
+            .with_agent_id("a1".to_string())
+            .with_parent_query_id("p1".to_string());
+        let json = query_source_to_json(&ctx);
+        assert_eq!(json["source"], "agent");
+        assert_eq!(json["session_id"], "s1");
+        assert_eq!(json["agent_id"], "a1");
+        assert_eq!(json["parent_query_id"], "p1");
+    }
+}
