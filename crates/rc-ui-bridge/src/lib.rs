@@ -44,6 +44,8 @@
 //! }
 //! ```
 
+pub mod bridge;
+
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

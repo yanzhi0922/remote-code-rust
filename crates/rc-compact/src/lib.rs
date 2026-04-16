@@ -64,6 +64,7 @@
 pub mod attachment;
 pub mod auto;
 pub mod compact_warning;
+pub mod context_collapse;
 pub mod engine;
 pub mod grouping;
 pub mod micro;
@@ -160,4 +161,13 @@ pub use attachment::{
     FileStateCache, InvokedSkill, InvokedSkillRegistry, POST_COMPACT_MAX_FILES_TO_RESTORE,
     POST_COMPACT_MAX_TOKENS_PER_FILE, POST_COMPACT_SKILLS_TOKEN_BUDGET,
     POST_COMPACT_TOKEN_BUDGET,
+};
+
+// ---------------------------------------------------------------------------
+// Re-exports: context collapse
+// ---------------------------------------------------------------------------
+
+pub use context_collapse::{
+    CollapseOperation, CollapsePersistence, CollapseResult, ContextCollapseConfig,
+    ContextCollapseEngine, Ratio64,
 };
