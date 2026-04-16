@@ -1,28 +1,61 @@
 //! Interactive TUI for Remote Code Rust.
 //!
-//! Uses crossterm raw mode for true single-keystroke detection, enabling
-//! real Vim keybindings (ESC, Ctrl+C, etc.) without line-buffered workarounds.
+//! Uses ratatui with crossterm backend for a full terminal UI with:
+//! - Multi-turn conversation with the provider
+//! - Automatic tool execution with permission checks
+//! - Context window compaction
+//! - Cost tracking across turns
+//! - Slash commands for session management
+//! - Vim mode with Normal / Insert / Command / Visual / Search modes
+//! - Virtual scrolling for 10 000+ messages
+//! - Sidebar with sessions, tools, MCP, and help tabs
 //!
-//! Supports Vim key bindings:
-//! - `h/j/k/l` — navigate message history (normal mode)
-//! - `i` — enter insert (input) mode
-//! - `Esc` — return to normal mode (real ESC detection via raw mode)
-//! - `G` — jump to bottom of history
-//! - `gg` — jump to top of history
-//! - `:q` — quit
-//! - `Ctrl+C` — exit from insert mode
+//! # Architecture
+//!
+//! - [`app`] — Application state machine
+//! - [`vim`] — Vim mode state machine
+//! - [`scroll`] — Virtual scroll engine
+//! - [`event`] — Event handling (keyboard / mouse / resize)
+//! - [`render`] — Main render entry point
+//! - [`components`] — UI components (chat, input, status bar, sidebar, etc.)
+//! - [`style`] — Style / theme system
+//! - [`message`] — Message types and rendering helpers
+//! - [`syntax`] — Syntax highlighting for code blocks
+//! - [`layout`] — Layout calculation
+//! - [`commands`] — Slash command handlers
+//! - [`slash_commands`] — Slash command dispatch
+//! - [`tab_complete`] — Tab completion logic
+//! - [`theme`] — Legacy theme (crossterm colors, used by command subsystem)
 
+// New ratatui-based modules.
+pub mod app;
+pub mod components;
+pub mod event;
+pub mod layout;
+pub mod message;
+pub mod render;
+pub mod scroll;
+pub mod style;
+pub mod syntax;
+pub mod vim;
+
+// Preserved modules (existing functionality).
 mod commands;
-mod completion;
 mod slash_commands;
+mod tab_complete;
 mod theme;
 
-use std::io::{self, Write};
+use std::io;
 use std::sync::Arc;
 
 use anyhow::Result;
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
+use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
 use rc_config::RuntimeConfig;
-use rc_core::{ConversationEntry, ConversationRole};
+use rc_core::ConversationEntry;
 use rc_permissions::{
     LayeredPermissionBroker, PermissionBroker, StaticPermissionBroker, load_layered_rules,
 };
@@ -37,78 +70,24 @@ use rc_tools::{
     execute_tool_call,
 };
 
-use completion::{
-    complete_slash_command, get_file_completions, get_tool_completions, update_search_results,
-};
-use slash_commands::{SlashCommandAction, handle_slash_command};
-use theme::Theme;
+use app::{App, AppAction};
+use event::{convert_event, handle_event};
 
-/// Vim-like input mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum VimMode {
-    /// Normal mode: single-key commands for navigation.
-    Normal,
-    /// Insert mode: text input for conversation.
-    Insert,
-}
+// ---------------------------------------------------------------------------
+// Public types re-exports
+// ---------------------------------------------------------------------------
+
+pub use app::{ActivePanel, SidebarTab};
+pub use message::{
+    ChatMessage, McpServerStatus, MessageRole, ModelInfo, PermissionRequest, StatusBarInfo,
+    ToolCallInfo,
+};
+pub use style::StyleConfig;
+pub use vim::{VimAction, VimMode, VimStateMachine};
 
 // ---------------------------------------------------------------------------
 // Public entry points
 // ---------------------------------------------------------------------------
-
-/// RAII guard for terminal raw mode + alternate screen.
-///
-/// The TUI regularly suspends the raw terminal session while provider output is
-/// printed. Keeping that lifecycle in one place ensures the terminal is
-/// restored even if an error bubbles out in the middle of a turn.
-struct TuiTerminalSession {
-    active: bool,
-}
-
-impl TuiTerminalSession {
-    fn enter() -> Result<Self> {
-        let mut session = Self { active: false };
-        session.activate()?;
-        Ok(session)
-    }
-
-    fn activate(&mut self) -> Result<()> {
-        if self.active {
-            return Ok(());
-        }
-        crossterm::terminal::enable_raw_mode()?;
-        crossterm::execute!(
-            io::stdout(),
-            crossterm::terminal::EnterAlternateScreen,
-            crossterm::event::EnableMouseCapture
-        )?;
-        self.active = true;
-        Ok(())
-    }
-
-    fn deactivate(&mut self) -> Result<()> {
-        if !self.active {
-            return Ok(());
-        }
-        let _ = crossterm::execute!(io::stdout(), crossterm::event::DisableMouseCapture);
-        crossterm::terminal::disable_raw_mode()?;
-        crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen)?;
-        self.active = false;
-        Ok(())
-    }
-}
-
-impl Drop for TuiTerminalSession {
-    fn drop(&mut self) {
-        if !self.active {
-            return;
-        }
-        let _ = crossterm::execute!(io::stdout(), crossterm::event::DisableMouseCapture);
-        let _ = crossterm::terminal::disable_raw_mode();
-        let _ = crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen);
-        self.active = false;
-    }
-}
 
 /// Text-based dashboard that prints session info and recent sessions.
 ///
@@ -159,7 +138,7 @@ pub fn run_dashboard(config: &RuntimeConfig, store: &SessionStore) -> Result<()>
     Ok(())
 }
 
-/// Run the interactive TUI application with crossterm raw-mode input.
+/// Run the interactive TUI application with ratatui.
 ///
 /// This is the main interactive mode entry point, providing:
 /// - Multi-turn conversation with the provider
@@ -167,7 +146,7 @@ pub fn run_dashboard(config: &RuntimeConfig, store: &SessionStore) -> Result<()>
 /// - Context window compaction
 /// - Cost tracking across turns
 /// - Slash commands for session management
-/// - True Vim mode with raw key detection (ESC, Ctrl+C, etc.)
+/// - Full Vim mode with ratatui rendering
 #[allow(clippy::too_many_lines)]
 pub async fn run_tui_app(config: RuntimeConfig, store: &SessionStore) -> Result<()> {
     let provider_client = Arc::new(ProviderClient::new()?);
@@ -187,455 +166,164 @@ pub async fn run_tui_app(config: RuntimeConfig, store: &SessionStore) -> Result<
     let cost_tracker = CostTracker::new();
     let mut conversation = load_or_create_conversation(store, &config)?;
 
-    let mut terminal_session = TuiTerminalSession::enter()?;
+    // Set up ratatui terminal.
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    crossterm::execute!(stdout, EnterAlternateScreen)?;
+    let backend_term = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend_term)?;
 
-    // Helper to print a line in raw mode (use \r\n for line endings).
-    let print_line = |text: &str| {
-        let _ = crossterm::execute!(io::stdout(), crossterm::style::Print(format!("{text}\r\n")));
-    };
+    // Initialize app state.
+    let mut app = App::new();
+    app.status.model_name = model_name.to_owned();
+    app.model_info.name = model_name.to_owned();
+    app.model_info.provider = config.provider.name.clone();
 
-    print_line("Remote Code Rust — Interactive Mode");
-    print_line(&format!("Session:  {}", config.session_id));
-    print_line(&format!(
-        "Provider: {} ({})",
+    // Add welcome messages.
+    app.add_message(ChatMessage::system(
+        "Remote Code Rust — Interactive Mode".to_owned(),
+    ));
+    app.add_message(ChatMessage::system(format!(
+        "Session: {} | Model: {} | Provider: {}",
+        config.session_id,
+        model_name,
         config.provider.name,
-        config.provider.protocol.as_str()
+    )));
+    app.add_message(ChatMessage::system(
+        "Type /help for commands, /quit to exit. Vim mode: Esc=normal, i=insert.".to_owned(),
     ));
-    print_line(&format!(
-        "Model:    {}",
-        config.provider.model.as_deref().unwrap_or("(missing)")
-    ));
-    print_line("Type /help for commands, /quit to exit");
-    print_line("Vim mode: Esc=normal, i=insert, j/k=scroll, G=bottom, gg=top, :q=quit");
-    print_line("");
 
-    let mut vim_mode = VimMode::Insert;
-    let mut history_scroll: usize = 0;
-    let mut pending_g = false;
-    let mut input_buffer = String::new();
-    let mut cursor_pos: usize = 0; // Cursor position within input_buffer
-    let mut command_buffer = String::new(); // for ':' commands in normal mode
-    let mut input_history: Vec<String> = Vec::new(); // History of submitted inputs
-    let mut history_index: usize = 0; // Current position in input history
-    let mut saved_buffer: String = String::new(); // Saved buffer when navigating history
-    let mut search_mode = false; // Ctrl+R reverse search active
-    let mut search_query = String::new(); // Current search query
-    let mut search_results: Vec<usize> = Vec::new(); // Matching history indices
-    let mut search_result_index: usize = 0; // Current position in search results
-    let mut theme = Theme::dark(); // Current color theme
+    let mut theme = theme::Theme::dark();
 
+    // Main event loop.
     loop {
-        // Print prompt and current input buffer.
-        let prompt = if search_mode {
-            format!("(search)'{}'> ", search_query)
-        } else {
-            match vim_mode {
-                VimMode::Insert => "> ".to_owned(),
-                VimMode::Normal => "(n) ".to_owned(),
-            }
-        };
-        let display = format!("{prompt}{input_buffer}");
-        let _ = crossterm::execute!(io::stdout(), crossterm::style::Print(&display));
-        let _ = io::stdout().flush();
+        // Update scroll viewport.
+        let area = terminal.size().map_or(ratatui::layout::Rect::new(0, 0, 80, 24), |s| ratatui::layout::Rect::new(0, 0, s.width, s.height));
+        app.update_scroll_viewport(area.height.saturating_sub(3) as usize);
 
-        // Poll for key events with a 100ms timeout.
+        // Render.
+        terminal.draw(|f| {
+            render::render(f, &app);
+        })?;
+
+        // Poll for events.
         if !crossterm::event::poll(std::time::Duration::from_millis(100))? {
+            app.tick_spinner();
             continue;
         }
 
-        let event = match crossterm::event::read()? {
-            crossterm::event::Event::Key(key) => key,
+        let crossterm_event = match crossterm::event::read()? {
+            crossterm::event::Event::Key(key) => {
+                // Suppress key release events.
+                if key.kind == crossterm::event::KeyEventKind::Release {
+                    continue;
+                }
+                crossterm::event::Event::Key(key)
+            }
             crossterm::event::Event::Resize(_, _) => {
-                // Redraw on resize — just continue the loop.
                 continue;
             }
             _ => continue,
         };
 
-        // Clear the current prompt line before processing.
-        let _ = crossterm::execute!(
-            io::stdout(),
-            crossterm::cursor::MoveToColumn(0),
-            crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
-        );
+        let Some(app_event) = convert_event(crossterm_event) else {
+            continue;
+        };
 
-        match vim_mode {
-            VimMode::Normal => {
-                if pending_g {
-                    pending_g = false;
-                    if let crossterm::event::KeyCode::Char('g') = event.code {
-                        // gg — jump to top
-                        history_scroll = conversation.len();
-                        print_line("  [top of history]");
+        let action = handle_event(&mut app, app_event);
+
+        match action {
+            AppAction::None => {}
+            AppAction::Quit => break,
+            AppAction::Cancel => {}
+            AppAction::Submit(input) => {
+                // Add user message.
+                app.add_message(ChatMessage::user(input.clone()));
+
+                // Temporarily restore terminal for conversation output.
+                disable_raw_mode()?;
+                crossterm::execute!(io::stdout(), LeaveAlternateScreen)?;
+
+                // Execute conversation turn.
+                if let Err(error) = run_conversation_turn(
+                    &backend,
+                    &config,
+                    store,
+                    &mut conversation,
+                    &context_manager,
+                    &broker,
+                    &cost_tracker,
+                    &input,
+                )
+                .await
+                {
+                    let err_str = format!("{error:#}");
+                    let is_transient = err_str.contains("timeout")
+                        || err_str.contains("429")
+                        || err_str.contains("rate limit")
+                        || err_str.contains("503")
+                        || err_str.contains("500")
+                        || err_str.contains("connection");
+                    if is_transient {
+                        eprintln!("⚠ Transient error (recovered): {err_str}");
+                        eprintln!(
+                            "  Your session is preserved. The next request will retry automatically."
+                        );
+                    } else {
+                        eprintln!("⚠ Error: {err_str}");
+                        eprintln!(
+                            "  Your message was saved. Type to continue or /help for options."
+                        );
                     }
-                    continue;
                 }
 
-                match event.code {
-                    crossterm::event::KeyCode::Char('i') | crossterm::event::KeyCode::Char('a') => {
-                        vim_mode = VimMode::Insert;
-                        input_buffer.clear();
-                        print_line("  -- INSERT --");
-                    }
-                    crossterm::event::KeyCode::Char('j') => {
-                        if history_scroll > 0 {
-                            history_scroll -= 1;
-                            let idx = conversation.len().saturating_sub(history_scroll + 1);
-                            if let Some(entry) = conversation.get(idx) {
-                                print_entry_raw(&print_line, entry);
-                            }
-                        } else {
-                            print_line("  [at bottom]");
-                        }
-                    }
-                    crossterm::event::KeyCode::Char('k') => {
-                        if history_scroll < conversation.len() {
-                            history_scroll += 1;
-                            let idx = conversation.len().saturating_sub(history_scroll + 1);
-                            if let Some(entry) = conversation.get(idx) {
-                                print_entry_raw(&print_line, entry);
-                            }
-                        } else {
-                            print_line("  [at top]");
-                        }
-                    }
-                    crossterm::event::KeyCode::Char('h') | crossterm::event::KeyCode::Char('l') => {
-                    }
-                    crossterm::event::KeyCode::Char('G') => {
-                        history_scroll = 0;
-                        if let Some(entry) = conversation.last() {
-                            print_entry_raw(&print_line, entry);
-                        }
-                    }
-                    crossterm::event::KeyCode::Char('g') => {
-                        pending_g = true;
-                    }
-                    crossterm::event::KeyCode::Char(':') => {
-                        command_buffer.clear();
-                        command_buffer.push(':');
-                    }
-                    crossterm::event::KeyCode::Char('q') => {
-                        print_line("Goodbye!");
-                        break;
-                    }
-                    crossterm::event::KeyCode::Esc => {
-                        // Already in normal mode — ignore.
-                    }
-                    _ => {}
-                }
+                // Update status bar with cost info.
+                app.status.cost = cost_tracker.total_cost_usd();
 
-                // Handle command buffer (e.g. ":q" entered char by char).
-                if command_buffer.starts_with(':') {
-                    match event.code {
-                        crossterm::event::KeyCode::Char(c) => {
-                            command_buffer.push(c);
-                        }
-                        crossterm::event::KeyCode::Enter => {
-                            let cmd = command_buffer.trim();
-                            if cmd == ":q" || cmd == ":quit" || cmd == ":exit" {
-                                print_line("Goodbye!");
-                                break;
-                            }
-                            command_buffer.clear();
-                        }
-                        crossterm::event::KeyCode::Esc => {
-                            command_buffer.clear();
-                        }
-                        _ => {}
-                    }
-                }
-                continue;
+                // Restore ratatui terminal.
+                enable_raw_mode()?;
+                crossterm::execute!(io::stdout(), EnterAlternateScreen)?;
+                let new_backend = CrosstermBackend::new(io::stdout());
+                terminal = Terminal::new(new_backend)?;
             }
-            VimMode::Insert => {
-                match event.code {
-                    crossterm::event::KeyCode::Esc => {
-                        if search_mode {
-                            search_mode = false;
-                            search_query.clear();
-                            continue;
+            AppAction::SlashCommand(cmd) => {
+                let sc_action = handle_slash_command_safe(
+                    &cmd,
+                    &config,
+                    store,
+                    &mut conversation,
+                    &context_manager,
+                    &cost_tracker,
+                    &broker,
+                    &mut theme,
+                );
+                match sc_action {
+                    slash_commands::SlashCommandAction::Quit => {
+                        // Restore terminal before exiting.
+                        disable_raw_mode()?;
+                        crossterm::execute!(io::stdout(), LeaveAlternateScreen)?;
+                        let cost = cost_tracker.total_cost_usd();
+                        if cost > 0.0 {
+                            println!();
+                            print!("{}", cost_tracker.summary());
                         }
-                        vim_mode = VimMode::Normal;
-                        input_buffer.clear();
-                        cursor_pos = 0;
-                        print_line("  -- NORMAL --");
-                        continue;
+                        return Ok(());
                     }
-                    crossterm::event::KeyCode::Enter => {
-                        // Exit search mode on Enter.
-                        if search_mode {
-                            search_mode = false;
-                            search_query.clear();
-                            continue;
-                        }
-                        // Shift+Enter: insert newline for multi-line input.
-                        if event
-                            .modifiers
-                            .contains(crossterm::event::KeyModifiers::SHIFT)
-                        {
-                            input_buffer.insert(cursor_pos, '\n');
-                            cursor_pos += 1;
-                            continue;
-                        }
-
-                        let input = input_buffer.trim().to_owned();
-                        input_buffer.clear();
-                        cursor_pos = 0;
-
-                        // Save to input history (deduplicate, bounded to prevent unbounded growth).
-                        const MAX_INPUT_HISTORY: usize = 1000;
-                        if !input.is_empty() {
-                            if input_history.last() != Some(&input) {
-                                input_history.push(input.clone());
-                                if input_history.len() > MAX_INPUT_HISTORY {
-                                    input_history.remove(0);
-                                }
-                            }
-                            history_index = input_history.len();
-                            saved_buffer.clear();
-                        }
-
-                        // Temporarily leave raw mode for conversation turn output.
-                        terminal_session.deactivate()?;
-
-                        if input.is_empty() {
-                            terminal_session.activate()?;
-                            continue;
-                        }
-
-                        // Handle slash commands.
-                        if input.starts_with('/') {
-                            match handle_slash_command(
-                                &input,
-                                &config,
-                                store,
-                                &mut conversation,
-                                &context_manager,
-                                &cost_tracker,
-                                &broker,
-                                &mut theme,
-                            ) {
-                                SlashCommandAction::Quit => {
-                                    let cost = cost_tracker.total_cost_usd();
-                                    if cost > 0.0 {
-                                        println!();
-                                        print!("{}", cost_tracker.summary());
-                                    }
-                                    return Ok(());
-                                }
-                                SlashCommandAction::ResetScroll => history_scroll = 0,
-                                SlashCommandAction::Continue => {}
-                            }
-                            terminal_session.activate()?;
-                            continue;
-                        }
-
-                        // Execute conversation turn (outside raw mode for normal output).
-                        if let Err(error) = run_conversation_turn(
-                            &backend,
-                            &config,
-                            store,
-                            &mut conversation,
-                            &context_manager,
-                            &broker,
-                            &cost_tracker,
-                            &input,
-                        )
-                        .await
-                        {
-                            let err_str = format!("{error:#}");
-                            let is_transient = err_str.contains("timeout")
-                                || err_str.contains("429")
-                                || err_str.contains("rate limit")
-                                || err_str.contains("503")
-                                || err_str.contains("500")
-                                || err_str.contains("connection");
-                            if is_transient {
-                                eprintln!("⚠ Transient error (recovered): {err_str}");
-                                eprintln!(
-                                    "  Your session is preserved. The next request will retry automatically."
-                                );
-                            } else {
-                                eprintln!("⚠ Error: {err_str}");
-                                eprintln!(
-                                    "  Your message was saved. Type to continue or /help for options."
-                                );
-                            }
-                        }
-
-                        terminal_session.activate()?;
-                        continue;
+                    slash_commands::SlashCommandAction::ResetScroll => {
+                        app.scroll.scroll_to_bottom();
                     }
-                    crossterm::event::KeyCode::Char(c) => {
-                        // Handle Ctrl+R: toggle reverse search mode.
-                        if c == 'r'
-                            && event
-                                .modifiers
-                                .contains(crossterm::event::KeyModifiers::CONTROL)
-                        {
-                            if search_mode {
-                                // Already in search mode: cycle to next result.
-                                if !search_results.is_empty() {
-                                    search_result_index =
-                                        (search_result_index + 1) % search_results.len();
-                                    let idx = search_results[search_result_index];
-                                    input_buffer = input_history[idx].clone();
-                                    cursor_pos = input_buffer.len();
-                                }
-                            } else {
-                                // Enter search mode.
-                                search_mode = true;
-                                search_query.clear();
-                                search_results.clear();
-                                search_result_index = 0;
-                            }
-                            continue;
-                        }
-                        // Handle Ctrl+C in insert mode.
-                        if c == 'c'
-                            && event
-                                .modifiers
-                                .contains(crossterm::event::KeyModifiers::CONTROL)
-                        {
-                            if search_mode {
-                                search_mode = false;
-                                search_query.clear();
-                                continue;
-                            }
-                            if input_buffer.is_empty() {
-                                print_line("Interrupted. Goodbye!");
-                                break;
-                            }
-                            // Ctrl+C with text: clear the input buffer.
-                            input_buffer.clear();
-                            cursor_pos = 0;
-                            print_line("  [input cleared — Ctrl+C again to exit]");
-                            continue;
-                        }
-                        // In search mode, add to query and filter.
-                        if search_mode {
-                            search_query.push(c);
-                            update_search_results(
-                                &input_history,
-                                &search_query,
-                                &mut search_results,
-                            );
-                            search_result_index = 0;
-                            if let Some(&idx) = search_results.first() {
-                                input_buffer = input_history[idx].clone();
-                                cursor_pos = input_buffer.len();
-                            }
-                            continue;
-                        }
-                        input_buffer.insert(cursor_pos, c);
-                        cursor_pos += 1;
-                    }
-                    crossterm::event::KeyCode::Backspace => {
-                        if search_mode {
-                            search_query.pop();
-                            update_search_results(
-                                &input_history,
-                                &search_query,
-                                &mut search_results,
-                            );
-                            search_result_index = 0;
-                            if let Some(&idx) = search_results.first() {
-                                input_buffer = input_history[idx].clone();
-                                cursor_pos = input_buffer.len();
-                            }
-                            continue;
-                        }
-                        if cursor_pos > 0 && !input_buffer.is_empty() {
-                            cursor_pos -= 1;
-                            input_buffer.remove(cursor_pos);
-                        }
-                    }
-                    crossterm::event::KeyCode::Delete => {
-                        if cursor_pos < input_buffer.len() {
-                            input_buffer.remove(cursor_pos);
-                        }
-                    }
-                    crossterm::event::KeyCode::Left => {
-                        cursor_pos = cursor_pos.saturating_sub(1);
-                    }
-                    crossterm::event::KeyCode::Right => {
-                        if cursor_pos < input_buffer.len() {
-                            cursor_pos += 1;
-                        }
-                    }
-                    crossterm::event::KeyCode::Home => {
-                        cursor_pos = 0;
-                    }
-                    crossterm::event::KeyCode::End => {
-                        cursor_pos = input_buffer.len();
-                    }
-                    crossterm::event::KeyCode::Up => {
-                        // Navigate input history (if not at first char, move up in conversation).
-                        if cursor_pos == 0 && !input_history.is_empty() && history_index > 0 {
-                            if history_index == input_history.len() {
-                                saved_buffer = input_buffer.clone();
-                            }
-                            history_index -= 1;
-                            input_buffer = input_history[history_index].clone();
-                            cursor_pos = input_buffer.len();
-                        } else if history_scroll < conversation.len() {
-                            history_scroll += 1;
-                        }
-                    }
-                    crossterm::event::KeyCode::Down => {
-                        // Navigate input history forward.
-                        if cursor_pos == 0 && history_index < input_history.len() {
-                            history_index += 1;
-                            if history_index == input_history.len() {
-                                input_buffer = saved_buffer.clone();
-                            } else {
-                                input_buffer = input_history[history_index].clone();
-                            }
-                            cursor_pos = input_buffer.len();
-                        } else if history_scroll > 0 {
-                            history_scroll = history_scroll.saturating_sub(1);
-                        }
-                    }
-                    crossterm::event::KeyCode::Tab => {
-                        // Tab completion for slash commands, tool names, and file paths.
-                        let completions = if input_buffer.starts_with('/') {
-                            complete_slash_command(&input_buffer)
-                        } else if input_buffer.is_empty() || input_buffer.ends_with(' ') {
-                            // Suggest tool names at start or after space.
-                            let tool_names = get_tool_completions("");
-                            tool_names.into_iter().map(|t| format!("{t} ")).collect()
-                        } else {
-                            // Try to complete the last word as a tool name or file path.
-                            let last_word = input_buffer.split_whitespace().last().unwrap_or("");
-                            let mut results = Vec::new();
-                            // Tool name completions.
-                            results.extend(get_tool_completions(last_word));
-                            // File path completions.
-                            results.extend(get_file_completions(last_word, &config.cwd));
-                            results
-                        };
-                        if completions.len() == 1 {
-                            // Replace the last word with the completion.
-                            if input_buffer.starts_with('/') {
-                                input_buffer = completions[0].clone();
-                            } else {
-                                let last_space =
-                                    input_buffer.rfind(' ').map(|i| i + 1).unwrap_or(0);
-                                input_buffer.replace_range(last_space.., &completions[0]);
-                            }
-                            cursor_pos = input_buffer.len();
-                        } else if !completions.is_empty() {
-                            let display = completions.join("  ");
-                            print_line(&format!("  {display}"));
-                        }
-                    }
-                    _ => {}
+                    slash_commands::SlashCommandAction::Continue => {}
                 }
-                continue;
+
+                // Add slash command output as a message.
+                app.add_message(ChatMessage::system(format!("Executed: {cmd}")));
             }
         }
     }
 
-    terminal_session.deactivate()?;
+    // Restore terminal.
+    disable_raw_mode()?;
+    crossterm::execute!(io::stdout(), LeaveAlternateScreen)?;
 
     // Print cost summary on exit.
     let cost = cost_tracker.total_cost_usd();
@@ -648,7 +336,7 @@ pub async fn run_tui_app(config: RuntimeConfig, store: &SessionStore) -> Result<
 }
 
 // ---------------------------------------------------------------------------
-// Conversation logic
+// Conversation logic (preserved from original)
 // ---------------------------------------------------------------------------
 
 /// Load an existing conversation or create a new one with a system prompt.
@@ -673,10 +361,6 @@ fn load_or_create_conversation(
 /// 2. Call provider
 /// 3. If tool calls → execute tools → go to 2
 /// 4. If no tool calls → display response → done
-///
-/// Tool execution errors are captured as error tool results rather than
-/// propagating, ensuring the conversation state remains consistent for
-/// the next provider call.
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 async fn run_conversation_turn(
     backend: &dyn ConversationBackend,
@@ -751,7 +435,7 @@ async fn run_conversation_turn(
 
         // Build and persist assistant entry
         let assistant_entry = ConversationEntry {
-            role: ConversationRole::Assistant,
+            role: rc_core::ConversationRole::Assistant,
             text: response.text.clone(),
             history_text: response.history_text.clone(),
             content_blocks: response.content_blocks.clone(),
@@ -804,9 +488,6 @@ async fn run_conversation_turn(
             println!("  ⏳ [tool] {} — running...", tool_call.name);
             let audit_count_before = broker.audit_records().len();
 
-            // Capture tool execution errors as error tool results instead of
-            // propagating, to keep conversation state consistent for the next
-            // provider call.
             let tool_result = match execute_tool_call(tool_call, &tool_context, broker).await {
                 Ok(result) => result,
                 Err(error) => {
@@ -842,7 +523,6 @@ async fn run_conversation_turn(
                 elapsed.as_secs_f64()
             );
 
-            // Truncate tool output for context management
             let truncated_output =
                 context_manager.truncate_tool_output_default(&tool_result.content);
 
@@ -867,22 +547,33 @@ async fn run_conversation_turn(
     Ok(())
 }
 
+/// Handle slash commands with a safe wrapper that returns the action.
+#[allow(clippy::too_many_arguments)]
+fn handle_slash_command_safe(
+    input: &str,
+    config: &RuntimeConfig,
+    store: &SessionStore,
+    conversation: &mut Vec<ConversationEntry>,
+    context_manager: &ContextWindowManager,
+    cost_tracker: &CostTracker,
+    broker: &dyn PermissionBroker,
+    theme: &mut theme::Theme,
+) -> slash_commands::SlashCommandAction {
+    slash_commands::handle_slash_command(
+        input,
+        config,
+        store,
+        conversation,
+        context_manager,
+        cost_tracker,
+        broker,
+        theme,
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Display helpers
 // ---------------------------------------------------------------------------
-
-/// Print a conversation entry for Vim-mode history navigation (raw mode).
-fn print_entry_raw(print_line: &dyn Fn(&str), entry: &ConversationEntry) {
-    let role = match entry.role {
-        ConversationRole::System => "system",
-        ConversationRole::User => "user",
-        ConversationRole::Assistant => "assistant",
-        ConversationRole::Tool => "tool",
-    };
-    let text = entry.history_text();
-    let preview: String = text.chars().take(200).collect();
-    print_line(&format!("  [{role}] {preview}"));
-}
 
 /// Format and print a tool execution result.
 fn print_tool_result(tool_name: &str, result: &rc_core::ToolResult, display_text: &str) {
@@ -893,7 +584,6 @@ fn print_tool_result(tool_name: &str, result: &rc_core::ToolResult, display_text
         );
     } else {
         println!("  [tool] {tool_name} — OK");
-        // Show first few lines of output
         for line in display_text.lines().take(5) {
             println!("    {}", truncate_display(line, 120));
         }
@@ -911,5 +601,40 @@ fn truncate_display(text: &str, max_chars: usize) -> String {
     } else {
         let truncated: String = text.chars().take(max_chars).collect();
         format!("{truncated}...")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_display_short() {
+        assert_eq!(truncate_display("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_display_long() {
+        let result = truncate_display("abcdefghij", 5);
+        assert_eq!(result, "abcde...");
+    }
+
+    #[test]
+    fn app_default_state() {
+        let app = App::new();
+        assert!(!app.should_quit());
+        assert!(app.input.is_empty());
+    }
+
+    #[test]
+    fn style_config_default() {
+        let style = StyleConfig::dark();
+        assert_eq!(style.name, "dark");
+    }
+
+    #[test]
+    fn vim_mode_labels() {
+        assert_eq!(VimMode::Normal.label(), "NORMAL");
+        assert_eq!(VimMode::Insert.label(), "INSERT");
     }
 }

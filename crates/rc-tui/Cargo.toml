@@ -1,6 +1,6 @@
 [package]
 name = "rc-tui"
-description = "Interactive TUI with Vim-like keybindings"
+description = "Interactive TUI with Vim-like keybindings powered by ratatui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,8 +14,10 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 crossterm.workspace = true
+ratatui.workspace = true
 tokio.workspace = true
 serde_json.workspace = true
+unicode-width = "0.2"
 rc-core = { path = "../rc-core" }
 rc-config = { path = "../rc-config" }
 rc-session = { path = "../rc-session" }

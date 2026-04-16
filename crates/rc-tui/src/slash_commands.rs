@@ -11,6 +11,7 @@ use crate::commands;
 use crate::theme::Theme;
 
 pub use crate::commands::SlashCommandAction;
+// Re-export for convenience.
 
 /// Handle slash commands via the modular command registry.
 #[allow(clippy::too_many_arguments)]
