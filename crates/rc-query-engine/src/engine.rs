@@ -10,10 +10,17 @@ use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::chain::{ChainManager, QueryChain};
 use crate::config::{ProcessUserInputContext, QueryEngineConfig};
+use crate::failure_tracker::FailureTracker;
+use crate::model_switch::ModelSwitcher;
 use crate::observer::QueryObserverEvent;
 use crate::query_loop::run_query_loop;
+use crate::state_machine::{EnginePhase, StateMachine};
+use crate::stop_hooks::StopHookManager;
+use crate::structured_output::StructuredOutputEnforcer;
 use crate::token_budget::BudgetTracker;
+use crate::tool_summary::ToolResultSummarizer;
 
 /// Runtime error returned by the compat query engine.
 #[derive(Debug, Error)]
@@ -34,6 +41,20 @@ pub struct EngineState {
     pub stop_reason: Option<String>,
     pub consecutive_failures: usize,
     pub permission_denials: Vec<Value>,
+    /// Explicit state machine tracking the engine's current phase.
+    pub state_machine: StateMachine,
+    /// Chain tracking for nested query execution.
+    pub current_chain: Option<QueryChain>,
+    /// Failure tracker with circuit breaker.
+    pub failure_tracker: FailureTracker,
+    /// Model switcher for runtime model changes.
+    pub model_switcher: ModelSwitcher,
+    /// Stop hook manager for graceful termination.
+    pub stop_hook_manager: StopHookManager,
+    /// Structured output enforcer.
+    pub structured_output: StructuredOutputEnforcer,
+    /// Tool result summarizer.
+    pub tool_summarizer: ToolResultSummarizer,
 }
 
 impl EngineState {
@@ -47,6 +68,13 @@ impl EngineState {
             stop_reason: None,
             consecutive_failures: 0,
             permission_denials: Vec::new(),
+            state_machine: StateMachine::new(),
+            current_chain: None,
+            failure_tracker: FailureTracker::default(),
+            model_switcher: ModelSwitcher::new("unknown"),
+            stop_hook_manager: StopHookManager::default(),
+            structured_output: StructuredOutputEnforcer::new(),
+            tool_summarizer: ToolResultSummarizer::default(),
         }
     }
 
@@ -61,6 +89,12 @@ impl EngineState {
 
     pub(crate) fn replace_from_legacy(&mut self, conversation: &[ConversationEntry]) {
         self.messages = conversation.iter().cloned().map(Message::from).collect();
+    }
+
+    /// Returns the current engine phase.
+    #[must_use]
+    pub fn phase(&self) -> EnginePhase {
+        self.state_machine.phase()
     }
 }
 
@@ -78,21 +112,52 @@ pub struct QueryResult {
 pub struct QueryEngine {
     config: QueryEngineConfig,
     state: EngineState,
+    chain_manager: ChainManager,
 }
 
 impl QueryEngine {
     #[must_use]
     pub fn new(config: QueryEngineConfig, existing_messages: Vec<Message>) -> Self {
         let budget_tracker = BudgetTracker::new(config.max_turns, None);
+        let model_switcher = ModelSwitcher::new(&config.model);
+        let chain_manager = ChainManager::new(config.max_chain_depth);
+        let failure_tracker = FailureTracker::new(config.failure_threshold, std::time::Duration::from_secs(30));
+        let stop_hook_manager = StopHookManager::new(config.stop_hook_max_retries);
+        let structured_output = match &config.structured_output_schema {
+            Some(schema) => StructuredOutputEnforcer::with_schema(schema.clone()),
+            None => StructuredOutputEnforcer::new(),
+        };
+        let tool_summarizer = if config.enable_tool_summarization {
+            ToolResultSummarizer::new(config.tool_result_max_length, 2_000)
+        } else {
+            let mut s = ToolResultSummarizer::new(config.tool_result_max_length, 2_000);
+            s.disable();
+            s
+        };
+
+        let mut state = EngineState::new(existing_messages, budget_tracker);
+        state.model_switcher = model_switcher;
+        state.failure_tracker = failure_tracker;
+        state.stop_hook_manager = stop_hook_manager;
+        state.structured_output = structured_output;
+        state.tool_summarizer = tool_summarizer;
+
         Self {
             config,
-            state: EngineState::new(existing_messages, budget_tracker),
+            state,
+            chain_manager,
         }
     }
 
     #[must_use]
     pub fn state(&self) -> &EngineState {
         &self.state
+    }
+
+    /// Returns a reference to the chain manager.
+    #[must_use]
+    pub fn chain_manager(&self) -> &ChainManager {
+        &self.chain_manager
     }
 
     /// Submit new user input and execute the compat query loop to completion.
@@ -104,6 +169,14 @@ impl QueryEngine {
         let started = Instant::now();
         let existing_messages = self.state.messages.len();
         let new_messages = user_input.len();
+
+        // Start a new chain for this query
+        let chain = self.chain_manager.start_root(context.query_source);
+        self.state.current_chain = Some(chain);
+
+        // Transition state machine to Initializing
+        let _ = self.state.state_machine.transition(EnginePhase::Initializing);
+
         self.config.event_stream.emit(EngineEvent::QueryStarted {
             session_id: event_session_id(&context.session_id),
         });
@@ -119,6 +192,10 @@ impl QueryEngine {
         let result = run_query_loop(&self.config, &mut self.state, user_input, &context).await;
         match &result {
             Ok(query_result) => {
+                // Transition to Idle via Finalizing
+                let _ = self.state.state_machine.transition(EnginePhase::Finalizing);
+                let _ = self.state.state_machine.transition(EnginePhase::Idle);
+
                 self.config.event_stream.emit(EngineEvent::QueryCompleted {
                     session_id: event_session_id(&context.session_id),
                     duration_ms: started.elapsed().as_millis() as u64,
@@ -135,6 +212,9 @@ impl QueryEngine {
                     .await;
             }
             Err(error) => {
+                // Transition to Failed
+                self.state.state_machine.force_set(EnginePhase::Failed);
+
                 self.config.event_stream.emit(EngineEvent::QueryAborted {
                     session_id: event_session_id(&context.session_id),
                 });
@@ -150,6 +230,13 @@ impl QueryEngine {
                     .await;
             }
         }
+
+        // End the chain
+        if let Some(ref chain) = self.state.current_chain {
+            self.chain_manager.end_chain(chain.id());
+        }
+        self.state.current_chain = None;
+
         result
     }
 }

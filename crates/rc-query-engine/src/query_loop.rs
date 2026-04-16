@@ -22,6 +22,7 @@ use crate::observer::{
     QueryBudgetState, QueryCheckpoint, QueryCheckpointKind, QueryContextBudgetState,
     QueryObserverEvent,
 };
+use crate::state_machine::EnginePhase;
 use crate::token_budget::TokenBudgetDecision;
 
 /// Execute the Phase 2 compat query loop in-memory.
@@ -53,6 +54,11 @@ pub async fn run_query_loop(
         .and_then(|budget| budget.max_total_tokens);
 
     loop {
+        // Transition: Initializing -> BuildingPrompt
+        let _ = state
+            .state_machine
+            .transition(EnginePhase::BuildingPrompt);
+
         let budget = QueryBudgetState {
             turn: state.turn,
             total_tokens: state.usage.total_tokens(),
@@ -89,12 +95,18 @@ pub async fn run_query_loop(
                         total_messages: state.messages.len(),
                     })
                     .await;
+                state.state_machine.force_set(EnginePhase::Failed);
                 return Err(EngineError::Stopped(reason));
             }
         }
 
         let mut legacy_conversation = state.legacy_conversation();
         maybe_compact_conversation(config, state, &mut legacy_conversation).await;
+
+        // Transition: BuildingPrompt -> CallingProvider
+        let _ = state
+            .state_machine
+            .transition(EnginePhase::CallingProvider);
 
         let response = if matches!(
             config.provider_invocation_mode,
@@ -106,12 +118,21 @@ pub async fn run_query_loop(
         }
         .map_err(|error| {
             state.consecutive_failures += 1;
+            let _ = state.failure_tracker.record_failure();
+            state.state_machine.force_set(EnginePhase::Failed);
             EngineError::Other(error)
         })?;
         state.consecutive_failures = 0;
+        state.failure_tracker.record_success();
         state.turn += 1;
         state.usage.record_summary(&response.usage);
         state.stop_reason = Some(response.stop_reason.clone());
+
+        // Transition: CallingProvider -> ProcessingResponse
+        let _ = state
+            .state_machine
+            .transition(EnginePhase::ProcessingResponse);
+
         config.event_stream.emit(EngineEvent::UsageUpdated {
             usage: usage_from_accumulator(&state.usage),
         });
@@ -141,6 +162,10 @@ pub async fn run_query_loop(
         });
 
         if response.tool_calls.is_empty() {
+            // Transition: ProcessingResponse -> Finalizing (handled by caller)
+            let _ = state
+                .state_machine
+                .transition(EnginePhase::Finalizing);
             return Ok(QueryResult {
                 state: state.clone(),
                 final_text: (!response.text.trim().is_empty()).then_some(response.text),
@@ -149,6 +174,11 @@ pub async fn run_query_loop(
                 permission_denials: state.permission_denials.clone(),
             });
         }
+
+        // Transition: ProcessingResponse -> ExecutingTools
+        let _ = state
+            .state_machine
+            .transition(EnginePhase::ExecutingTools);
 
         let checkpoints = checkpoints_for_tool_batch(state, context, &assistant_message, &response);
         for checkpoint in &checkpoints {
@@ -259,6 +289,10 @@ async fn maybe_compact_conversation(
 ) {
     let before_snapshot = config.context_manager.budget_snapshot(legacy_conversation);
     let needs_compaction = before_snapshot.exceeds_threshold();
+    // Transition to Compacting phase if compaction will occur
+    if needs_compaction {
+        let _ = state.state_machine.transition(EnginePhase::Compacting);
+    }
     let _ = config
         .observer
         .on_event(QueryObserverEvent::ContextBudgetEvaluated {
@@ -309,6 +343,8 @@ async fn maybe_compact_conversation(
             estimated_tokens_after: after_snapshot.estimated_tokens,
         })
         .await;
+    // Transition back to BuildingPrompt after compaction
+    let _ = state.state_machine.transition(EnginePhase::BuildingPrompt);
 }
 
 fn record_permission_denial(
