@@ -163,6 +163,20 @@ pub struct QueryEngineConfig {
     pub max_turns: u32,
     pub context_manager: ContextWindowManager,
     pub failure_threshold: usize,
+    /// Maximum number of parallel tool executions.
+    pub max_parallel_tools: usize,
+    /// Optional JSON Schema for structured output enforcement.
+    pub structured_output_schema: Option<Value>,
+    /// Maximum retries for stop hooks.
+    pub stop_hook_max_retries: usize,
+    /// Optional fallback model for runtime model switching.
+    pub fallback_model: Option<String>,
+    /// Whether to enable tool result summarization.
+    pub enable_tool_summarization: bool,
+    /// Maximum tool result length before summarization.
+    pub tool_result_max_length: usize,
+    /// Maximum chain nesting depth for sub-queries.
+    pub max_chain_depth: u32,
     #[allow(dead_code)]
     pub metadata: Value,
 }
@@ -188,6 +202,13 @@ impl QueryEngineConfig {
             provider_invocation_mode: ProviderInvocationMode::Buffered,
             max_turns: 8,
             failure_threshold: 3,
+            max_parallel_tools: 4,
+            structured_output_schema: None,
+            stop_hook_max_retries: 3,
+            fallback_model: None,
+            enable_tool_summarization: true,
+            tool_result_max_length: 10_000,
+            max_chain_depth: 4,
             metadata: Value::Null,
         }
     }
@@ -201,6 +222,24 @@ impl QueryEngineConfig {
     #[must_use]
     pub fn with_provider_invocation_mode(mut self, mode: ProviderInvocationMode) -> Self {
         self.provider_invocation_mode = mode;
+        self
+    }
+
+    #[must_use]
+    pub fn with_fallback_model(mut self, model: impl Into<String>) -> Self {
+        self.fallback_model = Some(model.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_structured_output_schema(mut self, schema: Value) -> Self {
+        self.structured_output_schema = Some(schema);
+        self
+    }
+
+    #[must_use]
+    pub fn with_max_parallel_tools(mut self, max: usize) -> Self {
+        self.max_parallel_tools = max;
         self
     }
 }

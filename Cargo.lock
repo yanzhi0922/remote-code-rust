@@ -3809,7 +3809,9 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
+ "tracing",
  "uuid",
 ]
 
@@ -4118,6 +4120,16 @@ dependencies = [
  "thiserror 2.0.18",
  "toml 0.9.12+spec-1.1.0",
  "walkdir",
+]
+
+[[package]]
+name = "rc-system-prompt"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rc-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

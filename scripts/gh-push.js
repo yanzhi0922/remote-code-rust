@@ -11,9 +11,10 @@ const REPO = "yanzhi0922/remote-code-rust";
 const BRANCH = "main";
 const localSha = process.argv[2];
 const parentSha = process.argv[3];
+const localParentSha = process.argv[4] || parentSha;
 
 if (!localSha || !parentSha) {
-  console.error("Usage: node gh-push.js <local-commit-sha> <parent-remote-sha>");
+  console.error("Usage: node gh-push.js <local-commit-sha> <parent-remote-sha> [local-parent-sha]");
   process.exit(1);
 }
 
@@ -56,7 +57,7 @@ function ghPatch(endpoint, body) {
 // 1. Get list of changed files between parent and local commit
 console.log("1. Getting changed files...");
 const diffRaw = execSync(
-  `git diff-tree --no-commit-id -r ${parentSha}..${localSha}`,
+  `git diff-tree --no-commit-id -r ${localParentSha}..${localSha}`,
   { encoding: "utf-8" }
 );
 

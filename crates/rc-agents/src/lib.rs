@@ -1,8 +1,39 @@
-//! Multi-agent scheduler with mailbox-based task coordination.
+//! Multi-agent system with mailbox-based task coordination and Claude Code–style
+//! agent definitions.
 //!
-//! [`AgentScheduler`] manages a team of agents, assigns tasks based on
-//! ownership paths and label requirements, tracks budgets, and supports
-//! parallel execution with lifecycle events.
+//! This crate provides two complementary layers:
+//!
+//! 1. **[`AgentScheduler`]** — A low-level team scheduler that manages agents,
+//!    tasks, mailboxes, budgets, and lifecycle events.
+//!
+//! 2. **Agent definitions & tools** — High-level agent types matching Claude
+//!    Code's `AgentTool/` system, including built-in agents, fork subagents,
+//!    prompt building, memory, and display.
+//!
+//! # Module layout
+//!
+//! - [`definition`] — [`AgentDefinition`] struct and related types
+//! - [`constants`]   — Agent tool constants
+//! - [`builtins`]    — Built-in agent registry (6 agents)
+//! - [`prompt`]      — Agent tool prompt builder
+//! - [`fork`]        — Fork subagent support
+//! - [`runner`]      — Agent execution runner
+//! - [`memory`]      — Agent memory management
+//! - [`display`]     — Agent display/color management
+//! - [`loader`]      — Agent directory loader
+
+// ── New modules ──────────────────────────────────────────────────────────
+pub mod builtins;
+pub mod constants;
+pub mod definition;
+pub mod display;
+pub mod fork;
+pub mod loader;
+pub mod memory;
+pub mod prompt;
+pub mod runner;
+
+// ── Existing scheduler types ─────────────────────────────────────────────
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -10,6 +41,10 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+// Re-export key types from submodules at the crate root for backward compat.
+pub use definition::{AgentDefinition, AgentIsolation, AgentMemoryScope, AgentSource};
+pub use runner::{AgentRunConfig, AgentRunResult, AgentRunner, ConversationEntry, UsageSummary};
 
 /// Current state of an agent.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
