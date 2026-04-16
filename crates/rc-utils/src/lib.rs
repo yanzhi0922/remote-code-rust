@@ -11,6 +11,7 @@ pub mod diff;
 pub mod git_fs;
 pub mod image_resizer;
 pub mod markdown;
+pub mod memory_store;
 pub mod memory_types;
 pub mod secure_storage;
 pub mod teleport;

@@ -4,6 +4,8 @@
 //! with optional TOML front matter, and extracts metadata such as triggers,
 //! descriptions, and reference file paths.
 
+pub mod bundled;
+pub mod executor;
 pub mod search;
 
 use std::{

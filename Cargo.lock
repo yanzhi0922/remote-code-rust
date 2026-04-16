@@ -4356,6 +4356,7 @@ dependencies = [
  "rc-session",
  "rc-skills",
  "rc-ui-bridge",
+ "rc-utils",
  "regex",
  "reqwest 0.12.28",
  "serde",
@@ -4387,6 +4388,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "crossterm 0.29.0",
+ "directories 6.0.0",
  "ratatui",
  "rc-config",
  "rc-core",
@@ -4424,6 +4426,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

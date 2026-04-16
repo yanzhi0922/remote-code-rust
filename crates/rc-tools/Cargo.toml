@@ -38,6 +38,7 @@ rc-plugins = { path = "../rc-plugins" }
 rc-session = { path = "../rc-session" }
 rc-skills = { path = "../rc-skills" }
 rc-ui-bridge = { path = "../rc-ui-bridge" }
+rc-utils = { path = "../rc-utils" }
 
 [dev-dependencies]
 tempfile.workspace = true
