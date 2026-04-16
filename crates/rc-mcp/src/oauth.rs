@@ -798,4 +798,210 @@ mod tests {
     fn urlencoding_handles_spaces() {
         assert_eq!(urlencoding("hello world"), "hello+world");
     }
+
+    // ── Enhanced OAuth tests ──────────────────────────────────────────────
+
+    #[test]
+    fn pkce_params_are_unique() {
+        let pkce1 = McpOAuthFlow::generate_pkce();
+        let pkce2 = McpOAuthFlow::generate_pkce();
+        // Verifiers should be different (extremely unlikely to collide)
+        assert_ne!(pkce1.code_verifier, pkce2.code_verifier);
+        assert_ne!(pkce1.code_challenge, pkce2.code_challenge);
+    }
+
+    #[test]
+    fn oauth_flow_with_values_constructor() {
+        let flow = McpOAuthFlow::with_values(
+            Some("client-123".to_owned()),
+            Some(3000),
+            None,
+            false,
+        );
+        assert!(!flow.xaa_enabled());
+    }
+
+    #[test]
+    fn build_authorization_url_without_scopes() {
+        let flow = McpOAuthFlow::with_values(
+            Some("test-client".to_owned()),
+            Some(8080),
+            None,
+            false,
+        );
+        let metadata = AuthorizationServerMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_owned(),
+            token_endpoint: "https://auth.example.com/token".to_owned(),
+            registration_endpoint: None,
+            scopes_supported: None,
+            code_challenge_methods_supported: None,
+            grant_types_supported: None,
+            response_types_supported: None,
+        };
+        let pkce = McpOAuthFlow::generate_pkce();
+        let url = flow.build_authorization_url(
+            &metadata,
+            &pkce,
+            "mystate",
+            "http://localhost:8080/callback",
+        );
+        assert!(!url.contains("scope="));
+        assert!(url.contains("response_type=code"));
+    }
+
+    #[test]
+    fn build_authorization_url_with_empty_scopes() {
+        let flow = McpOAuthFlow::with_values(
+            Some("test-client".to_owned()),
+            Some(8080),
+            None,
+            false,
+        );
+        let metadata = AuthorizationServerMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_owned(),
+            token_endpoint: "https://auth.example.com/token".to_owned(),
+            registration_endpoint: None,
+            scopes_supported: Some(vec![]),
+            code_challenge_methods_supported: None,
+            grant_types_supported: None,
+            response_types_supported: None,
+        };
+        let pkce = McpOAuthFlow::generate_pkce();
+        let url = flow.build_authorization_url(
+            &metadata,
+            &pkce,
+            "state",
+            "http://localhost:8080/callback",
+        );
+        assert!(!url.contains("scope="));
+    }
+
+    #[test]
+    fn token_store_multiple_servers() {
+        let mut store = OAuthTokenStore::new("/tmp/test-multi");
+        for i in 0..5 {
+            store.save_token(
+                &format!("server-{i}"),
+                OAuthTokens {
+                    access_token: format!("at-{i}"),
+                    refresh_token: Some(format!("rt-{i}")),
+                    expires_at: Some(1000 + i as i64),
+                    token_type: "Bearer".to_owned(),
+                    scope: None,
+                },
+            );
+        }
+        assert_eq!(store.len(), 5);
+        assert!(!store.is_empty());
+
+        // Remove one
+        store.remove_token("server-2");
+        assert_eq!(store.len(), 4);
+        assert!(!store.contains("server-2"));
+    }
+
+    #[test]
+    fn token_store_overwrite() {
+        let mut store = OAuthTokenStore::new("/tmp/test-overwrite");
+        store.save_token("srv", OAuthTokens {
+            access_token: "old-token".to_owned(),
+            refresh_token: None,
+            expires_at: None,
+            token_type: "Bearer".to_owned(),
+            scope: None,
+        });
+        store.save_token("srv", OAuthTokens {
+            access_token: "new-token".to_owned(),
+            refresh_token: Some("refresh".to_owned()),
+            expires_at: Some(9999),
+            token_type: "Bearer".to_owned(),
+            scope: None,
+        });
+        let token = store.get_token("srv").expect("should exist");
+        assert_eq!(token.access_token, "new-token");
+    }
+
+    #[test]
+    fn is_token_expired_near_boundary() {
+        // Token expires in 30 seconds — should NOT be expired (60s buffer)
+        let future = epoch_seconds() + 30;
+        let tokens = OAuthTokens {
+            access_token: "at".to_owned(),
+            refresh_token: None,
+            expires_at: Some(future),
+            token_type: "Bearer".to_owned(),
+            scope: None,
+        };
+        assert!(McpOAuthFlow::is_token_expired(&tokens));
+
+        // Token expires in 120 seconds — should NOT be expired
+        let future2 = epoch_seconds() + 120;
+        let tokens2 = OAuthTokens {
+            access_token: "at".to_owned(),
+            refresh_token: None,
+            expires_at: Some(future2),
+            token_type: "Bearer".to_owned(),
+            scope: None,
+        };
+        assert!(!McpOAuthFlow::is_token_expired(&tokens2));
+    }
+
+    #[test]
+    fn oauth_tokens_default_token_type() {
+        let tokens: OAuthTokens = serde_json::from_str(
+            r#"{"access_token":"abc"}"#,
+        )
+        .expect("deserialize");
+        assert_eq!(tokens.token_type, "Bearer");
+    }
+
+    #[test]
+    fn authorization_metadata_defaults() {
+        let json = r#"{
+            "authorization_endpoint": "https://auth.example.com/authorize",
+            "token_endpoint": "https://auth.example.com/token"
+        }"#;
+        let metadata: AuthorizationServerMetadata =
+            serde_json::from_str(json).expect("deserialize");
+        assert!(metadata.registration_endpoint.is_none());
+        assert!(metadata.scopes_supported.is_none());
+        assert!(metadata.code_challenge_methods_supported.is_none());
+    }
+
+    #[test]
+    fn extract_query_param_handles_no_query() {
+        let result = extract_query_param("GET /path HTTP/1.1", "code");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn urlencoding_preserves_safe_chars() {
+        let encoded = urlencoding("https://example.com/path?a=1&b=2");
+        assert_eq!(encoded, "https://example.com/path?a=1&b=2");
+    }
+
+    #[test]
+    fn urlencoding_encodes_special() {
+        let encoded = urlencoding("hello@world!");
+        assert!(encoded.contains("%40")); // @
+        assert!(encoded.contains("%21")); // !
+    }
+
+    #[test]
+    fn token_store_load_nonexistent() {
+        let rt = tokio::runtime::Runtime::new().expect("create runtime");
+        let mut store = OAuthTokenStore::new("/tmp/nonexistent-path-xyz");
+        let result = rt.block_on(store.load());
+        assert!(result.is_ok());
+        assert!(store.is_empty());
+    }
+
+    #[test]
+    fn oauth_flow_xaa_toggle() {
+        let flow_enabled = McpOAuthFlow::with_values(None, None, None, true);
+        assert!(flow_enabled.xaa_enabled());
+
+        let flow_disabled = McpOAuthFlow::with_values(None, None, None, false);
+        assert!(!flow_disabled.xaa_enabled());
+    }
 }
