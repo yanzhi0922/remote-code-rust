@@ -10,6 +10,7 @@
 //! upstream Claude Code's `categorizeRetryableAPIError`. Each variant carries
 //! enough context for the caller to decide whether to retry, compact, or abort.
 
+pub mod agent_types;
 pub mod api_client;
 pub mod attribution;
 pub mod beta_headers;
@@ -23,10 +24,16 @@ pub mod effort_params;
 pub mod failover;
 pub mod fingerprint;
 pub mod max_tokens;
+pub mod mcp_api;
+pub mod media;
 pub mod model_info;
+pub mod query_source;
 pub mod retry;
+pub mod server_tool_use;
 pub mod sigv4;
 pub mod streaming;
+pub mod thinking_blocks;
+pub mod workload;
 
 pub use api_client::{ApiClient, ContentBlock, QueryOptions, QueryResult, UsageStats};
 pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
