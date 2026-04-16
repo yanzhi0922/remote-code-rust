@@ -4077,6 +4077,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "rc-integration-tests"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "rc-agents",
+ "rc-auth",
+ "rc-compact",
+ "rc-config",
+ "rc-context",
+ "rc-core",
+ "rc-engine-events",
+ "rc-event-bus",
+ "rc-file-history",
+ "rc-mcp",
+ "rc-model",
+ "rc-permissions",
+ "rc-provider",
+ "rc-query-engine",
+ "rc-session",
+ "rc-settings",
+ "rc-swarm",
+ "rc-system-prompt",
+ "rc-tools",
+ "rc-transcript",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "rc-mcp"
 version = "0.1.0"
 dependencies = [
