@@ -31,12 +31,18 @@
 pub mod app;
 pub mod components;
 pub mod event;
+pub mod history_search;
+pub mod ide;
+pub mod keybindings;
 pub mod layout;
 pub mod message;
+pub mod notifications;
+pub mod output_styles;
 pub mod render;
 pub mod scroll;
 pub mod style;
 pub mod syntax;
+pub mod virtual_scroll;
 pub mod vim;
 
 // Preserved modules (existing functionality).
