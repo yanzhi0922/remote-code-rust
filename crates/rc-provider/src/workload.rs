@@ -13,8 +13,10 @@ use serde_json::{Value, json};
 /// The type of workload for request routing.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum WorkloadType {
     /// Default workload for standard queries.
+    #[default]
     Default,
     /// Code review workload.
     CodeReview,
@@ -54,11 +56,6 @@ impl std::fmt::Display for WorkloadType {
     }
 }
 
-impl Default for WorkloadType {
-    fn default() -> Self {
-        Self::Default
-    }
-}
 
 // ---------------------------------------------------------------------------
 // WorkloadContext

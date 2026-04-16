@@ -67,18 +67,12 @@ impl Default for MicroCompactConfig {
 // ---------------------------------------------------------------------------
 
 /// Micro-compact strategy that clears old tool results to save tokens.
+#[derive(Default)]
 pub struct MicroCompactStrategy {
     /// Configuration for this strategy.
     pub config: MicroCompactConfig,
 }
 
-impl Default for MicroCompactStrategy {
-    fn default() -> Self {
-        Self {
-            config: MicroCompactConfig::default(),
-        }
-    }
-}
 
 impl MicroCompactStrategy {
     /// Create a new micro-compact strategy with custom config.
@@ -138,11 +132,10 @@ pub fn micro_compact(
     for msg in messages {
         if let Message::Assistant(assistant) = msg {
             for block in &assistant.blocks {
-                if let AssistantContentBlock::ToolUse { id, name, .. } = block {
-                    if is_compactable_tool(name) {
+                if let AssistantContentBlock::ToolUse { id, name, .. } = block
+                    && is_compactable_tool(name) {
                         tool_use_map.insert(id.clone(), (name.clone(), false));
                     }
-                }
             }
         }
     }

@@ -112,12 +112,7 @@ pub fn configure_effort_params(
         Some(level) => {
             // Validate the effort level.
             let level_lower = level.to_ascii_lowercase();
-            let normalized = match level_lower.as_str() {
-                "low" => "low",
-                "medium" => "medium",
-                "high" => "high",
-                other => other, // Pass through unknown values.
-            };
+            let normalized = level_lower.as_str();
 
             // Set output_config.effort on the body.
             if body.get("output_config").is_none() {

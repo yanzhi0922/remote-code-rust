@@ -11,6 +11,7 @@ use crate::classifier::ClassifierResult;
 
 /// State of the auto permission mode.
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct AutoModeState {
     /// Whether auto mode is currently active.
     pub active: bool,
@@ -28,19 +29,6 @@ pub struct AutoModeState {
     pub cooldown_ms: u64,
 }
 
-impl Default for AutoModeState {
-    fn default() -> Self {
-        Self {
-            active: false,
-            auto_approved_count: 0,
-            auto_denied_count: 0,
-            escalated_count: 0,
-            last_result: None,
-            activated_at: None,
-            cooldown_ms: 0,
-        }
-    }
-}
 
 impl AutoModeState {
     /// Create a new auto mode state.

@@ -519,7 +519,7 @@ impl ApiClient {
         let extra_params = beta_headers::get_extra_body_params(None);
         if let Some(extra_obj) = extra_params.as_object() {
             for (key, value) in extra_obj {
-                if !body.get(key).is_some() {
+                if body.get(key).is_none() {
                     body[key.clone()] = value.clone();
                 }
             }
@@ -553,11 +553,10 @@ impl ApiClient {
             enable_thinking,
         );
 
-        if !betas.is_empty() {
-            if let Ok((name, value)) = beta_headers::build_beta_header_pair(&betas) {
+        if !betas.is_empty()
+            && let Ok((name, value)) = beta_headers::build_beta_header_pair(&betas) {
                 headers.insert(name, value);
             }
-        }
 
         // Attribution header.
         if let Ok(value) = build_attribution_header() {

@@ -133,11 +133,10 @@ pub fn compute_retry_delay(
     attempt: u32,
     retry_after: Option<Duration>,
 ) -> Duration {
-    if let Some(retry_after) = retry_after {
-        if config.respect_retry_after {
+    if let Some(retry_after) = retry_after
+        && config.respect_retry_after {
             return retry_after;
         }
-    }
 
     let multiplier = 2u64.saturating_pow(attempt.min(16));
     let base_ms = config

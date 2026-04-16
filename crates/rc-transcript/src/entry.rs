@@ -140,7 +140,7 @@ impl TranscriptEntry {
 
     #[must_use]
     pub fn timestamp(&self) -> DateTime<Utc> {
-        self.meta().timestamp.clone()
+        self.meta().timestamp
     }
 
     #[must_use]
@@ -185,7 +185,7 @@ impl From<&TranscriptEntry> for StoredEvent {
     fn from(value: &TranscriptEntry) -> Self {
         match value {
             TranscriptEntry::Conversation { meta, entry } => Self {
-                timestamp: meta.timestamp.clone(),
+                timestamp: meta.timestamp,
                 session_id: meta.session_id,
                 event_type: "conversation".to_owned(),
                 conversation: Some(entry.clone()),
@@ -196,14 +196,14 @@ impl From<&TranscriptEntry> for StoredEvent {
                 event_type,
                 payload,
             } => Self {
-                timestamp: meta.timestamp.clone(),
+                timestamp: meta.timestamp,
                 session_id: meta.session_id,
                 event_type: event_type.clone(),
                 conversation: None,
                 payload: payload.clone(),
             },
             TranscriptEntry::CompactBoundary { meta, boundary } => Self {
-                timestamp: meta.timestamp.clone(),
+                timestamp: meta.timestamp,
                 session_id: meta.session_id,
                 event_type: "compact_boundary".to_owned(),
                 conversation: None,

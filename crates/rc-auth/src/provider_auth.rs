@@ -263,7 +263,7 @@ fn resolve_openai_compatible_auth(
     let base_url = config
         .openai_compatible_base_url
         .clone()
-        .ok_or_else(|| {
+        .ok_or({
             ProviderAuthError::NoAuth
         })?;
 

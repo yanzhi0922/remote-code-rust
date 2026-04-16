@@ -154,9 +154,9 @@ fn determine_plugin_name(dir: &Path) -> Option<String> {
         .join(crate::PLUGIN_MANIFEST_DIR)
         .join(crate::PLUGIN_MANIFEST_FILE);
 
-    if manifest_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&manifest_path) {
-            if let Ok(value) =
+    if manifest_path.exists()
+        && let Ok(content) = std::fs::read_to_string(&manifest_path)
+            && let Ok(value) =
                 serde_json::from_str::<serde_json::Value>(&content)
             {
                 return value
@@ -164,8 +164,6 @@ fn determine_plugin_name(dir: &Path) -> Option<String> {
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_owned());
             }
-        }
-    }
     None
 }
 

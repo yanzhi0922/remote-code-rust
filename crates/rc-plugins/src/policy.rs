@@ -65,6 +65,7 @@ impl PluginPolicySource {
 
 /// A set of policy rules governing which plugins may be installed or enabled.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct PluginPolicy {
     /// Only plugins from these sources (marketplace names or URLs) are allowed.
     /// An empty set means all sources are allowed.
@@ -89,17 +90,6 @@ pub struct PluginPolicy {
     pub source: Option<PluginPolicySource>,
 }
 
-impl Default for PluginPolicy {
-    fn default() -> Self {
-        Self {
-            allowed_sources: HashSet::new(),
-            blocked_plugins: HashSet::new(),
-            max_plugins: None,
-            require_approval: false,
-            source: None,
-        }
-    }
-}
 
 impl PluginPolicy {
     /// Create a new permissive (allow-all) policy.
@@ -171,8 +161,8 @@ pub fn check_plugin_policy(
     }
 
     // 3. Max plugins
-    if let Some(max) = policy.max_plugins {
-        if current_plugin_count >= max {
+    if let Some(max) = policy.max_plugins
+        && current_plugin_count >= max {
             return PolicyCheckResult {
                 allowed: false,
                 reason: Some(format!(
@@ -180,7 +170,6 @@ pub fn check_plugin_policy(
                 )),
             };
         }
-    }
 
     // 4. Approval required
     if policy.require_approval {
@@ -225,7 +214,7 @@ pub fn merge_policies(policies: &[PluginPolicy]) -> PluginPolicy {
         let pb = b.source.as_ref().map(|s| s.priority()).unwrap_or(0);
         pb.cmp(&pa)
     });
-    merged.source = sorted[0].source.clone();
+    merged.source = sorted[0].source;
 
     // allowed_sources: intersection of non-empty sets
     let non_empty: Vec<&HashSet<String>> = policies

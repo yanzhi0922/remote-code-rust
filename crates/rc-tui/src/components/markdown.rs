@@ -113,7 +113,7 @@ fn render_heading(line: &str, level: usize, style: &StyleConfig) -> Line<'static
         _ => (style.status_fg, Modifier::empty()),
     };
     Line::from(Span::styled(
-        format!("{text}"),
+        text.to_string(),
         Style::default().fg(color).add_modifier(modifier),
     ))
 }

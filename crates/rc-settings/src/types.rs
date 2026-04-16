@@ -233,7 +233,7 @@ impl Settings {
         self.permissions
             .as_ref()
             .and_then(|p| p.allow.as_ref())
-            .map_or(false, |rules| rules.iter().any(|r| r == rule))
+            .is_some_and(|rules| rules.iter().any(|r| r == rule))
     }
 
     /// Check if a specific permission rule is denied.
@@ -242,7 +242,7 @@ impl Settings {
         self.permissions
             .as_ref()
             .and_then(|p| p.deny.as_ref())
-            .map_or(false, |rules| rules.iter().any(|r| r == rule))
+            .is_some_and(|rules| rules.iter().any(|r| r == rule))
     }
 
     /// Get the effective model, falling back to the provided default.

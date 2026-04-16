@@ -57,20 +57,17 @@ pub fn get_extra_body_params(beta_headers: Option<&[String]>) -> Value {
     let mut result = json!({});
 
     // Parse user-supplied extra body parameters.
-    if let Ok(extra_body_str) = std::env::var("CLAUDE_CODE_EXTRA_BODY") {
-        if !extra_body_str.is_empty() {
-            if let Ok(parsed) = serde_json::from_str::<Value>(&extra_body_str) {
-                if parsed.is_object() {
+    if let Ok(extra_body_str) = std::env::var("CLAUDE_CODE_EXTRA_BODY")
+        && !extra_body_str.is_empty()
+            && let Ok(parsed) = serde_json::from_str::<Value>(&extra_body_str)
+                && parsed.is_object() {
                     // Shallow clone — we don't want to mutate the original.
                     result = parsed;
                 }
-            }
-        }
-    }
 
     // Merge beta headers into anthropic_beta array.
-    if let Some(headers) = beta_headers {
-        if !headers.is_empty() {
+    if let Some(headers) = beta_headers
+        && !headers.is_empty() {
             let existing: Vec<String> = result
                 .get("anthropic_beta")
                 .and_then(Value::as_array)
@@ -89,7 +86,6 @@ pub fn get_extra_body_params(beta_headers: Option<&[String]>) -> Value {
 
             result["anthropic_beta"] = json!(merged);
         }
-    }
 
     result
 }

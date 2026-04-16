@@ -217,7 +217,7 @@ pub fn get_plugin_seed_dirs() -> Vec<PathBuf> {
 
     raw.split(delimiter)
         .filter(|s| !s.is_empty())
-        .map(|s| expand_tilde(s))
+        .map(expand_tilde)
         .collect()
 }
 

@@ -186,7 +186,7 @@ fn add_comment(artifact_id: &str, input: &Value) -> Result<String> {
             "timestamp": comment.timestamp,
             "file_path": comment.file_path,
             "line": comment.line,
-            "severity": serde_json::to_value(&comment.severity).expect("severity serializes"),
+            "severity": serde_json::to_value(comment.severity).expect("severity serializes"),
         },
         "message": format!("Comment added to artifact '{artifact_id}'")
     })
@@ -208,7 +208,7 @@ fn update_status(artifact_id: &str, input: &Value) -> Result<String> {
     Ok(json!({
         "type": "review_status_updated",
         "artifact_id": artifact_id,
-        "status": serde_json::to_value(&status).expect("status serializes"),
+        "status": serde_json::to_value(status).expect("status serializes"),
         "reviewer": reviewer,
         "timestamp": chrono::Utc::now().timestamp_millis(),
         "message": format!("Artifact '{artifact_id}' status updated to {status_str} by {reviewer}")

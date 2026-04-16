@@ -235,7 +235,7 @@ fn estimate_messages_tokens(messages: &[Message]) -> u64 {
         total += estimate_single_message_tokens(msg);
     }
     // Pad by 4/3 to be conservative
-    (total * 4 + 2) / 3
+    (total * 4).div_ceil(3)
 }
 
 /// Estimate tokens for a single message.

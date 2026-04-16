@@ -107,7 +107,7 @@ impl CronField {
                         _ => min,
                     };
                     if value >= base_start {
-                        return (value - base_start) % step == 0;
+                        return (value - base_start).is_multiple_of(*step);
                     }
                 }
                 false
@@ -263,13 +263,11 @@ pub fn next_run(
             return None;
         }
 
-        if cron.month.matches(month, 1, 12) && cron.day_of_month.matches(day, 1, 31) {
-            if cron.hour.matches(hour, 0, 23) {
-                if cron.minute.matches(minute, 0, 59) {
+        if cron.month.matches(month, 1, 12) && cron.day_of_month.matches(day, 1, 31)
+            && cron.hour.matches(hour, 0, 23)
+                && cron.minute.matches(minute, 0, 59) {
                     return Some((minute, hour, day, month));
                 }
-            }
-        }
 
         // Advance by one minute.
         minute += 1;

@@ -58,10 +58,10 @@ impl HookSettings {
     /// Check if any hooks are configured.
     #[must_use]
     pub fn has_hooks(&self) -> bool {
-        self.pre_tool_use.as_ref().map_or(false, |h| !h.is_empty())
-            || self.post_tool_use.as_ref().map_or(false, |h| !h.is_empty())
-            || self.notification.as_ref().map_or(false, |h| !h.is_empty())
-            || self.stop.as_ref().map_or(false, |h| !h.is_empty())
+        self.pre_tool_use.as_ref().is_some_and(|h| !h.is_empty())
+            || self.post_tool_use.as_ref().is_some_and(|h| !h.is_empty())
+            || self.notification.as_ref().is_some_and(|h| !h.is_empty())
+            || self.stop.as_ref().is_some_and(|h| !h.is_empty())
     }
 }
 

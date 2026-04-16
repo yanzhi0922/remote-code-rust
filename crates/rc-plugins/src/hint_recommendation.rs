@@ -154,11 +154,10 @@ pub fn should_show_hint(
     }
 
     // Only official marketplaces
-    if let Some(ref mkt) = parsed.marketplace {
-        if !is_official_marketplace(mkt) {
+    if let Some(ref mkt) = parsed.marketplace
+        && !is_official_marketplace(mkt) {
             return false;
         }
-    }
 
     true
 }

@@ -55,6 +55,7 @@ impl Default for SessionMemoryCompactConfig {
 // ---------------------------------------------------------------------------
 
 /// Session-memory compact strategy that preserves key facts while compressing.
+#[derive(Default)]
 pub struct SessionMemoryCompactStrategy {
     /// Configuration for this strategy.
     pub config: SessionMemoryCompactConfig,
@@ -62,14 +63,6 @@ pub struct SessionMemoryCompactStrategy {
     pub session_memory_content: Option<String>,
 }
 
-impl Default for SessionMemoryCompactStrategy {
-    fn default() -> Self {
-        Self {
-            config: SessionMemoryCompactConfig::default(),
-            session_memory_content: None,
-        }
-    }
-}
 
 impl SessionMemoryCompactStrategy {
     /// Create a new session-memory compact strategy with custom config.
@@ -230,13 +223,8 @@ fn find_split_point(messages: &[Message], config: &SessionMemoryCompactConfig) -
         }
     }
 
-    // If we never accumulated enough, keep everything from the point where
-    // we have at least min_text_block_messages
-    if text_block_count >= config.min_text_block_messages {
-        0
-    } else {
-        0
-    }
+    // Always keep everything from the earliest possible point
+    0
 }
 
 /// Check if a message contains text blocks (user or assistant text content).

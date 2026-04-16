@@ -59,8 +59,10 @@ impl VoiceConfig {
 /// Current state of the voice service.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum VoiceState {
     /// No voice activity.
+    #[default]
     Idle,
     /// Microphone is active and listening.
     Listening,
@@ -81,11 +83,6 @@ impl std::fmt::Display for VoiceState {
     }
 }
 
-impl Default for VoiceState {
-    fn default() -> Self {
-        Self::Idle
-    }
-}
 
 // ---------------------------------------------------------------------------
 // VoiceEvent

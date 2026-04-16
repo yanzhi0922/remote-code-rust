@@ -68,29 +68,26 @@ impl StructuredOutputEnforcer {
         }
 
         // Check required fields for objects
-        if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
-            if let Some(obj) = value.as_object() {
+        if let Some(required) = schema.get("required").and_then(|r| r.as_array())
+            && let Some(obj) = value.as_object() {
                 for field in required {
-                    if let Some(field_name) = field.as_str() {
-                        if !obj.contains_key(field_name) {
+                    if let Some(field_name) = field.as_str()
+                        && !obj.contains_key(field_name) {
                             return Err(StructuredOutputError::MissingRequiredField {
                                 field: field_name.to_string(),
                             });
                         }
-                    }
                 }
             }
-        }
 
         // Check enum constraint
-        if let Some(enum_values) = schema.get("enum").and_then(|e| e.as_array()) {
-            if !enum_values.contains(value) {
+        if let Some(enum_values) = schema.get("enum").and_then(|e| e.as_array())
+            && !enum_values.contains(value) {
                 return Err(StructuredOutputError::EnumViolation {
                     value: value.clone(),
                     allowed: enum_values.clone(),
                 });
             }
-        }
 
         Ok(())
     }
@@ -117,39 +114,33 @@ impl StructuredOutputEnforcer {
 
         match expected_type {
             "object" => {
-                if value.is_string() {
-                    if let Ok(parsed) = serde_json::from_str::<Value>(value.as_str().unwrap_or("")) {
-                        if parsed.is_object() {
+                if value.is_string()
+                    && let Ok(parsed) = serde_json::from_str::<Value>(value.as_str().unwrap_or(""))
+                        && parsed.is_object() {
                             return parsed;
                         }
-                    }
-                }
                 value.clone()
             }
             "array" => {
-                if value.is_string() {
-                    if let Ok(parsed) = serde_json::from_str::<Value>(value.as_str().unwrap_or("")) {
-                        if parsed.is_array() {
+                if value.is_string()
+                    && let Ok(parsed) = serde_json::from_str::<Value>(value.as_str().unwrap_or(""))
+                        && parsed.is_array() {
                             return parsed;
                         }
-                    }
-                }
                 value.clone()
             }
             "number" => {
-                if let Some(s) = value.as_str() {
-                    if let Ok(n) = s.parse::<f64>() {
+                if let Some(s) = value.as_str()
+                    && let Ok(n) = s.parse::<f64>() {
                         return Value::from(n);
                     }
-                }
                 value.clone()
             }
             "boolean" => {
-                if let Some(s) = value.as_str() {
-                    if let Ok(b) = s.parse::<bool>() {
+                if let Some(s) = value.as_str()
+                    && let Ok(b) = s.parse::<bool>() {
                         return Value::from(b);
                     }
-                }
                 value.clone()
             }
             _ => value.clone(),

@@ -150,12 +150,10 @@ pub async fn refresh_oauth_token(
     refresh_token: &str,
     scopes: Option<&[String]>,
 ) -> Result<OAuthTokens, OAuthClientError> {
-    let default_scopes = vec![
-        "org:inference".to_owned(),
+    let default_scopes = ["org:inference".to_owned(),
         "user:profile".to_owned(),
         "user:api_keys".to_owned(),
-        "org:api_keys".to_owned(),
-    ];
+        "org:api_keys".to_owned()];
     let scope_str = scopes
         .map(|s| s.join(" "))
         .unwrap_or_else(|| default_scopes.join(" "));

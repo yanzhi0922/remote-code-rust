@@ -36,13 +36,11 @@ pub fn shell_command_matches_pattern(command: &str, pattern: &str) -> bool {
 
 /// Extract content from tool-prefixed patterns like "Bash(git status)".
 fn extract_tool_content(pattern: &str) -> Option<&str> {
-    if let Some(start) = pattern.find('(') {
-        if let Some(end) = pattern.rfind(')') {
-            if start < end {
+    if let Some(start) = pattern.find('(')
+        && let Some(end) = pattern.rfind(')')
+            && start < end {
                 return Some(&pattern[start + 1..end]);
             }
-        }
-    }
     None
 }
 

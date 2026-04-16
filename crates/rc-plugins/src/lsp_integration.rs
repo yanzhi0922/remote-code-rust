@@ -72,10 +72,10 @@ pub fn load_plugin_lsp_servers(
     let manifest_path = plugin_root
         .join(crate::PLUGIN_MANIFEST_DIR)
         .join(crate::PLUGIN_MANIFEST_FILE);
-    if manifest_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&manifest_path) {
-            if let Ok(raw) = serde_json::from_str::<Value>(&content) {
-                if let Some(lsp_servers) = raw.get("lspServers") {
+    if manifest_path.exists()
+        && let Ok(content) = std::fs::read_to_string(&manifest_path)
+            && let Ok(raw) = serde_json::from_str::<Value>(&content)
+                && let Some(lsp_servers) = raw.get("lspServers") {
                     match parse_lsp_servers(
                         plugin_name,
                         lsp_servers,
@@ -89,9 +89,6 @@ pub fn load_plugin_lsp_servers(
                         }
                     }
                 }
-            }
-        }
-    }
 
     LoadLspResult { servers, errors }
 }

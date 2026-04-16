@@ -128,7 +128,7 @@ pub fn build_agent_name(plugin_name: &str, relative_path: &Path) -> String {
     let namespace_parts: Vec<&str> = parent
         .and_then(|p| p.to_str())
         .map(|s| {
-            s.split(|c: char| c == std::path::MAIN_SEPARATOR || c == '/')
+            s.split([std::path::MAIN_SEPARATOR, '/'])
                 .filter(|part| !part.is_empty())
                 .collect()
         })

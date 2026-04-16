@@ -104,7 +104,7 @@ pub fn agent_color_for_type(agent_type: &str) -> AgentColor {
     ];
 
     // Simple stable hash: sum of byte values
-    let hash: usize = agent_type.bytes().map(|b| usize::from(b)).sum();
+    let hash: usize = agent_type.bytes().map(usize::from).sum();
     colors[hash % colors.len()]
 }
 

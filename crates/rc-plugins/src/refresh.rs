@@ -17,6 +17,7 @@ use crate::{PluginBundle, discover_plugins};
 
 /// Result of refreshing all plugins.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct RefreshResult {
     /// Number of enabled plugins after refresh.
     pub enabled_count: usize,
@@ -40,22 +41,6 @@ pub struct RefreshResult {
     pub warnings: Vec<String>,
 }
 
-impl Default for RefreshResult {
-    fn default() -> Self {
-        Self {
-            enabled_count: 0,
-            disabled_count: 0,
-            command_count: 0,
-            agent_count: 0,
-            hook_count: 0,
-            mcp_count: 0,
-            lsp_count: 0,
-            error_count: 0,
-            errors: Vec::new(),
-            warnings: Vec::new(),
-        }
-    }
-}
 
 /// Result of refreshing marketplace plugins.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,11 +81,10 @@ pub fn refresh_plugins(root: &Path) -> RefreshResult {
                 if plugin.mcp_config_path().is_some() {
                     result.mcp_count += 1;
                 }
-                if let Some(skills_root) = plugin.skills_root() {
-                    if skills_root.exists() {
+                if let Some(skills_root) = plugin.skills_root()
+                    && skills_root.exists() {
                         result.command_count += 1;
                     }
-                }
 
                 // Validate and collect errors
                 let report = crate::validate_plugin_bundle(plugin);

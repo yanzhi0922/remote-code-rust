@@ -34,8 +34,7 @@ impl SystemPromptSection for CoordinatorSection {
             return Ok(None);
         }
 
-        let prompt = format!(
-            r#"# Coordinator Agent
+        let prompt = r#"# Coordinator Agent
 
 You are a coordinator agent managing a team of workers. Your primary responsibilities are:
 
@@ -153,8 +152,7 @@ When receiving notifications from workers, expect these formats:
 - If a task fails, analyze the error before retrying
 - If multiple tasks fail, consider adjusting the overall approach
 - Always inform the user of significant issues or delays
-"#
-        );
+"#.to_string();
 
         Ok(Some(prompt))
     }

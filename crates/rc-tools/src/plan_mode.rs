@@ -11,8 +11,10 @@ use super::ToolExecutionContext;
 
 /// Plan mode state tracked in the execution context.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default)]
 pub enum PlanModeState {
     /// Normal execution mode — tools can make modifications.
+    #[default]
     Normal,
     /// Plan mode — only read-only tools are allowed.
     Plan {
@@ -29,11 +31,6 @@ impl PlanModeState {
     }
 }
 
-impl Default for PlanModeState {
-    fn default() -> Self {
-        Self::Normal
-    }
-}
 
 /// Enter plan mode.
 ///

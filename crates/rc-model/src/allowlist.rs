@@ -31,13 +31,12 @@ pub fn is_model_allowed(model: &str, allowlist: Option<&[String]>) -> bool {
     let normalized_refs: Vec<&str> = normalized_list.iter().map(|s| s.as_str()).collect();
 
     // 1. Direct match (but skip family aliases that have been narrowed).
-    if normalized_refs.contains(&normalized.as_str()) {
-        if !is_model_family_alias(&normalized)
-            || !family_has_specific_entries(&normalized, &normalized_refs)
+    if normalized_refs.contains(&normalized.as_str())
+        && (!is_model_family_alias(&normalized)
+            || !family_has_specific_entries(&normalized, &normalized_refs))
         {
             return true;
         }
-    }
 
     // 2. Family-level aliases in the allowlist match any model in that family
     //    (only if no more specific entries exist for that family).
@@ -69,11 +68,10 @@ pub fn is_model_allowed(model: &str, allowlist: Option<&[String]>) -> bool {
 
     // 4. Version-prefix matching.
     for entry in &normalized_refs {
-        if !is_model_family_alias(entry) && !is_model_alias(entry) {
-            if model_matches_version_prefix(&normalized, entry) {
+        if !is_model_family_alias(entry) && !is_model_alias(entry)
+            && model_matches_version_prefix(&normalized, entry) {
                 return true;
             }
-        }
     }
 
     false

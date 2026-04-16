@@ -60,7 +60,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         };
         let cursor_x = (prefix_len + buffer_len) as u16;
         if cursor_x < area.width {
-            f.set_cursor_position((area.x + cursor_x as u16, area.y + 1));
+            f.set_cursor_position((area.x + cursor_x, area.y + 1));
         }
     }
 }

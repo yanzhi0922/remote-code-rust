@@ -12,20 +12,17 @@ use super::ToolExecutionContext;
 /// Message priority levels.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum MessagePriority {
     /// Low priority (informational).
     Low,
     /// Normal priority (default).
+    #[default]
     Normal,
     /// High priority (urgent).
     High,
 }
 
-impl Default for MessagePriority {
-    fn default() -> Self {
-        Self::Normal
-    }
-}
 
 /// A structured agent message.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -115,7 +112,7 @@ pub fn send_message(input: &Value, _context: &ToolExecutionContext) -> Result<St
         "from": msg.from,
         "to": msg.to,
         "content": msg.content,
-        "priority": serde_json::to_value(&msg.priority).expect("priority serializes"),
+        "priority": serde_json::to_value(msg.priority).expect("priority serializes"),
         "timestamp": msg.timestamp,
         "correlation_id": msg.correlation_id,
         "status": "queued",
@@ -161,7 +158,7 @@ pub fn broadcast_message(input: &Value, _context: &ToolExecutionContext) -> Resu
         "broadcast_id": broadcast_id,
         "from": sender,
         "content": message,
-        "priority": serde_json::to_value(&priority).expect("priority serializes"),
+        "priority": serde_json::to_value(priority).expect("priority serializes"),
         "recipients": recipients,
         "timestamp": chrono::Utc::now().timestamp_millis(),
         "status": "queued",
