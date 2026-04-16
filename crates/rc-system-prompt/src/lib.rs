@@ -48,6 +48,7 @@ use anyhow::Result;
 use cache::{SectionCache, SYSTEM_PROMPT_DYNAMIC_BOUNDARY};
 use sections::SystemPromptSection;
 use sections::actions::ActionsSection;
+use sections::coordinator::CoordinatorSection;
 use sections::doing_tasks::DoingTasksSection;
 use sections::env_info::EnvInfoSection;
 use sections::intro::IntroSection;
@@ -171,6 +172,7 @@ impl SystemPromptBuilder {
         builder.dynamic_sections.push(Box::new(McpInstructionsSection));
         builder.dynamic_sections.push(Box::new(ScratchpadSection));
         builder.dynamic_sections.push(Box::new(ToolResultSection));
+        builder.dynamic_sections.push(Box::new(CoordinatorSection));
         builder.dynamic_sections.push(Box::new(ProactiveSection));
 
         builder
@@ -308,7 +310,7 @@ mod tests {
     fn builder_with_defaults_has_sections() {
         let builder = SystemPromptBuilder::with_default_sections();
         assert_eq!(builder.static_section_count(), 7);
-        assert_eq!(builder.dynamic_section_count(), 9);
+        assert_eq!(builder.dynamic_section_count(), 10);
     }
 
     #[test]
@@ -406,6 +408,7 @@ mod tests {
                 "mcp_instructions",
                 "scratchpad",
                 "tool_result",
+                "coordinator",
                 "proactive"
             ]
         );

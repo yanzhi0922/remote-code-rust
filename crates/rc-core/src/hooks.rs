@@ -35,6 +35,25 @@ pub enum HookEventKind {
     MemoryLoaded,
     MemorySaved,
     StopHookSummary,
+    // ── Phase 9: Additional hook events ─────────────────────────────────
+    SubagentStart,
+    SubagentStop,
+    PreCompact,
+    PostCompact,
+    TeammateIdle,
+    Elicitation,
+    ElicitationResult,
+    ConfigChange,
+    WorktreeCreate,
+    WorktreeRemove,
+    InstructionsLoaded,
+    CwdChanged,
+    FileChanged,
+    Stop,
+    StopFailure,
+    Setup,
+    TaskCreated,
+    TaskCompleted,
 }
 
 impl HookEventKind {
@@ -68,6 +87,25 @@ impl HookEventKind {
             Self::MemoryLoaded => "MemoryLoaded",
             Self::MemorySaved => "MemorySaved",
             Self::StopHookSummary => "StopHookSummary",
+            // Phase 9
+            Self::SubagentStart => "SubagentStart",
+            Self::SubagentStop => "SubagentStop",
+            Self::PreCompact => "PreCompact",
+            Self::PostCompact => "PostCompact",
+            Self::TeammateIdle => "TeammateIdle",
+            Self::Elicitation => "Elicitation",
+            Self::ElicitationResult => "ElicitationResult",
+            Self::ConfigChange => "ConfigChange",
+            Self::WorktreeCreate => "WorktreeCreate",
+            Self::WorktreeRemove => "WorktreeRemove",
+            Self::InstructionsLoaded => "InstructionsLoaded",
+            Self::CwdChanged => "CwdChanged",
+            Self::FileChanged => "FileChanged",
+            Self::Stop => "Stop",
+            Self::StopFailure => "StopFailure",
+            Self::Setup => "Setup",
+            Self::TaskCreated => "TaskCreated",
+            Self::TaskCompleted => "TaskCompleted",
         }
     }
 }
@@ -146,5 +184,170 @@ mod tests {
             serde_json::from_str(&encoded).expect("response should deserialize");
         assert_eq!(decoded.decision, HookDecision::Retry);
         assert_eq!(decoded.outputs.len(), 1);
+    }
+
+    // ── Phase 9: New hook event tests ─────────────────────────────────────
+
+    #[test]
+    fn phase9_subagent_start_event_name() {
+        assert_eq!(HookEventKind::SubagentStart.as_str(), "SubagentStart");
+    }
+
+    #[test]
+    fn phase9_subagent_stop_event_name() {
+        assert_eq!(HookEventKind::SubagentStop.as_str(), "SubagentStop");
+    }
+
+    #[test]
+    fn phase9_pre_compact_event_name() {
+        assert_eq!(HookEventKind::PreCompact.as_str(), "PreCompact");
+    }
+
+    #[test]
+    fn phase9_post_compact_event_name() {
+        assert_eq!(HookEventKind::PostCompact.as_str(), "PostCompact");
+    }
+
+    #[test]
+    fn phase9_teammate_idle_event_name() {
+        assert_eq!(HookEventKind::TeammateIdle.as_str(), "TeammateIdle");
+    }
+
+    #[test]
+    fn phase9_elicitation_event_name() {
+        assert_eq!(HookEventKind::Elicitation.as_str(), "Elicitation");
+    }
+
+    #[test]
+    fn phase9_elicitation_result_event_name() {
+        assert_eq!(HookEventKind::ElicitationResult.as_str(), "ElicitationResult");
+    }
+
+    #[test]
+    fn phase9_config_change_event_name() {
+        assert_eq!(HookEventKind::ConfigChange.as_str(), "ConfigChange");
+    }
+
+    #[test]
+    fn phase9_worktree_create_event_name() {
+        assert_eq!(HookEventKind::WorktreeCreate.as_str(), "WorktreeCreate");
+    }
+
+    #[test]
+    fn phase9_worktree_remove_event_name() {
+        assert_eq!(HookEventKind::WorktreeRemove.as_str(), "WorktreeRemove");
+    }
+
+    #[test]
+    fn phase9_instructions_loaded_event_name() {
+        assert_eq!(HookEventKind::InstructionsLoaded.as_str(), "InstructionsLoaded");
+    }
+
+    #[test]
+    fn phase9_cwd_changed_event_name() {
+        assert_eq!(HookEventKind::CwdChanged.as_str(), "CwdChanged");
+    }
+
+    #[test]
+    fn phase9_file_changed_event_name() {
+        assert_eq!(HookEventKind::FileChanged.as_str(), "FileChanged");
+    }
+
+    #[test]
+    fn phase9_stop_event_name() {
+        assert_eq!(HookEventKind::Stop.as_str(), "Stop");
+    }
+
+    #[test]
+    fn phase9_stop_failure_event_name() {
+        assert_eq!(HookEventKind::StopFailure.as_str(), "StopFailure");
+    }
+
+    #[test]
+    fn phase9_setup_event_name() {
+        assert_eq!(HookEventKind::Setup.as_str(), "Setup");
+    }
+
+    #[test]
+    fn phase9_task_created_event_name() {
+        assert_eq!(HookEventKind::TaskCreated.as_str(), "TaskCreated");
+    }
+
+    #[test]
+    fn phase9_task_completed_event_name() {
+        assert_eq!(HookEventKind::TaskCompleted.as_str(), "TaskCompleted");
+    }
+
+    #[test]
+    fn phase9_new_events_round_trip_envelope() {
+        let events = vec![
+            HookEventKind::SubagentStart,
+            HookEventKind::SubagentStop,
+            HookEventKind::PreCompact,
+            HookEventKind::PostCompact,
+            HookEventKind::TeammateIdle,
+            HookEventKind::Elicitation,
+            HookEventKind::ElicitationResult,
+            HookEventKind::ConfigChange,
+            HookEventKind::WorktreeCreate,
+            HookEventKind::WorktreeRemove,
+            HookEventKind::InstructionsLoaded,
+            HookEventKind::CwdChanged,
+            HookEventKind::FileChanged,
+            HookEventKind::Stop,
+            HookEventKind::StopFailure,
+            HookEventKind::Setup,
+            HookEventKind::TaskCreated,
+            HookEventKind::TaskCompleted,
+        ];
+
+        for event in events {
+            let envelope = HookEventEnvelope {
+                event,
+                payload: serde_json::json!({"test": true}),
+            };
+            let encoded = serde_json::to_string(&envelope).expect("envelope should serialize");
+            let decoded: HookEventEnvelope =
+                serde_json::from_str(&encoded).expect("envelope should deserialize");
+            assert_eq!(decoded.event, event);
+        }
+    }
+
+    #[test]
+    fn phase9_all_new_events_have_unique_names() {
+        let new_events = [
+            HookEventKind::SubagentStart,
+            HookEventKind::SubagentStop,
+            HookEventKind::PreCompact,
+            HookEventKind::PostCompact,
+            HookEventKind::TeammateIdle,
+            HookEventKind::Elicitation,
+            HookEventKind::ElicitationResult,
+            HookEventKind::ConfigChange,
+            HookEventKind::WorktreeCreate,
+            HookEventKind::WorktreeRemove,
+            HookEventKind::InstructionsLoaded,
+            HookEventKind::CwdChanged,
+            HookEventKind::FileChanged,
+            HookEventKind::Stop,
+            HookEventKind::StopFailure,
+            HookEventKind::Setup,
+            HookEventKind::TaskCreated,
+            HookEventKind::TaskCompleted,
+        ];
+
+        let names: Vec<&str> = new_events.iter().map(|e| e.as_str()).collect();
+        let unique_names: std::collections::HashSet<&str> = names.iter().copied().collect();
+        assert_eq!(names.len(), unique_names.len(), "All event names must be unique");
+    }
+
+    #[test]
+    fn phase9_new_events_serde_round_trip() {
+        let event = HookEventKind::TaskCreated;
+        let serialized = serde_json::to_string(&event).expect("serialize");
+        assert!(serialized.contains("task_created"));
+        let deserialized: HookEventKind =
+            serde_json::from_str(&serialized).expect("deserialize");
+        assert_eq!(deserialized, event);
     }
 }

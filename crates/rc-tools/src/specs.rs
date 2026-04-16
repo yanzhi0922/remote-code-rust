@@ -5,7 +5,7 @@ use serde_json::json;
 use super::ToolSpec;
 
 #[must_use]
-pub fn builtin_tool_specs() -> Vec<ToolSpec> {
+fn builtin_tool_specs_core() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: "list_directory".to_owned(),
@@ -1000,6 +1000,128 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
                     "lines": {"type": "integer", "description": "Number of log lines to read (for logs, default 50)", "minimum": 1, "maximum": 500}
                 },
                 "required": ["action"],
+                "additionalProperties": false,
+            }),
+        },
+    ]
+}
+
+#[must_use]
+pub fn builtin_tool_specs() -> Vec<ToolSpec> {
+    let mut specs = builtin_tool_specs_core();
+    specs.extend(phase9_tool_specs());
+    specs
+}
+
+/// Phase 9: Additional tool specs for new dedicated modules.
+#[must_use]
+pub fn phase9_tool_specs() -> Vec<ToolSpec> {
+    vec![
+        ToolSpec {
+            name: "discover_skills".to_owned(),
+            protocol_name: "DiscoverSkills".to_owned(),
+            permission_tool_name: "Read".to_owned(),
+            description: "Discover relevant skills using BM25 text search based on a task description query.".to_owned(),
+            requires_permission: false,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Task description to search for matching skills"},
+                    "max_results": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Maximum number of results (default 10)"}
+                },
+                "required": ["query"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "team_delete".to_owned(),
+            protocol_name: "TeamDelete".to_owned(),
+            permission_tool_name: "TeamDelete".to_owned(),
+            description: "Delete a multi-agent team and clean up associated resources (team file, worktree, mailbox).".to_owned(),
+            requires_permission: true,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "team_name": {"type": "string", "description": "Name of the team to delete"}
+                },
+                "required": ["team_name"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "team_list".to_owned(),
+            protocol_name: "TeamList".to_owned(),
+            permission_tool_name: "Read".to_owned(),
+            description: "List all multi-agent teams with their metadata.".to_owned(),
+            requires_permission: false,
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "broadcast_message".to_owned(),
+            protocol_name: "BroadcastMessage".to_owned(),
+            permission_tool_name: "SendMessage".to_owned(),
+            description: "Broadcast a message to all agents in the multi-agent system.".to_owned(),
+            requires_permission: false,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "message": {"type": "string", "description": "Message content to broadcast"},
+                    "sender": {"type": "string", "description": "Sender agent name (default: coordinator)"},
+                    "priority": {"type": "string", "enum": ["low", "normal", "high"], "description": "Message priority (default: normal)"},
+                    "recipients": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional list of specific recipient agent names"
+                    }
+                },
+                "required": ["message"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "review_artifact".to_owned(),
+            protocol_name: "ReviewArtifact".to_owned(),
+            permission_tool_name: "Read".to_owned(),
+            description: "Review an artifact: view diff, add comments, update status, or get review summary.".to_owned(),
+            requires_permission: false,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["view_diff", "add_comment", "update_status", "get_comments", "summary"], "description": "Review action to perform"},
+                    "artifact_id": {"type": "string", "description": "Artifact identifier"},
+                    "comment": {"type": "string", "description": "Comment text (for add_comment)"},
+                    "status": {"type": "string", "enum": ["pending", "in_progress", "approved", "changes_requested", "rejected"], "description": "Review status (for update_status)"},
+                    "author": {"type": "string", "description": "Comment author (default: reviewer)"},
+                    "severity": {"type": "string", "enum": ["info", "suggestion", "warning", "critical"], "description": "Comment severity (default: info)"},
+                    "file_path": {"type": "string", "description": "File path for inline comment"},
+                    "line": {"type": "integer", "description": "Line number for inline comment"},
+                    "from_version": {"type": "string", "description": "Git ref for diff start (default: HEAD~1)"},
+                    "to_version": {"type": "string", "description": "Git ref for diff end (default: HEAD)"},
+                    "reviewer": {"type": "string", "description": "Reviewer name (for update_status)"}
+                },
+                "required": ["action", "artifact_id"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "send_user_file".to_owned(),
+            protocol_name: "SendUserFile".to_owned(),
+            permission_tool_name: "Read".to_owned(),
+            description: "Send a file to the user (logs, screenshots, exported data). Supports base64 encoding and file type detection.".to_owned(),
+            requires_permission: false,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "Path to the file (relative to workspace)"},
+                    "description": {"type": "string", "description": "Optional description of the file"},
+                    "max_size_bytes": {"type": "integer", "minimum": 1, "maximum": 104857600, "description": "Maximum file size in bytes (default 10MB)"},
+                    "max_text_chars": {"type": "integer", "minimum": 1000, "maximum": 500000, "description": "Maximum text content characters (default 50000)"}
+                },
+                "required": ["file_path"],
                 "additionalProperties": false,
             }),
         },
