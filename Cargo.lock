@@ -4253,6 +4253,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "rc-swarm"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "rc-agents",
+ "rc-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "rc-system-prompt"
 version = "0.1.0"
 dependencies = [
