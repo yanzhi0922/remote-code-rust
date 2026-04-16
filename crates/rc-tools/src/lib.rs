@@ -7,22 +7,31 @@
 pub mod agent;
 pub mod command;
 pub mod delegate;
+pub mod discover_skills;
 pub mod file_ops;
 pub mod git;
 pub mod hooks;
 pub mod lsp;
+pub mod mcp_resource_tools;
 pub mod mcp_runtime;
 pub mod mcp_tools;
 pub mod memory_tools;
 pub mod misc;
+pub mod plan_mode;
+pub mod review_artifact;
 pub mod sandbox;
 pub mod search;
+pub mod send_message;
+pub mod send_user_file;
 pub mod shell;
 pub mod specs;
 pub mod system;
 pub mod task_output;
 pub mod tasks;
+pub mod team_tools;
 pub mod web;
+pub mod web_browser;
+pub mod worktree_tools;
 pub mod workflow;
 
 use std::path::PathBuf;
@@ -431,6 +440,13 @@ pub async fn execute_tool_call(
         "skill_execute" => misc::skill_execute_tool(&call.input, context),
         "voice_input" => misc::voice_input_tool(&call.input),
         "daemon" => workflow::daemon_tool(&call.input, context),
+        // ── Phase 9: New dedicated tool modules ────────────────────────────
+        "discover_skills" => discover_skills::discover_skills(&call.input, context),
+        "team_delete" => team_tools::team_delete(&call.input, context),
+        "team_list" => team_tools::team_list(&call.input, context),
+        "broadcast_message" => send_message::broadcast_message(&call.input, context),
+        "review_artifact" => review_artifact::review_artifact(&call.input, context),
+        "send_user_file" => send_user_file::send_user_file(&call.input, context),
         _ => Err(anyhow!("unsupported tool {}", spec.name)),
     };
 

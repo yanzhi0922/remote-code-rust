@@ -5,6 +5,7 @@
 
 pub mod actions;
 pub mod agent;
+pub mod coordinator;
 pub mod doing_tasks;
 pub mod env_info;
 pub mod intro;
