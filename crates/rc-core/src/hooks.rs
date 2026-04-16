@@ -54,6 +54,45 @@ pub enum HookEventKind {
     Setup,
     TaskCreated,
     TaskCompleted,
+    /// Fired when a permission request is denied.
+    PermissionDenied,
+}
+
+/// All standard hook event kinds (26 events matching upstream HOOK_EVENTS).
+pub const HOOK_EVENTS: [HookEventKind; 27] = [
+    HookEventKind::PreToolUse,
+    HookEventKind::PostToolUse,
+    HookEventKind::PostToolUseFailure,
+    HookEventKind::Notification,
+    HookEventKind::UserPromptSubmit,
+    HookEventKind::SessionStart,
+    HookEventKind::SessionEnd,
+    HookEventKind::Stop,
+    HookEventKind::StopFailure,
+    HookEventKind::SubagentStart,
+    HookEventKind::SubagentStop,
+    HookEventKind::PreCompact,
+    HookEventKind::PostCompact,
+    HookEventKind::PermissionRequest,
+    HookEventKind::PermissionDenied,
+    HookEventKind::Setup,
+    HookEventKind::TeammateIdle,
+    HookEventKind::TaskCreated,
+    HookEventKind::TaskCompleted,
+    HookEventKind::Elicitation,
+    HookEventKind::ElicitationResult,
+    HookEventKind::ConfigChange,
+    HookEventKind::WorktreeCreate,
+    HookEventKind::WorktreeRemove,
+    HookEventKind::InstructionsLoaded,
+    HookEventKind::CwdChanged,
+    HookEventKind::FileChanged,
+];
+
+/// Check if a string matches a known hook event name.
+#[must_use]
+pub fn is_hook_event(value: &str) -> bool {
+    HOOK_EVENTS.iter().any(|e| e.as_str() == value)
 }
 
 impl HookEventKind {
@@ -106,6 +145,7 @@ impl HookEventKind {
             Self::Setup => "Setup",
             Self::TaskCreated => "TaskCreated",
             Self::TaskCompleted => "TaskCompleted",
+            Self::PermissionDenied => "PermissionDenied",
         }
     }
 }
@@ -148,7 +188,7 @@ pub struct HookResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{HookDecision, HookEventEnvelope, HookEventKind, HookResponse, HookSpecificOutput};
+    use super::{HookDecision, HookEventEnvelope, HookEventKind, HookResponse, HookSpecificOutput, HOOK_EVENTS};
 
     #[test]
     fn expanded_hook_event_catalog_uses_pascal_case_names() {
@@ -349,5 +389,44 @@ mod tests {
         let deserialized: HookEventKind =
             serde_json::from_str(&serialized).expect("deserialize");
         assert_eq!(deserialized, event);
+    }
+
+    // ── Phase 19: PermissionDenied + is_hook_event tests ────────────────
+
+    #[test]
+    fn permission_denied_event_name() {
+        assert_eq!(HookEventKind::PermissionDenied.as_str(), "PermissionDenied");
+    }
+
+    #[test]
+    fn permission_denied_serde_round_trip() {
+        let event = HookEventKind::PermissionDenied;
+        let serialized = serde_json::to_string(&event).expect("serialize");
+        assert!(serialized.contains("permission_denied"));
+        let deserialized: HookEventKind =
+            serde_json::from_str(&serialized).expect("deserialize");
+        assert_eq!(deserialized, event);
+    }
+
+    #[test]
+    fn hook_events_constant_has_27_entries() {
+        assert_eq!(HOOK_EVENTS.len(), 27);
+    }
+
+    #[test]
+    fn is_hook_event_recognizes_standard_events() {
+        assert!(super::is_hook_event("PreToolUse"));
+        assert!(super::is_hook_event("PostToolUse"));
+        assert!(super::is_hook_event("SessionStart"));
+        assert!(super::is_hook_event("PermissionDenied"));
+        assert!(super::is_hook_event("FileChanged"));
+        assert!(super::is_hook_event("WorktreeCreate"));
+    }
+
+    #[test]
+    fn is_hook_event_rejects_unknown() {
+        assert!(!super::is_hook_event("UnknownEvent"));
+        assert!(!super::is_hook_event("pre_tool_use"));
+        assert!(!super::is_hook_event(""));
     }
 }
