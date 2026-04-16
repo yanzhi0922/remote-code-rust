@@ -367,6 +367,7 @@ impl StreamingToolExecutor {
             let notify = Arc::clone(&self.notify);
             let timeout = self.config.timeout;
             let max_bytes = self.config.max_result_bytes;
+            let max_concurrency = self.config.max_concurrency;
 
             let state_arc = Arc::clone(&self.state);
 
@@ -387,6 +388,11 @@ impl StreamingToolExecutor {
                         tool.call.status = ToolStatus::Completed;
                         tool.result = Some(r);
                     }
+                    drop(s);
+                    Self::dispatch_queued(
+                        &state_arc, &runner, &progress, &notify,
+                        max_concurrency, timeout, max_bytes,
+                    );
                     notify.notify_waiters();
                     return;
                 }
@@ -404,6 +410,11 @@ impl StreamingToolExecutor {
                         tool.call.status = ToolStatus::Completed;
                         tool.result = Some(r);
                     }
+                    drop(s);
+                    Self::dispatch_queued(
+                        &state_arc, &runner, &progress, &notify,
+                        max_concurrency, timeout, max_bytes,
+                    );
                     notify.notify_waiters();
                     return;
                 }
@@ -429,6 +440,11 @@ impl StreamingToolExecutor {
                                 tool.call.status = ToolStatus::Completed;
                                 tool.result = Some(r);
                             }
+                            drop(s);
+                            Self::dispatch_queued(
+                                &state_arc, &runner, &progress, &notify,
+                                max_concurrency, timeout, max_bytes,
+                            );
                             notify.notify_waiters();
                             return;
                         }
@@ -453,11 +469,129 @@ impl StreamingToolExecutor {
                 }
 
                 // Store result
-                let mut s = state_arc.lock().expect("lock");
-                if let Some(tool) = s.tools.iter_mut().find(|t| t.call.id == id) {
-                    tool.call.status = ToolStatus::Completed;
-                    tool.result = Some(r);
+                {
+                    let mut s = state_arc.lock().expect("lock");
+                    if let Some(tool) = s.tools.iter_mut().find(|t| t.call.id == id) {
+                        tool.call.status = ToolStatus::Completed;
+                        tool.result = Some(r);
+                    }
                 }
+                // After completing, try to dispatch any queued tools that
+                // were blocked by this non-concurrent tool.
+                Self::dispatch_queued(
+                    &state_arc, &runner, &progress, &notify,
+                    max_concurrency, timeout, max_bytes,
+                );
+                notify.notify_waiters();
+            });
+        }
+    }
+
+    /// After a tool finishes, check whether any queued tools can now be
+    /// dispatched (e.g. a non-concurrent tool that was blocked).
+    fn dispatch_queued(
+        state_arc: &Arc<Mutex<SharedState>>,
+        runner: &Arc<dyn ToolRunner>,
+        progress: &ProgressStream,
+        notify: &Arc<Notify>,
+        max_concurrency: usize,
+        timeout: Option<Duration>,
+        max_bytes: usize,
+    ) {
+        let mut state = state_arc.lock().expect("lock");
+        let executing_count = state.tools.iter().filter(|t| t.call.status == ToolStatus::Executing).count();
+        let mut to_dispatch: Vec<usize> = Vec::new();
+        let mut current_executing = executing_count;
+
+        for (i, tool) in state.tools.iter().enumerate() {
+            if tool.call.status != ToolStatus::Queued {
+                continue;
+            }
+            if current_executing >= max_concurrency {
+                break;
+            }
+            if !Self::can_execute(tool.call.is_concurrency_safe, &state.tools) {
+                if !tool.call.is_concurrency_safe {
+                    break;
+                }
+                continue;
+            }
+            to_dispatch.push(i);
+            current_executing += 1;
+        }
+
+        for idx in to_dispatch {
+            let tool = &mut state.tools[idx];
+            tool.call.status = ToolStatus::Executing;
+
+            let id = tool.call.id.clone();
+            let name = tool.call.name.clone();
+            let input = tool.call.input.clone();
+            let runner = Arc::clone(runner);
+            let progress = progress.clone();
+            let notify = Arc::clone(notify);
+            let state_arc = Arc::clone(state_arc);
+
+            tokio::spawn(async move {
+                let start = std::time::Instant::now();
+                let handle = runner.run(&id, &name, &input, &progress);
+
+                let result = if let Some(dur) = timeout {
+                    match tokio::time::timeout(dur, handle).await {
+                        Ok(res) => res,
+                        Err(_) => {
+                            let r = ToolExecutionResult {
+                                tool_call_id: id.clone(),
+                                content: format!(
+                                    "<tool_use_error>Timeout after {}s</tool_use_error>",
+                                    dur.as_secs()
+                                ),
+                                is_error: true,
+                                duration: start.elapsed(),
+                            };
+                            let mut s = state_arc.lock().expect("lock");
+                            if let Some(tool) = s.tools.iter_mut().find(|t| t.call.id == id) {
+                                tool.call.status = ToolStatus::Completed;
+                                tool.result = Some(r);
+                            }
+                            drop(s);
+                            Self::dispatch_queued(
+                                &state_arc, &runner, &progress, &notify,
+                                max_concurrency, timeout, max_bytes,
+                            );
+                            notify.notify_waiters();
+                            return;
+                        }
+                    }
+                } else {
+                    handle.await
+                };
+
+                let mut r = match result {
+                    Ok(r) => r,
+                    Err(e) => ToolExecutionResult {
+                        tool_call_id: id.clone(),
+                        content: format!("<tool_use_error>Join error: {e}</tool_use_error>"),
+                        is_error: true,
+                        duration: start.elapsed(),
+                    },
+                };
+
+                if r.content.len() > max_bytes {
+                    r.content = apply_tool_result_budget(&r.content, max_bytes);
+                }
+
+                {
+                    let mut s = state_arc.lock().expect("lock");
+                    if let Some(tool) = s.tools.iter_mut().find(|t| t.call.id == id) {
+                        tool.call.status = ToolStatus::Completed;
+                        tool.result = Some(r);
+                    }
+                }
+                Self::dispatch_queued(
+                    &state_arc, &runner, &progress, &notify,
+                    max_concurrency, timeout, max_bytes,
+                );
                 notify.notify_waiters();
             });
         }
@@ -627,8 +761,8 @@ mod tests {
         assert!(ex.completed_results().is_empty());
     }
 
-    #[test]
-    fn tool_count_tracks_additions() {
+    #[tokio::test]
+    async fn tool_count_tracks_additions() {
         let ex = make_executor();
         assert_eq!(ex.tool_count(), 0);
         ex.add_tool("tc-1", "read", &Value::Null, true);
@@ -637,8 +771,8 @@ mod tests {
         assert_eq!(ex.tool_count(), 2);
     }
 
-    #[test]
-    fn tracked_calls_snapshot() {
+    #[tokio::test]
+    async fn tracked_calls_snapshot() {
         let ex = make_executor();
         ex.add_tool("tc-1", "read_file", &Value::Null, true);
         let calls = ex.tracked_calls();
