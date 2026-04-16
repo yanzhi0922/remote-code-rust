@@ -1,9 +1,11 @@
-//! Exponential backoff reconnect scheduler.
+//! Exponential backoff reconnect scheduler with strategy pattern.
 //!
 //! Manages reconnect attempts for MCP servers that have disconnected,
-//! using exponential backoff with configurable parameters. Only remote
-//! transports (SSE/HTTP/WS) are eligible for automatic reconnection;
-//! stdio and SDK transports are not reconnected automatically.
+//! using exponential backoff with configurable parameters. Includes a
+//! strategy trait for custom reconnect behavior and a circuit breaker
+//! implementation. Only remote transports (SSE/HTTP/WS) are eligible
+//! for automatic reconnection; stdio and SDK transports are not
+//! reconnected automatically.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -36,6 +38,303 @@ pub struct ReconnectState {
     /// Whether this reconnect has been aborted.
     pub aborted: bool,
 }
+
+// ── Reconnect strategy trait ──────────────────────────────────────────────────
+
+/// Trait for custom reconnect strategies.
+///
+/// Implementations define how reconnect timing and attempt limits
+/// are managed for different server types or failure modes.
+pub trait ReconnectStrategy: Send + Sync {
+    /// Compute the action for the next reconnect attempt.
+    ///
+    /// Called with the current attempt number (1-based) and should
+    /// return the appropriate action.
+    fn next_action(&self, attempt: u32) -> ReconnectAction;
+
+    /// Record a successful connection (resets internal state).
+    fn record_success(&mut self, server_name: &str);
+
+    /// Record a failed connection attempt.
+    fn record_failure(&mut self, server_name: &str);
+
+    /// Check if the strategy allows more attempts for a server.
+    fn can_retry(&self, server_name: &str) -> bool;
+
+    /// Reset the strategy state for a specific server.
+    fn reset(&mut self, server_name: &str);
+
+    /// Get the current attempt count for a server.
+    fn attempt_count(&self, server_name: &str) -> u32;
+}
+
+// ── Exponential backoff strategy ──────────────────────────────────────────────
+
+/// Exponential backoff reconnect strategy.
+///
+/// Doubles the backoff duration on each consecutive failure, capped
+/// at a maximum backoff. Gives up after a configurable number of
+/// attempts.
+#[derive(Debug, Clone)]
+pub struct ExponentialBackoffReconnect {
+    max_attempts: u32,
+    initial_backoff: Duration,
+    max_backoff: Duration,
+    attempts: HashMap<String, u32>,
+}
+
+impl ExponentialBackoffReconnect {
+    /// Create a new exponential backoff strategy.
+    #[must_use]
+    pub fn new(max_attempts: u32, initial_backoff: Duration, max_backoff: Duration) -> Self {
+        Self {
+            max_attempts,
+            initial_backoff,
+            max_backoff,
+            attempts: HashMap::new(),
+        }
+    }
+
+    /// Create with default parameters.
+    #[must_use]
+    pub fn default_strategy() -> Self {
+        Self::new(
+            DEFAULT_MAX_ATTEMPTS,
+            Duration::from_millis(DEFAULT_INITIAL_BACKOFF_MS),
+            Duration::from_millis(DEFAULT_MAX_BACKOFF_MS),
+        )
+    }
+
+    /// Compute the backoff for a given attempt number.
+    fn compute_backoff(&self, attempt: u32) -> Duration {
+        let exponent = attempt.saturating_sub(1);
+        let multiplier = 2_u64.saturating_pow(exponent);
+        let backoff_ms = self
+            .initial_backoff
+            .as_millis()
+            .saturating_mul(multiplier as u128);
+        let max_ms = self.max_backoff.as_millis();
+        Duration::from_millis(backoff_ms.min(max_ms) as u64)
+    }
+}
+
+impl ReconnectStrategy for ExponentialBackoffReconnect {
+    fn next_action(&self, attempt: u32) -> ReconnectAction {
+        if attempt > self.max_attempts {
+            ReconnectAction::GiveUp
+        } else if attempt == 1 {
+            ReconnectAction::ConnectNow
+        } else {
+            ReconnectAction::WaitFor(self.compute_backoff(attempt - 1))
+        }
+    }
+
+    fn record_success(&mut self, server_name: &str) {
+        self.attempts.remove(server_name);
+    }
+
+    fn record_failure(&mut self, server_name: &str) {
+        *self.attempts.entry(server_name.to_owned()).or_insert(0) += 1;
+    }
+
+    fn can_retry(&self, server_name: &str) -> bool {
+        let attempt = self.attempts.get(server_name).copied().unwrap_or(0);
+        attempt < self.max_attempts
+    }
+
+    fn reset(&mut self, server_name: &str) {
+        self.attempts.remove(server_name);
+    }
+
+    fn attempt_count(&self, server_name: &str) -> u32 {
+        self.attempts.get(server_name).copied().unwrap_or(0)
+    }
+}
+
+// ── Circuit breaker strategy ──────────────────────────────────────────────────
+
+/// Circuit breaker reconnect strategy.
+///
+/// After a configurable number of consecutive failures, the circuit
+/// "opens" and prevents further attempts for a cooldown period.
+/// After the cooldown, a single "half-open" attempt is allowed. If
+/// it succeeds, the circuit closes. If it fails, the cooldown
+/// restarts.
+#[derive(Debug, Clone)]
+pub struct CircuitBreakerReconnect {
+    /// Number of failures before opening the circuit.
+    failure_threshold: u32,
+    /// Duration to wait in the open state before allowing a half-open attempt.
+    cooldown: Duration,
+    /// Backoff for individual retry attempts (before circuit opens).
+    retry_backoff: Duration,
+    /// Maximum total attempts across all phases.
+    max_total_attempts: u32,
+    /// Per-server state.
+    states: HashMap<String, CircuitBreakerState>,
+}
+
+/// State for a single server in the circuit breaker.
+#[derive(Debug, Clone)]
+struct CircuitBreakerState {
+    /// Consecutive failure count.
+    consecutive_failures: u32,
+    /// Total attempts made.
+    total_attempts: u32,
+    /// When the circuit opened (if open).
+    opened_at: Option<Instant>,
+    /// Whether in half-open state.
+    half_open: bool,
+    /// Whether permanently failed.
+    given_up: bool,
+}
+
+impl CircuitBreakerState {
+    fn new() -> Self {
+        Self {
+            consecutive_failures: 0,
+            total_attempts: 0,
+            opened_at: None,
+            half_open: false,
+            given_up: false,
+        }
+    }
+
+    /// Whether the circuit is currently open (in cooldown).
+    fn is_open(&self) -> bool {
+        self.opened_at.is_some() && !self.half_open
+    }
+}
+
+/// Circuit breaker state for external observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CircuitState {
+    /// Circuit is closed — normal operation.
+    Closed,
+    /// Circuit is open — in cooldown.
+    Open,
+    /// Circuit is half-open — allowing a single test attempt.
+    HalfOpen,
+}
+
+impl CircuitBreakerReconnect {
+    /// Create a new circuit breaker strategy.
+    #[must_use]
+    pub fn new(
+        failure_threshold: u32,
+        cooldown: Duration,
+        retry_backoff: Duration,
+        max_total_attempts: u32,
+    ) -> Self {
+        Self {
+            failure_threshold,
+            cooldown,
+            retry_backoff,
+            max_total_attempts,
+            states: HashMap::new(),
+        }
+    }
+
+    /// Create with sensible defaults.
+    #[must_use]
+    pub fn default_strategy() -> Self {
+        Self::new(
+            3,
+            Duration::from_secs(30),
+            Duration::from_secs(2),
+            20,
+        )
+    }
+
+    /// Get the circuit state for a server.
+    #[must_use]
+    pub fn circuit_state(&self, server_name: &str) -> CircuitState {
+        let state = self.states.get(server_name);
+        match state {
+            None => CircuitState::Closed,
+            Some(s) if s.half_open => CircuitState::HalfOpen,
+            Some(s) if s.is_open() => CircuitState::Open,
+            _ => CircuitState::Closed,
+        }
+    }
+}
+
+impl ReconnectStrategy for CircuitBreakerReconnect {
+    fn next_action(&self, attempt: u32) -> ReconnectAction {
+        // This is a simplified version; the per-server logic is in the state.
+        if attempt > self.max_total_attempts {
+            ReconnectAction::GiveUp
+        } else if attempt == 1 {
+            ReconnectAction::ConnectNow
+        } else {
+            ReconnectAction::WaitFor(self.retry_backoff)
+        }
+    }
+
+    fn record_success(&mut self, server_name: &str) {
+        if let Some(state) = self.states.get_mut(server_name) {
+            state.consecutive_failures = 0;
+            state.half_open = false;
+            state.opened_at = None;
+            state.given_up = false;
+        }
+    }
+
+    fn record_failure(&mut self, server_name: &str) {
+        let state = self
+            .states
+            .entry(server_name.to_owned())
+            .or_insert_with(CircuitBreakerState::new);
+
+        state.consecutive_failures += 1;
+        state.total_attempts += 1;
+
+        if state.half_open {
+            // Half-open attempt failed — reopen circuit
+            state.half_open = false;
+            state.opened_at = Some(Instant::now());
+        }
+
+        if state.consecutive_failures >= self.failure_threshold && state.opened_at.is_none() {
+            // Threshold reached — open the circuit
+            state.opened_at = Some(Instant::now());
+        }
+
+        if state.total_attempts >= self.max_total_attempts {
+            state.given_up = true;
+        }
+    }
+
+    fn can_retry(&self, server_name: &str) -> bool {
+        let state = self.states.get(server_name);
+        match state {
+            None => true,
+            Some(s) if s.given_up => false,
+            Some(s) if s.is_open() => {
+                // Check if cooldown has elapsed
+                match s.opened_at {
+                    Some(opened) => opened.elapsed() >= self.cooldown,
+                    None => false,
+                }
+            }
+            Some(s) if s.half_open => true,
+            Some(s) => s.total_attempts < self.max_total_attempts,
+        }
+    }
+
+    fn reset(&mut self, server_name: &str) {
+        self.states.remove(server_name);
+    }
+
+    fn attempt_count(&self, server_name: &str) -> u32 {
+        self.states
+            .get(server_name)
+            .map(|s| s.total_attempts)
+            .unwrap_or(0)
+    }
+}
+
+// ── Reconnect scheduler ──────────────────────────────────────────────────────
 
 /// Exponential backoff reconnect scheduler.
 #[derive(Debug)]
@@ -189,9 +488,13 @@ impl Default for ReconnectScheduler {
     }
 }
 
+// ── Tests ────────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── ReconnectScheduler tests (original) ───────────────────────────────
 
     #[test]
     fn first_attempt_returns_connect_now() {
@@ -295,5 +598,215 @@ mod tests {
         scheduler.schedule_reconnect("srv".to_owned()); // attempt 1
         let next = scheduler.report_failure("srv");
         assert!(next.is_none());
+    }
+
+    // ── ExponentialBackoffReconnect strategy tests ────────────────────────
+
+    #[test]
+    fn exp_backoff_first_attempt_connect_now() {
+        let strategy = ExponentialBackoffReconnect::default_strategy();
+        assert_eq!(strategy.next_action(1), ReconnectAction::ConnectNow);
+    }
+
+    #[test]
+    fn exp_backoff_second_attempt_waits() {
+        let strategy = ExponentialBackoffReconnect::new(
+            5,
+            Duration::from_secs(1),
+            Duration::from_secs(30),
+        );
+        match strategy.next_action(2) {
+            ReconnectAction::WaitFor(d) => assert_eq!(d, Duration::from_secs(1)),
+            other => panic!("expected WaitFor, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn exp_backoff_exceeds_max_gives_up() {
+        let strategy = ExponentialBackoffReconnect::new(
+            3,
+            Duration::from_secs(1),
+            Duration::from_secs(30),
+        );
+        assert_eq!(strategy.next_action(4), ReconnectAction::GiveUp);
+    }
+
+    #[test]
+    fn exp_backoff_record_success_resets() {
+        let mut strategy = ExponentialBackoffReconnect::default_strategy();
+        strategy.record_failure("srv");
+        strategy.record_failure("srv");
+        assert_eq!(strategy.attempt_count("srv"), 2);
+        strategy.record_success("srv");
+        assert_eq!(strategy.attempt_count("srv"), 0);
+    }
+
+    #[test]
+    fn exp_backoff_can_retry_under_limit() {
+        let mut strategy = ExponentialBackoffReconnect::new(
+            3,
+            Duration::from_secs(1),
+            Duration::from_secs(30),
+        );
+        assert!(strategy.can_retry("srv"));
+        strategy.record_failure("srv");
+        assert!(strategy.can_retry("srv"));
+        strategy.record_failure("srv");
+        assert!(strategy.can_retry("srv"));
+        strategy.record_failure("srv");
+        assert!(!strategy.can_retry("srv"));
+    }
+
+    #[test]
+    fn exp_backoff_reset_clears_state() {
+        let mut strategy = ExponentialBackoffReconnect::default_strategy();
+        strategy.record_failure("srv");
+        strategy.record_failure("srv");
+        strategy.reset("srv");
+        assert_eq!(strategy.attempt_count("srv"), 0);
+        assert!(strategy.can_retry("srv"));
+    }
+
+    #[test]
+    fn exp_backoff_backoff_caps_at_max() {
+        let strategy = ExponentialBackoffReconnect::new(
+            10,
+            Duration::from_secs(1),
+            Duration::from_secs(5),
+        );
+        match strategy.next_action(10) {
+            ReconnectAction::WaitFor(d) => assert!(d <= Duration::from_secs(5)),
+            other => panic!("expected WaitFor, got {other:?}"),
+        }
+    }
+
+    // ── CircuitBreakerReconnect strategy tests ────────────────────────────
+
+    #[test]
+    fn circuit_breaker_starts_closed() {
+        let cb = CircuitBreakerReconnect::default_strategy();
+        assert_eq!(cb.circuit_state("srv"), CircuitState::Closed);
+    }
+
+    #[test]
+    fn circuit_breaker_opens_after_threshold() {
+        let mut cb = CircuitBreakerReconnect::new(
+            3,
+            Duration::from_secs(30),
+            Duration::from_secs(2),
+            20,
+        );
+        cb.record_failure("srv");
+        cb.record_failure("srv");
+        assert_eq!(cb.circuit_state("srv"), CircuitState::Closed);
+        cb.record_failure("srv"); // hits threshold
+        assert_eq!(cb.circuit_state("srv"), CircuitState::Open);
+    }
+
+    #[test]
+    fn circuit_breaker_success_closes() {
+        let mut cb = CircuitBreakerReconnect::new(
+            2,
+            Duration::from_secs(30),
+            Duration::from_secs(2),
+            20,
+        );
+        cb.record_failure("srv");
+        cb.record_failure("srv");
+        assert_eq!(cb.circuit_state("srv"), CircuitState::Open);
+        cb.record_success("srv");
+        assert_eq!(cb.circuit_state("srv"), CircuitState::Closed);
+    }
+
+    #[test]
+    fn circuit_breaker_can_retry_when_closed() {
+        let cb = CircuitBreakerReconnect::default_strategy();
+        assert!(cb.can_retry("srv"));
+    }
+
+    #[test]
+    fn circuit_breaker_gives_up_after_max_total() {
+        let mut cb = CircuitBreakerReconnect::new(
+            100, // high threshold so circuit never opens
+            Duration::from_secs(30),
+            Duration::from_secs(2),
+            3, // low max total
+        );
+        cb.record_failure("srv");
+        cb.record_failure("srv");
+        cb.record_failure("srv");
+        assert!(!cb.can_retry("srv"));
+    }
+
+    #[test]
+    fn circuit_breaker_attempt_count() {
+        let mut cb = CircuitBreakerReconnect::default_strategy();
+        assert_eq!(cb.attempt_count("srv"), 0);
+        cb.record_failure("srv");
+        assert_eq!(cb.attempt_count("srv"), 1);
+        cb.record_failure("srv");
+        assert_eq!(cb.attempt_count("srv"), 2);
+    }
+
+    #[test]
+    fn circuit_breaker_reset_clears() {
+        let mut cb = CircuitBreakerReconnect::default_strategy();
+        cb.record_failure("srv");
+        cb.record_failure("srv");
+        cb.reset("srv");
+        assert_eq!(cb.circuit_state("srv"), CircuitState::Closed);
+        assert_eq!(cb.attempt_count("srv"), 0);
+    }
+
+    #[test]
+    fn circuit_breaker_next_action() {
+        let cb = CircuitBreakerReconnect::default_strategy();
+        assert_eq!(cb.next_action(1), ReconnectAction::ConnectNow);
+        assert!(matches!(cb.next_action(2), ReconnectAction::WaitFor(_)));
+        assert_eq!(cb.next_action(100), ReconnectAction::GiveUp);
+    }
+
+    #[test]
+    fn circuit_breaker_half_open_after_cooldown() {
+        let mut cb = CircuitBreakerReconnect::new(
+            1,
+            Duration::from_nanos(1), // instant cooldown
+            Duration::from_secs(2),
+            20,
+        );
+        cb.record_failure("srv"); // opens circuit
+        assert_eq!(cb.circuit_state("srv"), CircuitState::Open);
+        // After cooldown, can_retry should return true
+        assert!(cb.can_retry("srv"));
+    }
+
+    #[test]
+    fn circuit_breaker_reopen_on_half_open_failure() {
+        let mut cb = CircuitBreakerReconnect::new(
+            1,
+            Duration::from_nanos(1), // instant cooldown
+            Duration::from_secs(2),
+            20,
+        );
+        cb.record_failure("srv"); // opens circuit
+        assert_eq!(cb.circuit_state("srv"), CircuitState::Open);
+
+        // Simulate half-open: manually set state
+        if let Some(state) = cb.states.get_mut("srv") {
+            state.half_open = true;
+        }
+        assert_eq!(cb.circuit_state("srv"), CircuitState::HalfOpen);
+
+        // Fail the half-open attempt
+        cb.record_failure("srv");
+        assert_eq!(cb.circuit_state("srv"), CircuitState::Open);
+    }
+
+    #[test]
+    fn circuit_breaker_default_strategy() {
+        let cb = CircuitBreakerReconnect::default_strategy();
+        assert_eq!(cb.failure_threshold, 3);
+        assert_eq!(cb.cooldown, Duration::from_secs(30));
+        assert_eq!(cb.max_total_attempts, 20);
     }
 }

@@ -39,6 +39,7 @@ pub mod batch;
 pub mod channel;
 pub mod config;
 pub mod connection;
+pub mod connection_pool;
 pub mod discovery;
 pub mod elicitation;
 pub mod env_expansion;
@@ -97,10 +98,22 @@ pub use connection::McpServerConnection;
 pub use manager::McpConnectionManager;
 
 // Lifecycle
-pub use lifecycle::{DisconnectReason, McpLifecycleEvent, McpLifecycleHook};
+pub use lifecycle::{
+    DisconnectReason, McpConnectionLifecycle, McpConnectionState, McpLifecycleEvent,
+    McpLifecycleHook, StateTransitionError,
+};
+
+// Connection pool
+pub use connection_pool::{
+    BatchOperationResult, HealthCheckResult, McpConnectionPool, PoolConfig, PoolConnectionStats,
+    PoolEntry,
+};
 
 // Reconnect
-pub use reconnect::{ReconnectAction, ReconnectScheduler, ReconnectState};
+pub use reconnect::{
+    CircuitBreakerReconnect, CircuitState, ExponentialBackoffReconnect, ReconnectAction,
+    ReconnectScheduler, ReconnectState, ReconnectStrategy,
+};
 
 // Auth cache
 pub use auth_cache::McpAuthCache;
@@ -109,7 +122,11 @@ pub use auth_cache::McpAuthCache;
 pub use discovery::{McpDiscovery, McpDiscoveryResult};
 
 // Batch
-pub use batch::{BatchUpdate, BatchedUpdateQueue};
+pub use batch::{
+    BatchOperationResults, BatchResourceFetch, BatchResourceResult, BatchResourceResults,
+    BatchToolCall, BatchToolCallResult, BatchUpdate, BatchedUpdateQueue, McpBatchOperation,
+    McpBatchResourceFetch,
+};
 
 // Headers
 pub use headers::McpHeadersResolver;
@@ -124,9 +141,10 @@ pub use oauth::{
 
 // Elicitation
 pub use elicitation::{
-    AutoDeclineElicitationHandler, CallbackElicitationHandler, ElicitationHandler,
-    ElicitationParams, ElicitationRequestEvent, ElicitationResult, ElicitationWaitingState,
-    QueuedElicitationHandler,
+    AutoCancelElicitationHandler, AutoDeclineElicitationHandler, CallbackElicitationHandler,
+    ElicitationHandler, ElicitationParams, ElicitationRequestEvent, ElicitationResult,
+    ElicitationType, ElicitationWaitingState, QueuedElicitationHandler,
+    TimeoutElicitationHandler,
 };
 
 // Channel
