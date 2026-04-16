@@ -8,6 +8,7 @@ pub mod conversation;
 pub mod memory;
 pub mod replay;
 pub mod resume_state;
+pub mod session_memory_service;
 pub mod transcript;
 
 use std::collections::BTreeMap;

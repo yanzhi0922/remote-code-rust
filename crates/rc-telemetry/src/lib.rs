@@ -38,6 +38,8 @@ use tracing_subscriber::EnvFilter;
 // ---------------------------------------------------------------------------
 
 pub mod analytics;
+pub mod away_summary;
+pub mod growthbook;
 pub mod rate_limit;
 pub mod token_estimation;
 
