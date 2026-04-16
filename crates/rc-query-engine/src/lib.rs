@@ -6,6 +6,7 @@ pub mod failure_tracker;
 pub mod message_utils;
 pub mod model_switch;
 pub mod observer;
+pub mod prompt_suggestion;
 pub mod query_loop;
 pub mod state_machine;
 pub mod stop_hooks;
@@ -15,6 +16,7 @@ pub mod tombstone;
 pub mod token_budget;
 pub mod tool_progress;
 pub mod tool_summary;
+pub mod tool_use_summary_gen;
 
 pub use config::{
     EffortLevel, ProcessUserInputContext, ProviderInvocationMode, QueryEngineConfig, QuerySource,
