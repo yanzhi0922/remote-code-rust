@@ -4109,6 +4109,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rc-lsp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rc-mcp"
 version = "0.1.0"
 dependencies = [
@@ -4410,6 +4419,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "rc-voice"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
  "serde",
  "serde_json",
 ]

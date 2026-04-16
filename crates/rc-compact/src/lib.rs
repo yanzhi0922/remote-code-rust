@@ -63,8 +63,11 @@
 
 pub mod attachment;
 pub mod auto;
+pub mod compact_warning;
 pub mod engine;
+pub mod grouping;
 pub mod micro;
+pub mod post_compact;
 pub mod prompt;
 pub mod reactive;
 pub mod session_memory;
