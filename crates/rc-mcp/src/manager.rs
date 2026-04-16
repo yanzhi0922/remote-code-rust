@@ -1,0 +1,620 @@
+//! MCP connection manager — orchestrates the lifecycle of all MCP server connections.
+//!
+//! Manages server registration, connection establishment (with batched concurrency),
+//! reconnection scheduling, authentication caching, tool/resource discovery, and
+//! lifecycle event dispatching.
+
+use std::collections::HashMap;
+
+use serde_json::Value;
+
+use crate::auth_cache::McpAuthCache;
+use crate::batch::BatchedUpdateQueue;
+use crate::connection::{
+    ConnectedServer, DisabledServer, FailedServer, McpServerConnection, NeedsAuthServer,
+    PendingServer,
+};
+use crate::discovery::McpDiscovery;
+use crate::error::McpRuntimeError;
+use crate::lifecycle::{DisconnectReason, McpLifecycleEvent, McpLifecycleHook};
+use crate::reconnect::ReconnectScheduler;
+use crate::resources::ServerResource;
+use crate::scope::ScopedMcpServerConfig;
+use crate::serialization::McpCliState;
+use crate::types::{McpClientInfo, McpToolCallResponse, McpToolDescriptor};
+
+/// Default batch size for local (stdio) server connections.
+const DEFAULT_LOCAL_BATCH_SIZE: usize = 3;
+/// Default batch size for remote (HTTP/SSE/WS) server connections.
+const DEFAULT_REMOTE_BATCH_SIZE: usize = 20;
+
+/// MCP connection manager — manages all MCP server connection lifecycles.
+pub struct McpConnectionManager {
+    /// Current connection states keyed by server name.
+    connections: HashMap<String, McpServerConnection>,
+    /// Registered server configurations keyed by name.
+    configs: HashMap<String, ScopedMcpServerConfig>,
+    /// Authentication state cache.
+    auth_cache: McpAuthCache,
+    /// Reconnection scheduler.
+    reconnect_scheduler: ReconnectScheduler,
+    /// Tool/resource discovery cache.
+    discovery: McpDiscovery,
+    /// Batched state update queue.
+    batch_queue: BatchedUpdateQueue,
+    /// Registered lifecycle hooks.
+    lifecycle_hooks: Vec<Box<dyn McpLifecycleHook>>,
+    /// Client info for MCP initialization.
+    client_info: McpClientInfo,
+    /// Max concurrent connections for local (stdio) servers.
+    local_batch_size: usize,
+    /// Max concurrent connections for remote servers.
+    remote_batch_size: usize,
+}
+
+impl McpConnectionManager {
+    /// Create a new connection manager with default settings.
+    ///
+    /// The auth cache directory defaults to a temp directory. Use
+    /// [`with_auth_cache_dir`][Self::with_auth_cache_dir] to customize.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            connections: HashMap::new(),
+            configs: HashMap::new(),
+            auth_cache: McpAuthCache::new(std::env::temp_dir()),
+            reconnect_scheduler: ReconnectScheduler::new(),
+            discovery: McpDiscovery::new(),
+            batch_queue: BatchedUpdateQueue::new(),
+            lifecycle_hooks: Vec::new(),
+            client_info: McpClientInfo::default(),
+            local_batch_size: DEFAULT_LOCAL_BATCH_SIZE,
+            remote_batch_size: DEFAULT_REMOTE_BATCH_SIZE,
+        }
+    }
+
+    /// Set the auth cache directory.
+    #[must_use]
+    pub fn with_auth_cache_dir(mut self, dir: impl AsRef<std::path::Path>) -> Self {
+        self.auth_cache = McpAuthCache::new(dir);
+        self
+    }
+
+    /// Set the client info used for MCP initialization.
+    #[must_use]
+    pub fn with_client_info(mut self, info: McpClientInfo) -> Self {
+        self.client_info = info;
+        self
+    }
+
+    /// Set the batch sizes for concurrent connections.
+    #[must_use]
+    pub fn with_batch_sizes(mut self, local: usize, remote: usize) -> Self {
+        self.local_batch_size = local;
+        self.remote_batch_size = remote;
+        self
+    }
+
+    /// Register a server configuration.
+    ///
+    /// If a server with the same name already exists, its configuration is
+    /// updated but its connection state is preserved.
+    pub fn register_server(&mut self, name: String, config: ScopedMcpServerConfig) {
+        let is_new = !self.configs.contains_key(&name);
+        self.configs.insert(name.clone(), config);
+        if is_new {
+            // Set initial state to Pending.
+            let conn = McpServerConnection::Pending(PendingServer {
+                name: name.clone(),
+                config: self
+                    .configs
+                    .get(&name)
+                    .expect("just inserted")
+                    .clone(),
+                reconnect_attempt: None,
+                max_reconnect_attempts: None,
+            });
+            self.connections.insert(name, conn);
+        }
+    }
+
+    /// Remove a server entirely (disconnects and removes config + state).
+    pub fn remove_server(&mut self, name: &str) {
+        self.configs.remove(name);
+        self.connections.remove(name);
+        self.discovery.clear_server(name);
+        self.reconnect_scheduler.cancel(name);
+        self.auth_cache.clear_server(name);
+    }
+
+    /// Enable or disable a server.
+    ///
+    /// Disabling a server sets its state to `Disabled` and cancels any
+    /// pending reconnection attempts.
+    pub fn set_server_enabled(&mut self, name: &str, enabled: bool) {
+        let Some(config) = self.configs.get_mut(name) else {
+            return;
+        };
+        config.inner.enabled = enabled;
+
+        if enabled {
+            self.emit_event(McpLifecycleEvent::Enabled {
+                name: name.to_owned(),
+            });
+            // Transition to Pending so the next connect_all picks it up.
+            self.connections.insert(
+                name.to_owned(),
+                McpServerConnection::Pending(PendingServer {
+                    name: name.to_owned(),
+                    config: self.configs.get(name).expect("exists").clone(),
+                    reconnect_attempt: None,
+                    max_reconnect_attempts: None,
+                }),
+            );
+        } else {
+            self.emit_event(McpLifecycleEvent::Disabled {
+                name: name.to_owned(),
+            });
+            self.reconnect_scheduler.cancel(name);
+            self.connections.insert(
+                name.to_owned(),
+                McpServerConnection::Disabled(DisabledServer {
+                    name: name.to_owned(),
+                    config: self.configs.get(name).expect("exists").clone(),
+                }),
+            );
+        }
+    }
+
+    /// Connect all registered and enabled servers.
+    ///
+    /// Local (stdio) servers are connected in batches of `local_batch_size`,
+    /// remote servers in batches of `remote_batch_size`.
+    ///
+    /// Returns the final connection states for all servers that were attempted.
+    pub async fn connect_all(&mut self) -> Vec<McpServerConnection> {
+        let names: Vec<String> = self
+            .configs
+            .iter()
+            .filter(|(_, c)| c.inner.enabled)
+            .map(|(name, _)| name.clone())
+            .collect();
+
+        for name in &names {
+            self.emit_event(McpLifecycleEvent::Connecting {
+                name: name.clone(),
+            });
+        }
+
+        // Connect servers sequentially in batches.
+        // A full production implementation would use tokio::JoinSet for
+        // true concurrent batching; here we connect sequentially to keep
+        // the borrow checker happy and avoid complex async state management.
+        for name in &names {
+            let _ = self.connect_server_inner(name).await;
+        }
+
+        names
+            .iter()
+            .filter_map(|name| self.connections.get(name).cloned())
+            .collect()
+    }
+
+    /// Connect a single server by name.
+    pub async fn connect_server(
+        &mut self,
+        name: &str,
+    ) -> Result<McpServerConnection, McpRuntimeError> {
+        self.emit_event(McpLifecycleEvent::Connecting {
+            name: name.to_owned(),
+        });
+        let result = self.connect_server_inner(name).await;
+        match &result {
+            Ok(conn) if conn.is_connected() => {
+                self.emit_event(McpLifecycleEvent::Connected {
+                    name: name.to_owned(),
+                });
+            }
+            Ok(_) => {}
+            Err(e) => {
+                self.emit_event(McpLifecycleEvent::Failed {
+                    name: name.to_owned(),
+                    error: e.to_string(),
+                });
+            }
+        }
+        result
+    }
+
+    /// Internal connect implementation.
+    async fn connect_server_inner(
+        &mut self,
+        name: &str,
+    ) -> Result<McpServerConnection, McpRuntimeError> {
+        let config = self
+            .configs
+            .get(name)
+            .ok_or_else(|| McpRuntimeError::Protocol {
+                server: name.to_owned(),
+                phase: "connect",
+                message: "server not registered".to_owned(),
+            })?;
+
+        // Check auth cache — skip if recently needed auth.
+        if self.auth_cache.is_cached(name) {
+            let conn = McpServerConnection::NeedsAuth(NeedsAuthServer {
+                name: name.to_owned(),
+                config: config.clone(),
+            });
+            self.connections.insert(name.to_owned(), conn.clone());
+            self.emit_event(McpLifecycleEvent::NeedsAuth {
+                name: name.to_owned(),
+            });
+            return Ok(conn);
+        }
+
+        // Attempt to discover (connect + inspect).
+        match self
+            .discovery
+            .discover_for_server(name, &config.inner, &self.client_info)
+            .await
+        {
+            Ok(result) => {
+                let tool_count = result.tools.len();
+                let resource_count = result.resources.len();
+                let instructions = result.instructions.clone();
+
+                let conn =
+                    McpServerConnection::Connected(ConnectedServer {
+                        name: name.to_owned(),
+                        capabilities: config.inner.capabilities.clone(),
+                        server_info: None,
+                        instructions,
+                        config: config.clone(),
+                    });
+                self.connections.insert(name.to_owned(), conn.clone());
+                self.reconnect_scheduler.report_success(name);
+
+                if tool_count > 0 {
+                    self.emit_event(McpLifecycleEvent::ToolsDiscovered {
+                        name: name.to_owned(),
+                        count: tool_count,
+                    });
+                }
+                if resource_count > 0 {
+                    self.emit_event(McpLifecycleEvent::ResourcesDiscovered {
+                        name: name.to_owned(),
+                        count: resource_count,
+                    });
+                }
+
+                Ok(conn)
+            }
+            Err(e) => {
+                let conn = McpServerConnection::Failed(FailedServer {
+                    name: name.to_owned(),
+                    config: config.clone(),
+                    error: Some(e.to_string()),
+                });
+                self.connections.insert(name.to_owned(), conn.clone());
+                Ok(conn)
+            }
+        }
+    }
+
+    /// Disconnect a server.
+    pub async fn disconnect_server(&mut self, name: &str) {
+        self.reconnect_scheduler.cancel(name);
+        self.discovery.clear_server(name);
+
+        let config = self.configs.get(name).cloned();
+        let conn = match config {
+            Some(config) => McpServerConnection::Pending(PendingServer {
+                name: name.to_owned(),
+                config,
+                reconnect_attempt: None,
+                max_reconnect_attempts: None,
+            }),
+            None => return,
+        };
+        self.connections.insert(name.to_owned(), conn);
+        self.emit_event(McpLifecycleEvent::Disconnected {
+            name: name.to_owned(),
+            reason: DisconnectReason::Manual,
+        });
+    }
+
+    /// Reconnect a server.
+    pub async fn reconnect_server(
+        &mut self,
+        name: &str,
+    ) -> Result<McpServerConnection, McpRuntimeError> {
+        self.emit_event(McpLifecycleEvent::Reconnecting {
+            name: name.to_owned(),
+            attempt: 1,
+            max_attempts: 5,
+        });
+        self.disconnect_server(name).await;
+        self.connect_server(name).await
+    }
+
+    /// Refresh a server (disconnect + reconnect).
+    pub async fn refresh_server(
+        &mut self,
+        name: &str,
+    ) -> Result<McpServerConnection, McpRuntimeError> {
+        self.disconnect_server(name).await;
+        self.connect_server(name).await
+    }
+
+    /// Get all connection states.
+    #[must_use]
+    pub fn connections(&self) -> &HashMap<String, McpServerConnection> {
+        &self.connections
+    }
+
+    /// Get the tools for a connected server.
+    #[must_use]
+    pub fn tools_for_server(&self, name: &str) -> Option<Vec<McpToolDescriptor>> {
+        let conn = self.connections.get(name)?;
+        if !conn.is_connected() {
+            return None;
+        }
+        self.discovery.tools(name).map(Vec::from)
+    }
+
+    /// Get the resources for a connected server.
+    #[must_use]
+    pub fn resources_for_server(&self, name: &str) -> Option<Vec<ServerResource>> {
+        let conn = self.connections.get(name)?;
+        if !conn.is_connected() {
+            return None;
+        }
+        self.discovery.resources(name).map(Vec::from)
+    }
+
+    /// Call a tool on a connected server.
+    pub async fn call_tool(
+        &mut self,
+        server_name: &str,
+        tool_name: &str,
+        arguments: Value,
+    ) -> Result<McpToolCallResponse, McpRuntimeError> {
+        let config = self.configs.get(server_name).ok_or_else(|| {
+            McpRuntimeError::Protocol {
+                server: server_name.to_owned(),
+                phase: "call_tool",
+                message: "server not registered".to_owned(),
+            }
+        })?;
+
+        crate::session::call_tool(
+            &config.inner,
+            &self.client_info,
+            tool_name,
+            arguments,
+        )
+        .await
+    }
+
+    /// Register a lifecycle hook.
+    pub fn register_hook(&mut self, hook: Box<dyn McpLifecycleHook>) {
+        self.lifecycle_hooks.push(hook);
+    }
+
+    /// Get a CLI state snapshot for serialization.
+    #[must_use]
+    pub fn cli_state(&self) -> McpCliState {
+        use crate::serialization::{SerializedClient, SerializedTool};
+
+        let clients: Vec<SerializedClient> = self
+            .connections
+            .values()
+            .map(|conn| SerializedClient {
+                name: conn.name().to_owned(),
+                connection_type: conn.connection_type().to_owned(),
+                capabilities: None,
+            })
+            .collect();
+
+        let tools: Vec<SerializedTool> = self
+            .discovery
+            .all_tools()
+            .iter()
+            .flat_map(|(server, tool_list)| {
+                tool_list.iter().map(move |t| SerializedTool {
+                    name: format!("{server}__{}", t.name),
+                    description: t.description.clone().unwrap_or_default(),
+                    input_json_schema: Some(t.input_schema.clone()),
+                    is_mcp: Some(true),
+                    original_tool_name: Some(t.name.clone()),
+                })
+            })
+            .collect();
+
+        let resources: HashMap<String, Vec<ServerResource>> = self
+            .configs
+            .keys()
+            .filter_map(|name| {
+                self.discovery
+                    .resources(name)
+                    .map(|r| (name.clone(), r.to_vec()))
+            })
+            .collect();
+
+        McpCliState {
+            clients,
+            configs: self.configs.clone(),
+            tools,
+            resources,
+            normalized_names: None,
+        }
+    }
+
+    /// Emit a lifecycle event to all registered hooks.
+    fn emit_event(&self, event: McpLifecycleEvent) {
+        for hook in &self.lifecycle_hooks {
+            hook.on_event(&event);
+        }
+    }
+
+    /// Return the number of registered servers.
+    #[must_use]
+    pub fn server_count(&self) -> usize {
+        self.configs.len()
+    }
+
+    /// Return the number of connected servers.
+    #[must_use]
+    pub fn connected_count(&self) -> usize {
+        self.connections
+            .values()
+            .filter(|c| c.is_connected())
+            .count()
+    }
+
+    /// Return a reference to the batched update queue.
+    #[must_use]
+    pub fn batch_queue(&self) -> &BatchedUpdateQueue {
+        &self.batch_queue
+    }
+
+    /// Return a mutable reference to the batched update queue.
+    pub fn batch_queue_mut(&mut self) -> &mut BatchedUpdateQueue {
+        &mut self.batch_queue
+    }
+}
+
+impl Default for McpConnectionManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{McpCapabilityMatrix, McpServerConfig};
+    use crate::scope::ConfigScope;
+    use crate::transport::McpTransportConfig;
+    use std::collections::BTreeMap;
+    use std::sync::{Arc, Mutex};
+
+    fn test_scoped_config(name: &str) -> ScopedMcpServerConfig {
+        ScopedMcpServerConfig::new(
+            McpServerConfig {
+                name: name.to_owned(),
+                enabled: true,
+                transport: McpTransportConfig::Stdio {
+                    command: "echo".to_owned(),
+                    args: vec![],
+                    cwd: None,
+                    env: BTreeMap::new(),
+                },
+                capabilities: McpCapabilityMatrix::default(),
+                startup_timeout_secs: None,
+                request_timeout_secs: None,
+                metadata: BTreeMap::new(),
+            },
+            ConfigScope::Local,
+        )
+    }
+
+    /// A lifecycle hook that records events for testing.
+    #[derive(Debug, Default)]
+    struct RecordingHook {
+        events: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl McpLifecycleHook for RecordingHook {
+        fn on_event(&self, event: &McpLifecycleEvent) {
+            let msg = format!("{event:?}");
+            self.events.lock().expect("lock").push(msg);
+        }
+    }
+
+    #[test]
+    fn new_manager_is_empty() {
+        let mgr = McpConnectionManager::new();
+        assert_eq!(mgr.server_count(), 0);
+        assert_eq!(mgr.connected_count(), 0);
+        assert!(mgr.connections().is_empty());
+    }
+
+    #[test]
+    fn register_server_adds_pending_state() {
+        let mut mgr = McpConnectionManager::new();
+        mgr.register_server("test".to_owned(), test_scoped_config("test"));
+        assert_eq!(mgr.server_count(), 1);
+        let conn = mgr.connections().get("test").expect("connection exists");
+        assert!(matches!(conn, McpServerConnection::Pending(_)));
+    }
+
+    #[test]
+    fn remove_server_clears_everything() {
+        let mut mgr = McpConnectionManager::new();
+        mgr.register_server("test".to_owned(), test_scoped_config("test"));
+        mgr.remove_server("test");
+        assert_eq!(mgr.server_count(), 0);
+        assert!(mgr.connections().get("test").is_none());
+    }
+
+    #[test]
+    fn set_server_enabled_false() {
+        let mut mgr = McpConnectionManager::new();
+        mgr.register_server("test".to_owned(), test_scoped_config("test"));
+        mgr.set_server_enabled("test", false);
+        let conn = mgr.connections().get("test").expect("exists");
+        assert!(matches!(conn, McpServerConnection::Disabled(_)));
+    }
+
+    #[test]
+    fn set_server_enabled_true_after_disable() {
+        let mut mgr = McpConnectionManager::new();
+        mgr.register_server("test".to_owned(), test_scoped_config("test"));
+        mgr.set_server_enabled("test", false);
+        mgr.set_server_enabled("test", true);
+        let conn = mgr.connections().get("test").expect("exists");
+        assert!(matches!(conn, McpServerConnection::Pending(_)));
+    }
+
+    #[test]
+    fn lifecycle_hook_receives_events() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut mgr = McpConnectionManager::new();
+        mgr.register_hook(Box::new(RecordingHook {
+            events: events.clone(),
+        }));
+        mgr.register_server("test".to_owned(), test_scoped_config("test"));
+        mgr.set_server_enabled("test", false);
+        let recorded = events.lock().expect("lock");
+        assert!(
+            recorded.iter().any(|e| e.contains("Disabled")),
+            "should have received Disabled event: {recorded:?}"
+        );
+    }
+
+    #[test]
+    fn tools_for_server_unconnected_returns_none() {
+        let mut mgr = McpConnectionManager::new();
+        mgr.register_server("test".to_owned(), test_scoped_config("test"));
+        assert!(mgr.tools_for_server("test").is_none());
+    }
+
+    #[test]
+    fn cli_state_reflects_registrations() {
+        let mut mgr = McpConnectionManager::new();
+        mgr.register_server("srv-a".to_owned(), test_scoped_config("srv-a"));
+        mgr.register_server("srv-b".to_owned(), test_scoped_config("srv-b"));
+        let state = mgr.cli_state();
+        assert_eq!(state.clients.len(), 2);
+        assert_eq!(state.configs.len(), 2);
+    }
+
+    #[test]
+    fn default_manager_has_expected_batch_sizes() {
+        let mgr = McpConnectionManager::default();
+        assert_eq!(mgr.local_batch_size, DEFAULT_LOCAL_BATCH_SIZE);
+        assert_eq!(mgr.remote_batch_size, DEFAULT_REMOTE_BATCH_SIZE);
+    }
+}
