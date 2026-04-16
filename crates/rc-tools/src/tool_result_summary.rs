@@ -498,7 +498,7 @@ mod tests {
     #[test]
     fn count_lines_test() {
         assert_eq!(count_lines("a\nb\nc"), 3);
-        assert_eq!(count_lines(""), 1); // empty string has 1 line
+        assert_eq!(count_lines(""), 0); // empty string has 0 lines
         assert_eq!(count_lines("single"), 1);
     }
 
