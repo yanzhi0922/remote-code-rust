@@ -166,7 +166,7 @@ pub fn extract_plugin_description(content: &str) -> Option<String> {
 fn heading_text(line: &str) -> Option<&str> {
     if line.starts_with('#') {
         let hash_end = line.chars().take_while(|c| *c == '#').count();
-        if hash_end >= 1 && hash_end <= 6 {
+        if (1..=6).contains(&hash_end) {
             let rest = &line[hash_end..];
             let text = rest.trim_start();
             if !text.is_empty() {

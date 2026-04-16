@@ -309,7 +309,7 @@ pub enum UiEvent {
     /// Snapshot of the active runtime/provider/permission status.
     StatusSnapshot {
         /// Shared status surface used by CLI, GUI, and remote consumers.
-        snapshot: UiRuntimeStatusSnapshot,
+        snapshot: Box<UiRuntimeStatusSnapshot>,
     },
     /// Provider is thinking / processing.
     Thinking {
@@ -665,7 +665,7 @@ mod tests {
     #[test]
     fn status_snapshot_event_round_trips() {
         let event = UiEvent::StatusSnapshot {
-            snapshot: UiRuntimeStatusSnapshot {
+            snapshot: Box::new(UiRuntimeStatusSnapshot {
                 session_name: Some("Investigate parity".to_owned()),
                 provider: UiProviderStatusSnapshot {
                     name: "glm-coding".to_owned(),
@@ -702,7 +702,7 @@ mod tests {
                         disabled: 1,
                     },
                 },
-            },
+            }),
         };
         let json = serde_json::to_string(&event).expect("serialize should not fail");
         let parsed: UiEvent = serde_json::from_str(&json).expect("deserialize should not fail");

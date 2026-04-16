@@ -245,11 +245,10 @@ pub async fn list_teams() -> SwarmResult<Vec<String>> {
         let path = entry.path();
         if path.is_dir() {
             let team_file = path.join(TEAM_FILE_NAME);
-            if team_file.exists() {
-                if let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string()) {
+            if team_file.exists()
+                && let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string()) {
                     teams.push(name);
                 }
-            }
         }
     }
     Ok(teams)

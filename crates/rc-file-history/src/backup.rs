@@ -196,8 +196,8 @@ pub fn get_first_version_backup_name(
     snapshots: &[crate::snapshot::FileHistorySnapshot],
 ) -> Option<Option<String>> {
     for snapshot in snapshots {
-        if let Some(backup) = snapshot.tracked_file_backups.get(tracking_path) {
-            if backup.version == 1 {
+        if let Some(backup) = snapshot.tracked_file_backups.get(tracking_path)
+            && backup.version == 1 {
                 // Return Some(None) for null backups, Some(Some(name)) for real backups
                 if backup.is_null() {
                     return Some(None);
@@ -205,7 +205,6 @@ pub fn get_first_version_backup_name(
                 let name = get_backup_file_name(&backup.file_path, 1);
                 return Some(Some(name));
             }
-        }
     }
     None // Could not find any first version
 }
@@ -216,11 +215,10 @@ pub fn get_first_version_backup_name(
 #[must_use]
 pub fn maybe_shorten_file_path(file_path: &str, cwd: &Path) -> String {
     let path = Path::new(file_path);
-    if path.is_absolute() {
-        if let Ok(relative) = path.strip_prefix(cwd) {
+    if path.is_absolute()
+        && let Ok(relative) = path.strip_prefix(cwd) {
             return relative.to_string_lossy().to_string();
         }
-    }
     file_path.to_string()
 }
 

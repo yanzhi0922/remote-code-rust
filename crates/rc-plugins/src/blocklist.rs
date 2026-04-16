@@ -70,18 +70,12 @@ pub struct BlocklistEntry {
 
 /// In-memory representation of the plugin blocklist.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct PluginBlocklist {
     /// Map from plugin ID to blocklist entry.
     pub entries: HashMap<String, BlocklistEntry>,
 }
 
-impl Default for PluginBlocklist {
-    fn default() -> Self {
-        Self {
-            entries: HashMap::new(),
-        }
-    }
-}
 
 impl PluginBlocklist {
     /// Create a new empty blocklist.

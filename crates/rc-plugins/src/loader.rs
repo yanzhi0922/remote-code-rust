@@ -124,16 +124,14 @@ pub fn load_plugin_from_directory(
     };
 
     // Check for validation errors in strict mode
-    if options.strict {
-        if let Some(ref report) = validation {
-            if !report.errors.is_empty() {
+    if options.strict
+        && let Some(ref report) = validation
+            && !report.errors.is_empty() {
                 return Err(LoaderError::ValidationFailed {
                     plugin_name: bundle.manifest.name.clone(),
                     errors: report.errors.clone(),
                 });
             }
-        }
-    }
 
     let mut warnings = Vec::new();
     if let Some(ref report) = validation {
@@ -215,7 +213,7 @@ pub fn load_all_plugins(
     options: &PluginLoadOptions,
 ) -> Result<Vec<PluginLoadResult>, LoaderError> {
     let bundles = discover_plugins(root).map_err(|e| LoaderError::Io(
-        std::io::Error::new(std::io::ErrorKind::Other, e.to_string()),
+        std::io::Error::other(e.to_string()),
     ))?;
 
     let mut results = Vec::new();

@@ -130,17 +130,16 @@ pub fn run_post_compact_cleanup(
         }
 
         // Deduplicate system messages (keep only the last one)
-        if let Some(last_idx) = last_system_idx {
-            if matches!(msg, Message::System(_)) && i != last_idx {
+        if let Some(last_idx) = last_system_idx
+            && matches!(msg, Message::System(_)) && i != last_idx {
                 should_remove = true;
             }
-        }
 
         if should_remove {
             removed += 1;
             // Rough token estimate
             let text = format!("{msg:?}");
-            tokens_saved += (text.len() as u64 + 3) / 4;
+            tokens_saved += (text.len() as u64).div_ceil(4);
         } else {
             kept.push(msg.clone());
         }

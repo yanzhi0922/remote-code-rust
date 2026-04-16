@@ -116,7 +116,7 @@ fn rough_tokens_for_message(message: &Message) -> u64 {
     if len == 0 {
         0
     } else {
-        (len + 3) / 4
+        len.div_ceil(4)
     }
 }
 

@@ -119,6 +119,7 @@ pub struct OAuthProfileOrganization {
 
 /// Configuration for an OAuth client (endpoints, client ID, etc.).
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct OAuthConfig {
     pub client_id: String,
     pub authorize_url: String,
@@ -132,22 +133,6 @@ pub struct OAuthConfig {
     pub roles_url: String,
 }
 
-impl Default for OAuthConfig {
-    fn default() -> Self {
-        Self {
-            client_id: String::new(),
-            authorize_url: String::new(),
-            console_authorize_url: String::new(),
-            token_url: String::new(),
-            manual_redirect_url: String::new(),
-            claudeai_success_url: String::new(),
-            console_success_url: String::new(),
-            profile_url: String::new(),
-            api_key_url: String::new(),
-            roles_url: String::new(),
-        }
-    }
-}
 
 /// Parameters for building the authorization URL.
 #[derive(Debug, Clone)]

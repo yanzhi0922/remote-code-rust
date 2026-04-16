@@ -42,11 +42,10 @@ pub fn validate_model_id(
     }
 
     // Check allowlist if configured.
-    if let Some(list) = allowlist {
-        if !crate::allowlist::is_model_allowed(trimmed, Some(list)) {
+    if let Some(list) = allowlist
+        && !crate::allowlist::is_model_allowed(trimmed, Some(list)) {
             return Err(ValidationError::NotAllowed(trimmed.to_owned()));
         }
-    }
 
     Ok(())
 }

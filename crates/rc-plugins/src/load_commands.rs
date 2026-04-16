@@ -93,7 +93,7 @@ pub fn load_plugin_commands(
 
         let is_skill = file_path
             .file_name()
-            .is_some_and(|name| name.to_ascii_lowercase() == "skill.md");
+            .is_some_and(|name| name.eq_ignore_ascii_case("skill.md"));
 
         commands.push(PluginCommand {
             name: command_name,

@@ -158,7 +158,7 @@ pub async fn is_iterm2_available() -> bool {
 
 /// Check if the `TERM_PROGRAM` environment variable indicates iTerm2.
 pub fn is_iterm2_term() -> bool {
-    std::env::var("TERM_PROGRAM").map_or(false, |v| v == "iTerm.app")
+    std::env::var("TERM_PROGRAM").is_ok_and(|v| v == "iTerm.app")
 }
 
 /// Get the terminal program name from the environment.

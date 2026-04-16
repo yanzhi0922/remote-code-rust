@@ -67,8 +67,8 @@ pub fn download_plugin(
         };
     }
 
-    if !target_dir.exists() {
-        if let Err(e) = std::fs::create_dir_all(target_dir) {
+    if !target_dir.exists()
+        && let Err(e) = std::fs::create_dir_all(target_dir) {
             return DownloadResult {
                 path: PathBuf::new(),
                 size_bytes: 0,
@@ -76,7 +76,6 @@ pub fn download_plugin(
                 error: Some(format!("failed to create target dir: {e}")),
             };
         }
-    }
 
     let filename = extract_filename(source_url);
     let target_path = target_dir.join(filename);

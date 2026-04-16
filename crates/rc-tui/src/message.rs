@@ -130,7 +130,7 @@ impl ChatMessage {
                 if line_len == 0 {
                     1
                 } else {
-                    (line_len + width - 1) / width
+                    line_len.div_ceil(width)
                 }
             })
             .sum::<usize>()

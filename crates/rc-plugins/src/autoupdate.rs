@@ -33,6 +33,7 @@ pub struct AutoUpdateResult {
 
 /// Result of checking all plugins for updates.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct AutoUpdateCheckResult {
     /// Total number of plugins checked.
     pub checked_count: usize,
@@ -46,17 +47,6 @@ pub struct AutoUpdateCheckResult {
     pub results: Vec<AutoUpdateResult>,
 }
 
-impl Default for AutoUpdateCheckResult {
-    fn default() -> Self {
-        Self {
-            checked_count: 0,
-            updates_available: 0,
-            updated: 0,
-            failed: 0,
-            results: Vec::new(),
-        }
-    }
-}
 
 /// Configuration for auto-update behavior.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

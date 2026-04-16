@@ -23,31 +23,28 @@ pub fn load_rules_from_file(
 
     if let Some(allow_arr) = json.get("allow").and_then(|v| v.as_array()) {
         for item in allow_arr {
-            if let Some(rule_str) = item.as_str() {
-                if let Some(rule) = parse_rule_string(rule_str, source, PermissionBehavior::Allow) {
+            if let Some(rule_str) = item.as_str()
+                && let Some(rule) = parse_rule_string(rule_str, source, PermissionBehavior::Allow) {
                     rules.push(rule);
                 }
-            }
         }
     }
 
     if let Some(deny_arr) = json.get("deny").and_then(|v| v.as_array()) {
         for item in deny_arr {
-            if let Some(rule_str) = item.as_str() {
-                if let Some(rule) = parse_rule_string(rule_str, source, PermissionBehavior::Deny) {
+            if let Some(rule_str) = item.as_str()
+                && let Some(rule) = parse_rule_string(rule_str, source, PermissionBehavior::Deny) {
                     rules.push(rule);
                 }
-            }
         }
     }
 
     if let Some(ask_arr) = json.get("ask").and_then(|v| v.as_array()) {
         for item in ask_arr {
-            if let Some(rule_str) = item.as_str() {
-                if let Some(rule) = parse_rule_string(rule_str, source, PermissionBehavior::Ask) {
+            if let Some(rule_str) = item.as_str()
+                && let Some(rule) = parse_rule_string(rule_str, source, PermissionBehavior::Ask) {
                     rules.push(rule);
                 }
-            }
         }
     }
 
@@ -66,9 +63,9 @@ pub fn parse_rule_string(
     }
 
     // Check for tool-prefixed pattern: "Bash(git status)"
-    if let Some(open) = trimmed.find('(') {
-        if let Some(close) = trimmed.rfind(')') {
-            if open < close {
+    if let Some(open) = trimmed.find('(')
+        && let Some(close) = trimmed.rfind(')')
+            && open < close {
                 let tool_name = &trimmed[..open];
                 let content = &trimmed[open + 1..close];
                 return Some(PermissionRuleV2::new(
@@ -78,8 +75,6 @@ pub fn parse_rule_string(
                     Some(content.to_string()),
                 ));
             }
-        }
-    }
 
     // Simple tool name
     Some(PermissionRuleV2::new(source, behavior, trimmed, None))

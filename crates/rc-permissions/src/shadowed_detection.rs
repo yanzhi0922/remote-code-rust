@@ -61,7 +61,6 @@ pub fn detect_shadowed_rules(rules: &[PermissionRuleV2]) -> Vec<ShadowedRule> {
     let mut sorted: Vec<(usize, &PermissionRuleV2)> = rules
         .iter()
         .enumerate()
-        .map(|(i, r)| (i, r))
         .collect();
     sorted.sort_by_key(|(_, r)| source_priority(r.source));
 

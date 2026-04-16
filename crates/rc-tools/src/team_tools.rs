@@ -87,9 +87,9 @@ pub fn team_list(_input: &Value, _context: &ToolExecutionContext) -> Result<Stri
         let path = entry.path();
         if path.is_dir() {
             let team_file = path.join("team.json");
-            if team_file.exists() {
-                if let Ok(content) = std::fs::read_to_string(&team_file) {
-                    if let Ok(team_data) = serde_json::from_str::<Value>(&content) {
+            if team_file.exists()
+                && let Ok(content) = std::fs::read_to_string(&team_file)
+                    && let Ok(team_data) = serde_json::from_str::<Value>(&content) {
                         teams.push(json!({
                             "name": team_data["name"].as_str().unwrap_or("unknown"),
                             "lead": team_data["lead_agent_id"].as_str().unwrap_or("unknown"),
@@ -100,8 +100,6 @@ pub fn team_list(_input: &Value, _context: &ToolExecutionContext) -> Result<Stri
                                 .unwrap_or(0),
                         }));
                     }
-                }
-            }
         }
     }
 
@@ -117,11 +115,10 @@ pub fn team_list(_input: &Value, _context: &ToolExecutionContext) -> Result<Stri
 /// Resolve the base directory for teams data.
 fn resolve_teams_base_dir() -> PathBuf {
     // Check in-memory override first (used by tests).
-    if let Ok(guard) = BASE_DIR_OVERRIDE.lock() {
-        if let Some(ref dir) = *guard {
+    if let Ok(guard) = BASE_DIR_OVERRIDE.lock()
+        && let Some(ref dir) = *guard {
             return dir.clone();
         }
-    }
 
     // Check environment variable.
     if let Ok(env_dir) = std::env::var("RC_SWARM_TEAM_DIR") {

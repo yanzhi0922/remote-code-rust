@@ -245,8 +245,7 @@ pub fn diff_stats(diff: &str) -> DiffStats {
 /// The escaped text.
 #[must_use]
 pub fn escape_diff_markers(text: &str) -> String {
-    text.replace('&', "&")
-        .replace('$', "&#36;")
+    text.replace('$', "&#36;")
 }
 
 /// Unescape diff markers back to original characters.

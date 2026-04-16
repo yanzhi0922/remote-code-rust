@@ -31,6 +31,7 @@ pub enum MarketplaceSkipReason {
 
 /// Result of performing marketplace startup checks.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct MarketplaceStartupCheckResult {
     /// Whether the official marketplace was installed.
     pub official_installed: bool,
@@ -46,18 +47,6 @@ pub struct MarketplaceStartupCheckResult {
     pub errors: Vec<String>,
 }
 
-impl Default for MarketplaceStartupCheckResult {
-    fn default() -> Self {
-        Self {
-            official_installed: false,
-            skip_reason: None,
-            marketplaces_checked: 0,
-            failed_count: 0,
-            failed_names: Vec::new(),
-            errors: Vec::new(),
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Core functions

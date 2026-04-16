@@ -124,15 +124,14 @@ pub fn detect_indexing_tools() -> Vec<DetectedTool> {
     let mut detected = Vec::new();
 
     for tool in CodeIndexingTool::all_values() {
-        if let Some(cmd) = cli_command_for_tool(*tool) {
-            if let Some(path) = find_in_path(cmd) {
+        if let Some(cmd) = cli_command_for_tool(*tool)
+            && let Some(path) = find_in_path(cmd) {
                 detected.push(DetectedTool {
                     tool: *tool,
                     path: Some(path),
                     version: None,
                 });
             }
-        }
     }
 
     detected

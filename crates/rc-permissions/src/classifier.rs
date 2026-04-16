@@ -185,8 +185,8 @@ impl PermissionClassifier for YoloClassifier {
         }
 
         // Bash commands
-        if tool_name == "Bash" || tool_name == "BashCommand" {
-            if let Some(command) = input.get("command").and_then(|v| v.as_str()) {
+        if (tool_name == "Bash" || tool_name == "BashCommand")
+            && let Some(command) = input.get("command").and_then(|v| v.as_str()) {
                 if Self::is_safe_bash_command(command) {
                     return ClassifierResult {
                         should_allow: true,
@@ -204,11 +204,10 @@ impl PermissionClassifier for YoloClassifier {
                     };
                 }
             }
-        }
 
         // File write tools — check path safety
-        if tool_name == "Write" || tool_name == "Edit" || tool_name == "MultiEdit" {
-            if let Some(path) = input.get("file_path").or_else(|| input.get("path")).and_then(|v| v.as_str()) {
+        if (tool_name == "Write" || tool_name == "Edit" || tool_name == "MultiEdit")
+            && let Some(path) = input.get("file_path").or_else(|| input.get("path")).and_then(|v| v.as_str()) {
                 // Reject writes outside cwd
                 if path.starts_with("/etc/") || path.starts_with("/usr/") || path.starts_with("/sys/") {
                     return ClassifierResult {
@@ -228,7 +227,6 @@ impl PermissionClassifier for YoloClassifier {
                     };
                 }
             }
-        }
 
         ClassifierResult {
             should_allow: false,

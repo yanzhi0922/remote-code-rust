@@ -49,18 +49,12 @@ impl Default for SnipCompactConfig {
 // ---------------------------------------------------------------------------
 
 /// Snip-compact strategy that trims oversized tool outputs.
+#[derive(Default)]
 pub struct SnipCompactStrategy {
     /// Configuration for this strategy.
     pub config: SnipCompactConfig,
 }
 
-impl Default for SnipCompactStrategy {
-    fn default() -> Self {
-        Self {
-            config: SnipCompactConfig::default(),
-        }
-    }
-}
 
 impl SnipCompactStrategy {
     /// Create a new snip-compact strategy with custom config.

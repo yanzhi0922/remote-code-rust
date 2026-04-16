@@ -36,7 +36,7 @@ impl PermissionSettings {
     pub fn is_allowed(&self, rule: &str) -> bool {
         self.allow
             .as_ref()
-            .map_or(false, |rules| rules.iter().any(|r| r == rule))
+            .is_some_and(|rules| rules.iter().any(|r| r == rule))
     }
 
     /// Check if a rule is in the deny list.
@@ -44,7 +44,7 @@ impl PermissionSettings {
     pub fn is_denied(&self, rule: &str) -> bool {
         self.deny
             .as_ref()
-            .map_or(false, |rules| rules.iter().any(|r| r == rule))
+            .is_some_and(|rules| rules.iter().any(|r| r == rule))
     }
 
     /// Check if a rule is in the ask list.
@@ -52,7 +52,7 @@ impl PermissionSettings {
     pub fn is_ask(&self, rule: &str) -> bool {
         self.ask
             .as_ref()
-            .map_or(false, |rules| rules.iter().any(|r| r == rule))
+            .is_some_and(|rules| rules.iter().any(|r| r == rule))
     }
 
     /// Add a rule to the allow list.

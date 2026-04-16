@@ -147,11 +147,7 @@ impl VirtualScroll {
     /// Maximum valid scroll offset.
     pub fn max_offset(&self) -> usize {
         let total = self.total_height();
-        if total > self.viewport_height {
-            total - self.viewport_height
-        } else {
-            0
-        }
+        total.saturating_sub(self.viewport_height)
     }
 
     /// Current scroll offset.

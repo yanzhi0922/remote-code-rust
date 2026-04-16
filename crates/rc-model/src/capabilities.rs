@@ -239,13 +239,13 @@ fn canonicalise_for_lookup(model_id: &str) -> String {
         .unwrap_or(&lower)
         .to_owned();
     // Remove `-v1:0` or `-v1` suffix (Bedrock)
-    let lower = lower
+    
+    lower
         .strip_suffix("-v1:0")
         .unwrap_or(&lower)
         .strip_suffix("-v1")
         .unwrap_or(&lower)
-        .to_owned();
-    lower
+        .to_owned()
 }
 
 /// Retrieve capabilities for a model.
@@ -267,7 +267,7 @@ pub fn get_capabilities(model_id: &str) -> ModelCapabilities {
     // Substring / prefix match (longest ID first, which is how the table is
     // roughly ordered for dated models).
     for (id, caps) in CAPABILITY_TABLE.iter() {
-        if key.contains(*id) || id.contains(&key.as_str()) {
+        if key.contains(*id) || id.contains(key.as_str()) {
             return caps.clone();
         }
     }

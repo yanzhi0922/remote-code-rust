@@ -349,7 +349,7 @@ pub async fn execute_tool_call(
         // Fast-path: if the broker exposes a mode and auto_allows covers this class, skip.
         let broker_mode = broker.mode();
         let tool_class = classify_tool(&spec.permission_tool_name);
-        let skip_broker = broker_mode.map_or(false, |m| auto_allows(m, tool_class));
+        let skip_broker = broker_mode.is_some_and(|m| auto_allows(m, tool_class));
         if !skip_broker {
             let decision = broker
                 .decide(PermissionRequest {

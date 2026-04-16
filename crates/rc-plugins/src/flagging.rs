@@ -116,18 +116,12 @@ pub struct FlagEntry {
 
 /// In-memory store of plugin flags.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct FlagStore {
     /// Map from plugin ID to its flag entry.
     pub flags: HashMap<String, FlagEntry>,
 }
 
-impl Default for FlagStore {
-    fn default() -> Self {
-        Self {
-            flags: HashMap::new(),
-        }
-    }
-}
 
 impl FlagStore {
     /// Create a new empty flag store.

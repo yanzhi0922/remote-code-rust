@@ -135,15 +135,14 @@ pub async fn list_pending_requests(team_name: &str) -> SwarmResult<Vec<SwarmPerm
 
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
-        if let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string()) {
-            if name.ends_with(PERMISSION_REQUEST_EXT) {
+        if let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string())
+            && name.ends_with(PERMISSION_REQUEST_EXT) {
                 let content = fs::read_to_string(&path).await?;
                 let req: SwarmPermissionRequest = serde_json::from_str(&content)?;
                 if !req.is_resolved() {
                     requests.push(req);
                 }
             }
-        }
     }
 
     Ok(requests)
@@ -162,17 +161,15 @@ pub async fn cleanup_permissions(team_name: &str, older_than_secs: i64) -> Swarm
 
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
-        if let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string()) {
-            if name.ends_with(PERMISSION_REQUEST_EXT) || name.ends_with(PERMISSION_RESPONSE_EXT) {
+        if let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string())
+            && (name.ends_with(PERMISSION_REQUEST_EXT) || name.ends_with(PERMISSION_RESPONSE_EXT)) {
                 let content = fs::read_to_string(&path).await?;
-                if let Ok(req) = serde_json::from_str::<SwarmPermissionRequest>(&content) {
-                    if now - req.created_at > older_than_secs {
+                if let Ok(req) = serde_json::from_str::<SwarmPermissionRequest>(&content)
+                    && now - req.created_at > older_than_secs {
                         let _ = fs::remove_file(&path).await;
                         removed += 1;
                     }
-                }
             }
-        }
     }
 
     Ok(removed)

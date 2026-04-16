@@ -166,7 +166,7 @@ pub fn send_user_file(input: &Value, context: &ToolExecutionContext) -> Result<S
         "file_info": {
             "name": file_info.name,
             "extension": file_info.extension,
-            "category": serde_json::to_value(&file_info.category).expect("category serializes"),
+            "category": serde_json::to_value(file_info.category).expect("category serializes"),
             "size_bytes": file_info.size_bytes,
             "mime_type": file_info.mime_type,
             "is_base64": file_info.is_base64,

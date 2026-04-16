@@ -158,10 +158,7 @@ pub fn compute_diff_stats_for_file(
 ) -> DiffStats {
     let mut stats = DiffStats::new();
 
-    let current_content = match fs::read_to_string(file_path) {
-        Ok(content) => Some(content),
-        Err(_) => None,
-    };
+    let current_content = fs::read_to_string(file_path).ok();
 
     match (current_content, backup_content) {
         (None, None) => {

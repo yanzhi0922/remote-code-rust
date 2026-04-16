@@ -42,42 +42,36 @@ pub trait McpServerEntryMatcher {
 
 impl McpServerEntryMatcher for AllowedMcpServerEntry {
     fn matches(&self, name: &str, command: &str, url: &str) -> bool {
-        if let Some(pattern) = &self.server_name {
-            if simple_glob_match(pattern, name) {
+        if let Some(pattern) = &self.server_name
+            && simple_glob_match(pattern, name) {
                 return true;
             }
-        }
-        if let Some(pattern) = &self.server_command {
-            if simple_glob_match(pattern, command) {
+        if let Some(pattern) = &self.server_command
+            && simple_glob_match(pattern, command) {
                 return true;
             }
-        }
-        if let Some(pattern) = &self.server_url {
-            if simple_glob_match(pattern, url) {
+        if let Some(pattern) = &self.server_url
+            && simple_glob_match(pattern, url) {
                 return true;
             }
-        }
         false
     }
 }
 
 impl McpServerEntryMatcher for DeniedMcpServerEntry {
     fn matches(&self, name: &str, command: &str, url: &str) -> bool {
-        if let Some(pattern) = &self.server_name {
-            if simple_glob_match(pattern, name) {
+        if let Some(pattern) = &self.server_name
+            && simple_glob_match(pattern, name) {
                 return true;
             }
-        }
-        if let Some(pattern) = &self.server_command {
-            if simple_glob_match(pattern, command) {
+        if let Some(pattern) = &self.server_command
+            && simple_glob_match(pattern, command) {
                 return true;
             }
-        }
-        if let Some(pattern) = &self.server_url {
-            if simple_glob_match(pattern, url) {
+        if let Some(pattern) = &self.server_url
+            && simple_glob_match(pattern, url) {
                 return true;
             }
-        }
         false
     }
 }

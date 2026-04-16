@@ -278,8 +278,8 @@ pub fn validate_plugin_manifest(file_path: &Path) -> PluginValidationResult {
             .filter(|k| MARKETPLACE_ONLY_FIELDS.contains(k))
             .collect();
 
-        if !stray_keys.is_empty() {
-            if let Value::Object(ref mut map) = to_validate {
+        if !stray_keys.is_empty()
+            && let Value::Object(ref mut map) = to_validate {
                 for key in &stray_keys {
                     map.remove(*key);
                     warnings.push(ValidationWarning {
@@ -292,7 +292,6 @@ pub fn validate_plugin_manifest(file_path: &Path) -> PluginValidationResult {
                     });
                 }
             }
-        }
     }
 
     // Validate against schema
@@ -415,8 +414,8 @@ pub fn validate_marketplace_manifest(file_path: &Path) -> PluginValidationResult
     let mut warnings: Vec<ValidationWarning> = Vec::new();
 
     // Check path traversal in plugin sources
-    if let Value::Object(ref obj) = parsed {
-        if let Some(Value::Array(plugins)) = obj.get("plugins") {
+    if let Value::Object(ref obj) = parsed
+        && let Some(Value::Array(plugins)) = obj.get("plugins") {
             for (i, plugin) in plugins.iter().enumerate() {
                 if let Some(source) = plugin.get("source") {
                     // String sources (relative paths)
@@ -429,8 +428,8 @@ pub fn validate_marketplace_manifest(file_path: &Path) -> PluginValidationResult
                         );
                     }
                     // Object source with .path
-                    if let Value::Object(src_map) = source {
-                        if let Some(Value::String(p)) = src_map.get("path") {
+                    if let Value::Object(src_map) = source
+                        && let Some(Value::String(p)) = src_map.get("path") {
                             check_path_traversal(
                                 p,
                                 &format!("plugins[{i}].source.path"),
@@ -438,7 +437,6 @@ pub fn validate_marketplace_manifest(file_path: &Path) -> PluginValidationResult
                                 None,
                             );
                         }
-                    }
                 }
             }
 
@@ -467,7 +465,6 @@ pub fn validate_marketplace_manifest(file_path: &Path) -> PluginValidationResult
                 });
             }
         }
-    }
 
     PluginValidationResult {
         success: errors.is_empty(),

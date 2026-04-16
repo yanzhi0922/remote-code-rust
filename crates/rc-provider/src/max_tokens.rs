@@ -40,13 +40,11 @@ pub fn get_max_output_tokens_for_model(model: &str) -> u32 {
     let default_tokens = get_model_info(model).max_output as u32;
 
     // Allow environment variable override.
-    if let Ok(env_val) = std::env::var(ENV_MAX_OUTPUT_TOKENS) {
-        if let Ok(parsed) = env_val.parse::<u32>() {
-            if parsed > 0 {
+    if let Ok(env_val) = std::env::var(ENV_MAX_OUTPUT_TOKENS)
+        && let Ok(parsed) = env_val.parse::<u32>()
+            && parsed > 0 {
                 return parsed;
             }
-        }
-    }
 
     default_tokens
 }

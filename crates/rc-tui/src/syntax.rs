@@ -339,7 +339,7 @@ fn highlight_json(line: &str, colors: &SyntaxColors) -> Vec<Span<'static>> {
             }
             let s: String = chars[start..i].iter().collect();
             // Key if followed by ':'
-            let is_key = i < chars.len() && chars[i..].iter().any(|&c| c == ':');
+            let is_key = i < chars.len() && chars[i..].contains(&':');
             let style = if is_key {
                 Style::default().fg(colors.function)
             } else {

@@ -55,13 +55,12 @@ pub async fn read_messages(team_name: &str, agent_name: &str) -> SwarmResult<Vec
 
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
-        if let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string()) {
-            if name.ends_with(MAILBOX_MESSAGE_EXT) {
+        if let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string())
+            && name.ends_with(MAILBOX_MESSAGE_EXT) {
                 let content = fs::read_to_string(&path).await?;
                 let msg: MailboxMessage = serde_json::from_str(&content)?;
                 messages.push(msg);
             }
-        }
     }
 
     // Sort by timestamp.

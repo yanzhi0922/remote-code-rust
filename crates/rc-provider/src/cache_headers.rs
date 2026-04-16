@@ -84,11 +84,9 @@ pub fn is_prompt_caching_enabled(model: &str) -> bool {
     if std::env::var("DISABLE_PROMPT_CACHING_HAIKU")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
-    {
-        if model_lower.contains("haiku") || model_lower.contains("flash") {
+        && (model_lower.contains("haiku") || model_lower.contains("flash")) {
             return false;
         }
-    }
 
     true
 }
@@ -119,16 +117,15 @@ pub fn add_cache_breakpoints(body: &mut Value, use_1h_ttl: bool) {
                 "text": text,
                 "cache_control": cache_control.clone(),
             }]);
-        } else if let Some(system_arr) = system.as_array_mut() {
-            if let Some(last) = system_arr.last_mut() {
+        } else if let Some(system_arr) = system.as_array_mut()
+            && let Some(last) = system_arr.last_mut() {
                 last["cache_control"] = cache_control.clone();
             }
-        }
     }
 
     // 2. Tools — sort by name for deterministic cache keys, mark last.
-    if let Some(tools) = body.get_mut("tools") {
-        if let Some(tools_arr) = tools.as_array_mut() {
+    if let Some(tools) = body.get_mut("tools")
+        && let Some(tools_arr) = tools.as_array_mut() {
             // Sort tools by name for deterministic ordering.
             tools_arr.sort_by(|a, b| {
                 let name_a = a.get("name").and_then(Value::as_str).unwrap_or("");
@@ -139,11 +136,10 @@ pub fn add_cache_breakpoints(body: &mut Value, use_1h_ttl: bool) {
                 last_tool["cache_control"] = cache_control.clone();
             }
         }
-    }
 
     // 3. Most recent user message — mark last content block.
-    if let Some(messages) = body.get_mut("messages") {
-        if let Some(msg_arr) = messages.as_array_mut() {
+    if let Some(messages) = body.get_mut("messages")
+        && let Some(msg_arr) = messages.as_array_mut() {
             for msg in msg_arr.iter_mut().rev() {
                 if msg.get("role").and_then(Value::as_str) == Some("user") {
                     if let Some(content) = msg.get_mut("content") {
@@ -154,17 +150,15 @@ pub fn add_cache_breakpoints(body: &mut Value, use_1h_ttl: bool) {
                                 "text": text,
                                 "cache_control": cache_control.clone(),
                             }]);
-                        } else if let Some(content_arr) = content.as_array_mut() {
-                            if let Some(last_block) = content_arr.last_mut() {
+                        } else if let Some(content_arr) = content.as_array_mut()
+                            && let Some(last_block) = content_arr.last_mut() {
                                 last_block["cache_control"] = cache_control.clone();
                             }
-                        }
                     }
                     break;
                 }
             }
         }
-    }
 }
 
 #[cfg(test)]

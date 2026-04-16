@@ -230,20 +230,18 @@ impl App {
 
     /// Append streaming content to the last assistant message.
     pub fn append_to_last_assistant(&mut self, content: &str) {
-        if let Some(last) = self.messages.last_mut() {
-            if last.role == MessageRole::Assistant {
+        if let Some(last) = self.messages.last_mut()
+            && last.role == MessageRole::Assistant {
                 last.content.push_str(content);
             }
-        }
     }
 
     /// Add a tool call to the last assistant message.
     pub fn add_tool_call(&mut self, tool_call: ToolCallInfo) {
-        if let Some(last) = self.messages.last_mut() {
-            if last.role == MessageRole::Assistant {
+        if let Some(last) = self.messages.last_mut()
+            && last.role == MessageRole::Assistant {
                 last.tool_calls.push(tool_call);
             }
-        }
     }
 
     /// Get the current input text.

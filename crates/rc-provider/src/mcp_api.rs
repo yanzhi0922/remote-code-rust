@@ -209,13 +209,12 @@ pub fn build_mcp_tools_param(config: &McpToolConfig) -> Option<Value> {
 /// * `body` — The mutable API request body.
 /// * `config` — The MCP tool configuration.
 pub fn merge_mcp_tools_into_body(body: &mut Value, config: &McpToolConfig) {
-    if let Some(params) = build_mcp_tools_param(config) {
-        if let Value::Object(map) = params {
+    if let Some(params) = build_mcp_tools_param(config)
+        && let Value::Object(map) = params {
             for (key, value) in map {
                 body[key] = value;
             }
         }
-    }
 }
 
 // ---------------------------------------------------------------------------

@@ -147,8 +147,7 @@ fn build_when_not_to_use_section() -> String {
 
 /// Build the "When to fork" section (fork mode only).
 fn build_when_to_fork_section() -> String {
-    format!(
-        "\n## When to fork\n\n\
+    "\n## When to fork\n\n\
         Fork yourself (omit `subagent_type`) when the intermediate tool output isn't worth \
         keeping in your context. The criterion is qualitative — \"will I need this output again\" \
         — not task size.\n\
@@ -168,8 +167,7 @@ fn build_when_to_fork_section() -> String {
         a later turn; it is never something you write yourself.\n\n\
         **Writing a fork prompt.** Since the fork inherits your context, the prompt is a *directive* \
         — what to do, not what the situation is. Be specific about scope: what's in, what's out, \
-        what another agent is handling. Don't re-explain background."
-    )
+        what another agent is handling. Don't re-explain background.".to_string()
 }
 
 /// Build the "Writing the prompt" section.

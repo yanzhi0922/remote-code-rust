@@ -49,18 +49,12 @@ impl Default for ReactiveCompactConfig {
 // ---------------------------------------------------------------------------
 
 /// Reactive-compact strategy that responds to prompt-too-long errors.
+#[derive(Default)]
 pub struct ReactiveCompactStrategy {
     /// Configuration for this strategy.
     pub config: ReactiveCompactConfig,
 }
 
-impl Default for ReactiveCompactStrategy {
-    fn default() -> Self {
-        Self {
-            config: ReactiveCompactConfig::default(),
-        }
-    }
-}
 
 impl ReactiveCompactStrategy {
     /// Create a new reactive-compact strategy with custom config.

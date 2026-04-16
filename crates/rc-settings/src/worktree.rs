@@ -18,8 +18,8 @@ impl WorktreeSettings {
     pub fn has_config(&self) -> bool {
         self.symlink_directories
             .as_ref()
-            .map_or(false, |d| !d.is_empty())
-            || self.sparse_paths.as_ref().map_or(false, |p| !p.is_empty())
+            .is_some_and(|d| !d.is_empty())
+            || self.sparse_paths.as_ref().is_some_and(|p| !p.is_empty())
     }
 }
 

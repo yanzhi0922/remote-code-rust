@@ -140,8 +140,8 @@ impl PluginOptionsStore {
         let mut options = self.load_options(plugin_id)?;
 
         // Check if this key is sensitive — if so, skip writing to file
-        if let Some(s) = schema {
-            if s.get(key).and_then(|c| c.sensitive).unwrap_or(false) {
+        if let Some(s) = schema
+            && s.get(key).and_then(|c| c.sensitive).unwrap_or(false) {
                 // Sensitive values should go to secure storage, not here
                 // Remove from non-sensitive store if present
                 options.remove(key);
@@ -149,7 +149,6 @@ impl PluginOptionsStore {
                 self.save_options(plugin_id, &filtered, s)?;
                 return Ok(());
             }
-        }
 
         options.insert(key.to_string(), value);
 
@@ -166,14 +165,13 @@ impl PluginOptionsStore {
     /// Best-effort: failure is logged but does not throw.
     pub fn delete_options(&self, plugin_id: &str) {
         let path = self.options_file_path(plugin_id);
-        if path.exists() {
-            if let Err(e) = fs::remove_file(&path) {
+        if path.exists()
+            && let Err(e) = fs::remove_file(&path) {
                 tracing::warn!(
                     "Failed to delete options file {}: {e}",
                     path.display()
                 );
             }
-        }
     }
 
     /// Get the path to a plugin's options file.

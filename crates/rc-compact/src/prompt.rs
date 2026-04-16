@@ -322,8 +322,8 @@ pub fn format_compact_summary(summary: &str) -> String {
     }
 
     // Extract and format summary section
-    if let Some(summary_start) = formatted.find("<summary>") {
-        if let Some(summary_end) = formatted.find("</summary>") {
+    if let Some(summary_start) = formatted.find("<summary>")
+        && let Some(summary_end) = formatted.find("</summary>") {
             let content = &formatted[summary_start + "<summary>".len()..summary_end];
             let replacement = format!("Summary:\n{}", content.trim());
             formatted = format!(
@@ -333,7 +333,6 @@ pub fn format_compact_summary(summary: &str) -> String {
                 &formatted[summary_end + "</summary>".len()..]
             );
         }
-    }
 
     // Clean up extra whitespace between sections
     while formatted.contains("\n\n\n") {
@@ -389,7 +388,7 @@ pub fn build_compact_user_summary_message(
 pub fn rough_token_count(text: &str) -> u64 {
     let len = text.len() as u64;
     // Pad by 4/3 to be conservative
-    (len * 4 + 2) / 3
+    (len * 4).div_ceil(3)
 }
 
 #[cfg(test)]

@@ -27,9 +27,9 @@ impl TerminalEnvironment {
     pub fn detect() -> Self {
         Self {
             is_tmux: std::env::var("TMUX").is_ok(),
-            is_iterm2: std::env::var("TERM_PROGRAM").map_or(false, |v| v == "iTerm.app"),
+            is_iterm2: std::env::var("TERM_PROGRAM").is_ok_and(|v| v == "iTerm.app"),
             is_windows_terminal: std::env::var("WT_SESSION").is_ok(),
-            is_vscode: std::env::var("TERM_PROGRAM").map_or(false, |v| v == "vscode"),
+            is_vscode: std::env::var("TERM_PROGRAM").is_ok_and(|v| v == "vscode"),
             term_program: std::env::var("TERM_PROGRAM").ok(),
             term: std::env::var("TERM").ok(),
         }
@@ -73,13 +73,13 @@ pub fn is_inside_tmux() -> bool {
 /// Quick check: are we inside iTerm2?
 #[must_use]
 pub fn is_inside_iterm2() -> bool {
-    std::env::var("TERM_PROGRAM").map_or(false, |v| v == "iTerm.app")
+    std::env::var("TERM_PROGRAM").is_ok_and(|v| v == "iTerm.app")
 }
 
 /// Quick check: are we inside VS Code terminal?
 #[must_use]
 pub fn is_inside_vscode() -> bool {
-    std::env::var("TERM_PROGRAM").map_or(false, |v| v == "vscode")
+    std::env::var("TERM_PROGRAM").is_ok_and(|v| v == "vscode")
 }
 
 /// Quick check: are we inside Windows Terminal?

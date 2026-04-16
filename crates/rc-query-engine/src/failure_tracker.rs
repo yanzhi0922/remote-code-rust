@@ -97,7 +97,7 @@ impl FailureTracker {
             CircuitState::Open => {
                 // Check if cooldown has elapsed
                 self.last_failure_time
-                    .map_or(true, |t| t.elapsed() >= self.cooldown_duration)
+                    .is_none_or(|t| t.elapsed() >= self.cooldown_duration)
             }
             CircuitState::HalfOpen => true,
         }
@@ -126,14 +126,12 @@ impl FailureTracker {
     /// Attempt to transition from Open to HalfOpen if the cooldown has elapsed.
     /// Returns true if the transition occurred.
     pub fn try_half_open(&mut self) -> bool {
-        if self.state == CircuitState::Open {
-            if let Some(last_failure) = self.last_failure_time {
-                if last_failure.elapsed() >= self.cooldown_duration {
+        if self.state == CircuitState::Open
+            && let Some(last_failure) = self.last_failure_time
+                && last_failure.elapsed() >= self.cooldown_duration {
                     self.state = CircuitState::HalfOpen;
                     return true;
                 }
-            }
-        }
         false
     }
 

@@ -268,12 +268,11 @@ pub fn parse_skill_metadata(content: &str, path: &Path) -> Result<SkillMetadata>
         let trimmed = line.trim();
 
         // Extract name from first H1 heading.
-        if name.is_empty() {
-            if let Some(heading) = trimmed.strip_prefix("# ") {
+        if name.is_empty()
+            && let Some(heading) = trimmed.strip_prefix("# ") {
                 name = heading.to_string();
                 continue;
             }
-        }
 
         // Extract description from "description:" or "Description:" field.
         if description.is_empty() {
@@ -298,7 +297,7 @@ pub fn parse_skill_metadata(content: &str, path: &Path) -> Result<SkillMetadata>
                 .map(|idx| trimmed[idx + 1..].trim())
                 .unwrap_or("");
             triggers = trigger_str
-                .split(|c: char| c == ',' || c == ';')
+                .split([',', ';'])
                 .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
@@ -345,13 +344,11 @@ pub fn scan_skills_dir(dir: &Path) -> Vec<SkillMetadata> {
         let path = entry.path();
         if path.is_dir() {
             let skill_file = path.join("SKILL.md");
-            if skill_file.exists() {
-                if let Ok(content) = std::fs::read_to_string(&skill_file) {
-                    if let Ok(metadata) = parse_skill_metadata(&content, &skill_file) {
+            if skill_file.exists()
+                && let Ok(content) = std::fs::read_to_string(&skill_file)
+                    && let Ok(metadata) = parse_skill_metadata(&content, &skill_file) {
                         skills.push(metadata);
                     }
-                }
-            }
         }
     }
 
