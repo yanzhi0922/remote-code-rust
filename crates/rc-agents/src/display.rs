@@ -1,7 +1,10 @@
 //! Agent display and color management matching Claude Code's `AgentTool/agentDisplay.ts`.
 //!
-//! Provides display types, color assignment, status formatting, and source
-//! grouping for rendering agent information in CLI and interactive contexts.
+//! Provides display types, color assignment, status formatting, source
+//! grouping, and an [`AgentColorManager`] for unique per-agent color
+//! assignment in CLI and interactive contexts.
+
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -216,6 +219,150 @@ pub fn get_override_source_label(source: AgentSource) -> &'static str {
     }
 }
 
+// ── Enhanced display types ────────────────────────────────────────────────
+
+/// Manages unique color assignment for multiple agents.
+///
+/// Each agent is assigned a unique color from the palette, cycling through
+/// when there are more agents than colors. This ensures visual distinction
+/// when multiple agents are displayed simultaneously.
+#[derive(Debug, Clone)]
+pub struct AgentColorManager {
+    /// Map from agent ID to assigned color.
+    assignments: BTreeMap<String, AgentColor>,
+    /// Color palette for cycling.
+    palette: Vec<AgentColor>,
+    /// Next color index for new assignments.
+    next_index: usize,
+}
+
+impl Default for AgentColorManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AgentColorManager {
+    /// Create a new color manager with the default palette.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            assignments: BTreeMap::new(),
+            palette: vec![
+                AgentColor::Blue,
+                AgentColor::Green,
+                AgentColor::Yellow,
+                AgentColor::Purple,
+                AgentColor::Cyan,
+                AgentColor::Orange,
+                AgentColor::Pink,
+                AgentColor::Teal,
+                AgentColor::Indigo,
+            ],
+            next_index: 0,
+        }
+    }
+
+    /// Get or assign a color for the given agent.
+    ///
+    /// If the agent already has a color, returns it. Otherwise assigns the
+    /// next color from the palette (cycling when exhausted).
+    pub fn color_for(&mut self, agent_id: &str) -> AgentColor {
+        if let Some(&color) = self.assignments.get(agent_id) {
+            return color;
+        }
+        let color = self.palette[self.next_index % self.palette.len()];
+        self.assignments.insert(agent_id.to_owned(), color);
+        self.next_index += 1;
+        color
+    }
+
+    /// Get the color for an agent if it has been assigned.
+    pub fn get_color(&self, agent_id: &str) -> Option<AgentColor> {
+        self.assignments.get(agent_id).copied()
+    }
+
+    /// Remove an agent's color assignment.
+    pub fn remove(&mut self, agent_id: &str) {
+        self.assignments.remove(agent_id);
+    }
+
+    /// Get the number of agents with assigned colors.
+    pub fn len(&self) -> usize {
+        self.assignments.len()
+    }
+
+    /// Check if no agents have been assigned colors.
+    pub fn is_empty(&self) -> bool {
+        self.assignments.is_empty()
+    }
+
+    /// Clear all color assignments.
+    pub fn clear(&mut self) {
+        self.assignments.clear();
+        self.next_index = 0;
+    }
+}
+
+/// Format an agent header for display.
+///
+/// Produces a colored header line with the agent's icon, name, and
+/// optional description.
+pub fn format_agent_header(name: &str, description: Option<&str>, color: AgentColor) -> String {
+    let icon = agent_icon_for_type(name);
+    let reset = AgentColor::ansi_reset();
+    let fg = color.ansi_fg();
+
+    match description {
+        Some(desc) => format!("{fg}{icon} {name}{reset} — {desc}"),
+        None => format!("{fg}{icon} {name}{reset}"),
+    }
+}
+
+/// Format an agent result for display.
+///
+/// Produces a colored result block with the agent's output and
+/// optional usage information.
+pub fn format_agent_result(
+    agent_id: &str,
+    output: &str,
+    success: bool,
+    usage: Option<&crate::runner::UsageSummary>,
+    color: AgentColor,
+) -> String {
+    let reset = AgentColor::ansi_reset();
+    let fg = color.ansi_fg();
+    let status_icon = if success { "✓" } else { "✗" };
+
+    let mut result = format!("{fg}{status_icon} Agent {agent_id}{reset}\n");
+    result.push_str(output);
+
+    if let Some(usage) = usage {
+        result.push_str(&format!(
+            "\n{fg}Tokens: {}+{} (cache: +{}, -{}){reset}",
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.cache_creation_tokens,
+            usage.cache_read_tokens,
+        ));
+    }
+
+    result
+}
+
+/// Format a duration in a human-readable way.
+pub fn format_duration(ms: u64) -> String {
+    if ms < 1000 {
+        format!("{ms}ms")
+    } else if ms < 60_000 {
+        format!("{:.1}s", ms as f64 / 1000.0)
+    } else {
+        let mins = ms / 60_000;
+        let secs = (ms % 60_000) / 1000;
+        format!("{mins}m {secs}s")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,5 +468,129 @@ mod tests {
         assert_eq!(get_override_source_label(AgentSource::BuiltIn), "built-in");
         assert_eq!(get_override_source_label(AgentSource::User), "user");
         assert_eq!(get_override_source_label(AgentSource::Plugin), "plugin");
+    }
+
+    // ── Enhanced tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn color_manager_assigns_unique_colors() {
+        let mut mgr = AgentColorManager::new();
+        let c1 = mgr.color_for("agent-1");
+        let c2 = mgr.color_for("agent-2");
+        assert_ne!(c1, c2);
+    }
+
+    #[test]
+    fn color_manager_returns_same_color_for_same_agent() {
+        let mut mgr = AgentColorManager::new();
+        let c1 = mgr.color_for("agent-1");
+        let c2 = mgr.color_for("agent-1");
+        assert_eq!(c1, c2);
+    }
+
+    #[test]
+    fn color_manager_cycles_palette() {
+        let mut mgr = AgentColorManager::new();
+        let palette_size = 9; // default palette has 9 colors
+        for i in 0..palette_size * 2 {
+            let _ = mgr.color_for(&format!("agent-{i}"));
+        }
+        // Should have assigned 18 agents without panic (cycling)
+        assert_eq!(mgr.len(), palette_size * 2);
+    }
+
+    #[test]
+    fn color_manager_get_color_unassigned() {
+        let mgr = AgentColorManager::new();
+        assert!(mgr.get_color("nonexistent").is_none());
+    }
+
+    #[test]
+    fn color_manager_get_color_assigned() {
+        let mut mgr = AgentColorManager::new();
+        let color = mgr.color_for("agent-1");
+        assert_eq!(mgr.get_color("agent-1"), Some(color));
+    }
+
+    #[test]
+    fn color_manager_remove() {
+        let mut mgr = AgentColorManager::new();
+        mgr.color_for("agent-1");
+        mgr.remove("agent-1");
+        assert!(mgr.get_color("agent-1").is_none());
+        assert!(mgr.is_empty());
+    }
+
+    #[test]
+    fn color_manager_clear() {
+        let mut mgr = AgentColorManager::new();
+        mgr.color_for("a");
+        mgr.color_for("b");
+        mgr.clear();
+        assert!(mgr.is_empty());
+    }
+
+    #[test]
+    fn color_manager_default() {
+        let mgr = AgentColorManager::default();
+        assert!(mgr.is_empty());
+    }
+
+    #[test]
+    fn format_agent_header_with_description() {
+        let header = format_agent_header("worker", Some("Fix auth bug"), AgentColor::Blue);
+        assert!(header.contains("worker"));
+        assert!(header.contains("Fix auth bug"));
+        assert!(header.contains("⚙️"));
+    }
+
+    #[test]
+    fn format_agent_header_without_description() {
+        let header = format_agent_header("Explore", None, AgentColor::Green);
+        assert!(header.contains("Explore"));
+        assert!(header.contains("🔍"));
+        assert!(!header.contains("—"));
+    }
+
+    #[test]
+    fn format_agent_result_success() {
+        let usage = crate::runner::UsageSummary {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_creation_tokens: 10,
+            cache_read_tokens: 20,
+        };
+        let result = format_agent_result("agent-1", "Done", true, Some(&usage), AgentColor::Cyan);
+        assert!(result.contains("✓"));
+        assert!(result.contains("agent-1"));
+        assert!(result.contains("Done"));
+        assert!(result.contains("100+50"));
+    }
+
+    #[test]
+    fn format_agent_result_failure() {
+        let result = format_agent_result("agent-2", "Error", false, None, AgentColor::Red);
+        assert!(result.contains("✗"));
+        assert!(result.contains("Error"));
+    }
+
+    #[test]
+    fn format_duration_milliseconds() {
+        assert_eq!(format_duration(500), "500ms");
+    }
+
+    #[test]
+    fn format_duration_seconds() {
+        assert_eq!(format_duration(1500), "1.5s");
+    }
+
+    #[test]
+    fn format_duration_minutes() {
+        assert_eq!(format_duration(125_000), "2m 5s");
+    }
+
+    #[test]
+    fn format_duration_zero() {
+        assert_eq!(format_duration(0), "0ms");
     }
 }

@@ -2,8 +2,15 @@
 //!
 //! The [`AgentRunner`] orchestrates agent execution: resolving tools, building
 //! the system prompt, and tracking turns and usage.
+//!
+//! # Enhanced Functions
+//!
+//! - [`enhance_system_prompt_with_env_details`] — Inject environment info into prompts
+//! - [`resolve_effective_tools`] — Resolve tool set with wildcard/denylist support
+//! - [`aggregate_run_results`] — Aggregate multiple run results
 
-use std::path::PathBuf;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -211,6 +218,181 @@ impl AgentRunner {
     }
 }
 
+// ── Enhanced functions ────────────────────────────────────────────────────
+
+/// Result of resolving effective tools for an agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolvedTools {
+    /// Whether the agent has a wildcard tool specification.
+    pub has_wildcard: bool,
+    /// Valid tool names from the agent's specification.
+    pub valid_tools: Vec<String>,
+    /// Invalid tool names that couldn't be resolved.
+    pub invalid_tools: Vec<String>,
+    /// The resolved set of tool names.
+    pub resolved: Vec<String>,
+}
+
+/// Enhance a system prompt with environment details.
+///
+/// Appends information about the working directory, absolute paths,
+/// and formatting guidelines (no emoji, no colons before tool calls).
+pub fn enhance_system_prompt_with_env_details(
+    base_prompt: &str,
+    working_dir: &Path,
+    absolute_paths: &[&Path],
+) -> String {
+    let mut prompt = base_prompt.to_owned();
+
+    prompt.push_str("\n\n## Environment\n");
+    prompt.push_str(&format!(
+        "Working directory: {}\n",
+        working_dir.display()
+    ));
+
+    if !absolute_paths.is_empty() {
+        prompt.push_str("Additional paths:\n");
+        for path in absolute_paths {
+            prompt.push_str(&format!("- {}\n", path.display()));
+        }
+    }
+
+    prompt.push_str("\n## Formatting Guidelines\n");
+    prompt.push_str("- Use absolute paths when referring to files\n");
+    prompt.push_str("- Do not use emoji in output\n");
+    prompt.push_str("- Do not use colons before tool calls\n");
+
+    prompt
+}
+
+/// Resolve the effective tool set for an agent.
+///
+/// Handles wildcard expansion (`*`), denylist filtering, and validation
+/// against the available tool set. Returns a [`ResolvedTools`] with
+/// detailed information about the resolution.
+pub fn resolve_effective_tools(
+    agent_tools: &[String],
+    disallowed_tools: &[String],
+    available_tools: &[String],
+) -> ResolvedTools {
+    let deny_set: BTreeSet<&str> = disallowed_tools.iter().map(|s| s.as_str()).collect();
+    let available_set: BTreeSet<&str> = available_tools.iter().map(|s| s.as_str()).collect();
+
+    // Check for wildcard (explicit "*" or empty means all tools)
+    let has_wildcard = agent_tools.is_empty()
+        || (agent_tools.len() == 1 && agent_tools[0] == "*");
+
+    if has_wildcard || agent_tools.is_empty() {
+        let resolved: Vec<String> = available_tools
+            .iter()
+            .filter(|t| !deny_set.contains(t.as_str()))
+            .cloned()
+            .collect();
+        return ResolvedTools {
+            has_wildcard,
+            valid_tools: Vec::new(),
+            invalid_tools: Vec::new(),
+            resolved,
+        };
+    }
+
+    let mut valid = Vec::new();
+    let mut invalid = Vec::new();
+    let mut resolved = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    for tool in agent_tools {
+        if deny_set.contains(tool.as_str()) {
+            // Tool is in denylist — skip
+            continue;
+        }
+        if available_set.contains(tool.as_str()) {
+            valid.push(tool.clone());
+            if seen.insert(tool.as_str()) {
+                resolved.push(tool.clone());
+            }
+        } else {
+            invalid.push(tool.clone());
+        }
+    }
+
+    ResolvedTools {
+        has_wildcard: false,
+        valid_tools: valid,
+        invalid_tools: invalid,
+        resolved,
+    }
+}
+
+/// Aggregate multiple agent run results into a single summary.
+///
+/// Combines output, usage, and success status from multiple runs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AggregatedRunResults {
+    /// Combined output from all runs.
+    pub combined_output: String,
+    /// Whether all runs succeeded.
+    pub all_succeeded: bool,
+    /// Total turns across all runs.
+    pub total_turns: u32,
+    /// Aggregated usage.
+    pub total_usage: UsageSummary,
+    /// Number of runs.
+    pub run_count: usize,
+}
+
+/// Aggregate multiple run results.
+pub fn aggregate_run_results(results: &[AgentRunResult]) -> AggregatedRunResults {
+    let mut combined_output = String::new();
+    let mut all_succeeded = true;
+    let mut total_turns = 0u32;
+    let mut total_usage = UsageSummary::default();
+
+    for (i, result) in results.iter().enumerate() {
+        if i > 0 {
+            combined_output.push_str("\n---\n");
+        }
+        combined_output.push_str(&result.output);
+
+        if !result.success {
+            all_succeeded = false;
+        }
+        total_turns += result.turns;
+        total_usage.input_tokens += result.usage.input_tokens;
+        total_usage.output_tokens += result.usage.output_tokens;
+        total_usage.cache_creation_tokens += result.usage.cache_creation_tokens;
+        total_usage.cache_read_tokens += result.usage.cache_read_tokens;
+    }
+
+    AggregatedRunResults {
+        combined_output,
+        all_succeeded,
+        total_turns,
+        total_usage,
+        run_count: results.len(),
+    }
+}
+
+/// Format an agent result for return to the caller.
+///
+/// Produces a structured output string with the agent's final text,
+/// usage information, and status.
+pub fn format_agent_run_result(agent_id: &str, result: &AgentRunResult) -> String {
+    let status = if result.success { "completed" } else { "failed" };
+    format!(
+        "Agent {agent_id} {status}\n\
+         Turns: {turns}\n\
+         Tokens: {input_in}+{output_out} (cache: +{cache_create}, -{cache_read})\n\
+         Output:\n{output}",
+        turns = result.turns,
+        input_in = result.usage.input_tokens,
+        output_out = result.usage.output_tokens,
+        cache_create = result.usage.cache_creation_tokens,
+        cache_read = result.usage.cache_read_tokens,
+        output = result.output,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,5 +536,187 @@ mod tests {
         let result = runner.run("test task", &[]).await.expect("run");
         assert!(result.success);
         assert!(result.output.contains("test-agent"));
+    }
+
+    // ── Enhanced tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn enhance_system_prompt_adds_env_details() {
+        let base = "You are a test agent.";
+        let working_dir = PathBuf::from("/home/user/project");
+        let tmp = PathBuf::from("/tmp");
+        let extra = vec![tmp.as_path()];
+        let enhanced = enhance_system_prompt_with_env_details(base, &working_dir, &extra);
+        assert!(enhanced.starts_with("You are a test agent."));
+        assert!(enhanced.contains("## Environment"));
+        assert!(enhanced.contains("/home/user/project"));
+        assert!(enhanced.contains("/tmp"));
+    }
+
+    #[test]
+    fn enhance_system_prompt_no_extra_paths() {
+        let base = "Base prompt";
+        let working_dir = PathBuf::from("/tmp");
+        let enhanced = enhance_system_prompt_with_env_details(base, &working_dir, &[]);
+        assert!(enhanced.contains("## Environment"));
+        assert!(!enhanced.contains("Additional paths"));
+    }
+
+    #[test]
+    fn enhance_system_prompt_formatting_guidelines() {
+        let base = "Base";
+        let working_dir = PathBuf::from("/tmp");
+        let enhanced = enhance_system_prompt_with_env_details(base, &working_dir, &[]);
+        assert!(enhanced.contains("## Formatting Guidelines"));
+        assert!(enhanced.contains("absolute paths"));
+        assert!(enhanced.contains("emoji"));
+        assert!(enhanced.contains("colons before tool calls"));
+    }
+
+    #[test]
+    fn resolve_effective_tools_wildcard() {
+        let agent_tools = vec!["*".to_owned()];
+        let disallowed = vec!["Agent".to_owned()];
+        let available = vec!["Bash".to_owned(), "Read".to_owned(), "Agent".to_owned()];
+        let result = resolve_effective_tools(&agent_tools, &disallowed, &available);
+        assert!(result.has_wildcard);
+        assert_eq!(result.resolved, vec!["Bash", "Read"]);
+    }
+
+    #[test]
+    fn resolve_effective_tools_specific_list() {
+        let agent_tools = vec!["Bash".to_owned(), "Read".to_owned(), "NonExistent".to_owned()];
+        let disallowed: Vec<String> = Vec::new();
+        let available = vec!["Bash".to_owned(), "Read".to_owned(), "Write".to_owned()];
+        let result = resolve_effective_tools(&agent_tools, &disallowed, &available);
+        assert!(!result.has_wildcard);
+        assert_eq!(result.valid_tools, vec!["Bash", "Read"]);
+        assert_eq!(result.invalid_tools, vec!["NonExistent"]);
+        assert_eq!(result.resolved, vec!["Bash", "Read"]);
+    }
+
+    #[test]
+    fn resolve_effective_tools_denylist_filters() {
+        let agent_tools = vec!["Bash".to_owned(), "Agent".to_owned()];
+        let disallowed = vec!["Agent".to_owned()];
+        let available = vec!["Bash".to_owned(), "Agent".to_owned()];
+        let result = resolve_effective_tools(&agent_tools, &disallowed, &available);
+        assert_eq!(result.resolved, vec!["Bash"]);
+    }
+
+    #[test]
+    fn resolve_effective_tools_empty_agent_tools() {
+        let agent_tools: Vec<String> = Vec::new();
+        let disallowed: Vec<String> = Vec::new();
+        let available = vec!["Bash".to_owned()];
+        let result = resolve_effective_tools(&agent_tools, &disallowed, &available);
+        assert!(result.has_wildcard); // Empty means all tools
+        assert_eq!(result.resolved, vec!["Bash"]);
+    }
+
+    #[test]
+    fn resolve_effective_tools_deduplicates() {
+        let agent_tools = vec!["Bash".to_owned(), "Bash".to_owned()];
+        let disallowed: Vec<String> = Vec::new();
+        let available = vec!["Bash".to_owned()];
+        let result = resolve_effective_tools(&agent_tools, &disallowed, &available);
+        assert_eq!(result.resolved, vec!["Bash"]);
+    }
+
+    #[test]
+    fn aggregate_run_results_single() {
+        let results = vec![AgentRunResult {
+            output: "Done".to_owned(),
+            success: true,
+            turns: 3,
+            usage: UsageSummary {
+                input_tokens: 100,
+                output_tokens: 50,
+                cache_creation_tokens: 0,
+                cache_read_tokens: 0,
+            },
+        }];
+        let agg = aggregate_run_results(&results);
+        assert!(agg.all_succeeded);
+        assert_eq!(agg.run_count, 1);
+        assert_eq!(agg.total_turns, 3);
+        assert_eq!(agg.total_usage.input_tokens, 100);
+        assert!(agg.combined_output.contains("Done"));
+    }
+
+    #[test]
+    fn aggregate_run_results_multiple() {
+        let results = vec![
+            AgentRunResult {
+                output: "First".to_owned(),
+                success: true,
+                turns: 2,
+                usage: UsageSummary {
+                    input_tokens: 50,
+                    output_tokens: 25,
+                    cache_creation_tokens: 0,
+                    cache_read_tokens: 0,
+                },
+            },
+            AgentRunResult {
+                output: "Second".to_owned(),
+                success: false,
+                turns: 1,
+                usage: UsageSummary {
+                    input_tokens: 30,
+                    output_tokens: 15,
+                    cache_creation_tokens: 0,
+                    cache_read_tokens: 0,
+                },
+            },
+        ];
+        let agg = aggregate_run_results(&results);
+        assert!(!agg.all_succeeded);
+        assert_eq!(agg.run_count, 2);
+        assert_eq!(agg.total_turns, 3);
+        assert_eq!(agg.total_usage.input_tokens, 80);
+        assert!(agg.combined_output.contains("First"));
+        assert!(agg.combined_output.contains("Second"));
+        assert!(agg.combined_output.contains("---"));
+    }
+
+    #[test]
+    fn aggregate_run_results_empty() {
+        let agg = aggregate_run_results(&[]);
+        assert!(agg.all_succeeded);
+        assert_eq!(agg.run_count, 0);
+        assert!(agg.combined_output.is_empty());
+    }
+
+    #[test]
+    fn format_agent_run_result_success() {
+        let result = AgentRunResult {
+            output: "Fixed the bug".to_owned(),
+            success: true,
+            turns: 5,
+            usage: UsageSummary {
+                input_tokens: 100,
+                output_tokens: 50,
+                cache_creation_tokens: 10,
+                cache_read_tokens: 20,
+            },
+        };
+        let formatted = format_agent_run_result("agent-123", &result);
+        assert!(formatted.contains("agent-123 completed"));
+        assert!(formatted.contains("Turns: 5"));
+        assert!(formatted.contains("100+50"));
+        assert!(formatted.contains("Fixed the bug"));
+    }
+
+    #[test]
+    fn format_agent_run_result_failure() {
+        let result = AgentRunResult {
+            output: "Error occurred".to_owned(),
+            success: false,
+            turns: 0,
+            usage: UsageSummary::default(),
+        };
+        let formatted = format_agent_run_result("agent-456", &result);
+        assert!(formatted.contains("agent-456 failed"));
     }
 }
