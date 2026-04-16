@@ -1,0 +1,36 @@
+[package]
+name = "rc-integration-tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+rc-core = { path = "../rc-core" }
+rc-auth = { path = "../rc-auth" }
+rc-model = { path = "../rc-model" }
+rc-context = { path = "../rc-context" }
+rc-compact = { path = "../rc-compact" }
+rc-provider = { path = "../rc-provider" }
+rc-query-engine = { path = "../rc-query-engine" }
+rc-engine-events = { path = "../rc-engine-events" }
+rc-event-bus = { path = "../rc-event-bus" }
+rc-file-history = { path = "../rc-file-history" }
+rc-session = { path = "../rc-session" }
+rc-settings = { path = "../rc-settings" }
+rc-permissions = { path = "../rc-permissions" }
+rc-system-prompt = { path = "../rc-system-prompt" }
+rc-tools = { path = "../rc-tools" }
+rc-mcp = { path = "../rc-mcp" }
+rc-agents = { path = "../rc-agents" }
+rc-swarm = { path = "../rc-swarm" }
+rc-transcript = { path = "../rc-transcript" }
+rc-config = { path = "../rc-config" }
+tokio = { workspace = true, features = ["rt", "macros", "time", "sync", "fs"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+chrono = { workspace = true }
