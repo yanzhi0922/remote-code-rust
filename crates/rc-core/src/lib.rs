@@ -4,10 +4,13 @@
 //! permission modes, provider protocols, conversation entries, tool calls,
 //! usage summaries, hook definitions, and session events.
 
+pub mod app_state;
 pub mod cost;
+pub mod exit_reasons;
 pub mod hooks;
 pub mod ids;
 pub mod message;
+pub mod message_types;
 pub mod permission_types;
 pub mod state;
 pub mod task_stack;
@@ -19,7 +22,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+pub use app_state::{
+    AppStateManager, SharedStateManager, StateManagerExt, StateSnapshot, StateUpdate,
+};
 pub use cost::CostTracker;
+pub use exit_reasons::{ExitReason, ExitReasonTracker, ExitRecord};
 pub use hooks::{HookDecision, HookEventEnvelope, HookEventKind, HookResponse, HookSpecificOutput};
 pub use ids::{AgentId, SessionId};
 pub use message::{
@@ -27,6 +34,7 @@ pub use message::{
     GroupedToolUseMessage, HookResultMessage, Message, MessageBase, MessageOrigin, ProgressMessage,
     SystemMessage, SystemMessageSubtype, TombstoneMessage, ToolUseSummaryMessage, UserMessage,
 };
+pub use message_types::{NormalizedMessage, NormalizedOrigin};
 pub use permission_types::{
     PermissionBehavior, PermissionResult, PermissionRule, PermissionRuleSource,
 };
