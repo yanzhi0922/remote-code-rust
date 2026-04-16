@@ -4083,6 +4083,7 @@ dependencies = [
 name = "rc-integration-tests"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "chrono",
  "rc-agents",
  "rc-auth",
@@ -4100,10 +4101,12 @@ dependencies = [
  "rc-query-engine",
  "rc-session",
  "rc-settings",
+ "rc-skills",
  "rc-swarm",
  "rc-system-prompt",
  "rc-tools",
  "rc-transcript",
+ "rc-utils",
  "serde",
  "serde_json",
  "tempfile",
