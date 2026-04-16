@@ -22,6 +22,7 @@ pub fn get_tool_completions(prefix: &str) -> Vec<String> {
 }
 
 /// Get file path completions for a partial path.
+#[allow(dead_code)]
 pub fn get_file_completions(partial: &str, cwd: &std::path::Path) -> Vec<String> {
     if partial.is_empty() {
         return Vec::new();
@@ -77,6 +78,7 @@ pub fn get_file_completions(partial: &str, cwd: &std::path::Path) -> Vec<String>
 }
 
 /// Update search results based on the current query.
+#[allow(dead_code)]
 pub fn update_search_results(history: &[String], query: &str, results: &mut Vec<usize>) {
     results.clear();
     if query.is_empty() {
