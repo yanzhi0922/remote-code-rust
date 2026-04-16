@@ -11,9 +11,11 @@ use crate::theme::Theme;
 pub mod agent_commands;
 pub mod auth;
 pub mod config;
+pub mod doctor_cmd;
 pub mod git_commands;
 pub mod help;
 pub mod hooks_cmd;
+pub mod install;
 pub mod keybindings;
 pub mod mcp;
 pub mod memory;
@@ -32,7 +34,10 @@ pub mod session_mgmt;
 pub mod skills;
 pub mod status;
 pub mod tasks;
+pub mod teleport;
 pub mod utility;
+pub mod version;
+pub mod vim;
 pub mod worktree;
 
 /// Result of handling a slash command.
@@ -415,6 +420,31 @@ pub const SLASH_COMMANDS: &[SlashCommandSpec] = &[
         usage: "/upgrade",
     },
     SlashCommandSpec {
+        name: "/vim",
+        summary: "Toggle Vim input mode",
+        usage: "/vim [on|off|status]",
+    },
+    SlashCommandSpec {
+        name: "/doctor",
+        summary: "Run diagnostic checks",
+        usage: "/doctor [full|quick|providers|mcp|config]",
+    },
+    SlashCommandSpec {
+        name: "/version",
+        summary: "Show version information",
+        usage: "/version",
+    },
+    SlashCommandSpec {
+        name: "/install",
+        summary: "Install plugins and extensions",
+        usage: "/install [list|status|<plugin-name>]",
+    },
+    SlashCommandSpec {
+        name: "/teleport",
+        summary: "Jump to a directory",
+        usage: "/teleport <path>",
+    },
+    SlashCommandSpec {
         name: "/quit",
         summary: "Exit the interactive session",
         usage: "/quit",
@@ -649,6 +679,11 @@ pub fn dispatch(input: &str, context: SlashCommandContext<'_>) -> SlashCommandAc
         "/debugToolCall" => misc_commands::dispatch_debug_tool_call(trimmed, context.config),
         "/subscribe-pr" => misc_commands::dispatch_subscribe_pr(trimmed, context.config),
         "/upgrade" => misc_commands::render_upgrade(),
+        "/vim" => vim::dispatch(trimmed, context.config),
+        "/doctor" => doctor_cmd::dispatch(trimmed, context.config),
+        "/version" => version::render(),
+        "/install" => install::dispatch(trimmed, context.config),
+        "/teleport" => teleport::dispatch(trimmed, context.config),
         "/quit" | "/exit" => return SlashCommandAction::Quit,
         _ => {
             println!("Unknown command `{trimmed}`. Type /help for a list of commands.");
@@ -1192,5 +1227,243 @@ mod tests {
         // We should have significantly more than the original ~22 commands
         let names = command_names();
         assert!(names.len() > 60, "Expected 60+ commands, got {}", names.len());
+    }
+
+    // --- Phase 21: new command tests ---
+
+    #[test]
+    fn command_names_include_phase21_commands() {
+        let names = command_names();
+        assert!(names.contains(&"/vim".to_owned()));
+        assert!(names.contains(&"/doctor".to_owned()));
+        assert!(names.contains(&"/version".to_owned()));
+        assert!(names.contains(&"/install".to_owned()));
+        assert!(names.contains(&"/teleport".to_owned()));
+    }
+
+    #[test]
+    fn dispatch_vim_command() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let action = dispatch(
+            "/vim on",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
+        );
+        assert!(matches!(action, SlashCommandAction::Continue));
+    }
+
+    #[test]
+    fn dispatch_vim_off_command() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let action = dispatch(
+            "/vim off",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
+        );
+        assert!(matches!(action, SlashCommandAction::Continue));
+    }
+
+    #[test]
+    fn dispatch_doctor_command() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let action = dispatch(
+            "/doctor quick",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
+        );
+        assert!(matches!(action, SlashCommandAction::Continue));
+    }
+
+    #[test]
+    fn dispatch_doctor_full_command() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let action = dispatch(
+            "/doctor full",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
+        );
+        assert!(matches!(action, SlashCommandAction::Continue));
+    }
+
+    #[test]
+    fn dispatch_version_command() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let action = dispatch(
+            "/version",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
+        );
+        assert!(matches!(action, SlashCommandAction::Continue));
+    }
+
+    #[test]
+    fn dispatch_install_command() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let action = dispatch(
+            "/install list",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
+        );
+        assert!(matches!(action, SlashCommandAction::Continue));
+    }
+
+    #[test]
+    fn dispatch_install_plugin_command() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let action = dispatch(
+            "/install my-plugin",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
+        );
+        assert!(matches!(action, SlashCommandAction::Continue));
+    }
+
+    #[test]
+    fn dispatch_teleport_command() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let action = dispatch(
+            "/teleport /tmp",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
+        );
+        assert!(matches!(action, SlashCommandAction::Continue));
+    }
+
+    #[test]
+    fn dispatch_teleport_no_args() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let action = dispatch(
+            "/teleport",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
+        );
+        assert!(matches!(action, SlashCommandAction::Continue));
+    }
+
+    #[test]
+    fn total_command_count_after_phase21() {
+        let names = command_names();
+        assert!(
+            names.len() >= 75,
+            "Expected 75+ commands after Phase 21, got {}",
+            names.len()
+        );
     }
 }
