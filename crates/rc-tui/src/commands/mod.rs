@@ -8,18 +8,31 @@ use rc_tools::runtime_builtin_tool_specs;
 
 use crate::theme::Theme;
 
+pub mod agent_commands;
+pub mod auth;
+pub mod config;
+pub mod git_commands;
 pub mod help;
+pub mod hooks_cmd;
+pub mod keybindings;
 pub mod mcp;
 pub mod memory;
+pub mod metrics;
+pub mod misc_commands;
+pub mod mode_commands;
 pub mod model;
 pub mod permissions;
 pub mod plugins;
 pub mod provider;
+pub mod remote;
 pub mod review;
+pub mod security;
 pub mod session;
+pub mod session_mgmt;
 pub mod skills;
 pub mod status;
 pub mod tasks;
+pub mod utility;
 pub mod worktree;
 
 /// Result of handling a slash command.
@@ -139,6 +152,267 @@ pub const SLASH_COMMANDS: &[SlashCommandSpec] = &[
         name: "/clear",
         summary: "Clear the in-memory conversation",
         usage: "/clear",
+    },
+    // --- New commands (Phase 10) ---
+    SlashCommandSpec {
+        name: "/config",
+        summary: "Runtime configuration get/set/list",
+        usage: "/config [list|get <key>|set <key> <value>]",
+    },
+    SlashCommandSpec {
+        name: "/resume",
+        summary: "List recent sessions for resumption",
+        usage: "/resume",
+    },
+    SlashCommandSpec {
+        name: "/rename",
+        summary: "Rename the current session",
+        usage: "/rename <new-name>",
+    },
+    SlashCommandSpec {
+        name: "/rewind",
+        summary: "Show rewind history for the current session",
+        usage: "/rewind",
+    },
+    SlashCommandSpec {
+        name: "/export",
+        summary: "Export current session to JSON or Markdown",
+        usage: "/export [json|markdown]",
+    },
+    SlashCommandSpec {
+        name: "/share",
+        summary: "Generate a share summary for the session",
+        usage: "/share",
+    },
+    SlashCommandSpec {
+        name: "/summary",
+        summary: "Show current session summary",
+        usage: "/summary",
+    },
+    SlashCommandSpec {
+        name: "/tag",
+        summary: "Manage session tags",
+        usage: "/tag [list|add <tag>|remove <tag>]",
+    },
+    SlashCommandSpec {
+        name: "/commit",
+        summary: "One-click commit preview (git add + commit)",
+        usage: "/commit",
+    },
+    SlashCommandSpec {
+        name: "/diff",
+        summary: "View code changes (git diff)",
+        usage: "/diff",
+    },
+    SlashCommandSpec {
+        name: "/pr_comments",
+        summary: "View PR comments",
+        usage: "/pr_comments",
+    },
+    SlashCommandSpec {
+        name: "/branch",
+        summary: "Branch management (list/create/switch)",
+        usage: "/branch [list|create <name>|switch <name>]",
+    },
+    SlashCommandSpec {
+        name: "/autofix-pr",
+        summary: "Auto-fix PR issues",
+        usage: "/autofix-pr",
+    },
+    SlashCommandSpec {
+        name: "/usage",
+        summary: "Show detailed token usage statistics",
+        usage: "/usage",
+    },
+    SlashCommandSpec {
+        name: "/extraUsage",
+        summary: "Show extra usage details (cache tokens)",
+        usage: "/extraUsage",
+    },
+    SlashCommandSpec {
+        name: "/stats",
+        summary: "Show session/tool/error statistics",
+        usage: "/stats",
+    },
+    SlashCommandSpec {
+        name: "/insights",
+        summary: "Show session analysis report",
+        usage: "/insights",
+    },
+    SlashCommandSpec {
+        name: "/fork",
+        summary: "Fork a sub-agent from the current session",
+        usage: "/fork <description>",
+    },
+    SlashCommandSpec {
+        name: "/peers",
+        summary: "List peer agents in the current swarm",
+        usage: "/peers",
+    },
+    SlashCommandSpec {
+        name: "/plan",
+        summary: "Enter or exit plan mode",
+        usage: "/plan [on|off]",
+    },
+    SlashCommandSpec {
+        name: "/effort",
+        summary: "Adjust reasoning effort level",
+        usage: "/effort [low|medium|high]",
+    },
+    SlashCommandSpec {
+        name: "/fast",
+        summary: "Toggle fast mode",
+        usage: "/fast [on|off]",
+    },
+    SlashCommandSpec {
+        name: "/outputStyle",
+        summary: "Switch output style",
+        usage: "/outputStyle [default|concise|verbose|technical]",
+    },
+    SlashCommandSpec {
+        name: "/color",
+        summary: "Switch color scheme",
+        usage: "/color [auto|always|never]",
+    },
+    SlashCommandSpec {
+        name: "/proactive",
+        summary: "Toggle proactive mode",
+        usage: "/proactive [on|off]",
+    },
+    SlashCommandSpec {
+        name: "/brief",
+        summary: "Toggle brief mode",
+        usage: "/brief [on|off]",
+    },
+    SlashCommandSpec {
+        name: "/files",
+        summary: "List files in the working directory",
+        usage: "/files [subdir]",
+    },
+    SlashCommandSpec {
+        name: "/env",
+        summary: "Show local environment variables",
+        usage: "/env",
+    },
+    SlashCommandSpec {
+        name: "/remoteEnv",
+        summary: "Show remote environment variables",
+        usage: "/remoteEnv",
+    },
+    SlashCommandSpec {
+        name: "/context",
+        summary: "Show context window usage",
+        usage: "/context",
+    },
+    SlashCommandSpec {
+        name: "/copy",
+        summary: "Copy recent output to clipboard",
+        usage: "/copy",
+    },
+    SlashCommandSpec {
+        name: "/advisor",
+        summary: "Show advisor suggestions",
+        usage: "/advisor",
+    },
+    SlashCommandSpec {
+        name: "/init",
+        summary: "Initialize project configuration",
+        usage: "/init",
+    },
+    SlashCommandSpec {
+        name: "/add-dir",
+        summary: "Add a working directory",
+        usage: "/add-dir <path>",
+    },
+    SlashCommandSpec {
+        name: "/feedback",
+        summary: "Submit feedback",
+        usage: "/feedback",
+    },
+    SlashCommandSpec {
+        name: "/releaseNotes",
+        summary: "Show release notes",
+        usage: "/releaseNotes",
+    },
+    SlashCommandSpec {
+        name: "/reloadPlugins",
+        summary: "Reload plugins",
+        usage: "/reloadPlugins",
+    },
+    SlashCommandSpec {
+        name: "/securityReview",
+        summary: "Perform a security review",
+        usage: "/securityReview",
+    },
+    SlashCommandSpec {
+        name: "/sandboxToggle",
+        summary: "Toggle sandbox mode",
+        usage: "/sandboxToggle [on|off|status]",
+    },
+    SlashCommandSpec {
+        name: "/login",
+        summary: "Show authentication status",
+        usage: "/login",
+    },
+    SlashCommandSpec {
+        name: "/logout",
+        summary: "Log out from current session",
+        usage: "/logout",
+    },
+    SlashCommandSpec {
+        name: "/hooks",
+        summary: "Manage hooks (list/run/test)",
+        usage: "/hooks [list|run <event>|test]",
+    },
+    SlashCommandSpec {
+        name: "/keybindings",
+        summary: "Manage keybindings (list/set/reset)",
+        usage: "/keybindings [list|set <key> <action>|reset]",
+    },
+    SlashCommandSpec {
+        name: "/terminalSetup",
+        summary: "Show terminal setup information",
+        usage: "/terminalSetup",
+    },
+    SlashCommandSpec {
+        name: "/remoteControlServer",
+        summary: "Show remote control server status",
+        usage: "/remoteControlServer",
+    },
+    SlashCommandSpec {
+        name: "/remote-setup",
+        summary: "Remote setup wizard",
+        usage: "/remote-setup [1|2|3|4]",
+    },
+    SlashCommandSpec {
+        name: "/ide",
+        summary: "Show IDE integration status",
+        usage: "/ide",
+    },
+    SlashCommandSpec {
+        name: "/voice",
+        summary: "Show voice mode status",
+        usage: "/voice",
+    },
+    SlashCommandSpec {
+        name: "/thinkback",
+        summary: "Show thinking/reasoning playback",
+        usage: "/thinkback",
+    },
+    SlashCommandSpec {
+        name: "/debugToolCall",
+        summary: "Debug tool call execution",
+        usage: "/debugToolCall <tool-name>",
+    },
+    SlashCommandSpec {
+        name: "/subscribe-pr",
+        summary: "Subscribe to PR activity",
+        usage: "/subscribe-pr <pr-url-or-number>",
+    },
+    SlashCommandSpec {
+        name: "/upgrade",
+        summary: "Check for updates",
+        usage: "/upgrade",
     },
     SlashCommandSpec {
         name: "/quit",
@@ -318,6 +592,63 @@ pub fn dispatch(input: &str, context: SlashCommandContext<'_>) -> SlashCommandAc
                 }
             }
         }
+        // --- New commands (Phase 10) ---
+        "/config" => config::dispatch(trimmed, context.config),
+        "/resume" => session_mgmt::render_resume(context.config, context.store),
+        "/rename" => session_mgmt::dispatch_rename(trimmed, context.config),
+        "/rewind" => session_mgmt::render_rewind(context.config, context.store),
+        "/export" => session_mgmt::dispatch_export(trimmed, context.config, context.store),
+        "/share" => session_mgmt::render_share(context.config, context.store),
+        "/summary" => session_mgmt::render_summary(context.config, context.store),
+        "/tag" => session_mgmt::dispatch_tag(trimmed, context.config),
+        "/commit" => git_commands::render_commit(context.config),
+        "/diff" => git_commands::render_diff(context.config),
+        "/pr_comments" => git_commands::render_pr_comments(context.config),
+        "/branch" => git_commands::dispatch_branch(trimmed, context.config),
+        "/autofix-pr" => git_commands::render_autofix_pr(context.config),
+        "/usage" => metrics::render_usage(context.config, context.store),
+        "/extraUsage" => metrics::render_extra_usage(context.config, context.store),
+        "/stats" => metrics::render_stats(context.config, context.store, context.cost_tracker),
+        "/insights" => metrics::render_insights(context.config, context.store),
+        "/fork" => agent_commands::dispatch_fork(trimmed, context.config),
+        "/peers" => agent_commands::render_peers(context.config),
+        "/plan" => mode_commands::dispatch_plan(trimmed, context.config),
+        "/effort" => mode_commands::dispatch_effort(trimmed, context.config),
+        "/fast" => mode_commands::dispatch_fast(trimmed, context.config),
+        "/outputStyle" => mode_commands::dispatch_output_style(trimmed, context.config),
+        "/color" => mode_commands::dispatch_color(trimmed, context.config),
+        "/proactive" => mode_commands::dispatch_proactive(trimmed, context.config),
+        "/brief" => mode_commands::dispatch_brief(trimmed, context.config),
+        "/files" => utility::dispatch_files(trimmed, context.config),
+        "/env" => utility::render_env(),
+        "/remoteEnv" => utility::render_remote_env(context.config),
+        "/context" => utility::render_context(
+            context.config,
+            context.context_manager,
+            context.conversation,
+        ),
+        "/copy" => utility::render_copy(),
+        "/advisor" => utility::render_advisor(context.config),
+        "/init" => utility::render_init(context.config),
+        "/add-dir" => utility::dispatch_add_dir(trimmed, context.config),
+        "/feedback" => utility::render_feedback(),
+        "/releaseNotes" => utility::render_release_notes(),
+        "/reloadPlugins" => utility::render_reload_plugins(context.config),
+        "/securityReview" => security::render_security_review(context.config),
+        "/sandboxToggle" => security::dispatch_sandbox_toggle(trimmed, context.config),
+        "/login" => auth::render_login(context.config),
+        "/logout" => auth::render_logout(context.config),
+        "/hooks" => hooks_cmd::dispatch(trimmed, context.config),
+        "/keybindings" => keybindings::dispatch(trimmed, context.config),
+        "/terminalSetup" => keybindings::render_terminal_setup(context.config),
+        "/remoteControlServer" => remote::render_remote_control_server(context.config),
+        "/remote-setup" => remote::dispatch_remote_setup(trimmed, context.config),
+        "/ide" => misc_commands::render_ide(context.config),
+        "/voice" => misc_commands::render_voice(context.config),
+        "/thinkback" => misc_commands::render_thinkback(context.config),
+        "/debugToolCall" => misc_commands::dispatch_debug_tool_call(trimmed, context.config),
+        "/subscribe-pr" => misc_commands::dispatch_subscribe_pr(trimmed, context.config),
+        "/upgrade" => misc_commands::render_upgrade(),
         "/quit" | "/exit" => return SlashCommandAction::Quit,
         _ => {
             println!("Unknown command `{trimmed}`. Type /help for a list of commands.");
@@ -365,6 +696,26 @@ mod tests {
         (config, store)
     }
 
+    fn build_context<'a>(
+        config: &'a RuntimeConfig,
+        store: &'a SessionStore,
+        conversation: &'a mut Vec<ConversationEntry>,
+        context_manager: &'a ContextWindowManager,
+        cost_tracker: &'a CostTracker,
+        broker: &'a StaticPermissionBroker,
+        theme: &'a mut Theme,
+    ) -> SlashCommandContext<'a> {
+        SlashCommandContext {
+            config,
+            store,
+            conversation,
+            context_manager,
+            cost_tracker,
+            broker,
+            theme,
+        }
+    }
+
     #[test]
     fn command_names_expose_management_surfaces() {
         let names = command_names();
@@ -374,6 +725,36 @@ mod tests {
         assert!(names.contains(&"/plugins".to_owned()));
         assert!(names.contains(&"/skills".to_owned()));
         assert!(names.contains(&"/quit".to_owned()));
+    }
+
+    #[test]
+    fn command_names_include_new_phase10_commands() {
+        let names = command_names();
+        assert!(names.contains(&"/config".to_owned()));
+        assert!(names.contains(&"/resume".to_owned()));
+        assert!(names.contains(&"/rename".to_owned()));
+        assert!(names.contains(&"/export".to_owned()));
+        assert!(names.contains(&"/commit".to_owned()));
+        assert!(names.contains(&"/diff".to_owned()));
+        assert!(names.contains(&"/branch".to_owned()));
+        assert!(names.contains(&"/usage".to_owned()));
+        assert!(names.contains(&"/stats".to_owned()));
+        assert!(names.contains(&"/insights".to_owned()));
+        assert!(names.contains(&"/fork".to_owned()));
+        assert!(names.contains(&"/peers".to_owned()));
+        assert!(names.contains(&"/plan".to_owned()));
+        assert!(names.contains(&"/effort".to_owned()));
+        assert!(names.contains(&"/fast".to_owned()));
+        assert!(names.contains(&"/outputStyle".to_owned()));
+        assert!(names.contains(&"/color".to_owned()));
+        assert!(names.contains(&"/files".to_owned()));
+        assert!(names.contains(&"/env".to_owned()));
+        assert!(names.contains(&"/context".to_owned()));
+        assert!(names.contains(&"/login".to_owned()));
+        assert!(names.contains(&"/logout".to_owned()));
+        assert!(names.contains(&"/hooks".to_owned()));
+        assert!(names.contains(&"/keybindings".to_owned()));
+        assert!(names.contains(&"/upgrade".to_owned()));
     }
 
     #[test]
@@ -391,15 +772,15 @@ mod tests {
 
         let action = dispatch(
             "/clear",
-            SlashCommandContext {
-                config: &config,
-                store: &store,
-                conversation: &mut conversation,
-                context_manager: &context_manager,
-                cost_tracker: &cost_tracker,
-                broker: &broker,
-                theme: &mut theme,
-            },
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
         );
 
         assert!(matches!(action, SlashCommandAction::ResetScroll));
@@ -418,31 +799,398 @@ mod tests {
 
         let action = dispatch(
             "/theme solarized",
-            SlashCommandContext {
-                config: &config,
-                store: &store,
-                conversation: &mut conversation,
-                context_manager: &context_manager,
-                cost_tracker: &cost_tracker,
-                broker: &broker,
-                theme: &mut theme,
-            },
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
         );
         assert!(matches!(action, SlashCommandAction::Continue));
         assert_eq!(theme.name, "solarized");
 
         let quit_action = dispatch(
             "/quit",
-            SlashCommandContext {
-                config: &config,
-                store: &store,
-                conversation: &mut conversation,
-                context_manager: &context_manager,
-                cost_tracker: &cost_tracker,
-                broker: &broker,
-                theme: &mut theme,
-            },
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
         );
         assert!(matches!(quit_action, SlashCommandAction::Quit));
+    }
+
+    #[test]
+    fn unknown_command_returns_continue() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let action = dispatch(
+            "/unknown_command_xyz",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
+        );
+        assert!(matches!(action, SlashCommandAction::Continue));
+    }
+
+    #[test]
+    fn dispatch_config_command() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let action = dispatch(
+            "/config list",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
+        );
+        assert!(matches!(action, SlashCommandAction::Continue));
+    }
+
+    #[test]
+    fn dispatch_resume_command() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let action = dispatch(
+            "/resume",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
+        );
+        assert!(matches!(action, SlashCommandAction::Continue));
+    }
+
+    #[test]
+    fn dispatch_commit_command() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let action = dispatch(
+            "/commit",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
+        );
+        assert!(matches!(action, SlashCommandAction::Continue));
+    }
+
+    #[test]
+    fn dispatch_usage_command() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let action = dispatch(
+            "/usage",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
+        );
+        assert!(matches!(action, SlashCommandAction::Continue));
+    }
+
+    #[test]
+    fn dispatch_fork_command() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let action = dispatch(
+            "/fork test task",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
+        );
+        assert!(matches!(action, SlashCommandAction::Continue));
+    }
+
+    #[test]
+    fn dispatch_plan_command() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let action = dispatch(
+            "/plan on",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
+        );
+        assert!(matches!(action, SlashCommandAction::Continue));
+    }
+
+    #[test]
+    fn dispatch_login_command() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let action = dispatch(
+            "/login",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
+        );
+        assert!(matches!(action, SlashCommandAction::Continue));
+    }
+
+    #[test]
+    fn dispatch_upgrade_command() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let action = dispatch(
+            "/upgrade",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
+        );
+        assert!(matches!(action, SlashCommandAction::Continue));
+    }
+
+    #[test]
+    fn dispatch_env_command() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let action = dispatch(
+            "/env",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
+        );
+        assert!(matches!(action, SlashCommandAction::Continue));
+    }
+
+    #[test]
+    fn dispatch_hooks_command() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let action = dispatch(
+            "/hooks list",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
+        );
+        assert!(matches!(action, SlashCommandAction::Continue));
+    }
+
+    #[test]
+    fn dispatch_security_review_command() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let action = dispatch(
+            "/securityReview",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
+        );
+        assert!(matches!(action, SlashCommandAction::Continue));
+    }
+
+    #[test]
+    fn dispatch_keybindings_command() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let action = dispatch(
+            "/keybindings",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
+        );
+        assert!(matches!(action, SlashCommandAction::Continue));
+    }
+
+    #[test]
+    fn dispatch_remote_setup_command() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let action = dispatch(
+            "/remote-setup",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
+        );
+        assert!(matches!(action, SlashCommandAction::Continue));
+    }
+
+    #[test]
+    fn dispatch_ide_command() {
+        let (config, store) = build_test_config();
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let action = dispatch(
+            "/ide",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+            ),
+        );
+        assert!(matches!(action, SlashCommandAction::Continue));
+    }
+
+    #[test]
+    fn total_command_count_includes_new_commands() {
+        // We should have significantly more than the original ~22 commands
+        let names = command_names();
+        assert!(names.len() > 60, "Expected 60+ commands, got {}", names.len());
     }
 }
