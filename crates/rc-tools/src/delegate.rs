@@ -211,7 +211,11 @@ impl DelegationEngine {
                 };
 
             let assistant_text = response.text.clone();
-            conversation.push(ConversationEntry::assistant(&assistant_text));
+            let mut assistant_entry = ConversationEntry::assistant(&assistant_text);
+            assistant_entry.history_text = response.history_text.clone();
+            assistant_entry.content_blocks = response.content_blocks.clone();
+            assistant_entry.tool_calls = response.tool_calls.clone();
+            conversation.push(assistant_entry);
 
             // No tool calls → child is done.
             if response.tool_calls.is_empty() {
@@ -657,8 +661,9 @@ fn emit_completed(
 mod tests {
     use super::*;
     use crate::ToolExecutionContext;
-    use rc_core::ProviderResponse;
+    use rc_core::{ProviderResponse, ToolCall};
     use rc_permissions::StaticPermissionBroker;
+    use serde_json::json;
     use std::sync::Mutex;
 
     // -- Mock completer -------------------------------------------------------
@@ -709,6 +714,53 @@ mod tests {
             &self,
             _conversation: &[ConversationEntry],
         ) -> anyhow::Result<ProviderResponse> {
+            let mut count = self.call_count.lock().unwrap();
+            let idx = *count;
+            *count += 1;
+            if idx < self.responses.len() {
+                Ok(self.responses[idx].clone())
+            } else {
+                Ok(ProviderResponse {
+                    text: "done".to_owned(),
+                    tool_calls: Vec::new(),
+                    stop_reason: "stop".to_owned(),
+                    usage: Default::default(),
+                    history_text: Some(String::new()),
+                    content_blocks: Vec::new(),
+                    thinking: None,
+                    request_id: None,
+                })
+            }
+        }
+    }
+
+    struct InspectingMultiTurnMock {
+        responses: Vec<ProviderResponse>,
+        call_count: Mutex<usize>,
+        seen_conversations: Mutex<Vec<Vec<ConversationEntry>>>,
+    }
+
+    impl InspectingMultiTurnMock {
+        fn new(responses: Vec<ProviderResponse>) -> Self {
+            Self {
+                responses,
+                call_count: Mutex::new(0),
+                seen_conversations: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SubAgentCompletion for InspectingMultiTurnMock {
+        async fn complete(
+            &self,
+            conversation: &[ConversationEntry],
+        ) -> anyhow::Result<ProviderResponse> {
+            self.seen_conversations
+                .lock()
+                .unwrap()
+                .push(conversation.to_vec());
+
             let mut count = self.call_count.lock().unwrap();
             let idx = *count;
             *count += 1;
@@ -927,6 +979,92 @@ mod tests {
         assert!(captured.len() >= 2);
         assert!(captured[0].starts_with("started:"));
         assert!(captured[1].starts_with("completed:"));
+    }
+
+    #[tokio::test]
+    async fn delegation_preserves_assistant_tool_calls_across_turns() {
+        let engine = DelegationEngine::new(DelegationConfig::default());
+        let completer = Arc::new(InspectingMultiTurnMock::new(vec![
+            ProviderResponse {
+                text: "Need to delegate".to_owned(),
+                tool_calls: vec![ToolCall {
+                    id: "call-1".to_owned(),
+                    name: "agent".to_owned(),
+                    input: json!({"task":"inspect"}),
+                }],
+                stop_reason: "tool_use".to_owned(),
+                usage: Default::default(),
+                history_text: Some("Need to delegate".to_owned()),
+                content_blocks: vec![
+                    json!({"type":"text","text":"Need to delegate"}),
+                    json!({
+                        "type":"tool_use",
+                        "id":"call-1",
+                        "name":"agent",
+                        "input":{"task":"inspect"}
+                    }),
+                ],
+                thinking: None,
+                request_id: None,
+            },
+            ProviderResponse {
+                text: "done".to_owned(),
+                tool_calls: Vec::new(),
+                stop_reason: "stop".to_owned(),
+                usage: Default::default(),
+                history_text: Some("done".to_owned()),
+                content_blocks: vec![json!({"type":"text","text":"done"})],
+                thinking: None,
+                request_id: None,
+            },
+        ]));
+
+        let ctx = DelegationContext {
+            task: "inspect".to_owned(),
+            cwd: PathBuf::from("."),
+            parent_conversation: Vec::new(),
+            depth: 0,
+            task_metadata: None,
+            allowed_tools: Vec::new(),
+            tool_context: tool_context(),
+            broker: test_broker(),
+        };
+
+        let result = engine
+            .delegate_single(ctx, completer.clone(), None)
+            .await
+            .unwrap();
+        assert!(result.success);
+        assert_eq!(result.output, "done");
+
+        let seen = completer.seen_conversations.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+
+        let second_turn = &seen[1];
+        let assistant_entry = second_turn
+            .iter()
+            .find(|entry| {
+                matches!(entry.role, rc_core::ConversationRole::Assistant)
+                    && entry.tool_calls.iter().any(|call| call.id == "call-1")
+            })
+            .expect("assistant entry with original tool call should be preserved");
+        assert_eq!(
+            assistant_entry.history_text.as_deref(),
+            Some("Need to delegate")
+        );
+        assert!(
+            assistant_entry
+                .content_blocks
+                .iter()
+                .any(|block| block.get("type").and_then(|value| value.as_str()) == Some("tool_use"))
+        );
+
+        let tool_entry = second_turn
+            .iter()
+            .find(|entry| entry.tool_call_id.as_deref() == Some("call-1"))
+            .expect("tool result should still reference the original tool call id");
+        assert_eq!(tool_entry.name.as_deref(), Some("agent"));
+        assert!(tool_entry.is_error);
     }
 
     #[test]

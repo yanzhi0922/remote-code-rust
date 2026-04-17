@@ -37,3 +37,4 @@ tempfile = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 chrono = { workspace = true }
 anyhow = { workspace = true }
+async-trait = { workspace = true }

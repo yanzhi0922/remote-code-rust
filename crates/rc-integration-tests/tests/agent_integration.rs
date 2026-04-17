@@ -6,6 +6,9 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -165,6 +168,96 @@ fn runner_builds_system_prompt_from_definition() {
     let runner = rc_agents::AgentRunner::new(def, config);
     let prompt = runner.build_system_prompt();
     assert!(prompt.contains("Remote Code"));
+}
+
+#[tokio::test]
+async fn runner_requires_host_executor_for_execution() {
+    let def = rc_agents::builtins::general_purpose_agent();
+    let config = rc_agents::AgentRunConfig {
+        max_turns: 10,
+        model: "sonnet".to_owned(),
+        tools: vec!["Read".to_owned(), "Write".to_owned()],
+        system_prompt: None,
+        working_dir: PathBuf::from("."),
+    };
+    let runner = rc_agents::AgentRunner::new(def, config);
+    let error = runner
+        .run("ship the feature", &[])
+        .await
+        .expect_err("runner should require executor");
+    assert!(error.to_string().contains("run_with_executor"));
+}
+
+#[tokio::test]
+async fn runner_executes_via_mock_executor_with_resolved_request() {
+    #[derive(Clone)]
+    struct MockExecutor {
+        requests: Arc<Mutex<Vec<rc_agents::AgentExecutionRequest>>>,
+    }
+
+    #[async_trait]
+    impl rc_agents::AgentExecutor for MockExecutor {
+        async fn execute(
+            &self,
+            request: rc_agents::AgentExecutionRequest,
+        ) -> anyhow::Result<rc_agents::AgentRunResult> {
+            self.requests.lock().expect("requests lock").push(request);
+            Ok(rc_agents::AgentRunResult {
+                output: "executor output".to_owned(),
+                success: true,
+                turns: 3,
+                usage: rc_agents::UsageSummary {
+                    input_tokens: 12,
+                    output_tokens: 8,
+                    cache_creation_tokens: 0,
+                    cache_read_tokens: 0,
+                },
+            })
+        }
+    }
+
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let executor = MockExecutor {
+        requests: Arc::clone(&requests),
+    };
+    let def = rc_agents::builtins::explore_agent();
+    let config = rc_agents::AgentRunConfig {
+        max_turns: 0,
+        model: String::new(),
+        tools: vec![
+            "Read".to_owned(),
+            "Write".to_owned(),
+            "Edit".to_owned(),
+            "Glob".to_owned(),
+        ],
+        system_prompt: None,
+        working_dir: PathBuf::from("."),
+    };
+    let runner = rc_agents::AgentRunner::new(def, config);
+    let result = runner
+        .run_with_executor(
+            "inspect auth code",
+            &[rc_agents::ConversationEntry {
+                role: "user".to_owned(),
+                content: "previous context".to_owned(),
+            }],
+            &executor,
+        )
+        .await
+        .expect("run with mock executor");
+
+    assert_eq!(result.output, "executor output");
+    let recorded = requests.lock().expect("requests");
+    assert_eq!(recorded.len(), 1);
+    let request = &recorded[0];
+    assert_eq!(request.task, "inspect auth code");
+    assert_eq!(request.context.len(), 1);
+    assert_eq!(request.max_turns, 200);
+    assert_eq!(request.model, "haiku");
+    assert!(request.tools.contains(&"Read".to_owned()));
+    assert!(request.tools.contains(&"Glob".to_owned()));
+    assert!(!request.tools.contains(&"Write".to_owned()));
+    assert!(!request.tools.contains(&"Edit".to_owned()));
 }
 
 // ─── Fork configuration ──────────────────────────────────────────────────

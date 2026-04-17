@@ -115,7 +115,7 @@ async fn main() -> Result<()> {
         Some(Commands::Worktree { command }) => run_worktree(&config, command),
         Some(Commands::Tasks { command }) => run_tasks(&config, command),
         Some(Commands::Export(args)) => run_export(&store, args),
-        Some(Commands::Agents { command }) => run_agents(&config, command),
+        Some(Commands::Agents { command }) => run_agents(&config, command).await,
         Some(Commands::Plugins { command }) => run_plugins(&config, command).await,
         Some(Commands::Mcp { command }) => run_mcp(&config, command).await,
         Some(Commands::Skills { command }) => run_skills(&config, command),

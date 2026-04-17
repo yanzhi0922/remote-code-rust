@@ -12,7 +12,8 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::definition::AgentDefinition;
@@ -67,6 +68,34 @@ pub struct ConversationEntry {
     pub content: String,
 }
 
+/// Fully-resolved request for a concrete agent runtime.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentExecutionRequest {
+    /// Agent type identifier.
+    pub agent_type: String,
+    /// Task prompt to execute.
+    pub task: String,
+    /// Conversation context inherited from the caller.
+    pub context: Vec<ConversationEntry>,
+    /// Resolved model name.
+    pub model: String,
+    /// Resolved maximum turn count.
+    pub max_turns: u32,
+    /// Resolved system prompt.
+    pub system_prompt: String,
+    /// Resolved tool set available to the agent.
+    pub tools: Vec<String>,
+    /// Working directory for the run.
+    pub working_dir: PathBuf,
+}
+
+/// Concrete host runtime capable of executing an agent request.
+#[async_trait]
+pub trait AgentExecutor: Send + Sync {
+    /// Execute the provided request and return the run result.
+    async fn execute(&self, request: AgentExecutionRequest) -> Result<AgentRunResult>;
+}
+
 /// The agent execution runner.
 ///
 /// Orchestrates the execution of an agent according to its definition and
@@ -103,17 +132,21 @@ impl AgentRunner {
     /// Otherwise, all tools are available.
     pub fn resolve_tools(&self, available_tools: &[String]) -> Vec<String> {
         if self.definition.has_tool_allowlist() {
-            // Check for wildcard
-            if self.definition.tools.contains(&"*".to_owned()) {
-                return available_tools.to_owned();
-            }
-            // Filter allowlist by denylist
             let deny_set: std::collections::HashSet<&str> = self
                 .definition
                 .disallowed_tools
                 .iter()
                 .map(|s| s.as_str())
                 .collect();
+            // Check for wildcard
+            if self.definition.tools.contains(&"*".to_owned()) {
+                return available_tools
+                    .iter()
+                    .filter(|tool| !deny_set.contains(tool.as_str()))
+                    .cloned()
+                    .collect();
+            }
+            // Filter allowlist by denylist
             self.definition
                 .tools
                 .iter()
@@ -142,6 +175,11 @@ impl AgentRunner {
     /// Uses the agent's system prompt if defined, otherwise generates a
     /// default prompt based on the agent type.
     pub fn build_system_prompt(&self) -> String {
+        if let Some(prompt) = &self.config.system_prompt
+            && !prompt.is_empty()
+        {
+            return prompt.clone();
+        }
         match &self.definition.system_prompt {
             Some(prompt) if !prompt.is_empty() => prompt.clone(),
             _ => format!(
@@ -174,43 +212,52 @@ impl AgentRunner {
         self.definition.max_turns
     }
 
+    /// Build the fully-resolved execution request for this run.
+    #[must_use]
+    pub fn build_request(
+        &self,
+        task: &str,
+        context: &[ConversationEntry],
+    ) -> AgentExecutionRequest {
+        AgentExecutionRequest {
+            agent_type: self.definition.agent_type.clone(),
+            task: task.to_owned(),
+            context: context.to_owned(),
+            model: self.resolve_model("default"),
+            max_turns: self.resolve_max_turns(),
+            system_prompt: self.build_system_prompt(),
+            tools: self.resolve_tools(&self.config.tools),
+            working_dir: self.config.working_dir.clone(),
+        }
+    }
+
     /// Run the agent with the given task and conversation context.
     ///
-    /// This is the main entry point for agent execution. In a real
-    /// implementation, this would invoke the LLM API with the resolved
-    /// tools, system prompt, and conversation history.
-    ///
-    /// For now, this returns a placeholder result indicating the agent
-    /// was configured correctly.
-    pub async fn run(&self, task: &str, _context: &[ConversationEntry]) -> Result<AgentRunResult> {
-        let system_prompt = self.build_system_prompt();
-        let max_turns = self.resolve_max_turns();
-        let model = self.resolve_model("default");
+    /// This entry point requires the host runtime to supply a concrete
+    /// executor via [`AgentRunner::run_with_executor`].
+    pub async fn run(&self, _task: &str, _context: &[ConversationEntry]) -> Result<AgentRunResult> {
+        Err(anyhow!(
+            "AgentRunner requires a concrete executor; call run_with_executor() from the host runtime"
+        ))
+    }
 
-        // In a real implementation, this would:
-        // 1. Create a query loop with the resolved tools
-        // 2. Inject the system prompt
-        // 3. Run the agent loop up to max_turns
-        // 4. Collect the final output and usage
-
+    /// Run the agent using a concrete executor supplied by the host runtime.
+    pub async fn run_with_executor(
+        &self,
+        task: &str,
+        context: &[ConversationEntry],
+        executor: &dyn AgentExecutor,
+    ) -> Result<AgentRunResult> {
+        let request = self.build_request(task, context);
         tracing::info!(
-            agent_type = %self.definition.agent_type,
-            model = %model,
-            max_turns = max_turns,
-            prompt_len = system_prompt.len(),
-            "Agent run configured for task: {}",
-            task.chars().take(80).collect::<String>()
+            agent_type = %request.agent_type,
+            model = %request.model,
+            max_turns = request.max_turns,
+            prompt_len = request.system_prompt.len(),
+            task_preview = %task.chars().take(80).collect::<String>(),
+            "Executing agent run"
         );
-
-        Ok(AgentRunResult {
-            output: format!(
-                "Agent '{}' configured but not yet executed (model: {}, max_turns: {})",
-                self.definition.agent_type, model, max_turns
-            ),
-            success: true,
-            turns: 0,
-            usage: UsageSummary::default(),
-        })
+        executor.execute(request).await
     }
 }
 
@@ -393,6 +440,7 @@ pub fn format_agent_run_result(agent_id: &str, result: &AgentRunResult) -> Strin
 mod tests {
     use super::*;
     use crate::definition::AgentSource;
+    use std::sync::{Arc, Mutex};
 
     fn test_definition() -> AgentDefinition {
         AgentDefinition {
@@ -450,6 +498,17 @@ mod tests {
     }
 
     #[test]
+    fn resolve_tools_wildcard_respects_denylist() {
+        let mut def = test_definition();
+        def.tools = vec!["*".to_owned()];
+        def.disallowed_tools = vec!["Read".to_owned()];
+        let runner = AgentRunner::new(def, test_config());
+        let available = vec!["Bash".to_owned(), "Read".to_owned(), "Write".to_owned()];
+        let tools = runner.resolve_tools(&available);
+        assert_eq!(tools, vec!["Bash", "Write"]);
+    }
+
+    #[test]
     fn resolve_tools_denylist_only() {
         let mut def = test_definition();
         def.tools = Vec::new();
@@ -475,6 +534,15 @@ mod tests {
         let runner = AgentRunner::new(test_definition(), test_config());
         let prompt = runner.build_system_prompt();
         assert_eq!(prompt, "You are a test agent.");
+    }
+
+    #[test]
+    fn build_system_prompt_prefers_config_override() {
+        let mut config = test_config();
+        config.system_prompt = Some("Config override".to_owned());
+        let runner = AgentRunner::new(test_definition(), config);
+        let prompt = runner.build_system_prompt();
+        assert_eq!(prompt, "Config override");
     }
 
     #[test]
@@ -523,11 +591,71 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_returns_placeholder_result() {
+    async fn run_requires_executor() {
         let runner = AgentRunner::new(test_definition(), test_config());
-        let result = runner.run("test task", &[]).await.expect("run");
-        assert!(result.success);
-        assert!(result.output.contains("test-agent"));
+        let error = runner
+            .run("test task", &[])
+            .await
+            .expect_err("missing executor");
+        assert!(error.to_string().contains("run_with_executor"));
+    }
+
+    struct RecordingExecutor {
+        seen_requests: Arc<Mutex<Vec<AgentExecutionRequest>>>,
+        result: AgentRunResult,
+    }
+
+    #[async_trait]
+    impl AgentExecutor for RecordingExecutor {
+        async fn execute(&self, request: AgentExecutionRequest) -> Result<AgentRunResult> {
+            self.seen_requests
+                .lock()
+                .expect("requests lock")
+                .push(request);
+            Ok(self.result.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn run_with_executor_passes_resolved_request() {
+        let seen_requests = Arc::new(Mutex::new(Vec::new()));
+        let executor = RecordingExecutor {
+            seen_requests: Arc::clone(&seen_requests),
+            result: AgentRunResult {
+                output: "done".to_owned(),
+                success: true,
+                turns: 2,
+                usage: UsageSummary {
+                    input_tokens: 10,
+                    output_tokens: 5,
+                    cache_creation_tokens: 0,
+                    cache_read_tokens: 0,
+                },
+            },
+        };
+        let runner = AgentRunner::new(test_definition(), test_config());
+        let context = vec![ConversationEntry {
+            role: "user".to_owned(),
+            content: "prior context".to_owned(),
+        }];
+
+        let result = runner
+            .run_with_executor("test task", &context, &executor)
+            .await
+            .expect("run with executor");
+
+        assert_eq!(result.output, "done");
+        let requests = seen_requests.lock().expect("requests");
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        assert_eq!(request.agent_type, "test-agent");
+        assert_eq!(request.task, "test task");
+        assert_eq!(request.context.len(), 1);
+        assert_eq!(request.model, "haiku");
+        assert_eq!(request.max_turns, 100);
+        assert_eq!(request.system_prompt, "You are a test agent.");
+        assert_eq!(request.tools, vec!["Bash", "Read"]);
+        assert_eq!(request.working_dir, PathBuf::from("/tmp"));
     }
 
     // ── Enhanced tests ──────────────────────────────────────────────────

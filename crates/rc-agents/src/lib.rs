@@ -52,7 +52,10 @@ use uuid::Uuid;
 pub use coordinator::{CoordinatorMode, TaskNotificationStatus, TaskUsage};
 pub use definition::{AgentDefinition, AgentIsolation, AgentMemoryScope, AgentSource};
 pub use resume::{AgentCheckpoint, ResumableAgentState};
-pub use runner::{AgentRunConfig, AgentRunResult, AgentRunner, ConversationEntry, UsageSummary};
+pub use runner::{
+    AgentExecutionRequest, AgentExecutor, AgentRunConfig, AgentRunResult, AgentRunner,
+    ConversationEntry, UsageSummary,
+};
 pub use worker::{WorkerAgent, WorkerConfig, WorkerResult, WorkerStatus};
 
 /// Current state of an agent.
