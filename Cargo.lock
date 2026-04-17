@@ -4093,6 +4093,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rc-ide"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "rc-integration-tests"
 version = "0.1.0"
 dependencies = [
@@ -4296,6 +4309,18 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tracing",
+]
+
+[[package]]
+name = "rc-skill-search"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "regex",
+ "serde",
+ "serde_json",
+ "tokio",
  "tracing",
 ]
 
