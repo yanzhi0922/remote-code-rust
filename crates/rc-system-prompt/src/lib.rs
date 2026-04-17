@@ -51,6 +51,7 @@ use sections::actions::ActionsSection;
 use sections::coordinator::CoordinatorSection;
 use sections::doing_tasks::DoingTasksSection;
 use sections::env_info::EnvInfoSection;
+use sections::hooks::HooksSection;
 use sections::intro::IntroSection;
 use sections::language::LanguageSection;
 use sections::mcp_instructions::McpInstructionsSection;
@@ -61,6 +62,8 @@ use sections::proactive::ProactiveSection;
 use sections::scratchpad::ScratchpadSection;
 use sections::session_guidance::SessionGuidanceSection;
 use sections::system::SystemSection;
+use sections::system_reminders::SystemRemindersSection;
+use sections::token_budget::TokenBudgetSection;
 use sections::tone_style::ToneStyleSection;
 use sections::tool_result::ToolResultSection;
 use sections::using_tools::UsingToolsSection;
@@ -172,6 +175,9 @@ impl SystemPromptBuilder {
         builder.dynamic_sections.push(Box::new(McpInstructionsSection));
         builder.dynamic_sections.push(Box::new(ScratchpadSection));
         builder.dynamic_sections.push(Box::new(ToolResultSection));
+        builder.dynamic_sections.push(Box::new(TokenBudgetSection));
+        builder.dynamic_sections.push(Box::new(HooksSection));
+        builder.dynamic_sections.push(Box::new(SystemRemindersSection));
         builder.dynamic_sections.push(Box::new(CoordinatorSection));
         builder.dynamic_sections.push(Box::new(ProactiveSection));
 
@@ -310,7 +316,7 @@ mod tests {
     fn builder_with_defaults_has_sections() {
         let builder = SystemPromptBuilder::with_default_sections();
         assert_eq!(builder.static_section_count(), 7);
-        assert_eq!(builder.dynamic_section_count(), 10);
+        assert_eq!(builder.dynamic_section_count(), 13);
     }
 
     #[test]
@@ -408,6 +414,9 @@ mod tests {
                 "mcp_instructions",
                 "scratchpad",
                 "tool_result",
+                "token_budget",
+                "hooks",
+                "system_reminders",
                 "coordinator",
                 "proactive"
             ]
