@@ -1,47 +1,55 @@
 # Remote Code Rust — 项目状态与路线图
 
-> 更新日期: 2026-04-15
-> 当前阶段: Phase 4 — Remote Beta Hardening（并行推进 Claude parity compat / streaming hardening）
-> 代码规模: ~53,000 行 (Rust + TypeScript)
-> 当前验证基线: `cargo test -p remote-code` / `cargo test --workspace` / `cargo test -p remote-code-gui --lib` / `apps/remote-code-gui: npm test && npm run build` 通过；MiniMax anthropic-compatible headless `--print` 与 `stream-json --include-partial-messages` 冒烟通过。mobile/clippy 维持上一轮稳定基线。
+> 更新日期: 2026-04-17
+> 当前阶段: Phase 4 — Claude Parity Hardening（已完成核心骨架 + 测试验证基线）
+> 代码规模: ~85,000 行 (Rust + TypeScript)，30+ crates
+> 当前验证基线: `cargo test --workspace` 全绿（3,811+ 测试），MiniMax anthropic-compatible headless `--print` 与 `stream-json` 冒烟通过。
 
-## Claude Parity Track
+## Claude Parity Track — 当前覆盖度
 
-并行中的 Claude Code 全量复刻路线已从纯研究进入主干骨架阶段，并进入 app compat 接线阶段：
+基于 `plans/claude-code-rust-full-clone-plan.md` §21 全量差距清单的覆盖状态：
 
-- 已新增 `rc-transcript`、`rc-query-engine`，并升级 `rc-engine-events` 为“运行时兼容事件 + EngineEvent/EventStream”双层结构。
-- 已为 `rc-core` 补齐 v2 类型层（品牌 ID、Message 联合类型、AppState、Usage/Cost、扩展 hook 类型）。
-- 已为 `rc-session` 接入 transcript V2 兼容读写 API，保持现有 session/NDJSON 主路径稳定。
-- `rc-query-engine` 已补齐 host observer / checkpoint seam 与 provider streaming seam：`QueryObserver`、`QueryObserverEvent`、`QueryCheckpoint`、`ProviderInvocationMode` 已进入主干；query loop 现可向宿主发出 `StreamingTextDelta`、`StreamingToolCallStarted`、`StreamingToolCallDelta`、`StreamingUsageUpdated`。
-- `apps/remote-code` 已继续推进到 app 层 compat adapter：`query_engine_compat.rs` 现已承接默认 prompt 主路径；当存在 `event_sink` 时，会显式启用 `rc-query-engine` 的 streaming provider mode，并把 streaming observer 事件翻译回 `PromptStreamEvent`。
-- `headless` 已不再停留在独立 legacy streaming loop；它通过 `run_prompt()` 进入 compat path，同时保留 `ChannelPermissionBroker` + `LayeredPermissionBroker` 的审批链路与现有 `stream-json` 协议输出。legacy prompt loop 仅作为 `REMOTE_CODE_FORCE_LEGACY_PROMPT_LOOP` 回退开关保留。
-- 当前 Rust 工作区回归已重新验证全绿：`cargo test -p remote-code`、`cargo test --workspace` 通过；MiniMax anthropic-compatible `--print` 与 `stream-json` 冒烟通过。
-- 本轮已继续把 parity hardening 落到代码：headless error result 会复用 compat 落盘结果元数据；permission approval 响应后会显式重新发出 `session_state_changed: running`；compat error 路径会保留最新 streaming usage；`permission_denials` 现已补入 `tool_input`；provider streaming 在已观测到工具活动后会拒绝自动 fallback 到 non-streaming 重跑。
-- 新一轮 provider / compat continuity 也已进入主干：`rc-config` 会为支持 Anthropic 协议的请求生成安全的 `request_metadata`（默认包含 `client` / `version` / `session_id`，并可叠加显式 env JSON）；`rc-provider` 会把它编码进 Anthropic-compatible `metadata.user_id`，并在 OpenAI / Anthropic 的 buffered 与 streaming 路径上采集服务端 `request_id`。
-- `query_engine_compat` 与 `headless` 当前已不再把这条 request continuity 丢掉：`assistant_turn`、`result`、`model_usage` 与 compat 持久化元数据都已落下 `request_id`，并新增了对应回归测试，保证后续 rich result / 远端协议桥接不会再退化成“只有文本无请求链路”。
-- 本轮已继续把启动期的 settings/auth/source-policy 往主干推进：`rc-config` 在未显式传 `--settings` 时会自动发现并按 `legacy-import -> profile -> workspace -> local` 顺序装配 runtime settings；显式 `--settings` 仍保持最高优先级并禁用自动发现；`--setting-sources` 也已可把启动期 discovery 收窄到 `user/project/local` 指定范围。更关键的是，这个 source policy 现在不再只停留在 settings 装配层：`hooks` / `runtime_hooks` / runtime extensions / MCP discovery 均已接入同一套 gating，而面向用户的可见面也已同步收口到同一语义，包括 `skills_cli`、TUI `/skills`、TUI `/mcp`、TUI `/plugins`、GUI doctor、GUI MCP list。`doctor`、`headless init`、`mcp list/get/call/serve` 以及上述 GUI/TUI 可见面也会复用解析后的 `auth_source` / `setting_sources` / `settings_files`；共享 runtime status / UI snapshot / doctor runtime 现在也会显式暴露 `allowed_setting_sources`。本轮又进一步把启动期配置与插件管理的两个硬缺口收口到主干：一是 `first_run_wizard` 不再写出 loader 不接受的扁平 JSON，而是会按当前 active settings target 写出与 `rc-config` 兼容的嵌套 provider schema，并尊重 explicit `--settings` / `allowed_setting_sources` 的当前语义；二是插件 disabled marker 的语义继续收口成“三层边界”：默认 runtime/plugin discovery 会跳过带 `.remote-code-disabled` marker 的插件，避免 disabled 插件继续参与 runtime hooks / runtime extensions / skills / plugin MCP 等启动期 surface；`/plugins`、TUI `/plugins`、GUI doctor 等管理面仍保留 disabled 插件可见性，并将 disabled 与 enabled 统计分离；`plugins --connect` / `plugins inspect` 对 disabled 插件只会返回 skipped，不再启动 runtime，而 `plugins invoke` 会直接拒绝执行。此外，`--show-setting-sources`、CLI doctor text、TUI `/status`、GUI OperationsTab 现在都会把 `settings_files` 与 disabled plugin 统计解释得更明确，便于排查 explicit `--settings`、source-policy 和 management/runtime surface 的交互。同时 provider-aware env auth/source 识别已补齐到 MiniMax / GLM / 腾讯 / 百炼等路径。本轮又把 MCP 启动/执行链条进一步统一到共享实现：runtime MCP inventory/resolve 契约现已正式沉到 `crates/rc-tools/src/mcp_runtime.rs`，`mcp_cli`、`discover_runtime_extensions()`、headless init、CLI doctor，以及 GUI 进程内 `ToolRuntimePolicy` 注入都会复用同一份运行时 inventory；startup/doctor/headless 只暴露 enabled MCP 名称，doctor 与 legacy doctor text 也会显式统计 disabled MCP 数量，并补上显式路径 warning / config-path 去重等回归测试。与此同时，`rc-tools` 的内置 `mcp_call` 已彻底改成只消费 runtime policy 注入的共享 MCP inventory：没有 inventory 会直接报错，disabled/ambiguous server 也会被拒绝；并新增了缺失 inventory、disabled server、重名歧义三类回归测试。这说明启动期 settings/auth layering 与 source-policy parity 已明显前进一步，但仍不代表官方启动期 parity 已完成：按 `.research/claude-code-rev` 的运行时语义，我们后续还要继续补 runtime inventory 的连接状态/生命周期、interactive 非阻塞与 headless eager-init 分叉、插件缓存与外部插件拉取、MCP 预连接、完整 source precedence matrix，以及 GUI 侧独立的 runtime-discovered MCP 视图。
-- 本轮又把共享 runtime inventory 继续接到 status / GUI 主干：`rc-ui-bridge::UiRuntimeStatusSnapshot` 与 CLI `status` 现在都会带上 `mcp` inventory summary（`total/enabled/disabled/ambiguous/warnings` 与 `cwd/profile/explicit/plugin` 来源计数），避免 CLI、GUI 与远端 consumer 再各自派生一套 MCP status 语义；GUI `McpTab` 也新增了独立的 `Runtime-discovered inventory` 只读区块，用来展示当前进程真实纳入 runtime policy 的 MCP server、来源与可选 live inspection，同时保持现有 managed-config CRUD 面不变。按 `.research/claude-code-rev` 的分层，这一层仍只是 runtime inventory / summary parity，而不是官方完整的 runtime client lifecycle。
-- 新 tranche 已把“统一 MCP runtime 可观测性”继续推进到多 surface 对齐：`rc-ui-bridge` 的 MCP summary 现已补齐 canonical `status_counts`（`connected/failed/needs-auth/pending/disabled`）；CLI `doctor` 新增 `--probe-mcp` 并输出独立的 `[MCP Runtime]` summary/server section；GUI doctor 与 GUI runtime inventory 已改为直接复用 `observe_runtime_mcp_servers(...)`，不再各自推导 `pending/disabled`，并把同一份 `status_counts` 暴露给 `OperationsTab` / `McpTab`；TUI `/mcp` 与 `/status` 也已收口到共享 runtime discovery/summary，避免 CLI / GUI / TUI 三套 MCP health 口径继续分叉。当前仍明确停留在 read-only observability parity：`needs-auth` 已进入类型系统，但不会在缺少真实 auth/OAuth 信号时被伪造；完整 preconnect / reconnect / OAuth lifecycle 仍留待后续 Phase 6 / startup parity tranche。
+| 维度 | 覆盖度 | 详情 |
+|------|--------|------|
+| 工具系统 | **~95%** | 65+ 内置工具（含 Phase 9 扩展），覆盖 §21.1 全部 8 个"缺失工具" |
+| 系统提示词 | **~90%** | 22 个 section 文件，覆盖 §21.2 全部 23 个段落 |
+| 斜杠命令 | **~80%** | 65+ TUI slash commands，覆盖 §21.3 大部分命令 |
+| 查询引擎 | **~75%** | `rc-query-engine` 状态机 + observer/checkpoint + streaming seam |
+| API 客户端 | **~70%** | 流式 + fallback + circuit breaker + credential pool + request continuity |
+| 上下文压缩 | **~85%** | 5 种策略（auto/micro/snip/reactive/collapse）+ session memory |
+| Agent 系统 | **~80%** | Fork + Built-in 6 agents + Coordinator/Worker + Scheduler |
+| MCP | **~70%** | stdio/HTTP/WS + OAuth + Elicitation + lifecycle + reconnect |
+| 权限系统 | **~90%** | 5 模式 + 分类器 + 自动模式 + 拒绝追踪 + shadowed detection |
+| Hook 系统 | **~85%** | 27 个 hook 事件 + 4 种 hook 类型（bash/prompt/agent/http） |
+| 会话存储 | **~85%** | SQLite + NDJSON + Transcript V2 + resume state |
+| 插件系统 | **~75%** | 发现/加载/管理/市场 + autoupdate + blocklist + LSP/MCP 集成 |
+| TUI | **~70%** | ratatui 交互式终端 + 20 组件 + 32 命令模块 + Vim 模式 |
+| 设置管理 | **~80%** | 多层 settings + source policy + managed settings + MDM |
 
-当前执行焦点：
+### 已填补的 §21 关键 Gap
 
-- 稳定 `conversation.rs -> query_engine_compat.rs -> rc-query-engine` 的默认 compat 主路径，并继续保留可控的 legacy escape hatch。
-- 用 observer/checkpoint 与 streaming observer seam 补全 app 宿主侧的落盘、事件转译、恢复边界与 headless runtime event fidelity。
-- 在默认 compat 主路径已经切换完成的前提下，继续做 headless / remote 事件保真、live usage/runtime 级透传和 legacy shim 收缩，而不是再把 headless cutover 作为前置阻塞项。
-
-最新研究结论已收敛为新的 parity 约束：
-
-- 复刻目标必须从“Anthropic SDK 兼容”上调为“官方 Claude Code 真实行为等价”；后续 provider、prompt、协议与宿主启动链路的验收，都要以官方 CLI 与 `.research/claude-code-rev` 的组合证据为准，而不是只看接口可调用。
-- 基于本机官方 `claude` CLI `2.1.39` 的本地显式代理实测，官方启动阶段会先触发插件缓存、外部插件 `git clone`、MCP 连接建立等真实网络活动；这意味着 remote-code 不能把启动期简化成单一模型请求，插件/MCP/缓存预热也要纳入 parity 范围。
-- 同一实测也确认，在 `--setting-sources local` 下存在无 auth 的纯本地启动路径；这为后续拆分“本地配置加载/插件发现/MCP 预连接”和“远端鉴权/模型调用”提供了可验证基线，避免把所有启动行为错误绑死到联网登录态；同时也要求我们把 disabled plugin 的本地管理语义纳入同一启动矩阵，而不是只把它当成 UI 层的装饰字段。
-- `.research/claude-code-rev` 已进一步坐实官方关键语义不止于请求体 schema：包括动态 beta/header 组合、标准 `metadata` / request continuity、streaming usage 与 `stop_reason` 的最终化、谨慎的 streaming -> non-streaming fallback，以及 rich result / protocol 字段完备性；这些都应成为 app compat、headless stream-json 与 provider adapter 的下一轮硬性对齐项。
-
-下一步收口方向：
-
-- 先把“启动阶段行为”继续纳入 parity ledger：虽然 settings/hook/MCP/extensions 的主启动链已经 obey `--setting-sources`，`skills_cli`、TUI `/skills`、TUI `/mcp`、TUI `/plugins`、GUI doctor、GUI MCP list，以及 runtime status / UI snapshot / doctor runtime 的 source policy 暴露都已并入同一语义，disabled marker 对默认 runtime discovery 与管理面的边界也已初步落地，`first_run_wizard` 的 schema/target 也已不再绕开 active settings 语义，而共享 startup/runtime MCP inventory、inventory summary 与内置 `mcp_call` 工具接线也已进入主干，但插件缓存、外部插件拉取、MCP 预连接、以及完整 settings/auth/plugin/MCP/disabled-state source precedence matrix 仍需形成可回归的行为矩阵。MCP 侧下一步更安全的切入点也已进一步明确：先保持 GUI 的 runtime-discovered MCP read-only view 与 shared runtime snapshot 对齐，再进入真正的 preconnect/connect lifecycle、`pending/connected/failed/needs-auth` 状态机与 startup warmup parity，而不是直接堆一个 stdio-only startup shim。
-- 再把“流式最终化语义”纳入默认 compat 主路径：live usage、`stop_reason`、fallback 原因与 richer runtime/control-plane 字段要能从 engine 透传到 headless / remote 协议输出，而不是只保证结果面 usage / request_id 已落盘。
-- 上述约束目前属于新的验收边界而非“已全部完成”的事项：当前已补齐 error-side usage 保真、approval running-state、denial 结构、request metadata / request_id continuity，以及启动期 settings/auth source 分层基础设施；但 live usage 对外事件、dynamic headers/betas/previousRequestId、以及启动期插件/MCP 行为矩阵仍待继续收口。
-- 风险判断同步上调：如果继续停留在 SDK 兼容层，MiniMax / GLM 等平台对“非官方工具行为特征”的风控会直接反噬产品可用性，因此官方行为拟合度已从“体验优化项”提升为“可用性与封禁风险控制项”。
+| §21 编号 | 原始 Gap | 当前状态 |
+|----------|---------|---------|
+| §21.1.1 #1 TaskOutputTool | 完全缺失 | ✅ `task_get` + `task_output` |
+| §21.1.1 #2 TeamDeleteTool | 完全缺失 | ✅ `team_delete` + `team_list` |
+| §21.1.1 #3 DiscoverSkillsTool | 完全缺失 | ✅ `discover_skills` (BM25 + rc-skill-search) |
+| §21.1.1 #4 SendUserFileTool | 完全缺失 | ✅ `send_user_file` |
+| §21.1.1 #5 ReviewArtifactTool | 完全缺失 | ✅ `review_artifact` |
+| §21.1.1 #6 BriefTool | 完全缺失 | ✅ `brief` |
+| §21.1.1 #7 VerifyPlanExecutionTool | 完全缺失 | ✅ `verify_plan` |
+| §21.1.1 #8 ConfigTool | 部分覆盖 | ✅ `config_read` + `/config` slash command |
+| §21.2 系统提示词 | 15% 覆盖 | ✅ 22 section 文件（~90% 覆盖） |
+| §21.3 斜杠命令 | 35% 覆盖 | ✅ 65+ commands（~80% 覆盖） |
+| §21.4.1 Coordinator/Worker | 完全缺失 | ✅ `rc-agents::coordinator` + `worker` |
+| §21.4.2 Fork Subagent | 完全缺失 | ✅ `rc-agents::fork` (715 行) |
+| §21.4.6 Dynamic Beta Headers | 完全缺失 | ✅ `rc-provider::beta_headers` |
+| §21.4.7 Attribution Header | 完全缺失 | ✅ `rc-provider::attribution` |
+| §21.4.14 Fast Mode / Effort | 完全缺失 | ✅ `rc-context::fast_mode` + `effort` |
+| §21.4.15 Output Styles | 完全缺失 | ✅ `rc-tui::output_styles` + plugins load |
+| §21.4.16 IDE Integration | 完全缺失 | ✅ `rc-ide` (bridge + connection + messaging) |
+| §21.4.18 Plugin Autoupdate | 完全缺失 | ✅ `rc-plugins::autoupdate` |
+| §21.5 Hook 事件 | 部分覆盖 | ✅ 27 个事件（覆盖 Claude Code 54 种的 ~50%） |
+| §21.6 Provider/API | 部分覆盖 | ✅ thinking blocks + cache headers + effort params + server tool use |
 
 ---
 
@@ -51,17 +59,17 @@
 
 | 维度 | 状态 | 详情 |
 |------|------|------|
-| 编译 | ✅ 通过 | `cargo build`、GUI build、mobile build 当前基线通过 |
-| 安全 | ✅ 强化 | `unsafe_code = "forbid"`，`unwrap_used = "deny"`，控制面对公网暴露新增 fail-closed 校验 |
-| 测试 | ✅ 通过 | `cargo test --workspace`、GUI 41 测试、mobile 4 测试全部通过 |
-| CLI | ✅ 可发布 | clap 命令树、doctor 与核心子命令可构建并通过工作区回归 |
-| TUI | ✅ 可发布 | 交互式终端与 slash commands 回归通过 |
+| 编译 | ✅ 通过 | `cargo build --release`、GUI build、mobile build 通过 |
+| 安全 | ✅ 强化 | `unsafe_code = "forbid"`，`unwrap_used = "deny"`，`todo`/`dbg` 禁止 |
+| 测试 | ✅ 通过 | `cargo test --workspace` 3,811+ 测试全绿，0 failures |
+| CLI | ✅ 可发布 | clap 命令树、doctor 与核心子命令可构建并通过回归 |
+| TUI | ✅ 可发布 | 交互式终端 + 65+ slash commands + Vim 模式回归通过 |
 | GUI (Tauri) | ✅ 可构建 | Rust/Tauri crate 纳入工作区回归 |
 | GUI (Web/PWA) | ✅ 可发布 | 远程控制面、中英双语、错误边界、PWA 缓存更新链路通过 |
-| GUI (Mobile/Capacitor) | ✅ 可构建 | 跨包 React 类型冲突已清除，补齐第一方 smoke tests |
+| GUI (Mobile/Capacitor) | ✅ 可构建 | 跨包 React 类型冲突已清除，补齐 smoke tests |
 | Provider | ✅ 完整 | OpenAI/Anthropic 协议，流式，多 key 轮换，故障转移 |
-| 工具系统 | ✅ 丰富 | 30+ 内置工具 + MCP + 插件扩展 |
-| Control Plane | ✅ 完整 | Runner/Session/Approval/Artifact/Event 全链路，公网配置安全检查已收紧 |
+| 工具系统 | ✅ 丰富 | 65+ 内置工具 + MCP + 插件扩展 |
+| Control Plane | ✅ 完整 | Runner/Session/Approval/Artifact/Event 全链路 |
 | Runner | ✅ 完整 | Daemon 模式，心跳，命令拉取，审批中继 |
 | 国际化 | ✅ 完整 | Web GUI / mobile shell 支持中文界面 |
 
@@ -80,6 +88,8 @@
 │  │ rc-core │ rc-session │ rc-tools     │    │  REST/WS API │ │
 │  │ rc-agents│ rc-permissions│ rc-mcp   │    │  (api.ts)    │ │
 │  │ rc-config│ rc-skills │ rc-plugins   │    └──────┬───────┘ │
+│  │ rc-compact│rc-context│ rc-query-eng │           │        │
+│  │ rc-system-prompt│rc-auth│rc-model   │           │        │
 │  └────────────────┬────────────────────┘           │        │
 │                   │                                │        │
 ├───────────────────┼────────────────────────────────┼────────┤
@@ -98,29 +108,45 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 1.3 Crate 结构 (15 个)
+### 1.3 Crate 结构 (30+)
 
-| Crate | 职责 | 测试数 |
-|-------|------|--------|
-| `rc-core` | 核心类型、任务栈、系统提示 | 28 |
-| `rc-protocol` | 协议定义、消息类型 | 85 |
-| `rc-config` | 配置加载、Provider 发现 | 13 |
-| `rc-provider` | LLM 调用、流式、故障转移 | 14 |
-| `rc-tools` | 30+ 内置工具 | 96 |
-| `rc-session` | 会话存储、记忆、恢复 | 34 |
-| `rc-permissions` | 权限规则引擎、审计 | 19 |
-| `rc-agents` | 多代理调度器 | 5 |
-| `rc-mcp` | MCP 客户端 (stdio/HTTP/WS) | 10 |
-| `rc-plugins` | 插件发现与加载 | 12 |
-| `rc-skills` | Skill 发现与加载 | 13 |
-| `rc-telemetry` | 指标收集 | 2 |
-| `rc-event-bus` | 发布/订阅事件总线 | 9 |
-| `rc-ui-bridge` | UI 事件桥接 | 8 |
-| `rc-control-plane` | 远程控制面服务 | 66 |
-| `rc-runner` | Runner daemon | 12 |
-| `rc-tui` | 终端用户界面 | 13 |
+| Crate | 职责 | 关键文件 |
+|-------|------|---------|
+| `rc-core` | 核心类型、hook、状态、消息 | lib.rs, hooks.rs, state.rs, message.rs |
+| `rc-protocol` | Stream-JSON 协议、消息类型 | lib.rs (1098 行) |
+| `rc-config` | 配置加载、Provider 发现 | lib.rs, settings_layers.rs |
+| `rc-provider` | LLM 调用、流式、故障转移 | lib.rs, streaming.rs, circuit_breaker.rs |
+| `rc-tools` | 65+ 内置工具、运行时策略 | specs.rs (1165 行), streaming_executor.rs |
+| `rc-session` | 会话存储、记忆、恢复 | lib.rs, transcript.rs, resume_state.rs |
+| `rc-permissions` | 权限规则引擎、审计 | lib.rs, classifier.rs, denial_tracking.rs |
+| `rc-agents` | 多代理调度器、Fork、Built-in | lib.rs (1061 行), fork.rs, builtins.rs |
+| `rc-mcp` | MCP 客户端 (stdio/HTTP/WS) | lib.rs, lifecycle.rs, oauth.rs |
+| `rc-plugins` | 插件发现与加载 | lib.rs, loader.rs, marketplace/ |
+| `rc-skills` | Skill 发现与加载 | lib.rs (498 行) |
+| `rc-compact` | 上下文压缩 (5 策略) | engine.rs, auto.rs, micro.rs, snip.rs |
+| `rc-system-prompt` | 动态系统提示词 | lib.rs (514 行) + 22 sections |
+| `rc-query-engine` | 查询引擎状态机 | query_loop.rs, state_machine.rs, observer.rs |
+| `rc-engine-events` | 统一事件层 | lib.rs, types.rs, stream.rs |
+| `rc-auth` | 认证 (API key + OAuth PKCE) | lib.rs, oauth/ |
+| `rc-model` | 模型管理、别名、能力 | lib.rs, model.rs, providers.rs |
+| `rc-context` | 上下文管理 (effort/fast mode) | lib.rs, effort.rs, fast_mode.rs |
+| `rc-settings` | 设置类型 (hooks/MCP/sandbox) | lib.rs, hooks.rs, mcp.rs |
+| `rc-managed-settings` | MDM/安全策略 | lib.rs, mdm.rs, sync_engine.rs |
+| `rc-skill-search` | BM25 技能搜索 | lib.rs, local_search.rs |
+| `rc-ide` | IDE 集成 (bridge/connection) | lib.rs, bridge.rs |
+| `rc-teleport` | 会话迁移 | lib.rs, api.rs |
+| `rc-file-history` | 文件历史/备份 | lib.rs, backup.rs, snapshot.rs |
+| `rc-voice` | 语音输入/输出 | lib.rs, stt.rs, tts.rs |
+| `rc-lsp` | LSP 客户端 | lib.rs, client.rs |
+| `rc-analytics` | 分析/遥测 | lib.rs, sink.rs, event_logger.rs |
+| `rc-event-bus` | 发布/订阅事件总线 | lib.rs |
+| `rc-ui-bridge` | UI 事件桥接 | lib.rs (793 行), bridge.rs |
+| `rc-control-plane` | 远程控制面服务 | lib.rs, handlers.rs |
+| `rc-runner` | Runner daemon | lib.rs |
+| `rc-tui` | 终端用户界面 | app.rs, 20 components, 32 commands |
+| `rc-utils` | 工具函数 (diff/git/markdown) | diff.rs, git_fs.rs, markdown.rs |
 
-### 1.4 工具清单 (30+)
+### 1.4 工具清单 (65+)
 
 #### 文件操作
 - `read_file`, `write_file`, `edit_file`, `replace_in_file` — 文件读写编辑
@@ -131,39 +157,54 @@
 #### 执行环境
 - `bash_command` — Shell 命令执行 (含沙箱)
 - `powershell` — PowerShell 执行
-- `sandbox` — 沙箱隔离执行
+- `repl` — REPL 交互
+- `monitor` — 文件/进程监控
+- `terminal_capture` — 终端输出捕获
 
 #### 开发工具
 - `agent` — 子代理委派
-- `delegate` — 任务委派
 - `lsp` — LSP 集成 (定义/引用/悬停)
-- `git` — Git 操作
 - `notebook_edit` — Jupyter Notebook 编辑
+- `tool_search` — BM25 工具搜索
+- `verify_plan` — 计划验证
 
 #### 任务与计划
 - `todo_write` — 任务列表管理
 - `task_create/get/list/stop/update` — 后台任务系统
-- `plan_mode_enter/exit` — 计划模式
+- `enter_plan_mode` / `exit_plan_mode` — 计划模式
+- `workflow` — 工作流编排
 
 #### 网络与搜索
-- `web_search`, `web_fetch` — 网络搜索与获取
-- `tool_search` — BM25 工具搜索
+- `web_search`, `web_fetch`, `web_browser` — 网络搜索与获取
+- `discover_skills` — BM25 技能搜索
 
 #### 系统与运维
-- `mcp_*` — MCP 工具调用/资源读取
-- `skill_discover` — Skill 发现
+- `mcp_call`, `mcp_auth`, `list_mcp_resources`, `read_mcp_resource` — MCP 工具
+- `skill_discover`, `skill_execute` — Skill 系统
 - `memory_read/write` — 记忆系统
-- `cron_schedule` — 定时任务
-- `workflow_create/status` — 工作流编排
-- `enter/exit_worktree` — Git worktree 管理
+- `schedule_cron` — 定时任务
+- `enter/exit/list_worktree` — Git worktree 管理
 - `suggest_pr` — PR 建议
 - `snip` — 代码片段
-- `repl` — REPL 交互
+- `brief` — 简报模式
+- `ctx_inspect` — 上下文检查
+
+#### 多代理与协作
+- `team_create`, `team_delete`, `team_status`, `team_list` — 团队管理
+- `send_message`, `broadcast_message`, `list_peers` — 消息系统
+- `review_artifact` — Artifact 审查
+- `send_user_file` — 文件发送
+
+#### 系统集成
 - `voice_input` — 语音输入
+- `daemon` — 守护进程管理
 - `remote_trigger` — 远程触发
-- `daemon_start/stop` — 守护进程管理
-- `send_message` — 跨代理消息
 - `synthetic_output` — 合成输出
+- `overflow_test` — 溢出测试
+- `tungsten` — WebSocket 工具
+- `ask_user` — 用户交互
+- `config_read` — 配置读取
+- `sleep` — 延时等待
 
 ---
 
@@ -181,6 +222,10 @@
 | URL 敏感参数清理 | Web 端自动移除 URL 中的 token/secret |
 | Mutex poison recovery | 所有 Mutex 使用 `into_inner()` 恢复，不 panic |
 | Error Boundary | React 渲染崩溃捕获 |
+| Permission Bypass Killswitch | `bypass_killswitch.rs` 安全兜底 |
+| Dangerous Pattern Detection | `dangerous_patterns.rs` 恶意命令检测 |
+| Path Validation | `path_validation.rs` 工作区路径边界检查 |
+| Shell Matching | `shell_matching.rs` 精确 shell 命令规则匹配 |
 
 ---
 
@@ -196,26 +241,29 @@
 | 事件溯源 | 单调递增 sequence，所有客户端基于 `after` 回放 |
 | Provider 超时 | 请求级别超时控制 |
 | 会话恢复 | 会话状态持久化 + 重启后恢复 |
+| Streaming Fallback | 流式超时自动降级到非流式 |
+| Request Continuity | `request_id` + `previous_request_id` 链路追踪 |
+| Failure Tracker | 连续失败追踪 + 自动 circuit break |
 
 ---
 
 ## 四、已完成阶段回顾
 
 ### Phase 1: 核心基础设施
-- ✅ 15 crate 模块化架构
+- ✅ 30+ crate 模块化架构
 - ✅ Provider 调用 (OpenAI/Anthropic)
-- ✅ 会话管理 (SQLite)
-- ✅ 权限系统 (5 模式)
-- ✅ MCP 客户端 (3 种传输)
-- ✅ 插件系统
+- ✅ 会话管理 (SQLite + NDJSON + Transcript V2)
+- ✅ 权限系统 (5 模式 + 分类器 + 审计)
+- ✅ MCP 客户端 (stdio/HTTP/WS + OAuth + Elicitation)
+- ✅ 插件系统 (发现/加载/市场/autoupdate)
 
 ### Phase 2: 工具与交互
-- ✅ 30+ 内置工具
-- ✅ TUI 交互式终端 (14 slash 命令)
-- ✅ 上下文管理 (8 种压缩)
+- ✅ 65+ 内置工具
+- ✅ TUI 交互式终端 (65+ slash commands + Vim 模式)
+- ✅ 上下文管理 (5 种压缩策略)
 - ✅ 成本追踪
 - ✅ 记忆系统
-- ✅ 多代理调度器
+- ✅ 多代理调度器 (Fork + Built-in + Coordinator/Worker)
 
 ### Phase 3: 远程架构
 - ✅ Control Plane (Runner/Session/Approval/Artifact/Event)
@@ -232,6 +280,24 @@
 - ✅ Artifact 下载
 - ✅ 实时审批卡片
 - ✅ 腾讯云部署方案
+
+### Phase 5-38: Claude Parity Hardening
+- ✅ 查询引擎状态机 (`rc-query-engine`)
+- ✅ 动态系统提示词 (`rc-system-prompt` + 22 sections)
+- ✅ 认证系统 (`rc-auth` + OAuth PKCE)
+- ✅ 模型管理 (`rc-model` + aliases + capabilities)
+- ✅ 设置管理 (`rc-settings` + `rc-managed-settings` + MDM)
+- ✅ IDE 集成 (`rc-ide`)
+- ✅ 技能搜索 (`rc-skill-search` + BM25)
+- ✅ 会话迁移 (`rc-teleport`)
+- ✅ 文件历史 (`rc-file-history`)
+- ✅ 语音系统 (`rc-voice`)
+- ✅ LSP 客户端 (`rc-lsp`)
+- ✅ 分析/遥测 (`rc-analytics`)
+- ✅ 3,811+ 测试全绿 (190 E2E + 3,621 unit)
+- ✅ MiniMax anthropic-compatible provider 实测通过
+- ✅ Permission bypass + Windows path canonicalization 修复
+- ✅ Stream-JSON 协议完整实现
 
 ---
 
@@ -271,11 +337,15 @@
 | GUI | ✅ Tauri+Web | ❌ CLI only | ✅ VSCode | ✅ TUI | ✅ VSCode |
 | Circuit Breaker | ✅ | ❌ | ❌ | ❌ | ❌ |
 | 多 Provider Failover | ✅ | ❌ | 部分 | ❌ | ❌ |
-| 工具数量 | 30+ | 55+ | 40+ | 20+ | 30+ |
+| 工具数量 | 65+ | 55+ | 40+ | 20+ | 30+ |
 | PWA 移动端 | ✅ | ❌ | ❌ | ❌ | ❌ |
 | 国际化 | ✅ 中/英 | ❌ | ❌ | ❌ | ❌ |
+| 系统提示词 Sections | 22 | 23 | ~10 | ~5 | ~8 |
+| 斜杠命令 | 65+ | 80+ | ~20 | ~10 | ~15 |
+| 上下文压缩策略 | 5 | 5 | 2 | 1 | 2 |
+| Agent 类型 | 6 built-in + fork | 6 + fork | 1 | 0 | 1 |
 
-**独有优势**: Rust 原生性能 + 分布式远程执行架构 + Circuit Breaker + PWA 移动端 + 多 Provider 故障转移
+**独有优势**: Rust 原生性能 + 分布式远程执行架构 + Circuit Breaker + PWA 移动端 + 多 Provider 故障转移 + 65+ 内置工具
 
 ---
 
@@ -308,8 +378,14 @@
 
 | 文档 | 说明 |
 |------|------|
+| [`claude-code-rust-full-clone-plan.md`](claude-code-rust-full-clone-plan.md) | Claude Code 全量复刻方案 (4986 行) |
+| [`comprehensive-test-plan-500.md`](comprehensive-test-plan-500.md) | 630 测试计划 (16 批次) |
 | [`REMOTE_PLAN.md`](REMOTE_PLAN.md) | 远程控制 v1 架构主计划 |
 | [`coding-plan-support.md`](coding-plan-support.md) | 国内 Coding Plan 供应商参考 |
 | [`tauri-gui-architecture-design.md`](tauri-gui-architecture-design.md) | GUI 架构设计方案 |
-| [`gui-remote-advanced-optimization-v2.md`](gui-remote-advanced-optimization-v2.md) | GUI 与 Remote 进阶优化方案 v2（基于当前代码真实状态的正式实施稿，已取代并删除 v1） |
+| [`gui-remote-advanced-optimization-v2.md`](gui-remote-advanced-optimization-v2.md) | GUI 与 Remote 进阶优化方案 v2 |
+| [`claude-code-deep-comparison.md`](claude-code-deep-comparison.md) | Claude Code 深度对比分析 |
+| [`gap-analysis-and-restructure.md`](gap-analysis-and-restructure.md) | Gap 分析与重构方案 |
+| [`cli-stress-test-report.md`](cli-stress-test-report.md) | CLI 压力测试报告 |
+| [`mobile-app-research-report.md`](mobile-app-research-report.md) | 移动端研究报告 |
 | 本文档 | 项目状态、路线图、竞品对比 |
