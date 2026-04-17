@@ -108,8 +108,8 @@ impl std::fmt::Display for CoordinatorMode {
 /// then falls back to the `REMOTE_CODE_COORDINATOR_MODE` environment variable.
 pub fn is_coordinator_mode() -> bool {
     // Check in-process override first
-    if COORDINATOR_OVERRIDE_SET.load(Ordering::Relaxed) {
-        return COORDINATOR_OVERRIDE.load(Ordering::Relaxed);
+    if COORDINATOR_OVERRIDE_SET.load(Ordering::SeqCst) {
+        return COORDINATOR_OVERRIDE.load(Ordering::SeqCst);
     }
     // Fall back to env var
     std::env::var(COORDINATOR_MODE_ENV)
@@ -150,8 +150,8 @@ pub fn match_session_mode(session_mode: Option<CoordinatorMode>) -> Option<Strin
 ///
 /// Used in tests to ensure a clean state.
 pub fn reset_coordinator_override() {
-    COORDINATOR_OVERRIDE.store(false, Ordering::Relaxed);
-    COORDINATOR_OVERRIDE_SET.store(false, Ordering::Relaxed);
+    COORDINATOR_OVERRIDE.store(false, Ordering::SeqCst);
+    COORDINATOR_OVERRIDE_SET.store(false, Ordering::SeqCst);
 }
 
 /// Get the user context for coordinator mode.
@@ -495,11 +495,12 @@ mod tests {
     #[test]
     fn is_coordinator_mode_default_false() {
         reset_state();
-        // Without env var and without override, should be false
-        // (This test assumes REMOTE_CODE_COORDINATOR_MODE is not set in CI)
-        let result = is_coordinator_mode();
-        // If the env var happens to be set, this test still passes
-        assert_eq!(result, is_coordinator_mode());
+        // Explicitly set override to false to avoid interference from parallel tests
+        // that may set COORDINATOR_OVERRIDE=true.
+        COORDINATOR_OVERRIDE.store(false, Ordering::Relaxed);
+        COORDINATOR_OVERRIDE_SET.store(true, Ordering::Relaxed);
+        assert!(!is_coordinator_mode());
+        reset_state();
     }
 
     #[test]
@@ -673,10 +674,10 @@ mod tests {
     #[test]
     fn get_coordinator_user_context_with_tools() {
         reset_state();
-        COORDINATOR_OVERRIDE.store(true, Ordering::Relaxed);
-        COORDINATOR_OVERRIDE_SET.store(true, Ordering::Relaxed);
+        COORDINATOR_OVERRIDE.store(true, Ordering::SeqCst);
+        COORDINATOR_OVERRIDE_SET.store(true, Ordering::SeqCst);
         let ctx = get_coordinator_user_context(&[], None, false);
-        assert!(!ctx.is_empty());
+        assert!(!ctx.is_empty(), "coordinator context should not be empty when coordinator mode is active");
         let (key, value) = ctx.iter().next().expect("at least one entry");
         assert_eq!(key, "workerToolsContext");
         assert!(value.contains("Workers spawned via the Agent tool"));
