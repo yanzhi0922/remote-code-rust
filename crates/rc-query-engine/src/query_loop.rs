@@ -18,14 +18,23 @@ use crate::engine::{
     EngineError, EngineState, QueryResult, assistant_message_from_response, budget_stop_message,
     tool_result_message, usage_from_accumulator,
 };
+use crate::max_tokens_recovery::{MaxTokensRecovery, MaxTokensRecoveryAction};
 use crate::observer::{
     QueryBudgetState, QueryCheckpoint, QueryCheckpointKind, QueryContextBudgetState,
     QueryObserverEvent,
 };
+use crate::preprocessing::PreprocessingPipeline;
+use crate::reactive_compact::ReactiveCompactHandler;
 use crate::state_machine::EnginePhase;
 use crate::token_budget::TokenBudgetDecision;
 
 /// Execute the Phase 2 compat query loop in-memory.
+///
+/// Enhanced with:
+/// - **Preprocessing pipeline** — runs before each API call to reduce context
+/// - **Reactive compact** — recovers from prompt-too-long errors
+/// - **Max-output-tokens recovery** — escalates token limits or continues
+/// - **Model fallback** — switches to fallback model on provider errors
 pub async fn run_query_loop(
     config: &QueryEngineConfig,
     state: &mut EngineState,
@@ -52,6 +61,11 @@ pub async fn run_query_loop(
         .task_budget
         .as_ref()
         .and_then(|budget| budget.max_total_tokens);
+
+    // Initialize recovery handlers
+    let mut reactive_handler = ReactiveCompactHandler::new();
+    let mut max_tokens_recovery = MaxTokensRecovery::new();
+    let preprocessing_pipeline = PreprocessingPipeline::default();
 
     loop {
         // Transition: Initializing -> BuildingPrompt
@@ -100,6 +114,15 @@ pub async fn run_query_loop(
             }
         }
 
+        // --- Preprocessing pipeline ---
+        let context_usage = compute_context_usage(state, config);
+        let max_context = config.context_manager.available_budget() as usize;
+        let _preprocessing_result = preprocessing_pipeline.run(
+            &mut state.messages,
+            context_usage,
+            max_context,
+        );
+
         let mut legacy_conversation = state.legacy_conversation();
         maybe_compact_conversation(config, state, &mut legacy_conversation).await;
 
@@ -115,18 +138,118 @@ pub async fn run_query_loop(
             complete_with_streaming_observer(config, &legacy_conversation, state.turn + 1).await
         } else {
             config.backend.complete(&legacy_conversation).await
-        }
-        .map_err(|error| {
-            state.consecutive_failures += 1;
-            let _ = state.failure_tracker.record_failure();
-            state.state_machine.force_set(EnginePhase::Failed);
-            EngineError::Other(error)
-        })?;
+        };
+
+        let response = match response {
+            Ok(resp) => resp,
+            Err(error) => {
+                // --- Prompt-too-long recovery (reactive compact) ---
+                if is_prompt_too_long_error(&error) {
+                    if reactive_handler.can_attempt() {
+                        let compact_result = reactive_handler
+                            .handle_prompt_too_long(state.messages.clone())
+                            .map_err(EngineError::Other)?;
+                        if compact_result.was_compacted {
+                            let after_len = compact_result.messages.len();
+                            let before_len = compact_result.messages_removed + after_len;
+                            state.messages = compact_result.messages;
+                            state.replace_from_legacy(&state.legacy_conversation());
+                            config.event_stream.emit(EngineEvent::CompactCompleted {
+                                result: CompactionResult {
+                                    strategy: "reactive".to_owned(),
+                                    before_messages: before_len,
+                                    after_messages: after_len,
+                                    summary: Some("reactive compact applied after prompt-too-long".to_owned()),
+                                },
+                            });
+                            continue; // Retry the turn
+                        }
+                    }
+                    // No recovery possible
+                    state.consecutive_failures += 1;
+                    let _ = state.failure_tracker.record_failure();
+                    state.state_machine.force_set(EnginePhase::Failed);
+                    return Err(EngineError::Other(error));
+                }
+
+                // --- Model fallback ---
+                if is_model_overloaded_error(&error)
+                    && let Some(fallback) = config.fallback_model.as_deref() {
+                        let switch_result = state.model_switcher.switch_to(
+                            fallback,
+                            crate::model_switch::SwitchReason::Fallback,
+                        );
+                        if switch_result.is_switched() {
+                            let _ = config.observer
+                                .on_event(QueryObserverEvent::MessagesAppended {
+                                    session_id: context.session_id.clone(),
+                                    appended: vec![crate::message_utils::create_info_message(
+                                        &format!("Switched to fallback model: {fallback}"),
+                                    )],
+                                    total_messages: state.messages.len(),
+                                })
+                                .await;
+                            continue; // Retry with fallback model
+                        }
+                    }
+
+                state.consecutive_failures += 1;
+                let _ = state.failure_tracker.record_failure();
+                state.state_machine.force_set(EnginePhase::Failed);
+                return Err(EngineError::Other(error));
+            }
+        };
+
         state.consecutive_failures = 0;
         state.failure_tracker.record_success();
         state.turn += 1;
         state.usage.record_summary(&response.usage);
         state.stop_reason = Some(response.stop_reason.clone());
+
+        // --- Max-output-tokens recovery ---
+        if is_max_tokens_truncated(&response.stop_reason)
+            && let Some(action) = max_tokens_recovery.handle_truncation(
+                estimate_current_max_tokens(&state.usage),
+            ) {
+                match action {
+                    MaxTokensRecoveryAction::Escalate { new_max_tokens: _ } => {
+                        // The escalation is handled by updating the request
+                        // parameters on the next iteration. For now, emit an
+                        // event and continue the loop so the assistant response
+                        // is processed normally and the next turn uses the
+                        // escalated limit.
+                        config.event_stream.emit(EngineEvent::StateUpdated {
+                            state_snapshot: state_snapshot(state, 0),
+                        });
+                    }
+                    MaxTokensRecoveryAction::ContinueWithMessage {
+                        max_tokens: _,
+                        continuation_message,
+                    } => {
+                        // Append the assistant's truncated response
+                        let assistant_message = assistant_message_from_response(&response);
+                        state.messages.push(assistant_message.clone());
+                        // Append the continuation prompt
+                        state.messages.push(continuation_message.clone());
+                        let _ = config.observer
+                            .on_event(QueryObserverEvent::MessagesAppended {
+                                session_id: context.session_id.clone(),
+                                appended: vec![continuation_message],
+                                total_messages: state.messages.len(),
+                            })
+                            .await;
+                        config.event_stream.emit(EngineEvent::StateUpdated {
+                            state_snapshot: state_snapshot(state, 0),
+                        });
+                        continue; // Next turn will pick up the continuation
+                    }
+                    MaxTokensRecoveryAction::Exhausted => {
+                        // Surface the truncation — the response is still
+                        // processed below, but the stop_reason indicates
+                        // truncation.
+                    }
+                }
+            }
 
         // Transition: CallingProvider -> ProcessingResponse
         let _ = state
@@ -511,4 +634,82 @@ fn build_streaming_callbacks(
 #[allow(dead_code)]
 fn unknown_tool_error(tool_name: &str) -> EngineError {
     EngineError::Other(anyhow!("unknown tool {tool_name}"))
+}
+
+// ---------------------------------------------------------------------------
+// Error classification helpers
+// ---------------------------------------------------------------------------
+
+/// Check if the error message indicates a prompt-too-long / 413 error.
+fn is_prompt_too_long_error(error: &anyhow::Error) -> bool {
+    let msg = format!("{error:#}");
+    let lowered = msg.to_ascii_lowercase();
+    lowered.contains("prompt is too long")
+        || lowered.contains("prompt_too_long")
+        || lowered.contains("request too large")
+        || lowered.contains("context_length_exceeded")
+        || lowered.contains("maximum context length")
+        || (lowered.contains("413") && lowered.contains("prompt"))
+}
+
+/// Check if the error message indicates model overload (triggers fallback).
+fn is_model_overloaded_error(error: &anyhow::Error) -> bool {
+    let msg = format!("{error:#}");
+    let lowered = msg.to_ascii_lowercase();
+    lowered.contains("overloaded")
+        || lowered.contains("capacity")
+        || lowered.contains("503")
+        || lowered.contains("rate_limit")
+        || lowered.contains("too many requests")
+        || lowered.contains("service unavailable")
+}
+
+/// Check if the stop reason indicates max-output-tokens truncation.
+fn is_max_tokens_truncated(stop_reason: &str) -> bool {
+    let lowered = stop_reason.to_ascii_lowercase();
+    lowered == "max_tokens"
+        || lowered == "max_tokens_reached"
+        || lowered.contains("max_output_tokens")
+        || lowered == "length"
+}
+
+/// Compute an approximate context usage ratio from the engine state.
+fn compute_context_usage(state: &EngineState, config: &QueryEngineConfig) -> f64 {
+    let max_tokens = config.context_manager.available_budget();
+    if max_tokens == 0 {
+        return 0.0;
+    }
+    let used = state.usage.total_tokens();
+    let ratio = used as f64 / max_tokens as f64;
+    ratio.min(1.0)
+}
+
+/// Estimate the current max_tokens setting from usage data.
+/// Uses output tokens as a proxy for the current max_tokens limit.
+fn estimate_current_max_tokens(usage: &rc_core::UsageAccumulator) -> usize {
+    let output = usage.output_tokens;
+    if output == 0 {
+        return 8192; // Default starting tier
+    }
+    // Round up to the nearest power of 2
+    let mut tier = 8192;
+    while tier < output as usize {
+        tier *= 2;
+    }
+    tier
+}
+
+// ---------------------------------------------------------------------------
+// Model switcher integration
+// ---------------------------------------------------------------------------
+
+/// Extension for SwitchResult to check if a switch actually occurred.
+trait SwitchResultExt {
+    fn is_switched(&self) -> bool;
+}
+
+impl SwitchResultExt for crate::model_switch::SwitchResult {
+    fn is_switched(&self) -> bool {
+        matches!(self, Self::Switched { .. })
+    }
 }

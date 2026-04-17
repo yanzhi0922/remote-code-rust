@@ -8,6 +8,7 @@ pub mod agent;
 pub mod command;
 pub mod delegate;
 pub mod discover_skills;
+pub mod enhanced_tool_system;
 pub mod file_ops;
 pub mod git;
 pub mod hooks;
