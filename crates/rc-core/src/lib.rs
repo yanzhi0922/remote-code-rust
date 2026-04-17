@@ -57,7 +57,14 @@ pub use message::{
     GroupedToolUseMessage, HookResultMessage, Message, MessageBase, MessageOrigin, ProgressMessage,
     SystemMessage, SystemMessageSubtype, TombstoneMessage, ToolUseSummaryMessage, UserMessage,
 };
-pub use message_types::{NormalizedMessage, NormalizedOrigin};
+pub use message_types::{
+    AttachmentMessageType, HookResultMessageType, NormalizedMessage, NormalizedOrigin,
+    ProgressMessageType, SystemAPIErrorMessage, SystemAgentsKilledMessage, SystemApiMetricsMessage,
+    SystemAwaySummaryMessage, SystemCompactBoundaryMessage, SystemFileSnapshotMessage,
+    SystemMemorySavedMessage, SystemMicrocompactBoundaryMessage, SystemPermissionRetryMessage,
+    SystemStopHookSummaryMessage, SystemThinkingMessage, TombstoneMessageType,
+    ToolUseSummaryMessageType,
+};
 pub use permission_types::{
     PermissionBehavior, PermissionResult, PermissionRule, PermissionRuleSource,
 };

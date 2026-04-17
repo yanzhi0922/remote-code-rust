@@ -993,6 +993,186 @@ Notes:
 - Use `send_message` for direct one-to-one communication.
 - High-priority messages may interrupt agent workflows.";
 
+// ── Detailed prompt functions (Claude Code parity) ───────────────────────────
+
+/// Returns the full Bash tool prompt matching Claude Code's BashTool/prompt.ts.
+///
+/// Includes background usage notes, commit and PR instructions, sandbox
+/// section, and comprehensive shell usage guidelines.
+#[must_use]
+pub fn bash_tool_prompt() -> String {
+    let background_note = "You can use the `run_in_background` parameter to run the command in \
+        the background. Only use this if you don't need the result immediately and are OK being \
+        notified when the command completes later. You do not need to check the output right \
+        away — you'll be notified when it finishes. You do not need to use '&' at the end of the \
+        command when using this parameter.";
+
+    let commit_pr = "# Committing changes with git
+
+Only create commits when requested by the user. If unclear, ask first. When the user asks you to \
+create a new git commit, follow these steps carefully:
+
+Git Safety Protocol:
+- NEVER update the git config
+- NEVER run destructive git commands (push --force, reset --hard, checkout ., restore ., clean \
+-f, branch -D) unless the user explicitly requests these actions
+- NEVER skip hooks (--no-verify, --no-gpg-sign, etc) unless the user explicitly requests it
+- NEVER run force push to main/master, warn the user if they request it
+- CRITICAL: Always create NEW commits rather than amending, unless the user explicitly requests a \
+git amend. When a pre-commit hook fails, the commit did NOT happen — so --amend would modify the \
+PREVIOUS commit, which may result in destroying work or losing previous changes. Instead, after \
+hook failure, fix the issue, re-stage, and create a NEW commit
+- When staging files, prefer adding specific files by name rather than using \"git add -A\" or \
+\"git add .\", which can accidentally include sensitive files (.env, credentials) or large binaries
+- NEVER commit changes unless the user explicitly asks you to
+
+1. Run git status, git diff, and git log in parallel to understand the current state.
+2. Analyze all staged changes and draft a commit message focusing on the \"why\" rather than the \
+\"what\".
+3. Add relevant files, create the commit, and verify with git status.
+4. If the commit fails due to pre-commit hook: fix the issue and create a NEW commit.
+
+# Creating pull requests
+Use the gh command via the Bash tool for ALL GitHub-related tasks. When creating a PR:
+1. Run git status, git diff, git log, and git diff [base]...HEAD in parallel.
+2. Analyze ALL commits (not just the latest) and draft a PR title and summary.
+3. Create the branch, push, and create PR using gh pr create with a HEREDOC for the body.";
+
+    let sandbox = "# Command sandbox
+By default, your command will be run in a sandbox. This sandbox controls which directories and \
+network hosts commands may access or modify without an explicit override. For temporary files, \
+always use the $TMPDIR environment variable instead of /tmp directly.";
+
+    format!(
+        "Executes a given bash command and returns its output.\n\n\
+        The working directory persists between commands, but shell state does not. The shell \
+        environment is initialized from the user's profile (bash or zsh).\n\n\
+        IMPORTANT: Avoid using this tool to run `find`, `grep`, `cat`, `head`, `tail`, `sed`, \
+        `awk`, or `echo` commands, unless explicitly instructed or after you have verified that \
+        a dedicated tool cannot accomplish your task. Instead, use the appropriate dedicated tool:\n\
+        - File search: Use Glob (NOT find or ls)\n\
+        - Content search: Use Grep (NOT grep or rg)\n\
+        - Read files: Use Read (NOT cat/head/tail)\n\
+        - Edit files: Use Edit (NOT sed/awk)\n\
+        - Write files: Use Write (NOT echo/cat)\n\n\
+        While the Bash tool can do similar things, it's better to use the built-in tools as they \
+        provide a better user experience and make it easier to review tool calls and give \
+        permission.\n\n\
+        # Instructions\n\
+        - If your command will create new directories or files, first run `ls` to verify the \
+        parent directory exists.\n\
+        - Always quote file paths containing spaces with double quotes.\n\
+        - Try to maintain your current working directory by using absolute paths and avoiding `cd`.\n\
+        - You may specify an optional timeout in milliseconds (up to 600000ms / 10 minutes).\n\
+        - {background_note}\n\
+        - When issuing multiple commands, use && for sequential dependent commands, and make \
+        multiple Bash calls for parallel independent commands.\n\
+        - For git commands: prefer new commits over amending. Never skip hooks. Never force push \
+        to main.\n\
+        - Avoid unnecessary sleep commands. Use run_in_background for long-running tasks.\n\n\
+        {sandbox}\n\n\
+        {commit_pr}"
+    )
+}
+
+/// Returns the file-edit tool prompt with detailed editing instructions.
+#[must_use]
+pub fn file_edit_tool_prompt() -> String {
+    "Performs precise, targeted search/replace edits on an existing text file.\n\n\
+    # Usage\n\
+    - You MUST read the file at least once before editing. The tool will error otherwise.\n\
+    - Each edit has a `search` string and a `replace` string. Edits are applied in sequence.\n\
+    - The `search` string must match EXACTLY, including all whitespace and indentation.\n\
+    - The edit will FAIL if any `search` string is not found in the file at its point of \
+    application.\n\
+    - Set `create_if_missing` to true to create the file if it does not exist.\n\n\
+    # Best practices\n\
+    - ALWAYS prefer editing existing files over creating new files.\n\
+    - Use the smallest search string that is clearly unique — usually 2-4 adjacent lines is \
+    sufficient.\n\
+    - When editing text from read_file output, ensure you preserve the exact indentation.\n\
+    - Never include line number prefixes in the search or replace strings.\n\
+    - For a single replacement, use replace_in_file instead.\n\
+    - When editing code, always consider the context in which the code is being used. Ensure that \
+    your changes are compatible with the existing codebase and follow the project's coding \
+    standards and best practices.\n\n\
+    # Important\n\
+    - Do NOT include `// rest of code unchanged` or similar placeholders.\n\
+    - ALWAYS provide the COMPLETE intended content in each replace block.\n\
+    - Partial updates or placeholders are STRICTLY FORBIDDEN.".to_owned()
+}
+
+/// Returns the file-read tool prompt with detailed reading instructions.
+#[must_use]
+pub fn file_read_tool_prompt() -> String {
+    "Reads a UTF-8 text file from the local filesystem. You can access any file directly by using \
+    this tool.\n\n\
+    # Usage\n\
+    - The `path` parameter must be a path relative to the current workspace.\n\
+    - By default, it reads up to 2000 lines starting from the beginning of the file.\n\
+    - Use `start_line` and `end_line` to read specific ranges, especially for large files.\n\
+    - Results are returned with line numbers, starting at 1.\n\
+    - This tool can read images (PNG, JPG, etc.) — contents are presented visually.\n\
+    - This tool can read Jupyter notebooks (.ipynb) and returns all cells with outputs.\n\
+    - This tool can only read files, not directories. Use list_directory for directories.\n\n\
+    # Notes\n\
+    - If you read a file that exists but has empty contents, a warning will be returned.\n\
+    - It is okay to read a file that does not exist; an error will be returned.\n\
+    - Always read a file before editing it — the edit tool requires a prior read.\n\
+    - For very large files, read in chunks using start_line/end_line to avoid truncation.\n\
+    - Supports text extraction from PDF and DOCX files.\n\
+    - Lines longer than 2000 characters are truncated in the output.".to_owned()
+}
+
+/// Returns the file-write tool prompt with detailed writing instructions.
+#[must_use]
+pub fn file_write_tool_prompt() -> String {
+    "Writes a file to the local filesystem. Creates the file if it does not exist; overwrites if \
+    it does.\n\n\
+    # Usage\n\
+    - The `path` parameter is relative to the current workspace directory.\n\
+    - The `content` parameter must contain the COMPLETE file content — partial writes are not \
+    supported.\n\
+    - Set `append` to true to append content to an existing file instead of overwriting.\n\
+    - If this is an existing file, you MUST read it first to understand its current contents.\n\
+    - Prefer the edit_file or replace_in_file tool for modifying existing files — it only sends \
+    the diff.\n\n\
+    # Important\n\
+    - NEVER create documentation files (*.md) or README files unless explicitly requested.\n\
+    - This tool automatically creates any intermediate directories needed.\n\
+    - Do NOT use this tool for small edits to existing files — use edit_file instead.\n\
+    - ALWAYS provide the COMPLETE intended content. Partial updates or placeholders are FORBIDDEN.\n\
+    - Failure to do so will result in incomplete or broken code.\n\
+    - When creating a new project, organize all new files within a dedicated project directory \
+    unless the user specifies otherwise.".to_owned()
+}
+
+/// Returns the agent tool prompt with detailed sub-agent delegation instructions.
+#[must_use]
+pub fn agent_tool_prompt() -> String {
+    "Spawn a sub-agent to complete a task. The sub-agent runs in its own context and returns the \
+    result.\n\n\
+    # Usage\n\
+    - Write a detailed `prompt` describing what the sub-agent should accomplish and why.\n\
+    - Optionally restrict available tools via the `tools` array.\n\
+    - The sub-agent starts with zero context — brief it like a smart colleague who just walked in.\n\
+    - Explain what you're trying to accomplish, what you've already learned, and what the agent \
+    should do.\n\
+    - If you need a short response, say so ('report in under 200 words').\n\n\
+    # Writing the prompt\n\
+    - Explain what you're trying to accomplish and why.\n\
+    - Describe what you've already learned or ruled out.\n\
+    - Give enough context for the agent to make judgment calls.\n\
+    - Lookups: hand over the exact command. Investigations: hand over the question.\n\
+    - Terse command-style prompts produce shallow, generic work.\n\n\
+    # Notes\n\
+    - Never delegate understanding. Don't write 'based on your findings, fix the bug'.\n\
+    - Include file paths, line numbers, and what specifically to change.\n\
+    - The sub-agent cannot see this conversation — provide all necessary context in the prompt.\n\
+    - For complex multi-step tasks, break the work into clear, sequential instructions.\n\
+    - The sub-agent has access to the same tools you do unless explicitly restricted.".to_owned()
+}
+
 /// Lookup table: returns the detailed prompt for a tool by its internal name.
 ///
 /// Returns an empty string for unknown tool names.
@@ -1211,5 +1391,69 @@ mod tests {
             known_tools.len(),
             "Not all builtin tools have prompts"
         );
+    }
+
+    // ── Detailed prompt function tests ─────────────────────────────────
+
+    #[test]
+    fn bash_tool_prompt_is_non_empty() {
+        let prompt = bash_tool_prompt();
+        assert!(!prompt.is_empty(), "bash_tool_prompt must not be empty");
+    }
+
+    #[test]
+    fn bash_tool_prompt_is_long_enough() {
+        let prompt = bash_tool_prompt();
+        assert!(
+            prompt.len() > 500,
+            "bash_tool_prompt should be >500 chars, got {}",
+            prompt.len()
+        );
+    }
+
+    #[test]
+    fn bash_tool_prompt_contains_key_phrases() {
+        let prompt = bash_tool_prompt();
+        assert!(prompt.contains("run_in_background"), "should mention background usage");
+        assert!(prompt.contains("Committing changes"), "should mention committing");
+        assert!(prompt.contains("sandbox"), "should mention sandbox");
+        assert!(prompt.contains("Git Safety Protocol"), "should mention git safety");
+        assert!(prompt.contains("pull request"), "should mention PR creation");
+    }
+
+    #[test]
+    fn file_edit_tool_prompt_is_non_empty_and_long() {
+        let prompt = file_edit_tool_prompt();
+        assert!(!prompt.is_empty());
+        assert!(prompt.len() > 200, "should be >200 chars, got {}", prompt.len());
+        assert!(prompt.contains("search"), "should mention search");
+        assert!(prompt.contains("replace"), "should mention replace");
+    }
+
+    #[test]
+    fn file_read_tool_prompt_is_non_empty_and_long() {
+        let prompt = file_read_tool_prompt();
+        assert!(!prompt.is_empty());
+        assert!(prompt.len() > 200, "should be >200 chars, got {}", prompt.len());
+        assert!(prompt.contains("start_line"), "should mention start_line");
+        assert!(prompt.contains("end_line"), "should mention end_line");
+    }
+
+    #[test]
+    fn file_write_tool_prompt_is_non_empty_and_long() {
+        let prompt = file_write_tool_prompt();
+        assert!(!prompt.is_empty());
+        assert!(prompt.len() > 200, "should be >200 chars, got {}", prompt.len());
+        assert!(prompt.contains("COMPLETE"), "should mention COMPLETE");
+        assert!(prompt.contains("append"), "should mention append");
+    }
+
+    #[test]
+    fn agent_tool_prompt_is_non_empty_and_long() {
+        let prompt = agent_tool_prompt();
+        assert!(!prompt.is_empty());
+        assert!(prompt.len() > 200, "should be >200 chars, got {}", prompt.len());
+        assert!(prompt.contains("sub-agent"), "should mention sub-agent");
+        assert!(prompt.contains("prompt"), "should mention prompt");
     }
 }
