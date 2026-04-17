@@ -62,12 +62,39 @@ impl DatadogExporter {
 
 impl EventExporter for DatadogExporter {
     fn export(&self, events: &[AnalyticsEvent]) -> Result<()> {
-        // Placeholder: in production, this would POST to the Datadog API
-        for event in events {
-            let _formatted = self.format_event(event)?;
-            // Would send via HTTP here
+        if events.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        let mut payload = String::with_capacity(events.len() * 512);
+        for event in events {
+            let formatted = self.format_event(event)?;
+            payload.push_str(&formatted);
+            payload.push('\n');
+        }
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        rt.block_on(async {
+            let client = reqwest::Client::new();
+            let resp = client
+                .post(&self.endpoint)
+                .header("DD-API-KEY", &self.api_key)
+                .header("Content-Type", "application/json")
+                .body(payload)
+                .send()
+                .await;
+            match resp {
+                Ok(r) if r.status().is_success() => Ok(()),
+                Ok(r) => {
+                    tracing::warn!("Datadog export returned status {}", r.status());
+                    Ok(())
+                }
+                Err(e) => {
+                    tracing::warn!("Datadog export failed: {e}");
+                    Ok(())
+                }
+            }
+        })
     }
 }
 
@@ -95,11 +122,33 @@ impl FirstPartyExporter {
 
 impl EventExporter for FirstPartyExporter {
     fn export(&self, events: &[AnalyticsEvent]) -> Result<()> {
-        // Placeholder: in production, this would POST to the 1P endpoint
-        for _event in events {
-            // Would serialize and send via HTTP
+        if events.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        let body = serde_json::to_string(events)?;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        rt.block_on(async {
+            let client = reqwest::Client::new();
+            let resp = client
+                .post(&self.endpoint)
+                .header("Content-Type", "application/json")
+                .body(body)
+                .send()
+                .await;
+            match resp {
+                Ok(r) if r.status().is_success() => Ok(()),
+                Ok(r) => {
+                    tracing::warn!("1P analytics export returned status {}", r.status());
+                    Ok(())
+                }
+                Err(e) => {
+                    tracing::warn!("1P analytics export failed: {e}");
+                    Ok(())
+                }
+            }
+        })
     }
 }
 

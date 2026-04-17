@@ -123,7 +123,7 @@ pub use micro::{
 
 pub use snip::{
     is_snip_boundary_message, snip_compact, SnipCompactConfig, SnipCompactStrategy,
-    DEFAULT_SNIP_THRESHOLD_TOKENS, SNIPPED_CONTENT_MARKER,
+    SnipStrategy, DEFAULT_SNIP_THRESHOLD_TOKENS, SNIPPED_CONTENT_MARKER,
 };
 
 // ---------------------------------------------------------------------------
@@ -171,8 +171,9 @@ pub use attachment::{
 // ---------------------------------------------------------------------------
 
 pub use context_collapse::{
-    CollapseOperation, CollapsePersistence, CollapseResult, ContextCollapseConfig,
-    ContextCollapseEngine, Ratio64,
+    detect_collapsible_spans, context_collapse, CollapseOperation, CollapsePersistence,
+    CollapseResult, CollapsibleSpan, ContextCollapseConfig, ContextCollapseEngine,
+    ContextCollapseStrategy, Ratio64,
 };
 
 // ---------------------------------------------------------------------------

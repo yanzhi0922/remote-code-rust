@@ -510,6 +510,186 @@ impl ContextCollapseEngine {
 }
 
 // ---------------------------------------------------------------------------
+// Standalone context_collapse function
+// ---------------------------------------------------------------------------
+
+/// Perform context collapse on the given messages.
+///
+/// This is a convenience wrapper around [`ContextCollapseEngine::execute_collapse`]
+/// that creates a default engine, runs the collapse, and returns a
+/// [`CompactionResult`] suitable for the compact pipeline.
+///
+/// This does **not** call the LLM — it applies deterministic collapse operations.
+pub fn context_collapse(
+    messages: &[rc_core::Message],
+    config: &ContextCollapseConfig,
+) -> Result<(Vec<rc_core::Message>, CollapseResult)> {
+    let mut engine = ContextCollapseEngine::new(config.clone());
+    engine.execute_collapse(messages)
+}
+
+// ---------------------------------------------------------------------------
+// ContextCollapseStrategy — CompactStrategy adapter
+// ---------------------------------------------------------------------------
+
+/// Adapter that wraps [`ContextCollapseEngine`] as a [`CompactStrategy`].
+///
+/// This allows the context-collapse engine to be used through the same
+/// [`CompactStrategy::compact()`] interface as all other strategies.
+pub struct ContextCollapseStrategy {
+    /// Configuration for the collapse engine.
+    pub config: ContextCollapseConfig,
+}
+
+impl ContextCollapseStrategy {
+    /// Create a new strategy with the given configuration.
+    #[must_use]
+    pub fn new(config: ContextCollapseConfig) -> Self {
+        Self { config }
+    }
+
+    /// Create a strategy with default configuration.
+    #[must_use]
+    pub fn with_defaults() -> Self {
+        Self::new(ContextCollapseConfig::default())
+    }
+}
+
+impl Default for ContextCollapseStrategy {
+    fn default() -> Self {
+        Self::with_defaults()
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::strategy::CompactStrategy for ContextCollapseStrategy {
+    fn strategy_type(&self) -> crate::strategy::CompactStrategyType {
+        crate::strategy::CompactStrategyType::Full
+    }
+
+    async fn compact(
+        &self,
+        messages: &[rc_core::Message],
+        _options: &crate::strategy::CompactOptions,
+        _provider: &dyn crate::strategy::SummaryProvider,
+        progress: Option<&crate::strategy::ProgressCallback>,
+    ) -> Result<crate::strategy::CompactionResult, anyhow::Error> {
+        if let Some(sink) = progress {
+            sink(crate::strategy::CompactProgressEvent::Started {
+                strategy: crate::strategy::CompactStrategyType::Full,
+            });
+        }
+
+        let original_tokens = estimate_messages_tokens(messages);
+        let (collapsed, collapse_result) = context_collapse(messages, &self.config)?;
+
+        let tokens_saved = original_tokens.saturating_sub(estimate_messages_tokens(&collapsed));
+        let pre_tokens = usize::try_from(original_tokens).unwrap_or(usize::MAX);
+        let post_tokens = usize::try_from(estimate_messages_tokens(&collapsed)).unwrap_or(usize::MAX);
+        let ops_count = collapse_result.operations_applied.len();
+        let removed_count = collapse_result.removed_message_count;
+        let saved_by_collapse = collapse_result.tokens_saved();
+
+        let result = crate::strategy::CompactionResult {
+            summary: format!(
+                "Context collapse: {ops_count} operations applied, {removed_count} messages removed, ~{saved_by_collapse} tokens saved"
+            ),
+            messages_removed: removed_count,
+            tokens_saved,
+            strategy_used: crate::strategy::CompactStrategyType::Full,
+            preserved_segments: Vec::new(),
+            pre_compact_token_count: Some(u64::try_from(pre_tokens).unwrap_or(u64::MAX)),
+            post_compact_token_count: Some(u64::try_from(post_tokens).unwrap_or(u64::MAX)),
+            messages_to_keep: collapsed,
+            attachments: Vec::new(),
+            hook_results: Vec::new(),
+            user_display_message: None,
+        };
+
+        if let Some(sink) = progress {
+            sink(crate::strategy::CompactProgressEvent::Completed(result.clone()));
+        }
+
+        Ok(result)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Detect collapsible message groups
+// ---------------------------------------------------------------------------
+
+/// A span of consecutive messages that can be collapsed into a single summary.
+#[derive(Debug, Clone)]
+pub struct CollapsibleSpan {
+    /// Start index (inclusive) in the original message list.
+    pub start: usize,
+    /// End index (exclusive) in the original message list.
+    pub end: usize,
+    /// Estimated tokens in this span.
+    pub estimated_tokens: u64,
+    /// Description of the span's content.
+    pub description: String,
+}
+
+/// Detect consecutive tool-call/result groups that can be collapsed.
+///
+/// Scans the message list for runs of `ToolUseSummary` or `CollapsedReadSearch`
+/// messages and returns spans that exceed the given minimum token threshold.
+pub fn detect_collapsible_spans(
+    messages: &[rc_core::Message],
+    min_span_tokens: u64,
+) -> Vec<CollapsibleSpan> {
+    let mut spans = Vec::new();
+    let mut span_start: Option<usize> = None;
+    let mut span_tokens: u64 = 0;
+
+    for (i, msg) in messages.iter().enumerate() {
+        let is_tool = matches!(
+            msg,
+            rc_core::Message::ToolUseSummary(_) | rc_core::Message::CollapsedReadSearch(_)
+        );
+
+        if is_tool {
+            if span_start.is_none() {
+                span_start = Some(i);
+            }
+            span_tokens += estimate_messages_tokens(std::slice::from_ref(msg));
+        } else if let Some(start) = span_start.take() {
+            if span_tokens >= min_span_tokens {
+                spans.push(CollapsibleSpan {
+                    start,
+                    end: i,
+                    estimated_tokens: span_tokens,
+                    description: format!(
+                        "tool results [{}..{})",
+                        start, i
+                    ),
+                });
+            }
+            span_tokens = 0;
+        }
+    }
+
+    // Handle trailing span
+    if let Some(start) = span_start.take()
+        && span_tokens >= min_span_tokens
+    {
+        spans.push(CollapsibleSpan {
+            start,
+            end: messages.len(),
+            estimated_tokens: span_tokens,
+            description: format!(
+                "tool results [{}..{})",
+                start,
+                messages.len()
+            ),
+        });
+    }
+
+    spans
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -821,5 +1001,147 @@ mod tests {
         let parsed: CollapseOperation =
             serde_json::from_str(&json).expect("deserialize should succeed");
         assert_eq!(parsed, op);
+    }
+
+    // -- ContextCollapseStrategy tests --
+
+    #[tokio::test]
+    async fn strategy_compact_removes_tombstones() {
+        use crate::strategy::{CompactOptions, CompactStrategy, FnSummaryProvider};
+
+        let strategy = ContextCollapseStrategy::with_defaults();
+        let messages = vec![
+            make_user_msg("hello"),
+            make_tombstone("old message"),
+            make_assistant_msg("world"),
+        ];
+        let options = CompactOptions::default();
+        let provider = FnSummaryProvider::new(|_msgs, _sys, _user| {
+            Box::pin(async { Ok("summary".into()) })
+        });
+        let result = strategy
+            .compact(&messages, &options, &provider, None)
+            .await
+            .expect("should succeed");
+        assert!(result.messages_removed >= 1);
+        assert!(result.tokens_saved > 0);
+    }
+
+    #[tokio::test]
+    async fn strategy_compact_preserves_recent() {
+        use crate::strategy::{CompactOptions, CompactStrategy, FnSummaryProvider};
+
+        let config = ContextCollapseConfig {
+            preserve_recent_messages: 2,
+            preserve_system_messages: false,
+            ..ContextCollapseConfig::default()
+        };
+        let strategy = ContextCollapseStrategy::new(config);
+        let messages = vec![
+            make_user_msg("msg1"),
+            make_user_msg("msg2"),
+            make_user_msg("msg3"),
+            make_user_msg("msg4"),
+            make_user_msg("msg5"),
+        ];
+        let options = CompactOptions::default();
+        let provider = FnSummaryProvider::new(|_msgs, _sys, _user| {
+            Box::pin(async { Ok("summary".into()) })
+        });
+        let result = strategy
+            .compact(&messages, &options, &provider, None)
+            .await
+            .expect("should succeed");
+        assert!(result.messages_to_keep.len() <= 2);
+    }
+
+    #[tokio::test]
+    async fn strategy_compact_empty_messages() {
+        use crate::strategy::{CompactOptions, CompactStrategy, FnSummaryProvider};
+
+        let strategy = ContextCollapseStrategy::with_defaults();
+        let messages: Vec<Message> = Vec::new();
+        let options = CompactOptions::default();
+        let provider = FnSummaryProvider::new(|_msgs, _sys, _user| {
+            Box::pin(async { Ok("summary".into()) })
+        });
+        let result = strategy
+            .compact(&messages, &options, &provider, None)
+            .await
+            .expect("should succeed");
+        assert_eq!(result.messages_removed, 0);
+    }
+
+    #[tokio::test]
+    async fn strategy_compact_progress_events() {
+        use crate::strategy::{CompactOptions, CompactStrategy, FnSummaryProvider, CompactProgressEvent};
+
+        let strategy = ContextCollapseStrategy::with_defaults();
+        let messages = vec![
+            make_user_msg("hello"),
+            make_tombstone("old"),
+        ];
+        let options = CompactOptions::default();
+        let provider = FnSummaryProvider::new(|_msgs, _sys, _user| {
+            Box::pin(async { Ok("summary".into()) })
+        });
+
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let events_clone = events.clone();
+        let progress: Box<crate::strategy::ProgressCallback> = Box::new(move |evt| {
+            let label = match &evt {
+                CompactProgressEvent::Started { strategy } => format!("started:{strategy}"),
+                CompactProgressEvent::Completed(r) => format!("completed:{}", r.strategy_used),
+                CompactProgressEvent::Failed(msg) => format!("failed:{msg}"),
+                CompactProgressEvent::Summarizing { messages_processed } => {
+                    format!("summarizing:{messages_processed}")
+                }
+            };
+            events_clone.lock().expect("lock").push(label);
+        });
+
+        let _result = strategy
+            .compact(&messages, &options, &provider, Some(&*progress))
+            .await
+            .expect("should succeed");
+
+        let evts = events.lock().expect("lock");
+        assert!(evts.iter().any(|e| e.starts_with("started:")));
+        assert!(evts.iter().any(|e| e.starts_with("completed:")));
+    }
+
+    // -- detect_collapsible_spans tests --
+
+    #[test]
+    fn detect_spans_no_tool_messages() {
+        let messages = vec![
+            make_user_msg("hello"),
+            make_assistant_msg("world"),
+        ];
+        let spans = detect_collapsible_spans(&messages, 10);
+        assert!(spans.is_empty());
+    }
+
+    #[test]
+    fn detect_spans_consecutive_tool_summaries() {
+        let messages = vec![
+            make_user_msg("hello"),
+            make_tool_summary("tc-1", "bash", &"x".repeat(2000)),
+            make_tool_summary("tc-2", "read", &"y".repeat(2000)),
+            make_assistant_msg("done"),
+        ];
+        let spans = detect_collapsible_spans(&messages, 10);
+        assert_eq!(spans.len(), 1, "should detect one span of consecutive tool results");
+        assert_eq!(spans[0].start, 1);
+        assert_eq!(spans[0].end, 3);
+    }
+
+    #[test]
+    fn detect_spans_below_threshold() {
+        let messages = vec![
+            make_tool_summary("tc-1", "bash", "short"),
+        ];
+        let spans = detect_collapsible_spans(&messages, 10_000);
+        assert!(spans.is_empty(), "short span should be below threshold");
     }
 }
