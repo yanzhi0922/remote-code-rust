@@ -232,10 +232,36 @@ pub(crate) fn team_create_tool(input: &Value) -> Result<String> {
 }
 
 pub(crate) fn team_status_tool() -> Result<String> {
-    // Return a placeholder status indicating no active team in the current context.
+    // Check for active team state file.
+    let state_dir = std::env::temp_dir().join("remote-code-rust").join("teams");
+    if state_dir.exists() {
+        let mut teams = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&state_dir) {
+            for entry in entries.flatten() {
+                if let Some(name) = entry.file_name().to_str() {
+                    if name.ends_with(".json") {
+                        if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                            if let Ok(team) = serde_json::from_str::<Value>(&content) {
+                                teams.push(team);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if !teams.is_empty() {
+            return Ok(json!({
+                "type": "team_status",
+                "teams": teams,
+                "count": teams.len(),
+            })
+            .to_string());
+        }
+    }
     Ok(json!({
         "type": "team_status",
-        "message": "No active team in current tool context. Use team_create to create a team.",
+        "teams": [],
+        "message": "No active team in current context. Use team_create to create a team.",
         "note": "Team management requires AgentScheduler context in the conversation loop."
     })
     .to_string())

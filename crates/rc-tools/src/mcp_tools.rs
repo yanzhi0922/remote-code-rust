@@ -56,28 +56,113 @@ pub(crate) fn mcp_auth_tool(input: &Value, context: &ToolExecutionContext) -> Re
     }
 }
 
-pub(crate) fn list_mcp_resources_tool(input: &Value) -> Result<String> {
-    let server = input["server"].as_str();
+pub(crate) async fn list_mcp_resources_tool(
+    input: &Value,
+    _context: &ToolExecutionContext,
+) -> Result<String> {
+    let server_name = input["server"]
+        .as_str()
+        .ok_or_else(|| anyhow!("server is required"))?;
 
-    Ok(json!({
-        "server": server,
-        "resources": [],
-        "message": "MCP resource listing requires an active MCP connection. No resources found in current context."
-    })
-    .to_string())
+    // Resolve the server config from runtime policy.
+    let runtime_policy = current_tool_runtime_policy();
+    let server = match resolve_runtime_policy_mcp_server(&runtime_policy, server_name) {
+        Ok(s) => s.server,
+        Err(_) => {
+            return Ok(json!({
+                "server": server_name,
+                "resources": [],
+                "message": format!("MCP server '{}' not found in runtime policy. Configure it in .remote-code-rust/mcp.toml or settings.", server_name)
+            })
+            .to_string());
+        }
+    };
+
+    let client_info = rc_mcp::McpClientInfo::new("remote-code-rust", env!("CARGO_PKG_VERSION"));
+    match rc_mcp::list_resources(&server, &client_info).await {
+        Ok(resources) => {
+            let resource_list: Vec<Value> = resources
+                .iter()
+                .map(|r| {
+                    json!({
+                        "uri": r.uri,
+                        "name": r.name,
+                        "description": r.description,
+                        "mime_type": r.mime_type,
+                    })
+                })
+                .collect();
+            Ok(json!({
+                "server": server_name,
+                "resources": resource_list,
+                "count": resource_list.len(),
+            })
+            .to_string())
+        }
+        Err(e) => Ok(json!({
+            "server": server_name,
+            "resources": [],
+            "error": e.to_string(),
+            "message": format!("Failed to list resources from MCP server '{}': {}", server_name, e)
+        })
+        .to_string()),
+    }
 }
 
-pub(crate) fn read_mcp_resource_tool(input: &Value) -> Result<String> {
+pub(crate) async fn read_mcp_resource_tool(
+    input: &Value,
+    _context: &ToolExecutionContext,
+) -> Result<String> {
+    let server_name = input["server"]
+        .as_str()
+        .ok_or_else(|| anyhow!("server is required"))?;
     let uri = input["uri"]
         .as_str()
         .ok_or_else(|| anyhow!("uri is required"))?;
 
-    Ok(json!({
-        "uri": uri,
-        "content": null,
-        "message": "MCP resource reading requires an active MCP connection. No content available in current context."
-    })
-    .to_string())
+    // Resolve the server config from runtime policy.
+    let runtime_policy = current_tool_runtime_policy();
+    let server = match resolve_runtime_policy_mcp_server(&runtime_policy, server_name) {
+        Ok(s) => s.server,
+        Err(_) => {
+            return Ok(json!({
+                "uri": uri,
+                "content": null,
+                "error": format!("MCP server '{}' not found in runtime policy.", server_name)
+            })
+            .to_string());
+        }
+    };
+
+    let client_info = rc_mcp::McpClientInfo::new("remote-code-rust", env!("CARGO_PKG_VERSION"));
+    match rc_mcp::read_resource(&server, &client_info, uri).await {
+        Ok(contents) => {
+            let content_items: Vec<Value> = contents
+                .iter()
+                .map(|c| {
+                    json!({
+                        "uri": c.uri,
+                        "mime_type": c.mime_type,
+                        "text": c.text,
+                        "has_blob": c.blob.is_some(),
+                    })
+                })
+                .collect();
+            Ok(json!({
+                "uri": uri,
+                "server": server_name,
+                "contents": content_items,
+            })
+            .to_string())
+        }
+        Err(e) => Ok(json!({
+            "uri": uri,
+            "server": server_name,
+            "contents": [],
+            "error": e.to_string(),
+        })
+        .to_string()),
+    }
 }
 
 /// Call a tool on an MCP server directly.
