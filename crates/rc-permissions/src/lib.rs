@@ -66,13 +66,24 @@ pub use rules::{LayeredRuleEngine, RuleAction, RuleMatch, RuleSource, SourceAwar
 // ── V2 re-exports ─────────────────────────────────────────────
 pub use auto_mode::{AutoModeManager, AutoModeState};
 pub use bypass_killswitch::BypassKillswitchManager;
-pub use classifier::{BashClassifier, BashCommandCategory, ClassifierResult, PermissionClassifier, YoloClassifier};
-pub use dangerous_patterns::{DangerLevel, DangerousPattern, detect_dangerous_patterns, has_dangerous_patterns, is_critically_dangerous};
-pub use decision::{AllowDecision, AskDecision, DecisionReason, DenyDecision, PassthroughDecision, PermissionDecisionV2, PermissionUpdate, PermissionUpdateDestination};
+pub use classifier::{
+    BashClassifier, BashCommandCategory, ClassifierResult, PermissionClassifier, YoloClassifier,
+};
+pub use dangerous_patterns::{
+    DangerLevel, DangerousPattern, detect_dangerous_patterns, has_dangerous_patterns,
+    is_critically_dangerous,
+};
+pub use decision::{
+    AllowDecision, AskDecision, DecisionReason, DenyDecision, PassthroughDecision,
+    PermissionDecisionV2, PermissionUpdate, PermissionUpdateDestination,
+};
 pub use denial_tracking::{DenialTracker, SharedDenialTracker};
 pub use explainer::explain_permission;
 pub use filesystem::check_filesystem_permission;
-pub use handler::{CoordinatorHandler, InteractiveHandler, PermissionCheckContext, PermissionHandler, SwarmWorkerHandler};
+pub use handler::{
+    CoordinatorHandler, InteractiveHandler, PermissionCheckContext, PermissionHandler,
+    SwarmWorkerHandler,
+};
 pub use loader::{load_rules_from_file, merge_rules, parse_rule_string};
 pub use mode::{ExtendedPermissionMode, ModeColorKey, PermissionModeConfig};
 pub use path_validation::validate_path;
@@ -84,7 +95,6 @@ pub use shell_matching::shell_command_matches_pattern;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-
 
 // ── V1 core types (kept for backward compatibility) ───────────
 
@@ -124,11 +134,17 @@ pub struct PermissionDecision {
 
 impl PermissionDecision {
     pub fn allow() -> Self {
-        Self { allowed: true, message: None }
+        Self {
+            allowed: true,
+            message: None,
+        }
     }
 
     pub fn deny(message: impl Into<String>) -> Self {
-        Self { allowed: false, message: Some(message.into()) }
+        Self {
+            allowed: false,
+            message: Some(message.into()),
+        }
     }
 }
 
@@ -169,7 +185,10 @@ pub struct StaticPermissionBroker {
 impl StaticPermissionBroker {
     /// Create a broker that either allows or denies everything.
     pub fn new(allow_all: bool) -> Self {
-        Self { allow_all, mode: None }
+        Self {
+            allow_all,
+            mode: None,
+        }
     }
 
     /// Create a broker from a [`rc_core::PermissionMode`].
@@ -177,11 +196,11 @@ impl StaticPermissionBroker {
     /// `BypassPermissions` and `AcceptEdits` auto-approve certain classes;
     /// all other modes deny by default.
     pub fn from_mode(mode: rc_core::PermissionMode) -> Self {
-        let allow_all = matches!(
-            mode,
-            rc_core::PermissionMode::BypassPermissions
-        );
-        Self { allow_all, mode: Some(mode) }
+        let allow_all = matches!(mode, rc_core::PermissionMode::BypassPermissions);
+        Self {
+            allow_all,
+            mode: Some(mode),
+        }
     }
 }
 
@@ -233,7 +252,10 @@ impl<B: PermissionBroker> LayeredPermissionBroker<B> {
     }
 
     fn push_audit(&self, record: PermissionAuditRecord) {
-        self.audit.lock().unwrap_or_else(|e| e.into_inner()).push(record);
+        self.audit
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(record);
     }
 }
 
@@ -248,7 +270,8 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
                     return match rule.action {
                         RuleAction::Allow => PermissionDecision::allow(),
                         RuleAction::Deny => PermissionDecision::deny(format!(
-                            "Denied by session rule: {}", rule.tool_pattern
+                            "Denied by session rule: {}",
+                            rule.tool_pattern
                         )),
                         RuleAction::Ask => continue,
                     };
@@ -271,7 +294,8 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
                 return match rule.action {
                     RuleAction::Allow => PermissionDecision::allow(),
                     RuleAction::Deny => PermissionDecision::deny(format!(
-                        "Denied by rule from {:?}: {}", rule.source, rule.tool_pattern
+                        "Denied by rule from {:?}: {}",
+                        rule.source, rule.tool_pattern
                     )),
                     RuleAction::Ask => continue,
                 };
@@ -283,7 +307,10 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
     }
 
     fn add_session_rule(&self, action: RuleAction, tool_pattern: String) -> Result<()> {
-        let mut session = self.session_rules.write().unwrap_or_else(|e| e.into_inner());
+        let mut session = self
+            .session_rules
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
         session.push(SourceAwarePermissionRule {
             action,
             tool_pattern,
@@ -293,7 +320,10 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
     }
 
     fn clear_session_rules(&self) -> Result<usize> {
-        let mut session = self.session_rules.write().unwrap_or_else(|e| e.into_inner());
+        let mut session = self
+            .session_rules
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
         let count = session.len();
         session.clear();
         Ok(count)
@@ -318,7 +348,10 @@ pub fn load_layered_rules(
     cli_settings_files: &[std::path::PathBuf],
 ) -> Vec<SourceAwarePermissionRule> {
     let files = rule_parser::discover_permission_rule_files(
-        cwd, profile_dir, settings_files, cli_settings_files,
+        cwd,
+        profile_dir,
+        settings_files,
+        cli_settings_files,
     );
     let mut all_rules = Vec::new();
     for (path, source) in &files {
@@ -348,12 +381,18 @@ pub fn rule_matches_pattern(pattern: &str, tool_name: &str) -> bool {
     let parts: Vec<&str> = pattern.split('*').collect();
     let mut idx = 0;
     for (i, part) in parts.iter().enumerate() {
-        if part.is_empty() { continue; }
+        if part.is_empty() {
+            continue;
+        }
         if i == 0 {
-            if !tool_name[idx..].starts_with(part) { return false; }
+            if !tool_name[idx..].starts_with(part) {
+                return false;
+            }
             idx += part.len();
         } else if i == parts.len() - 1 {
-            if !tool_name.ends_with(part) { return false; }
+            if !tool_name.ends_with(part) {
+                return false;
+            }
         } else {
             match tool_name[idx..].find(part) {
                 Some(pos) => idx += pos + part.len(),
@@ -380,10 +419,8 @@ pub fn classify_tool(name: &str) -> PermissionClass {
         // snake_case (internal tool names) — Bash
         "bash_command" | "powershell" | "repl" | "tungsten" => PermissionClass::Bash,
         // snake_case — Edit
-        "write_file" | "replace_in_file" | "edit_file" | "notebook_edit"
-        | "memory_write" | "schedule_cron" | "enter_worktree" | "exit_worktree" => {
-            PermissionClass::Edit
-        }
+        "write_file" | "replace_in_file" | "edit_file" | "notebook_edit" | "memory_write"
+        | "schedule_cron" | "enter_worktree" | "exit_worktree" => PermissionClass::Edit,
         // snake_case — Agent
         "agent" => PermissionClass::Agent,
         // snake_case — Mcp
@@ -401,10 +438,12 @@ pub fn auto_allows(mode: rc_core::PermissionMode, class: PermissionClass) -> boo
     use rc_core::PermissionMode;
     match mode {
         PermissionMode::BypassPermissions => true,
-        PermissionMode::AcceptEdits => matches!(class, PermissionClass::Read | PermissionClass::Edit),
-        PermissionMode::Default
-        | PermissionMode::Plan
-        | PermissionMode::DontAsk => matches!(class, PermissionClass::Read),
+        PermissionMode::AcceptEdits => {
+            matches!(class, PermissionClass::Read | PermissionClass::Edit)
+        }
+        PermissionMode::Default | PermissionMode::Plan | PermissionMode::DontAsk => {
+            matches!(class, PermissionClass::Read)
+        }
     }
 }
 
@@ -552,7 +591,9 @@ mod tests {
         }];
         let layered = LayeredPermissionBroker::new(fallback, rules);
         // Session rule denies Bash
-        layered.add_session_rule(RuleAction::Deny, "Bash".to_owned()).unwrap();
+        layered
+            .add_session_rule(RuleAction::Deny, "Bash".to_owned())
+            .unwrap();
         let rt = tokio::runtime::Runtime::new().unwrap();
         let decision = rt.block_on(layered.decide(PermissionRequest {
             tool_name: "Bash".to_owned(),
@@ -570,8 +611,12 @@ mod tests {
     fn clear_session_rules_returns_count() {
         let fallback = StaticPermissionBroker::new(true);
         let layered = LayeredPermissionBroker::new(fallback, vec![]);
-        layered.add_session_rule(RuleAction::Allow, "Read".to_owned()).unwrap();
-        layered.add_session_rule(RuleAction::Deny, "Bash".to_owned()).unwrap();
+        layered
+            .add_session_rule(RuleAction::Allow, "Read".to_owned())
+            .unwrap();
+        layered
+            .add_session_rule(RuleAction::Deny, "Bash".to_owned())
+            .unwrap();
         let count = layered.clear_session_rules().unwrap();
         assert_eq!(count, 2);
     }

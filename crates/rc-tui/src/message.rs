@@ -3,8 +3,8 @@
 //! Defines the data model for chat messages, tool calls, permission requests,
 //! and provides helpers for converting messages into ratatui renderable form.
 
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::style::{Color, Style, Modifier};
 
 use crate::style::StyleConfig;
 
@@ -224,16 +224,15 @@ pub struct McpServerStatus {
 pub fn role_span(role: MessageRole, style: &StyleConfig) -> Span<'static> {
     let color = role.color(style);
     let label = format!("[{}] ", role.label());
-    Span::styled(label, Style::default().fg(color).add_modifier(Modifier::BOLD))
+    Span::styled(
+        label,
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    )
 }
 
 /// Render a single-line preview of a message (for sidebar / compact view).
 pub fn message_preview(msg: &ChatMessage, max_chars: usize) -> String {
-    let first_line = msg
-        .content
-        .lines()
-        .next()
-        .unwrap_or("");
+    let first_line = msg.content.lines().next().unwrap_or("");
     let truncated: String = first_line.chars().take(max_chars).collect();
     if first_line.chars().count() > max_chars {
         format!("{}…", truncated)
@@ -253,7 +252,11 @@ pub fn truncate_text(text: &str, max_chars: usize) -> String {
 }
 
 /// Convert a ChatMessage into ratatui Lines for rendering.
-pub fn message_to_lines(msg: &ChatMessage, width: usize, style: &StyleConfig) -> Vec<Line<'static>> {
+pub fn message_to_lines(
+    msg: &ChatMessage,
+    width: usize,
+    style: &StyleConfig,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
     // Header line with role.
@@ -268,10 +271,7 @@ pub fn message_to_lines(msg: &ChatMessage, width: usize, style: &StyleConfig) ->
         let color = msg.role.color(style);
         let wrapped = wrap_text(content_line, width);
         for chunk in wrapped {
-            lines.push(Line::from(Span::styled(
-                chunk,
-                Style::default().fg(color),
-            )));
+            lines.push(Line::from(Span::styled(chunk, Style::default().fg(color))));
         }
     }
 
@@ -279,7 +279,11 @@ pub fn message_to_lines(msg: &ChatMessage, width: usize, style: &StyleConfig) ->
     for tc in &msg.tool_calls {
         let icon = if tc.is_error { "✗" } else { "✓" };
         let summary = if tc.is_collapsed {
-            format!("  {icon} [tool] {} ({:.1}s)", tc.tool_name, tc.duration_ms as f64 / 1000.0)
+            format!(
+                "  {icon} [tool] {} ({:.1}s)",
+                tc.tool_name,
+                tc.duration_ms as f64 / 1000.0
+            )
         } else {
             let output_preview = truncate_text(&tc.output, width.saturating_sub(20));
             format!(

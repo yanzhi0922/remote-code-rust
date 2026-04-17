@@ -20,7 +20,11 @@ pub enum ResolvedMarketplaceSource {
     /// URL to marketplace index JSON.
     Url { url: String },
     /// Git repository URL.
-    Git { url: String, #[serde(default)] ref_: Option<String> },
+    Git {
+        url: String,
+        #[serde(default)]
+        ref_: Option<String>,
+    },
     /// Local directory path.
     Directory { path: String },
     /// Local file path.
@@ -34,9 +38,7 @@ pub enum ResolvedMarketplaceSource {
 /// Resolve a marketplace source from a user-provided string.
 ///
 /// Handles GitHub shorthand (`owner/repo`), URLs, and local paths.
-pub fn resolve_marketplace_source(
-    input: &str,
-) -> Option<ResolvedMarketplaceSource> {
+pub fn resolve_marketplace_source(input: &str) -> Option<ResolvedMarketplaceSource> {
     let trimmed = input.trim();
 
     // Handle URLs
@@ -64,11 +66,7 @@ pub fn resolve_marketplace_source(
     if let Some(slash_pos) = trimmed.find('/') {
         let owner = &trimmed[..slash_pos];
         let repo = &trimmed[slash_pos + 1..];
-        if !owner.is_empty()
-            && !repo.is_empty()
-            && !repo.contains('/')
-            && !owner.contains('.')
-        {
+        if !owner.is_empty() && !repo.is_empty() && !repo.contains('/') && !owner.contains('.') {
             return Some(ResolvedMarketplaceSource::Github {
                 repo: trimmed.to_owned(),
             });
@@ -100,10 +98,7 @@ fn extract_github_repo(url: &str) -> Option<String> {
 }
 
 /// Format plugin failure details for user display.
-pub fn format_failure_details(
-    failures: &[FailureEntry],
-    include_reasons: bool,
-) -> String {
+pub fn format_failure_details(failures: &[FailureEntry], include_reasons: bool) -> String {
     let max_show = 2;
     let details: Vec<String> = failures
         .iter()
@@ -153,10 +148,7 @@ pub fn get_marketplace_source_display(source: &ResolvedMarketplaceSource) -> Str
 }
 
 /// Create a plugin ID from plugin name and marketplace name.
-pub fn create_plugin_id(
-    plugin_name: &str,
-    marketplace_name: &str,
-) -> String {
+pub fn create_plugin_id(plugin_name: &str, marketplace_name: &str) -> String {
     format!("{plugin_name}@{marketplace_name}")
 }
 
@@ -164,9 +156,7 @@ pub fn create_plugin_id(
 ///
 /// In a real implementation, this would make an HTTP request.
 /// Here it returns an error to indicate the operation is not available.
-pub fn fetch_marketplace_index(
-    _url: &str,
-) -> Result<MarketplaceIndex, String> {
+pub fn fetch_marketplace_index(_url: &str) -> Result<MarketplaceIndex, String> {
     Err("network fetch not available in this build".to_owned())
 }
 
@@ -178,8 +168,7 @@ pub fn parse_marketplace_index(
     let raw: serde_json::Value =
         serde_json::from_str(content).map_err(|e| format!("invalid JSON: {e}"))?;
 
-    let entries = if let Some(arr) = raw.get("plugins").and_then(|v| v.as_array())
-    {
+    let entries = if let Some(arr) = raw.get("plugins").and_then(|v| v.as_array()) {
         arr.iter()
             .filter_map(|v| serde_json::from_value(v.clone()).ok())
             .collect()
@@ -222,8 +211,7 @@ mod tests {
 
     #[test]
     fn resolve_github_url() {
-        let result =
-            resolve_marketplace_source("https://github.com/org/repo");
+        let result = resolve_marketplace_source("https://github.com/org/repo");
         assert!(matches!(
             result,
             Some(ResolvedMarketplaceSource::Github { repo }) if repo == "org/repo"
@@ -232,8 +220,7 @@ mod tests {
 
     #[test]
     fn resolve_git_ssh() {
-        let result =
-            resolve_marketplace_source("git@github.com:org/repo.git");
+        let result = resolve_marketplace_source("git@github.com:org/repo.git");
         assert!(matches!(
             result,
             Some(ResolvedMarketplaceSource::Git { url, .. }) if url == "git@github.com:org/repo.git"
@@ -331,11 +318,9 @@ mod tests {
 
     #[test]
     fn get_marketplace_source_display_works() {
-        let source =
-            ResolvedMarketplaceSource::Github { repo: "org/repo".to_owned() };
-        assert_eq!(
-            get_marketplace_source_display(&source),
-            "org/repo"
-        );
+        let source = ResolvedMarketplaceSource::Github {
+            repo: "org/repo".to_owned(),
+        };
+        assert_eq!(get_marketplace_source_display(&source), "org/repo");
     }
 }

@@ -12,9 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::schemas::{
-    PluginManifestSchema,
-};
+use crate::schemas::PluginManifestSchema;
 
 // ---------------------------------------------------------------------------
 // Error types
@@ -143,9 +141,7 @@ fn check_path_traversal(
     if p.contains("..") {
         let message = match hint {
             Some(h) => format!("Path contains \"..\": {p}. {h}"),
-            None => format!(
-                "Path contains \"..\" which could be a path traversal attempt: {p}"
-            ),
+            None => format!("Path contains \"..\" which could be a path traversal attempt: {p}"),
         };
         errors.push(ValidationError {
             path: field.to_string(),
@@ -279,24 +275,24 @@ pub fn validate_plugin_manifest(file_path: &Path) -> PluginValidationResult {
             .collect();
 
         if !stray_keys.is_empty()
-            && let Value::Object(ref mut map) = to_validate {
-                for key in &stray_keys {
-                    map.remove(*key);
-                    warnings.push(ValidationWarning {
-                        path: key.to_string(),
-                        message: format!(
-                            "Field '{key}' belongs in the marketplace entry \
+            && let Value::Object(ref mut map) = to_validate
+        {
+            for key in &stray_keys {
+                map.remove(*key);
+                warnings.push(ValidationWarning {
+                    path: key.to_string(),
+                    message: format!(
+                        "Field '{key}' belongs in the marketplace entry \
                              (marketplace.json), not plugin.json. It's harmless \
                              here but unused — the runtime ignores it at load time."
-                        ),
-                    });
-                }
+                    ),
+                });
             }
+        }
     }
 
     // Validate against schema
-    let schema_result: Result<PluginManifestSchema, _> =
-        serde_json::from_value(to_validate);
+    let schema_result: Result<PluginManifestSchema, _> = serde_json::from_value(to_validate);
     if let Err(e) = schema_result {
         errors.push(ValidationError {
             path: "schema".into(),
@@ -415,56 +411,56 @@ pub fn validate_marketplace_manifest(file_path: &Path) -> PluginValidationResult
 
     // Check path traversal in plugin sources
     if let Value::Object(ref obj) = parsed
-        && let Some(Value::Array(plugins)) = obj.get("plugins") {
-            for (i, plugin) in plugins.iter().enumerate() {
-                if let Some(source) = plugin.get("source") {
-                    // String sources (relative paths)
-                    if let Value::String(s) = source {
-                        check_path_traversal(
-                            s,
-                            &format!("plugins[{i}].source"),
-                            &mut errors,
-                            Some(&marketplace_source_hint(s)),
-                        );
-                    }
-                    // Object source with .path
-                    if let Value::Object(src_map) = source
-                        && let Some(Value::String(p)) = src_map.get("path") {
-                            check_path_traversal(
-                                p,
-                                &format!("plugins[{i}].source.path"),
-                                &mut errors,
-                                None,
-                            );
-                        }
+        && let Some(Value::Array(plugins)) = obj.get("plugins")
+    {
+        for (i, plugin) in plugins.iter().enumerate() {
+            if let Some(source) = plugin.get("source") {
+                // String sources (relative paths)
+                if let Value::String(s) = source {
+                    check_path_traversal(
+                        s,
+                        &format!("plugins[{i}].source"),
+                        &mut errors,
+                        Some(&marketplace_source_hint(s)),
+                    );
                 }
-            }
-
-            // Check for duplicate plugin names
-            let mut seen_names: HashSet<String> = HashSet::new();
-            for (i, plugin) in plugins.iter().enumerate() {
-                if let Some(Value::String(name)) = plugin.get("name") {
-                    if seen_names.contains(name) {
-                        errors.push(ValidationError {
-                            path: format!("plugins[{i}].name"),
-                            message: format!(
-                                "Duplicate plugin name \"{name}\" found in marketplace"
-                            ),
-                            code: None,
-                        });
-                    }
-                    seen_names.insert(name.clone());
+                // Object source with .path
+                if let Value::Object(src_map) = source
+                    && let Some(Value::String(p)) = src_map.get("path")
+                {
+                    check_path_traversal(
+                        p,
+                        &format!("plugins[{i}].source.path"),
+                        &mut errors,
+                        None,
+                    );
                 }
-            }
-
-            // Warn if no plugins
-            if plugins.is_empty() {
-                warnings.push(ValidationWarning {
-                    path: "plugins".into(),
-                    message: "Marketplace has no plugins defined".into(),
-                });
             }
         }
+
+        // Check for duplicate plugin names
+        let mut seen_names: HashSet<String> = HashSet::new();
+        for (i, plugin) in plugins.iter().enumerate() {
+            if let Some(Value::String(name)) = plugin.get("name") {
+                if seen_names.contains(name) {
+                    errors.push(ValidationError {
+                        path: format!("plugins[{i}].name"),
+                        message: format!("Duplicate plugin name \"{name}\" found in marketplace"),
+                        code: None,
+                    });
+                }
+                seen_names.insert(name.clone());
+            }
+        }
+
+        // Warn if no plugins
+        if plugins.is_empty() {
+            warnings.push(ValidationWarning {
+                path: "plugins".into(),
+                message: "Marketplace has no plugins defined".into(),
+            });
+        }
+    }
 
     PluginValidationResult {
         success: errors.is_empty(),
@@ -531,8 +527,7 @@ pub fn validate_plugin_structure(plugin_dir: &Path) -> PluginValidationResult {
     if !has_manifest {
         errors.push(ValidationError {
             path: "plugin.json".into(),
-            message: "No plugin.json manifest found. Expected at root or in .codex-plugin/"
-                .into(),
+            message: "No plugin.json manifest found. Expected at root or in .codex-plugin/".into(),
             code: None,
         });
     }
@@ -554,9 +549,7 @@ pub fn validate_plugin_structure(plugin_dir: &Path) -> PluginValidationResult {
             if name_str.contains("..") {
                 errors.push(ValidationError {
                     path: name_str.to_string(),
-                    message: format!(
-                        "Directory/file name contains \"..\": {name_str}"
-                    ),
+                    message: format!("Directory/file name contains \"..\": {name_str}"),
                     code: None,
                 });
             }
@@ -805,7 +798,12 @@ mod tests {
 
         let result = validate_marketplace_manifest(&manifest);
         assert!(!result.success);
-        assert!(result.errors.iter().any(|e| e.message.contains("Duplicate")));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("Duplicate"))
+        );
     }
 
     #[test]
@@ -863,7 +861,12 @@ mod tests {
 
         let result = validate_plugin_structure(dir.path());
         assert!(result.success);
-        assert!(result.warnings.iter().any(|w| w.path == crate::PLUGIN_DISABLED_MARKER));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.path == crate::PLUGIN_DISABLED_MARKER)
+        );
     }
 
     #[test]
@@ -889,7 +892,11 @@ mod tests {
         .expect("write");
 
         let result = validate_plugin(dir.path());
-        assert!(result.success, "Errors: {:?}, Warnings: {:?}", result.errors, result.warnings);
+        assert!(
+            result.success,
+            "Errors: {:?}, Warnings: {:?}",
+            result.errors, result.warnings
+        );
     }
 
     #[test]

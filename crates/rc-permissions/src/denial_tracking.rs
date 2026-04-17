@@ -39,7 +39,7 @@ impl DenialTracker {
     /// Record a denial.
     pub fn record_denial(&mut self, tool_name: &str, reason: &str) {
         self.total_denials += 1;
-        
+
         let entry = self.denials.get_mut(tool_name);
         match entry {
             Some(record) => {
@@ -112,7 +112,10 @@ impl SharedDenialTracker {
 
     /// Record a denial.
     pub fn record_denial(&self, tool_name: &str, reason: &str) {
-        self.inner.lock().expect("lock").record_denial(tool_name, reason);
+        self.inner
+            .lock()
+            .expect("lock")
+            .record_denial(tool_name, reason);
     }
 
     /// Record an approval.
@@ -123,13 +126,19 @@ impl SharedDenialTracker {
     /// Get consecutive denial count.
     #[must_use]
     pub fn consecutive_denials(&self, tool_name: &str) -> u32 {
-        self.inner.lock().expect("lock").consecutive_denials(tool_name)
+        self.inner
+            .lock()
+            .expect("lock")
+            .consecutive_denials(tool_name)
     }
 
     /// Check if should auto-skip.
     #[must_use]
     pub fn should_auto_skip(&self, tool_name: &str, threshold: u32) -> bool {
-        self.inner.lock().expect("lock").should_auto_skip(tool_name, threshold)
+        self.inner
+            .lock()
+            .expect("lock")
+            .should_auto_skip(tool_name, threshold)
     }
 }
 
@@ -149,7 +158,7 @@ mod tests {
         tracker.record_denial("Bash", "dangerous");
         tracker.record_denial("Bash", "dangerous");
         tracker.record_denial("Bash", "dangerous");
-        
+
         assert_eq!(tracker.consecutive_denials("Bash"), 3);
         assert_eq!(tracker.total_denials(), 3);
     }
@@ -160,7 +169,7 @@ mod tests {
         tracker.record_denial("Bash", "dangerous");
         tracker.record_denial("Bash", "dangerous");
         tracker.record_approval("Bash");
-        
+
         assert_eq!(tracker.consecutive_denials("Bash"), 0);
     }
 
@@ -170,7 +179,7 @@ mod tests {
         tracker.record_denial("Bash", "dangerous");
         tracker.record_denial("Bash", "dangerous");
         tracker.record_denial("Bash", "dangerous");
-        
+
         assert!(tracker.should_auto_skip("Bash", 3));
         assert!(!tracker.should_auto_skip("Bash", 4));
     }

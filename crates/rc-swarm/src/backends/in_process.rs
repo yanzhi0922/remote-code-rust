@@ -105,9 +105,7 @@ impl PaneBackend for InProcessBackend {
         let mut panes = self.panes.lock().await;
         match panes.remove(pane_id) {
             Some(_) => Ok(()),
-            None => Err(SwarmError::InvalidPath(
-                pane_id.clone().into(),
-            )),
+            None => Err(SwarmError::InvalidPath(pane_id.clone().into())),
         }
     }
 
@@ -117,9 +115,7 @@ impl PaneBackend for InProcessBackend {
             // In-process: input is handled via channels in a real implementation.
             Ok(())
         } else {
-            Err(SwarmError::InvalidPath(
-                pane_id.clone().into(),
-            ))
+            Err(SwarmError::InvalidPath(pane_id.clone().into()))
         }
     }
 
@@ -169,7 +165,10 @@ mod tests {
     async fn create_pane_first() {
         let backend = InProcessBackend::new();
         let config = PaneConfig::new("worker-1", "/tmp", BackendType::InProcess);
-        let result = backend.create_pane(&config).await.expect("should create pane");
+        let result = backend
+            .create_pane(&config)
+            .await
+            .expect("should create pane");
         assert!(result.is_first_teammate);
         assert!(result.pane_id.starts_with("in-process-pane-"));
     }
@@ -189,14 +188,20 @@ mod tests {
         let backend = InProcessBackend::new();
         let config = PaneConfig::new("w1", "/tmp", BackendType::InProcess);
         let result = backend.create_pane(&config).await.expect("should create");
-        let status = backend.pane_status(&result.pane_id).await.expect("should get status");
+        let status = backend
+            .pane_status(&result.pane_id)
+            .await
+            .expect("should get status");
         assert_eq!(status, PaneStatus::Running);
     }
 
     #[tokio::test]
     async fn pane_status_not_found() {
         let backend = InProcessBackend::new();
-        let status = backend.pane_status(&"nonexistent".to_owned()).await.expect("should get status");
+        let status = backend
+            .pane_status(&"nonexistent".to_owned())
+            .await
+            .expect("should get status");
         assert_eq!(status, PaneStatus::NotFound);
     }
 
@@ -210,8 +215,14 @@ mod tests {
     #[tokio::test]
     async fn list_panes_after_create() {
         let backend = InProcessBackend::new();
-        backend.create_pane(&PaneConfig::new("w1", "/tmp", BackendType::InProcess)).await.expect("ok");
-        backend.create_pane(&PaneConfig::new("w2", "/tmp", BackendType::InProcess)).await.expect("ok");
+        backend
+            .create_pane(&PaneConfig::new("w1", "/tmp", BackendType::InProcess))
+            .await
+            .expect("ok");
+        backend
+            .create_pane(&PaneConfig::new("w2", "/tmp", BackendType::InProcess))
+            .await
+            .expect("ok");
         let panes = backend.list_panes().await.expect("should list");
         assert_eq!(panes.len(), 2);
     }
@@ -219,8 +230,14 @@ mod tests {
     #[tokio::test]
     async fn destroy_pane() {
         let backend = InProcessBackend::new();
-        let result = backend.create_pane(&PaneConfig::new("w1", "/tmp", BackendType::InProcess)).await.expect("ok");
-        backend.destroy_pane(&result.pane_id).await.expect("should destroy");
+        let result = backend
+            .create_pane(&PaneConfig::new("w1", "/tmp", BackendType::InProcess))
+            .await
+            .expect("ok");
+        backend
+            .destroy_pane(&result.pane_id)
+            .await
+            .expect("should destroy");
         let status = backend.pane_status(&result.pane_id).await.expect("ok");
         assert_eq!(status, PaneStatus::NotFound);
     }
@@ -235,14 +252,22 @@ mod tests {
     #[tokio::test]
     async fn send_to_pane() {
         let backend = InProcessBackend::new();
-        let result = backend.create_pane(&PaneConfig::new("w1", "/tmp", BackendType::InProcess)).await.expect("ok");
-        backend.send_to_pane(&result.pane_id, "hello").await.expect("should send");
+        let result = backend
+            .create_pane(&PaneConfig::new("w1", "/tmp", BackendType::InProcess))
+            .await
+            .expect("ok");
+        backend
+            .send_to_pane(&result.pane_id, "hello")
+            .await
+            .expect("should send");
     }
 
     #[tokio::test]
     async fn send_to_nonexistent_pane() {
         let backend = InProcessBackend::new();
-        let result = backend.send_to_pane(&"nonexistent".to_owned(), "hello").await;
+        let result = backend
+            .send_to_pane(&"nonexistent".to_owned(), "hello")
+            .await;
         assert!(result.is_err());
     }
 
@@ -273,7 +298,10 @@ mod tests {
             permission_mode: None,
             worktree_path: None,
         };
-        let result = executor.start_teammate(&config).await.expect("should start");
+        let result = executor
+            .start_teammate(&config)
+            .await
+            .expect("should start");
         assert!(result.is_first_teammate);
     }
 
@@ -283,8 +311,16 @@ mod tests {
         let executor = InProcessExecutor::new(Arc::clone(&backend));
         let config = PaneConfig::new("w1", "/tmp", BackendType::InProcess);
         let result = backend.create_pane(&config).await.expect("ok");
-        executor.stop_teammate(&result.pane_id).await.expect("should stop");
-        assert!(!executor.is_teammate_running(&result.pane_id).await.expect("ok"));
+        executor
+            .stop_teammate(&result.pane_id)
+            .await
+            .expect("should stop");
+        assert!(
+            !executor
+                .is_teammate_running(&result.pane_id)
+                .await
+                .expect("ok")
+        );
     }
 
     #[tokio::test]
@@ -293,7 +329,12 @@ mod tests {
         let executor = InProcessExecutor::new(Arc::clone(&backend));
         let config = PaneConfig::new("w1", "/tmp", BackendType::InProcess);
         let result = backend.create_pane(&config).await.expect("ok");
-        assert!(executor.is_teammate_running(&result.pane_id).await.expect("ok"));
+        assert!(
+            executor
+                .is_teammate_running(&result.pane_id)
+                .await
+                .expect("ok")
+        );
     }
 
     #[tokio::test]

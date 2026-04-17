@@ -280,7 +280,9 @@ pub fn resume_agent_from_checkpoint(
     }
 
     // Add the resume prompt as a new user message
-    checkpoint.messages.push(CheckpointMessage::user(resume_prompt));
+    checkpoint
+        .messages
+        .push(CheckpointMessage::user(resume_prompt));
     checkpoint.prompt = resume_prompt.to_owned();
     checkpoint.state = ResumableAgentState::Running;
     checkpoint.created_at = Utc::now();
@@ -355,7 +357,10 @@ mod tests {
 
     #[test]
     fn resumable_agent_state_default() {
-        assert_eq!(ResumableAgentState::default(), ResumableAgentState::NotStarted);
+        assert_eq!(
+            ResumableAgentState::default(),
+            ResumableAgentState::NotStarted
+        );
     }
 
     #[test]

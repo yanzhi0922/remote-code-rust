@@ -1,4 +1,4 @@
-﻿//! Using Your Tools section — guidance on tool usage preferences.
+//! Using Your Tools section — guidance on tool usage preferences.
 //!
 //! Matches `getUsingYourToolsSection()` in Claude Code's `prompts.ts`.
 
@@ -37,10 +37,14 @@ impl SystemPromptSection for UsingToolsSection {
         let provided_tool_subitems = vec![
             format!("To read files use {FILE_READ_TOOL_NAME} instead of cat, head, tail, or sed"),
             format!("To edit files use {FILE_EDIT_TOOL_NAME} instead of sed or awk"),
-            format!("To create files use {FILE_WRITE_TOOL_NAME} instead of cat with heredoc or echo redirection"),
+            format!(
+                "To create files use {FILE_WRITE_TOOL_NAME} instead of cat with heredoc or echo redirection"
+            ),
             format!("To search for files use {GLOB_TOOL_NAME} instead of find or ls"),
             format!("To search the content of files, use {GREP_TOOL_NAME} instead of grep or rg"),
-            format!("Reserve using the {BASH_TOOL_NAME} exclusively for system commands and terminal operations that require shell execution. If you are unsure and there is a relevant dedicated tool, default to using the dedicated tool and only fallback on using the {BASH_TOOL_NAME} tool for these if it is absolutely necessary."),
+            format!(
+                "Reserve using the {BASH_TOOL_NAME} exclusively for system commands and terminal operations that require shell execution. If you are unsure and there is a relevant dedicated tool, default to using the dedicated tool and only fallback on using the {BASH_TOOL_NAME} tool for these if it is absolutely necessary."
+            ),
         ];
 
         let mut items: Vec<BulletItem> = vec![
@@ -92,7 +96,9 @@ mod tests {
     #[test]
     fn using_tools_starts_with_header() {
         let section = UsingToolsSection;
-        let result = section.compute(&test_ctx_with_tools(&[])).expect("compute ok");
+        let result = section
+            .compute(&test_ctx_with_tools(&[]))
+            .expect("compute ok");
         let content = result.expect("should be Some");
         assert!(content.starts_with("# Using your tools"));
     }
@@ -100,7 +106,9 @@ mod tests {
     #[test]
     fn using_tools_mentions_dedicated_tools() {
         let section = UsingToolsSection;
-        let result = section.compute(&test_ctx_with_tools(&[])).expect("compute ok");
+        let result = section
+            .compute(&test_ctx_with_tools(&[]))
+            .expect("compute ok");
         let content = result.expect("should be Some");
         assert!(content.contains(FILE_READ_TOOL_NAME));
         assert!(content.contains(FILE_EDIT_TOOL_NAME));
@@ -121,7 +129,9 @@ mod tests {
     #[test]
     fn using_tools_mentions_parallel_execution() {
         let section = UsingToolsSection;
-        let result = section.compute(&test_ctx_with_tools(&[])).expect("compute ok");
+        let result = section
+            .compute(&test_ctx_with_tools(&[]))
+            .expect("compute ok");
         let content = result.expect("should be Some");
         assert!(content.contains("parallel"));
     }

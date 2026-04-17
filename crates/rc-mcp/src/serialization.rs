@@ -42,8 +42,7 @@ pub struct SerializedClient {
 }
 
 /// Full MCP CLI state for serialization.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct McpCliState {
     /// Connected/known clients.
     #[serde(default)]
@@ -61,7 +60,6 @@ pub struct McpCliState {
     #[serde(default)]
     pub normalized_names: Option<HashMap<String, String>>,
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -133,7 +131,9 @@ mod tests {
         assert_eq!(back.clients.len(), 1);
         assert_eq!(back.tools.len(), 1);
         assert_eq!(
-            back.normalized_names.as_ref().map(|m| m.get("a b").cloned()),
+            back.normalized_names
+                .as_ref()
+                .map(|m| m.get("a b").cloned()),
             Some(Some("a_b".to_owned()))
         );
     }

@@ -18,13 +18,9 @@ use crate::oauth::types::OAuthTokens;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AuthSource {
     /// Direct Anthropic API key.
-    AnthropicApiKey {
-        key: String,
-    },
+    AnthropicApiKey { key: String },
     /// OAuth tokens from claude.ai login.
-    OAuth {
-        tokens: OAuthTokens,
-    },
+    OAuth { tokens: OAuthTokens },
     /// AWS Bedrock credentials.
     AwsBedrock {
         region: String,
@@ -37,10 +33,7 @@ pub enum AuthSource {
         credentials: GcpCredentials,
     },
     /// OpenAI-compatible provider.
-    OpenAiCompatible {
-        key: String,
-        base_url: String,
-    },
+    OpenAiCompatible { key: String, base_url: String },
 }
 
 /// AWS temporary credentials obtained via STS or credential export.
@@ -131,9 +124,7 @@ pub enum ProviderType {
 ///
 /// This function dispatches to the appropriate authentication method
 /// based on the provider type and available credentials.
-pub async fn resolve_auth(
-    config: &ProviderAuthConfig,
-) -> Result<AuthSource, ProviderAuthError> {
+pub async fn resolve_auth(config: &ProviderAuthConfig) -> Result<AuthSource, ProviderAuthError> {
     match config.provider_type {
         ProviderType::FirstParty => resolve_first_party_auth(config).await,
         ProviderType::AwsBedrock => resolve_aws_auth(config).await,
@@ -161,9 +152,7 @@ async fn resolve_first_party_auth(
     // 2. Auth token
     if let Some(ref token) = config.anthropic_auth_token {
         debug!("Using ANTHROPIC_AUTH_TOKEN from environment");
-        return Ok(AuthSource::AnthropicApiKey {
-            key: token.clone(),
-        });
+        return Ok(AuthSource::AnthropicApiKey { key: token.clone() });
     }
 
     // 3. API key helper
@@ -204,9 +193,7 @@ async fn resolve_first_party_auth(
 }
 
 /// Resolve AWS Bedrock authentication.
-async fn resolve_aws_auth(
-    config: &ProviderAuthConfig,
-) -> Result<AuthSource, ProviderAuthError> {
+async fn resolve_aws_auth(config: &ProviderAuthConfig) -> Result<AuthSource, ProviderAuthError> {
     let region = config
         .aws_region
         .clone()
@@ -227,9 +214,7 @@ async fn resolve_aws_auth(
 }
 
 /// Resolve GCP Vertex AI authentication.
-async fn resolve_gcp_auth(
-    config: &ProviderAuthConfig,
-) -> Result<AuthSource, ProviderAuthError> {
+async fn resolve_gcp_auth(config: &ProviderAuthConfig) -> Result<AuthSource, ProviderAuthError> {
     let project = config
         .gcp_project
         .clone()
@@ -263,9 +248,7 @@ fn resolve_openai_compatible_auth(
     let base_url = config
         .openai_compatible_base_url
         .clone()
-        .ok_or({
-            ProviderAuthError::NoAuth
-        })?;
+        .ok_or({ ProviderAuthError::NoAuth })?;
 
     Ok(AuthSource::OpenAiCompatible { key, base_url })
 }
@@ -297,9 +280,7 @@ async fn execute_api_key_helper(command: &str) -> Result<String, ProviderAuthErr
 }
 
 /// Execute an AWS credential export command and parse JSON output.
-async fn execute_aws_credential_export(
-    command: &str,
-) -> Result<AwsCredentials, ProviderAuthError> {
+async fn execute_aws_credential_export(command: &str) -> Result<AwsCredentials, ProviderAuthError> {
     let output = tokio::process::Command::new("sh")
         .arg("-c")
         .arg(command)
@@ -341,9 +322,7 @@ async fn execute_gcloud_auth() -> Result<String, ProviderAuthError> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(ProviderAuthError::GcpAuthFailed(
-            stderr.trim().to_owned(),
-        ));
+        return Err(ProviderAuthError::GcpAuthFailed(stderr.trim().to_owned()));
     }
 
     let token = String::from_utf8_lossy(&output.stdout).trim().to_owned();

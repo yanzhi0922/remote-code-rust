@@ -38,21 +38,23 @@ pub fn shell_command_matches_pattern(command: &str, pattern: &str) -> bool {
 fn extract_tool_content(pattern: &str) -> Option<&str> {
     if let Some(start) = pattern.find('(')
         && let Some(end) = pattern.rfind(')')
-            && start < end {
-                return Some(&pattern[start + 1..end]);
-            }
+        && start < end
+    {
+        return Some(&pattern[start + 1..end]);
+    }
     None
 }
 
 /// Glob-style matching for shell commands.
 fn glob_match_command(command: &str, pattern: &str) -> bool {
     let parts: Vec<&str> = pattern.split('*').collect();
-    
+
     match parts.len() {
         1 => command == parts[0],
         2 => {
             let (prefix, suffix) = (parts[0], parts[1]);
-            command.starts_with(prefix) && command.ends_with(suffix)
+            command.starts_with(prefix)
+                && command.ends_with(suffix)
                 && command.len() >= prefix.len() + suffix.len()
         }
         _ => {
@@ -168,17 +170,26 @@ mod tests {
     #[test]
     fn wildcard_prefix() {
         assert!(shell_command_matches_pattern("git status", "git *"));
-        assert!(shell_command_matches_pattern("git push origin main", "git *"));
+        assert!(shell_command_matches_pattern(
+            "git push origin main",
+            "git *"
+        ));
     }
 
     #[test]
     fn wildcard_prefix_suffix() {
-        assert!(shell_command_matches_pattern("git push origin main", "git push * main"));
+        assert!(shell_command_matches_pattern(
+            "git push origin main",
+            "git push * main"
+        ));
     }
 
     #[test]
     fn tool_prefixed_pattern() {
-        assert!(shell_command_matches_pattern("git status", "Bash(git status)"));
+        assert!(shell_command_matches_pattern(
+            "git status",
+            "Bash(git status)"
+        ));
         assert!(shell_command_matches_pattern("git push", "Bash(git *)"));
     }
 
@@ -217,7 +228,10 @@ mod tests {
 
     #[test]
     fn recursive_glob() {
-        assert!(recursive_glob_match("git push origin main --force", "git * --force"));
+        assert!(recursive_glob_match(
+            "git push origin main --force",
+            "git * --force"
+        ));
         assert!(recursive_glob_match("abc", "a*c"));
         assert!(!recursive_glob_match("ac", "a*b*c"));
     }

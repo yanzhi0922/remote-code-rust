@@ -14,7 +14,7 @@
 
 use rc_core::Message;
 
-use crate::engine::{compact_conversation, ERROR_MESSAGE_PROMPT_TOO_LONG};
+use crate::engine::{ERROR_MESSAGE_PROMPT_TOO_LONG, compact_conversation};
 use crate::strategy::{
     CompactOptions, CompactProgressEvent, CompactStrategy, CompactStrategyType, CompactionResult,
     ProgressCallback, SummaryProvider,
@@ -206,9 +206,8 @@ mod tests {
     async fn reactive_compact_empty_messages_fails() {
         let config = ReactiveCompactConfig::default();
         let options = CompactOptions::default();
-        let provider = FnSummaryProvider::new(|_msgs, _sys, _user| {
-            Box::pin(async { Ok("summary".into()) })
-        });
+        let provider =
+            FnSummaryProvider::new(|_msgs, _sys, _user| Box::pin(async { Ok("summary".into()) }));
 
         let result = reactive_compact(&[], &config, &options, &provider, None).await;
         assert!(result.is_err(), "empty messages should fail");
@@ -216,10 +215,7 @@ mod tests {
 
     #[tokio::test]
     async fn reactive_compact_success_on_first_try() {
-        let messages = vec![
-            make_user_msg("hello"),
-            make_user_msg("world"),
-        ];
+        let messages = vec![make_user_msg("hello"), make_user_msg("world")];
 
         let config = ReactiveCompactConfig::default();
         let options = CompactOptions::default();
@@ -280,9 +276,8 @@ mod tests {
         let messages = vec![make_user_msg("hello")];
         let config = ReactiveCompactConfig::default();
         let options = CompactOptions::default();
-        let provider = FnSummaryProvider::new(|_msgs, _sys, _user| {
-            Box::pin(async { Ok("summary".into()) })
-        });
+        let provider =
+            FnSummaryProvider::new(|_msgs, _sys, _user| Box::pin(async { Ok("summary".into()) }));
 
         let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let events_clone = events.clone();
@@ -302,14 +297,8 @@ mod tests {
             events_clone.lock().expect("lock").push(label);
         });
 
-        let result = reactive_compact(
-            &messages,
-            &config,
-            &options,
-            &provider,
-            Some(&*progress),
-        )
-        .await;
+        let result =
+            reactive_compact(&messages, &config, &options, &provider, Some(&*progress)).await;
         assert!(result.is_ok());
 
         let evts = events.lock().expect("lock");

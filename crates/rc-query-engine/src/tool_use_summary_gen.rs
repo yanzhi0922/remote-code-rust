@@ -35,7 +35,11 @@ pub struct ToolInfo {
 impl ToolInfo {
     /// Creates a new tool info.
     #[must_use]
-    pub fn new(name: impl Into<String>, input: impl Into<String>, output: impl Into<String>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        input: impl Into<String>,
+        output: impl Into<String>,
+    ) -> Self {
         Self {
             name: name.into(),
             input: input.into(),
@@ -46,7 +50,11 @@ impl ToolInfo {
 
     /// Creates a tool info representing an error.
     #[must_use]
-    pub fn with_error(name: impl Into<String>, input: impl Into<String>, error: impl Into<String>) -> Self {
+    pub fn with_error(
+        name: impl Into<String>,
+        input: impl Into<String>,
+        error: impl Into<String>,
+    ) -> Self {
         Self {
             name: name.into(),
             input: input.into(),
@@ -302,7 +310,10 @@ fn summarize_batch(tools: &[ToolInfo], _templates: &[SummaryTemplate]) -> String
     let mut sorted_tools: Vec<_> = tool_counts.into_iter().collect();
     sorted_tools.sort_by(|a, b| b.1.cmp(&a.1));
 
-    let primary_tool = sorted_tools.first().map(|(name, _)| *name).unwrap_or("Unknown");
+    let primary_tool = sorted_tools
+        .first()
+        .map(|(name, _)| *name)
+        .unwrap_or("Unknown");
 
     // Build summary
     let action = infer_action_from_tool(primary_tool);
@@ -367,8 +378,8 @@ fn extract_file_from_input(input: &str) -> String {
 
     // Fallback: look for file-like patterns
     let extensions = [
-        ".rs", ".ts", ".js", ".py", ".toml", ".json", ".yaml", ".yml", ".md",
-        ".css", ".html", ".go", ".java", ".c", ".cpp", ".h",
+        ".rs", ".ts", ".js", ".py", ".toml", ".json", ".yaml", ".yml", ".md", ".css", ".html",
+        ".go", ".java", ".c", ".cpp", ".h",
     ];
 
     for word in input.split_whitespace() {
@@ -557,11 +568,7 @@ mod tests {
     fn test_generate_summary_single_edit() {
         let config = SummaryGeneratorConfig::default();
         let templates = default_templates();
-        let tools = vec![ToolInfo::new(
-            "Edit",
-            r#"{"file_path": "lib.rs"}"#,
-            "ok",
-        )];
+        let tools = vec![ToolInfo::new("Edit", r#"{"file_path": "lib.rs"}"#, "ok")];
         let result = generate_summary(&tools, &templates, &config);
         assert!(result.is_some());
         assert!(result.expect("summary").contains("lib.rs"));

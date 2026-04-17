@@ -83,7 +83,12 @@ pub fn build_spawn_command(config: &SpawnConfig) -> SpawnCommand {
         .env(ENV_TEAM_NAME, &config.team_name)
         .env(ENV_LEAD_AGENT_ID, &config.agent_id) // Will be overridden by actual lead ID
         .env(ENV_BACKEND_TYPE, config.backend_type.as_str())
-        .env(ENV_TEAM_DIR, team_helpers::team_dir(&config.team_name).to_string_lossy().to_string());
+        .env(
+            ENV_TEAM_DIR,
+            team_helpers::team_dir(&config.team_name)
+                .to_string_lossy()
+                .to_string(),
+        );
 
     if let Some(ref mode) = config.permission_mode {
         cmd = cmd.env(ENV_PERMISSION_MODE, mode.as_legacy_str());
@@ -104,7 +109,10 @@ pub fn build_env_vars(config: &SpawnConfig) -> Vec<(String, String)> {
         (ENV_AGENT_ID.to_owned(), config.agent_id.clone()),
         (ENV_AGENT_NAME.to_owned(), config.agent_name.clone()),
         (ENV_TEAM_NAME.to_owned(), config.team_name.clone()),
-        (ENV_BACKEND_TYPE.to_owned(), config.backend_type.as_str().to_owned()),
+        (
+            ENV_BACKEND_TYPE.to_owned(),
+            config.backend_type.as_str().to_owned(),
+        ),
         (
             ENV_TEAM_DIR.to_owned(),
             team_helpers::team_dir(&config.team_name)
@@ -114,7 +122,10 @@ pub fn build_env_vars(config: &SpawnConfig) -> Vec<(String, String)> {
     ];
 
     if let Some(ref mode) = config.permission_mode {
-        env.push((ENV_PERMISSION_MODE.to_owned(), mode.as_legacy_str().to_owned()));
+        env.push((
+            ENV_PERMISSION_MODE.to_owned(),
+            mode.as_legacy_str().to_owned(),
+        ));
     }
 
     // Add custom vars.
@@ -182,10 +193,7 @@ mod tests {
     fn build_spawn_command_custom_env() {
         let config = test_config();
         let cmd = build_spawn_command(&config);
-        let custom = cmd
-            .env
-            .iter()
-            .find(|(k, _)| k == "CUSTOM_VAR");
+        let custom = cmd.env.iter().find(|(k, _)| k == "CUSTOM_VAR");
         assert!(custom.is_some());
         assert_eq!(custom.expect("found").1, "custom_value");
     }
@@ -194,16 +202,28 @@ mod tests {
     fn build_env_vars_basic() {
         let config = test_config();
         let env = build_env_vars(&config);
-        assert!(env.iter().any(|(k, v)| k == ENV_AGENT_ID && v == "agent-123"));
-        assert!(env.iter().any(|(k, v)| k == ENV_AGENT_NAME && v == "worker-1"));
-        assert!(env.iter().any(|(k, v)| k == ENV_TEAM_NAME && v == "test-team"));
+        assert!(
+            env.iter()
+                .any(|(k, v)| k == ENV_AGENT_ID && v == "agent-123")
+        );
+        assert!(
+            env.iter()
+                .any(|(k, v)| k == ENV_AGENT_NAME && v == "worker-1")
+        );
+        assert!(
+            env.iter()
+                .any(|(k, v)| k == ENV_TEAM_NAME && v == "test-team")
+        );
     }
 
     #[test]
     fn build_env_vars_custom() {
         let config = test_config();
         let env = build_env_vars(&config);
-        assert!(env.iter().any(|(k, v)| k == "CUSTOM_VAR" && v == "custom_value"));
+        assert!(
+            env.iter()
+                .any(|(k, v)| k == "CUSTOM_VAR" && v == "custom_value")
+        );
     }
 
     #[test]
@@ -227,9 +247,7 @@ mod tests {
 
     #[test]
     fn spawn_command_builder() {
-        let cmd = SpawnCommand::new("prog")
-            .arg("arg1")
-            .env("KEY", "VALUE");
+        let cmd = SpawnCommand::new("prog").arg("arg1").env("KEY", "VALUE");
         assert_eq!(cmd.args, vec!["arg1"]);
         assert_eq!(cmd.env, vec![("KEY".to_owned(), "VALUE".to_owned())]);
     }

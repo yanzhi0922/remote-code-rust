@@ -37,43 +37,51 @@ pub fn validate_settings(settings: &Settings) -> ValidationResult {
 
     // Validate feedback survey rate
     if let Some(rate) = settings.feedback_survey_rate
-        && (!(0.0..=1.0).contains(&rate)) {
-            result.errors.push(format!(
-                "feedbackSurveyRate must be between 0 and 1, got {rate}"
-            ));
-        }
+        && (!(0.0..=1.0).contains(&rate))
+    {
+        result.errors.push(format!(
+            "feedbackSurveyRate must be between 0 and 1, got {rate}"
+        ));
+    }
 
     // Validate cleanup period days
     if let Some(days) = settings.cleanup_period_days
-        && days > 365 {
-            result.warnings.push(format!(
-                "cleanupPeriodDays of {days} is very large (> 1 year)"
-            ));
-        }
+        && days > 365
+    {
+        result.warnings.push(format!(
+            "cleanupPeriodDays of {days} is very large (> 1 year)"
+        ));
+    }
 
     // Validate auto updates channel
     if let Some(channel) = &settings.auto_updates_channel
-        && channel != "latest" && channel != "stable" {
-            result.errors.push(format!(
-                "autoUpdatesChannel must be 'latest' or 'stable', got '{channel}'"
-            ));
-        }
+        && channel != "latest"
+        && channel != "stable"
+    {
+        result.errors.push(format!(
+            "autoUpdatesChannel must be 'latest' or 'stable', got '{channel}'"
+        ));
+    }
 
     // Validate default shell
     if let Some(shell) = &settings.default_shell
-        && shell != "bash" && shell != "powershell" {
-            result.errors.push(format!(
-                "defaultShell must be 'bash' or 'powershell', got '{shell}'"
-            ));
-        }
+        && shell != "bash"
+        && shell != "powershell"
+    {
+        result.errors.push(format!(
+            "defaultShell must be 'bash' or 'powershell', got '{shell}'"
+        ));
+    }
 
     // Validate force login method
     if let Some(method) = &settings.force_login_method
-        && method != "claudeai" && method != "console" {
-            result.errors.push(format!(
-                "forceLoginMethod must be 'claudeai' or 'console', got '{method}'"
-            ));
-        }
+        && method != "claudeai"
+        && method != "console"
+    {
+        result.errors.push(format!(
+            "forceLoginMethod must be 'claudeai' or 'console', got '{method}'"
+        ));
+    }
 
     // Validate effort level
     if let Some(level) = &settings.effort_level {
@@ -89,9 +97,9 @@ pub fn validate_settings(settings: &Settings) -> ValidationResult {
 
     // Warn about deprecated fields
     if settings.include_co_authored_by.is_some() {
-        result.warnings.push(
-            "includeCoAuthoredBy is deprecated; use attribution instead".to_string(),
-        );
+        result
+            .warnings
+            .push("includeCoAuthoredBy is deprecated; use attribution instead".to_string());
     }
 
     result

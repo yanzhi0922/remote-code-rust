@@ -87,7 +87,11 @@ impl BridgeMessage {
 
     /// Create a message with a specific ID (useful for testing).
     pub fn with_id(id: String, direction: MessageDirection, payload: BridgePayload) -> Self {
-        Self { id, direction, payload }
+        Self {
+            id,
+            direction,
+            payload,
+        }
     }
 
     /// Serialize the message to a JSON string.
@@ -151,7 +155,10 @@ mod tests {
     fn payload_file_open() {
         let msg = BridgeMessage::new(
             MessageDirection::ToIde,
-            BridgePayload::FileOpen { path: "x.rs".into(), line: None },
+            BridgePayload::FileOpen {
+                path: "x.rs".into(),
+                line: None,
+            },
         );
         assert_eq!(msg.payload_type(), "file_open");
     }
@@ -160,7 +167,10 @@ mod tests {
     fn payload_diff_apply() {
         let msg = BridgeMessage::new(
             MessageDirection::ToIde,
-            BridgePayload::DiffApply { path: "y.rs".into(), diff: "+++ ".into() },
+            BridgePayload::DiffApply {
+                path: "y.rs".into(),
+                diff: "+++ ".into(),
+            },
         );
         assert_eq!(msg.payload_type(), "diff_apply");
     }
@@ -219,20 +229,41 @@ mod tests {
 
     #[test]
     fn message_new_has_id() {
-        let msg = BridgeMessage::new(MessageDirection::FromIde, BridgePayload::StatusUpdate {
-            status: "ok".into(), detail: None,
-        });
+        let msg = BridgeMessage::new(
+            MessageDirection::FromIde,
+            BridgePayload::StatusUpdate {
+                status: "ok".into(),
+                detail: None,
+            },
+        );
         assert!(!msg.id.is_empty());
     }
 
     #[test]
     fn roundtrip_all_payload_types() {
         let payloads: Vec<BridgePayload> = vec![
-            BridgePayload::FileOpen { path: "a".into(), line: Some(1) },
-            BridgePayload::DiffApply { path: "b".into(), diff: "d".into() },
-            BridgePayload::Diagnostic { path: "c".into(), severity: "warn".into(), message: "m".into() },
-            BridgePayload::StatusUpdate { status: "s".into(), detail: Some("d".into()) },
-            BridgePayload::SelectionChanged { path: "e".into(), start_line: 1, end_line: 2 },
+            BridgePayload::FileOpen {
+                path: "a".into(),
+                line: Some(1),
+            },
+            BridgePayload::DiffApply {
+                path: "b".into(),
+                diff: "d".into(),
+            },
+            BridgePayload::Diagnostic {
+                path: "c".into(),
+                severity: "warn".into(),
+                message: "m".into(),
+            },
+            BridgePayload::StatusUpdate {
+                status: "s".into(),
+                detail: Some("d".into()),
+            },
+            BridgePayload::SelectionChanged {
+                path: "e".into(),
+                start_line: 1,
+                end_line: 2,
+            },
         ];
         for payload in payloads {
             let msg = BridgeMessage::with_id("x".into(), MessageDirection::ToIde, payload);

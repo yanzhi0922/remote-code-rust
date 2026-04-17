@@ -109,11 +109,7 @@ impl SecurityChecker {
     ///
     /// Returns a `SecurityCheckResult` indicating whether the setting can be
     /// applied and at what risk level.
-    pub fn check_setting(
-        &self,
-        key: &str,
-        value: &serde_json::Value,
-    ) -> SecurityCheckResult {
+    pub fn check_setting(&self, key: &str, value: &serde_json::Value) -> SecurityCheckResult {
         // Check if the key is enterprise-managed
         if self.enterprise_keys.contains(&key.to_lowercase()) {
             return SecurityCheckResult::denied(
@@ -126,7 +122,9 @@ impl SecurityChecker {
         for pattern in &self.restricted_key_patterns {
             if pattern.is_match(key) {
                 return SecurityCheckResult::denied(
-                    format!("'{key}' matches a restricted key pattern — secrets should not be stored in settings"),
+                    format!(
+                        "'{key}' matches a restricted key pattern — secrets should not be stored in settings"
+                    ),
                     RiskLevel::Critical,
                 );
             }
@@ -177,8 +175,7 @@ fn looks_like_secret(s: &str) -> bool {
     // Hex strings of 32+ chars
     let hex_re = Regex::new(r"^[0-9a-fA-F]{32,}$").expect("regex");
     // Common secret prefixes
-    let prefix_re =
-        Regex::new(r"^(sk-|ghp_|gho_|AKIA|eyJ)[A-Za-z0-9]").expect("regex");
+    let prefix_re = Regex::new(r"^(sk-|ghp_|gho_|AKIA|eyJ)[A-Za-z0-9]").expect("regex");
 
     base64_re.is_match(s) || hex_re.is_match(s) || prefix_re.is_match(s)
 }
@@ -237,15 +234,15 @@ mod tests {
     #[test]
     fn check_secret_value() {
         let checker = SecurityChecker::new();
-        let result = checker.check_setting("my_config", &json!("sk-abcdefghijklmnopqrstuvwxyz123456"));
+        let result =
+            checker.check_setting("my_config", &json!("sk-abcdefghijklmnopqrstuvwxyz123456"));
         assert!(!result.allowed);
         assert_eq!(result.risk_level, RiskLevel::High);
     }
 
     #[test]
     fn check_enterprise_key() {
-        let checker =
-            SecurityChecker::with_enterprise_keys(vec!["security.policy".to_owned()]);
+        let checker = SecurityChecker::with_enterprise_keys(vec!["security.policy".to_owned()]);
         let result = checker.check_setting("security.policy", &json!("strict"));
         assert!(!result.allowed);
         assert_eq!(result.risk_level, RiskLevel::Critical);

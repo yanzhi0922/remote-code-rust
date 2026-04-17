@@ -18,9 +18,7 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SummaryOutcome {
     /// Content was within budget – no summarization needed.
-    NotNeeded {
-        content: String,
-    },
+    NotNeeded { content: String },
     /// Content was truncated to fit within the budget.
     Truncated {
         original_length: usize,
@@ -50,8 +48,12 @@ impl SummaryOutcome {
     pub fn original_length(&self) -> usize {
         match self {
             Self::NotNeeded { content } => content.len(),
-            Self::Truncated { original_length, .. } => *original_length,
-            Self::Summarized { original_length, .. } => *original_length,
+            Self::Truncated {
+                original_length, ..
+            } => *original_length,
+            Self::Summarized {
+                original_length, ..
+            } => *original_length,
         }
     }
 
@@ -84,7 +86,11 @@ pub struct ToolResultSummarizer {
 impl ToolResultSummarizer {
     /// Create a new summarizer with the given length thresholds.
     #[must_use]
-    pub fn new(max_result_length: usize, max_preview_length: usize, max_tail_length: usize) -> Self {
+    pub fn new(
+        max_result_length: usize,
+        max_preview_length: usize,
+        max_tail_length: usize,
+    ) -> Self {
         Self {
             max_result_length,
             max_preview_length,
@@ -165,10 +171,7 @@ impl ToolResultSummarizer {
         let original_length = content.len();
 
         // Take the first `max_preview_length` chars for the head
-        let preview: String = content
-            .chars()
-            .take(self.max_preview_length)
-            .collect();
+        let preview: String = content.chars().take(self.max_preview_length).collect();
 
         // Take the last `max_tail_length` chars for the tail
         let tail_chars: Vec<char> = content.chars().rev().take(self.max_tail_length).collect();
@@ -228,11 +231,7 @@ impl ToolResultSummarizer {
             error_count: error_lines.len(),
             warning_count: warning_lines.len(),
             error_snippets,
-            preview: content
-                .lines()
-                .take(5)
-                .collect::<Vec<&str>>()
-                .join("\n"),
+            preview: content.lines().take(5).collect::<Vec<&str>>().join("\n"),
         }
     }
 }
@@ -248,10 +247,7 @@ impl fmt::Display for ToolResultSummarizer {
         write!(
             f,
             "ToolResultSummarizer(max={}B, preview={}B, tail={}B, enabled={})",
-            self.max_result_length,
-            self.max_preview_length,
-            self.max_tail_length,
-            self.enabled
+            self.max_result_length, self.max_preview_length, self.max_tail_length, self.enabled
         )
     }
 }

@@ -126,10 +126,7 @@ impl PluginInstallationManager {
     /// Uninstall a plugin.
     ///
     /// Removes the plugin directory and unregisters it.
-    pub fn uninstall_plugin(
-        &mut self,
-        plugin_id: &str,
-    ) -> InstallResult {
+    pub fn uninstall_plugin(&mut self, plugin_id: &str) -> InstallResult {
         let install_path = match self.installed.remove(plugin_id) {
             Some(plugin) => plugin.install_path,
             None => {
@@ -154,11 +151,7 @@ impl PluginInstallationManager {
     }
 
     /// Update a plugin to a new version.
-    pub fn update_plugin(
-        &mut self,
-        plugin_id: &str,
-        new_version: &str,
-    ) -> InstallResult {
+    pub fn update_plugin(&mut self, plugin_id: &str, new_version: &str) -> InstallResult {
         let plugin = match self.installed.get_mut(plugin_id) {
             Some(p) => p,
             None => {
@@ -193,10 +186,7 @@ impl PluginInstallationManager {
     }
 
     /// Get an installed plugin by ID.
-    pub fn get_installed(
-        &self,
-        plugin_id: &str,
-    ) -> Option<&InstalledPlugin> {
+    pub fn get_installed(&self, plugin_id: &str) -> Option<&InstalledPlugin> {
         self.installed.get(plugin_id)
     }
 
@@ -243,13 +233,8 @@ mod tests {
     #[test]
     fn install_and_list() {
         let temp = ok(tempdir());
-        let mut mgr =
-            PluginInstallationManager::new(temp.path().to_path_buf());
-        let result = mgr.install_plugin(
-            "test@mkt",
-            "1.0.0",
-            Path::new("/source"),
-        );
+        let mut mgr = PluginInstallationManager::new(temp.path().to_path_buf());
+        let result = mgr.install_plugin("test@mkt", "1.0.0", Path::new("/source"));
         assert!(result.success);
         assert_eq!(mgr.len(), 1);
 
@@ -261,8 +246,7 @@ mod tests {
     #[test]
     fn install_and_is_installed() {
         let temp = ok(tempdir());
-        let mut mgr =
-            PluginInstallationManager::new(temp.path().to_path_buf());
+        let mut mgr = PluginInstallationManager::new(temp.path().to_path_buf());
         mgr.install_plugin("test@mkt", "1.0.0", Path::new("/source"));
         assert!(mgr.is_installed("test@mkt"));
         assert!(!mgr.is_installed("other@mkt"));
@@ -271,8 +255,7 @@ mod tests {
     #[test]
     fn uninstall_removes() {
         let temp = ok(tempdir());
-        let mut mgr =
-            PluginInstallationManager::new(temp.path().to_path_buf());
+        let mut mgr = PluginInstallationManager::new(temp.path().to_path_buf());
         mgr.install_plugin("test@mkt", "1.0.0", Path::new("/source"));
         let result = mgr.uninstall_plugin("test@mkt");
         assert!(result.success);
@@ -282,8 +265,7 @@ mod tests {
     #[test]
     fn uninstall_nonexistent() {
         let temp = ok(tempdir());
-        let mut mgr =
-            PluginInstallationManager::new(temp.path().to_path_buf());
+        let mut mgr = PluginInstallationManager::new(temp.path().to_path_buf());
         let result = mgr.uninstall_plugin("nonexistent@mkt");
         assert!(!result.success);
     }
@@ -291,8 +273,7 @@ mod tests {
     #[test]
     fn update_changes_version() {
         let temp = ok(tempdir());
-        let mut mgr =
-            PluginInstallationManager::new(temp.path().to_path_buf());
+        let mut mgr = PluginInstallationManager::new(temp.path().to_path_buf());
         mgr.install_plugin("test@mkt", "1.0.0", Path::new("/source"));
         let result = mgr.update_plugin("test@mkt", "2.0.0");
         assert!(result.success);
@@ -304,8 +285,7 @@ mod tests {
     #[test]
     fn update_nonexistent() {
         let temp = ok(tempdir());
-        let mut mgr =
-            PluginInstallationManager::new(temp.path().to_path_buf());
+        let mut mgr = PluginInstallationManager::new(temp.path().to_path_buf());
         let result = mgr.update_plugin("nonexistent@mkt", "2.0.0");
         assert!(!result.success);
     }

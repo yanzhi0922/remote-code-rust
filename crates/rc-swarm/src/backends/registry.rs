@@ -6,10 +6,10 @@
 
 use std::sync::Arc;
 
+use crate::backends::PaneBackend;
 use crate::backends::in_process::InProcessBackend;
 use crate::backends::iterm::ItermBackend;
 use crate::backends::tmux::TmuxBackend;
-use crate::backends::PaneBackend;
 use crate::error::{SwarmError, SwarmResult};
 use crate::types::BackendType;
 
@@ -128,11 +128,11 @@ pub async fn detect_backend_with_registry(
 
     // Auto-detect.
     let detected = detect_backend().await;
-    registry.find(detected).ok_or_else(|| {
-        SwarmError::BackendDetectionFailed {
+    registry
+        .find(detected)
+        .ok_or_else(|| SwarmError::BackendDetectionFailed {
             message: format!("detected backend {} but it is not registered", detected),
-        }
-    })
+        })
 }
 
 /// Check if we're running inside a tmux session.

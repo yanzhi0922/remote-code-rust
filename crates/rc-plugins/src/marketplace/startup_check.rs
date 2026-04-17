@@ -30,8 +30,7 @@ pub enum MarketplaceSkipReason {
 }
 
 /// Result of performing marketplace startup checks.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct MarketplaceStartupCheckResult {
     /// Whether the official marketplace was installed.
     pub official_installed: bool,
@@ -46,7 +45,6 @@ pub struct MarketplaceStartupCheckResult {
     /// Errors encountered during checks.
     pub errors: Vec<String>,
 }
-
 
 // ---------------------------------------------------------------------------
 // Core functions
@@ -71,8 +69,7 @@ pub fn perform_marketplace_startup_checks(
             .iter()
             .any(|m| m == OFFICIAL_MARKETPLACE_NAME);
         if has_official {
-            result.skip_reason =
-                Some(MarketplaceSkipReason::AlreadyInstalled);
+            result.skip_reason = Some(MarketplaceSkipReason::AlreadyInstalled);
         }
     }
 
@@ -95,8 +92,7 @@ pub fn get_retry_delay_ms(attempt: u32) -> u64 {
     let multiplier: u64 = 2;
     let max_delay_ms: u64 = 7 * 24 * 60 * 60 * 1000; // 1 week
 
-    let delay = initial_delay_ms
-        .saturating_mul(multiplier.saturating_pow(attempt));
+    let delay = initial_delay_ms.saturating_mul(multiplier.saturating_pow(attempt));
     delay.min(max_delay_ms)
 }
 
@@ -110,10 +106,8 @@ mod tests {
 
     #[test]
     fn perform_checks_with_official_installed() {
-        let result = perform_marketplace_startup_checks(
-            &["claude-plugins-official".to_owned()],
-            true,
-        );
+        let result =
+            perform_marketplace_startup_checks(&["claude-plugins-official".to_owned()], true);
         assert_eq!(
             result.skip_reason,
             Some(MarketplaceSkipReason::AlreadyInstalled)
@@ -122,18 +116,15 @@ mod tests {
 
     #[test]
     fn perform_checks_without_marketplaces() {
-        let result =
-            perform_marketplace_startup_checks(&[], false);
+        let result = perform_marketplace_startup_checks(&[], false);
         assert_eq!(result.marketplaces_checked, 0);
         assert!(result.skip_reason.is_none());
     }
 
     #[test]
     fn perform_checks_with_marketplaces() {
-        let result = perform_marketplace_startup_checks(
-            &["mkt-a".to_owned(), "mkt-b".to_owned()],
-            false,
-        );
+        let result =
+            perform_marketplace_startup_checks(&["mkt-a".to_owned(), "mkt-b".to_owned()], false);
         assert_eq!(result.marketplaces_checked, 2);
     }
 

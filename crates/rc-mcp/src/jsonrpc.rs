@@ -132,7 +132,9 @@ pub(crate) struct McpResourceReadResult {
 pub(crate) fn rpc_id_matches(id: &Value, request_id: u64) -> bool {
     id.as_u64() == Some(request_id)
         || id.as_i64() == Some(request_id as i64)
-        || id.as_str().is_some_and(|value| value == request_id.to_string())
+        || id
+            .as_str()
+            .is_some_and(|value| value == request_id.to_string())
 }
 
 #[cfg(test)]
@@ -185,7 +187,10 @@ mod tests {
         let json = r#"{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"test","version":"1.0"},"instructions":"Use wisely"}"#;
         let result: McpInitializeResult = serde_json::from_str(json).expect("deserialize");
         assert_eq!(result.protocol_version, "2025-03-26");
-        assert_eq!(result.server_info.as_ref().map(|i| i.name.as_str()), Some("test"));
+        assert_eq!(
+            result.server_info.as_ref().map(|i| i.name.as_str()),
+            Some("test")
+        );
         assert_eq!(result.instructions.as_deref(), Some("Use wisely"));
     }
 

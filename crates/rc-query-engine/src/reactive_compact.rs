@@ -9,9 +9,7 @@
 
 use anyhow::Result;
 
-use rc_core::{
-    Message, MessageBase, MessageOrigin, SystemMessage, SystemMessageSubtype,
-};
+use rc_core::{Message, MessageBase, MessageOrigin, SystemMessage, SystemMessageSubtype};
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -144,11 +142,12 @@ impl ReactiveCompactHandler {
                 }
                 other => {
                     if let Message::System(sys) = other
-                        && sys.base.is_compact_summary {
-                            always_keep.push(msg.clone());
-                            removable_start = i + 1;
-                            continue;
-                        }
+                        && sys.base.is_compact_summary
+                    {
+                        always_keep.push(msg.clone());
+                        removable_start = i + 1;
+                        continue;
+                    }
                     break;
                 }
             }
@@ -197,9 +196,7 @@ impl ReactiveCompactHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rc_core::{
-        AssistantMessage, UserMessage,
-    };
+    use rc_core::{AssistantMessage, UserMessage};
 
     fn make_user_message(text: &str) -> Message {
         Message::User(UserMessage {
@@ -273,9 +270,10 @@ mod tests {
         let result = handler.handle_prompt_too_long(messages).unwrap();
         assert!(result.was_compacted);
 
-        let has_system = result.messages.iter().any(|m| {
-            matches!(m, Message::System(sys) if sys.text == "system prompt")
-        });
+        let has_system = result
+            .messages
+            .iter()
+            .any(|m| matches!(m, Message::System(sys) if sys.text == "system prompt"));
         assert!(has_system, "System message should be preserved");
     }
 
@@ -324,9 +322,10 @@ mod tests {
         assert!(result.was_compacted);
         assert!(result.messages_removed > 0);
 
-        let has_tombstone = result.messages.iter().any(|m| {
-            matches!(m, Message::System(sys) if sys.text.contains("[Reactive compact:"))
-        });
+        let has_tombstone = result
+            .messages
+            .iter()
+            .any(|m| matches!(m, Message::System(sys) if sys.text.contains("[Reactive compact:")));
         assert!(has_tombstone, "Should contain a reactive compact tombstone");
     }
 
@@ -335,10 +334,7 @@ mod tests {
     #[test]
     fn handler_noop_for_short_conversations() {
         let mut handler = ReactiveCompactHandler::new();
-        let messages = vec![
-            make_system_message("system"),
-            make_user_message("hello"),
-        ];
+        let messages = vec![make_system_message("system"), make_user_message("hello")];
 
         let result = handler.handle_prompt_too_long(messages).unwrap();
         // With only 2 messages and preserve_recent=3, nothing gets removed
@@ -379,9 +375,10 @@ mod tests {
 
         let result = handler.handle_prompt_too_long(messages).unwrap();
 
-        let has_summary = result.messages.iter().any(|m| {
-            matches!(m, Message::System(sys) if sys.text == "previous summary")
-        });
+        let has_summary = result
+            .messages
+            .iter()
+            .any(|m| matches!(m, Message::System(sys) if sys.text == "previous summary"));
         assert!(has_summary, "Compact summary should be preserved");
     }
 

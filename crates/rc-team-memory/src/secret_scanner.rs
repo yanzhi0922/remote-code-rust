@@ -208,10 +208,12 @@ mod tests {
         let scanner = SecretScanner::new();
         let result = scanner.scan_content(r#"password = 'supersecretpassword123'"#);
         assert!(result.has_secrets);
-        assert!(result
-            .findings
-            .iter()
-            .any(|f| f.kind == SecretKind::Password));
+        assert!(
+            result
+                .findings
+                .iter()
+                .any(|f| f.kind == SecretKind::Password)
+        );
     }
 
     #[test]
@@ -233,13 +235,17 @@ mod tests {
     #[test]
     fn detect_private_key() {
         let scanner = SecretScanner::new();
-        let result = scanner.scan_content(r"-----BEGIN RSA PRIVATE KEY-----
-MIIE...");
+        let result = scanner.scan_content(
+            r"-----BEGIN RSA PRIVATE KEY-----
+MIIE...",
+        );
         assert!(result.has_secrets);
-        assert!(result
-            .findings
-            .iter()
-            .any(|f| f.kind == SecretKind::PrivateKey));
+        assert!(
+            result
+                .findings
+                .iter()
+                .any(|f| f.kind == SecretKind::PrivateKey)
+        );
     }
 
     #[test]
@@ -247,10 +253,12 @@ MIIE...");
         let scanner = SecretScanner::new();
         let result = scanner.scan_content(r"postgres://user:pass@host:5432/mydb");
         assert!(result.has_secrets);
-        assert!(result
-            .findings
-            .iter()
-            .any(|f| f.kind == SecretKind::ConnectionString));
+        assert!(
+            result
+                .findings
+                .iter()
+                .any(|f| f.kind == SecretKind::ConnectionString)
+        );
     }
 
     #[test]

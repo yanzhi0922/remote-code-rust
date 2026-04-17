@@ -87,11 +87,17 @@ impl QueuedSink {
 
     /// Attach a real sink and flush all buffered events to it.
     pub fn attach(&self, sink: Arc<dyn AnalyticsSink>) -> Result<()> {
-        let mut target = self.target.lock().map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
+        let mut target = self
+            .target
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
         *target = Some(sink);
 
         // Flush buffered events to the new target
-        let mut buffer = self.buffer.lock().map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
+        let mut buffer = self
+            .buffer
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
         if let Some(ref real_sink) = *target {
             for event in buffer.drain(..) {
                 real_sink.log_event(event);
@@ -103,10 +109,7 @@ impl QueuedSink {
 
     /// Number of events currently buffered.
     pub fn buffered_count(&self) -> usize {
-        self.buffer
-            .lock()
-            .map(|b| b.len())
-            .unwrap_or(0)
+        self.buffer.lock().map(|b| b.len()).unwrap_or(0)
     }
 }
 
@@ -126,7 +129,10 @@ impl AnalyticsSink for QueuedSink {
     }
 
     fn flush(&self) -> Result<()> {
-        let target = self.target.lock().map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
+        let target = self
+            .target
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
         if let Some(ref sink) = *target {
             sink.flush()?;
         }
@@ -211,13 +217,19 @@ impl AnalyticsSink for ExporterSink {
     }
 
     fn flush(&self) -> Result<()> {
-        let mut buffer = self.buffer.lock().map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
+        let mut buffer = self
+            .buffer
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
         if buffer.is_empty() {
             return Ok(());
         }
 
         let events: Vec<AnalyticsEvent> = buffer.drain(..).collect();
-        let exporter = self.exporter.lock().map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
+        let exporter = self
+            .exporter
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
         exporter.export(&events)
     }
 }

@@ -155,10 +155,7 @@ pub fn is_fork_child(messages: &[ForkMessage]) -> bool {
 ///    using an identical placeholder, then appends the per-child directive
 ///
 /// Result: `[...history, assistant(all_tool_uses), user(placeholder_results..., directive)]`
-pub fn build_fork_messages(
-    parent_messages: &[ForkMessage],
-    directive: &str,
-) -> Vec<ForkMessage> {
+pub fn build_fork_messages(parent_messages: &[ForkMessage], directive: &str) -> Vec<ForkMessage> {
     // Find the last assistant message with tool_use blocks
     let last_assistant = parent_messages
         .iter()
@@ -323,10 +320,12 @@ pub fn replace_tool_results_with_placeholder(messages: &[ForkMessage]) -> Vec<Fo
                 .content
                 .iter()
                 .map(|block| match block {
-                    ForkContentBlock::ToolResult { tool_use_id, .. } => ForkContentBlock::ToolResult {
-                        tool_use_id: tool_use_id.clone(),
-                        content: FORK_PLACEHOLDER_RESULT.to_owned(),
-                    },
+                    ForkContentBlock::ToolResult { tool_use_id, .. } => {
+                        ForkContentBlock::ToolResult {
+                            tool_use_id: tool_use_id.clone(),
+                            content: FORK_PLACEHOLDER_RESULT.to_owned(),
+                        }
+                    }
                     other => other.clone(),
                 })
                 .collect(),
@@ -584,7 +583,10 @@ mod tests {
         }];
         let replaced = replace_tool_results_with_placeholder(&messages);
         match &replaced[0].content[0] {
-            ForkContentBlock::ToolResult { tool_use_id, content } => {
+            ForkContentBlock::ToolResult {
+                tool_use_id,
+                content,
+            } => {
                 assert_eq!(tool_use_id, "unique-id-123");
                 assert_eq!(content, FORK_PLACEHOLDER_RESULT);
             }

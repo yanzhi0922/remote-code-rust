@@ -91,7 +91,10 @@ impl EstimatedConversation {
 
     /// Create a conversation with a system prompt.
     #[must_use]
-    pub fn with_system_prompt(system_prompt: impl Into<String>, messages: Vec<EstimatedMessage>) -> Self {
+    pub fn with_system_prompt(
+        system_prompt: impl Into<String>,
+        messages: Vec<EstimatedMessage>,
+    ) -> Self {
         Self {
             system_prompt: Some(system_prompt.into()),
             messages,
@@ -380,9 +383,7 @@ mod tests {
 
     #[test]
     fn estimate_conversation_grows_with_messages() {
-        let conv_small = EstimatedConversation::new(vec![
-            EstimatedMessage::new("user", "Hi"),
-        ]);
+        let conv_small = EstimatedConversation::new(vec![EstimatedMessage::new("user", "Hi")]);
         let conv_large = EstimatedConversation::new(vec![
             EstimatedMessage::new("user", "Hi"),
             EstimatedMessage::new("assistant", "Hello! How can I help you today?"),

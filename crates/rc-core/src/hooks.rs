@@ -188,7 +188,10 @@ pub struct HookResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{HookDecision, HookEventEnvelope, HookEventKind, HookResponse, HookSpecificOutput, HOOK_EVENTS};
+    use super::{
+        HOOK_EVENTS, HookDecision, HookEventEnvelope, HookEventKind, HookResponse,
+        HookSpecificOutput,
+    };
 
     #[test]
     fn expanded_hook_event_catalog_uses_pascal_case_names() {
@@ -260,7 +263,10 @@ mod tests {
 
     #[test]
     fn phase9_elicitation_result_event_name() {
-        assert_eq!(HookEventKind::ElicitationResult.as_str(), "ElicitationResult");
+        assert_eq!(
+            HookEventKind::ElicitationResult.as_str(),
+            "ElicitationResult"
+        );
     }
 
     #[test]
@@ -280,7 +286,10 @@ mod tests {
 
     #[test]
     fn phase9_instructions_loaded_event_name() {
-        assert_eq!(HookEventKind::InstructionsLoaded.as_str(), "InstructionsLoaded");
+        assert_eq!(
+            HookEventKind::InstructionsLoaded.as_str(),
+            "InstructionsLoaded"
+        );
     }
 
     #[test]
@@ -378,7 +387,11 @@ mod tests {
 
         let names: Vec<&str> = new_events.iter().map(|e| e.as_str()).collect();
         let unique_names: std::collections::HashSet<&str> = names.iter().copied().collect();
-        assert_eq!(names.len(), unique_names.len(), "All event names must be unique");
+        assert_eq!(
+            names.len(),
+            unique_names.len(),
+            "All event names must be unique"
+        );
     }
 
     #[test]
@@ -386,8 +399,7 @@ mod tests {
         let event = HookEventKind::TaskCreated;
         let serialized = serde_json::to_string(&event).expect("serialize");
         assert!(serialized.contains("task_created"));
-        let deserialized: HookEventKind =
-            serde_json::from_str(&serialized).expect("deserialize");
+        let deserialized: HookEventKind = serde_json::from_str(&serialized).expect("deserialize");
         assert_eq!(deserialized, event);
     }
 
@@ -403,8 +415,7 @@ mod tests {
         let event = HookEventKind::PermissionDenied;
         let serialized = serde_json::to_string(&event).expect("serialize");
         assert!(serialized.contains("permission_denied"));
-        let deserialized: HookEventKind =
-            serde_json::from_str(&serialized).expect("deserialize");
+        let deserialized: HookEventKind = serde_json::from_str(&serialized).expect("deserialize");
         assert_eq!(deserialized, event);
     }
 

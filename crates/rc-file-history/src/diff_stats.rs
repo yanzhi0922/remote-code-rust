@@ -152,10 +152,7 @@ fn compute_line_diff(old: &str, new: &str) -> Vec<LineChange> {
 /// with backup content.
 ///
 /// Corresponds to `computeDiffStatsForFile` in the TS source.
-pub fn compute_diff_stats_for_file(
-    file_path: &Path,
-    backup_content: Option<&str>,
-) -> DiffStats {
+pub fn compute_diff_stats_for_file(file_path: &Path, backup_content: Option<&str>) -> DiffStats {
     let mut stats = DiffStats::new();
 
     let current_content = fs::read_to_string(file_path).ok();
@@ -166,24 +163,30 @@ pub fn compute_diff_stats_for_file(
         }
         (Some(_current), None) => {
             // File exists but no backup — all lines are insertions
-            stats.files_changed.push(file_path.to_string_lossy().to_string());
+            stats
+                .files_changed
+                .push(file_path.to_string_lossy().to_string());
             let line_count = _current.lines().count();
             stats.insertions = line_count as u64;
         }
         (None, Some(_backup)) => {
             // File missing but backup exists — all lines are deletions
-            stats.files_changed.push(file_path.to_string_lossy().to_string());
+            stats
+                .files_changed
+                .push(file_path.to_string_lossy().to_string());
             let line_count = _backup.lines().count();
             stats.deletions = line_count as u64;
         }
         (Some(current), Some(backup)) => {
             let changes = compute_line_diff(backup, &current);
-            let has_add_or_remove = changes.iter().any(|c| {
-                matches!(c, LineChange::Added { .. } | LineChange::Removed { .. })
-            });
+            let has_add_or_remove = changes
+                .iter()
+                .any(|c| matches!(c, LineChange::Added { .. } | LineChange::Removed { .. }));
 
             if has_add_or_remove {
-                stats.files_changed.push(file_path.to_string_lossy().to_string());
+                stats
+                    .files_changed
+                    .push(file_path.to_string_lossy().to_string());
                 for change in &changes {
                     match change {
                         LineChange::Added { count } => stats.insertions += *count as u64,
@@ -296,8 +299,16 @@ mod tests {
     fn line_diff_mixed() {
         let changes = compute_line_diff("a\nb\nc", "a\nx\nc");
         // Should have: unchanged(a), removed(b), added(x), unchanged(c)
-        assert!(changes.iter().any(|c| matches!(c, LineChange::Removed { .. })));
-        assert!(changes.iter().any(|c| matches!(c, LineChange::Added { .. })));
+        assert!(
+            changes
+                .iter()
+                .any(|c| matches!(c, LineChange::Removed { .. }))
+        );
+        assert!(
+            changes
+                .iter()
+                .any(|c| matches!(c, LineChange::Added { .. }))
+        );
     }
 
     #[test]
@@ -364,10 +375,7 @@ mod tests {
                 tmp.path().join("a.txt").to_string_lossy().to_string(),
                 Some("old\n".to_string()),
             ),
-            (
-                tmp.path().join("b.txt").to_string_lossy().to_string(),
-                None,
-            ),
+            (tmp.path().join("b.txt").to_string_lossy().to_string(), None),
         ];
 
         let stats = compute_diff_stats_for_files(&files_with_paths);

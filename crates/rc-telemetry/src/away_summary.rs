@@ -272,7 +272,8 @@ impl AwaySummaryTracker {
     /// Returns the idle duration since last activity.
     #[must_use]
     pub fn idle_duration(&self) -> Duration {
-        self.last_activity.map_or(Duration::MAX, |last| last.elapsed())
+        self.last_activity
+            .map_or(Duration::MAX, |last| last.elapsed())
     }
 
     /// Generates an away summary from the given messages.
@@ -291,14 +292,13 @@ impl AwaySummaryTracker {
         }
 
         // Take the recent message window
-        let start = messages.len().saturating_sub(self.config.recent_message_window);
+        let start = messages
+            .len()
+            .saturating_sub(self.config.recent_message_window);
         let recent = &messages[start..];
 
         // Count tool calls in recent messages
-        let tool_calls: usize = recent
-            .iter()
-            .filter(|m| m.has_tool_calls)
-            .count();
+        let tool_calls: usize = recent.iter().filter(|m| m.has_tool_calls).count();
 
         // Build a simple heuristic summary from recent messages
         let summary_text = build_heuristic_summary(recent, session_memory);
@@ -360,10 +360,7 @@ impl AwaySummaryTracker {
 
 /// Builds a heuristic summary from recent messages.
 /// In production, this would call an LLM; here we extract key information.
-fn build_heuristic_summary(
-    recent: &[SummaryMessage],
-    session_memory: Option<&str>,
-) -> String {
+fn build_heuristic_summary(recent: &[SummaryMessage], session_memory: Option<&str>) -> String {
     let mut user_messages: Vec<&str> = Vec::new();
     let mut assistant_actions: Vec<&str> = Vec::new();
 
@@ -453,8 +450,7 @@ mod tests {
     fn test_config_serialization_roundtrip() {
         let config = AwaySummaryConfig::default();
         let json = serde_json::to_string(&config).expect("serialize");
-        let deserialized: AwaySummaryConfig =
-            serde_json::from_str(&json).expect("deserialize");
+        let deserialized: AwaySummaryConfig = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(deserialized.recent_message_window, 30);
     }
 

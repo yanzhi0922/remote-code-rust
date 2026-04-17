@@ -142,9 +142,7 @@ impl MdmManager {
     /// Get the list of all managed keys.
     pub fn managed_keys(&self) -> Vec<String> {
         match &self.profile {
-            Some(profile) if profile.enforced => {
-                profile.settings.keys().cloned().collect()
-            }
+            Some(profile) if profile.enforced => profile.settings.keys().cloned().collect(),
             _ => Vec::new(),
         }
     }
@@ -159,7 +157,10 @@ impl MdmManager {
         #[cfg(target_os = "macos")]
         {
             if let Some(home) = dirs_sys::home_dir() {
-                return Ok(home.join("Library").join("Managed Preferences").join("remote-code.json"));
+                return Ok(home
+                    .join("Library")
+                    .join("Managed Preferences")
+                    .join("remote-code.json"));
             }
         }
 

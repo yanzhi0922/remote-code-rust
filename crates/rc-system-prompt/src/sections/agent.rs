@@ -67,7 +67,9 @@ mod tests {
     #[test]
     fn agent_section_fork_mode() {
         let section = AgentSection;
-        let result = section.compute(&test_ctx_with_agent(true)).expect("compute ok");
+        let result = section
+            .compute(&test_ctx_with_agent(true))
+            .expect("compute ok");
         let content = result.expect("should be Some");
         assert!(content.contains("fork"));
         assert!(content.contains("If you ARE the fork"));
@@ -76,7 +78,9 @@ mod tests {
     #[test]
     fn agent_section_subagent_mode() {
         let section = AgentSection;
-        let result = section.compute(&test_ctx_with_agent(false)).expect("compute ok");
+        let result = section
+            .compute(&test_ctx_with_agent(false))
+            .expect("compute ok");
         let content = result.expect("should be Some");
         assert!(content.contains("subagent"));
         assert!(content.contains("parallelizing"));

@@ -506,7 +506,10 @@ mod tests {
     fn is_hook_event_all_26() {
         // Verify all 26+ events are recognized
         for &name in HOOK_EVENT_NAMES {
-            assert!(is_hook_event(name), "Expected '{name}' to be a valid hook event");
+            assert!(
+                is_hook_event(name),
+                "Expected '{name}' to be a valid hook event"
+            );
         }
     }
 

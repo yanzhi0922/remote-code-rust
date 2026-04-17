@@ -41,12 +41,11 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         Span::raw(display_text),
     ];
 
-    let paragraph = Paragraph::new(vec![Line::from(input_line)])
-        .block(
-            Block::default()
-                .borders(Borders::TOP)
-                .border_style(border_style),
-        );
+    let paragraph = Paragraph::new(vec![Line::from(input_line)]).block(
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(border_style),
+    );
 
     f.render_widget(paragraph, area);
 

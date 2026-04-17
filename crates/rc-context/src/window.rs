@@ -86,7 +86,6 @@ pub struct ContextConfig {
     pub is_ant_user: bool,
 }
 
-
 // ── Functions ───────────────────────────────────────────────────────────
 
 /// Check if the model name has the `[1m]` tag indicating 1M context.
@@ -155,9 +154,8 @@ pub fn calculate_context_percentages(
 ) -> Option<ContextPercentages> {
     let usage = usage?;
 
-    let total_input_tokens = usage.input_tokens
-        + usage.cache_creation_input_tokens
-        + usage.cache_read_input_tokens;
+    let total_input_tokens =
+        usage.input_tokens + usage.cache_creation_input_tokens + usage.cache_read_input_tokens;
 
     let context_window_size = context_window_size as f64;
     let used_percentage = if context_window_size > 0.0 {
@@ -186,10 +184,7 @@ pub fn get_model_max_output_tokens(model: &str) -> MaxOutputTokens {
         (64_000, 128_000)
     } else if m.contains("sonnet-4-6") {
         (32_000, 128_000)
-    } else if m.contains("opus-4-5")
-        || m.contains("sonnet-4-")
-        || m.contains("haiku-4")
-    {
+    } else if m.contains("opus-4-5") || m.contains("sonnet-4-") || m.contains("haiku-4") {
         (32_000, 64_000)
     } else if m.contains("opus-4-1") || m.contains("opus-4-2") {
         (32_000, 32_000)
@@ -223,7 +218,9 @@ pub fn get_model_max_output_tokens(model: &str) -> MaxOutputTokens {
 /// Returns `upper_limit - 1` since thinking tokens must be strictly less
 /// than max output tokens.
 pub fn get_max_thinking_tokens_for_model(model: &str) -> u32 {
-    get_model_max_output_tokens(model).upper_limit.saturating_sub(1)
+    get_model_max_output_tokens(model)
+        .upper_limit
+        .saturating_sub(1)
 }
 
 #[cfg(test)]
@@ -267,10 +264,7 @@ mod tests {
     #[test]
     fn test_context_window_1m_suffix() {
         let config = ContextConfig::default();
-        assert_eq!(
-            get_context_window_for_model("opus[1m]", &config),
-            1_000_000
-        );
+        assert_eq!(get_context_window_for_model("opus[1m]", &config), 1_000_000);
     }
 
     #[test]
@@ -280,10 +274,7 @@ mod tests {
             max_context_tokens_override: Some(50_000),
             ..Default::default()
         };
-        assert_eq!(
-            get_context_window_for_model("opus[1m]", &config),
-            50_000
-        );
+        assert_eq!(get_context_window_for_model("opus[1m]", &config), 50_000);
     }
 
     #[test]

@@ -48,18 +48,12 @@ pub struct LoadOutputStylesResult {
 ///
 /// Walks the `output-styles/` directory and extracts style definitions
 /// from markdown files.
-pub fn load_plugin_output_styles(
-    plugin_name: &str,
-    styles_dir: &Path,
-) -> LoadOutputStylesResult {
+pub fn load_plugin_output_styles(plugin_name: &str, styles_dir: &Path) -> LoadOutputStylesResult {
     let mut styles = Vec::new();
     let mut errors = Vec::new();
 
     if !styles_dir.exists() {
-        return LoadOutputStylesResult {
-            styles,
-            errors,
-        };
+        return LoadOutputStylesResult { styles, errors };
     }
 
     if !styles_dir.is_dir() {
@@ -67,10 +61,7 @@ pub fn load_plugin_output_styles(
             "output-styles path {} is not a directory",
             styles_dir.display()
         ));
-        return LoadOutputStylesResult {
-            styles,
-            errors,
-        };
+        return LoadOutputStylesResult { styles, errors };
     }
 
     let markdown_entries = walk_markdown_paths(styles_dir);
@@ -108,17 +99,11 @@ pub fn load_plugin_output_styles(
 
     styles.sort_by(|a, b| a.name.cmp(&b.name));
 
-    LoadOutputStylesResult {
-        styles,
-        errors,
-    }
+    LoadOutputStylesResult { styles, errors }
 }
 
 /// Parse style content into description and prompt.
-fn parse_style_content(
-    content: &str,
-    fallback_name: &str,
-) -> (String, String) {
+fn parse_style_content(content: &str, fallback_name: &str) -> (String, String) {
     let lines: Vec<&str> = content.lines().collect();
 
     // Extract description from first heading or first non-empty paragraph
@@ -177,18 +162,14 @@ mod tests {
         assert_eq!(result.styles.len(), 2);
         assert!(result.errors.is_empty());
 
-        let names: Vec<&str> =
-            result.styles.iter().map(|s| s.name.as_str()).collect();
+        let names: Vec<&str> = result.styles.iter().map(|s| s.name.as_str()).collect();
         assert!(names.contains(&"my-plugin:concise"));
         assert!(names.contains(&"my-plugin:detailed"));
     }
 
     #[test]
     fn load_plugin_output_styles_nonexistent() {
-        let result = load_plugin_output_styles(
-            "my-plugin",
-            Path::new("/nonexistent/styles"),
-        );
+        let result = load_plugin_output_styles("my-plugin", Path::new("/nonexistent/styles"));
         assert!(result.styles.is_empty());
         assert!(result.errors.is_empty());
     }

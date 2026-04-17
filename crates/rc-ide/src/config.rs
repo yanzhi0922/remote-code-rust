@@ -78,7 +78,11 @@ impl IdeConfig {
     }
 
     /// Create a configuration with an explicit endpoint.
-    pub fn with_endpoint(ide_type: IdeType, connection_mode: ConnectionMode, endpoint: String) -> Self {
+    pub fn with_endpoint(
+        ide_type: IdeType,
+        connection_mode: ConnectionMode,
+        endpoint: String,
+    ) -> Self {
         Self {
             ide_type,
             connection_mode,
@@ -264,10 +268,7 @@ mod tests {
 
     #[test]
     fn detect_neovim() {
-        assert_eq!(
-            detect_ide_from_env(env_with("NVIM", "1")),
-            IdeType::Neovim
-        );
+        assert_eq!(detect_ide_from_env(env_with("NVIM", "1")), IdeType::Neovim);
     }
 
     #[test]
@@ -280,9 +281,21 @@ mod tests {
 
     #[test]
     fn default_connection_modes() {
-        assert_eq!(default_connection_mode(IdeType::VsCode), ConnectionMode::Stdio);
-        assert_eq!(default_connection_mode(IdeType::JetBrains), ConnectionMode::Http);
-        assert_eq!(default_connection_mode(IdeType::Neovim), ConnectionMode::Stdio);
-        assert_eq!(default_connection_mode(IdeType::Unknown), ConnectionMode::Stdio);
+        assert_eq!(
+            default_connection_mode(IdeType::VsCode),
+            ConnectionMode::Stdio
+        );
+        assert_eq!(
+            default_connection_mode(IdeType::JetBrains),
+            ConnectionMode::Http
+        );
+        assert_eq!(
+            default_connection_mode(IdeType::Neovim),
+            ConnectionMode::Stdio
+        );
+        assert_eq!(
+            default_connection_mode(IdeType::Unknown),
+            ConnectionMode::Stdio
+        );
     }
 }

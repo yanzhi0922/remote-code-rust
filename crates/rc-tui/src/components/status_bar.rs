@@ -24,10 +24,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             .add_modifier(Modifier::BOLD),
     );
 
-    let separator = Span::styled(
-        " │ ",
-        Style::default().fg(style.info_color),
-    );
+    let separator = Span::styled(" │ ", Style::default().fg(style.info_color));
 
     let model_span = Span::styled(
         format!(" {} ", status.model_name),
@@ -63,10 +60,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(style.info_color),
     );
 
-    let hint_span = Span::styled(
-        " Tab:sidebar ",
-        Style::default().fg(style.info_color),
-    );
+    let hint_span = Span::styled(" Tab:sidebar ", Style::default().fg(style.info_color));
 
     // Calculate padding to push right section to the right edge.
     let left_total_width = mode_span.content.len()
@@ -97,11 +91,8 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         hint_span,
     ]);
 
-    let paragraph = Paragraph::new(line).style(
-        Style::default()
-            .bg(style.status_bg)
-            .fg(style.status_fg),
-    );
+    let paragraph =
+        Paragraph::new(line).style(Style::default().bg(style.status_bg).fg(style.status_fg));
 
     f.render_widget(paragraph, area);
 }

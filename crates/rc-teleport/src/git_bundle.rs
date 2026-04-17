@@ -163,7 +163,7 @@ pub fn create_git_bundle(config: &GitBundleConfig) -> Result<GitBundleResult> {
 
     // Create the bundle
     let output = Command::new("git")
-        .args(["bundle", "create",])
+        .args(["bundle", "create"])
         .arg(&bundle_path)
         .arg(&bundle_ref)
         .current_dir(repo_path)

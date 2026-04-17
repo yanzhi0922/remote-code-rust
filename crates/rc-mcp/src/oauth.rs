@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -179,10 +179,12 @@ impl McpOAuthFlow {
             metadata_url.to_owned()
         };
 
-        let response = reqwest::get(&url).await.map_err(|e| McpRuntimeError::OAuth {
-            server: server_url.to_owned(),
-            message: format!("metadata discovery failed: {e}"),
-        })?;
+        let response = reqwest::get(&url)
+            .await
+            .map_err(|e| McpRuntimeError::OAuth {
+                server: server_url.to_owned(),
+                message: format!("metadata discovery failed: {e}"),
+            })?;
 
         if !response.status().is_success() {
             return Err(McpRuntimeError::OAuth {
@@ -212,10 +214,7 @@ impl McpOAuthFlow {
         state: &str,
         redirect_uri: &str,
     ) -> String {
-        let client_id = self
-            .client_id
-            .as_deref()
-            .unwrap_or("mcp-client");
+        let client_id = self.client_id.as_deref().unwrap_or("mcp-client");
         let mut url = format!(
             "{}?response_type=code&client_id={}&redirect_uri={}&state={}&code_challenge={}&code_challenge_method={}",
             metadata.authorization_endpoint,
@@ -273,20 +272,17 @@ impl McpOAuthFlow {
 
         // Parse the request line: GET /callback?code=xxx&state=yyy HTTP/1.1
         let request_line = request.lines().next().unwrap_or("");
-        let code = extract_query_param(request_line, "code").ok_or_else(|| {
-            McpRuntimeError::OAuth {
+        let code =
+            extract_query_param(request_line, "code").ok_or_else(|| McpRuntimeError::OAuth {
                 server: "callback".to_owned(),
                 message: "callback request missing 'code' parameter".to_owned(),
-            }
-        })?;
+            })?;
 
         let state = extract_query_param(request_line, "state").unwrap_or_default();
         if state != expected_state {
             return Err(McpRuntimeError::OAuth {
                 server: "callback".to_owned(),
-                message: format!(
-                    "state mismatch: expected {expected_state}, got {state}"
-                ),
+                message: format!("state mismatch: expected {expected_state}, got {state}"),
             });
         }
 
@@ -359,12 +355,14 @@ impl McpOAuthFlow {
         tokens: &OAuthTokens,
         client_id: &str,
     ) -> Result<OAuthTokens, McpRuntimeError> {
-        let refresh_token = tokens.refresh_token.as_deref().ok_or_else(|| {
-            McpRuntimeError::OAuth {
-                server: "token-refresh".to_owned(),
-                message: "no refresh token available".to_owned(),
-            }
-        })?;
+        let refresh_token =
+            tokens
+                .refresh_token
+                .as_deref()
+                .ok_or_else(|| McpRuntimeError::OAuth {
+                    server: "token-refresh".to_owned(),
+                    message: "no refresh token available".to_owned(),
+                })?;
 
         let params = [
             ("grant_type", "refresh_token".to_owned()),
@@ -485,9 +483,8 @@ impl OAuthTokenStore {
                 })?;
         }
 
-        let json = serde_json::to_string_pretty(&self.tokens).map_err(|e| {
-            McpRuntimeError::TokenStoreSerialize { source: e }
-        })?;
+        let json = serde_json::to_string_pretty(&self.tokens)
+            .map_err(|e| McpRuntimeError::TokenStoreSerialize { source: e })?;
 
         tokio::fs::write(&self.store_path, json)
             .await
@@ -512,9 +509,8 @@ impl OAuthTokenStore {
                 source: e,
             })?;
 
-        self.tokens = serde_json::from_str(&content).map_err(|e| {
-            McpRuntimeError::TokenStoreSerialize { source: e }
-        })?;
+        self.tokens = serde_json::from_str(&content)
+            .map_err(|e| McpRuntimeError::TokenStoreSerialize { source: e })?;
 
         Ok(())
     }
@@ -527,8 +523,19 @@ fn urlencoding(s: &str) -> String {
     s.chars()
         .map(|c| match c {
             ' ' => "+".to_owned(),
-            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' | '/' | ':'
-            | '?' | '&' | '=' | '%' => c.to_string(),
+            'A'..='Z'
+            | 'a'..='z'
+            | '0'..='9'
+            | '-'
+            | '_'
+            | '.'
+            | '~'
+            | '/'
+            | ':'
+            | '?'
+            | '&'
+            | '='
+            | '%' => c.to_string(),
             _ => format!("%{:02X}", c as u8),
         })
         .collect()
@@ -587,20 +594,17 @@ mod tests {
     #[test]
     fn pkce_verifier_is_url_safe() {
         let pkce = McpOAuthFlow::generate_pkce();
-        assert!(pkce
-            .code_verifier
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert!(
+            pkce.code_verifier
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        );
     }
 
     #[test]
     fn build_authorization_url_includes_required_params() {
-        let flow = McpOAuthFlow::with_values(
-            Some("test-client".to_owned()),
-            Some(8080),
-            None,
-            false,
-        );
+        let flow =
+            McpOAuthFlow::with_values(Some("test-client".to_owned()), Some(8080), None, false);
         let metadata = AuthorizationServerMetadata {
             authorization_endpoint: "https://auth.example.com/authorize".to_owned(),
             token_endpoint: "https://auth.example.com/token".to_owned(),
@@ -753,14 +757,10 @@ mod tests {
             response_types_supported: Some(vec!["code".to_owned()]),
         };
         let json = serde_json::to_string(&metadata).expect("serialize");
-        let back: AuthorizationServerMetadata =
-            serde_json::from_str(&json).expect("deserialize");
+        let back: AuthorizationServerMetadata = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back.authorization_endpoint, metadata.authorization_endpoint);
         assert_eq!(back.token_endpoint, metadata.token_endpoint);
-        assert_eq!(
-            back.registration_endpoint,
-            metadata.registration_endpoint
-        );
+        assert_eq!(back.registration_endpoint, metadata.registration_endpoint);
     }
 
     #[test]
@@ -812,23 +812,15 @@ mod tests {
 
     #[test]
     fn oauth_flow_with_values_constructor() {
-        let flow = McpOAuthFlow::with_values(
-            Some("client-123".to_owned()),
-            Some(3000),
-            None,
-            false,
-        );
+        let flow =
+            McpOAuthFlow::with_values(Some("client-123".to_owned()), Some(3000), None, false);
         assert!(!flow.xaa_enabled());
     }
 
     #[test]
     fn build_authorization_url_without_scopes() {
-        let flow = McpOAuthFlow::with_values(
-            Some("test-client".to_owned()),
-            Some(8080),
-            None,
-            false,
-        );
+        let flow =
+            McpOAuthFlow::with_values(Some("test-client".to_owned()), Some(8080), None, false);
         let metadata = AuthorizationServerMetadata {
             authorization_endpoint: "https://auth.example.com/authorize".to_owned(),
             token_endpoint: "https://auth.example.com/token".to_owned(),
@@ -851,12 +843,8 @@ mod tests {
 
     #[test]
     fn build_authorization_url_with_empty_scopes() {
-        let flow = McpOAuthFlow::with_values(
-            Some("test-client".to_owned()),
-            Some(8080),
-            None,
-            false,
-        );
+        let flow =
+            McpOAuthFlow::with_values(Some("test-client".to_owned()), Some(8080), None, false);
         let metadata = AuthorizationServerMetadata {
             authorization_endpoint: "https://auth.example.com/authorize".to_owned(),
             token_endpoint: "https://auth.example.com/token".to_owned(),
@@ -903,20 +891,26 @@ mod tests {
     #[test]
     fn token_store_overwrite() {
         let mut store = OAuthTokenStore::new("/tmp/test-overwrite");
-        store.save_token("srv", OAuthTokens {
-            access_token: "old-token".to_owned(),
-            refresh_token: None,
-            expires_at: None,
-            token_type: "Bearer".to_owned(),
-            scope: None,
-        });
-        store.save_token("srv", OAuthTokens {
-            access_token: "new-token".to_owned(),
-            refresh_token: Some("refresh".to_owned()),
-            expires_at: Some(9999),
-            token_type: "Bearer".to_owned(),
-            scope: None,
-        });
+        store.save_token(
+            "srv",
+            OAuthTokens {
+                access_token: "old-token".to_owned(),
+                refresh_token: None,
+                expires_at: None,
+                token_type: "Bearer".to_owned(),
+                scope: None,
+            },
+        );
+        store.save_token(
+            "srv",
+            OAuthTokens {
+                access_token: "new-token".to_owned(),
+                refresh_token: Some("refresh".to_owned()),
+                expires_at: Some(9999),
+                token_type: "Bearer".to_owned(),
+                scope: None,
+            },
+        );
         let token = store.get_token("srv").expect("should exist");
         assert_eq!(token.access_token, "new-token");
     }
@@ -948,10 +942,8 @@ mod tests {
 
     #[test]
     fn oauth_tokens_default_token_type() {
-        let tokens: OAuthTokens = serde_json::from_str(
-            r#"{"access_token":"abc"}"#,
-        )
-        .expect("deserialize");
+        let tokens: OAuthTokens =
+            serde_json::from_str(r#"{"access_token":"abc"}"#).expect("deserialize");
         assert_eq!(tokens.token_type, "Bearer");
     }
 

@@ -30,7 +30,9 @@ pub static DANGEROUS_PATTERNS: &[DangerousPattern] = &[
         description: "Recursive force-delete from root directory",
         check: |cmd| {
             let c = cmd.trim();
-            (c.contains("rm") && c.contains("-rf") && (c.contains(" /") || c.starts_with("rm -rf /")))
+            (c.contains("rm")
+                && c.contains("-rf")
+                && (c.contains(" /") || c.starts_with("rm -rf /")))
                 || (c.contains("rm") && c.contains("-r") && c.contains("-f") && c.contains(" /"))
         },
     },
@@ -40,7 +42,9 @@ pub static DANGEROUS_PATTERNS: &[DangerousPattern] = &[
         description: "Recursive force-delete from home directory",
         check: |cmd| {
             let c = cmd.trim();
-            c.contains("rm") && (c.contains("-rf") || (c.contains("-r") && c.contains("-f"))) && c.contains("~/")
+            c.contains("rm")
+                && (c.contains("-rf") || (c.contains("-r") && c.contains("-f")))
+                && c.contains("~/")
         },
     },
     DangerousPattern {
@@ -71,7 +75,11 @@ pub static DANGEROUS_PATTERNS: &[DangerousPattern] = &[
         name: "format_disk",
         level: DangerLevel::Critical,
         description: "Formats or writes directly to disk devices",
-        check: |cmd| cmd.contains("mkfs.") || cmd.contains("fdisk ") || (cmd.contains("dd ") && cmd.contains("of=/dev/")),
+        check: |cmd| {
+            cmd.contains("mkfs.")
+                || cmd.contains("fdisk ")
+                || (cmd.contains("dd ") && cmd.contains("of=/dev/"))
+        },
     },
     DangerousPattern {
         name: "shutdown",
@@ -79,14 +87,21 @@ pub static DANGEROUS_PATTERNS: &[DangerousPattern] = &[
         description: "Shuts down or reboots the system",
         check: |cmd| {
             let c = cmd.trim();
-            c.starts_with("shutdown ") || c.starts_with("reboot") || c.starts_with("halt ") || c.starts_with("poweroff")
+            c.starts_with("shutdown ")
+                || c.starts_with("reboot")
+                || c.starts_with("halt ")
+                || c.starts_with("poweroff")
         },
     },
     DangerousPattern {
         name: "curl_pipe_sh",
         level: DangerLevel::Critical,
         description: "Downloads and executes remote script",
-        check: |cmd| cmd.contains("curl") && cmd.contains("|") && (cmd.contains("sh") || cmd.contains("bash")),
+        check: |cmd| {
+            cmd.contains("curl")
+                && cmd.contains("|")
+                && (cmd.contains("sh") || cmd.contains("bash"))
+        },
     },
     DangerousPattern {
         name: "npm_global",
@@ -98,7 +113,11 @@ pub static DANGEROUS_PATTERNS: &[DangerousPattern] = &[
         name: "docker_rm",
         level: DangerLevel::Medium,
         description: "Removes Docker containers, images, or system data",
-        check: |cmd| cmd.contains("docker rm") || cmd.contains("docker rmi") || cmd.contains("docker system prune"),
+        check: |cmd| {
+            cmd.contains("docker rm")
+                || cmd.contains("docker rmi")
+                || cmd.contains("docker system prune")
+        },
     },
 ];
 
@@ -121,9 +140,12 @@ pub fn is_critically_dangerous(command: &str) -> bool {
 /// Check if a command has any dangerous patterns (medium or above).
 #[must_use]
 pub fn has_dangerous_patterns(command: &str) -> bool {
-    detect_dangerous_patterns(command)
-        .iter()
-        .any(|p| matches!(p.level, DangerLevel::Medium | DangerLevel::High | DangerLevel::Critical))
+    detect_dangerous_patterns(command).iter().any(|p| {
+        matches!(
+            p.level,
+            DangerLevel::Medium | DangerLevel::High | DangerLevel::Critical
+        )
+    })
 }
 
 #[cfg(test)]

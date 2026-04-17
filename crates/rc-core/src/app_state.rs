@@ -95,38 +95,24 @@ pub enum StateUpdate {
         agent_id: Option<AgentId>,
     },
     /// Change the permission mode.
-    PermissionModeChanged {
-        mode: PermissionMode,
-    },
+    PermissionModeChanged { mode: PermissionMode },
     /// Push a new message.
-    MessagePushed {
-        message: Message,
-    },
+    MessagePushed { message: Message },
     /// Replace all messages (e.g., after compaction).
-    MessagesReplaced {
-        messages: Vec<Message>,
-    },
+    MessagesReplaced { messages: Vec<Message> },
     /// Record a newly discovered skill.
-    SkillDiscovered {
-        skill: String,
-    },
+    SkillDiscovered { skill: String },
     /// Activate a tool.
-    ToolActivated {
-        tool: String,
-    },
+    ToolActivated { tool: String },
     /// Deactivate a tool.
-    ToolDeactivated {
-        tool: String,
-    },
+    ToolDeactivated { tool: String },
     /// Change the active model.
     ModelChanged {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,
     },
     /// Update the queued task count.
-    QueueUpdated {
-        count: usize,
-    },
+    QueueUpdated { count: usize },
     /// Reset the entire state to defaults.
     Reset,
 }
@@ -258,10 +244,7 @@ impl AppStateManager {
     /// Returns an immutable snapshot that can be held without locking
     /// the manager.
     pub fn snapshot(&self) -> StateSnapshot {
-        let guard = self
-            .inner
-            .read()
-            .unwrap_or_else(|e| e.into_inner());
+        let guard = self.inner.read().unwrap_or_else(|e| e.into_inner());
         StateSnapshot::new(guard.state.clone(), guard.version)
     }
 
@@ -269,10 +252,7 @@ impl AppStateManager {
     ///
     /// Increments the version counter and updates the timestamp.
     pub fn apply(&self, update: StateUpdate) {
-        let mut guard = self
-            .inner
-            .write()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.inner.write().unwrap_or_else(|e| e.into_inner());
         guard.apply(update);
     }
 
@@ -281,10 +261,7 @@ impl AppStateManager {
     /// All updates are applied under a single write lock, ensuring
     /// no reader sees an intermediate state.
     pub fn batch_apply(&self, updates: Vec<StateUpdate>) {
-        let mut guard = self
-            .inner
-            .write()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.inner.write().unwrap_or_else(|e| e.into_inner());
         for update in updates {
             guard.apply(update);
         }
@@ -292,37 +269,25 @@ impl AppStateManager {
 
     /// Return the current version number.
     pub fn version(&self) -> u64 {
-        let guard = self
-            .inner
-            .read()
-            .unwrap_or_else(|e| e.into_inner());
+        let guard = self.inner.read().unwrap_or_else(|e| e.into_inner());
         guard.version
     }
 
     /// Return the last update timestamp.
     pub fn last_updated(&self) -> DateTime<Utc> {
-        let guard = self
-            .inner
-            .read()
-            .unwrap_or_else(|e| e.into_inner());
+        let guard = self.inner.read().unwrap_or_else(|e| e.into_inner());
         guard.last_updated
     }
 
     /// Check if the manager has an active session.
     pub fn has_session(&self) -> bool {
-        let guard = self
-            .inner
-            .read()
-            .unwrap_or_else(|e| e.into_inner());
+        let guard = self.inner.read().unwrap_or_else(|e| e.into_inner());
         guard.state.session_id.is_some()
     }
 
     /// Return the current message count.
     pub fn message_count(&self) -> usize {
-        let guard = self
-            .inner
-            .read()
-            .unwrap_or_else(|e| e.into_inner());
+        let guard = self.inner.read().unwrap_or_else(|e| e.into_inner());
         guard.state.messages.len()
     }
 
@@ -408,10 +373,7 @@ mod tests {
 
     #[test]
     fn state_update_labels() {
-        assert_eq!(
-            StateUpdate::Reset.label(),
-            "reset"
-        );
+        assert_eq!(StateUpdate::Reset.label(), "reset");
         assert_eq!(
             StateUpdate::PermissionModeChanged {
                 mode: PermissionMode::Default,

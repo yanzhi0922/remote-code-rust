@@ -39,10 +39,7 @@ impl FileHistorySnapshot {
 
     /// Create a snapshot with pre-populated backups.
     #[must_use]
-    pub fn with_backups(
-        message_id: String,
-        backups: HashMap<String, BackupRecord>,
-    ) -> Self {
+    pub fn with_backups(message_id: String, backups: HashMap<String, BackupRecord>) -> Self {
         Self {
             message_id,
             tracked_file_backups: backups,

@@ -183,9 +183,8 @@ pub fn resolve_dependency_closure(
         let id_parsed = PluginIdentifier::parse(id);
         let id_marketplace = id_parsed.marketplace.as_deref();
         if id_marketplace != ctx.root_marketplace {
-            let is_allowed = id_marketplace.is_some_and(|m| {
-                ctx.allowed_cross_marketplaces.contains(m)
-            });
+            let is_allowed =
+                id_marketplace.is_some_and(|m| ctx.allowed_cross_marketplaces.contains(m));
             if !is_allowed {
                 return Some(ResolutionResult::CrossMarketplace {
                     dependency: id.to_owned(),
@@ -250,16 +249,13 @@ pub fn resolve_dependency_closure(
 /// Detect circular dependencies in a set of plugins.
 ///
 /// Returns a list of cycles found. Each cycle is a list of plugin IDs.
-pub fn detect_circular_dependencies(
-    plugins: &[LoadedPluginRef],
-) -> Vec<Vec<PluginId>> {
+pub fn detect_circular_dependencies(plugins: &[LoadedPluginRef]) -> Vec<Vec<PluginId>> {
     let mut cycles: Vec<Vec<PluginId>> = Vec::new();
     let mut visited: HashSet<PluginId> = HashSet::new();
     let mut rec_stack: HashSet<PluginId> = HashSet::new();
     let mut path: Vec<PluginId> = Vec::new();
 
-    let source_set: HashSet<PluginId> =
-        plugins.iter().map(|p| p.source.clone()).collect();
+    let source_set: HashSet<PluginId> = plugins.iter().map(|p| p.source.clone()).collect();
 
     fn dfs(
         plugin: &LoadedPluginRef,
@@ -273,9 +269,7 @@ pub fn detect_circular_dependencies(
         if visited.contains(&plugin.source) {
             if rec_stack.contains(&plugin.source) {
                 // Found a cycle
-                if let Some(start) =
-                    path.iter().position(|p| p == &plugin.source)
-                {
+                if let Some(start) = path.iter().position(|p| p == &plugin.source) {
                     cycles.push(path[start..].to_vec());
                 }
             }
@@ -336,8 +330,7 @@ pub fn detect_circular_dependencies(
 ///
 /// Does NOT mutate input. Returns the set of plugin IDs to demote.
 pub fn verify_and_demote(plugins: &[LoadedPluginRef]) -> VerifyAndDemoteResult {
-    let known: HashSet<PluginId> =
-        plugins.iter().map(|p| p.source.clone()).collect();
+    let known: HashSet<PluginId> = plugins.iter().map(|p| p.source.clone()).collect();
     let mut enabled: HashSet<PluginId> = plugins
         .iter()
         .filter(|p| p.enabled)
@@ -366,8 +359,7 @@ pub fn verify_and_demote(plugins: &[LoadedPluginRef]) -> VerifyAndDemoteResult {
             }
             for raw_dep in &p.dependencies {
                 let dep = qualify_dependency(raw_dep, &p.source);
-                let is_bare =
-                    PluginIdentifier::parse(&dep).marketplace.is_none();
+                let is_bare = PluginIdentifier::parse(&dep).marketplace.is_none();
                 let satisfied = if is_bare {
                     enabled_by_name.get(&dep).copied().unwrap_or(0) > 0
                 } else {
@@ -418,10 +410,7 @@ pub fn verify_and_demote(plugins: &[LoadedPluginRef]) -> VerifyAndDemoteResult {
 /// Find all enabled plugins that declare `plugin_id` as a dependency.
 ///
 /// Used to warn on uninstall/disable ("required by: X, Y").
-pub fn find_reverse_dependents(
-    plugin_id: &str,
-    plugins: &[LoadedPluginRef],
-) -> Vec<String> {
+pub fn find_reverse_dependents(plugin_id: &str, plugins: &[LoadedPluginRef]) -> Vec<String> {
     let target_name = PluginIdentifier::parse(plugin_id).name;
     plugins
         .iter()
@@ -470,19 +459,14 @@ pub fn format_reverse_dependents_suffix(rdeps: &[String]) -> String {
 mod tests {
     use super::*;
 
-    fn make_lookup(
-        entries: &[(&str, &[&str])],
-    ) -> impl Fn(&str) -> Option<DependencyLookupResult> {
+    fn make_lookup(entries: &[(&str, &[&str])]) -> impl Fn(&str) -> Option<DependencyLookupResult> {
         let map: HashMap<String, DependencyLookupResult> = entries
             .iter()
             .map(|(id, deps)| {
                 (
                     (*id).to_owned(),
                     DependencyLookupResult {
-                        dependencies: deps
-                            .iter()
-                            .map(|d| (*d).to_owned())
-                            .collect(),
+                        dependencies: deps.iter().map(|d| (*d).to_owned()).collect(),
                     },
                 )
             })
@@ -492,18 +476,12 @@ mod tests {
 
     #[test]
     fn qualify_dependency_bare_inherits_marketplace() {
-        assert_eq!(
-            qualify_dependency("dep-a", "root@mkt"),
-            "dep-a@mkt"
-        );
+        assert_eq!(qualify_dependency("dep-a", "root@mkt"), "dep-a@mkt");
     }
 
     #[test]
     fn qualify_dependency_already_qualified() {
-        assert_eq!(
-            qualify_dependency("dep-a@other", "root@mkt"),
-            "dep-a@other"
-        );
+        assert_eq!(qualify_dependency("dep-a@other", "root@mkt"), "dep-a@other");
     }
 
     #[test]
@@ -518,16 +496,9 @@ mod tests {
 
     #[test]
     fn resolve_closure_simple() {
-        let lookup = make_lookup(&[
-            ("root@mkt", &["dep-a@mkt"]),
-            ("dep-a@mkt", &[]),
-        ]);
-        let result = resolve_dependency_closure(
-            "root@mkt",
-            &lookup,
-            &HashSet::new(),
-            &HashSet::new(),
-        );
+        let lookup = make_lookup(&[("root@mkt", &["dep-a@mkt"]), ("dep-a@mkt", &[])]);
+        let result =
+            resolve_dependency_closure("root@mkt", &lookup, &HashSet::new(), &HashSet::new());
         match result {
             ResolutionResult::Ok { closure } => {
                 assert!(closure.contains(&"dep-a@mkt".to_owned()));
@@ -540,18 +511,10 @@ mod tests {
 
     #[test]
     fn resolve_closure_skips_already_enabled() {
-        let lookup = make_lookup(&[
-            ("root@mkt", &["dep-a@mkt"]),
-            ("dep-a@mkt", &[]),
-        ]);
+        let lookup = make_lookup(&[("root@mkt", &["dep-a@mkt"]), ("dep-a@mkt", &[])]);
         let mut already = HashSet::new();
         already.insert("dep-a@mkt".to_owned());
-        let result = resolve_dependency_closure(
-            "root@mkt",
-            &lookup,
-            &already,
-            &HashSet::new(),
-        );
+        let result = resolve_dependency_closure("root@mkt", &lookup, &already, &HashSet::new());
         match result {
             ResolutionResult::Ok { closure } => {
                 assert!(closure.contains(&"root@mkt".to_owned()));
@@ -569,12 +532,7 @@ mod tests {
         let lookup = make_lookup(&[("root@mkt", &[])]);
         let mut already = HashSet::new();
         already.insert("root@mkt".to_owned());
-        let result = resolve_dependency_closure(
-            "root@mkt",
-            &lookup,
-            &already,
-            &HashSet::new(),
-        );
+        let result = resolve_dependency_closure("root@mkt", &lookup, &already, &HashSet::new());
         match result {
             ResolutionResult::Ok { closure } => {
                 assert!(
@@ -588,16 +546,8 @@ mod tests {
 
     #[test]
     fn resolve_closure_detects_cycle() {
-        let lookup = make_lookup(&[
-            ("a@mkt", &["b@mkt"]),
-            ("b@mkt", &["a@mkt"]),
-        ]);
-        let result = resolve_dependency_closure(
-            "a@mkt",
-            &lookup,
-            &HashSet::new(),
-            &HashSet::new(),
-        );
+        let lookup = make_lookup(&[("a@mkt", &["b@mkt"]), ("b@mkt", &["a@mkt"])]);
+        let result = resolve_dependency_closure("a@mkt", &lookup, &HashSet::new(), &HashSet::new());
         assert!(
             matches!(result, ResolutionResult::Cycle { .. }),
             "expected Cycle, got {result:?}"
@@ -607,12 +557,8 @@ mod tests {
     #[test]
     fn resolve_closure_detects_not_found() {
         let lookup = make_lookup(&[("root@mkt", &["missing@mkt"])]);
-        let result = resolve_dependency_closure(
-            "root@mkt",
-            &lookup,
-            &HashSet::new(),
-            &HashSet::new(),
-        );
+        let result =
+            resolve_dependency_closure("root@mkt", &lookup, &HashSet::new(), &HashSet::new());
         assert!(
             matches!(result, ResolutionResult::NotFound { .. }),
             "expected NotFound, got {result:?}"
@@ -621,16 +567,9 @@ mod tests {
 
     #[test]
     fn resolve_closure_blocks_cross_marketplace() {
-        let lookup = make_lookup(&[
-            ("root@mkt", &["dep@other"]),
-            ("dep@other", &[]),
-        ]);
-        let result = resolve_dependency_closure(
-            "root@mkt",
-            &lookup,
-            &HashSet::new(),
-            &HashSet::new(),
-        );
+        let lookup = make_lookup(&[("root@mkt", &["dep@other"]), ("dep@other", &[])]);
+        let result =
+            resolve_dependency_closure("root@mkt", &lookup, &HashSet::new(), &HashSet::new());
         assert!(
             matches!(result, ResolutionResult::CrossMarketplace { .. }),
             "expected CrossMarketplace, got {result:?}"
@@ -639,18 +578,10 @@ mod tests {
 
     #[test]
     fn resolve_closure_allows_cross_marketplace_in_allowlist() {
-        let lookup = make_lookup(&[
-            ("root@mkt", &["dep@other"]),
-            ("dep@other", &[]),
-        ]);
+        let lookup = make_lookup(&[("root@mkt", &["dep@other"]), ("dep@other", &[])]);
         let mut allowed = HashSet::new();
         allowed.insert("other".to_owned());
-        let result = resolve_dependency_closure(
-            "root@mkt",
-            &lookup,
-            &HashSet::new(),
-            &allowed,
-        );
+        let result = resolve_dependency_closure("root@mkt", &lookup, &HashSet::new(), &allowed);
         assert!(
             matches!(result, ResolutionResult::Ok { .. }),
             "expected Ok, got {result:?}"

@@ -677,7 +677,10 @@ mod tests {
         COORDINATOR_OVERRIDE.store(true, Ordering::SeqCst);
         COORDINATOR_OVERRIDE_SET.store(true, Ordering::SeqCst);
         let ctx = get_coordinator_user_context(&[], None, false);
-        assert!(!ctx.is_empty(), "coordinator context should not be empty when coordinator mode is active");
+        assert!(
+            !ctx.is_empty(),
+            "coordinator context should not be empty when coordinator mode is active"
+        );
         let (key, value) = ctx.iter().next().expect("at least one entry");
         assert_eq!(key, "workerToolsContext");
         assert!(value.contains("Workers spawned via the Agent tool"));

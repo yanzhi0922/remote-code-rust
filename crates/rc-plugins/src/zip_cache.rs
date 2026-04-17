@@ -208,7 +208,11 @@ impl ZipCache {
     }
 
     /// Insert a new entry into the cache index and persist.
-    pub fn insert(&mut self, key: impl Into<String>, entry: ZipCacheEntry) -> Result<(), ZipCacheError> {
+    pub fn insert(
+        &mut self,
+        key: impl Into<String>,
+        entry: ZipCacheEntry,
+    ) -> Result<(), ZipCacheError> {
         self.index.insert(key, entry);
         self.save_index()
     }

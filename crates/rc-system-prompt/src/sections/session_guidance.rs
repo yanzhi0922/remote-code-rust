@@ -1,4 +1,4 @@
-﻿//! Session-specific Guidance section - dynamic guidance based on enabled tools.
+//! Session-specific Guidance section - dynamic guidance based on enabled tools.
 //!
 //! Matches `getSessionSpecificGuidanceSection()` in Claude Code's `prompts.ts`.
 
@@ -66,7 +66,10 @@ impl SystemPromptSection for SessionGuidanceSection {
             return Ok(None);
         }
 
-        Ok(Some(section_with_bullets("Session-specific guidance", &items)))
+        Ok(Some(section_with_bullets(
+            "Session-specific guidance",
+            &items,
+        )))
     }
 }
 

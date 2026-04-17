@@ -1226,7 +1226,11 @@ mod tests {
     fn total_command_count_includes_new_commands() {
         // We should have significantly more than the original ~22 commands
         let names = command_names();
-        assert!(names.len() > 60, "Expected 60+ commands, got {}", names.len());
+        assert!(
+            names.len() > 60,
+            "Expected 60+ commands, got {}",
+            names.len()
+        );
     }
 
     // --- Phase 21: new command tests ---

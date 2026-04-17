@@ -74,19 +74,18 @@ pub fn get_plugin_recommendations(
         return Vec::new();
     }
 
-    let mut recommendations: Vec<PluginRecommendation> =
-        available_plugins
-            .iter()
-            .filter(|rec| {
-                // Skip already installed
-                !installed_plugins.contains(&rec.plugin_id)
+    let mut recommendations: Vec<PluginRecommendation> = available_plugins
+        .iter()
+        .filter(|rec| {
+            // Skip already installed
+            !installed_plugins.contains(&rec.plugin_id)
                 // Skip already shown
                 && !state.shown_plugins.contains(&rec.plugin_id)
                 // Only recommend from official marketplaces
                 && is_official_marketplace(&rec.marketplace_name)
-            })
-            .cloned()
-            .collect();
+        })
+        .cloned()
+        .collect();
 
     // Sort by relevance (descending)
     recommendations.sort_by(|a, b| b.relevance.cmp(&a.relevance));
@@ -113,15 +112,11 @@ pub fn generate_install_hint(rec: &PluginRecommendation) -> String {
 ///
 /// For v1, only official Anthropic marketplaces are used for recommendations.
 pub fn is_official_marketplace(name: &str) -> bool {
-    crate::schemas::ALLOWED_OFFICIAL_MARKETPLACE_NAMES
-        .contains(&name.to_lowercase().as_str())
+    crate::schemas::ALLOWED_OFFICIAL_MARKETPLACE_NAMES.contains(&name.to_lowercase().as_str())
 }
 
 /// Record that a plugin hint has been shown.
-pub fn mark_hint_shown(
-    state: &mut HintRecommendationState,
-    plugin_id: &str,
-) {
+pub fn mark_hint_shown(state: &mut HintRecommendationState, plugin_id: &str) {
     state.shown_plugins.insert(plugin_id.to_owned());
 }
 
@@ -155,9 +150,10 @@ pub fn should_show_hint(
 
     // Only official marketplaces
     if let Some(ref mkt) = parsed.marketplace
-        && !is_official_marketplace(mkt) {
-            return false;
-        }
+        && !is_official_marketplace(mkt)
+    {
+        return false;
+    }
 
     true
 }
@@ -170,11 +166,7 @@ pub fn should_show_hint(
 mod tests {
     use super::*;
 
-    fn make_rec(
-        id: &str,
-        name: &str,
-        mkt: &str,
-    ) -> PluginRecommendation {
+    fn make_rec(id: &str, name: &str, mkt: &str) -> PluginRecommendation {
         PluginRecommendation {
             plugin_id: id.to_owned(),
             plugin_name: name.to_owned(),
@@ -202,8 +194,7 @@ mod tests {
         let mut state = HintRecommendationState::default();
         state.shown_plugins.insert("a@mkt".to_owned());
 
-        let result =
-            get_plugin_recommendations(&recs, &state, &HashSet::new());
+        let result = get_plugin_recommendations(&recs, &state, &HashSet::new());
         assert!(result.is_empty());
     }
 
@@ -213,14 +204,17 @@ mod tests {
         let mut state = HintRecommendationState::default();
         state.disabled = true;
 
-        let result =
-            get_plugin_recommendations(&recs, &state, &HashSet::new());
+        let result = get_plugin_recommendations(&recs, &state, &HashSet::new());
         assert!(result.is_empty());
     }
 
     #[test]
     fn generate_install_hint_basic() {
-        let rec = make_rec("test-plugin@claude-code-marketplace", "Test", "claude-code-marketplace");
+        let rec = make_rec(
+            "test-plugin@claude-code-marketplace",
+            "Test",
+            "claude-code-marketplace",
+        );
         let hint = generate_install_hint(&rec);
         assert!(hint.contains("Test"));
         assert!(hint.contains("test-plugin@claude-code-marketplace"));
@@ -257,7 +251,9 @@ mod tests {
     #[test]
     fn should_show_hint_already_shown() {
         let mut state = HintRecommendationState::default();
-        state.shown_plugins.insert("test@claude-code-marketplace".to_owned());
+        state
+            .shown_plugins
+            .insert("test@claude-code-marketplace".to_owned());
         assert!(!should_show_hint(
             &state,
             "test@claude-code-marketplace",

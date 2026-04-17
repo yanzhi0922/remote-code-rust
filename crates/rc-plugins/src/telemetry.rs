@@ -91,10 +91,7 @@ impl PluginTelemetry {
     }
 
     /// Get usage statistics for a specific plugin.
-    pub fn get_plugin_usage_stats(
-        &self,
-        plugin_id: &str,
-    ) -> PluginUsageStats {
+    pub fn get_plugin_usage_stats(&self, plugin_id: &str) -> PluginUsageStats {
         let plugin_events: Vec<&PluginUsageEvent> = self
             .events
             .iter()
@@ -103,15 +100,11 @@ impl PluginTelemetry {
 
         let mut events_by_type: HashMap<String, usize> = HashMap::new();
         for event in &plugin_events {
-            *events_by_type
-                .entry(event.event_type.clone())
-                .or_insert(0) += 1;
+            *events_by_type.entry(event.event_type.clone()).or_insert(0) += 1;
         }
 
-        let first_event_secs =
-            plugin_events.first().map(|e| e.timestamp_secs);
-        let last_event_secs =
-            plugin_events.last().map(|e| e.timestamp_secs);
+        let first_event_secs = plugin_events.first().map(|e| e.timestamp_secs);
+        let last_event_secs = plugin_events.last().map(|e| e.timestamp_secs);
 
         PluginUsageStats {
             plugin_id: plugin_id.to_owned(),
@@ -124,11 +117,7 @@ impl PluginTelemetry {
 
     /// Get usage statistics for all plugins.
     pub fn get_all_usage_stats(&self) -> HashMap<String, PluginUsageStats> {
-        let plugin_ids: HashSet<String> = self
-            .events
-            .iter()
-            .map(|e| e.plugin_id.clone())
-            .collect();
+        let plugin_ids: HashSet<String> = self.events.iter().map(|e| e.plugin_id.clone()).collect();
 
         plugin_ids
             .into_iter()
@@ -166,21 +155,9 @@ mod tests {
     #[test]
     fn record_and_get_stats() {
         let mut telemetry = PluginTelemetry::new(100);
-        telemetry.record_plugin_usage(
-            "test-plugin@mkt",
-            "invoke",
-            HashMap::new(),
-        );
-        telemetry.record_plugin_usage(
-            "test-plugin@mkt",
-            "invoke",
-            HashMap::new(),
-        );
-        telemetry.record_plugin_usage(
-            "test-plugin@mkt",
-            "load",
-            HashMap::new(),
-        );
+        telemetry.record_plugin_usage("test-plugin@mkt", "invoke", HashMap::new());
+        telemetry.record_plugin_usage("test-plugin@mkt", "invoke", HashMap::new());
+        telemetry.record_plugin_usage("test-plugin@mkt", "load", HashMap::new());
 
         assert_eq!(telemetry.event_count(), 3);
 
@@ -205,11 +182,7 @@ mod tests {
     fn max_events_trims_old() {
         let mut telemetry = PluginTelemetry::new(3);
         for i in 0..5 {
-            telemetry.record_plugin_usage(
-                &format!("plugin-{i}@mkt"),
-                "invoke",
-                HashMap::new(),
-            );
+            telemetry.record_plugin_usage(&format!("plugin-{i}@mkt"), "invoke", HashMap::new());
         }
         assert_eq!(telemetry.event_count(), 3);
     }
@@ -217,16 +190,8 @@ mod tests {
     #[test]
     fn get_all_stats() {
         let mut telemetry = PluginTelemetry::new(100);
-        telemetry.record_plugin_usage(
-            "a@mkt",
-            "invoke",
-            HashMap::new(),
-        );
-        telemetry.record_plugin_usage(
-            "b@mkt",
-            "invoke",
-            HashMap::new(),
-        );
+        telemetry.record_plugin_usage("a@mkt", "invoke", HashMap::new());
+        telemetry.record_plugin_usage("b@mkt", "invoke", HashMap::new());
 
         let all = telemetry.get_all_usage_stats();
         assert_eq!(all.len(), 2);
@@ -237,11 +202,7 @@ mod tests {
     #[test]
     fn clear_removes_all() {
         let mut telemetry = PluginTelemetry::new(100);
-        telemetry.record_plugin_usage(
-            "a@mkt",
-            "invoke",
-            HashMap::new(),
-        );
+        telemetry.record_plugin_usage("a@mkt", "invoke", HashMap::new());
         telemetry.clear();
         assert_eq!(telemetry.event_count(), 0);
     }

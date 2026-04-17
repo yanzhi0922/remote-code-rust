@@ -251,10 +251,7 @@ mod tests {
 
     #[test]
     fn server_tool_result_block_to_value() {
-        let block = ServerToolResultBlock::new(
-            "srv_456".to_string(),
-            json!({"output": "result"}),
-        );
+        let block = ServerToolResultBlock::new("srv_456".to_string(), json!({"output": "result"}));
         let val = block.to_value();
         assert_eq!(val["type"], "server_tool_result");
         assert_eq!(val["tool_use_id"], "srv_456");
@@ -262,10 +259,7 @@ mod tests {
 
     #[test]
     fn server_tool_result_block_serialization_roundtrip() {
-        let block = ServerToolResultBlock::new(
-            "srv_abc".to_string(),
-            json!({"data": 42}),
-        );
+        let block = ServerToolResultBlock::new("srv_abc".to_string(), json!({"data": 42}));
         let json_str = serde_json::to_string(&block).expect("serialize");
         let deserialized: ServerToolResultBlock =
             serde_json::from_str(&json_str).expect("deserialize");

@@ -273,12 +273,16 @@ mod tests {
         assert!(PluginIdentifier::is_official_marketplace(Some(
             "Claude-Code-Marketplace"
         )));
-        assert!(PluginIdentifier::is_official_marketplace(Some("agent-skills")));
+        assert!(PluginIdentifier::is_official_marketplace(Some(
+            "agent-skills"
+        )));
     }
 
     #[test]
     fn test_is_official_marketplace_false() {
-        assert!(!PluginIdentifier::is_official_marketplace(Some("my-marketplace")));
+        assert!(!PluginIdentifier::is_official_marketplace(Some(
+            "my-marketplace"
+        )));
         assert!(!PluginIdentifier::is_official_marketplace(None));
     }
 

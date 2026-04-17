@@ -83,15 +83,15 @@ pub fn find_orphaned_plugins(
     };
 
     for entry in entries.flatten() {
-        if !entry.file_type().is_ok_and(|ft: std::fs::FileType| ft.is_dir()) {
+        if !entry
+            .file_type()
+            .is_ok_and(|ft: std::fs::FileType| ft.is_dir())
+        {
             continue;
         }
         checked_dirs += 1;
 
-        let dir_name = entry
-            .file_name()
-            .to_string_lossy()
-            .to_string();
+        let dir_name = entry.file_name().to_string_lossy().to_string();
 
         // Check if this directory is associated with a known marketplace
         let is_known_marketplace = known_marketplaces.contains(&dir_name);
@@ -137,12 +137,7 @@ pub fn clean_orphaned_plugins(
             } else {
                 std::fs::remove_dir_all(&orphan.path)
                     .map(|_| orphan.path.clone())
-                    .map_err(|e| {
-                        format!(
-                            "failed to remove {}: {e}",
-                            orphan.path.display()
-                        )
-                    })
+                    .map_err(|e| format!("failed to remove {}: {e}", orphan.path.display()))
             }
         })
         .collect()
@@ -156,14 +151,13 @@ fn determine_plugin_name(dir: &Path) -> Option<String> {
 
     if manifest_path.exists()
         && let Ok(content) = std::fs::read_to_string(&manifest_path)
-            && let Ok(value) =
-                serde_json::from_str::<serde_json::Value>(&content)
-            {
-                return value
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_owned());
-            }
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(&content)
+    {
+        return value
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_owned());
+    }
     None
 }
 
@@ -266,8 +260,7 @@ mod tests {
         let temp = ok(tempdir());
         assert!(!is_orphaned(temp.path()));
 
-        fs::write(temp.path().join(ORPHANED_AT_FILENAME), "2024-01-01")
-            .expect("write marker");
+        fs::write(temp.path().join(ORPHANED_AT_FILENAME), "2024-01-01").expect("write marker");
         assert!(is_orphaned(temp.path()));
     }
 }

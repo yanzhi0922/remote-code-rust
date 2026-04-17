@@ -34,9 +34,9 @@ pub fn is_model_allowed(model: &str, allowlist: Option<&[String]>) -> bool {
     if normalized_refs.contains(&normalized.as_str())
         && (!is_model_family_alias(&normalized)
             || !family_has_specific_entries(&normalized, &normalized_refs))
-        {
-            return true;
-        }
+    {
+        return true;
+    }
 
     // 2. Family-level aliases in the allowlist match any model in that family
     //    (only if no more specific entries exist for that family).
@@ -68,10 +68,12 @@ pub fn is_model_allowed(model: &str, allowlist: Option<&[String]>) -> bool {
 
     // 4. Version-prefix matching.
     for entry in &normalized_refs {
-        if !is_model_family_alias(entry) && !is_model_alias(entry)
-            && model_matches_version_prefix(&normalized, entry) {
-                return true;
-            }
+        if !is_model_family_alias(entry)
+            && !is_model_alias(entry)
+            && model_matches_version_prefix(&normalized, entry)
+        {
+            return true;
+        }
     }
 
     false
@@ -193,19 +195,13 @@ mod tests {
         let list = vec!["opus".into(), "opus-4-5".into()];
         // "opus" alone should NOT match because "opus-4-5" narrows it.
         // But "claude-opus-4-5-20251101" should match via prefix.
-        assert!(is_model_allowed(
-            "claude-opus-4-5-20251101",
-            Some(&list),
-        ));
+        assert!(is_model_allowed("claude-opus-4-5-20251101", Some(&list),));
     }
 
     #[test]
     fn version_prefix_match() {
         let list = vec!["claude-opus-4-5".into()];
-        assert!(is_model_allowed(
-            "claude-opus-4-5-20251101",
-            Some(&list),
-        ));
+        assert!(is_model_allowed("claude-opus-4-5-20251101", Some(&list),));
     }
 
     #[test]

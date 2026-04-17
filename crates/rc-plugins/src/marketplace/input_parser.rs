@@ -39,10 +39,7 @@ pub fn parse_marketplace_input(input: &str) -> MarketplaceInput {
 
     // Handle local paths (check before GitHub shorthand so ~/x isn't
     // misclassified as owner/repo).
-    if trimmed.starts_with('.')
-        || trimmed.starts_with('/')
-        || trimmed.starts_with('~')
-    {
+    if trimmed.starts_with('.') || trimmed.starts_with('/') || trimmed.starts_with('~') {
         return MarketplaceInput::Path {
             path: trimmed.to_owned(),
         };
@@ -119,8 +116,7 @@ mod tests {
 
     #[test]
     fn parse_https_url() {
-        let result =
-            parse_marketplace_input("https://example.com/marketplace.json");
+        let result = parse_marketplace_input("https://example.com/marketplace.json");
         assert_eq!(
             result,
             MarketplaceInput::Url {
@@ -131,8 +127,7 @@ mod tests {
 
     #[test]
     fn parse_git_ssh_url() {
-        let result =
-            parse_marketplace_input("git@github.com:org/repo.git");
+        let result = parse_marketplace_input("git@github.com:org/repo.git");
         assert_eq!(
             result,
             MarketplaceInput::Url {
@@ -143,13 +138,11 @@ mod tests {
 
     #[test]
     fn parse_github_shorthand() {
-        let result =
-            parse_marketplace_input("anthropics/claude-plugins-official");
+        let result = parse_marketplace_input("anthropics/claude-plugins-official");
         assert_eq!(
             result,
             MarketplaceInput::Url {
-                url: "https://github.com/anthropics/claude-plugins-official"
-                    .to_owned()
+                url: "https://github.com/anthropics/claude-plugins-official".to_owned()
             }
         );
     }
@@ -200,8 +193,7 @@ mod tests {
 
     #[test]
     fn parse_deploy_ssh_url() {
-        let result =
-            parse_marketplace_input("deploy@gitlab.com:group/project.git");
+        let result = parse_marketplace_input("deploy@gitlab.com:group/project.git");
         assert_eq!(
             result,
             MarketplaceInput::Url {

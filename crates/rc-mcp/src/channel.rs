@@ -131,8 +131,7 @@ pub enum ChannelPermissionDecision {
 /// 1. If the server is in the allowlist → `Allow`
 /// 2. If a callback is set → delegate to the callback
 /// 3. Otherwise → `Deny`
-type PermissionCallback =
-    Box<dyn Fn(&ChannelMessage) -> ChannelPermissionDecision + Send + Sync>;
+type PermissionCallback = Box<dyn Fn(&ChannelMessage) -> ChannelPermissionDecision + Send + Sync>;
 
 pub struct ChannelPermissionManager {
     allowlist: ChannelAllowlist,

@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::backends::types::{CreatePaneResult, PaneConfig, PaneId, PaneStatus};
 use crate::backends::PaneBackend;
+use crate::backends::types::{CreatePaneResult, PaneConfig, PaneId, PaneStatus};
 use crate::error::{SwarmError, SwarmResult};
 
 /// Tmux session name prefix.
@@ -139,10 +139,7 @@ impl TmuxBackend {
     }
 
     /// Build the command that would create a new pane.
-    pub async fn build_create_command(
-        &self,
-        config: &PaneConfig,
-    ) -> (TmuxCommand, PaneId) {
+    pub async fn build_create_command(&self, config: &PaneConfig) -> (TmuxCommand, PaneId) {
         let mut counter = self.counter.lock().await;
         *counter += 1;
         let pane_id = format!("tmux-pane-{}", counter);
@@ -219,7 +216,8 @@ impl PaneBackend for TmuxBackend {
             .expect_err("should not be true on Windows")
             .to_string()
             .contains("tmux")
-            || cfg!(target_os = "linux") || cfg!(target_os = "macos")
+            || cfg!(target_os = "linux")
+            || cfg!(target_os = "macos")
     }
 }
 
@@ -272,7 +270,11 @@ mod tests {
 
     #[test]
     fn tmux_command_to_string() {
-        let cmd = TmuxCommand::new(vec!["new-window".to_owned(), "-n".to_owned(), "my pane".to_owned()]);
+        let cmd = TmuxCommand::new(vec![
+            "new-window".to_owned(),
+            "-n".to_owned(),
+            "my pane".to_owned(),
+        ]);
         let s = cmd.to_command_string();
         assert!(s.starts_with("tmux"));
         assert!(s.contains("new-window"));
@@ -298,8 +300,14 @@ mod tests {
     #[tokio::test]
     async fn tmux_backend_list_panes() {
         let backend = TmuxBackend::new("test-team");
-        backend.create_pane(&PaneConfig::new("w1", "/tmp", BackendType::Tmux)).await.expect("ok");
-        backend.create_pane(&PaneConfig::new("w2", "/tmp", BackendType::Tmux)).await.expect("ok");
+        backend
+            .create_pane(&PaneConfig::new("w1", "/tmp", BackendType::Tmux))
+            .await
+            .expect("ok");
+        backend
+            .create_pane(&PaneConfig::new("w2", "/tmp", BackendType::Tmux))
+            .await
+            .expect("ok");
         let panes = backend.list_panes().await.expect("should list");
         assert_eq!(panes.len(), 2);
     }
@@ -307,8 +315,14 @@ mod tests {
     #[tokio::test]
     async fn tmux_backend_destroy_pane() {
         let backend = TmuxBackend::new("test-team");
-        let result = backend.create_pane(&PaneConfig::new("w1", "/tmp", BackendType::Tmux)).await.expect("ok");
-        backend.destroy_pane(&result.pane_id).await.expect("should destroy");
+        let result = backend
+            .create_pane(&PaneConfig::new("w1", "/tmp", BackendType::Tmux))
+            .await
+            .expect("ok");
+        backend
+            .destroy_pane(&result.pane_id)
+            .await
+            .expect("should destroy");
         let panes = backend.list_panes().await.expect("ok");
         assert!(panes.is_empty());
     }
@@ -316,7 +330,10 @@ mod tests {
     #[tokio::test]
     async fn tmux_backend_pane_status() {
         let backend = TmuxBackend::new("test-team");
-        let result = backend.create_pane(&PaneConfig::new("w1", "/tmp", BackendType::Tmux)).await.expect("ok");
+        let result = backend
+            .create_pane(&PaneConfig::new("w1", "/tmp", BackendType::Tmux))
+            .await
+            .expect("ok");
         let status = backend.pane_status(&result.pane_id).await.expect("ok");
         assert_eq!(status, PaneStatus::Running);
     }
@@ -324,21 +341,32 @@ mod tests {
     #[tokio::test]
     async fn tmux_backend_pane_status_not_found() {
         let backend = TmuxBackend::new("test-team");
-        let status = backend.pane_status(&"nonexistent".to_owned()).await.expect("ok");
+        let status = backend
+            .pane_status(&"nonexistent".to_owned())
+            .await
+            .expect("ok");
         assert_eq!(status, PaneStatus::NotFound);
     }
 
     #[tokio::test]
     async fn tmux_backend_send_to_pane() {
         let backend = TmuxBackend::new("test-team");
-        let result = backend.create_pane(&PaneConfig::new("w1", "/tmp", BackendType::Tmux)).await.expect("ok");
-        backend.send_to_pane(&result.pane_id, "hello").await.expect("should send");
+        let result = backend
+            .create_pane(&PaneConfig::new("w1", "/tmp", BackendType::Tmux))
+            .await
+            .expect("ok");
+        backend
+            .send_to_pane(&result.pane_id, "hello")
+            .await
+            .expect("should send");
     }
 
     #[tokio::test]
     async fn tmux_backend_send_to_nonexistent() {
         let backend = TmuxBackend::new("test-team");
-        let result = backend.send_to_pane(&"nonexistent".to_owned(), "hello").await;
+        let result = backend
+            .send_to_pane(&"nonexistent".to_owned(), "hello")
+            .await;
         assert!(result.is_err());
     }
 

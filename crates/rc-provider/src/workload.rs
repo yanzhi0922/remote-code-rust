@@ -56,7 +56,6 @@ impl std::fmt::Display for WorkloadType {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // WorkloadContext
 // ---------------------------------------------------------------------------
@@ -248,8 +247,14 @@ mod tests {
 
     #[test]
     fn workload_type_from_str_opt() {
-        assert_eq!(WorkloadType::from_str_opt("default"), Some(WorkloadType::Default));
-        assert_eq!(WorkloadType::from_str_opt("code_review"), Some(WorkloadType::CodeReview));
+        assert_eq!(
+            WorkloadType::from_str_opt("default"),
+            Some(WorkloadType::Default)
+        );
+        assert_eq!(
+            WorkloadType::from_str_opt("code_review"),
+            Some(WorkloadType::CodeReview)
+        );
         assert_eq!(WorkloadType::from_str_opt("unknown"), None);
     }
 
@@ -291,8 +296,7 @@ mod tests {
 
     #[test]
     fn workload_context_serialization_roundtrip() {
-        let ctx = WorkloadContext::new(WorkloadType::Compact)
-            .with_priority(3);
+        let ctx = WorkloadContext::new(WorkloadType::Compact).with_priority(3);
         let json = serde_json::to_string(&ctx).expect("serialize");
         let deserialized: WorkloadContext = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(ctx, deserialized);

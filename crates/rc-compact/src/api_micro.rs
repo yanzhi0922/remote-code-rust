@@ -188,14 +188,8 @@ fn estimate_single_message_tokens(msg: &Message) -> u64 {
         Message::System(s) => rough_token_count(&s.text),
         Message::HookResult(h) => rough_token_count(&h.output),
         Message::Tombstone(t) => rough_token_count(&t.summary),
-        Message::Progress(p) => {
-            rough_token_count(&p.stage) + rough_token_count(&p.status)
-        }
-        Message::Attachment(a) => a
-            .label
-            .as_ref()
-            .map(|l| rough_token_count(l))
-            .unwrap_or(5),
+        Message::Progress(p) => rough_token_count(&p.stage) + rough_token_count(&p.status),
+        Message::Attachment(a) => a.label.as_ref().map(|l| rough_token_count(l)).unwrap_or(5),
         Message::GroupedToolUse(g) => g
             .summary
             .as_ref()
@@ -255,10 +249,7 @@ mod tests {
     #[test]
     fn estimate_savings_detects_tool_result_savings() {
         let long_content = "x".repeat(5000);
-        let messages = vec![
-            user_msg("short"),
-            tool_summary("1", &long_content),
-        ];
+        let messages = vec![user_msg("short"), tool_summary("1", &long_content)];
         let savings = estimate_savings(&messages);
         assert!(savings.before > 0, "before should be positive");
         assert!(savings.saved > 0, "should detect savings from tool result");
@@ -338,6 +329,9 @@ mod tests {
             saved: 600,
         };
         let ratio = savings.ratio();
-        assert!((ratio - 0.6).abs() < 0.001, "ratio should be ~0.6, got {ratio}");
+        assert!(
+            (ratio - 0.6).abs() < 0.001,
+            "ratio should be ~0.6, got {ratio}"
+        );
     }
 }

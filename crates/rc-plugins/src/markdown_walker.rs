@@ -221,9 +221,7 @@ fn walk_dir_recursive(
     let has_skill_md = stop_at_skill_dir
         && entry_list.iter().any(|e| {
             e.file_type().map(|t| t.is_file()).unwrap_or(false)
-                && e.file_name()
-                    .to_ascii_lowercase()
-                    == OsStr::new(SKILL_MD_PATTERN)
+                && e.file_name().to_ascii_lowercase() == OsStr::new(SKILL_MD_PATTERN)
         });
 
     // Compute namespace (subdirectory path relative to root)
@@ -429,11 +427,7 @@ mod tests {
     fn walk_namespace() {
         let dir = TempDir::new().expect("tempdir");
         fs::create_dir_all(dir.path().join("foo").join("bar")).expect("dir");
-        fs::write(
-            dir.path().join("foo").join("bar").join("doc.md"),
-            "# Doc\n",
-        )
-        .expect("write");
+        fs::write(dir.path().join("foo").join("bar").join("doc.md"), "# Doc\n").expect("write");
 
         let files = walk_plugin_markdown(dir.path(), false).expect("walk");
         assert_eq!(files.len(), 1);

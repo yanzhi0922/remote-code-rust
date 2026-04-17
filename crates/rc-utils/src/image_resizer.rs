@@ -60,7 +60,12 @@ impl ImageFormat {
     /// All known formats.
     #[must_use]
     pub fn all_values() -> &'static [ImageFormat] {
-        &[ImageFormat::Png, ImageFormat::Jpeg, ImageFormat::Gif, ImageFormat::WebP]
+        &[
+            ImageFormat::Png,
+            ImageFormat::Jpeg,
+            ImageFormat::Gif,
+            ImageFormat::WebP,
+        ]
     }
 }
 
@@ -229,8 +234,8 @@ pub fn estimate_dimensions(base64_data: &str, format: ImageFormat) -> (u32, u32)
     let pixels = match format {
         ImageFormat::Png => byte_size / 3, // PNG is lossless but compressed.
         ImageFormat::Jpeg => byte_size * 10, // JPEG has ~10:1 compression.
-        ImageFormat::Gif => byte_size * 5,   // GIF has moderate compression.
-        ImageFormat::WebP => byte_size * 8,  // WebP is efficient.
+        ImageFormat::Gif => byte_size * 5, // GIF has moderate compression.
+        ImageFormat::WebP => byte_size * 8, // WebP is efficient.
     };
 
     // Assume square image.
@@ -323,18 +328,24 @@ mod tests {
     #[test]
     fn image_error_display() {
         assert_eq!(ImageError::EmptyData.to_string(), "Image data is empty");
-        assert!(ImageError::InvalidBase64("bad".to_string())
+        assert!(
+            ImageError::InvalidBase64("bad".to_string())
+                .to_string()
+                .contains("bad")
+        );
+        assert!(
+            ImageError::UnsupportedFormat("bmp".to_string())
+                .to_string()
+                .contains("bmp")
+        );
+        assert!(
+            ImageError::SizeExceeded {
+                actual: 100,
+                max: 50
+            }
             .to_string()
-            .contains("bad"));
-        assert!(ImageError::UnsupportedFormat("bmp".to_string())
-            .to_string()
-            .contains("bmp"));
-        assert!(ImageError::SizeExceeded {
-            actual: 100,
-            max: 50
-        }
-        .to_string()
-        .contains("100"));
+            .contains("100")
+        );
     }
 
     // --- detect_image_format ---
@@ -342,25 +353,37 @@ mod tests {
     #[test]
     fn detect_png_magic_bytes() {
         // PNG magic bytes in base64: \x89PNG\r\n\x1a\n -> iVBORw0KGgo
-        assert_eq!(detect_image_format("iVBORw0KGgoAAAANS"), Some(ImageFormat::Png));
+        assert_eq!(
+            detect_image_format("iVBORw0KGgoAAAANS"),
+            Some(ImageFormat::Png)
+        );
     }
 
     #[test]
     fn detect_jpeg_magic_bytes() {
         // JPEG magic bytes: \xFF\xD8\xFF -> /9j/
-        assert_eq!(detect_image_format("/9j/4AAQSkZJRg"), Some(ImageFormat::Jpeg));
+        assert_eq!(
+            detect_image_format("/9j/4AAQSkZJRg"),
+            Some(ImageFormat::Jpeg)
+        );
     }
 
     #[test]
     fn detect_gif_magic_bytes() {
         // GIF magic bytes: GIF89a -> R0lGODlh
-        assert_eq!(detect_image_format("R0lGODlhAQABAIAAAP"), Some(ImageFormat::Gif));
+        assert_eq!(
+            detect_image_format("R0lGODlhAQABAIAAAP"),
+            Some(ImageFormat::Gif)
+        );
     }
 
     #[test]
     fn detect_webp_magic_bytes() {
         // WebP magic bytes: RIFF....WEBP -> UklGR
-        assert_eq!(detect_image_format("UklGRjoAAABXRUJQ"), Some(ImageFormat::WebP));
+        assert_eq!(
+            detect_image_format("UklGRjoAAABXRUJQ"),
+            Some(ImageFormat::WebP)
+        );
     }
 
     #[test]
@@ -393,7 +416,10 @@ mod tests {
 
     #[test]
     fn detect_data_uri_unknown() {
-        assert_eq!(detect_format_from_data_uri("data:application/pdf;base64,abc"), None);
+        assert_eq!(
+            detect_format_from_data_uri("data:application/pdf;base64,abc"),
+            None
+        );
     }
 
     // --- estimate_dimensions ---

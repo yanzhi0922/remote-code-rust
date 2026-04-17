@@ -7,9 +7,9 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use crate::backends::PaneBackend;
-use crate::backends::types::{CreatePaneResult, PaneId};
 use crate::backends::TeammateExecutor;
 use crate::backends::types::PaneConfig;
+use crate::backends::types::{CreatePaneResult, PaneId};
 use crate::error::SwarmResult;
 use crate::types::SpawnConfig;
 
@@ -32,11 +32,7 @@ impl PaneExecutor {
 #[async_trait]
 impl TeammateExecutor for PaneExecutor {
     async fn start_teammate(&self, config: &SpawnConfig) -> SwarmResult<CreatePaneResult> {
-        let mut pane_config = PaneConfig::new(
-            &config.agent_name,
-            &config.cwd,
-            config.backend_type,
-        );
+        let mut pane_config = PaneConfig::new(&config.agent_name, &config.cwd, config.backend_type);
         // Add environment variables.
         for (key, value) in &config.env_vars {
             pane_config = pane_config.with_env(key, value);
@@ -82,7 +78,10 @@ mod tests {
             permission_mode: Some(PermissionMode::Default),
             worktree_path: None,
         };
-        let result = executor.start_teammate(&config).await.expect("should start");
+        let result = executor
+            .start_teammate(&config)
+            .await
+            .expect("should start");
         assert!(result.is_first_teammate);
     }
 
@@ -92,7 +91,10 @@ mod tests {
         let executor = PaneExecutor::new(Arc::clone(&backend));
         let pane_config = PaneConfig::new("w1", "/tmp", BackendType::InProcess);
         let result = backend.create_pane(&pane_config).await.expect("ok");
-        executor.stop_teammate(&result.pane_id).await.expect("should stop");
+        executor
+            .stop_teammate(&result.pane_id)
+            .await
+            .expect("should stop");
     }
 
     #[tokio::test]
@@ -101,7 +103,12 @@ mod tests {
         let executor = PaneExecutor::new(Arc::clone(&backend));
         let pane_config = PaneConfig::new("w1", "/tmp", BackendType::InProcess);
         let result = backend.create_pane(&pane_config).await.expect("ok");
-        assert!(executor.is_teammate_running(&result.pane_id).await.expect("ok"));
+        assert!(
+            executor
+                .is_teammate_running(&result.pane_id)
+                .await
+                .expect("ok")
+        );
     }
 
     #[tokio::test]
@@ -111,7 +118,12 @@ mod tests {
         let pane_config = PaneConfig::new("w1", "/tmp", BackendType::InProcess);
         let result = backend.create_pane(&pane_config).await.expect("ok");
         executor.stop_teammate(&result.pane_id).await.expect("ok");
-        assert!(!executor.is_teammate_running(&result.pane_id).await.expect("ok"));
+        assert!(
+            !executor
+                .is_teammate_running(&result.pane_id)
+                .await
+                .expect("ok")
+        );
     }
 
     #[tokio::test]

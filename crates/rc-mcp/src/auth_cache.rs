@@ -96,9 +96,8 @@ impl McpAuthCache {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(e) => return Err(e),
         };
-        let parsed: AuthCacheData = serde_json::from_str(&content).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-        })?;
+        let parsed: AuthCacheData = serde_json::from_str(&content)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         self.data = parsed.entries;
         Ok(())
     }
@@ -222,7 +221,10 @@ mod tests {
     async fn load_missing_file_is_ok() {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut cache = McpAuthCache::new(dir.path().join("nonexistent"));
-        cache.load().await.expect("load should succeed on missing file");
+        cache
+            .load()
+            .await
+            .expect("load should succeed on missing file");
         assert!(cache.is_empty());
     }
 

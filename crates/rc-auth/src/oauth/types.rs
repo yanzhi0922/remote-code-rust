@@ -118,8 +118,7 @@ pub struct OAuthProfileOrganization {
 }
 
 /// Configuration for an OAuth client (endpoints, client ID, etc.).
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct OAuthConfig {
     pub client_id: String,
     pub authorize_url: String,
@@ -132,7 +131,6 @@ pub struct OAuthConfig {
     pub api_key_url: String,
     pub roles_url: String,
 }
-
 
 /// Parameters for building the authorization URL.
 #[derive(Debug, Clone)]

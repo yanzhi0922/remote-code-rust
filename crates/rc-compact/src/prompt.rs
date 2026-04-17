@@ -281,11 +281,18 @@ pub fn build_partial_compact_prompt(
     direction: PartialCompactDirection,
 ) -> String {
     let (template, analysis) = match direction {
-        PartialCompactDirection::From => (PARTIAL_COMPACT_PROMPT, DETAILED_ANALYSIS_INSTRUCTION_PARTIAL),
-        PartialCompactDirection::UpTo => (PARTIAL_COMPACT_UP_TO_PROMPT, DETAILED_ANALYSIS_INSTRUCTION_BASE),
+        PartialCompactDirection::From => (
+            PARTIAL_COMPACT_PROMPT,
+            DETAILED_ANALYSIS_INSTRUCTION_PARTIAL,
+        ),
+        PartialCompactDirection::UpTo => (
+            PARTIAL_COMPACT_UP_TO_PROMPT,
+            DETAILED_ANALYSIS_INSTRUCTION_BASE,
+        ),
     };
 
-    let mut prompt = format!("{NO_TOOLS_PREAMBLE}{template}{analysis}\n\n{PARTIAL_SUMMARY_SECTIONS}");
+    let mut prompt =
+        format!("{NO_TOOLS_PREAMBLE}{template}{analysis}\n\n{PARTIAL_SUMMARY_SECTIONS}");
 
     if let Some(instructions) = custom_instructions {
         let trimmed = instructions.trim();
@@ -323,16 +330,17 @@ pub fn format_compact_summary(summary: &str) -> String {
 
     // Extract and format summary section
     if let Some(summary_start) = formatted.find("<summary>")
-        && let Some(summary_end) = formatted.find("</summary>") {
-            let content = &formatted[summary_start + "<summary>".len()..summary_end];
-            let replacement = format!("Summary:\n{}", content.trim());
-            formatted = format!(
-                "{}{}{}",
-                &formatted[..summary_start],
-                replacement,
-                &formatted[summary_end + "</summary>".len()..]
-            );
-        }
+        && let Some(summary_end) = formatted.find("</summary>")
+    {
+        let content = &formatted[summary_start + "<summary>".len()..summary_end];
+        let replacement = format!("Summary:\n{}", content.trim());
+        formatted = format!(
+            "{}{}{}",
+            &formatted[..summary_start],
+            replacement,
+            &formatted[summary_end + "</summary>".len()..]
+        );
+    }
 
     // Clean up extra whitespace between sections
     while formatted.contains("\n\n\n") {

@@ -152,9 +152,7 @@ async fn run_single_delegation(
 
     let engine = DelegationEngine::new(DelegationConfig::default());
 
-    let broker: Arc<dyn PermissionBroker> = Arc::new(StaticPermissionBroker::new(
-        true,
-    ));
+    let broker: Arc<dyn PermissionBroker> = Arc::new(StaticPermissionBroker::new(true));
 
     let delegation_ctx = DelegationContext {
         task: prompt.to_owned(),
@@ -208,9 +206,7 @@ async fn run_batch_delegation(
     let engine = DelegationEngine::new(DelegationConfig::default());
     let progress_cb = build_progress_callback(context);
 
-    let broker: Arc<dyn PermissionBroker> = Arc::new(StaticPermissionBroker::new(
-        true,
-    ));
+    let broker: Arc<dyn PermissionBroker> = Arc::new(StaticPermissionBroker::new(true));
 
     let (batch_depth, parent_task_id) = {
         let stack = context.task_stack.lock().expect("task_stack lock poisoned");

@@ -92,9 +92,8 @@ pub use strategy::{
 // ---------------------------------------------------------------------------
 
 pub use engine::{
-    build_post_compact_messages, compact_conversation, create_compact_boundary_message,
-    merge_hook_instructions, partial_compact_conversation, FullCompactStrategy,
-    PartialCompactStrategy,
+    FullCompactStrategy, PartialCompactStrategy, build_post_compact_messages, compact_conversation,
+    create_compact_boundary_message, merge_hook_instructions, partial_compact_conversation,
 };
 
 // ---------------------------------------------------------------------------
@@ -102,10 +101,10 @@ pub use engine::{
 // ---------------------------------------------------------------------------
 
 pub use auto::{
-    auto_compact, should_auto_compact, AutoCompactStrategy, AutoCompactTrackingState,
-    TokenWarningState, AUTOCOMPACT_BUFFER_TOKENS, ERROR_THRESHOLD_BUFFER_TOKENS,
-    MANUAL_COMPACT_BUFFER_TOKENS, MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES,
-    WARNING_THRESHOLD_BUFFER_TOKENS,
+    AUTOCOMPACT_BUFFER_TOKENS, AutoCompactStrategy, AutoCompactTrackingState,
+    ERROR_THRESHOLD_BUFFER_TOKENS, MANUAL_COMPACT_BUFFER_TOKENS,
+    MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES, TokenWarningState, WARNING_THRESHOLD_BUFFER_TOKENS,
+    auto_compact, should_auto_compact,
 };
 
 // ---------------------------------------------------------------------------
@@ -113,8 +112,8 @@ pub use auto::{
 // ---------------------------------------------------------------------------
 
 pub use micro::{
-    estimate_messages_tokens, micro_compact, MicroCompactConfig, MicroCompactStrategy,
-    TIME_BASED_MC_CLEARED_MESSAGE,
+    MicroCompactConfig, MicroCompactStrategy, TIME_BASED_MC_CLEARED_MESSAGE,
+    estimate_messages_tokens, micro_compact,
 };
 
 // ---------------------------------------------------------------------------
@@ -122,8 +121,8 @@ pub use micro::{
 // ---------------------------------------------------------------------------
 
 pub use snip::{
-    is_snip_boundary_message, snip_compact, SnipCompactConfig, SnipCompactStrategy,
-    SnipStrategy, DEFAULT_SNIP_THRESHOLD_TOKENS, SNIPPED_CONTENT_MARKER,
+    DEFAULT_SNIP_THRESHOLD_TOKENS, SNIPPED_CONTENT_MARKER, SnipCompactConfig, SnipCompactStrategy,
+    SnipStrategy, is_snip_boundary_message, snip_compact,
 };
 
 // ---------------------------------------------------------------------------
@@ -131,8 +130,7 @@ pub use snip::{
 // ---------------------------------------------------------------------------
 
 pub use reactive::{
-    reactive_compact, ReactiveCompactConfig, ReactiveCompactStrategy,
-    MAX_REACTIVE_COMPACT_RETRIES,
+    MAX_REACTIVE_COMPACT_RETRIES, ReactiveCompactConfig, ReactiveCompactStrategy, reactive_compact,
 };
 
 // ---------------------------------------------------------------------------
@@ -140,9 +138,9 @@ pub use reactive::{
 // ---------------------------------------------------------------------------
 
 pub use session_memory::{
-    has_text_blocks, session_memory_compact, SessionMemoryCompactConfig,
-    SessionMemoryCompactStrategy, DEFAULT_SM_COMPACT_MAX_TOKENS,
-    DEFAULT_SM_COMPACT_MIN_TEXT_BLOCK_MESSAGES, DEFAULT_SM_COMPACT_MIN_TOKENS,
+    DEFAULT_SM_COMPACT_MAX_TOKENS, DEFAULT_SM_COMPACT_MIN_TEXT_BLOCK_MESSAGES,
+    DEFAULT_SM_COMPACT_MIN_TOKENS, SessionMemoryCompactConfig, SessionMemoryCompactStrategy,
+    has_text_blocks, session_memory_compact,
 };
 
 // ---------------------------------------------------------------------------
@@ -150,8 +148,9 @@ pub use session_memory::{
 // ---------------------------------------------------------------------------
 
 pub use prompt::{
-    build_compact_prompt, build_compact_user_summary_message, build_partial_compact_prompt,
-    format_compact_summary, rough_token_count, PartialCompactDirection, COMPACT_SYSTEM_PROMPT,
+    COMPACT_SYSTEM_PROMPT, PartialCompactDirection, build_compact_prompt,
+    build_compact_user_summary_message, build_partial_compact_prompt, format_compact_summary,
+    rough_token_count,
 };
 
 // ---------------------------------------------------------------------------
@@ -159,11 +158,11 @@ pub use prompt::{
 // ---------------------------------------------------------------------------
 
 pub use attachment::{
-    create_file_attachment_message, create_plan_attachment_if_needed,
-    create_post_compact_file_attachments, create_skill_attachment_if_needed, FileState,
-    FileStateCache, InvokedSkill, InvokedSkillRegistry, POST_COMPACT_MAX_FILES_TO_RESTORE,
-    POST_COMPACT_MAX_TOKENS_PER_FILE, POST_COMPACT_SKILLS_TOKEN_BUDGET,
-    POST_COMPACT_TOKEN_BUDGET,
+    FileState, FileStateCache, InvokedSkill, InvokedSkillRegistry,
+    POST_COMPACT_MAX_FILES_TO_RESTORE, POST_COMPACT_MAX_TOKENS_PER_FILE,
+    POST_COMPACT_SKILLS_TOKEN_BUDGET, POST_COMPACT_TOKEN_BUDGET, create_file_attachment_message,
+    create_plan_attachment_if_needed, create_post_compact_file_attachments,
+    create_skill_attachment_if_needed,
 };
 
 // ---------------------------------------------------------------------------
@@ -171,27 +170,29 @@ pub use attachment::{
 // ---------------------------------------------------------------------------
 
 pub use context_collapse::{
-    detect_collapsible_spans, context_collapse, CollapseOperation, CollapsePersistence,
-    CollapseResult, CollapsibleSpan, ContextCollapseConfig, ContextCollapseEngine,
-    ContextCollapseStrategy, Ratio64,
+    CollapseOperation, CollapsePersistence, CollapseResult, CollapsibleSpan, ContextCollapseConfig,
+    ContextCollapseEngine, ContextCollapseStrategy, Ratio64, context_collapse,
+    detect_collapsible_spans,
 };
 
 // ---------------------------------------------------------------------------
 // Re-exports: forked agent compact
 // ---------------------------------------------------------------------------
 
-pub use forked_agent::{compact_for_fork, should_compact_for_fork, ForkedAgentCompactConfig};
+pub use forked_agent::{ForkedAgentCompactConfig, compact_for_fork, should_compact_for_fork};
 
 // ---------------------------------------------------------------------------
 // Re-exports: API microcompact
 // ---------------------------------------------------------------------------
 
-pub use api_micro::{api_microcompact, estimate_savings, ApiMicrocompactConfig, CompactResult, TokenSavings};
+pub use api_micro::{
+    ApiMicrocompactConfig, CompactResult, TokenSavings, api_microcompact, estimate_savings,
+};
 
 // ---------------------------------------------------------------------------
 // Re-exports: microcompact configuration
 // ---------------------------------------------------------------------------
 
 pub use mc_config::{
-    should_use_microcompact, CachedMcConfig, McConfig, McStrategy, TimeBasedConfig,
+    CachedMcConfig, McConfig, McStrategy, TimeBasedConfig, should_use_microcompact,
 };

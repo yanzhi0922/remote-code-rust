@@ -59,10 +59,7 @@ impl AssistantTextRenderer {
             } else {
                 lines.push(Line::from(vec![
                     Span::styled("   ", Style::default()),
-                    Span::styled(
-                        line.to_owned(),
-                        Style::default().fg(style.assistant_color),
-                    ),
+                    Span::styled(line.to_owned(), Style::default().fg(style.assistant_color)),
                 ]));
             }
         }
@@ -132,10 +129,7 @@ impl UserTextRenderer {
             } else {
                 lines.push(Line::from(vec![
                     Span::styled("   ", Style::default()),
-                    Span::styled(
-                        line.to_owned(),
-                        Style::default().fg(style.user_color),
-                    ),
+                    Span::styled(line.to_owned(), Style::default().fg(style.user_color)),
                 ]));
             }
         }
@@ -366,20 +360,15 @@ impl ToolResultRenderer {
                 };
                 lines.push(Line::from(vec![
                     Span::styled("     ", Style::default()),
-                    Span::styled(
-                        truncated.to_owned(),
-                        Style::default().fg(style.status_fg),
-                    ),
+                    Span::styled(truncated.to_owned(), Style::default().fg(style.status_fg)),
                 ]));
             }
             let total = self.output.lines().count();
             if total > max_lines {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("     ... ({} more lines)", total - max_lines),
-                        Style::default().fg(style.info_color),
-                    ),
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    format!("     ... ({} more lines)", total - max_lines),
+                    Style::default().fg(style.info_color),
+                )]));
             }
         }
 
@@ -437,10 +426,7 @@ impl ThinkingRenderer {
                 } else {
                     lines.push(Line::from(vec![
                         Span::styled("   ", Style::default()),
-                        Span::styled(
-                            line.to_owned(),
-                            Style::default().fg(style.info_color),
-                        ),
+                        Span::styled(line.to_owned(), Style::default().fg(style.info_color)),
                     ]));
                 }
             }
@@ -505,23 +491,19 @@ impl CompactBoundaryRenderer {
 
         // Separator line.
         lines.push(Line::from(vec![
-            Span::styled(
-                "─".repeat(left_pad),
-                Style::default().fg(Color::DarkGray),
-            ),
+            Span::styled("─".repeat(left_pad), Style::default().fg(Color::DarkGray)),
             Span::styled(
                 format!(" {} ", self.label),
                 Style::default().fg(Color::DarkGray),
             ),
             Span::styled(
-                format!(
-                    "({} messages compacted) ",
-                    self.compacted_count
-                ),
+                format!("({} messages compacted) ", self.compacted_count),
                 Style::default().fg(Color::DarkGray),
             ),
             Span::styled(
-                "─".repeat(width.saturating_sub(left_pad + self.label.len() + self.compacted_count.to_string().len() + 26)),
+                "─".repeat(width.saturating_sub(
+                    left_pad + self.label.len() + self.compacted_count.to_string().len() + 26,
+                )),
                 Style::default().fg(Color::DarkGray),
             ),
         ]));
@@ -590,20 +572,15 @@ impl SystemMessageRenderer {
                     format!(" {icon} "),
                     Style::default().fg(color).add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(
-                    line.to_owned(),
-                    Style::default().fg(color),
-                ),
+                Span::styled(line.to_owned(), Style::default().fg(color)),
             ]));
         }
 
         if lines.is_empty() {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!(" {icon} "),
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                ),
-            ]));
+            lines.push(Line::from(vec![Span::styled(
+                format!(" {icon} "),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            )]));
         }
 
         lines
@@ -781,14 +758,18 @@ mod tests {
 
     #[test]
     fn system_error_message() {
-        let r = SystemMessageRenderer::new("Connection failed".to_owned(), SystemMessageLevel::Error);
+        let r =
+            SystemMessageRenderer::new("Connection failed".to_owned(), SystemMessageLevel::Error);
         let lines = r.render(&test_style());
         assert_eq!(lines.len(), 1);
     }
 
     #[test]
     fn system_multiline_warning() {
-        let r = SystemMessageRenderer::new("Warning line 1\nWarning line 2".to_owned(), SystemMessageLevel::Warning);
+        let r = SystemMessageRenderer::new(
+            "Warning line 1\nWarning line 2".to_owned(),
+            SystemMessageLevel::Warning,
+        );
         let lines = r.render(&test_style());
         assert_eq!(lines.len(), 2);
     }

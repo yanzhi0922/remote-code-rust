@@ -23,10 +23,7 @@ pub fn render_spinner(message: &str, frame: usize, style: &StyleConfig) -> Line<
                 .fg(style.accent_color)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            message.to_owned(),
-            Style::default().fg(style.status_fg),
-        ),
+        Span::styled(message.to_owned(), Style::default().fg(style.status_fg)),
     ])
 }
 
@@ -50,18 +47,9 @@ pub fn render_progress_bar(
     let bar_empty: String = "░".repeat(bar_width.saturating_sub(filled));
 
     Line::from(vec![
-        Span::styled(
-            format!(" {label} "),
-            Style::default().fg(style.status_fg),
-        ),
-        Span::styled(
-            bar_filled,
-            Style::default().fg(style.accent_color),
-        ),
-        Span::styled(
-            bar_empty,
-            Style::default().fg(style.info_color),
-        ),
+        Span::styled(format!(" {label} "), Style::default().fg(style.status_fg)),
+        Span::styled(bar_filled, Style::default().fg(style.accent_color)),
+        Span::styled(bar_empty, Style::default().fg(style.info_color)),
         Span::styled(
             format!(" {current}/{total} "),
             Style::default().fg(style.info_color),
@@ -76,7 +64,11 @@ pub fn render_token_usage(
     width: usize,
     style: &StyleConfig,
 ) -> Line<'static> {
-    let ratio = if max > 0 { used as f64 / max as f64 } else { 0.0 };
+    let ratio = if max > 0 {
+        used as f64 / max as f64
+    } else {
+        0.0
+    };
     let percentage = ratio * 100.0;
 
     let color = if ratio > 0.9 {
@@ -96,10 +88,7 @@ pub fn render_token_usage(
         Span::styled(" Context: ", Style::default().fg(style.info_color)),
         Span::styled(bar_filled, Style::default().fg(color)),
         Span::styled(bar_empty, Style::default().fg(style.info_color)),
-        Span::styled(
-            format!(" {percentage:.0}% "),
-            Style::default().fg(color),
-        ),
+        Span::styled(format!(" {percentage:.0}% "), Style::default().fg(color)),
     ])
 }
 

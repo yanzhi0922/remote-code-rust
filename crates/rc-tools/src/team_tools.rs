@@ -89,17 +89,18 @@ pub fn team_list(_input: &Value, _context: &ToolExecutionContext) -> Result<Stri
             let team_file = path.join("team.json");
             if team_file.exists()
                 && let Ok(content) = std::fs::read_to_string(&team_file)
-                    && let Ok(team_data) = serde_json::from_str::<Value>(&content) {
-                        teams.push(json!({
-                            "name": team_data["name"].as_str().unwrap_or("unknown"),
-                            "lead": team_data["lead_agent_id"].as_str().unwrap_or("unknown"),
-                            "created_at": team_data["created_at"].as_i64().unwrap_or(0),
-                            "member_count": team_data["members"]
-                                .as_array()
-                                .map(|a| a.len())
-                                .unwrap_or(0),
-                        }));
-                    }
+                && let Ok(team_data) = serde_json::from_str::<Value>(&content)
+            {
+                teams.push(json!({
+                    "name": team_data["name"].as_str().unwrap_or("unknown"),
+                    "lead": team_data["lead_agent_id"].as_str().unwrap_or("unknown"),
+                    "created_at": team_data["created_at"].as_i64().unwrap_or(0),
+                    "member_count": team_data["members"]
+                        .as_array()
+                        .map(|a| a.len())
+                        .unwrap_or(0),
+                }));
+            }
         }
     }
 
@@ -116,9 +117,10 @@ pub fn team_list(_input: &Value, _context: &ToolExecutionContext) -> Result<Stri
 fn resolve_teams_base_dir() -> PathBuf {
     // Check in-memory override first (used by tests).
     if let Ok(guard) = BASE_DIR_OVERRIDE.lock()
-        && let Some(ref dir) = *guard {
-            return dir.clone();
-        }
+        && let Some(ref dir) = *guard
+    {
+        return dir.clone();
+    }
 
     // Check environment variable.
     if let Ok(env_dir) = std::env::var("RC_SWARM_TEAM_DIR") {
@@ -163,14 +165,14 @@ fn cleanup_team_resources(team_dir: &std::path::Path, team_name: &str) -> Value 
                 cleanup.insert("mailbox".to_string(), Value::String("removed".to_string()));
             }
             Err(e) => {
-                cleanup.insert(
-                    "mailbox".to_string(),
-                    Value::String(format!("error: {e}")),
-                );
+                cleanup.insert("mailbox".to_string(), Value::String(format!("error: {e}")));
             }
         }
     } else {
-        cleanup.insert("mailbox".to_string(), Value::String("not_found".to_string()));
+        cleanup.insert(
+            "mailbox".to_string(),
+            Value::String("not_found".to_string()),
+        );
     }
 
     // Remove permissions directory.
@@ -178,7 +180,10 @@ fn cleanup_team_resources(team_dir: &std::path::Path, team_name: &str) -> Value 
     if perms_dir.exists() {
         match std::fs::remove_dir_all(&perms_dir) {
             Ok(()) => {
-                cleanup.insert("permissions".to_string(), Value::String("removed".to_string()));
+                cleanup.insert(
+                    "permissions".to_string(),
+                    Value::String("removed".to_string()),
+                );
             }
             Err(e) => {
                 cleanup.insert(
@@ -194,7 +199,10 @@ fn cleanup_team_resources(team_dir: &std::path::Path, team_name: &str) -> Value 
     if team_file.exists() {
         match std::fs::remove_file(&team_file) {
             Ok(()) => {
-                cleanup.insert("team_file".to_string(), Value::String("removed".to_string()));
+                cleanup.insert(
+                    "team_file".to_string(),
+                    Value::String("removed".to_string()),
+                );
             }
             Err(e) => {
                 cleanup.insert(
@@ -220,7 +228,10 @@ fn cleanup_team_resources(team_dir: &std::path::Path, team_name: &str) -> Value 
 
     // Log the deletion.
     let _ = team_name; // Used in log message.
-    cleanup.insert("team_name".to_string(), Value::String(team_name.to_string()));
+    cleanup.insert(
+        "team_name".to_string(),
+        Value::String(team_name.to_string()),
+    );
 
     Value::Object(cleanup)
 }
@@ -232,9 +243,29 @@ fn cleanup_team_resources(team_dir: &std::path::Path, team_name: &str) -> Value 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use once_cell::sync::Lazy;
     use std::path::PathBuf;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
+
+    static BASE_DIR_TEST_MUTEX: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+    struct ResetBaseDirOverride;
+
+    impl Drop for ResetBaseDirOverride {
+        fn drop(&mut self) {
+            set_base_dir_override(None);
+        }
+    }
+
+    fn with_base_dir_override<T>(dir: PathBuf, f: impl FnOnce() -> T) -> T {
+        let _test_guard = BASE_DIR_TEST_MUTEX
+            .lock()
+            .expect("BASE_DIR_TEST_MUTEX lock poisoned");
+        set_base_dir_override(Some(dir));
+        let _reset = ResetBaseDirOverride;
+        f()
+    }
 
     fn test_context() -> ToolExecutionContext {
         ToolExecutionContext {
@@ -301,11 +332,11 @@ mod tests {
         )
         .expect("write team.json");
 
-        set_base_dir_override(Some(temp.path().to_path_buf()));
-        let input = json!({"team_name": "test-team"});
-        let context = test_context();
-        let result = team_delete(&input, &context);
-        set_base_dir_override(None);
+        let result = with_base_dir_override(temp.path().to_path_buf(), || {
+            let input = json!({"team_name": "test-team"});
+            let context = test_context();
+            team_delete(&input, &context)
+        });
 
         assert!(result.is_ok());
         let parsed: Value = serde_json::from_str(&result.unwrap()).expect("valid json");
@@ -315,13 +346,11 @@ mod tests {
     #[test]
     fn team_list_returns_empty_when_no_teams() {
         let temp = TempDir::new().expect("temp dir");
-        set_base_dir_override(Some(temp.path().to_path_buf()));
-
-        let input = json!({});
-        let context = test_context();
-        let result = team_list(&input, &context);
-
-        set_base_dir_override(None);
+        let result = with_base_dir_override(temp.path().to_path_buf(), || {
+            let input = json!({});
+            let context = test_context();
+            team_list(&input, &context)
+        });
 
         assert!(result.is_ok());
         let parsed: Value = serde_json::from_str(&result.unwrap()).expect("valid json");
@@ -339,11 +368,11 @@ mod tests {
         )
         .expect("write team.json");
 
-        set_base_dir_override(Some(temp.path().to_path_buf()));
-        let input = json!({});
-        let context = test_context();
-        let result = team_list(&input, &context);
-        set_base_dir_override(None);
+        let result = with_base_dir_override(temp.path().to_path_buf(), || {
+            let input = json!({});
+            let context = test_context();
+            team_list(&input, &context)
+        });
 
         assert!(result.is_ok());
         let parsed: Value = serde_json::from_str(&result.unwrap()).expect("valid json");
@@ -355,17 +384,14 @@ mod tests {
 
     #[test]
     fn resolve_teams_base_dir_uses_override() {
-        set_base_dir_override(Some(PathBuf::from("/custom/path")));
-        let dir = resolve_teams_base_dir();
-        set_base_dir_override(None);
+        let dir = with_base_dir_override(PathBuf::from("/custom/path"), resolve_teams_base_dir);
         assert_eq!(dir, PathBuf::from("/custom/path"));
     }
 
     #[test]
     fn resolve_team_dir_sanitizes_name() {
-        set_base_dir_override(Some(PathBuf::from("/tmp")));
-        let dir = resolve_team_dir("my cool team");
-        set_base_dir_override(None);
+        let dir =
+            with_base_dir_override(PathBuf::from("/tmp"), || resolve_team_dir("my cool team"));
         assert!(dir.to_string_lossy().contains("my_cool_team"));
     }
 
@@ -381,11 +407,11 @@ mod tests {
 
     #[test]
     fn team_list_handles_nonexistent_base_dir() {
-        set_base_dir_override(Some(PathBuf::from("/nonexistent/path/xyz/abc")));
-        let input = json!({});
-        let context = test_context();
-        let result = team_list(&input, &context);
-        set_base_dir_override(None);
+        let result = with_base_dir_override(PathBuf::from("/nonexistent/path/xyz/abc"), || {
+            let input = json!({});
+            let context = test_context();
+            team_list(&input, &context)
+        });
         assert!(result.is_ok());
         let parsed: Value = serde_json::from_str(&result.unwrap()).expect("valid json");
         assert_eq!(parsed["total"], 0);

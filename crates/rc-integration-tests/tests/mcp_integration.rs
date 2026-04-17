@@ -24,7 +24,10 @@ enabled = false
 
     let fs_config = config.servers.get("filesystem").expect("filesystem server");
     assert!(fs_config.enabled);
-    assert!(matches!(fs_config.transport, rc_mcp::McpTransportConfig::Stdio { .. }));
+    assert!(matches!(
+        fs_config.transport,
+        rc_mcp::McpTransportConfig::Stdio { .. }
+    ));
 
     let gh_config = config.servers.get("github").expect("github server");
     assert!(!gh_config.enabled);
@@ -286,7 +289,8 @@ fn connection_state_transitions() {
         request_timeout_secs: None,
         metadata: BTreeMap::new(),
     };
-    let scoped = rc_mcp::scope::ScopedMcpServerConfig::new(config, rc_mcp::scope::ConfigScope::Local);
+    let scoped =
+        rc_mcp::scope::ScopedMcpServerConfig::new(config, rc_mcp::scope::ConfigScope::Local);
 
     // Connected
     let connected = rc_mcp::McpServerConnection::Connected(rc_mcp::connection::ConnectedServer {
@@ -389,7 +393,8 @@ fn batch_queue_operations() {
         request_timeout_secs: None,
         metadata: BTreeMap::new(),
     };
-    let scoped = rc_mcp::scope::ScopedMcpServerConfig::new(config, rc_mcp::scope::ConfigScope::User);
+    let scoped =
+        rc_mcp::scope::ScopedMcpServerConfig::new(config, rc_mcp::scope::ConfigScope::User);
 
     queue.enqueue(rc_mcp::BatchUpdate {
         server_name: "server-1".to_owned(),
@@ -455,16 +460,26 @@ fn mcp_name_normalization() {
 
 #[test]
 fn config_validator_checks_server_name() {
-    assert!(rc_mcp::McpConfigValidator::validate_server_name("valid-name"));
-    assert!(rc_mcp::McpConfigValidator::validate_server_name("my_server"));
+    assert!(rc_mcp::McpConfigValidator::validate_server_name(
+        "valid-name"
+    ));
+    assert!(rc_mcp::McpConfigValidator::validate_server_name(
+        "my_server"
+    ));
     assert!(!rc_mcp::McpConfigValidator::validate_server_name(""));
-    assert!(!rc_mcp::McpConfigValidator::validate_server_name(&"x".repeat(65)));
+    assert!(!rc_mcp::McpConfigValidator::validate_server_name(
+        &"x".repeat(65)
+    ));
 }
 
 #[test]
 fn config_validator_checks_url() {
-    assert!(rc_mcp::McpConfigValidator::validate_url("https://example.com"));
-    assert!(rc_mcp::McpConfigValidator::validate_url("http://localhost:8080"));
+    assert!(rc_mcp::McpConfigValidator::validate_url(
+        "https://example.com"
+    ));
+    assert!(rc_mcp::McpConfigValidator::validate_url(
+        "http://localhost:8080"
+    ));
     assert!(!rc_mcp::McpConfigValidator::validate_url("not-a-url"));
 }
 

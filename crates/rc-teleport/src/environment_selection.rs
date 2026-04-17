@@ -124,10 +124,18 @@ pub fn select_environment(
         .collect();
 
     // Sort by score descending
-    scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // Return the highest-scoring environment if its score is positive
-    scored.into_iter().next().filter(|s| s.score > 0.0).map(|s| s.environment)
+    scored
+        .into_iter()
+        .next()
+        .filter(|s| s.score > 0.0)
+        .map(|s| s.environment)
 }
 
 /// Rank all environments by their suitability for the given criteria.
@@ -145,7 +153,11 @@ pub fn rank_environments(
         })
         .collect();
 
-    scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     scored.into_iter().map(|s| s.environment).collect()
 }
 

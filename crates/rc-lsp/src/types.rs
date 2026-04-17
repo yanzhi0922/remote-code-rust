@@ -27,7 +27,10 @@ impl Position {
     /// The zero-origin position (0, 0).
     #[must_use]
     pub fn zero() -> Self {
-        Self { line: 0, character: 0 }
+        Self {
+            line: 0,
+            character: 0,
+        }
     }
 
     /// Whether this position is at the start of a document.
@@ -720,7 +723,12 @@ mod tests {
 
     #[test]
     fn document_symbol_serialization() {
-        let sym = DocumentSymbol::new("x", 13, Range::single_line(1, 0, 5), Range::single_line(1, 0, 1));
+        let sym = DocumentSymbol::new(
+            "x",
+            13,
+            Range::single_line(1, 0, 5),
+            Range::single_line(1, 0, 1),
+        );
         let json = serde_json::to_string(&sym).expect("serialize");
         let back: DocumentSymbol = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(sym.name, back.name);

@@ -80,7 +80,10 @@ impl TeamFile {
     /// Count active members.
     #[must_use]
     pub fn active_member_count(&self) -> usize {
-        self.members.iter().filter(|m| m.is_active.unwrap_or(false)).count()
+        self.members
+            .iter()
+            .filter(|m| m.is_active.unwrap_or(false))
+            .count()
     }
 
     /// Remove a member by agent name.
@@ -436,7 +439,10 @@ mod tests {
         tf.members.push(TeamMember::new("a1", "w1", "p1", "/tmp"));
         let m = tf.find_member_mut("w1").expect("should find");
         m.color = Some("red".to_owned());
-        assert_eq!(tf.find_member("w1").expect("found").color.as_deref(), Some("red"));
+        assert_eq!(
+            tf.find_member("w1").expect("found").color.as_deref(),
+            Some("red")
+        );
     }
 
     #[test]
@@ -465,9 +471,15 @@ mod tests {
 
     #[test]
     fn backend_type_roundtrip() {
-        assert_eq!(BackendType::from_str_opt("in_process"), Some(BackendType::InProcess));
+        assert_eq!(
+            BackendType::from_str_opt("in_process"),
+            Some(BackendType::InProcess)
+        );
         assert_eq!(BackendType::from_str_opt("tmux"), Some(BackendType::Tmux));
-        assert_eq!(BackendType::from_str_opt("iterm2"), Some(BackendType::ITerm2));
+        assert_eq!(
+            BackendType::from_str_opt("iterm2"),
+            Some(BackendType::ITerm2)
+        );
         assert_eq!(BackendType::from_str_opt("unknown"), None);
     }
 
@@ -522,7 +534,10 @@ mod tests {
             "bash",
             serde_json::json!({"command": "rm -rf /"}),
         );
-        req.resolve(PermissionDecision::Deny, Some("dangerous command".to_owned()));
+        req.resolve(
+            PermissionDecision::Deny,
+            Some("dangerous command".to_owned()),
+        );
         assert_eq!(req.decision, Some(PermissionDecision::Deny));
         assert_eq!(req.reason.as_deref(), Some("dangerous command"));
     }
@@ -628,10 +643,22 @@ mod tests {
 
     #[test]
     fn backend_type_from_str_opt_aliases() {
-        assert_eq!(BackendType::from_str_opt("in-process"), Some(BackendType::InProcess));
-        assert_eq!(BackendType::from_str_opt("inprocess"), Some(BackendType::InProcess));
-        assert_eq!(BackendType::from_str_opt("iterm"), Some(BackendType::ITerm2));
-        assert_eq!(BackendType::from_str_opt("iTerm2"), Some(BackendType::ITerm2));
+        assert_eq!(
+            BackendType::from_str_opt("in-process"),
+            Some(BackendType::InProcess)
+        );
+        assert_eq!(
+            BackendType::from_str_opt("inprocess"),
+            Some(BackendType::InProcess)
+        );
+        assert_eq!(
+            BackendType::from_str_opt("iterm"),
+            Some(BackendType::ITerm2)
+        );
+        assert_eq!(
+            BackendType::from_str_opt("iTerm2"),
+            Some(BackendType::ITerm2)
+        );
     }
 
     #[test]

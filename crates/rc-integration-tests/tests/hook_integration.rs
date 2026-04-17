@@ -174,12 +174,7 @@ fn match_hooks_returns_matched_hooks() {
         matcher: Some("Bash".to_owned()),
         hooks: vec![make_command_hook("lint.sh")],
     }];
-    let result = rc_core::hook_matcher::match_hooks(
-        &matchers,
-        Some("Bash"),
-        Some("Bash"),
-        None,
-    );
+    let result = rc_core::hook_matcher::match_hooks(&matchers, Some("Bash"), Some("Bash"), None);
     assert_eq!(result.hooks.len(), 1);
 }
 
@@ -189,12 +184,7 @@ fn match_hooks_skips_non_matching() {
         matcher: Some("Write".to_owned()),
         hooks: vec![make_command_hook("check.sh")],
     }];
-    let result = rc_core::hook_matcher::match_hooks(
-        &matchers,
-        Some("Bash"),
-        Some("Bash"),
-        None,
-    );
+    let result = rc_core::hook_matcher::match_hooks(&matchers, Some("Bash"), Some("Bash"), None);
     assert!(result.hooks.is_empty());
 }
 
@@ -327,7 +317,8 @@ fn hook_settings_serialization_round_trip() {
 
 #[test]
 fn hook_settings_deserialization_from_json() {
-    let json = r#"{"PostToolUse":[{"matcher":"Write","hooks":[{"type":"command","command":"fmt.sh"}]}]}"#;
+    let json =
+        r#"{"PostToolUse":[{"matcher":"Write","hooks":[{"type":"command","command":"fmt.sh"}]}]}"#;
     let settings: rc_settings::hooks::HookSettings =
         serde_json::from_str(json).expect("deserialize");
     assert!(settings.has_hooks_for_event("PostToolUse"));
@@ -374,7 +365,9 @@ fn ssrf_safe_urls_allowed() {
 
 #[test]
 fn ssrf_localhost_blocked() {
-    assert!(!rc_core::hook_executor::is_url_safe_for_hook("http://localhost:8080/hook"));
+    assert!(!rc_core::hook_executor::is_url_safe_for_hook(
+        "http://localhost:8080/hook"
+    ));
     assert!(!rc_core::hook_executor::is_url_safe_for_hook(
         "http://127.0.0.1:3000/hook"
     ));

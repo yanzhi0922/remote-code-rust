@@ -173,9 +173,7 @@ pub async fn execute_api_key_helper(
                 cached_at: Utc::now(),
             });
         }
-        return Err(ApiKeyHelperError::CommandFailed(
-            stderr.trim().to_owned(),
-        ));
+        return Err(ApiKeyHelperError::CommandFailed(stderr.trim().to_owned()));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();

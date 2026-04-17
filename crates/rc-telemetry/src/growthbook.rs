@@ -303,10 +303,7 @@ impl FeatureFlag {
 
     /// Evaluates the flag against the given overrides and returns the resolved value.
     #[must_use]
-    pub fn evaluate(
-        &self,
-        overrides: &HashMap<String, FeatureValue>,
-    ) -> FeatureValue {
+    pub fn evaluate(&self, overrides: &HashMap<String, FeatureValue>) -> FeatureValue {
         if let Some(value) = overrides.get(&self.key) {
             return value.clone();
         }
@@ -401,8 +398,7 @@ impl FeatureGate {
 // ---------------------------------------------------------------------------
 
 /// A remote evaluation response from the GrowthBook server.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RemoteEvalResponse {
     /// Map of feature key → evaluated value.
     pub features: HashMap<String, FeatureValue>,
@@ -411,7 +407,6 @@ pub struct RemoteEvalResponse {
     /// Timestamp of the evaluation (epoch millis).
     pub timestamp: u64,
 }
-
 
 /// Tracks experiment data for exposure logging.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -738,7 +733,10 @@ mod tests {
     #[test]
     fn test_platform_current_returns_valid() {
         let p = Platform::current();
-        assert!(matches!(p, Platform::Win32 | Platform::Darwin | Platform::Linux));
+        assert!(matches!(
+            p,
+            Platform::Win32 | Platform::Darwin | Platform::Linux
+        ));
     }
 
     #[test]
@@ -788,8 +786,7 @@ mod tests {
         let mut attrs = make_test_attributes();
         attrs.email = Some("test@example.com".to_string());
         let json = serde_json::to_string(&attrs).expect("serialize");
-        let deserialized: UserAttributes =
-            serde_json::from_str(&json).expect("deserialize");
+        let deserialized: UserAttributes = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(deserialized.id, "user-123");
         assert_eq!(deserialized.email, Some("test@example.com".to_string()));
     }
@@ -812,7 +809,10 @@ mod tests {
     fn test_feature_value_as_bool() {
         assert_eq!(FeatureValue::Bool(true).as_bool(), Some(true));
         assert_eq!(FeatureValue::Bool(false).as_bool(), Some(false));
-        assert_eq!(FeatureValue::String("true".to_string()).as_bool(), Some(true));
+        assert_eq!(
+            FeatureValue::String("true".to_string()).as_bool(),
+            Some(true)
+        );
         assert_eq!(FeatureValue::Number(1.0).as_bool(), Some(true));
         assert_eq!(FeatureValue::Number(0.0).as_bool(), Some(false));
     }
@@ -971,7 +971,9 @@ mod tests {
             forced: false,
             timestamp: 12345,
         };
-        client.process_remote_eval(response).expect("should succeed");
+        client
+            .process_remote_eval(response)
+            .expect("should succeed");
         assert!(client.is_initialized());
         assert!(client.is_gate_enabled(FeatureGate::Kairos));
     }
@@ -980,7 +982,9 @@ mod tests {
     fn test_client_process_empty_eval() {
         let client = make_test_client();
         let response = RemoteEvalResponse::default();
-        client.process_remote_eval(response).expect("should succeed");
+        client
+            .process_remote_eval(response)
+            .expect("should succeed");
         assert!(!client.is_initialized());
     }
 
@@ -1073,8 +1077,7 @@ mod tests {
             timestamp: 9999,
         };
         let json = serde_json::to_string(&response).expect("serialize");
-        let deserialized: RemoteEvalResponse =
-            serde_json::from_str(&json).expect("deserialize");
+        let deserialized: RemoteEvalResponse = serde_json::from_str(&json).expect("deserialize");
         assert!(deserialized.forced);
         assert_eq!(deserialized.timestamp, 9999);
     }

@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -24,9 +24,7 @@ use crate::jsonrpc::{
     ResourceReadParams, ToolCallParams, rpc_id_matches,
 };
 use crate::resources::ServerResource;
-use crate::types::{
-    McpClientInfo, McpServerInspection, McpToolCallResponse, McpToolCallResult,
-};
+use crate::types::{McpClientInfo, McpServerInspection, McpToolCallResponse, McpToolCallResult};
 
 /// Default MCP protocol version used during initialisation.
 pub const DEFAULT_MCP_PROTOCOL_VERSION: &str = "2025-03-26";
@@ -34,8 +32,10 @@ pub const DEFAULT_MCP_PROTOCOL_VERSION: &str = "2025-03-26";
 pub const DEFAULT_STARTUP_TIMEOUT_SECS: u64 = 10;
 /// Default timeout for individual MCP requests in seconds.
 pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 15;
-/// Default MCP config file name.
+/// Default legacy MCP config file name.
 pub const DEFAULT_MCP_CONFIG_FILE: &str = "mcp.toml";
+/// Default Claude-compatible project MCP config file name.
+pub const DEFAULT_PROJECT_MCP_CONFIG_FILE: &str = ".mcp.json";
 
 /// An active stdio MCP session managing a child process.
 pub(crate) struct StdioMcpSession {
@@ -159,7 +159,10 @@ pub fn discover_mcp_configs(root: &Path) -> Vec<PathBuf> {
         .into_iter()
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_file())
-        .filter(|entry| entry.file_name() == DEFAULT_MCP_CONFIG_FILE)
+        .filter(|entry| {
+            entry.file_name() == DEFAULT_MCP_CONFIG_FILE
+                || entry.file_name() == DEFAULT_PROJECT_MCP_CONFIG_FILE
+        })
         .map(walkdir::DirEntry::into_path)
         .collect::<Vec<_>>();
     configs.sort();
@@ -194,6 +197,36 @@ async fn inspect_stdio_server(
     result
 }
 
+fn resolve_stdio_command(command: &str) -> String {
+    #[cfg(windows)]
+    {
+        let path = Path::new(command);
+        if path.extension().is_some() || path.components().count() > 1 {
+            return command.to_owned();
+        }
+
+        for candidate in [
+            format!("{command}.exe"),
+            format!("{command}.cmd"),
+            format!("{command}.bat"),
+        ] {
+            if let Ok(output) = std::process::Command::new("where.exe")
+                .arg(&candidate)
+                .output()
+                && output.status.success()
+                && let Some(first_match) = String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty())
+            {
+                return first_match.to_owned();
+            }
+        }
+    }
+
+    command.to_owned()
+}
+
 impl StdioMcpSession {
     async fn connect(
         server: &McpServerConfig,
@@ -203,7 +236,8 @@ impl StdioMcpSession {
         env: &BTreeMap<String, String>,
         client_info: &McpClientInfo,
     ) -> Result<Self, McpRuntimeError> {
-        let mut process = Command::new(command);
+        let resolved_command = resolve_stdio_command(command);
+        let mut process = Command::new(&resolved_command);
         process
             .args(args)
             .stdin(Stdio::piped())
@@ -219,7 +253,7 @@ impl StdioMcpSession {
 
         let mut child = process.spawn().map_err(|source| McpRuntimeError::Spawn {
             server: server.name.clone(),
-            command: command.to_owned(),
+            command: resolved_command.clone(),
             source,
         })?;
         let mut stdin = child
@@ -424,6 +458,36 @@ impl StdioMcpSession {
 
     async fn shutdown(&mut self) {
         shutdown_child(&mut self.child).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_stdio_command;
+
+    #[test]
+    fn resolve_stdio_command_preserves_explicit_extension() {
+        assert_eq!(resolve_stdio_command("python.exe"), "python.exe");
+    }
+
+    #[test]
+    fn resolve_stdio_command_preserves_relative_paths() {
+        assert_eq!(
+            resolve_stdio_command(".\\scripts\\server.cmd"),
+            ".\\scripts\\server.cmd"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolve_stdio_command_prefers_windows_wrappers_when_available() {
+        let resolved = resolve_stdio_command("npx");
+        assert!(
+            resolved.eq_ignore_ascii_case("npx")
+                || resolved.to_ascii_lowercase().ends_with("npx.cmd")
+                || resolved.to_ascii_lowercase().ends_with("npx.exe"),
+            "unexpected resolved command: {resolved}"
+        );
     }
 }
 

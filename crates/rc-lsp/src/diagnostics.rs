@@ -228,7 +228,10 @@ mod tests {
     #[test]
     fn registry_clear_document() {
         let mut reg = DiagnosticRegistry::default();
-        reg.publish("file:///a.rs", vec![make_error(Range::single_line(1, 0, 5), "e")]);
+        reg.publish(
+            "file:///a.rs",
+            vec![make_error(Range::single_line(1, 0, 5), "e")],
+        );
         reg.clear("file:///a.rs");
         assert_eq!(reg.total_count(), 0);
         assert_eq!(reg.error_count(), 0);
@@ -237,8 +240,14 @@ mod tests {
     #[test]
     fn registry_clear_all() {
         let mut reg = DiagnosticRegistry::default();
-        reg.publish("file:///a.rs", vec![make_error(Range::single_line(1, 0, 5), "e")]);
-        reg.publish("file:///b.rs", vec![make_warning(Range::single_line(1, 0, 5), "w")]);
+        reg.publish(
+            "file:///a.rs",
+            vec![make_error(Range::single_line(1, 0, 5), "e")],
+        );
+        reg.publish(
+            "file:///b.rs",
+            vec![make_warning(Range::single_line(1, 0, 5), "w")],
+        );
         reg.clear_all();
         assert_eq!(reg.total_count(), 0);
         assert_eq!(reg.error_count(), 0);
@@ -248,10 +257,16 @@ mod tests {
     #[test]
     fn registry_replace_diagnostics() {
         let mut reg = DiagnosticRegistry::default();
-        reg.publish("file:///a.rs", vec![make_error(Range::single_line(1, 0, 5), "e1")]);
+        reg.publish(
+            "file:///a.rs",
+            vec![make_error(Range::single_line(1, 0, 5), "e1")],
+        );
         assert_eq!(reg.error_count(), 1);
 
-        reg.publish("file:///a.rs", vec![make_error(Range::single_line(2, 0, 5), "e2")]);
+        reg.publish(
+            "file:///a.rs",
+            vec![make_error(Range::single_line(2, 0, 5), "e2")],
+        );
         assert_eq!(reg.error_count(), 1);
         assert_eq!(reg.total_count(), 1);
     }
@@ -267,7 +282,10 @@ mod tests {
     fn registry_document_uris() {
         let mut reg = DiagnosticRegistry::default();
         reg.publish("file:///a.rs", vec![]);
-        reg.publish("file:///b.rs", vec![make_error(Range::single_line(1, 0, 5), "e")]);
+        reg.publish(
+            "file:///b.rs",
+            vec![make_error(Range::single_line(1, 0, 5), "e")],
+        );
         let mut uris: Vec<&str> = reg.document_uris();
         uris.sort();
         assert_eq!(uris, vec!["file:///a.rs", "file:///b.rs"]);
@@ -302,7 +320,10 @@ mod tests {
     #[test]
     fn registry_get_all() {
         let mut reg = DiagnosticRegistry::default();
-        reg.publish("file:///a.rs", vec![make_error(Range::single_line(1, 0, 5), "e")]);
+        reg.publish(
+            "file:///a.rs",
+            vec![make_error(Range::single_line(1, 0, 5), "e")],
+        );
         let all = reg.get_all();
         assert_eq!(all.len(), 1);
     }
@@ -323,7 +344,10 @@ mod tests {
     #[test]
     fn get_diagnostics_function() {
         let mut reg = DiagnosticRegistry::default();
-        reg.publish("file:///test.rs", vec![make_error(Range::single_line(1, 0, 5), "e")]);
+        reg.publish(
+            "file:///test.rs",
+            vec![make_error(Range::single_line(1, 0, 5), "e")],
+        );
         let diags = get_diagnostics(&reg, "file:///test.rs");
         assert_eq!(diags.len(), 1);
     }
@@ -331,7 +355,10 @@ mod tests {
     #[test]
     fn clear_diagnostics_function() {
         let mut reg = DiagnosticRegistry::default();
-        reg.publish("file:///test.rs", vec![make_error(Range::single_line(1, 0, 5), "e")]);
+        reg.publish(
+            "file:///test.rs",
+            vec![make_error(Range::single_line(1, 0, 5), "e")],
+        );
         clear_diagnostics(&mut reg, "file:///test.rs");
         assert_eq!(reg.total_count(), 0);
     }
@@ -346,7 +373,10 @@ mod tests {
     #[test]
     fn registry_only_warnings_no_errors() {
         let mut reg = DiagnosticRegistry::default();
-        reg.publish("file:///a.rs", vec![make_warning(Range::single_line(1, 0, 5), "w")]);
+        reg.publish(
+            "file:///a.rs",
+            vec![make_warning(Range::single_line(1, 0, 5), "w")],
+        );
         assert!(!reg.has_errors());
         assert!(reg.has_diagnostics());
         assert_eq!(reg.warning_count(), 1);

@@ -42,8 +42,8 @@ pub mod render;
 pub mod scroll;
 pub mod style;
 pub mod syntax;
-pub mod virtual_scroll;
 pub mod vim;
+pub mod virtual_scroll;
 
 // Preserved modules (existing functionality).
 mod commands;
@@ -56,10 +56,10 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 use rc_config::RuntimeConfig;
 use rc_core::ConversationEntry;
 use rc_permissions::{
@@ -191,9 +191,7 @@ pub async fn run_tui_app(config: RuntimeConfig, store: &SessionStore) -> Result<
     ));
     app.add_message(ChatMessage::system(format!(
         "Session: {} | Model: {} | Provider: {}",
-        config.session_id,
-        model_name,
-        config.provider.name,
+        config.session_id, model_name, config.provider.name,
     )));
     app.add_message(ChatMessage::system(
         "Type /help for commands, /quit to exit. Vim mode: Esc=normal, i=insert.".to_owned(),
@@ -204,7 +202,11 @@ pub async fn run_tui_app(config: RuntimeConfig, store: &SessionStore) -> Result<
     // Main event loop.
     loop {
         // Update scroll viewport.
-        let area = terminal.size().map_or(ratatui::layout::Rect::new(0, 0, 80, 24), |s| ratatui::layout::Rect::new(0, 0, s.width, s.height));
+        let area = terminal
+            .size()
+            .map_or(ratatui::layout::Rect::new(0, 0, 80, 24), |s| {
+                ratatui::layout::Rect::new(0, 0, s.width, s.height)
+            });
         app.update_scroll_viewport(area.height.saturating_sub(3) as usize);
 
         // Render.

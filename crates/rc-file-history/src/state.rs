@@ -66,7 +66,7 @@ impl FileHistoryState {
     /// Create a new snapshot of all tracked files.
     pub fn create_snapshot(&mut self, message_id: String) {
         let mut tracked_backups = HashMap::new();
-        
+
         for file_path in &self.tracked_files {
             let backup = BackupRecord {
                 file_path: file_path.clone(),
@@ -149,13 +149,7 @@ pub fn rewind_to_snapshot(
     snapshot_index: usize,
 ) -> Option<Vec<BackupRecord>> {
     let snapshot = state.get_snapshot(snapshot_index)?;
-    Some(
-        snapshot
-            .tracked_file_backups
-            .values()
-            .cloned()
-            .collect(),
-    )
+    Some(snapshot.tracked_file_backups.values().cloned().collect())
 }
 
 #[cfg(test)]
@@ -175,7 +169,7 @@ mod tests {
         let mut state = FileHistoryState::new();
         state.track_file("src/main.rs".to_string());
         state.track_file("src/lib.rs".to_string());
-        
+
         assert!(state.is_tracked("src/main.rs"));
         assert!(state.is_tracked("src/lib.rs"));
         assert!(!state.is_tracked("Cargo.toml"));
@@ -195,10 +189,10 @@ mod tests {
         let mut state = FileHistoryState::new();
         state.track_file("src/main.rs".to_string());
         state.create_snapshot("msg-1".to_string());
-        
+
         assert_eq!(state.snapshot_count(), 1);
         assert_eq!(state.snapshot_sequence, 1);
-        
+
         let snap = state.latest_snapshot().unwrap();
         assert_eq!(snap.message_id, "msg-1");
         assert!(snap.tracked_file_backups.contains_key("src/main.rs"));
@@ -208,16 +202,24 @@ mod tests {
     fn version_increments() {
         let mut state = FileHistoryState::new();
         state.track_file("src/main.rs".to_string());
-        
+
         state.create_snapshot("msg-1".to_string());
         state.create_snapshot("msg-2".to_string());
-        
+
         let snap1 = state.get_snapshot(0).unwrap();
         let snap2 = state.get_snapshot(1).unwrap();
-        
-        let v1 = snap1.tracked_file_backups.get("src/main.rs").unwrap().version;
-        let v2 = snap2.tracked_file_backups.get("src/main.rs").unwrap().version;
-        
+
+        let v1 = snap1
+            .tracked_file_backups
+            .get("src/main.rs")
+            .unwrap()
+            .version;
+        let v2 = snap2
+            .tracked_file_backups
+            .get("src/main.rs")
+            .unwrap()
+            .version;
+
         assert_eq!(v1, 1);
         assert_eq!(v2, 2);
     }
@@ -226,11 +228,11 @@ mod tests {
     fn snapshot_eviction() {
         let mut state = FileHistoryState::new();
         state.track_file("test.txt".to_string());
-        
+
         for i in 0..150 {
             state.create_snapshot(format!("msg-{}", i));
         }
-        
+
         assert!(state.snapshot_count() <= MAX_SNAPSHOTS);
         assert_eq!(state.snapshot_sequence, 150);
     }
@@ -240,7 +242,7 @@ mod tests {
         let mut state = FileHistoryState::new();
         state.track_file("test.txt".to_string());
         state.create_snapshot("msg-1".to_string());
-        
+
         assert!(state.can_restore(0));
         assert!(!state.can_restore(1));
     }
@@ -251,7 +253,7 @@ mod tests {
         state.track_file("a.txt".to_string());
         state.track_file("b.txt".to_string());
         state.create_snapshot("msg-1".to_string());
-        
+
         let backups = rewind_to_snapshot(&state, 0).unwrap();
         assert_eq!(backups.len(), 2);
     }
@@ -262,7 +264,7 @@ mod tests {
         state.track_file("test.txt".to_string());
         state.create_snapshot("msg-1".to_string());
         state.clear();
-        
+
         assert!(state.snapshots.is_empty());
         assert!(state.tracked_files.is_empty());
         assert_eq!(state.snapshot_sequence, 0);

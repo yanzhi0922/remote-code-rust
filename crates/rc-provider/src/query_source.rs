@@ -293,11 +293,9 @@ mod tests {
 
     #[test]
     fn query_source_context_serialization_roundtrip() {
-        let ctx = QuerySourceContext::new(QuerySource::Compact)
-            .with_session_id("s1".to_string());
+        let ctx = QuerySourceContext::new(QuerySource::Compact).with_session_id("s1".to_string());
         let json = serde_json::to_string(&ctx).expect("serialize");
-        let deserialized: QuerySourceContext =
-            serde_json::from_str(&json).expect("deserialize");
+        let deserialized: QuerySourceContext = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(ctx, deserialized);
     }
 
@@ -312,8 +310,8 @@ mod tests {
 
     #[test]
     fn query_source_header_with_session() {
-        let ctx = QuerySourceContext::new(QuerySource::Agent)
-            .with_session_id("sess_123".to_string());
+        let ctx =
+            QuerySourceContext::new(QuerySource::Agent).with_session_id("sess_123".to_string());
         let header = query_source_header(&ctx);
         assert!(header.contains("source=agent"));
         assert!(header.contains("session_id=sess_123"));
@@ -366,8 +364,7 @@ mod tests {
 
     #[test]
     fn header_roundtrip() {
-        let ctx = QuerySourceContext::new(QuerySource::Advisor)
-            .with_session_id("s2".to_string());
+        let ctx = QuerySourceContext::new(QuerySource::Advisor).with_session_id("s2".to_string());
         let header = query_source_header(&ctx);
         let parsed = parse_query_source_header(&header).expect("should parse");
         assert_eq!(parsed.source, QuerySource::Advisor);

@@ -16,10 +16,16 @@ pub enum McpConfigError {
         source: std::io::Error,
     },
     #[error("failed to parse MCP config TOML at `{path}`")]
-    Parse {
+    ParseToml {
         path: PathBuf,
         #[source]
         source: toml::de::Error,
+    },
+    #[error("failed to parse MCP config JSON at `{path}`")]
+    ParseJson {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
     },
     #[error("MCP server `{name}` must define either `command` or `url`")]
     MissingTransport { name: String },

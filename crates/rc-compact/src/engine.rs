@@ -10,8 +10,9 @@ use rc_core::{
 };
 
 use crate::prompt::{
-    build_compact_prompt, build_compact_user_summary_message, build_partial_compact_prompt,
-    format_compact_summary, rough_token_count, COMPACT_SYSTEM_PROMPT, PartialCompactDirection,
+    COMPACT_SYSTEM_PROMPT, PartialCompactDirection, build_compact_prompt,
+    build_compact_user_summary_message, build_partial_compact_prompt, format_compact_summary,
+    rough_token_count,
 };
 use crate::strategy::{
     CompactOptions, CompactProgressEvent, CompactStrategy, CompactStrategyType, CompactionResult,
@@ -130,16 +131,22 @@ pub async fn compact_conversation(
 
     let pre_compact_token_count = estimate_message_tokens(messages);
 
-    emit_progress(&progress, CompactProgressEvent::Started {
-        strategy: CompactStrategyType::Full,
-    });
+    emit_progress(
+        &progress,
+        CompactProgressEvent::Started {
+            strategy: CompactStrategyType::Full,
+        },
+    );
 
     // Build the compact prompt
     let user_prompt = build_compact_prompt(options.custom_instructions.as_deref());
 
-    emit_progress(&progress, CompactProgressEvent::Summarizing {
-        messages_processed: 0,
-    });
+    emit_progress(
+        &progress,
+        CompactProgressEvent::Summarizing {
+            messages_processed: 0,
+        },
+    );
 
     // Call the LLM to generate the summary
     let mut messages_to_summarize = messages.to_vec();
@@ -148,11 +155,7 @@ pub async fn compact_conversation(
 
     for _ in 0..=(MAX_PTL_RETRIES + 1) {
         let result = provider
-            .generate_summary(
-                &messages_to_summarize,
-                COMPACT_SYSTEM_PROMPT,
-                &user_prompt,
-            )
+            .generate_summary(&messages_to_summarize, COMPACT_SYSTEM_PROMPT, &user_prompt)
             .await;
 
         match result {
@@ -188,9 +191,12 @@ pub async fn compact_conversation(
         )
     })?;
 
-    emit_progress(&progress, CompactProgressEvent::Summarizing {
-        messages_processed: messages.len(),
-    });
+    emit_progress(
+        &progress,
+        CompactProgressEvent::Summarizing {
+            messages_processed: messages.len(),
+        },
+    );
 
     // Determine how many messages to keep from the tail
     let preserve_count = options.preserve_recent_messages.min(messages.len());
@@ -241,15 +247,9 @@ pub async fn compact_conversation(
     let preserved_segments = if preserve_count > 0 {
         let kept: Vec<&Message> = messages.iter().rev().take(preserve_count).collect();
         vec![PreservedSegment {
-            head_uuid: kept
-                .last()
-                .map(|m| m.uuid())
-                .unwrap_or_default(),
+            head_uuid: kept.last().map(|m| m.uuid()).unwrap_or_default(),
             anchor_uuid: summary_message.uuid(),
-            tail_uuid: kept
-                .first()
-                .map(|m| m.uuid())
-                .unwrap_or_default(),
+            tail_uuid: kept.first().map(|m| m.uuid()).unwrap_or_default(),
         }]
     } else {
         Vec::new()
@@ -297,11 +297,8 @@ pub async fn partial_compact_conversation(
 
     let (messages_to_summarize, messages_to_keep): (Vec<Message>, Vec<Message>) = match direction {
         PartialCompactDirection::UpTo => {
-            let to_summarize: Vec<Message> = all_messages
-                .iter()
-                .take(pivot_index)
-                .cloned()
-                .collect();
+            let to_summarize: Vec<Message> =
+                all_messages.iter().take(pivot_index).cloned().collect();
             let to_keep: Vec<Message> = all_messages
                 .iter()
                 .skip(pivot_index)
@@ -311,11 +308,8 @@ pub async fn partial_compact_conversation(
             (to_summarize, to_keep)
         }
         PartialCompactDirection::From => {
-            let to_summarize: Vec<Message> = all_messages
-                .iter()
-                .skip(pivot_index)
-                .cloned()
-                .collect();
+            let to_summarize: Vec<Message> =
+                all_messages.iter().skip(pivot_index).cloned().collect();
             let to_keep: Vec<Message> = all_messages
                 .iter()
                 .take(pivot_index)
@@ -338,9 +332,12 @@ pub async fn partial_compact_conversation(
 
     let pre_compact_token_count = estimate_message_tokens(all_messages);
 
-    emit_progress(&progress, CompactProgressEvent::Started {
-        strategy: CompactStrategyType::Partial,
-    });
+    emit_progress(
+        &progress,
+        CompactProgressEvent::Started {
+            strategy: CompactStrategyType::Partial,
+        },
+    );
 
     // Build custom instructions from user feedback + hook instructions
     let custom_instructions = match (options.custom_instructions.as_deref(), user_feedback) {
@@ -350,20 +347,18 @@ pub async fn partial_compact_conversation(
         (None, None) => None,
     };
 
-    let user_prompt =
-        build_partial_compact_prompt(custom_instructions.as_deref(), direction);
+    let user_prompt = build_partial_compact_prompt(custom_instructions.as_deref(), direction);
 
-    emit_progress(&progress, CompactProgressEvent::Summarizing {
-        messages_processed: 0,
-    });
+    emit_progress(
+        &progress,
+        CompactProgressEvent::Summarizing {
+            messages_processed: 0,
+        },
+    );
 
     // Call the LLM
     let summary = provider
-        .generate_summary(
-            &messages_to_summarize,
-            COMPACT_SYSTEM_PROMPT,
-            &user_prompt,
-        )
+        .generate_summary(&messages_to_summarize, COMPACT_SYSTEM_PROMPT, &user_prompt)
         .await?;
 
     if summary.is_empty() {
@@ -372,17 +367,15 @@ pub async fn partial_compact_conversation(
         ));
     }
 
-    emit_progress(&progress, CompactProgressEvent::Summarizing {
-        messages_processed: messages_to_summarize.len(),
-    });
+    emit_progress(
+        &progress,
+        CompactProgressEvent::Summarizing {
+            messages_processed: messages_to_summarize.len(),
+        },
+    );
 
     let formatted_summary = format_compact_summary(&summary);
-    let _ = build_compact_user_summary_message(
-        &summary,
-        false,
-        None,
-        !messages_to_keep.is_empty(),
-    );
+    let _ = build_compact_user_summary_message(&summary, false, None, !messages_to_keep.is_empty());
 
     let summary_message = Message::User(UserMessage {
         base: {
@@ -411,8 +404,8 @@ pub async fn partial_compact_conversation(
         error: None,
     });
 
-    let post_compact_token_count = rough_token_count(&formatted_summary)
-        + estimate_message_tokens(&messages_to_keep);
+    let post_compact_token_count =
+        rough_token_count(&formatted_summary) + estimate_message_tokens(&messages_to_keep);
 
     let tokens_saved = pre_compact_token_count.saturating_sub(post_compact_token_count);
 
@@ -488,8 +481,7 @@ pub fn build_post_compact_messages(result: &CompactionResult) -> Vec<Message> {
     for msg in &result.attachments {
         let is_boundary =
             matches!(msg, Message::System(s) if s.subtype == SystemMessageSubtype::CompactBoundary);
-        let is_summary =
-            matches!(msg, Message::User(u) if u.base.is_compact_summary);
+        let is_summary = matches!(msg, Message::User(u) if u.base.is_compact_summary);
         if !is_boundary && !is_summary {
             messages.push(msg.clone());
         }
@@ -506,10 +498,7 @@ pub fn build_post_compact_messages(result: &CompactionResult) -> Vec<Message> {
 // ---------------------------------------------------------------------------
 
 /// Emit a progress event if a sink is provided.
-fn emit_progress(
-    sink: &Option<&ProgressCallback>,
-    event: CompactProgressEvent,
-) {
+fn emit_progress(sink: &Option<&ProgressCallback>, event: CompactProgressEvent) {
     if let Some(sink) = sink {
         sink(event);
     }
@@ -595,9 +584,7 @@ pub fn create_compact_boundary_message(
         subtype: SystemMessageSubtype::CompactBoundary,
         text: format!(
             "compact_boundary: type={trigger}, pre_tokens={pre_compact_token_count}, last_uuid={}",
-            last_message_uuid
-                .map(|u| u.to_string())
-                .unwrap_or_default()
+            last_message_uuid.map(|u| u.to_string()).unwrap_or_default()
         ),
         error: None,
     })

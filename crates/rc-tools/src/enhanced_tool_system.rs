@@ -203,9 +203,7 @@ pub enum ToolDecision {
     /// Tool execution is allowed.
     Allowed,
     /// Tool execution is denied with a reason.
-    Denied {
-        reason: String,
-    },
+    Denied { reason: String },
     /// User was prompted and chose to allow for the session.
     AllowedForSession,
 }
@@ -374,7 +372,10 @@ impl std::fmt::Debug for RichToolUseContext {
             .field("tool_decisions_count", &self.tool_decisions.len())
             .field("file_reading_limits", &self.file_reading_limits)
             .field("glob_limits", &self.glob_limits)
-            .field("content_replacement_state", &self.content_replacement_state.is_some())
+            .field(
+                "content_replacement_state",
+                &self.content_replacement_state.is_some(),
+            )
             .field("query_chain_tracking", &self.query_chain_tracking.is_some())
             .finish()
     }
@@ -390,10 +391,7 @@ pub enum ValidationResult {
     /// Input is valid.
     Valid,
     /// Input is invalid with a message and error code.
-    Invalid {
-        message: String,
-        error_code: u32,
-    },
+    Invalid { message: String, error_code: u32 },
 }
 
 impl ValidationResult {
@@ -562,7 +560,11 @@ pub struct ToolExecutionResult {
 impl ToolExecutionResult {
     /// Create a successful result.
     #[must_use]
-    pub fn success(tool_call_id: impl Into<String>, tool_name: impl Into<String>, content: impl Into<String>) -> Self {
+    pub fn success(
+        tool_call_id: impl Into<String>,
+        tool_name: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
         Self {
             tool_call_id: tool_call_id.into(),
             tool_name: tool_name.into(),
@@ -576,7 +578,11 @@ impl ToolExecutionResult {
 
     /// Create an error result.
     #[must_use]
-    pub fn error(tool_call_id: impl Into<String>, tool_name: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn error(
+        tool_call_id: impl Into<String>,
+        tool_name: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             tool_call_id: tool_call_id.into(),
             tool_name: tool_name.into(),
@@ -628,11 +634,7 @@ pub enum PostToolHookOutcome {
 #[async_trait::async_trait]
 pub trait ToolExecutor: Send + Sync {
     /// Execute the tool with the given input and context.
-    async fn execute(
-        &self,
-        input: &Value,
-        context: &RichToolUseContext,
-    ) -> Result<String>;
+    async fn execute(&self, input: &Value, context: &RichToolUseContext) -> Result<String>;
 }
 
 // ---------------------------------------------------------------------------
@@ -693,7 +695,11 @@ impl ToolExecutionPipeline {
 
         // 1. Validate input
         let validation = self.validate_input(&request.spec, &request.tool_call.input);
-        if let ValidationResult::Invalid { message, error_code } = validation {
+        if let ValidationResult::Invalid {
+            message,
+            error_code,
+        } = validation
+        {
             return ToolExecutionResult {
                 tool_call_id,
                 tool_name,
@@ -808,9 +814,10 @@ impl ToolExecutionPipeline {
                         for field in required_arr {
                             if let Some(field_name) = field.as_str() {
                                 // Check if the property exists in the input
-                                if !properties.get(field_name).map_or(false, |_| {
-                                    input.get(field_name).is_some()
-                                }) {
+                                if !properties
+                                    .get(field_name)
+                                    .map_or(false, |_| input.get(field_name).is_some())
+                                {
                                     // Property is defined in schema but missing from input
                                     if input.get(field_name).is_none() {
                                         return ValidationResult::Invalid {
@@ -887,9 +894,7 @@ pub fn find_tool_by_name<'a>(tools: &'a [RichToolSpec], name: &str) -> Option<&'
         return Some(tool);
     }
     // Third pass: aliases
-    tools
-        .iter()
-        .find(|t| t.aliases.iter().any(|a| a == name))
+    tools.iter().find(|t| t.aliases.iter().any(|a| a == name))
 }
 
 // ---------------------------------------------------------------------------
@@ -899,8 +904,8 @@ pub fn find_tool_by_name<'a>(tools: &'a [RichToolSpec], name: &str) -> Option<&'
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rc_core::permission_types::{PermissionBehavior, PermissionRuleSource};
     use rc_core::PermissionMode;
+    use rc_core::permission_types::{PermissionBehavior, PermissionRuleSource};
     use serde_json::json;
 
     // ── Helper builders ───────────────────────────────────────────────────
@@ -997,8 +1002,7 @@ mod tests {
     fn rich_tool_spec_serialization_roundtrip() {
         let spec = make_mcp_spec("mcp_search", "my_server", "search");
         let json = serde_json::to_string(&spec).expect("serialize");
-        let deserialized: RichToolSpec =
-            serde_json::from_str(&json).expect("deserialize");
+        let deserialized: RichToolSpec = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(deserialized.name, "mcp_search");
         assert!(deserialized.is_mcp);
         assert_eq!(
@@ -1081,7 +1085,11 @@ mod tests {
     fn validation_result_invalid() {
         let v = ValidationResult::invalid("bad input", 4001);
         assert!(!v.is_valid());
-        if let ValidationResult::Invalid { message, error_code } = v {
+        if let ValidationResult::Invalid {
+            message,
+            error_code,
+        } = v
+        {
             assert_eq!(message, "bad input");
             assert_eq!(error_code, 4001);
         } else {
@@ -1125,10 +1133,7 @@ mod tests {
 
     #[test]
     fn find_tool_by_name_returns_primary() {
-        let tools = vec![
-            make_spec("read_file"),
-            make_spec("write_file"),
-        ];
+        let tools = vec![make_spec("read_file"), make_spec("write_file")];
         let found = find_tool_by_name(&tools, "read_file");
         assert!(found.is_some());
         assert_eq!(found.unwrap().name, "read_file");
@@ -1276,11 +1281,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ToolExecutor for EchoExecutor {
-        async fn execute(
-            &self,
-            input: &Value,
-            _context: &RichToolUseContext,
-        ) -> Result<String> {
+        async fn execute(&self, input: &Value, _context: &RichToolUseContext) -> Result<String> {
             Ok(format!("{input}"))
         }
     }

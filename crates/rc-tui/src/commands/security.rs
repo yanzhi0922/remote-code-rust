@@ -8,10 +8,7 @@ pub fn render_security_review(config: &RuntimeConfig) {
     println!("  session:     {}", config.session_id);
     println!("  cwd:         {}", config.cwd.display());
     println!("  provider:    {}", config.provider.name);
-    println!(
-        "  permission:  {}",
-        config.permission_mode.as_legacy_str()
-    );
+    println!("  permission:  {}", config.permission_mode.as_legacy_str());
     println!("  allowed tools:  {}", config.allowed_tools.len());
     println!("  denied tools:   {}", config.disallowed_tools.len());
 

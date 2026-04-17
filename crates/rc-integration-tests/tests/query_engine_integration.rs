@@ -10,7 +10,10 @@ use std::time::Duration;
 #[test]
 fn state_machine_starts_at_idle() {
     let sm = rc_query_engine::state_machine::StateMachine::new();
-    assert_eq!(sm.phase(), rc_query_engine::state_machine::EnginePhase::Idle);
+    assert_eq!(
+        sm.phase(),
+        rc_query_engine::state_machine::EnginePhase::Idle
+    );
 }
 
 #[test]
@@ -18,7 +21,10 @@ fn state_machine_idle_to_initializing() {
     let mut sm = rc_query_engine::state_machine::StateMachine::new();
     sm.transition(rc_query_engine::state_machine::EnginePhase::Initializing)
         .expect("transition should succeed");
-    assert_eq!(sm.phase(), rc_query_engine::state_machine::EnginePhase::Initializing);
+    assert_eq!(
+        sm.phase(),
+        rc_query_engine::state_machine::EnginePhase::Initializing
+    );
 }
 
 #[test]
@@ -28,7 +34,10 @@ fn state_machine_full_lifecycle() {
     // Idle → Initializing
     sm.transition(rc_query_engine::state_machine::EnginePhase::Initializing)
         .expect("idle → initializing");
-    assert_eq!(sm.phase(), rc_query_engine::state_machine::EnginePhase::Initializing);
+    assert_eq!(
+        sm.phase(),
+        rc_query_engine::state_machine::EnginePhase::Initializing
+    );
 
     // Initializing → BuildingPrompt
     sm.transition(rc_query_engine::state_machine::EnginePhase::BuildingPrompt)
@@ -59,13 +68,20 @@ fn state_machine_full_lifecycle() {
 fn state_machine_tool_call_lifecycle() {
     let mut sm = rc_query_engine::state_machine::StateMachine::new();
 
-    sm.transition(rc_query_engine::state_machine::EnginePhase::Initializing).expect("ok");
-    sm.transition(rc_query_engine::state_machine::EnginePhase::BuildingPrompt).expect("ok");
-    sm.transition(rc_query_engine::state_machine::EnginePhase::CallingProvider).expect("ok");
-    sm.transition(rc_query_engine::state_machine::EnginePhase::ProcessingResponse).expect("ok");
-    sm.transition(rc_query_engine::state_machine::EnginePhase::ExecutingTools).expect("ok");
-    sm.transition(rc_query_engine::state_machine::EnginePhase::Finalizing).expect("ok");
-    sm.transition(rc_query_engine::state_machine::EnginePhase::Idle).expect("ok");
+    sm.transition(rc_query_engine::state_machine::EnginePhase::Initializing)
+        .expect("ok");
+    sm.transition(rc_query_engine::state_machine::EnginePhase::BuildingPrompt)
+        .expect("ok");
+    sm.transition(rc_query_engine::state_machine::EnginePhase::CallingProvider)
+        .expect("ok");
+    sm.transition(rc_query_engine::state_machine::EnginePhase::ProcessingResponse)
+        .expect("ok");
+    sm.transition(rc_query_engine::state_machine::EnginePhase::ExecutingTools)
+        .expect("ok");
+    sm.transition(rc_query_engine::state_machine::EnginePhase::Finalizing)
+        .expect("ok");
+    sm.transition(rc_query_engine::state_machine::EnginePhase::Idle)
+        .expect("ok");
 }
 
 #[test]
@@ -80,43 +96,67 @@ fn state_machine_invalid_transition() {
 fn state_machine_failure_path() {
     let mut sm = rc_query_engine::state_machine::StateMachine::new();
 
-    sm.transition(rc_query_engine::state_machine::EnginePhase::Initializing).expect("ok");
-    sm.transition(rc_query_engine::state_machine::EnginePhase::Failed).expect("ok");
-    sm.transition(rc_query_engine::state_machine::EnginePhase::Idle).expect("ok");
+    sm.transition(rc_query_engine::state_machine::EnginePhase::Initializing)
+        .expect("ok");
+    sm.transition(rc_query_engine::state_machine::EnginePhase::Failed)
+        .expect("ok");
+    sm.transition(rc_query_engine::state_machine::EnginePhase::Idle)
+        .expect("ok");
 }
 
 #[test]
 fn state_machine_cancel_path() {
     let mut sm = rc_query_engine::state_machine::StateMachine::new();
 
-    sm.transition(rc_query_engine::state_machine::EnginePhase::Initializing).expect("ok");
-    sm.transition(rc_query_engine::state_machine::EnginePhase::Cancelled).expect("ok");
-    sm.transition(rc_query_engine::state_machine::EnginePhase::Idle).expect("ok");
+    sm.transition(rc_query_engine::state_machine::EnginePhase::Initializing)
+        .expect("ok");
+    sm.transition(rc_query_engine::state_machine::EnginePhase::Cancelled)
+        .expect("ok");
+    sm.transition(rc_query_engine::state_machine::EnginePhase::Idle)
+        .expect("ok");
 }
 
 #[test]
 fn state_machine_compacting_path() {
     let mut sm = rc_query_engine::state_machine::StateMachine::new();
 
-    sm.transition(rc_query_engine::state_machine::EnginePhase::Initializing).expect("ok");
-    sm.transition(rc_query_engine::state_machine::EnginePhase::BuildingPrompt).expect("ok");
-    sm.transition(rc_query_engine::state_machine::EnginePhase::Compacting).expect("ok");
-    sm.transition(rc_query_engine::state_machine::EnginePhase::BuildingPrompt).expect("ok");
+    sm.transition(rc_query_engine::state_machine::EnginePhase::Initializing)
+        .expect("ok");
+    sm.transition(rc_query_engine::state_machine::EnginePhase::BuildingPrompt)
+        .expect("ok");
+    sm.transition(rc_query_engine::state_machine::EnginePhase::Compacting)
+        .expect("ok");
+    sm.transition(rc_query_engine::state_machine::EnginePhase::BuildingPrompt)
+        .expect("ok");
 }
 
 #[test]
 fn state_machine_records_transitions() {
     let mut sm = rc_query_engine::state_machine::StateMachine::new();
 
-    sm.transition(rc_query_engine::state_machine::EnginePhase::Initializing).expect("ok");
-    sm.transition(rc_query_engine::state_machine::EnginePhase::BuildingPrompt).expect("ok");
+    sm.transition(rc_query_engine::state_machine::EnginePhase::Initializing)
+        .expect("ok");
+    sm.transition(rc_query_engine::state_machine::EnginePhase::BuildingPrompt)
+        .expect("ok");
 
     let transitions = sm.transitions();
     assert_eq!(transitions.len(), 2);
-    assert_eq!(transitions[0].from, rc_query_engine::state_machine::EnginePhase::Idle);
-    assert_eq!(transitions[0].to, rc_query_engine::state_machine::EnginePhase::Initializing);
-    assert_eq!(transitions[1].from, rc_query_engine::state_machine::EnginePhase::Initializing);
-    assert_eq!(transitions[1].to, rc_query_engine::state_machine::EnginePhase::BuildingPrompt);
+    assert_eq!(
+        transitions[0].from,
+        rc_query_engine::state_machine::EnginePhase::Idle
+    );
+    assert_eq!(
+        transitions[0].to,
+        rc_query_engine::state_machine::EnginePhase::Initializing
+    );
+    assert_eq!(
+        transitions[1].from,
+        rc_query_engine::state_machine::EnginePhase::Initializing
+    );
+    assert_eq!(
+        transitions[1].to,
+        rc_query_engine::state_machine::EnginePhase::BuildingPrompt
+    );
 }
 
 #[test]
@@ -199,13 +239,17 @@ fn budget_tracker_serialization() {
 #[test]
 fn failure_tracker_starts_closed() {
     let tracker = rc_query_engine::failure_tracker::FailureTracker::new(5, Duration::from_secs(30));
-    assert_eq!(tracker.state(), rc_query_engine::failure_tracker::CircuitState::Closed);
+    assert_eq!(
+        tracker.state(),
+        rc_query_engine::failure_tracker::CircuitState::Closed
+    );
     assert!(tracker.is_available());
 }
 
 #[test]
 fn failure_tracker_accumulates_failures() {
-    let mut tracker = rc_query_engine::failure_tracker::FailureTracker::new(3, Duration::from_secs(30));
+    let mut tracker =
+        rc_query_engine::failure_tracker::FailureTracker::new(3, Duration::from_secs(30));
 
     tracker.record_failure();
     assert_eq!(tracker.consecutive_failures(), 1);
@@ -219,7 +263,8 @@ fn failure_tracker_accumulates_failures() {
 
 #[test]
 fn failure_tracker_success_resets_consecutive() {
-    let mut tracker = rc_query_engine::failure_tracker::FailureTracker::new(5, Duration::from_secs(30));
+    let mut tracker =
+        rc_query_engine::failure_tracker::FailureTracker::new(5, Duration::from_secs(30));
 
     tracker.record_failure();
     tracker.record_failure();
@@ -232,19 +277,27 @@ fn failure_tracker_success_resets_consecutive() {
 
 #[test]
 fn failure_tracker_opens_on_threshold() {
-    let mut tracker = rc_query_engine::failure_tracker::FailureTracker::new(2, Duration::from_secs(60));
+    let mut tracker =
+        rc_query_engine::failure_tracker::FailureTracker::new(2, Duration::from_secs(60));
 
     tracker.record_failure();
-    assert_eq!(tracker.state(), rc_query_engine::failure_tracker::CircuitState::Closed);
+    assert_eq!(
+        tracker.state(),
+        rc_query_engine::failure_tracker::CircuitState::Closed
+    );
 
     tracker.record_failure();
     // After reaching threshold, state should transition
-    assert_eq!(tracker.state(), rc_query_engine::failure_tracker::CircuitState::Open);
+    assert_eq!(
+        tracker.state(),
+        rc_query_engine::failure_tracker::CircuitState::Open
+    );
 }
 
 #[test]
 fn failure_tracker_max_failures_config() {
-    let tracker = rc_query_engine::failure_tracker::FailureTracker::new(10, Duration::from_secs(30));
+    let tracker =
+        rc_query_engine::failure_tracker::FailureTracker::new(10, Duration::from_secs(30));
     assert_eq!(tracker.max_failures(), 10);
     assert_eq!(tracker.cooldown_duration(), Duration::from_secs(30));
 }

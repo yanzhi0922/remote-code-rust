@@ -84,8 +84,7 @@ impl ContextVisualizer {
             if block.token_count == 0 {
                 continue;
             }
-            let width = ((block.token_count as f64 / total_tokens as f64)
-                * Self::BAR_WIDTH as f64)
+            let width = ((block.token_count as f64 / total_tokens as f64) * Self::BAR_WIDTH as f64)
                 .round() as usize;
             let width = width.max(1);
             bar_spans.push(Span::styled(
@@ -108,7 +107,12 @@ impl ContextVisualizer {
         for block in blocks {
             let pct = (block.token_count as f64 / total_tokens as f64) * 100.0;
             legend_spans.push(Span::styled(
-                format!(" {}:{} {:.0}%", block.block_type.label(), block.token_count, pct),
+                format!(
+                    " {}:{} {:.0}%",
+                    block.block_type.label(),
+                    block.token_count,
+                    pct
+                ),
                 Style::default().fg(block.block_type.color()),
             ));
         }

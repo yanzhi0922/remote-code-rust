@@ -116,16 +116,13 @@ pub fn load_plugin_mcp_servers(
 }
 
 /// Parse MCP configuration content.
-fn parse_mcp_config(
-    content: &str,
-) -> Result<HashMap<String, McpServerEntry>, String> {
-    let raw: Value =
-        serde_json::from_str(content).map_err(|e| format!("invalid JSON: {e}"))?;
+fn parse_mcp_config(content: &str) -> Result<HashMap<String, McpServerEntry>, String> {
+    let raw: Value = serde_json::from_str(content).map_err(|e| format!("invalid JSON: {e}"))?;
 
     // Support both flat format and [mcp_servers] TOML-like format
-    let servers_obj = if let Some(obj) = raw.get("mcp_servers") {
+    let servers_obj = if let Some(obj) = raw.get("mcpServers").or_else(|| raw.get("mcp_servers")) {
         obj.as_object()
-            .ok_or_else(|| "mcp_servers must be an object".to_owned())?
+            .ok_or_else(|| "mcpServers must be an object".to_owned())?
     } else {
         raw.as_object()
             .ok_or_else(|| "config must be a JSON object".to_owned())?
@@ -172,11 +169,7 @@ fn parse_server_entry(value: &Value) -> Result<McpServerEntry, String> {
         })
         .unwrap_or_default();
 
-    Ok(McpServerEntry {
-        command,
-        args,
-        env,
-    })
+    Ok(McpServerEntry { command, args, env })
 }
 
 /// Internal server entry during parsing.
@@ -249,8 +242,7 @@ mod tests {
         )
         .expect("write");
 
-        let result =
-            load_plugin_mcp_servers("test-plugin", &mcp_path, temp.path());
+        let result = load_plugin_mcp_servers("test-plugin", &mcp_path, temp.path());
         assert_eq!(result.servers.len(), 1);
         assert!(result.errors.is_empty());
         assert_eq!(result.servers[0].name, "demo");
@@ -274,8 +266,7 @@ mod tests {
         let mcp_path = temp.path().join("mcp.json");
         fs::write(&mcp_path, "not json").expect("write");
 
-        let result =
-            load_plugin_mcp_servers("test-plugin", &mcp_path, temp.path());
+        let result = load_plugin_mcp_servers("test-plugin", &mcp_path, temp.path());
         assert!(result.servers.is_empty());
         assert_eq!(result.errors.len(), 1);
     }
@@ -296,13 +287,9 @@ mod tests {
         )
         .expect("write");
 
-        let result =
-            load_plugin_mcp_servers("test-plugin", &mcp_path, temp.path());
+        let result = load_plugin_mcp_servers("test-plugin", &mcp_path, temp.path());
         assert_eq!(result.servers.len(), 1);
-        assert_eq!(
-            result.servers[0].env.get("PORT"),
-            Some(&"3000".to_owned())
-        );
+        assert_eq!(result.servers[0].env.get("PORT"), Some(&"3000".to_owned()));
     }
 
     #[test]

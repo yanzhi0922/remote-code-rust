@@ -54,7 +54,10 @@ async fn concurrent_mailbox_file_operations() {
 
     // Wait for all sends
     for handle in handles {
-        handle.await.expect("task should complete").expect("send should succeed");
+        handle
+            .await
+            .expect("task should complete")
+            .expect("send should succeed");
     }
 
     // Verify all messages were received
@@ -94,7 +97,10 @@ async fn concurrent_permission_requests() {
     }
 
     for handle in handles {
-        handle.await.expect("task should complete").expect("write should succeed");
+        handle
+            .await
+            .expect("task should complete")
+            .expect("write should succeed");
     }
 
     // Verify all requests were written
@@ -110,11 +116,9 @@ async fn concurrent_permission_requests() {
 
 #[test]
 fn concurrent_credential_pool_rotation() {
-    let pool = Arc::new(rc_provider::credential_pool::CredentialPool::from_keys(vec![
-        "key-1".to_owned(),
-        "key-2".to_owned(),
-        "key-3".to_owned(),
-    ]));
+    let pool = Arc::new(rc_provider::credential_pool::CredentialPool::from_keys(
+        vec!["key-1".to_owned(), "key-2".to_owned(), "key-3".to_owned()],
+    ));
 
     let mut handles = vec![];
     for _ in 0..10 {
@@ -147,11 +151,13 @@ fn concurrent_credential_pool_rotation() {
 
 #[test]
 fn concurrent_circuit_breaker_access() {
-    let cb = Arc::new(rc_provider::CircuitBreaker::new(rc_provider::CircuitBreakerConfig {
-        failure_threshold: 100,
-        recovery_timeout: std::time::Duration::from_secs(60),
-        half_open_max_probes: 10,
-    }));
+    let cb = Arc::new(rc_provider::CircuitBreaker::new(
+        rc_provider::CircuitBreakerConfig {
+            failure_threshold: 100,
+            recovery_timeout: std::time::Duration::from_secs(60),
+            half_open_max_probes: 10,
+        },
+    ));
 
     let mut handles = vec![];
     for _ in 0..10 {
@@ -252,7 +258,10 @@ async fn concurrent_teamfile_operations() {
     }
 
     for handle in handles {
-        let team = handle.await.expect("task should complete").expect("should read team");
+        let team = handle
+            .await
+            .expect("task should complete")
+            .expect("should read team");
         assert_eq!(team.members.len(), 5);
     }
 

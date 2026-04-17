@@ -43,9 +43,7 @@ pub enum SwitchResult {
     /// No switch was needed (already on the target model).
     NoChange,
     /// Switch failed (no fallback configured).
-    Failed {
-        reason: String,
-    },
+    Failed { reason: String },
 }
 
 impl ModelSwitcher {
@@ -92,11 +90,7 @@ impl ModelSwitcher {
     }
 
     /// Switch to a specific model.
-    pub fn switch_to(
-        &mut self,
-        target: impl Into<String>,
-        reason: SwitchReason,
-    ) -> SwitchResult {
+    pub fn switch_to(&mut self, target: impl Into<String>, reason: SwitchReason) -> SwitchResult {
         let target = target.into();
         if target == self.current_model {
             return SwitchResult::NoChange;

@@ -11,26 +11,14 @@ pub fn render_usage(config: &RuntimeConfig, store: &SessionStore) {
 
     match store.load_session_bundle(config.session_id) {
         Ok(bundle) => {
-            println!(
-                "  input tokens:  {}",
-                bundle.stats.usage.input_tokens
-            );
-            println!(
-                "  output tokens: {}",
-                bundle.stats.usage.output_tokens
-            );
+            println!("  input tokens:  {}", bundle.stats.usage.input_tokens);
+            println!("  output tokens: {}", bundle.stats.usage.output_tokens);
             println!(
                 "  total tokens:  {}",
                 bundle.stats.usage.input_tokens + bundle.stats.usage.output_tokens
             );
-            println!(
-                "  tool calls:    {}",
-                bundle.stats.tool_call_count
-            );
-            println!(
-                "  errors:        {}",
-                bundle.stats.error_count
-            );
+            println!("  tool calls:    {}", bundle.stats.tool_call_count);
+            println!("  errors:        {}", bundle.stats.error_count);
         }
         Err(error) => println!("  (unable to load session bundle: {error})"),
     }
@@ -73,14 +61,8 @@ pub fn render_stats(config: &RuntimeConfig, store: &SessionStore, cost_tracker: 
             println!("  conversation entries: {}", bundle.conversation.len());
             println!("  tool calls:         {}", bundle.stats.tool_call_count);
             println!("  errors:             {}", bundle.stats.error_count);
-            println!(
-                "  input tokens:       {}",
-                bundle.stats.usage.input_tokens
-            );
-            println!(
-                "  output tokens:      {}",
-                bundle.stats.usage.output_tokens
-            );
+            println!("  input tokens:       {}", bundle.stats.usage.input_tokens);
+            println!("  output tokens:      {}", bundle.stats.usage.output_tokens);
         }
         Err(error) => println!("  (unable to load session bundle: {error})"),
     }
@@ -94,8 +76,7 @@ pub fn render_insights(config: &RuntimeConfig, store: &SessionStore) {
 
     match store.load_session_bundle(config.session_id) {
         Ok(bundle) => {
-            let total_tokens =
-                bundle.stats.usage.input_tokens + bundle.stats.usage.output_tokens;
+            let total_tokens = bundle.stats.usage.input_tokens + bundle.stats.usage.output_tokens;
             let tool_ratio = if total_tokens > 0 {
                 bundle.stats.tool_call_count as f64 / total_tokens as f64 * 1000.0
             } else {

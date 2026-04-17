@@ -46,18 +46,12 @@ pub struct LoadCommandsResult {
 ///
 /// Walks the `commands/` directory (or the directory specified by the manifest)
 /// and extracts command definitions from markdown files.
-pub fn load_plugin_commands(
-    plugin_name: &str,
-    commands_dir: &Path,
-) -> LoadCommandsResult {
+pub fn load_plugin_commands(plugin_name: &str, commands_dir: &Path) -> LoadCommandsResult {
     let mut commands = Vec::new();
     let mut errors = Vec::new();
 
     if !commands_dir.exists() {
-        return LoadCommandsResult {
-            commands,
-            errors,
-        };
+        return LoadCommandsResult { commands, errors };
     }
 
     if !commands_dir.is_dir() {
@@ -65,18 +59,13 @@ pub fn load_plugin_commands(
             "commands path {} is not a directory",
             commands_dir.display()
         ));
-        return LoadCommandsResult {
-            commands,
-            errors,
-        };
+        return LoadCommandsResult { commands, errors };
     }
 
     let markdown_entries = walk_markdown_paths(commands_dir);
 
     for (file_path, _namespace) in markdown_entries {
-        let relative = file_path
-            .strip_prefix(commands_dir)
-            .unwrap_or(&file_path);
+        let relative = file_path.strip_prefix(commands_dir).unwrap_or(&file_path);
 
         let command_name = build_command_name(plugin_name, relative);
 
@@ -106,10 +95,7 @@ pub fn load_plugin_commands(
 
     commands.sort_by(|a, b| a.name.cmp(&b.name));
 
-    LoadCommandsResult {
-        commands,
-        errors,
-    }
+    LoadCommandsResult { commands, errors }
 }
 
 /// Build a fully-qualified command name from a plugin name and file path.
@@ -213,18 +199,14 @@ mod tests {
         assert_eq!(result.commands.len(), 2);
         assert!(result.errors.is_empty());
 
-        let names: Vec<&str> =
-            result.commands.iter().map(|c| c.name.as_str()).collect();
+        let names: Vec<&str> = result.commands.iter().map(|c| c.name.as_str()).collect();
         assert!(names.contains(&"my-plugin:build"));
         assert!(names.contains(&"my-plugin:deploy"));
     }
 
     #[test]
     fn load_plugin_commands_nonexistent_directory() {
-        let result = load_plugin_commands(
-            "my-plugin",
-            Path::new("/nonexistent/commands"),
-        );
+        let result = load_plugin_commands("my-plugin", Path::new("/nonexistent/commands"));
         assert!(result.commands.is_empty());
         assert!(result.errors.is_empty());
     }

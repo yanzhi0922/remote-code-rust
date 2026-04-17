@@ -93,7 +93,10 @@ pub trait SecureStorage: Send + Sync {
     ///
     /// Returns an error if the check fails.
     fn exists(&self, key: &str) -> Result<bool> {
-        Ok(self.list().map(|keys| keys.iter().any(|k| k == key)).unwrap_or(false))
+        Ok(self
+            .list()
+            .map(|keys| keys.iter().any(|k| k == key))
+            .unwrap_or(false))
     }
 
     /// Return the backend type.
@@ -130,27 +133,39 @@ impl Default for PlainTextStorage {
 
 impl SecureStorage for PlainTextStorage {
     fn store(&self, key: &str, value: &str) -> Result<()> {
-        let mut data = self.data.lock().map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
+        let mut data = self
+            .data
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
         data.insert(key.to_string(), value.to_string());
         Ok(())
     }
 
     fn retrieve(&self, key: &str) -> Result<String> {
-        let data = self.data.lock().map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
+        let data = self
+            .data
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
         data.get(key)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("Key not found: {key}"))
     }
 
     fn delete(&self, key: &str) -> Result<()> {
-        let mut data = self.data.lock().map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
+        let mut data = self
+            .data
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
         data.remove(key)
             .ok_or_else(|| anyhow::anyhow!("Key not found: {key}"))?;
         Ok(())
     }
 
     fn list(&self) -> Result<Vec<String>> {
-        let data = self.data.lock().map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
+        let data = self
+            .data
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
         Ok(data.keys().cloned().collect())
     }
 
@@ -186,27 +201,39 @@ impl Default for MemoryStorage {
 
 impl SecureStorage for MemoryStorage {
     fn store(&self, key: &str, value: &str) -> Result<()> {
-        let mut data = self.data.lock().map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
+        let mut data = self
+            .data
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
         data.insert(key.to_string(), value.to_string());
         Ok(())
     }
 
     fn retrieve(&self, key: &str) -> Result<String> {
-        let data = self.data.lock().map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
+        let data = self
+            .data
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
         data.get(key)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("Key not found: {key}"))
     }
 
     fn delete(&self, key: &str) -> Result<()> {
-        let mut data = self.data.lock().map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
+        let mut data = self
+            .data
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
         data.remove(key)
             .ok_or_else(|| anyhow::anyhow!("Key not found: {key}"))?;
         Ok(())
     }
 
     fn list(&self) -> Result<Vec<String>> {
-        let data = self.data.lock().map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
+        let data = self
+            .data
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
         Ok(data.keys().cloned().collect())
     }
 

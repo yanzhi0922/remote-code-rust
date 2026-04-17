@@ -5,8 +5,8 @@ use std::env;
 use std::fs;
 
 use rc_config::RuntimeConfig;
-use rc_provider::context::ContextWindowManager;
 use rc_core::ConversationEntry;
+use rc_provider::context::ContextWindowManager;
 
 /// Dispatch `/files` — list files in the working directory.
 pub fn dispatch_files(input: &str, config: &RuntimeConfig) {
@@ -115,17 +115,18 @@ pub fn render_remote_env(config: &RuntimeConfig) {
 }
 
 /// Dispatch `/context` — show context window usage.
-pub fn render_context(config: &RuntimeConfig, context_manager: &ContextWindowManager, conversation: &[ConversationEntry]) {
+pub fn render_context(
+    config: &RuntimeConfig,
+    context_manager: &ContextWindowManager,
+    conversation: &[ConversationEntry],
+) {
     let ratio = context_manager.usage_ratio(conversation);
     let budget = context_manager.available_budget();
 
     println!("Context window:");
     println!("  usage:    {:.1}%", ratio * 100.0);
     println!("  budget:   {budget} tokens remaining");
-    println!(
-        "  entries:  {} conversation entries",
-        conversation.len()
-    );
+    println!("  entries:  {} conversation entries", conversation.len());
     println!(
         "  model:    {}",
         config.provider.model.as_deref().unwrap_or("(default)")
@@ -160,7 +161,10 @@ pub fn render_advisor(config: &RuntimeConfig) {
         println!("  💡 Consider setting a model via /config set provider.model <model>");
     }
     if config.max_turns < 10 {
-        println!("  💡 max_turns is low ({}) — consider increasing for complex tasks.", config.max_turns);
+        println!(
+            "  💡 max_turns is low ({}) — consider increasing for complex tasks.",
+            config.max_turns
+        );
     }
     if config.allowed_tools.is_empty() && config.disallowed_tools.is_empty() {
         println!("  💡 No tool filters configured — all tools are available.");
@@ -360,7 +364,9 @@ mod tests {
         let ctx = ContextWindowManager::for_model("glm-5.1");
         // Create many entries to simulate high usage
         let conversation: Vec<ConversationEntry> = (0..100)
-            .map(|i| ConversationEntry::user(format!("message {i} with some content to fill tokens")))
+            .map(|i| {
+                ConversationEntry::user(format!("message {i} with some content to fill tokens"))
+            })
             .collect();
         render_context(&config, &ctx, &conversation);
     }

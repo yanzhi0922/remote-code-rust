@@ -24,8 +24,7 @@ pub const POST_COMPACT_MAX_TOKENS_PER_SKILL: u64 = 5_000;
 pub const POST_COMPACT_SKILLS_TOKEN_BUDGET: u64 = 25_000;
 
 /// Truncation marker appended to skill content that exceeds the per-skill budget.
-const SKILL_TRUNCATION_MARKER: &str =
-    "\n\n[... skill content truncated for compaction; use Read on the skill path if you need the full text]";
+const SKILL_TRUNCATION_MARKER: &str = "\n\n[... skill content truncated for compaction; use Read on the skill path if you need the full text]";
 
 // ---------------------------------------------------------------------------
 // File attachment state
@@ -253,9 +252,7 @@ pub fn create_plan_attachment_if_needed(
 /// Create a skill attachment for all invoked skills that fit within the budget.
 ///
 /// Mirrors `createSkillAttachmentIfNeeded()`.
-pub fn create_skill_attachment_if_needed(
-    registry: &InvokedSkillRegistry,
-) -> Option<Message> {
+pub fn create_skill_attachment_if_needed(registry: &InvokedSkillRegistry) -> Option<Message> {
     if registry.is_empty() {
         return None;
     }

@@ -41,10 +41,7 @@ impl EnginePhase {
     /// Returns true if this phase represents an active (non-idle, non-terminal) state.
     #[must_use]
     pub fn is_active(self) -> bool {
-        !matches!(
-            self,
-            Self::Idle | Self::Failed | Self::Cancelled
-        )
+        !matches!(self, Self::Idle | Self::Failed | Self::Cancelled)
     }
 
     /// Returns the set of phases that are valid transitions from this phase.
@@ -53,9 +50,19 @@ impl EnginePhase {
         match self {
             Self::Idle => &[Self::Initializing],
             Self::Initializing => &[Self::BuildingPrompt, Self::Failed, Self::Cancelled],
-            Self::BuildingPrompt => &[Self::CallingProvider, Self::Compacting, Self::Failed, Self::Cancelled],
+            Self::BuildingPrompt => &[
+                Self::CallingProvider,
+                Self::Compacting,
+                Self::Failed,
+                Self::Cancelled,
+            ],
             Self::CallingProvider => &[Self::ProcessingResponse, Self::Failed, Self::Cancelled],
-            Self::ProcessingResponse => &[Self::ExecutingTools, Self::Finalizing, Self::Failed, Self::Cancelled],
+            Self::ProcessingResponse => &[
+                Self::ExecutingTools,
+                Self::Finalizing,
+                Self::Failed,
+                Self::Cancelled,
+            ],
             Self::ExecutingTools => &[Self::Finalizing, Self::Failed, Self::Cancelled],
             Self::Compacting => &[Self::BuildingPrompt, Self::Failed, Self::Cancelled],
             Self::Finalizing => &[Self::Idle],
@@ -208,13 +215,20 @@ mod tests {
     #[test]
     fn state_machine_happy_path_transitions() {
         let mut sm = StateMachine::new();
-        sm.transition(EnginePhase::Initializing).expect("idle -> initializing");
-        sm.transition(EnginePhase::BuildingPrompt).expect("initializing -> building_prompt");
-        sm.transition(EnginePhase::CallingProvider).expect("building_prompt -> calling_provider");
-        sm.transition(EnginePhase::ProcessingResponse).expect("calling_provider -> processing_response");
-        sm.transition(EnginePhase::ExecutingTools).expect("processing_response -> executing_tools");
-        sm.transition(EnginePhase::Finalizing).expect("executing_tools -> finalizing");
-        sm.transition(EnginePhase::Idle).expect("finalizing -> idle");
+        sm.transition(EnginePhase::Initializing)
+            .expect("idle -> initializing");
+        sm.transition(EnginePhase::BuildingPrompt)
+            .expect("initializing -> building_prompt");
+        sm.transition(EnginePhase::CallingProvider)
+            .expect("building_prompt -> calling_provider");
+        sm.transition(EnginePhase::ProcessingResponse)
+            .expect("calling_provider -> processing_response");
+        sm.transition(EnginePhase::ExecutingTools)
+            .expect("processing_response -> executing_tools");
+        sm.transition(EnginePhase::Finalizing)
+            .expect("executing_tools -> finalizing");
+        sm.transition(EnginePhase::Idle)
+            .expect("finalizing -> idle");
         assert_eq!(sm.transition_count(), 7);
     }
 
@@ -240,7 +254,8 @@ mod tests {
     #[test]
     fn state_machine_reset_clears_history() {
         let mut sm = StateMachine::new();
-        sm.transition(EnginePhase::Initializing).expect("transition");
+        sm.transition(EnginePhase::Initializing)
+            .expect("transition");
         sm.transition(EnginePhase::Failed).expect("transition");
         assert_eq!(sm.transition_count(), 2);
         sm.reset();
@@ -251,11 +266,15 @@ mod tests {
     #[test]
     fn state_machine_compacting_loop() {
         let mut sm = StateMachine::new();
-        sm.transition(EnginePhase::Initializing).expect("transition");
-        sm.transition(EnginePhase::BuildingPrompt).expect("transition");
+        sm.transition(EnginePhase::Initializing)
+            .expect("transition");
+        sm.transition(EnginePhase::BuildingPrompt)
+            .expect("transition");
         sm.transition(EnginePhase::Compacting).expect("transition");
-        sm.transition(EnginePhase::BuildingPrompt).expect("compacting -> building_prompt loop");
-        sm.transition(EnginePhase::CallingProvider).expect("transition");
+        sm.transition(EnginePhase::BuildingPrompt)
+            .expect("compacting -> building_prompt loop");
+        sm.transition(EnginePhase::CallingProvider)
+            .expect("transition");
         assert_eq!(sm.phase(), EnginePhase::CallingProvider);
     }
 
@@ -279,16 +298,19 @@ mod tests {
     #[test]
     fn state_machine_failed_to_idle_recovery() {
         let mut sm = StateMachine::new();
-        sm.transition(EnginePhase::Initializing).expect("transition");
+        sm.transition(EnginePhase::Initializing)
+            .expect("transition");
         sm.transition(EnginePhase::Failed).expect("transition");
-        sm.transition(EnginePhase::Idle).expect("failed -> idle recovery");
+        sm.transition(EnginePhase::Idle)
+            .expect("failed -> idle recovery");
         assert_eq!(sm.phase(), EnginePhase::Idle);
     }
 
     #[test]
     fn state_machine_cancelled_to_idle() {
         let mut sm = StateMachine::new();
-        sm.transition(EnginePhase::Initializing).expect("transition");
+        sm.transition(EnginePhase::Initializing)
+            .expect("transition");
         sm.transition(EnginePhase::Cancelled).expect("transition");
         sm.transition(EnginePhase::Idle).expect("cancelled -> idle");
         assert_eq!(sm.phase(), EnginePhase::Idle);

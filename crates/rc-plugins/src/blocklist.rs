@@ -69,13 +69,11 @@ pub struct BlocklistEntry {
 // ---------------------------------------------------------------------------
 
 /// In-memory representation of the plugin blocklist.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct PluginBlocklist {
     /// Map from plugin ID to blocklist entry.
     pub entries: HashMap<String, BlocklistEntry>,
 }
-
 
 impl PluginBlocklist {
     /// Create a new empty blocklist.
@@ -153,10 +151,7 @@ pub fn load_blocklist(path: &Path) -> Result<PluginBlocklist, BlocklistError> {
 /// Save the blocklist to a JSON file.
 ///
 /// Writes atomically via a temp file to avoid corruption.
-pub fn save_blocklist(
-    blocklist: &PluginBlocklist,
-    path: &Path,
-) -> Result<(), BlocklistError> {
+pub fn save_blocklist(blocklist: &PluginBlocklist, path: &Path) -> Result<(), BlocklistError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -195,10 +190,7 @@ pub fn detect_delisted_plugins(
 
     installed_ids
         .iter()
-        .filter(|id| {
-            id.ends_with(&suffix)
-                && !available.contains(&id[..id.len() - suffix.len()])
-        })
+        .filter(|id| id.ends_with(&suffix) && !available.contains(&id[..id.len() - suffix.len()]))
         .cloned()
         .collect()
 }
@@ -312,6 +304,9 @@ mod tests {
     fn blocklist_path_helper() {
         let dir = PathBuf::from("/home/user/.claude/plugins");
         let p = blocklist_path(&dir);
-        assert_eq!(p, PathBuf::from("/home/user/.claude/plugins/blocked-plugins.json"));
+        assert_eq!(
+            p,
+            PathBuf::from("/home/user/.claude/plugins/blocked-plugins.json")
+        );
     }
 }

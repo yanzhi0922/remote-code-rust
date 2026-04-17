@@ -8,6 +8,4 @@ pub mod manager;
 
 pub use counts::PluginInstallCounts;
 pub use helpers::{compute_install_path, download_plugin, extract_plugin, verify_plugin};
-pub use manager::{
-    InstallationProgress, PluginInstallationManager,
-};
+pub use manager::{InstallationProgress, PluginInstallationManager};

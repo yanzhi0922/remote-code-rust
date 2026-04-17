@@ -29,9 +29,8 @@ pub(crate) fn resolve_workspace_path(cwd: &Path, maybe_relative: Option<&str>) -
         _ => cwd.to_path_buf(),
     };
     // Canonicalize the cwd (always exists).
-    let canonical_cwd = normalize_for_comparison(
-        cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf()),
-    );
+    let canonical_cwd =
+        normalize_for_comparison(cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf()));
     // For the candidate, try to canonicalize the parent dir (which likely exists)
     // and append the file name. This handles the case where the target file
     // doesn't exist yet (e.g., write_file creating a new file).
@@ -41,7 +40,9 @@ pub(crate) fn resolve_workspace_path(cwd: &Path, maybe_relative: Option<&str>) -
         let parent = candidate.parent().unwrap_or(cwd);
         let file_name = candidate.file_name().unwrap_or_default();
         let canonical_parent = normalize_for_comparison(
-            parent.canonicalize().unwrap_or_else(|_| parent.to_path_buf()),
+            parent
+                .canonicalize()
+                .unwrap_or_else(|_| parent.to_path_buf()),
         );
         canonical_parent.join(file_name)
     };

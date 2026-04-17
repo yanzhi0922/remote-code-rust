@@ -64,9 +64,7 @@ pub struct PluginHealthCheck {
 /// Run all plugin startup checks.
 ///
 /// Discovers all plugins in the given root directory and validates each one.
-pub fn perform_plugin_startup_checks(
-    root: &Path,
-) -> PluginStartupCheckResult {
+pub fn perform_plugin_startup_checks(root: &Path) -> PluginStartupCheckResult {
     let mut result = PluginStartupCheckResult {
         total_plugins: 0,
         healthy: 0,
@@ -196,9 +194,7 @@ mod tests {
         )
         .expect("write marker");
 
-        let plugins = ok(crate::discover_plugins_including_disabled(
-            temp.path(),
-        ));
+        let plugins = ok(crate::discover_plugins_including_disabled(temp.path()));
         let health = check_plugin_health(&plugins[0]);
         assert!(health.is_disabled);
     }

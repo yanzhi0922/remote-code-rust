@@ -5,7 +5,11 @@ pub fn render() {
     println!("Remote Code Rust");
     println!("  version:     {}", env!("CARGO_PKG_VERSION"));
     println!("  description: {}", env!("CARGO_PKG_DESCRIPTION"));
-    println!("  platform:    {}-{}", std::env::consts::OS, std::env::consts::ARCH);
+    println!(
+        "  platform:    {}-{}",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
     println!("  rustc:       {}", rustc_version());
 }
 

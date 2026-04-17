@@ -85,7 +85,9 @@ pub fn get_mcp_prefix(server_name: &str) -> String {
 /// Otherwise returns `full_name` unchanged.
 pub fn get_mcp_display_name(full_name: &str, server_name: &str) -> String {
     let prefix = get_mcp_prefix(server_name);
-    full_name.strip_prefix(&prefix).map_or_else(|| full_name.to_owned(), str::to_owned)
+    full_name
+        .strip_prefix(&prefix)
+        .map_or_else(|| full_name.to_owned(), str::to_owned)
 }
 
 #[cfg(test)]
@@ -153,10 +155,7 @@ mod tests {
 
     #[test]
     fn display_name_strips_prefix() {
-        assert_eq!(
-            get_mcp_display_name("mcp__srv__search", "srv"),
-            "search"
-        );
+        assert_eq!(get_mcp_display_name("mcp__srv__search", "srv"), "search");
     }
 
     #[test]

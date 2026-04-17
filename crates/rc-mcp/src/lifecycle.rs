@@ -417,13 +417,14 @@ impl McpConnectionLifecycle {
         &mut self,
         name: &str,
     ) -> Result<McpLifecycleEvent, StateTransitionError> {
-        let entry = self.servers.get_mut(name).ok_or_else(|| {
-            StateTransitionError {
+        let entry = self
+            .servers
+            .get_mut(name)
+            .ok_or_else(|| StateTransitionError {
                 from: McpConnectionState::Disconnected,
                 to: McpConnectionState::Connecting,
                 reason: format!("server '{name}' not registered"),
-            }
-        })?;
+            })?;
 
         match entry.state {
             McpConnectionState::Disconnected
@@ -462,13 +463,14 @@ impl McpConnectionLifecycle {
         &mut self,
         name: &str,
     ) -> Result<McpLifecycleEvent, StateTransitionError> {
-        let entry = self.servers.get_mut(name).ok_or_else(|| {
-            StateTransitionError {
+        let entry = self
+            .servers
+            .get_mut(name)
+            .ok_or_else(|| StateTransitionError {
                 from: McpConnectionState::Disconnected,
                 to: McpConnectionState::Connected,
                 reason: format!("server '{name}' not registered"),
-            }
-        })?;
+            })?;
 
         let was_reconnecting = entry.state == McpConnectionState::Reconnecting;
 
@@ -512,13 +514,14 @@ impl McpConnectionLifecycle {
         name: &str,
         error: &str,
     ) -> Result<McpLifecycleEvent, StateTransitionError> {
-        let entry = self.servers.get_mut(name).ok_or_else(|| {
-            StateTransitionError {
+        let entry = self
+            .servers
+            .get_mut(name)
+            .ok_or_else(|| StateTransitionError {
                 from: McpConnectionState::Disconnected,
                 to: McpConnectionState::Failed,
                 reason: format!("server '{name}' not registered"),
-            }
-        })?;
+            })?;
 
         match entry.state {
             McpConnectionState::Connecting | McpConnectionState::Reconnecting => {
@@ -560,13 +563,14 @@ impl McpConnectionLifecycle {
         name: &str,
         reason: DisconnectReason,
     ) -> Result<McpLifecycleEvent, StateTransitionError> {
-        let entry = self.servers.get_mut(name).ok_or_else(|| {
-            StateTransitionError {
+        let entry = self
+            .servers
+            .get_mut(name)
+            .ok_or_else(|| StateTransitionError {
                 from: McpConnectionState::Disconnected,
                 to: McpConnectionState::Disconnected,
                 reason: format!("server '{name}' not registered"),
-            }
-        })?;
+            })?;
 
         let prev_state = entry.state;
         entry.state = McpConnectionState::Disconnected;
@@ -595,13 +599,14 @@ impl McpConnectionLifecycle {
         &mut self,
         name: &str,
     ) -> Result<McpLifecycleEvent, StateTransitionError> {
-        let entry = self.servers.get_mut(name).ok_or_else(|| {
-            StateTransitionError {
+        let entry = self
+            .servers
+            .get_mut(name)
+            .ok_or_else(|| StateTransitionError {
                 from: McpConnectionState::Disconnected,
                 to: McpConnectionState::NeedsAuth,
                 reason: format!("server '{name}' not registered"),
-            }
-        })?;
+            })?;
 
         match entry.state {
             McpConnectionState::Connecting
@@ -630,13 +635,14 @@ impl McpConnectionLifecycle {
         &mut self,
         name: &str,
     ) -> Result<(McpLifecycleEvent, Duration), StateTransitionError> {
-        let entry = self.servers.get_mut(name).ok_or_else(|| {
-            StateTransitionError {
+        let entry = self
+            .servers
+            .get_mut(name)
+            .ok_or_else(|| StateTransitionError {
                 from: McpConnectionState::Disconnected,
                 to: McpConnectionState::Reconnecting,
                 reason: format!("server '{name}' not registered"),
-            }
-        })?;
+            })?;
 
         match entry.state {
             McpConnectionState::Disconnected | McpConnectionState::Failed => {
@@ -695,10 +701,7 @@ impl McpConnectionLifecycle {
     /// Return the number of servers in a given state.
     #[must_use]
     pub fn count_in_state(&self, state: McpConnectionState) -> usize {
-        self.servers
-            .values()
-            .filter(|s| s.state == state)
-            .count()
+        self.servers.values().filter(|s| s.state == state).count()
     }
 
     /// Return all server names in a given state.
@@ -894,7 +897,10 @@ mod tests {
     fn register_server_starts_disconnected() {
         let mut lc = McpConnectionLifecycle::new();
         lc.register_server("test-server");
-        assert_eq!(lc.state("test-server"), Some(McpConnectionState::Disconnected));
+        assert_eq!(
+            lc.state("test-server"),
+            Some(McpConnectionState::Disconnected)
+        );
         assert_eq!(lc.server_count(), 1);
     }
 
@@ -928,8 +934,13 @@ mod tests {
         lc.register_server("srv");
 
         lc.start_connecting("srv").expect("start connecting");
-        let event = lc.mark_failed("srv", "connection refused").expect("mark failed");
-        assert!(matches!(event, McpLifecycleEvent::Reconnecting { attempt: 1, .. }));
+        let event = lc
+            .mark_failed("srv", "connection refused")
+            .expect("mark failed");
+        assert!(matches!(
+            event,
+            McpLifecycleEvent::Reconnecting { attempt: 1, .. }
+        ));
         assert_eq!(lc.state("srv"), Some(McpConnectionState::Reconnecting));
         assert_eq!(lc.reconnect_attempts("srv"), 1);
     }
@@ -981,7 +992,8 @@ mod tests {
 
         lc.start_connecting("srv").expect("connect");
         lc.mark_connected("srv").expect("connected");
-        lc.disconnect("srv", DisconnectReason::Manual).expect("disconnect");
+        lc.disconnect("srv", DisconnectReason::Manual)
+            .expect("disconnect");
         assert_eq!(lc.state("srv"), Some(McpConnectionState::Disconnected));
         assert_eq!(lc.reconnect_attempts("srv"), 0);
     }
@@ -1037,7 +1049,10 @@ mod tests {
         lc.register_server("srv");
 
         let (event, backoff) = lc.start_reconnect("srv").expect("reconnect");
-        assert!(matches!(event, McpLifecycleEvent::Reconnecting { attempt: 1, .. }));
+        assert!(matches!(
+            event,
+            McpLifecycleEvent::Reconnecting { attempt: 1, .. }
+        ));
         assert_eq!(lc.state("srv"), Some(McpConnectionState::Reconnecting));
         assert!(backoff > Duration::ZERO);
     }

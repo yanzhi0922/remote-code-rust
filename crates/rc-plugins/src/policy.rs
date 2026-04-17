@@ -64,8 +64,7 @@ impl PluginPolicySource {
 // ---------------------------------------------------------------------------
 
 /// A set of policy rules governing which plugins may be installed or enabled.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct PluginPolicy {
     /// Only plugins from these sources (marketplace names or URLs) are allowed.
     /// An empty set means all sources are allowed.
@@ -89,7 +88,6 @@ pub struct PluginPolicy {
     #[serde(default)]
     pub source: Option<PluginPolicySource>,
 }
-
 
 impl PluginPolicy {
     /// Create a new permissive (allow-all) policy.
@@ -146,9 +144,7 @@ pub fn check_plugin_policy(
             if !policy.allowed_sources.contains(src) {
                 return PolicyCheckResult {
                     allowed: false,
-                    reason: Some(format!(
-                        "Source '{src}' is not in the allowed sources list"
-                    )),
+                    reason: Some(format!("Source '{src}' is not in the allowed sources list")),
                 };
             }
         } else {
@@ -162,14 +158,15 @@ pub fn check_plugin_policy(
 
     // 3. Max plugins
     if let Some(max) = policy.max_plugins
-        && current_plugin_count >= max {
-            return PolicyCheckResult {
-                allowed: false,
-                reason: Some(format!(
-                    "Plugin limit of {max} reached ({current_plugin_count} installed)"
-                )),
-            };
-        }
+        && current_plugin_count >= max
+    {
+        return PolicyCheckResult {
+            allowed: false,
+            reason: Some(format!(
+                "Plugin limit of {max} reached ({current_plugin_count} installed)"
+            )),
+        };
+    }
 
     // 4. Approval required
     if policy.require_approval {
@@ -237,7 +234,9 @@ pub fn merge_policies(policies: &[PluginPolicy]) -> PluginPolicy {
 
     // blocked_plugins: union
     for p in policies {
-        merged.blocked_plugins.extend(p.blocked_plugins.iter().cloned());
+        merged
+            .blocked_plugins
+            .extend(p.blocked_plugins.iter().cloned());
     }
 
     // max_plugins: minimum

@@ -29,7 +29,10 @@ impl SessionMemoryStore {
     /// If a memory already exists for the given session it is updated;
     /// otherwise a new entry is created.
     pub fn store(&self, session_id: &str, content: &str) -> Result<()> {
-        let mut entries = self.entries.lock().map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+        let mut entries = self
+            .entries
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
         if let Some(existing) = entries.get_mut(session_id) {
             existing.content = content.to_owned();
             existing.touch();
@@ -42,25 +45,37 @@ impl SessionMemoryStore {
 
     /// Retrieve stored content for a session.
     pub fn retrieve(&self, session_id: &str) -> Result<Option<String>> {
-        let entries = self.entries.lock().map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+        let entries = self
+            .entries
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
         Ok(entries.get(session_id).map(|e| e.content.clone()))
     }
 
     /// List all stored session memory entries.
     pub fn list_sessions(&self) -> Result<Vec<MemoryEntry>> {
-        let entries = self.entries.lock().map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+        let entries = self
+            .entries
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
         Ok(entries.values().cloned().collect())
     }
 
     /// Remove a session entry.
     pub fn remove(&self, session_id: &str) -> Result<bool> {
-        let mut entries = self.entries.lock().map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+        let mut entries = self
+            .entries
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
         Ok(entries.remove(session_id).is_some())
     }
 
     /// Clear all session entries.
     pub fn clear(&self) -> Result<()> {
-        let mut entries = self.entries.lock().map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+        let mut entries = self
+            .entries
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
         entries.clear();
         Ok(())
     }
@@ -92,8 +107,8 @@ pub fn extract_memories(conversation: &str) -> Vec<String> {
     let mut memories = Vec::new();
 
     // Patterns for memory-worthy content
-    let remember_re = Regex::new(r"(?i)\b(remember|note|keep in mind|important)\b")
-        .expect("valid regex");
+    let remember_re =
+        Regex::new(r"(?i)\b(remember|note|keep in mind|important)\b").expect("valid regex");
     let action_re = Regex::new(r"(?i)\b(TODO|FIXME|ACTION|HACK|XXX)\b").expect("valid regex");
     let fact_re = Regex::new(r"^[A-Z][^.]*\.$").expect("valid regex");
 
@@ -176,7 +191,8 @@ mod tests {
 
     #[test]
     fn extract_memories_remember() {
-        let conv = "Please remember to use tabs.\njust a normal line here\nImportant: always commit.";
+        let conv =
+            "Please remember to use tabs.\njust a normal line here\nImportant: always commit.";
         let mems = extract_memories(conv);
         assert_eq!(mems.len(), 2);
         assert!(mems[0].contains("remember"));

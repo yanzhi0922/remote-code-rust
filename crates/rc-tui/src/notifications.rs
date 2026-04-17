@@ -10,7 +10,6 @@
 use std::fmt;
 use std::time::{Duration, Instant};
 
-
 // ---------------------------------------------------------------------------
 // Notification ID
 // ---------------------------------------------------------------------------
@@ -156,7 +155,11 @@ pub struct Notification {
 
 impl Notification {
     /// Create a new notification.
-    pub fn new(notif_type: NotificationType, title: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn new(
+        notif_type: NotificationType,
+        title: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
         let duration = notif_type.default_duration();
         Notification {
             id: NotificationId::next(),
@@ -349,17 +352,29 @@ impl NotificationManager {
     }
 
     /// Add a warning notification.
-    pub fn warning(&mut self, title: impl Into<String>, message: impl Into<String>) -> NotificationId {
+    pub fn warning(
+        &mut self,
+        title: impl Into<String>,
+        message: impl Into<String>,
+    ) -> NotificationId {
         self.add(Notification::warning(title, message))
     }
 
     /// Add an error notification.
-    pub fn error(&mut self, title: impl Into<String>, message: impl Into<String>) -> NotificationId {
+    pub fn error(
+        &mut self,
+        title: impl Into<String>,
+        message: impl Into<String>,
+    ) -> NotificationId {
         self.add(Notification::error(title, message))
     }
 
     /// Add a success notification.
-    pub fn success(&mut self, title: impl Into<String>, message: impl Into<String>) -> NotificationId {
+    pub fn success(
+        &mut self,
+        title: impl Into<String>,
+        message: impl Into<String>,
+    ) -> NotificationId {
         self.add(Notification::success(title, message))
     }
 
@@ -369,10 +384,7 @@ impl NotificationManager {
             && notif.dismissible
         {
             notif.dismiss();
-            let idx = self
-                .notifications
-                .iter()
-                .position(|n| n.id == id);
+            let idx = self.notifications.iter().position(|n| n.id == id);
             if let Some(idx) = idx {
                 let dismissed = self.notifications.remove(idx);
                 self.push_history(dismissed);
@@ -432,7 +444,10 @@ impl NotificationManager {
 
     /// Get the number of active notifications.
     pub fn active_count(&self) -> usize {
-        self.notifications.iter().filter(|n| !n.is_expired()).count()
+        self.notifications
+            .iter()
+            .filter(|n| !n.is_expired())
+            .count()
     }
 
     /// Get the total number of notifications (active + history).
@@ -504,7 +519,9 @@ mod tests {
 
     #[test]
     fn test_notification_type_default_duration() {
-        assert!(NotificationType::Error.default_duration() > NotificationType::Info.default_duration());
+        assert!(
+            NotificationType::Error.default_duration() > NotificationType::Info.default_duration()
+        );
     }
 
     #[test]
@@ -555,7 +572,10 @@ mod tests {
     #[test]
     fn test_notification_position_display() {
         assert_eq!(NotificationPosition::TopRight.to_string(), "top-right");
-        assert_eq!(NotificationPosition::BottomCenter.to_string(), "bottom-center");
+        assert_eq!(
+            NotificationPosition::BottomCenter.to_string(),
+            "bottom-center"
+        );
     }
 
     #[test]

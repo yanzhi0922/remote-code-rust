@@ -25,9 +25,7 @@ pub fn enter_worktree(input: &Value, context: &ToolExecutionContext) -> Result<S
         return Err(anyhow!("branch cannot be empty"));
     }
 
-    let target_dir = input["directory"]
-        .as_str()
-        .unwrap_or(".worktrees/branch");
+    let target_dir = input["directory"].as_str().unwrap_or(".worktrees/branch");
     let target_dir = if target_dir == ".worktrees/branch" {
         format!(".worktrees/{branch}")
     } else {
@@ -213,8 +211,8 @@ fn parse_worktree_list(text: &str) -> Vec<WorktreeInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     fn test_context() -> ToolExecutionContext {
         ToolExecutionContext {

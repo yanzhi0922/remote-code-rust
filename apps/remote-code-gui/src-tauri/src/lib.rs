@@ -37,7 +37,7 @@ use rc_tools::{
         observe_runtime_mcp_servers, runtime_mcp_inventory_summary, runtime_mcp_policy_entries,
         RuntimeMcpServerObservation,
     },
-    runtime_builtin_tool_specs,
+    runtime_provider_tool_spec,
     tasks::load_persisted_ui_task_snapshots,
     ToolExecutionContext, ToolRuntimePolicy,
 };
@@ -1553,9 +1553,7 @@ struct McpTransportFields {
     env_keys: Vec<String>,
 }
 
-fn mcp_server_transport_fields(
-    server: &McpServerConfig,
-) -> McpTransportFields {
+fn mcp_server_transport_fields(server: &McpServerConfig) -> McpTransportFields {
     match &server.transport {
         McpTransportConfig::Stdio {
             command,
@@ -2811,9 +2809,8 @@ async fn run_gui_prompt(
         }
 
         for tool_call in &response.tool_calls {
-            let _ = runtime_builtin_tool_specs()
-                .into_iter()
-                .find(|spec| spec.name == tool_call.name)
+            let _ = runtime_provider_tool_spec(&tool_call.name)
+                .await
                 .ok_or_else(|| anyhow!("unknown tool {}", tool_call.name))?;
 
             let _ = app.emit(

@@ -37,11 +37,8 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     let tab_line = Line::from(tabs);
-    let tab_widget = Paragraph::new(tab_line).style(
-        Style::default()
-            .bg(style.sidebar_bg)
-            .fg(style.status_fg),
-    );
+    let tab_widget =
+        Paragraph::new(tab_line).style(Style::default().bg(style.sidebar_bg).fg(style.status_fg));
     f.render_widget(tab_widget, area);
 
     // Content area below tabs.
@@ -65,7 +62,8 @@ fn render_sessions(f: &mut Frame, app: &App, area: Rect) {
         .enumerate()
         .filter_map(|(i, msg)| {
             if msg.role == crate::message::MessageRole::User {
-                let preview = crate::message::message_preview(msg, (area.width as usize).saturating_sub(6));
+                let preview =
+                    crate::message::message_preview(msg, (area.width as usize).saturating_sub(6));
                 let text = format!("{}. {preview}", i + 1);
                 Some(ListItem::new(text))
             } else {
@@ -125,10 +123,7 @@ fn render_mcp(f: &mut Frame, app: &App, area: Rect) {
                 "failed" => app.style.error_color,
                 _ => app.style.info_color,
             };
-            let text = format!(
-                " {icon} {} ({} tools)",
-                server.name, server.tool_count
-            );
+            let text = format!(" {icon} {} ({} tools)", server.name, server.tool_count);
             ListItem::new(Line::from(Span::styled(text, Style::default().fg(color))))
         })
         .collect();
@@ -146,29 +141,43 @@ fn render_help_tab(f: &mut Frame, app: &App, area: Rect) {
     let lines = vec![
         Line::from(Span::styled(
             " Keyboard Shortcuts",
-            Style::default().fg(style.accent_color).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(style.accent_color)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::raw("")),
-        Line::from(Span::styled(" Mode:", Style::default().add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled(
+            " Mode:",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
         Line::from(Span::raw("  Esc      → Normal mode")),
         Line::from(Span::raw("  i        → Insert mode")),
         Line::from(Span::raw("  v        → Visual mode")),
         Line::from(Span::raw("  :        → Command mode")),
         Line::from(Span::raw("  /        → Search mode")),
         Line::from(Span::raw("")),
-        Line::from(Span::styled(" Navigation:", Style::default().add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled(
+            " Navigation:",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
         Line::from(Span::raw("  j/k      → Scroll up/down")),
         Line::from(Span::raw("  G        → Jump to bottom")),
         Line::from(Span::raw("  gg       → Jump to top")),
         Line::from(Span::raw("  Ctrl-U/D → Half-page scroll")),
         Line::from(Span::raw("")),
-        Line::from(Span::styled(" Input:", Style::default().add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled(
+            " Input:",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
         Line::from(Span::raw("  Enter    → Send message")),
         Line::from(Span::raw("  Shift+Enter → New line")),
         Line::from(Span::raw("  Tab      → Toggle sidebar")),
         Line::from(Span::raw("  ↑/↓      → History")),
         Line::from(Span::raw("")),
-        Line::from(Span::styled(" Commands:", Style::default().add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled(
+            " Commands:",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
         Line::from(Span::raw("  :q       → Quit")),
         Line::from(Span::raw("  :help    → This panel")),
         Line::from(Span::raw("  :clear   → Clear chat")),

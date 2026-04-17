@@ -93,9 +93,27 @@ mod tests {
 
     #[test]
     fn env_vars_are_uppercase() {
-        assert!(ENV_TEAM_NAME.chars().filter(|c| c.is_ascii_lowercase()).count() == 0);
-        assert!(ENV_AGENT_NAME.chars().filter(|c| c.is_ascii_lowercase()).count() == 0);
-        assert!(ENV_AGENT_ID.chars().filter(|c| c.is_ascii_lowercase()).count() == 0);
+        assert!(
+            ENV_TEAM_NAME
+                .chars()
+                .filter(|c| c.is_ascii_lowercase())
+                .count()
+                == 0
+        );
+        assert!(
+            ENV_AGENT_NAME
+                .chars()
+                .filter(|c| c.is_ascii_lowercase())
+                .count()
+                == 0
+        );
+        assert!(
+            ENV_AGENT_ID
+                .chars()
+                .filter(|c| c.is_ascii_lowercase())
+                .count()
+                == 0
+        );
     }
 
     #[test]

@@ -99,18 +99,20 @@ impl McpHeadersResolver {
             return Err(McpRuntimeError::Protocol {
                 server: server_name.to_owned(),
                 phase: "headersHelper",
-                message: format!("helper script failed with status {}: {stderr}", output.status),
+                message: format!(
+                    "helper script failed with status {}: {stderr}",
+                    output.status
+                ),
             });
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let parsed: HashMap<String, String> = serde_json::from_str(stdout.trim()).map_err(|e| {
-            McpRuntimeError::Decode {
+        let parsed: HashMap<String, String> =
+            serde_json::from_str(stdout.trim()).map_err(|e| McpRuntimeError::Decode {
                 server: server_name.to_owned(),
                 phase: "headersHelper output",
                 source: e,
-            }
-        })?;
+            })?;
 
         Ok(parsed)
     }

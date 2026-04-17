@@ -57,11 +57,7 @@ impl SecureStorage for PlatformKeychain {
         load_secret(&self.service_name, &key).await
     }
 
-    async fn delete(
-        &self,
-        service: &str,
-        account: &str,
-    ) -> Result<(), SecureStorageError> {
+    async fn delete(&self, service: &str, account: &str) -> Result<(), SecureStorageError> {
         let key = format!("{service}:{account}");
         delete_secret(&self.service_name, &key).await
     }
@@ -70,11 +66,7 @@ impl SecureStorage for PlatformKeychain {
 // ── Platform-specific implementations ──────────────────────────────────
 
 #[cfg(target_os = "macos")]
-async fn save_secret(
-    service: &str,
-    account: &str,
-    secret: &str,
-) -> Result<(), SecureStorageError> {
+async fn save_secret(service: &str, account: &str, secret: &str) -> Result<(), SecureStorageError> {
     let output = tokio::process::Command::new("security")
         .args([
             "add-generic-password",
@@ -101,10 +93,7 @@ async fn save_secret(
 }
 
 #[cfg(target_os = "macos")]
-async fn load_secret(
-    service: &str,
-    account: &str,
-) -> Result<Option<String>, SecureStorageError> {
+async fn load_secret(service: &str, account: &str) -> Result<Option<String>, SecureStorageError> {
     let output = tokio::process::Command::new("security")
         .args(["find-generic-password", "-a", account, "-s", service, "-w"])
         .output()
@@ -120,10 +109,7 @@ async fn load_secret(
 }
 
 #[cfg(target_os = "macos")]
-async fn delete_secret(
-    service: &str,
-    account: &str,
-) -> Result<(), SecureStorageError> {
+async fn delete_secret(service: &str, account: &str) -> Result<(), SecureStorageError> {
     let output = tokio::process::Command::new("security")
         .args(["delete-generic-password", "-a", account, "-s", service])
         .output()
@@ -145,11 +131,7 @@ async fn delete_secret(
 }
 
 #[cfg(target_os = "windows")]
-async fn save_secret(
-    service: &str,
-    account: &str,
-    secret: &str,
-) -> Result<(), SecureStorageError> {
+async fn save_secret(service: &str, account: &str, secret: &str) -> Result<(), SecureStorageError> {
     // Use a file-based fallback on Windows.
     // In production, integrate with Windows Credential Manager via
     // the `windows` crate or `credential` crate.
@@ -157,30 +139,22 @@ async fn save_secret(
 }
 
 #[cfg(target_os = "windows")]
-async fn load_secret(
-    service: &str,
-    account: &str,
-) -> Result<Option<String>, SecureStorageError> {
+async fn load_secret(service: &str, account: &str) -> Result<Option<String>, SecureStorageError> {
     file_based_load(service, account).await
 }
 
 #[cfg(target_os = "windows")]
-async fn delete_secret(
-    service: &str,
-    account: &str,
-) -> Result<(), SecureStorageError> {
+async fn delete_secret(service: &str, account: &str) -> Result<(), SecureStorageError> {
     file_based_delete(service, account).await
 }
 
 #[cfg(target_os = "linux")]
-async fn save_secret(
-    service: &str,
-    account: &str,
-    secret: &str,
-) -> Result<(), SecureStorageError> {
+async fn save_secret(service: &str, account: &str, secret: &str) -> Result<(), SecureStorageError> {
     // Try secret-tool (libsecret) first, fall back to file-based.
     if let Ok(output) = tokio::process::Command::new("secret-tool")
-        .args(["store", "--label", service, "service", service, "account", account])
+        .args([
+            "store", "--label", service, "service", service, "account", account,
+        ])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -197,10 +171,7 @@ async fn save_secret(
 }
 
 #[cfg(target_os = "linux")]
-async fn load_secret(
-    service: &str,
-    account: &str,
-) -> Result<Option<String>, SecureStorageError> {
+async fn load_secret(service: &str, account: &str) -> Result<Option<String>, SecureStorageError> {
     if let Ok(output) = tokio::process::Command::new("secret-tool")
         .args(["lookup", "service", service, "account", account])
         .output()
@@ -215,10 +186,7 @@ async fn load_secret(
 }
 
 #[cfg(target_os = "linux")]
-async fn delete_secret(
-    service: &str,
-    account: &str,
-) -> Result<(), SecureStorageError> {
+async fn delete_secret(service: &str, account: &str) -> Result<(), SecureStorageError> {
     if let Ok(output) = tokio::process::Command::new("secret-tool")
         .args(["clear", "service", service, "account", account])
         .output()
@@ -269,10 +237,7 @@ async fn file_based_load(
     Ok(Some(secret))
 }
 
-async fn file_based_delete(
-    service: &str,
-    account: &str,
-) -> Result<(), SecureStorageError> {
+async fn file_based_delete(service: &str, account: &str) -> Result<(), SecureStorageError> {
     let path = secrets_dir()?.join(safe_filename(service, account));
     if path.exists() {
         tokio::fs::remove_file(&path)

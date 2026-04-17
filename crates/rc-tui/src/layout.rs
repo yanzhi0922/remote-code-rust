@@ -29,9 +29,9 @@ impl AppLayout {
         let vertical = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(1),       // main area
-                Constraint::Length(2),     // input area
-                Constraint::Length(1),     // status bar
+                Constraint::Min(1),    // main area
+                Constraint::Length(2), // input area
+                Constraint::Length(1), // status bar
             ])
             .split(area);
 
@@ -44,8 +44,8 @@ impl AppLayout {
             let horizontal = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
-                    Constraint::Min(1),       // chat
-                    Constraint::Length(30),    // sidebar
+                    Constraint::Min(1),     // chat
+                    Constraint::Length(30), // sidebar
                 ])
                 .split(main);
             (horizontal[0], horizontal[1])

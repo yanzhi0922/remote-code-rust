@@ -18,8 +18,8 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 
 use crate::coordinator::{
-    async_agent_allowed_tools_set, format_task_notification, internal_worker_tools_set,
-    TaskNotificationParams, TaskNotificationStatus, TaskUsage,
+    TaskNotificationParams, TaskNotificationStatus, TaskUsage, async_agent_allowed_tools_set,
+    format_task_notification, internal_worker_tools_set,
 };
 use crate::definition::AgentDefinition;
 use crate::runner::{AgentRunConfig, AgentRunResult, UsageSummary};
@@ -366,7 +366,10 @@ pub fn format_task_notification_xml(
 ) -> String {
     let summary = match status {
         TaskNotificationStatus::Completed => format!("Agent \"{description}\" completed"),
-        TaskNotificationStatus::Failed => format!("Agent \"{description}\" failed: {}", result.unwrap_or("unknown error")),
+        TaskNotificationStatus::Failed => format!(
+            "Agent \"{description}\" failed: {}",
+            result.unwrap_or("unknown error")
+        ),
         TaskNotificationStatus::Killed => format!("Agent \"{description}\" was stopped"),
     };
 
@@ -552,7 +555,10 @@ mod tests {
         let run_config = worker_run_config(&config);
         assert_eq!(run_config.max_turns, 50);
         assert_eq!(run_config.model, "haiku");
-        assert_eq!(run_config.working_dir, std::path::PathBuf::from("/tmp/test"));
+        assert_eq!(
+            run_config.working_dir,
+            std::path::PathBuf::from("/tmp/test")
+        );
     }
 
     #[test]

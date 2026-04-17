@@ -72,8 +72,7 @@ fn stress_large_mailbox_messages() {
     // Deserialize all messages
     for msg in &messages {
         let json = serde_json::to_string(msg).expect("should serialize");
-        let _: rc_swarm::MailboxMessage =
-            serde_json::from_str(&json).expect("should deserialize");
+        let _: rc_swarm::MailboxMessage = serde_json::from_str(&json).expect("should deserialize");
     }
 }
 
@@ -111,7 +110,9 @@ fn stress_session_large_conversation_serialization() {
 
     // Create 10,000 conversation entries
     for i in 0..5000 {
-        entries.push(rc_core::ConversationEntry::user(format!("User message {i}")));
+        entries.push(rc_core::ConversationEntry::user(format!(
+            "User message {i}"
+        )));
         entries.push(rc_core::ConversationEntry::assistant(format!(
             "Assistant response {i}"
         )));
@@ -271,12 +272,18 @@ fn stress_state_machine_transitions() {
 
     // Run 1000 full lifecycles
     for _ in 0..1000 {
-        sm.transition(rc_query_engine::state_machine::EnginePhase::Initializing).expect("ok");
-        sm.transition(rc_query_engine::state_machine::EnginePhase::BuildingPrompt).expect("ok");
-        sm.transition(rc_query_engine::state_machine::EnginePhase::CallingProvider).expect("ok");
-        sm.transition(rc_query_engine::state_machine::EnginePhase::ProcessingResponse).expect("ok");
-        sm.transition(rc_query_engine::state_machine::EnginePhase::Finalizing).expect("ok");
-        sm.transition(rc_query_engine::state_machine::EnginePhase::Idle).expect("ok");
+        sm.transition(rc_query_engine::state_machine::EnginePhase::Initializing)
+            .expect("ok");
+        sm.transition(rc_query_engine::state_machine::EnginePhase::BuildingPrompt)
+            .expect("ok");
+        sm.transition(rc_query_engine::state_machine::EnginePhase::CallingProvider)
+            .expect("ok");
+        sm.transition(rc_query_engine::state_machine::EnginePhase::ProcessingResponse)
+            .expect("ok");
+        sm.transition(rc_query_engine::state_machine::EnginePhase::Finalizing)
+            .expect("ok");
+        sm.transition(rc_query_engine::state_machine::EnginePhase::Idle)
+            .expect("ok");
     }
 
     // Transitions should have 6000 entries (6 transitions × 1000 cycles)

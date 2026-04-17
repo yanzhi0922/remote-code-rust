@@ -48,7 +48,10 @@ pub async fn write_request(team_name: &str, request: &SwarmPermissionRequest) ->
 }
 
 /// Read a permission request from the file system.
-pub async fn read_request(team_name: &str, request_id: &str) -> SwarmResult<SwarmPermissionRequest> {
+pub async fn read_request(
+    team_name: &str,
+    request_id: &str,
+) -> SwarmResult<SwarmPermissionRequest> {
     let path = request_file_path(team_name, request_id);
     if !path.exists() {
         return Err(SwarmError::PermissionRequestNotFound(request_id.to_owned()));
@@ -136,13 +139,14 @@ pub async fn list_pending_requests(team_name: &str) -> SwarmResult<Vec<SwarmPerm
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
         if let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string())
-            && name.ends_with(PERMISSION_REQUEST_EXT) {
-                let content = fs::read_to_string(&path).await?;
-                let req: SwarmPermissionRequest = serde_json::from_str(&content)?;
-                if !req.is_resolved() {
-                    requests.push(req);
-                }
+            && name.ends_with(PERMISSION_REQUEST_EXT)
+        {
+            let content = fs::read_to_string(&path).await?;
+            let req: SwarmPermissionRequest = serde_json::from_str(&content)?;
+            if !req.is_resolved() {
+                requests.push(req);
             }
+        }
     }
 
     Ok(requests)
@@ -162,14 +166,16 @@ pub async fn cleanup_permissions(team_name: &str, older_than_secs: i64) -> Swarm
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
         if let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string())
-            && (name.ends_with(PERMISSION_REQUEST_EXT) || name.ends_with(PERMISSION_RESPONSE_EXT)) {
-                let content = fs::read_to_string(&path).await?;
-                if let Ok(req) = serde_json::from_str::<SwarmPermissionRequest>(&content)
-                    && now - req.created_at > older_than_secs {
-                        let _ = fs::remove_file(&path).await;
-                        removed += 1;
-                    }
+            && (name.ends_with(PERMISSION_REQUEST_EXT) || name.ends_with(PERMISSION_RESPONSE_EXT))
+        {
+            let content = fs::read_to_string(&path).await?;
+            if let Ok(req) = serde_json::from_str::<SwarmPermissionRequest>(&content)
+                && now - req.created_at > older_than_secs
+            {
+                let _ = fs::remove_file(&path).await;
+                removed += 1;
             }
+        }
     }
 
     Ok(removed)
@@ -208,7 +214,9 @@ mod tests {
             "bash",
             serde_json::json!({"command": "ls"}),
         );
-        write_request("test-team", &request).await.expect("should write");
+        write_request("test-team", &request)
+            .await
+            .expect("should write");
         let read = read_request("test-team", &request.request_id)
             .await
             .expect("should read");
@@ -232,7 +240,9 @@ mod tests {
             "bash",
             serde_json::json!({"command": "ls"}),
         );
-        write_request("test-team", &request).await.expect("should write");
+        write_request("test-team", &request)
+            .await
+            .expect("should write");
         write_response(
             "test-team",
             &request.request_id,
@@ -258,7 +268,9 @@ mod tests {
             "bash",
             serde_json::json!({"command": "rm -rf /"}),
         );
-        write_request("test-team", &request).await.expect("should write");
+        write_request("test-team", &request)
+            .await
+            .expect("should write");
         write_response(
             "test-team",
             &request.request_id,
@@ -290,39 +302,43 @@ mod tests {
         write_request("test-team", &req1).await.expect("ok");
         write_request("test-team", &req2).await.expect("ok");
 
-        let pending = list_pending_requests("test-team").await.expect("should list");
+        let pending = list_pending_requests("test-team")
+            .await
+            .expect("should list");
         assert_eq!(pending.len(), 2);
     }
 
     #[tokio::test]
     async fn test_list_pending_requests_empty() {
         let _td = TestDir::new();
-        let pending = list_pending_requests("test-team").await.expect("should list");
+        let pending = list_pending_requests("test-team")
+            .await
+            .expect("should list");
         assert!(pending.is_empty());
     }
 
     #[tokio::test]
     async fn test_cleanup_old_permissions() {
         let _td = TestDir::new();
-        let mut request = SwarmPermissionRequest::new(
-            "test-team",
-            "worker-1",
-            "bash",
-            serde_json::json!({}),
-        );
+        let mut request =
+            SwarmPermissionRequest::new("test-team", "worker-1", "bash", serde_json::json!({}));
         // Set created_at to far past so it's definitely old enough.
         request.created_at = 0;
         write_request("test-team", &request).await.expect("ok");
 
         // Clean up files older than 0 seconds (everything with created_at=0).
-        let removed = cleanup_permissions("test-team", 0).await.expect("should cleanup");
+        let removed = cleanup_permissions("test-team", 0)
+            .await
+            .expect("should cleanup");
         assert_eq!(removed, 1);
     }
 
     #[tokio::test]
     async fn test_cleanup_permissions_no_dir() {
         let _td = TestDir::new();
-        let removed = cleanup_permissions("nonexistent-team", 0).await.expect("ok");
+        let removed = cleanup_permissions("nonexistent-team", 0)
+            .await
+            .expect("ok");
         assert_eq!(removed, 0);
     }
 

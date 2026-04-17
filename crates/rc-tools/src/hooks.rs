@@ -6,12 +6,12 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
+use rc_core::HookShell;
 use rc_core::hook_executor::{HookBatchResult, HookExecutor};
 use rc_core::hook_matcher::match_hooks;
 use rc_core::hook_registry::HookRegistry;
 use rc_core::hook_types::{HookInput, HookMatcherEntry};
 use rc_core::hooks::HookEventKind;
-use rc_core::HookShell;
 
 use std::process::Stdio;
 use tokio::io::AsyncReadExt;
@@ -201,19 +201,9 @@ impl HookExecutionContext {
     }
 
     /// Execute Stop hooks.
-    pub async fn execute_stop_hooks(
-        &self,
-        session_id: Option<&str>,
-        cwd: &str,
-    ) -> HookBatchResult {
-        self.execute_event_hooks(
-            HookEventKind::Stop,
-            None,
-            None,
-            session_id,
-            Some(cwd),
-        )
-        .await
+    pub async fn execute_stop_hooks(&self, session_id: Option<&str>, cwd: &str) -> HookBatchResult {
+        self.execute_event_hooks(HookEventKind::Stop, None, None, session_id, Some(cwd))
+            .await
     }
 
     /// Execute SessionStart hooks.
@@ -238,14 +228,8 @@ impl HookExecutionContext {
         session_id: Option<&str>,
         cwd: &str,
     ) -> HookBatchResult {
-        self.execute_event_hooks(
-            HookEventKind::SessionEnd,
-            None,
-            None,
-            session_id,
-            Some(cwd),
-        )
-        .await
+        self.execute_event_hooks(HookEventKind::SessionEnd, None, None, session_id, Some(cwd))
+            .await
     }
 
     /// Execute Notification hooks.
@@ -270,14 +254,8 @@ impl HookExecutionContext {
         session_id: Option<&str>,
         cwd: &str,
     ) -> HookBatchResult {
-        self.execute_event_hooks(
-            HookEventKind::PreCompact,
-            None,
-            None,
-            session_id,
-            Some(cwd),
-        )
-        .await
+        self.execute_event_hooks(HookEventKind::PreCompact, None, None, session_id, Some(cwd))
+            .await
     }
 
     /// Execute PostCompact hooks.
@@ -297,10 +275,7 @@ impl HookExecutionContext {
     }
 
     /// Load hooks from a settings map into the registry.
-    pub fn load_from_settings(
-        &mut self,
-        settings: &HashMap<String, Vec<HookMatcherEntry>>,
-    ) {
+    pub fn load_from_settings(&mut self, settings: &HashMap<String, Vec<HookMatcherEntry>>) {
         self.registry.register_from_settings(settings);
     }
 }
@@ -400,9 +375,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_pre_tool_hooks_matching() {
-        let mut ctx = HookExecutionContext::new(
-            std::env::temp_dir().to_string_lossy().to_string(),
-        );
+        let mut ctx = HookExecutionContext::new(std::env::temp_dir().to_string_lossy().to_string());
         ctx.registry.register_hooks(
             HookEventKind::PreToolUse,
             vec![make_matcher(Some("Bash"), &["echo pre-tool"])],
@@ -416,9 +389,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_pre_tool_hooks_non_matching() {
-        let mut ctx = HookExecutionContext::new(
-            std::env::temp_dir().to_string_lossy().to_string(),
-        );
+        let mut ctx = HookExecutionContext::new(std::env::temp_dir().to_string_lossy().to_string());
         ctx.registry.register_hooks(
             HookEventKind::PreToolUse,
             vec![make_matcher(Some("Write"), &["echo pre-tool"])],
@@ -431,9 +402,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_session_start_hooks() {
-        let mut ctx = HookExecutionContext::new(
-            std::env::temp_dir().to_string_lossy().to_string(),
-        );
+        let mut ctx = HookExecutionContext::new(std::env::temp_dir().to_string_lossy().to_string());
         ctx.registry.register_hooks(
             HookEventKind::SessionStart,
             vec![make_matcher(None, &["echo session-start"])],
@@ -444,9 +413,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_stop_hooks() {
-        let mut ctx = HookExecutionContext::new(
-            std::env::temp_dir().to_string_lossy().to_string(),
-        );
+        let mut ctx = HookExecutionContext::new(std::env::temp_dir().to_string_lossy().to_string());
         ctx.registry.register_hooks(
             HookEventKind::Stop,
             vec![make_matcher(None, &["echo stop"])],
@@ -457,9 +424,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_notification_hooks() {
-        let mut ctx = HookExecutionContext::new(
-            std::env::temp_dir().to_string_lossy().to_string(),
-        );
+        let mut ctx = HookExecutionContext::new(std::env::temp_dir().to_string_lossy().to_string());
         ctx.registry.register_hooks(
             HookEventKind::Notification,
             vec![make_matcher(None, &["echo notify"])],

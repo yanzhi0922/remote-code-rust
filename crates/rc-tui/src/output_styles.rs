@@ -8,7 +8,6 @@
 
 use std::fmt;
 
-
 // ---------------------------------------------------------------------------
 // Output Style
 // ---------------------------------------------------------------------------
@@ -426,7 +425,10 @@ mod tests {
     fn test_output_style_from_str() {
         assert_eq!(OutputStyle::from_str_lossy("concise"), OutputStyle::Concise);
         assert_eq!(OutputStyle::from_str_lossy("VERBOSE"), OutputStyle::Verbose);
-        assert_eq!(OutputStyle::from_str_lossy("technical"), OutputStyle::Technical);
+        assert_eq!(
+            OutputStyle::from_str_lossy("technical"),
+            OutputStyle::Technical
+        );
         assert_eq!(OutputStyle::from_str_lossy("unknown"), OutputStyle::Default);
         assert_eq!(OutputStyle::from_str_lossy("default"), OutputStyle::Default);
     }
@@ -560,11 +562,12 @@ mod tests {
                 ..config
             },
         );
-        let items: Vec<&str> = (0..5).map(|i| {
-            static ITEMS: [&str; 5] = ["a", "b", "c", "d", "e"];
-            ITEMS[i]
-        })
-        .collect();
+        let items: Vec<&str> = (0..5)
+            .map(|i| {
+                static ITEMS: [&str; 5] = ["a", "b", "c", "d", "e"];
+                ITEMS[i]
+            })
+            .collect();
         let result = fmt.format_list(&items);
         assert!(result.contains("... and 3 more"));
     }

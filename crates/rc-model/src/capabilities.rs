@@ -239,7 +239,7 @@ fn canonicalise_for_lookup(model_id: &str) -> String {
         .unwrap_or(&lower)
         .to_owned();
     // Remove `-v1:0` or `-v1` suffix (Bedrock)
-    
+
     lower
         .strip_suffix("-v1:0")
         .unwrap_or(&lower)

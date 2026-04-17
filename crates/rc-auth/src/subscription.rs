@@ -120,8 +120,14 @@ mod tests {
 
     #[test]
     fn from_org_type() {
-        assert_eq!(SubscriptionTier::from_org_type("claude_pro"), Some(SubscriptionTier::Pro));
-        assert_eq!(SubscriptionTier::from_org_type("claude_max"), Some(SubscriptionTier::Max));
+        assert_eq!(
+            SubscriptionTier::from_org_type("claude_pro"),
+            Some(SubscriptionTier::Pro)
+        );
+        assert_eq!(
+            SubscriptionTier::from_org_type("claude_max"),
+            Some(SubscriptionTier::Max)
+        );
         assert_eq!(SubscriptionTier::from_org_type("unknown"), None);
     }
 

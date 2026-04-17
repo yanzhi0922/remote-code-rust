@@ -38,8 +38,14 @@ pub fn render(f: &mut Frame, request: &PermissionRequest, area: Rect) {
             ),
         ]),
         Line::from(vec![
-            Span::styled(" Action: ", Style::default().fg(ratatui::style::Color::Cyan)),
-            Span::raw(truncate_str(&request.description, (dialog_width as usize).saturating_sub(12))),
+            Span::styled(
+                " Action: ",
+                Style::default().fg(ratatui::style::Color::Cyan),
+            ),
+            Span::raw(truncate_str(
+                &request.description,
+                (dialog_width as usize).saturating_sub(12),
+            )),
         ]),
         Line::from(Span::raw(String::new())),
         if request.allow_all_available {
@@ -49,10 +55,7 @@ pub fn render(f: &mut Frame, request: &PermissionRequest, area: Rect) {
                     Style::default().fg(ratatui::style::Color::Green),
                 ),
                 Span::raw("  "),
-                Span::styled(
-                    "[N] Deny",
-                    Style::default().fg(ratatui::style::Color::Red),
-                ),
+                Span::styled("[N] Deny", Style::default().fg(ratatui::style::Color::Red)),
                 Span::raw("  "),
                 Span::styled(
                     "[A] Allow All",
@@ -66,10 +69,7 @@ pub fn render(f: &mut Frame, request: &PermissionRequest, area: Rect) {
                     Style::default().fg(ratatui::style::Color::Green),
                 ),
                 Span::raw("  "),
-                Span::styled(
-                    "[N] Deny",
-                    Style::default().fg(ratatui::style::Color::Red),
-                ),
+                Span::styled("[N] Deny", Style::default().fg(ratatui::style::Color::Red)),
             ])
         },
     ];

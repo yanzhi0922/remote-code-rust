@@ -1,7 +1,7 @@
 //! MCP configuration loading, parsing, and saving.
 //!
-//! Handles TOML-based configuration files with support for stdio, HTTP,
-//! and WebSocket transports. Includes raw intermediate types for TOML
+//! Handles TOML- and JSON-based configuration files with support for stdio,
+//! HTTP, and WebSocket transports. Includes raw intermediate types for
 //! serialization/deserialization.
 
 use std::collections::BTreeMap;
@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::McpConfigError;
-use crate::transport::{infer_transport_kind, McpTransport, McpTransportConfig};
+use crate::transport::{McpTransport, McpTransportConfig, infer_transport_kind};
 
 /// Capability flags reported by an MCP server during initialisation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -77,12 +77,19 @@ pub struct DiscoveredMcpConfig {
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub(crate) struct RawMcpConfig {
-    #[serde(default, rename = "mcp_servers", alias = "servers")]
+    #[serde(
+        default,
+        rename = "mcp_servers",
+        alias = "servers",
+        alias = "mcpServers"
+    )]
     pub(crate) servers: BTreeMap<String, RawMcpServer>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub(crate) struct RawMcpServer {
+    #[serde(default, rename = "transport", alias = "type")]
+    pub(crate) transport_kind: Option<String>,
     pub(crate) command: Option<String>,
     #[serde(default)]
     pub(crate) args: Vec<String>,
@@ -90,7 +97,7 @@ pub(crate) struct RawMcpServer {
     #[serde(default)]
     pub(crate) env: BTreeMap<String, String>,
     pub(crate) url: Option<String>,
-    #[serde(default, rename = "http_headers")]
+    #[serde(default, rename = "http_headers", alias = "headers")]
     pub(crate) http_headers: BTreeMap<String, String>,
     pub(crate) enabled: Option<bool>,
     pub(crate) startup_timeout_secs: Option<u64>,
@@ -119,6 +126,26 @@ fn default_enabled() -> bool {
     true
 }
 
+fn should_parse_as_json(path: &Path, content: &str) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+        || content.trim_start().starts_with('{')
+}
+
+fn infer_transport_kind_with_override(url: &str, transport_kind: Option<&str>) -> McpTransport {
+    match transport_kind
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("http") | Some("sse") | Some("sse-ide") => McpTransport::Http,
+        Some("ws") | Some("websocket") | Some("ws-ide") => McpTransport::WebSocket,
+        Some("stdio") => McpTransport::Stdio,
+        _ => infer_transport_kind(url),
+    }
+}
+
 impl From<RawMcpCapabilities> for McpCapabilityMatrix {
     fn from(value: RawMcpCapabilities) -> Self {
         Self {
@@ -134,10 +161,21 @@ impl From<RawMcpCapabilities> for McpCapabilityMatrix {
 impl McpConfig {
     /// Parse an MCP configuration from a TOML string.
     pub fn from_toml_str(input: &str) -> Result<Self, McpConfigError> {
-        let raw: RawMcpConfig = toml::from_str(input).map_err(|source| McpConfigError::Parse {
-            path: PathBuf::from("<memory>"),
-            source,
-        })?;
+        let raw: RawMcpConfig =
+            toml::from_str(input).map_err(|source| McpConfigError::ParseToml {
+                path: PathBuf::from("<memory>"),
+                source,
+            })?;
+        Self::from_raw(raw)
+    }
+
+    /// Parse an MCP configuration from a JSON string.
+    pub fn from_json_str(input: &str) -> Result<Self, McpConfigError> {
+        let raw: RawMcpConfig =
+            serde_json::from_str(input).map_err(|source| McpConfigError::ParseJson {
+                path: PathBuf::from("<memory>"),
+                source,
+            })?;
         Self::from_raw(raw)
     }
 
@@ -148,11 +186,17 @@ impl McpConfig {
             path: path.to_path_buf(),
             source,
         })?;
-        let raw: RawMcpConfig =
-            toml::from_str(&content).map_err(|source| McpConfigError::Parse {
+        let raw = if should_parse_as_json(path, &content) {
+            serde_json::from_str(&content).map_err(|source| McpConfigError::ParseJson {
                 path: path.to_path_buf(),
                 source,
-            })?;
+            })?
+        } else {
+            toml::from_str(&content).map_err(|source| McpConfigError::ParseToml {
+                path: path.to_path_buf(),
+                source,
+            })?
+        };
         Self::from_raw(raw)
     }
 
@@ -173,7 +217,10 @@ impl McpConfig {
                 },
                 (None, Some(url)) => {
                     let headers = raw_server.http_headers;
-                    match infer_transport_kind(url) {
+                    match infer_transport_kind_with_override(
+                        url,
+                        raw_server.transport_kind.as_deref(),
+                    ) {
                         McpTransport::Http => McpTransportConfig::Http {
                             url: url.clone(),
                             headers,
@@ -275,6 +322,7 @@ impl From<&McpConfig> for RawMcpConfig {
                 (
                     name.clone(),
                     RawMcpServer {
+                        transport_kind: None,
                         command,
                         args,
                         cwd,
@@ -342,6 +390,60 @@ url = "https://example.com""#,
         )
         .expect_err("should fail");
         assert!(matches!(err, McpConfigError::AmbiguousTransport { .. }));
+    }
+
+    #[test]
+    fn parses_json_mcp_servers_shape() {
+        let config = McpConfig::from_json_str(
+            r#"{
+                "mcpServers": {
+                    "context7": {
+                        "type": "stdio",
+                        "command": "npx",
+                        "args": ["-y", "@upstash/context7-mcp"]
+                    },
+                    "relay": {
+                        "type": "ws",
+                        "url": "https://example.com/mcp",
+                        "headers": {
+                            "Authorization": "Bearer token"
+                        }
+                    }
+                }
+            }"#,
+        )
+        .expect("should parse");
+
+        assert_eq!(config.servers.len(), 2);
+        assert_eq!(
+            config.servers["context7"].transport.kind(),
+            McpTransport::Stdio
+        );
+        assert_eq!(
+            config.servers["relay"].transport.kind(),
+            McpTransport::WebSocket
+        );
+    }
+
+    #[test]
+    fn load_detects_json_by_extension() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(".mcp.json");
+        fs::write(
+            &path,
+            r#"{
+                "mcpServers": {
+                    "echo": {
+                        "command": "python"
+                    }
+                }
+            }"#,
+        )
+        .expect("write");
+
+        let config = McpConfig::load(&path).expect("load");
+        assert_eq!(config.servers.len(), 1);
+        assert_eq!(config.servers["echo"].transport.kind(), McpTransport::Stdio);
     }
 
     #[test]

@@ -141,14 +141,15 @@ impl PluginOptionsStore {
 
         // Check if this key is sensitive — if so, skip writing to file
         if let Some(s) = schema
-            && s.get(key).and_then(|c| c.sensitive).unwrap_or(false) {
-                // Sensitive values should go to secure storage, not here
-                // Remove from non-sensitive store if present
-                options.remove(key);
-                let filtered = self.filter_non_sensitive(&options, s);
-                self.save_options(plugin_id, &filtered, s)?;
-                return Ok(());
-            }
+            && s.get(key).and_then(|c| c.sensitive).unwrap_or(false)
+        {
+            // Sensitive values should go to secure storage, not here
+            // Remove from non-sensitive store if present
+            options.remove(key);
+            let filtered = self.filter_non_sensitive(&options, s);
+            self.save_options(plugin_id, &filtered, s)?;
+            return Ok(());
+        }
 
         options.insert(key.to_string(), value);
 
@@ -166,12 +167,10 @@ impl PluginOptionsStore {
     pub fn delete_options(&self, plugin_id: &str) {
         let path = self.options_file_path(plugin_id);
         if path.exists()
-            && let Err(e) = fs::remove_file(&path) {
-                tracing::warn!(
-                    "Failed to delete options file {}: {e}",
-                    path.display()
-                );
-            }
+            && let Err(e) = fs::remove_file(&path)
+        {
+            tracing::warn!("Failed to delete options file {}: {e}", path.display());
+        }
     }
 
     /// Get the path to a plugin's options file.
@@ -193,12 +192,7 @@ impl PluginOptionsStore {
     ) -> PluginOptionValues {
         values
             .iter()
-            .filter(|(key, _)| {
-                !schema
-                    .get(*key)
-                    .and_then(|c| c.sensitive)
-                    .unwrap_or(false)
-            })
+            .filter(|(key, _)| !schema.get(*key).and_then(|c| c.sensitive).unwrap_or(false))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect()
     }
@@ -232,7 +226,11 @@ impl PluginOptionsStore {
 ///
 /// On Windows, normalizes backslashes to forward slashes so shell commands
 /// don't interpret them as escape characters.
-pub fn substitute_plugin_variables(value: &str, plugin_path: &Path, plugin_source: Option<&str>) -> String {
+pub fn substitute_plugin_variables(
+    value: &str,
+    plugin_path: &Path,
+    plugin_source: Option<&str>,
+) -> String {
     let normalize = |p: &Path| -> String {
         let s = p.to_string_lossy().to_string();
         if cfg!(windows) {
@@ -274,14 +272,12 @@ pub fn substitute_user_config_variables(
             let abs_end = after_prefix + end;
             let key = &result[after_prefix..abs_end];
 
-            let config_value = user_config
-                .get(key)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Missing required user configuration value: {key}. \
+            let config_value = user_config.get(key).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Missing required user configuration value: {key}. \
                          This should have been validated before variable substitution."
-                    )
-                })?;
+                )
+            })?;
 
             let replacement = match config_value {
                 Value::String(s) => s.clone(),
@@ -492,17 +488,15 @@ mod tests {
         let mut config = BTreeMap::new();
         config.insert("name".into(), json!("world"));
 
-        let result =
-            substitute_user_config_variables("Hello ${user_config.name}!", &config)
-                .expect("substitute");
+        let result = substitute_user_config_variables("Hello ${user_config.name}!", &config)
+            .expect("substitute");
         assert_eq!(result, "Hello world!");
     }
 
     #[test]
     fn test_substitute_user_config_variables_missing_key() {
         let config = BTreeMap::new();
-        let result =
-            substitute_user_config_variables("Hello ${user_config.name}!", &config);
+        let result = substitute_user_config_variables("Hello ${user_config.name}!", &config);
         assert!(result.is_err());
     }
 
@@ -512,11 +506,9 @@ mod tests {
         config.insert("first".into(), json!("Alice"));
         config.insert("last".into(), json!("Smith"));
 
-        let result = substitute_user_config_variables(
-            "${user_config.first} ${user_config.last}",
-            &config,
-        )
-        .expect("substitute");
+        let result =
+            substitute_user_config_variables("${user_config.first} ${user_config.last}", &config)
+                .expect("substitute");
         assert_eq!(result, "Alice Smith");
     }
 
@@ -555,22 +547,15 @@ mod tests {
         let options = BTreeMap::new();
         let schema = BTreeMap::new();
 
-        let result = substitute_user_config_in_content(
-            "Hello ${user_config.unknown}",
-            &options,
-            &schema,
-        );
+        let result =
+            substitute_user_config_in_content("Hello ${user_config.unknown}", &options, &schema);
         assert_eq!(result, "Hello ${user_config.unknown}");
     }
 
     #[test]
     fn test_substitute_plugin_variables() {
         let plugin_path = Path::new("/home/user/.claude/plugins/test");
-        let result = substitute_plugin_variables(
-            "Path: ${CLAUDE_PLUGIN_ROOT}",
-            plugin_path,
-            None,
-        );
+        let result = substitute_plugin_variables("Path: ${CLAUDE_PLUGIN_ROOT}", plugin_path, None);
         assert!(result.contains("/home/user/.claude/plugins/test"));
         assert!(!result.contains("${CLAUDE_PLUGIN_ROOT}"));
     }

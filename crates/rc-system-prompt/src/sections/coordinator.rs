@@ -152,7 +152,8 @@ When receiving notifications from workers, expect these formats:
 - If a task fails, analyze the error before retrying
 - If multiple tasks fail, consider adjusting the overall approach
 - Always inform the user of significant issues or delays
-"#.to_string();
+"#
+        .to_string();
 
         Ok(Some(prompt))
     }

@@ -564,10 +564,7 @@ impl KeyBindingRegistry {
             return Ok(());
         }
 
-        self.bindings
-            .entry(context)
-            .or_default()
-            .push(binding);
+        self.bindings.entry(context).or_default().push(binding);
         self.lookup.insert((context, keystroke), action);
         Ok(())
     }
@@ -582,18 +579,16 @@ impl KeyBindingRegistry {
 
     /// Look up the action for a keystroke in a given context.
     /// Falls back to Global context if no context-specific binding is found.
-    pub fn resolve(
-        &self,
-        context: KeyBindingContext,
-        keystroke: &Keystroke,
-    ) -> Option<KeyAction> {
+    pub fn resolve(&self, context: KeyBindingContext, keystroke: &Keystroke) -> Option<KeyAction> {
         // Try the specific context first.
         if let Some(action) = self.lookup.get(&(context, keystroke.clone())) {
             return Some(*action);
         }
         // Fall back to Global.
         if context != KeyBindingContext::Global
-            && let Some(action) = self.lookup.get(&(KeyBindingContext::Global, keystroke.clone()))
+            && let Some(action) = self
+                .lookup
+                .get(&(KeyBindingContext::Global, keystroke.clone()))
         {
             return Some(*action);
         }
@@ -614,8 +609,12 @@ impl KeyBindingRegistry {
                 let bindings_a = self.bindings.get(&ctx_a);
                 let bindings_b = self.bindings.get(&ctx_b);
 
-                let Some(bindings_a) = bindings_a else { continue };
-                let Some(bindings_b) = bindings_b else { continue };
+                let Some(bindings_a) = bindings_a else {
+                    continue;
+                };
+                let Some(bindings_b) = bindings_b else {
+                    continue;
+                };
 
                 for ba in bindings_a {
                     for bb in bindings_b {
@@ -715,37 +714,105 @@ pub fn register_defaults(registry: &mut KeyBindingRegistry) {
         ("ctrl+d", KeyAction::AppExit, KeyBindingContext::Global),
         ("ctrl+l", KeyAction::AppRedraw, KeyBindingContext::Global),
         ("ctrl+t", KeyAction::ToggleTodos, KeyBindingContext::Global),
-        ("ctrl+o", KeyAction::ToggleTranscript, KeyBindingContext::Global),
-        ("ctrl+r", KeyAction::HistorySearch, KeyBindingContext::Global),
+        (
+            "ctrl+o",
+            KeyAction::ToggleTranscript,
+            KeyBindingContext::Global,
+        ),
+        (
+            "ctrl+r",
+            KeyAction::HistorySearch,
+            KeyBindingContext::Global,
+        ),
         // Chat
         ("enter", KeyAction::ChatSubmit, KeyBindingContext::Chat),
         ("escape", KeyAction::ChatCancel, KeyBindingContext::Chat),
         ("up", KeyAction::HistoryPrevious, KeyBindingContext::Chat),
         ("down", KeyAction::HistoryNext, KeyBindingContext::Chat),
-        ("ctrl+g", KeyAction::ChatExternalEditor, KeyBindingContext::Chat),
+        (
+            "ctrl+g",
+            KeyAction::ChatExternalEditor,
+            KeyBindingContext::Chat,
+        ),
         ("ctrl+s", KeyAction::ChatStash, KeyBindingContext::Chat),
         // Autocomplete
-        ("tab", KeyAction::AutocompleteAccept, KeyBindingContext::Autocomplete),
-        ("escape", KeyAction::AutocompleteDismiss, KeyBindingContext::Autocomplete),
-        ("up", KeyAction::AutocompletePrevious, KeyBindingContext::Autocomplete),
-        ("down", KeyAction::AutocompleteNext, KeyBindingContext::Autocomplete),
+        (
+            "tab",
+            KeyAction::AutocompleteAccept,
+            KeyBindingContext::Autocomplete,
+        ),
+        (
+            "escape",
+            KeyAction::AutocompleteDismiss,
+            KeyBindingContext::Autocomplete,
+        ),
+        (
+            "up",
+            KeyAction::AutocompletePrevious,
+            KeyBindingContext::Autocomplete,
+        ),
+        (
+            "down",
+            KeyAction::AutocompleteNext,
+            KeyBindingContext::Autocomplete,
+        ),
         // Confirmation
         ("y", KeyAction::ConfirmYes, KeyBindingContext::Confirmation),
         ("n", KeyAction::ConfirmNo, KeyBindingContext::Confirmation),
-        ("enter", KeyAction::ConfirmYes, KeyBindingContext::Confirmation),
-        ("escape", KeyAction::ConfirmNo, KeyBindingContext::Confirmation),
+        (
+            "enter",
+            KeyAction::ConfirmYes,
+            KeyBindingContext::Confirmation,
+        ),
+        (
+            "escape",
+            KeyAction::ConfirmNo,
+            KeyBindingContext::Confirmation,
+        ),
         // Tabs
         ("tab", KeyAction::TabsNext, KeyBindingContext::Tabs),
-        ("shift+tab", KeyAction::TabsPrevious, KeyBindingContext::Tabs),
+        (
+            "shift+tab",
+            KeyAction::TabsPrevious,
+            KeyBindingContext::Tabs,
+        ),
         // Transcript
-        ("escape", KeyAction::TranscriptExit, KeyBindingContext::Transcript),
-        ("q", KeyAction::TranscriptExit, KeyBindingContext::Transcript),
+        (
+            "escape",
+            KeyAction::TranscriptExit,
+            KeyBindingContext::Transcript,
+        ),
+        (
+            "q",
+            KeyAction::TranscriptExit,
+            KeyBindingContext::Transcript,
+        ),
         // HistorySearch
-        ("ctrl+r", KeyAction::HistorySearchNext, KeyBindingContext::HistorySearch),
-        ("escape", KeyAction::HistorySearchAccept, KeyBindingContext::HistorySearch),
-        ("tab", KeyAction::HistorySearchAccept, KeyBindingContext::HistorySearch),
-        ("ctrl+c", KeyAction::HistorySearchCancel, KeyBindingContext::HistorySearch),
-        ("enter", KeyAction::HistorySearchExecute, KeyBindingContext::HistorySearch),
+        (
+            "ctrl+r",
+            KeyAction::HistorySearchNext,
+            KeyBindingContext::HistorySearch,
+        ),
+        (
+            "escape",
+            KeyAction::HistorySearchAccept,
+            KeyBindingContext::HistorySearch,
+        ),
+        (
+            "tab",
+            KeyAction::HistorySearchAccept,
+            KeyBindingContext::HistorySearch,
+        ),
+        (
+            "ctrl+c",
+            KeyAction::HistorySearchCancel,
+            KeyBindingContext::HistorySearch,
+        ),
+        (
+            "enter",
+            KeyAction::HistorySearchExecute,
+            KeyBindingContext::HistorySearch,
+        ),
         // Task
         ("ctrl+b", KeyAction::TaskBackground, KeyBindingContext::Task),
         // Help
@@ -758,7 +825,11 @@ pub fn register_defaults(registry: &mut KeyBindingRegistry) {
         ("k", KeyAction::ScrollUp, KeyBindingContext::Normal),
         ("j", KeyAction::ScrollDown, KeyBindingContext::Normal),
         // Vim Insert mode
-        ("escape", KeyAction::VimNormalMode, KeyBindingContext::Insert),
+        (
+            "escape",
+            KeyAction::VimNormalMode,
+            KeyBindingContext::Insert,
+        ),
     ];
 
     for (key_str, action, context) in defaults {
@@ -844,7 +915,10 @@ mod tests {
     fn test_context_display() {
         assert_eq!(KeyBindingContext::Global.to_string(), "Global");
         assert_eq!(KeyBindingContext::Chat.to_string(), "Chat");
-        assert_eq!(KeyBindingContext::HistorySearch.to_string(), "HistorySearch");
+        assert_eq!(
+            KeyBindingContext::HistorySearch.to_string(),
+            "HistorySearch"
+        );
     }
 
     #[test]
@@ -872,8 +946,8 @@ mod tests {
         let mut registry = KeyBindingRegistry::new();
         let b1 = KeyBinding::from_parts("a", KeyAction::ChatSubmit, KeyBindingContext::Chat)
             .expect("b1");
-        let b2 =
-            KeyBinding::from_parts("a", KeyAction::ChatCancel, KeyBindingContext::Chat).expect("b2");
+        let b2 = KeyBinding::from_parts("a", KeyAction::ChatCancel, KeyBindingContext::Chat)
+            .expect("b2");
 
         registry.register(b1).expect("register b1");
         let result = registry.register(b2);
@@ -937,9 +1011,11 @@ mod tests {
         let chat_bindings = registry.bindings_for_context(KeyBindingContext::Chat);
         assert!(!chat_bindings.is_empty());
         // Enter should be in Chat bindings.
-        assert!(chat_bindings
-            .iter()
-            .any(|b| b.action == KeyAction::ChatSubmit));
+        assert!(
+            chat_bindings
+                .iter()
+                .any(|b| b.action == KeyAction::ChatSubmit)
+        );
     }
 
     #[test]
@@ -998,10 +1074,10 @@ mod tests {
     #[test]
     fn test_idempotent_register() {
         let mut registry = KeyBindingRegistry::new();
-        let b1 =
-            KeyBinding::from_parts("a", KeyAction::ChatSubmit, KeyBindingContext::Chat).expect("b1");
-        let b2 =
-            KeyBinding::from_parts("a", KeyAction::ChatSubmit, KeyBindingContext::Chat).expect("b2");
+        let b1 = KeyBinding::from_parts("a", KeyAction::ChatSubmit, KeyBindingContext::Chat)
+            .expect("b1");
+        let b2 = KeyBinding::from_parts("a", KeyAction::ChatSubmit, KeyBindingContext::Chat)
+            .expect("b2");
         registry.register(b1).expect("register b1");
         registry.register(b2).expect("register b2 (idempotent)");
         assert_eq!(registry.len(), 1);

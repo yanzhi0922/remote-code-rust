@@ -28,6 +28,6 @@ pub mod connection;
 pub mod messaging;
 pub mod path_conversion;
 
-pub use bridge::{IdeBridge, IdeAction, IdeNotification, IdeResponse};
-pub use config::{IdeConfig, IdeType, ConnectionMode, detect_ide};
-pub use connection::{IdeConnection, StdioConnection, HttpConnection, IdeStatus};
+pub use bridge::{IdeAction, IdeBridge, IdeNotification, IdeResponse};
+pub use config::{ConnectionMode, IdeConfig, IdeType, detect_ide};
+pub use connection::{HttpConnection, IdeConnection, IdeStatus, StdioConnection};

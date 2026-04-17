@@ -400,7 +400,12 @@ mod tests {
     fn all_built_in_agents_are_builtin_source() {
         let agents = get_built_in_agents();
         for agent in &agents {
-            assert_eq!(agent.source, AgentSource::BuiltIn, "Agent {} has wrong source", agent.agent_type);
+            assert_eq!(
+                agent.source,
+                AgentSource::BuiltIn,
+                "Agent {} has wrong source",
+                agent.agent_type
+            );
         }
     }
 
@@ -454,7 +459,11 @@ mod tests {
     fn all_agents_have_system_prompts() {
         let agents = get_built_in_agents();
         for agent in &agents {
-            assert!(agent.system_prompt.is_some(), "Agent {} missing system prompt", agent.agent_type);
+            assert!(
+                agent.system_prompt.is_some(),
+                "Agent {} missing system prompt",
+                agent.agent_type
+            );
         }
     }
 }

@@ -6,8 +6,8 @@
 use rc_core::permission_types::PermissionBehavior;
 use serde::{Deserialize, Serialize};
 
-use crate::rule::PermissionRuleV2;
 use crate::mode::ExtendedPermissionMode;
+use crate::rule::PermissionRuleV2;
 
 /// Reason why a permission decision was made.
 #[derive(Debug, Clone, Serialize, Deserialize)]

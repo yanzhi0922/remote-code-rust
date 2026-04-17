@@ -106,7 +106,11 @@ impl TeleportService {
 
     /// Build the full URL for an API endpoint path.
     fn url(&self, path: &str) -> String {
-        format!("{}/{}", self.config.base_url.trim_end_matches('/'), path.trim_start_matches('/'))
+        format!(
+            "{}/{}",
+            self.config.base_url.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        )
     }
 
     /// Apply authentication headers to a request builder.
@@ -114,7 +118,9 @@ impl TeleportService {
         self.config
             .auth_headers
             .iter()
-            .fold(builder, |b, (key, value)| b.header(key.as_str(), value.as_str()))
+            .fold(builder, |b, (key, value)| {
+                b.header(key.as_str(), value.as_str())
+            })
     }
 
     /// Fetch a teleport session by its ID.
@@ -234,7 +240,10 @@ mod tests {
         let json = serde_json::to_string(&session).expect("serialize");
         let parsed: TeleportSession = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(session.session_id, parsed.session_id);
-        assert_eq!(session.messages_summary.len(), parsed.messages_summary.len());
+        assert_eq!(
+            session.messages_summary.len(),
+            parsed.messages_summary.len()
+        );
     }
 
     #[test]

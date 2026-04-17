@@ -24,27 +24,30 @@ pub fn load_rules_from_file(
     if let Some(allow_arr) = json.get("allow").and_then(|v| v.as_array()) {
         for item in allow_arr {
             if let Some(rule_str) = item.as_str()
-                && let Some(rule) = parse_rule_string(rule_str, source, PermissionBehavior::Allow) {
-                    rules.push(rule);
-                }
+                && let Some(rule) = parse_rule_string(rule_str, source, PermissionBehavior::Allow)
+            {
+                rules.push(rule);
+            }
         }
     }
 
     if let Some(deny_arr) = json.get("deny").and_then(|v| v.as_array()) {
         for item in deny_arr {
             if let Some(rule_str) = item.as_str()
-                && let Some(rule) = parse_rule_string(rule_str, source, PermissionBehavior::Deny) {
-                    rules.push(rule);
-                }
+                && let Some(rule) = parse_rule_string(rule_str, source, PermissionBehavior::Deny)
+            {
+                rules.push(rule);
+            }
         }
     }
 
     if let Some(ask_arr) = json.get("ask").and_then(|v| v.as_array()) {
         for item in ask_arr {
             if let Some(rule_str) = item.as_str()
-                && let Some(rule) = parse_rule_string(rule_str, source, PermissionBehavior::Ask) {
-                    rules.push(rule);
-                }
+                && let Some(rule) = parse_rule_string(rule_str, source, PermissionBehavior::Ask)
+            {
+                rules.push(rule);
+            }
         }
     }
 
@@ -65,16 +68,17 @@ pub fn parse_rule_string(
     // Check for tool-prefixed pattern: "Bash(git status)"
     if let Some(open) = trimmed.find('(')
         && let Some(close) = trimmed.rfind(')')
-            && open < close {
-                let tool_name = &trimmed[..open];
-                let content = &trimmed[open + 1..close];
-                return Some(PermissionRuleV2::new(
-                    source,
-                    behavior,
-                    tool_name,
-                    Some(content.to_string()),
-                ));
-            }
+        && open < close
+    {
+        let tool_name = &trimmed[..open];
+        let content = &trimmed[open + 1..close];
+        return Some(PermissionRuleV2::new(
+            source,
+            behavior,
+            tool_name,
+            Some(content.to_string()),
+        ));
+    }
 
     // Simple tool name
     Some(PermissionRuleV2::new(source, behavior, trimmed, None))
@@ -82,7 +86,9 @@ pub fn parse_rule_string(
 
 /// Merge rules from multiple sources, respecting priority order.
 /// Higher-priority sources come first in the result.
-pub fn merge_rules(rules_from_sources: Vec<(PermissionRuleSource, Vec<PermissionRuleV2>)>) -> Vec<PermissionRuleV2> {
+pub fn merge_rules(
+    rules_from_sources: Vec<(PermissionRuleSource, Vec<PermissionRuleV2>)>,
+) -> Vec<PermissionRuleV2> {
     let mut all_rules: Vec<PermissionRuleV2> = rules_from_sources
         .into_iter()
         .flat_map(|(_, rules)| rules)
@@ -122,7 +128,8 @@ mod tests {
             "Read",
             PermissionRuleSource::UserSettings,
             PermissionBehavior::Allow,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(rule.value.tool_name, "Read");
         assert!(rule.value.rule_content.is_none());
     }
@@ -133,18 +140,22 @@ mod tests {
             "Bash(git *)",
             PermissionRuleSource::UserSettings,
             PermissionBehavior::Allow,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(rule.value.tool_name, "Bash");
         assert_eq!(rule.value.rule_content, Some("git *".to_string()));
     }
 
     #[test]
     fn parse_empty_returns_none() {
-        assert!(parse_rule_string(
-            "",
-            PermissionRuleSource::UserSettings,
-            PermissionBehavior::Allow,
-        ).is_none());
+        assert!(
+            parse_rule_string(
+                "",
+                PermissionRuleSource::UserSettings,
+                PermissionBehavior::Allow,
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -179,11 +190,20 @@ mod tests {
         std::fs::write(
             &path,
             r#"{"allow": ["Read", "Bash(git *)"], "deny": ["Bash(rm *)"]}"#,
-        ).unwrap();
+        )
+        .unwrap();
 
         let rules = load_rules_from_file(&path, PermissionRuleSource::UserSettings).unwrap();
         assert_eq!(rules.len(), 3);
-        assert!(rules.iter().any(|r| r.value.tool_name == "Read" && r.behavior == PermissionBehavior::Allow));
-        assert!(rules.iter().any(|r| r.value.tool_name == "Bash" && r.behavior == PermissionBehavior::Deny));
+        assert!(
+            rules
+                .iter()
+                .any(|r| r.value.tool_name == "Read" && r.behavior == PermissionBehavior::Allow)
+        );
+        assert!(
+            rules
+                .iter()
+                .any(|r| r.value.tool_name == "Bash" && r.behavior == PermissionBehavior::Deny)
+        );
     }
 }

@@ -45,7 +45,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use cache::{SectionCache, SYSTEM_PROMPT_DYNAMIC_BOUNDARY};
+use cache::{SYSTEM_PROMPT_DYNAMIC_BOUNDARY, SectionCache};
 use sections::SystemPromptSection;
 use sections::actions::ActionsSection;
 use sections::coordinator::CoordinatorSection;
@@ -164,20 +164,28 @@ impl SystemPromptBuilder {
         builder.static_sections.push(Box::new(ActionsSection));
         builder.static_sections.push(Box::new(UsingToolsSection));
         builder.static_sections.push(Box::new(ToneStyleSection));
-        builder.static_sections.push(Box::new(OutputEfficiencySection));
+        builder
+            .static_sections
+            .push(Box::new(OutputEfficiencySection));
 
         // Dynamic sections (after the boundary marker)
-        builder.dynamic_sections.push(Box::new(SessionGuidanceSection));
+        builder
+            .dynamic_sections
+            .push(Box::new(SessionGuidanceSection));
         builder.dynamic_sections.push(Box::new(MemorySection));
         builder.dynamic_sections.push(Box::new(EnvInfoSection));
         builder.dynamic_sections.push(Box::new(LanguageSection));
         builder.dynamic_sections.push(Box::new(OutputStyleSection));
-        builder.dynamic_sections.push(Box::new(McpInstructionsSection));
+        builder
+            .dynamic_sections
+            .push(Box::new(McpInstructionsSection));
         builder.dynamic_sections.push(Box::new(ScratchpadSection));
         builder.dynamic_sections.push(Box::new(ToolResultSection));
         builder.dynamic_sections.push(Box::new(TokenBudgetSection));
         builder.dynamic_sections.push(Box::new(HooksSection));
-        builder.dynamic_sections.push(Box::new(SystemRemindersSection));
+        builder
+            .dynamic_sections
+            .push(Box::new(SystemRemindersSection));
         builder.dynamic_sections.push(Box::new(CoordinatorSection));
         builder.dynamic_sections.push(Box::new(ProactiveSection));
 
@@ -377,32 +385,34 @@ mod tests {
         let _ = builder.build(&ctx);
         builder.clear_cache();
         // After clearing, a new build should still work
-        let result = builder.build(&ctx).expect("build after clear should succeed");
+        let result = builder
+            .build(&ctx)
+            .expect("build after clear should succeed");
         assert!(!result.is_empty());
     }
 
     #[test]
     fn static_section_ordering_matches_claude_code() {
         let builder = SystemPromptBuilder::with_default_sections();
-        let names: Vec<&str> = builder
-            .static_sections
-            .iter()
-            .map(|s| s.name())
-            .collect();
+        let names: Vec<&str> = builder.static_sections.iter().map(|s| s.name()).collect();
         assert_eq!(
             names,
-            vec!["intro", "system", "doing_tasks", "actions", "using_tools", "tone_style", "output_efficiency"]
+            vec![
+                "intro",
+                "system",
+                "doing_tasks",
+                "actions",
+                "using_tools",
+                "tone_style",
+                "output_efficiency"
+            ]
         );
     }
 
     #[test]
     fn dynamic_section_ordering_matches_claude_code() {
         let builder = SystemPromptBuilder::with_default_sections();
-        let names: Vec<&str> = builder
-            .dynamic_sections
-            .iter()
-            .map(|s| s.name())
-            .collect();
+        let names: Vec<&str> = builder.dynamic_sections.iter().map(|s| s.name()).collect();
         assert_eq!(
             names,
             vec![
@@ -434,10 +444,16 @@ mod tests {
         assert!(combined.contains("You are an interactive agent"), "intro");
         assert!(combined.contains("# System"), "system");
         assert!(combined.contains("# Doing tasks"), "doing_tasks");
-        assert!(combined.contains("# Executing actions with care"), "actions");
+        assert!(
+            combined.contains("# Executing actions with care"),
+            "actions"
+        );
         assert!(combined.contains("# Using your tools"), "using_tools");
         assert!(combined.contains("# Tone and style"), "tone_style");
-        assert!(combined.contains("# Output efficiency"), "output_efficiency");
+        assert!(
+            combined.contains("# Output efficiency"),
+            "output_efficiency"
+        );
 
         // Dynamic sections (env_info always present)
         assert!(combined.contains("# Environment"), "env_info");

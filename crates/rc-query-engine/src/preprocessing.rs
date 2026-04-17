@@ -12,8 +12,7 @@
 //! produces the same result without side effects.
 
 use rc_core::{
-    Message, SystemMessage, SystemMessageSubtype, UserMessage, MessageBase,
-    MessageOrigin,
+    Message, MessageBase, MessageOrigin, SystemMessage, SystemMessageSubtype, UserMessage,
 };
 
 // ---------------------------------------------------------------------------
@@ -101,14 +100,12 @@ impl PreprocessingPipeline {
         max_context: usize,
     ) -> PreprocessingResult {
         // Stage 1: truncate oversized tool results
-        let tool_results_truncated = Self::apply_tool_result_budget(messages, self.tool_result_budget);
+        let tool_results_truncated =
+            Self::apply_tool_result_budget(messages, self.tool_result_budget);
 
         // Stage 2: snip old history when context usage exceeds threshold
-        let messages_snipped = Self::snip_compact_if_needed(
-            messages,
-            context_usage,
-            self.snip_threshold,
-        );
+        let messages_snipped =
+            Self::snip_compact_if_needed(messages, context_usage, self.snip_threshold);
 
         // Stage 3: micro-compact old tool results
         let messages_micro_compacted = Self::micro_compact(messages, self.micro_keep_recent);
@@ -142,23 +139,21 @@ impl PreprocessingPipeline {
     /// Truncate tool-result content that exceeds `budget` characters.
     ///
     /// Returns the number of tool results that were truncated.
-    pub fn apply_tool_result_budget(
-        messages: &mut [Message],
-        budget: usize,
-    ) -> usize {
+    pub fn apply_tool_result_budget(messages: &mut [Message], budget: usize) -> usize {
         let mut truncated = 0;
         for msg in messages.iter_mut() {
             if let Message::ToolUseSummary(tool_summary) = msg
-                && tool_summary.summary.len() > budget {
-                    let truncated_text = format!(
-                        "{}\n\n[Tool result truncated: {} chars → {} chars]",
-                        &tool_summary.summary[..budget.min(tool_summary.summary.len())],
-                        tool_summary.summary.len(),
-                        budget,
-                    );
-                    tool_summary.summary = truncated_text;
-                    truncated += 1;
-                }
+                && tool_summary.summary.len() > budget
+            {
+                let truncated_text = format!(
+                    "{}\n\n[Tool result truncated: {} chars → {} chars]",
+                    &tool_summary.summary[..budget.min(tool_summary.summary.len())],
+                    tool_summary.summary.len(),
+                    budget,
+                );
+                tool_summary.summary = truncated_text;
+                truncated += 1;
+            }
         }
         truncated
     }
@@ -192,9 +187,10 @@ impl PreprocessingPipeline {
             if matches!(msg, Message::System(_)) {
                 keep_indices.push(i);
             } else if let Message::System(sys_msg) = msg
-                && sys_msg.base.is_compact_summary {
-                    keep_indices.push(i);
-                }
+                && sys_msg.base.is_compact_summary
+            {
+                keep_indices.push(i);
+            }
         }
 
         // Always keep the last 2 messages (latest exchange)
@@ -254,10 +250,7 @@ impl PreprocessingPipeline {
     /// intact; older ones get their content replaced with a compact marker.
     ///
     /// Returns the number of messages micro-compacted.
-    pub fn micro_compact(
-        messages: &mut [Message],
-        keep_recent: usize,
-    ) -> usize {
+    pub fn micro_compact(messages: &mut [Message], keep_recent: usize) -> usize {
         // Collect indices of tool-result messages in reverse order
         let tool_indices: Vec<usize> = messages
             .iter()
@@ -273,15 +266,16 @@ impl PreprocessingPipeline {
                 continue; // keep the N most recent
             }
             if let Message::ToolUseSummary(tool_summary) = &mut messages[idx]
-                && tool_summary.summary.len() > 100 {
-                    let original_len = tool_summary.summary.len();
-                    tool_summary.summary = format!(
-                        "[Micro-compacted: {} chars → ~50 chars] {}",
-                        original_len,
-                        &tool_summary.summary[..50.min(tool_summary.summary.len())],
-                    );
-                    compacted += 1;
-                }
+                && tool_summary.summary.len() > 100
+            {
+                let original_len = tool_summary.summary.len();
+                tool_summary.summary = format!(
+                    "[Micro-compacted: {} chars → ~50 chars] {}",
+                    original_len,
+                    &tool_summary.summary[..50.min(tool_summary.summary.len())],
+                );
+                compacted += 1;
+            }
         }
         compacted
     }
@@ -329,7 +323,10 @@ impl PreprocessingPipeline {
                 }
                 let unique_tools: Vec<String> = {
                     let mut set = std::collections::HashSet::new();
-                    tool_names.into_iter().filter(|n| set.insert(n.clone())).collect()
+                    tool_names
+                        .into_iter()
+                        .filter(|n| set.insert(n.clone()))
+                        .collect()
                 };
                 let collapse_msg = Message::System(SystemMessage {
                     base: MessageBase {
@@ -408,7 +405,7 @@ pub fn create_continuation_message() -> Message {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rc_core::{MessageBase, ToolUseSummaryMessage, UserMessage, MessageOrigin};
+    use rc_core::{MessageBase, MessageOrigin, ToolUseSummaryMessage, UserMessage};
 
     fn make_tool_summary(id: &str, content: &str, is_error: bool) -> Message {
         Message::ToolUseSummary(ToolUseSummaryMessage {
@@ -527,9 +524,7 @@ mod tests {
 
     #[test]
     fn micro_compact_preserves_recent() {
-        let mut messages = vec![
-            make_tool_summary("recent1", "short result", false),
-        ];
+        let mut messages = vec![make_tool_summary("recent1", "short result", false)];
 
         let compacted = PreprocessingPipeline::micro_compact(&mut messages, 1);
         assert_eq!(compacted, 0);
@@ -598,10 +593,7 @@ mod tests {
     #[test]
     fn pipeline_is_idempotent() {
         let pipeline = PreprocessingPipeline::default();
-        let mut messages = vec![
-            make_system_message("system"),
-            make_user_message("hello"),
-        ];
+        let mut messages = vec![make_system_message("system"), make_user_message("hello")];
 
         let result1 = pipeline.run(&mut messages, 0.5, 100_000);
         let result2 = pipeline.run(&mut messages, 0.5, 100_000);

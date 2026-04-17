@@ -5,7 +5,9 @@
 
 use uuid::Uuid;
 
-use crate::constants::{ENV_AGENT_ID, ENV_AGENT_NAME, ENV_LEAD_AGENT_ID, ENV_TEAM_NAME, TEAM_LEAD_NAME};
+use crate::constants::{
+    ENV_AGENT_ID, ENV_AGENT_NAME, ENV_LEAD_AGENT_ID, ENV_TEAM_NAME, TEAM_LEAD_NAME,
+};
 use crate::error::{SwarmError, SwarmResult};
 use crate::team_helpers;
 use crate::types::{BackendType, TeamFile, TeammateIdentity};
@@ -34,9 +36,9 @@ pub async fn init_teammate(
     team_helpers::validate_agent_name(agent_name)?;
 
     if agent_name == TEAM_LEAD_NAME {
-        return Err(SwarmError::InvalidAgentName(
-            format!("'{agent_name}' is reserved for the team lead"),
-        ));
+        return Err(SwarmError::InvalidAgentName(format!(
+            "'{agent_name}' is reserved for the team lead"
+        )));
     }
 
     let mut team = team_helpers::read_team(team_name).await?;
@@ -58,12 +60,8 @@ pub async fn init_teammate(
         backend_type,
     };
 
-    let mut member = crate::types::TeamMember::new(
-        &agent_id,
-        agent_name,
-        format!("pane-{agent_id}"),
-        _cwd,
-    );
+    let mut member =
+        crate::types::TeamMember::new(&agent_id, agent_name, format!("pane-{agent_id}"), _cwd);
     member.backend_type = Some(backend_type);
 
     team.members.push(member);
@@ -138,7 +136,10 @@ pub fn teammate_env_vars(identity: &TeammateIdentity) -> Vec<(String, String)> {
         (ENV_AGENT_NAME.to_owned(), identity.name.clone()),
         (ENV_TEAM_NAME.to_owned(), identity.team_name.clone()),
         (ENV_LEAD_AGENT_ID.to_owned(), identity.lead_agent_id.clone()),
-        ("RC_SWARM_BACKEND_TYPE".to_owned(), identity.backend_type.as_str().to_owned()),
+        (
+            "RC_SWARM_BACKEND_TYPE".to_owned(),
+            identity.backend_type.as_str().to_owned(),
+        ),
     ]
 }
 
@@ -184,9 +185,15 @@ mod tests {
             .await
             .expect("should init lead");
 
-        let result = init_teammate("test-team", "worker-1", "lead-123", BackendType::InProcess, "/tmp")
-            .await
-            .expect("should init teammate");
+        let result = init_teammate(
+            "test-team",
+            "worker-1",
+            "lead-123",
+            BackendType::InProcess,
+            "/tmp",
+        )
+        .await
+        .expect("should init teammate");
         assert!(!result.identity.is_lead);
         assert_eq!(result.identity.name, "worker-1");
         assert_eq!(result.team_file.members.len(), 1);
@@ -199,7 +206,14 @@ mod tests {
             .await
             .expect("should init lead");
 
-        let result = init_teammate("test-team", "lead", "lead-123", BackendType::InProcess, "/tmp").await;
+        let result = init_teammate(
+            "test-team",
+            "lead",
+            "lead-123",
+            BackendType::InProcess,
+            "/tmp",
+        )
+        .await;
         assert!(result.is_err());
     }
 
@@ -210,18 +224,38 @@ mod tests {
             .await
             .expect("should init lead");
 
-        init_teammate("test-team", "worker-1", "lead-123", BackendType::InProcess, "/tmp")
-            .await
-            .expect("should init first");
+        init_teammate(
+            "test-team",
+            "worker-1",
+            "lead-123",
+            BackendType::InProcess,
+            "/tmp",
+        )
+        .await
+        .expect("should init first");
 
-        let result = init_teammate("test-team", "worker-1", "lead-123", BackendType::InProcess, "/tmp").await;
+        let result = init_teammate(
+            "test-team",
+            "worker-1",
+            "lead-123",
+            BackendType::InProcess,
+            "/tmp",
+        )
+        .await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn init_teammate_invalid_team() {
         let _td = TestDir::new();
-        let result = init_teammate("nonexistent", "worker-1", "lead-123", BackendType::InProcess, "/tmp").await;
+        let result = init_teammate(
+            "nonexistent",
+            "worker-1",
+            "lead-123",
+            BackendType::InProcess,
+            "/tmp",
+        )
+        .await;
         assert!(result.is_err());
     }
 

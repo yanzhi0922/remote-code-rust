@@ -182,11 +182,7 @@ impl AgentRunner {
     ///
     /// For now, this returns a placeholder result indicating the agent
     /// was configured correctly.
-    pub async fn run(
-        &self,
-        task: &str,
-        _context: &[ConversationEntry],
-    ) -> Result<AgentRunResult> {
+    pub async fn run(&self, task: &str, _context: &[ConversationEntry]) -> Result<AgentRunResult> {
         let system_prompt = self.build_system_prompt();
         let max_turns = self.resolve_max_turns();
         let model = self.resolve_model("default");
@@ -245,10 +241,7 @@ pub fn enhance_system_prompt_with_env_details(
     let mut prompt = base_prompt.to_owned();
 
     prompt.push_str("\n\n## Environment\n");
-    prompt.push_str(&format!(
-        "Working directory: {}\n",
-        working_dir.display()
-    ));
+    prompt.push_str(&format!("Working directory: {}\n", working_dir.display()));
 
     if !absolute_paths.is_empty() {
         prompt.push_str("Additional paths:\n");
@@ -279,8 +272,7 @@ pub fn resolve_effective_tools(
     let available_set: BTreeSet<&str> = available_tools.iter().map(|s| s.as_str()).collect();
 
     // Check for wildcard (explicit "*" or empty means all tools)
-    let has_wildcard = agent_tools.is_empty()
-        || (agent_tools.len() == 1 && agent_tools[0] == "*");
+    let has_wildcard = agent_tools.is_empty() || (agent_tools.len() == 1 && agent_tools[0] == "*");
 
     if has_wildcard || agent_tools.is_empty() {
         let resolved: Vec<String> = available_tools
@@ -378,7 +370,11 @@ pub fn aggregate_run_results(results: &[AgentRunResult]) -> AggregatedRunResults
 /// Produces a structured output string with the agent's final text,
 /// usage information, and status.
 pub fn format_agent_run_result(agent_id: &str, result: &AgentRunResult) -> String {
-    let status = if result.success { "completed" } else { "failed" };
+    let status = if result.success {
+        "completed"
+    } else {
+        "failed"
+    };
     format!(
         "Agent {agent_id} {status}\n\
          Turns: {turns}\n\
@@ -458,11 +454,7 @@ mod tests {
         let mut def = test_definition();
         def.tools = Vec::new();
         let runner = AgentRunner::new(def, test_config());
-        let available = vec![
-            "Bash".to_owned(),
-            "Read".to_owned(),
-            "Agent".to_owned(),
-        ];
+        let available = vec!["Bash".to_owned(), "Read".to_owned(), "Agent".to_owned()];
         let tools = runner.resolve_tools(&available);
         assert_eq!(tools, vec!["Bash", "Read"]);
     }
@@ -585,7 +577,11 @@ mod tests {
 
     #[test]
     fn resolve_effective_tools_specific_list() {
-        let agent_tools = vec!["Bash".to_owned(), "Read".to_owned(), "NonExistent".to_owned()];
+        let agent_tools = vec![
+            "Bash".to_owned(),
+            "Read".to_owned(),
+            "NonExistent".to_owned(),
+        ];
         let disallowed: Vec<String> = Vec::new();
         let available = vec!["Bash".to_owned(), "Read".to_owned(), "Write".to_owned()];
         let result = resolve_effective_tools(&agent_tools, &disallowed, &available);

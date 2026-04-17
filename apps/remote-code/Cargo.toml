@@ -38,12 +38,13 @@ rc-query-engine = { path = "../../crates/rc-query-engine" }
 rc-runner = { path = "../../crates/rc-runner" }
 rc-session = { path = "../../crates/rc-session" }
 rc-skills = { path = "../../crates/rc-skills" }
+rc-system-prompt = { path = "../../crates/rc-system-prompt" }
 rc-telemetry = { path = "../../crates/rc-telemetry" }
 rc-tools = { path = "../../crates/rc-tools" }
 rc-tui = { path = "../../crates/rc-tui" }
 rc-ui-bridge = { path = "../../crates/rc-ui-bridge" }
+chrono.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
-chrono.workspace = true
 tempfile.workspace = true

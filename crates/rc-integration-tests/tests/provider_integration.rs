@@ -3,8 +3,8 @@
 //! Tests provider client construction, circuit breaker state transitions,
 //! credential pool rotation, and streaming callback structures.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 // ─── Circuit breaker state transitions ──────────────────────────────────────
@@ -158,10 +158,9 @@ fn credential_entry_with_model() {
 
 #[test]
 fn credential_pool_thread_safety() {
-    let pool = Arc::new(rc_provider::credential_pool::CredentialPool::from_keys(vec![
-        "key-a".to_owned(),
-        "key-b".to_owned(),
-    ]));
+    let pool = Arc::new(rc_provider::credential_pool::CredentialPool::from_keys(
+        vec!["key-a".to_owned(), "key-b".to_owned()],
+    ));
     let counter = Arc::new(AtomicUsize::new(0));
 
     let mut handles = vec![];

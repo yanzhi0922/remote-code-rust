@@ -45,7 +45,10 @@ pub fn create_error_message(error: &str) -> Message {
 
 /// Create an interruption message (system notification that the query was interrupted).
 pub fn create_interruption_message() -> Message {
-    create_system_message("Query interrupted by user", SystemMessageSubtype::Informational)
+    create_system_message(
+        "Query interrupted by user",
+        SystemMessageSubtype::Informational,
+    )
 }
 
 /// Create a tool use summary message from a tool call and its result.
@@ -86,10 +89,7 @@ pub fn create_assistant_text_message(text: &str) -> Message {
 }
 
 /// Create an assistant message with tool use blocks.
-pub fn create_assistant_tool_message(
-    text: &str,
-    tool_calls: Vec<ToolCall>,
-) -> Message {
+pub fn create_assistant_tool_message(text: &str, tool_calls: Vec<ToolCall>) -> Message {
     let mut blocks = Vec::new();
     if !text.trim().is_empty() {
         blocks.push(AssistantContentBlock::Text {
@@ -129,29 +129,27 @@ pub fn strip_signature_blocks(messages: &mut [Message]) {
 /// Find the last compact boundary message and return the slice of messages after it.
 /// If no compact boundary is found, returns the full slice.
 pub fn get_messages_after_compact_boundary(messages: &[Message]) -> &[Message] {
-    let last_boundary = messages
-        .iter()
-        .rposition(|m| {
-            matches!(
-                m,
-                Message::System(SystemMessage {
-                    base: MessageBase {
-                        is_compact_summary: true,
-                        ..
-                    },
+    let last_boundary = messages.iter().rposition(|m| {
+        matches!(
+            m,
+            Message::System(SystemMessage {
+                base: MessageBase {
+                    is_compact_summary: true,
                     ..
-                })
-            ) || matches!(
-                m,
-                Message::System(SystemMessage {
-                    base: MessageBase {
-                        origin: Some(MessageOrigin::Compact),
-                        ..
-                    },
+                },
+                ..
+            })
+        ) || matches!(
+            m,
+            Message::System(SystemMessage {
+                base: MessageBase {
+                    origin: Some(MessageOrigin::Compact),
                     ..
-                })
-            )
-        });
+                },
+                ..
+            })
+        )
+    });
 
     match last_boundary {
         Some(idx) => &messages[idx..],
@@ -175,9 +173,11 @@ pub fn collect_tool_call_ids(messages: &[Message]) -> Vec<String> {
     messages
         .iter()
         .flat_map(|m| match m {
-            Message::Assistant(assistant) => {
-                assistant.tool_calls.iter().map(|tc| tc.id.clone()).collect::<Vec<_>>()
-            }
+            Message::Assistant(assistant) => assistant
+                .tool_calls
+                .iter()
+                .map(|tc| tc.id.clone())
+                .collect::<Vec<_>>(),
             _ => Vec::new(),
         })
         .collect()
@@ -312,10 +312,7 @@ mod tests {
 
     #[test]
     fn get_messages_after_compact_boundary_returns_all_when_no_boundary() {
-        let messages = vec![
-            create_user_message("a"),
-            create_user_message("b"),
-        ];
+        let messages = vec![create_user_message("a"), create_user_message("b")];
         let slice = get_messages_after_compact_boundary(&messages);
         assert_eq!(slice.len(), 2);
     }
@@ -326,14 +323,26 @@ mod tests {
             create_assistant_tool_message(
                 "",
                 vec![
-                    ToolCall { id: "tc-1".into(), name: "bash".into(), input: json!({}) },
-                    ToolCall { id: "tc-2".into(), name: "read".into(), input: json!({}) },
+                    ToolCall {
+                        id: "tc-1".into(),
+                        name: "bash".into(),
+                        input: json!({}),
+                    },
+                    ToolCall {
+                        id: "tc-2".into(),
+                        name: "read".into(),
+                        input: json!({}),
+                    },
                 ],
             ),
             create_user_message("hello"),
             create_assistant_tool_message(
                 "",
-                vec![ToolCall { id: "tc-3".into(), name: "write".into(), input: json!({}) }],
+                vec![ToolCall {
+                    id: "tc-3".into(),
+                    name: "write".into(),
+                    input: json!({}),
+                }],
             ),
         ];
         assert_eq!(count_tool_calls(&messages), 3);
@@ -344,8 +353,16 @@ mod tests {
         let messages = vec![create_assistant_tool_message(
             "",
             vec![
-                ToolCall { id: "tc-1".into(), name: "bash".into(), input: json!({}) },
-                ToolCall { id: "tc-2".into(), name: "read".into(), input: json!({}) },
+                ToolCall {
+                    id: "tc-1".into(),
+                    name: "bash".into(),
+                    input: json!({}),
+                },
+                ToolCall {
+                    id: "tc-2".into(),
+                    name: "read".into(),
+                    input: json!({}),
+                },
             ],
         )];
         let ids = collect_tool_call_ids(&messages);
@@ -359,8 +376,15 @@ mod tests {
         let user = create_user_message("hello");
         assert!(!is_error_message(&user));
 
-        let tool_call = ToolCall { id: "tc-1".into(), name: "bash".into(), input: json!({}) };
-        let result = ToolResult { content: "ok".into(), is_error: false };
+        let tool_call = ToolCall {
+            id: "tc-1".into(),
+            name: "bash".into(),
+            input: json!({}),
+        };
+        let result = ToolResult {
+            content: "ok".into(),
+            is_error: false,
+        };
         let summary = create_tool_use_summary(&tool_call, &result);
         assert!(is_tool_summary(&summary));
         assert!(!is_tool_summary(&user));

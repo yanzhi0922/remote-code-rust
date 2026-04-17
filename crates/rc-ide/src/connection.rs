@@ -4,8 +4,8 @@
 //! stdio and HTTP-based communication with IDEs.
 
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{debug, warn};
@@ -148,7 +148,10 @@ impl IdeConnection for StdioConnection {
     }
 
     fn status(&self) -> IdeStatus {
-        self.status.try_read().map(|s| *s).unwrap_or(IdeStatus::Disconnected)
+        self.status
+            .try_read()
+            .map(|s| *s)
+            .unwrap_or(IdeStatus::Disconnected)
     }
 }
 
@@ -226,11 +229,18 @@ impl HttpConnection {
             if let Ok(mut s) = self.status.try_write() {
                 *s = IdeStatus::Disconnected;
             }
-            return Err(anyhow::anyhow!("Max reconnection retries ({}) exceeded", self.max_retries));
+            return Err(anyhow::anyhow!(
+                "Max reconnection retries ({}) exceeded",
+                self.max_retries
+            ));
         }
 
         let backoff = self.backoff_duration();
-        debug!(attempt, backoff_ms = backoff.as_millis(), "Reconnecting with backoff");
+        debug!(
+            attempt,
+            backoff_ms = backoff.as_millis(),
+            "Reconnecting with backoff"
+        );
         tokio::time::sleep(backoff).await;
 
         self.connect()
@@ -270,7 +280,10 @@ impl IdeConnection for HttpConnection {
     }
 
     fn status(&self) -> IdeStatus {
-        self.status.try_read().map(|s| *s).unwrap_or(IdeStatus::Disconnected)
+        self.status
+            .try_read()
+            .map(|s| *s)
+            .unwrap_or(IdeStatus::Disconnected)
     }
 }
 

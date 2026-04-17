@@ -10,7 +10,6 @@
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-
 // ---------------------------------------------------------------------------
 // History Entry
 // ---------------------------------------------------------------------------
@@ -182,7 +181,11 @@ impl HistorySearchEngine {
         }
 
         // Sort by score descending.
-        matches.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        matches.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         matches
     }
 

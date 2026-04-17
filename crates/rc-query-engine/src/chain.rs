@@ -191,10 +191,20 @@ mod tests {
     fn chain_manager_enforces_depth_limit() {
         let mut mgr = ChainManager::new(2);
         let root = mgr.start_root(QuerySource::User);
-        let child = mgr.start_child(&root, QuerySource::Agent).expect("depth 1 ok");
-        let grandchild = mgr.start_child(&child, QuerySource::Agent).expect("depth 2 ok");
+        let child = mgr
+            .start_child(&root, QuerySource::Agent)
+            .expect("depth 1 ok");
+        let grandchild = mgr
+            .start_child(&child, QuerySource::Agent)
+            .expect("depth 2 ok");
         let result = mgr.start_child(&grandchild, QuerySource::Agent);
-        assert!(matches!(result, Err(ChainError::DepthExceeded { depth: 3, max_depth: 2 })));
+        assert!(matches!(
+            result,
+            Err(ChainError::DepthExceeded {
+                depth: 3,
+                max_depth: 2
+            })
+        ));
     }
 
     #[test]

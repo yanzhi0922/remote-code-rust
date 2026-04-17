@@ -459,7 +459,12 @@ mod tests {
         let result = resize_image_base64("not!valid@base64#", 1024);
         assert!(result.data.is_none());
         assert!(result.error.is_some());
-        assert!(result.error.as_ref().is_some_and(|e| e.contains("Invalid base64")));
+        assert!(
+            result
+                .error
+                .as_ref()
+                .is_some_and(|e| e.contains("Invalid base64"))
+        );
     }
 
     #[test]
@@ -529,7 +534,10 @@ mod tests {
 
     #[test]
     fn detect_format_unknown() {
-        assert_eq!(detect_format_from_data_uri("data:application/pdf;base64,abc"), None);
+        assert_eq!(
+            detect_format_from_data_uri("data:application/pdf;base64,abc"),
+            None
+        );
     }
 
     #[test]

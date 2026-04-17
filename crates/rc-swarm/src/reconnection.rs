@@ -27,12 +27,12 @@ pub async fn reconnect_teammate(
 ) -> SwarmResult<ReconnectionResult> {
     let team = team_helpers::read_team(team_name).await?;
 
-    let member = team.find_member(agent_name).ok_or_else(|| {
-        SwarmError::ReconnectionFailed {
+    let member = team
+        .find_member(agent_name)
+        .ok_or_else(|| SwarmError::ReconnectionFailed {
             agent_name: agent_name.to_owned(),
             reason: "agent not found in team".to_owned(),
-        }
-    })?;
+        })?;
 
     let was_active = member.is_active.unwrap_or(false);
 
@@ -91,9 +91,7 @@ pub async fn list_reconnectable(team_name: &str) -> SwarmResult<Vec<TeammateIden
     let reconnectable: Vec<TeammateIdentity> = team
         .members
         .iter()
-        .filter(|m| {
-            m.session_id.is_some() && !m.is_active.unwrap_or(false)
-        })
+        .filter(|m| m.session_id.is_some() && !m.is_active.unwrap_or(false))
         .map(|m| TeammateIdentity {
             agent_id: m.agent_id.clone(),
             name: m.name.clone(),
@@ -110,8 +108,8 @@ pub async fn list_reconnectable(team_name: &str) -> SwarmResult<Vec<TeammateIden
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::teammate_init;
     use crate::team_helpers::set_base_dir_override;
+    use crate::teammate_init;
     use crate::types::BackendType;
 
     struct TestDir {
@@ -140,9 +138,15 @@ mod tests {
             .await
             .expect("should init lead");
 
-        teammate_init::init_teammate("test-team", "worker-1", "lead-123", BackendType::InProcess, "/tmp")
-            .await
-            .expect("should init teammate");
+        teammate_init::init_teammate(
+            "test-team",
+            "worker-1",
+            "lead-123",
+            BackendType::InProcess,
+            "/tmp",
+        )
+        .await
+        .expect("should init teammate");
 
         let result = reconnect_teammate("test-team", "worker-1")
             .await
@@ -169,9 +173,15 @@ mod tests {
             .await
             .expect("should init lead");
 
-        teammate_init::init_teammate("test-team", "worker-1", "lead-123", BackendType::InProcess, "/tmp")
-            .await
-            .expect("should init teammate");
+        teammate_init::init_teammate(
+            "test-team",
+            "worker-1",
+            "lead-123",
+            BackendType::InProcess,
+            "/tmp",
+        )
+        .await
+        .expect("should init teammate");
 
         // Without session_id, can't reconnect.
         assert!(!can_reconnect("test-team", "worker-1").await);
@@ -184,9 +194,15 @@ mod tests {
             .await
             .expect("should init lead");
 
-        teammate_init::init_teammate("test-team", "worker-1", "lead-123", BackendType::InProcess, "/tmp")
-            .await
-            .expect("should init teammate");
+        teammate_init::init_teammate(
+            "test-team",
+            "worker-1",
+            "lead-123",
+            BackendType::InProcess,
+            "/tmp",
+        )
+        .await
+        .expect("should init teammate");
 
         // Add session_id manually.
         let mut team = team_helpers::read_team("test-team").await.expect("ok");
@@ -203,9 +219,15 @@ mod tests {
             .await
             .expect("should init lead");
 
-        teammate_init::init_teammate("test-team", "worker-1", "lead-123", BackendType::InProcess, "/tmp")
-            .await
-            .expect("should init teammate");
+        teammate_init::init_teammate(
+            "test-team",
+            "worker-1",
+            "lead-123",
+            BackendType::InProcess,
+            "/tmp",
+        )
+        .await
+        .expect("should init teammate");
 
         mark_disconnected("test-team", "worker-1")
             .await
@@ -235,9 +257,15 @@ mod tests {
             .await
             .expect("should init lead");
 
-        teammate_init::init_teammate("test-team", "worker-1", "lead-123", BackendType::InProcess, "/tmp")
-            .await
-            .expect("should init teammate");
+        teammate_init::init_teammate(
+            "test-team",
+            "worker-1",
+            "lead-123",
+            BackendType::InProcess,
+            "/tmp",
+        )
+        .await
+        .expect("should init teammate");
 
         // Set up: worker-1 has session but is inactive.
         let mut team = team_helpers::read_team("test-team").await.expect("ok");

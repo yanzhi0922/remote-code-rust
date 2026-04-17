@@ -125,13 +125,14 @@ pub fn detect_indexing_tools() -> Vec<DetectedTool> {
 
     for tool in CodeIndexingTool::all_values() {
         if let Some(cmd) = cli_command_for_tool(*tool)
-            && let Some(path) = find_in_path(cmd) {
-                detected.push(DetectedTool {
-                    tool: *tool,
-                    path: Some(path),
-                    version: None,
-                });
-            }
+            && let Some(path) = find_in_path(cmd)
+        {
+            detected.push(DetectedTool {
+                tool: *tool,
+                path: Some(path),
+                version: None,
+            });
+        }
     }
 
     detected
@@ -256,7 +257,10 @@ mod tests {
 
     #[test]
     fn cli_command_sourcegraph() {
-        assert_eq!(cli_command_for_tool(CodeIndexingTool::Sourcegraph), Some("src"));
+        assert_eq!(
+            cli_command_for_tool(CodeIndexingTool::Sourcegraph),
+            Some("src")
+        );
     }
 
     #[test]
@@ -276,7 +280,10 @@ mod tests {
 
     #[test]
     fn cli_command_copilot() {
-        assert_eq!(cli_command_for_tool(CodeIndexingTool::Copilot), Some("github-copilot-cli"));
+        assert_eq!(
+            cli_command_for_tool(CodeIndexingTool::Copilot),
+            Some("github-copilot-cli")
+        );
     }
 
     #[test]
@@ -291,7 +298,10 @@ mod tests {
 
     #[test]
     fn cli_command_clangd() {
-        assert_eq!(cli_command_for_tool(CodeIndexingTool::Clangd), Some("clangd"));
+        assert_eq!(
+            cli_command_for_tool(CodeIndexingTool::Clangd),
+            Some("clangd")
+        );
     }
 
     // --- tool_description ---

@@ -293,7 +293,9 @@ impl VersionRange {
 
     /// Check if a version satisfies this range.
     pub fn matches(&self, version: &PluginVersion) -> bool {
-        self.comparators.iter().all(|comp| comp_matches(comp, version))
+        self.comparators
+            .iter()
+            .all(|comp| comp_matches(comp, version))
     }
 }
 
@@ -397,12 +399,13 @@ pub fn satisfies_version_range(version: &PluginVersion, range: &str) -> bool {
 /// Given a path like `~/.claude/plugins/cache/marketplace/plugin/1.0.0`,
 /// extracts and returns `"1.0.0"`.
 pub fn get_version_from_path(install_path: &Path) -> Option<String> {
-    let components: Vec<&std::ffi::OsStr> = install_path.components().filter_map(|c| {
-        match c {
+    let components: Vec<&std::ffi::OsStr> = install_path
+        .components()
+        .filter_map(|c| match c {
             std::path::Component::Normal(s) => Some(s),
             _ => None,
-        }
-    }).collect();
+        })
+        .collect();
 
     // Find "cache" index preceded by "plugins"
     let cache_idx = components.iter().enumerate().find_map(|(i, c)| {
@@ -417,7 +420,8 @@ pub fn get_version_from_path(install_path: &Path) -> Option<String> {
     })?;
 
     // Versioned path has 3 components after "cache": marketplace/plugin/version
-    let after_cache: Vec<&std::ffi::OsStr> = components.iter().skip(cache_idx + 1).copied().collect();
+    let after_cache: Vec<&std::ffi::OsStr> =
+        components.iter().skip(cache_idx + 1).copied().collect();
     if after_cache.len() >= 3 {
         after_cache[2].to_str().map(|s| s.to_string())
     } else {
@@ -486,7 +490,10 @@ mod tests {
     fn parse_version_with_prerelease() {
         let v = parse_version("1.0.0-alpha.1").expect("should parse");
         assert_eq!(v.pre_release.len(), 2);
-        assert_eq!(v.pre_release[0], PreReleaseIdentifier::Alpha("alpha".into()));
+        assert_eq!(
+            v.pre_release[0],
+            PreReleaseIdentifier::Alpha("alpha".into())
+        );
         assert_eq!(v.pre_release[1], PreReleaseIdentifier::Numeric(1));
     }
 
@@ -550,20 +557,17 @@ mod tests {
     #[test]
     fn prerelease_lower_than_release() {
         let release = PluginVersion::new(1, 0, 0);
-        let pre = PluginVersion::new(1, 0, 0).with_pre_release(vec![
-            PreReleaseIdentifier::Alpha("alpha".into()),
-        ]);
+        let pre = PluginVersion::new(1, 0, 0)
+            .with_pre_release(vec![PreReleaseIdentifier::Alpha("alpha".into())]);
         assert!(pre < release);
     }
 
     #[test]
     fn numeric_prerelease_lower_than_alpha() {
-        let num = PluginVersion::new(1, 0, 0).with_pre_release(vec![
-            PreReleaseIdentifier::Numeric(1),
-        ]);
-        let alpha = PluginVersion::new(1, 0, 0).with_pre_release(vec![
-            PreReleaseIdentifier::Alpha("alpha".into()),
-        ]);
+        let num =
+            PluginVersion::new(1, 0, 0).with_pre_release(vec![PreReleaseIdentifier::Numeric(1)]);
+        let alpha = PluginVersion::new(1, 0, 0)
+            .with_pre_release(vec![PreReleaseIdentifier::Alpha("alpha".into())]);
         assert!(num < alpha);
     }
 
@@ -631,9 +635,18 @@ mod tests {
 
     #[test]
     fn satisfies_version_range_convenience() {
-        assert!(satisfies_version_range(&PluginVersion::new(1, 5, 0), "^1.0.0"));
-        assert!(!satisfies_version_range(&PluginVersion::new(2, 0, 0), "^1.0.0"));
-        assert!(!satisfies_version_range(&PluginVersion::new(1, 0, 0), "invalid[range"));
+        assert!(satisfies_version_range(
+            &PluginVersion::new(1, 5, 0),
+            "^1.0.0"
+        ));
+        assert!(!satisfies_version_range(
+            &PluginVersion::new(2, 0, 0),
+            "^1.0.0"
+        ));
+        assert!(!satisfies_version_range(
+            &PluginVersion::new(1, 0, 0),
+            "invalid[range"
+        ));
     }
 
     // -- calculate_plugin_version --

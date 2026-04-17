@@ -56,19 +56,14 @@ pub enum ShadowReason {
 /// be reached because another rule already matches, it is shadowed.
 pub fn detect_shadowed_rules(rules: &[PermissionRuleV2]) -> Vec<ShadowedRule> {
     let mut shadowed = Vec::new();
-    
+
     // Sort rules by source priority
-    let mut sorted: Vec<(usize, &PermissionRuleV2)> = rules
-        .iter()
-        .enumerate()
-        .collect();
+    let mut sorted: Vec<(usize, &PermissionRuleV2)> = rules.iter().enumerate().collect();
     sorted.sort_by_key(|(_, r)| source_priority(r.source));
 
     // Check each rule against all higher-priority rules
     for (i, (_, rule)) in sorted.iter().enumerate() {
-        
         for (_, other) in sorted.iter().take(i) {
-            
             // Check if `other` shadows `rule`
             if rules_overlap(other, rule) {
                 let reason = if other.source != rule.source {
@@ -80,7 +75,7 @@ pub fn detect_shadowed_rules(rules: &[PermissionRuleV2]) -> Vec<ShadowedRule> {
                 } else {
                     ShadowReason::BroaderRule
                 };
-                
+
                 shadowed.push(ShadowedRule {
                     shadowed: (*rule).clone(),
                     shadowed_by: (*other).clone(),
@@ -111,7 +106,8 @@ fn rules_overlap(a: &PermissionRuleV2, b: &PermissionRuleV2) -> bool {
         (Some(a_content), Some(b_content)) => {
             a_content == b_content
                 || a_content == "*"
-                || (a_content.ends_with('*') && b_content.starts_with(a_content.trim_end_matches('*').trim()))
+                || (a_content.ends_with('*')
+                    && b_content.starts_with(a_content.trim_end_matches('*').trim()))
         }
     }
 }
@@ -132,10 +128,20 @@ mod tests {
     #[test]
     fn detect_higher_priority_shadowing() {
         let rules = vec![
-            make_rule(PermissionRuleSource::CliArg, PermissionBehavior::Allow, "Bash", Some("git *")),
-            make_rule(PermissionRuleSource::UserSettings, PermissionBehavior::Allow, "Bash", Some("git *")),
+            make_rule(
+                PermissionRuleSource::CliArg,
+                PermissionBehavior::Allow,
+                "Bash",
+                Some("git *"),
+            ),
+            make_rule(
+                PermissionRuleSource::UserSettings,
+                PermissionBehavior::Allow,
+                "Bash",
+                Some("git *"),
+            ),
         ];
-        
+
         let shadowed = detect_shadowed_rules(&rules);
         assert_eq!(shadowed.len(), 1);
         assert_eq!(shadowed[0].reason, ShadowReason::HigherPrioritySource);
@@ -145,10 +151,20 @@ mod tests {
     fn detect_deny_overrides_allow() {
         // Same source, deny before allow
         let rules = vec![
-            make_rule(PermissionRuleSource::UserSettings, PermissionBehavior::Deny, "Bash", Some("rm *")),
-            make_rule(PermissionRuleSource::UserSettings, PermissionBehavior::Allow, "Bash", Some("rm *")),
+            make_rule(
+                PermissionRuleSource::UserSettings,
+                PermissionBehavior::Deny,
+                "Bash",
+                Some("rm *"),
+            ),
+            make_rule(
+                PermissionRuleSource::UserSettings,
+                PermissionBehavior::Allow,
+                "Bash",
+                Some("rm *"),
+            ),
         ];
-        
+
         let shadowed = detect_shadowed_rules(&rules);
         assert_eq!(shadowed.len(), 1);
         assert_eq!(shadowed[0].reason, ShadowReason::DenyOverridesAllow);
@@ -157,10 +173,20 @@ mod tests {
     #[test]
     fn no_shadowing_different_tools() {
         let rules = vec![
-            make_rule(PermissionRuleSource::CliArg, PermissionBehavior::Allow, "Read", None),
-            make_rule(PermissionRuleSource::UserSettings, PermissionBehavior::Allow, "Write", None),
+            make_rule(
+                PermissionRuleSource::CliArg,
+                PermissionBehavior::Allow,
+                "Read",
+                None,
+            ),
+            make_rule(
+                PermissionRuleSource::UserSettings,
+                PermissionBehavior::Allow,
+                "Write",
+                None,
+            ),
         ];
-        
+
         let shadowed = detect_shadowed_rules(&rules);
         assert!(shadowed.is_empty());
     }
@@ -168,10 +194,20 @@ mod tests {
     #[test]
     fn broader_rule_shadows_narrower() {
         let rules = vec![
-            make_rule(PermissionRuleSource::UserSettings, PermissionBehavior::Allow, "Bash", None),
-            make_rule(PermissionRuleSource::UserSettings, PermissionBehavior::Allow, "Bash", Some("git *")),
+            make_rule(
+                PermissionRuleSource::UserSettings,
+                PermissionBehavior::Allow,
+                "Bash",
+                None,
+            ),
+            make_rule(
+                PermissionRuleSource::UserSettings,
+                PermissionBehavior::Allow,
+                "Bash",
+                Some("git *"),
+            ),
         ];
-        
+
         let shadowed = detect_shadowed_rules(&rules);
         assert_eq!(shadowed.len(), 1);
         assert_eq!(shadowed[0].reason, ShadowReason::BroaderRule);

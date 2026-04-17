@@ -42,9 +42,10 @@ pub fn get_max_output_tokens_for_model(model: &str) -> u32 {
     // Allow environment variable override.
     if let Ok(env_val) = std::env::var(ENV_MAX_OUTPUT_TOKENS)
         && let Ok(parsed) = env_val.parse::<u32>()
-            && parsed > 0 {
-                return parsed;
-            }
+        && parsed > 0
+    {
+        return parsed;
+    }
 
     default_tokens
 }
@@ -148,10 +149,7 @@ mod tests {
             "model": "test",
         });
         adjust_params_for_non_streaming(&mut body);
-        assert_eq!(
-            body.get("max_tokens").and_then(Value::as_u64),
-            Some(1024)
-        );
+        assert_eq!(body.get("max_tokens").and_then(Value::as_u64), Some(1024));
     }
 
     #[test]

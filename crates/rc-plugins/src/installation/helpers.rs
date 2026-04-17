@@ -54,10 +54,7 @@ pub struct VerifyResult {
 ///
 /// In a real implementation, this would make an HTTP request.
 /// Here it validates the source and returns a placeholder result.
-pub fn download_plugin(
-    source_url: &str,
-    target_dir: &Path,
-) -> DownloadResult {
+pub fn download_plugin(source_url: &str, target_dir: &Path) -> DownloadResult {
     if source_url.is_empty() {
         return DownloadResult {
             path: PathBuf::new(),
@@ -68,14 +65,15 @@ pub fn download_plugin(
     }
 
     if !target_dir.exists()
-        && let Err(e) = std::fs::create_dir_all(target_dir) {
-            return DownloadResult {
-                path: PathBuf::new(),
-                size_bytes: 0,
-                success: false,
-                error: Some(format!("failed to create target dir: {e}")),
-            };
-        }
+        && let Err(e) = std::fs::create_dir_all(target_dir)
+    {
+        return DownloadResult {
+            path: PathBuf::new(),
+            size_bytes: 0,
+            success: false,
+            error: Some(format!("failed to create target dir: {e}")),
+        };
+    }
 
     let filename = extract_filename(source_url);
     let target_path = target_dir.join(filename);
@@ -92,19 +90,13 @@ pub fn download_plugin(
 ///
 /// In a real implementation, this would extract a zip/tar archive.
 /// Here it creates the target directory structure.
-pub fn extract_plugin(
-    archive_path: &Path,
-    target_dir: &Path,
-) -> ExtractResult {
+pub fn extract_plugin(archive_path: &Path, target_dir: &Path) -> ExtractResult {
     if !archive_path.exists() {
         return ExtractResult {
             path: PathBuf::new(),
             file_count: 0,
             success: false,
-            error: Some(format!(
-                "archive not found: {}",
-                archive_path.display()
-            )),
+            error: Some(format!("archive not found: {}", archive_path.display())),
         };
     }
 
@@ -147,10 +139,7 @@ pub fn verify_plugin(plugin_dir: &Path) -> VerifyResult {
         .join(crate::PLUGIN_MANIFEST_FILE);
 
     if !manifest_path.exists() {
-        issues.push(format!(
-            "manifest not found at {}",
-            manifest_path.display()
-        ));
+        issues.push(format!("manifest not found at {}", manifest_path.display()));
     } else if let Ok(content) = std::fs::read_to_string(&manifest_path) {
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) {
             if value.get("name").and_then(|v| v.as_str()).is_none() {
@@ -179,26 +168,18 @@ pub fn compute_install_path(
     plugin_name: &str,
     version: &str,
 ) -> PathBuf {
-    base.join(marketplace)
-        .join(plugin_name)
-        .join(version)
+    base.join(marketplace).join(plugin_name).join(version)
 }
 
 /// Extract a filename from a URL.
 fn extract_filename(url: &str) -> String {
-    url.rsplit('/')
-        .next()
-        .unwrap_or("plugin.zip")
-        .to_owned()
+    url.rsplit('/').next().unwrap_or("plugin.zip").to_owned()
 }
 
 /// Validate that a resolved path stays within a base directory.
 ///
 /// Prevents path traversal attacks.
-pub fn validate_path_within_base(
-    base: &Path,
-    relative: &str,
-) -> Option<PathBuf> {
+pub fn validate_path_within_base(base: &Path, relative: &str) -> Option<PathBuf> {
     let resolved = base.join(relative);
     let canonical_base = base.canonicalize().ok()?;
     let canonical_resolved = resolved.canonicalize().ok()?;
@@ -230,10 +211,7 @@ mod tests {
     #[test]
     fn download_plugin_basic() {
         let temp = ok(tempdir());
-        let result = download_plugin(
-            "https://example.com/plugin.zip",
-            temp.path(),
-        );
+        let result = download_plugin("https://example.com/plugin.zip", temp.path());
         assert!(result.success);
         assert!(result.path.to_string_lossy().contains("plugin.zip"));
     }
@@ -258,10 +236,7 @@ mod tests {
 
     #[test]
     fn extract_plugin_nonexistent() {
-        let result = extract_plugin(
-            Path::new("/nonexistent.zip"),
-            Path::new("/tmp/out"),
-        );
+        let result = extract_plugin(Path::new("/nonexistent.zip"), Path::new("/tmp/out"));
         assert!(!result.success);
     }
 
@@ -312,16 +287,8 @@ mod tests {
 
     #[test]
     fn compute_install_path_works() {
-        let path = compute_install_path(
-            Path::new("/plugins"),
-            "mkt",
-            "my-plugin",
-            "1.0.0",
-        );
-        assert_eq!(
-            path,
-            PathBuf::from("/plugins/mkt/my-plugin/1.0.0")
-        );
+        let path = compute_install_path(Path::new("/plugins"), "mkt", "my-plugin", "1.0.0");
+        assert_eq!(path, PathBuf::from("/plugins/mkt/my-plugin/1.0.0"));
     }
 
     #[test]
@@ -330,9 +297,6 @@ mod tests {
             extract_filename("https://example.com/plugin.zip"),
             "plugin.zip"
         );
-        assert_eq!(
-            extract_filename("no-slash"),
-            "no-slash"
-        );
+        assert_eq!(extract_filename("no-slash"), "no-slash");
     }
 }

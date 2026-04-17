@@ -71,13 +71,34 @@ pub struct AgentSourceGroup {
 
 /// Ordered list of agent source groups for display.
 pub const AGENT_SOURCE_GROUPS: &[AgentSourceGroup] = &[
-    AgentSourceGroup { label: "User agents", source: AgentSource::User },
-    AgentSourceGroup { label: "Project agents", source: AgentSource::Project },
-    AgentSourceGroup { label: "Local agents", source: AgentSource::Local },
-    AgentSourceGroup { label: "Managed agents", source: AgentSource::Policy },
-    AgentSourceGroup { label: "Plugin agents", source: AgentSource::Plugin },
-    AgentSourceGroup { label: "CLI arg agents", source: AgentSource::Flag },
-    AgentSourceGroup { label: "Built-in agents", source: AgentSource::BuiltIn },
+    AgentSourceGroup {
+        label: "User agents",
+        source: AgentSource::User,
+    },
+    AgentSourceGroup {
+        label: "Project agents",
+        source: AgentSource::Project,
+    },
+    AgentSourceGroup {
+        label: "Local agents",
+        source: AgentSource::Local,
+    },
+    AgentSourceGroup {
+        label: "Managed agents",
+        source: AgentSource::Policy,
+    },
+    AgentSourceGroup {
+        label: "Plugin agents",
+        source: AgentSource::Plugin,
+    },
+    AgentSourceGroup {
+        label: "CLI arg agents",
+        source: AgentSource::Flag,
+    },
+    AgentSourceGroup {
+        label: "Built-in agents",
+        source: AgentSource::BuiltIn,
+    },
 ];
 
 /// An agent annotated with override information.
@@ -136,11 +157,7 @@ pub fn agent_icon_for_type(agent_type: &str) -> String {
 }
 
 /// Format an agent's status line with color and state information.
-pub fn format_agent_status(
-    name: &str,
-    state: crate::AgentState,
-    progress: Option<f64>,
-) -> String {
+pub fn format_agent_status(name: &str, state: crate::AgentState, progress: Option<f64>) -> String {
     let color = agent_color_for_type(name);
     let state_str = match state {
         crate::AgentState::Idle => "idle",
@@ -202,7 +219,9 @@ pub fn resolve_agent_overrides(
 
 /// Compare agents alphabetically by name (case-insensitive).
 pub fn compare_agents_by_name(a: &AgentDefinition, b: &AgentDefinition) -> std::cmp::Ordering {
-    a.agent_type.to_lowercase().cmp(&b.agent_type.to_lowercase())
+    a.agent_type
+        .to_lowercase()
+        .cmp(&b.agent_type.to_lowercase())
 }
 
 /// Get a human-readable label for the source that overrides an agent.
@@ -451,7 +470,9 @@ mod tests {
 
         assert_eq!(resolved.len(), 2);
         // The built-in should be marked as overridden
-        let bi = resolved.iter().find(|r| r.definition.source == AgentSource::BuiltIn);
+        let bi = resolved
+            .iter()
+            .find(|r| r.definition.source == AgentSource::BuiltIn);
         assert!(bi.is_some());
         assert_eq!(bi.expect("found").overridden_by, Some(AgentSource::User));
     }

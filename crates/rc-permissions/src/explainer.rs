@@ -23,23 +23,23 @@ pub fn explain_permission(
 
 fn explain_allow(reason: &Option<DecisionReason>, tool_name: &str) -> String {
     match reason {
-        Some(DecisionReason::Rule { rule }) => {
-            format!(
-                "✓ {} allowed by {} rule: {} {}",
-                tool_name,
-                format_source(rule.source),
-                rule.value.tool_name,
-                rule.value.rule_content.as_deref().unwrap_or("")
-            ).trim_end().to_string()
-        }
+        Some(DecisionReason::Rule { rule }) => format!(
+            "✓ {} allowed by {} rule: {} {}",
+            tool_name,
+            format_source(rule.source),
+            rule.value.tool_name,
+            rule.value.rule_content.as_deref().unwrap_or("")
+        )
+        .trim_end()
+        .to_string(),
         Some(DecisionReason::Mode { mode }) => {
-            format!(
-                "✓ {} auto-allowed in {} mode",
-                tool_name,
-                mode.title()
-            )
+            format!("✓ {} auto-allowed in {} mode", tool_name, mode.title())
         }
-        Some(DecisionReason::Hook { hook_name, reason: hook_reason, .. }) => {
+        Some(DecisionReason::Hook {
+            hook_name,
+            reason: hook_reason,
+            ..
+        }) => {
             format!(
                 "✓ {} allowed by hook '{}': {}",
                 tool_name,
@@ -47,19 +47,18 @@ fn explain_allow(reason: &Option<DecisionReason>, tool_name: &str) -> String {
                 hook_reason.as_deref().unwrap_or("no reason given")
             )
         }
-        Some(DecisionReason::PermissionPromptTool { tool_name: pt_name, .. }) => {
+        Some(DecisionReason::PermissionPromptTool {
+            tool_name: pt_name, ..
+        }) => {
             format!(
                 "✓ {} allowed by permission prompt tool '{}'",
-                tool_name,
-                pt_name
+                tool_name, pt_name
             )
         }
-        Some(DecisionReason::AsyncAgent { reason: agent_reason }) => {
-            format!(
-                "✓ {} allowed by async agent: {}",
-                tool_name,
-                agent_reason
-            )
+        Some(DecisionReason::AsyncAgent {
+            reason: agent_reason,
+        }) => {
+            format!("✓ {} allowed by async agent: {}", tool_name, agent_reason)
         }
         _ => format!("✓ {} allowed", tool_name),
     }
@@ -67,23 +66,23 @@ fn explain_allow(reason: &Option<DecisionReason>, tool_name: &str) -> String {
 
 fn explain_deny(reason: &Option<DecisionReason>, tool_name: &str) -> String {
     match reason {
-        Some(DecisionReason::Rule { rule }) => {
-            format!(
-                "✗ {} denied by {} rule: {} {}",
-                tool_name,
-                format_source(rule.source),
-                rule.value.tool_name,
-                rule.value.rule_content.as_deref().unwrap_or("")
-            ).trim_end().to_string()
-        }
+        Some(DecisionReason::Rule { rule }) => format!(
+            "✗ {} denied by {} rule: {} {}",
+            tool_name,
+            format_source(rule.source),
+            rule.value.tool_name,
+            rule.value.rule_content.as_deref().unwrap_or("")
+        )
+        .trim_end()
+        .to_string(),
         Some(DecisionReason::Mode { mode }) => {
-            format!(
-                "✗ {} denied in {} mode",
-                tool_name,
-                mode.title()
-            )
+            format!("✗ {} denied in {} mode", tool_name, mode.title())
         }
-        Some(DecisionReason::Hook { hook_name, reason: hook_reason, .. }) => {
+        Some(DecisionReason::Hook {
+            hook_name,
+            reason: hook_reason,
+            ..
+        }) => {
             format!(
                 "✗ {} denied by hook '{}': {}",
                 tool_name,
@@ -133,9 +132,9 @@ fn format_source(source: rc_core::permission_types::PermissionRuleSource) -> &'s
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rc_core::permission_types::PermissionRuleSource;
-    use crate::rule::PermissionRuleV2;
     use crate::mode::ExtendedPermissionMode;
+    use crate::rule::PermissionRuleV2;
+    use rc_core::permission_types::PermissionRuleSource;
 
     #[test]
     fn explain_allow_default() {

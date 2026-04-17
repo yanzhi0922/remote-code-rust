@@ -266,7 +266,12 @@ mod tests {
         // Scroll down first so we can scroll up.
         app.scroll.scroll_down(10);
         let offset_before = app.scroll.scroll_offset();
-        let mouse = MouseEvent { kind: MouseEventKind::ScrollUp, column: 10, row: 10, modifiers: KeyModifiers::NONE };
+        let mouse = MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        };
         handle_mouse(&mut app, mouse);
         assert!(app.scroll.scroll_offset() < offset_before);
     }

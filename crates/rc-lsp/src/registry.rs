@@ -164,9 +164,7 @@ impl LspServerManager {
         }
 
         instance.status = ServerStatus::Starting;
-        instance
-            .client
-            .initialize("remote-code", "0.1.0")?;
+        instance.client.initialize("remote-code", "0.1.0")?;
         instance.status = ServerStatus::Running;
         Ok(())
     }

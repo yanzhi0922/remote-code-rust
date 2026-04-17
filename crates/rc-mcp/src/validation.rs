@@ -89,9 +89,7 @@ impl McpConfigValidator {
             warnings.push(ValidationWarning {
                 server_name: name.to_owned(),
                 kind: ValidationWarningKind::InvalidName,
-                message: format!(
-                    "server name '{name}' must match ^[a-zA-Z0-9_-]{{1,64}}$"
-                ),
+                message: format!("server name '{name}' must match ^[a-zA-Z0-9_-]{{1,64}}$"),
             });
         }
 
@@ -135,7 +133,8 @@ impl McpConfigValidator {
         if name.is_empty() || name.len() > 64 {
             return false;
         }
-        name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        name.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     }
 
     /// Validate a URL format.
@@ -174,9 +173,7 @@ impl McpConfigValidator {
     ///
     /// Servers are considered duplicates if they have the same transport
     /// target (command for stdio, URL for HTTP/WebSocket).
-    pub fn find_duplicates(
-        configs: &HashMap<String, McpServerConfig>,
-    ) -> Vec<DuplicateEntry> {
+    pub fn find_duplicates(configs: &HashMap<String, McpServerConfig>) -> Vec<DuplicateEntry> {
         let mut duplicates = Vec::new();
         let entries: Vec<(&String, &McpServerConfig)> = configs.iter().collect();
 
@@ -202,8 +199,16 @@ impl McpConfigValidator {
     fn check_duplicate_pair(a: &McpServerConfig, b: &McpServerConfig) -> Option<String> {
         match (&a.transport, &b.transport) {
             (
-                crate::transport::McpTransportConfig::Stdio { command: cmd_a, args: args_a, .. },
-                crate::transport::McpTransportConfig::Stdio { command: cmd_b, args: args_b, .. },
+                crate::transport::McpTransportConfig::Stdio {
+                    command: cmd_a,
+                    args: args_a,
+                    ..
+                },
+                crate::transport::McpTransportConfig::Stdio {
+                    command: cmd_b,
+                    args: args_b,
+                    ..
+                },
             ) => {
                 if cmd_a == cmd_b && args_a == args_b {
                     Some(format!("same stdio command: {cmd_a}"))
@@ -243,19 +248,8 @@ impl McpConfigValidator {
 
         // Check for dangerous commands
         let dangerous_commands = [
-            "rm",
-            "rmdir",
-            "del",
-            "format",
-            "mkfs",
-            "dd",
-            "shred",
-            "sudo",
-            "su",
-            "chmod",
-            "chown",
-            "curl",
-            "wget",
+            "rm", "rmdir", "del", "format", "mkfs", "dd", "shred", "sudo", "su", "chmod", "chown",
+            "curl", "wget",
         ];
 
         let cmd_lower = command.to_lowercase();
@@ -457,20 +451,23 @@ mod tests {
 
     #[test]
     fn check_command_safety_path_traversal() {
-        let warnings = McpConfigValidator::check_command_safety(
-            "cat",
-            &["../../../etc/passwd".to_owned()],
+        let warnings =
+            McpConfigValidator::check_command_safety("cat", &["../../../etc/passwd".to_owned()]);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.message.contains("path traversal"))
         );
-        assert!(warnings.iter().any(|w| w.message.contains("path traversal")));
     }
 
     #[test]
     fn check_command_safety_shell_expansion() {
-        let warnings = McpConfigValidator::check_command_safety(
-            "echo",
-            &["$(whoami)".to_owned()],
+        let warnings = McpConfigValidator::check_command_safety("echo", &["$(whoami)".to_owned()]);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.message.contains("shell expansion"))
         );
-        assert!(warnings.iter().any(|w| w.message.contains("shell expansion")));
     }
 
     #[test]

@@ -128,7 +128,11 @@ mod tests {
     fn test_identity(is_lead: bool) -> TeammateIdentity {
         TeammateIdentity {
             agent_id: "a1".to_owned(),
-            name: if is_lead { "lead".to_owned() } else { "worker-1".to_owned() },
+            name: if is_lead {
+                "lead".to_owned()
+            } else {
+                "worker-1".to_owned()
+            },
             team_name: "test-team".to_owned(),
             is_lead,
             lead_agent_id: "lead-123".to_owned(),

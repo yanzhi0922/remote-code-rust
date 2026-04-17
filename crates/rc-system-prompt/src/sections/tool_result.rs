@@ -9,8 +9,7 @@ use crate::PromptContext;
 use crate::sections::SystemPromptSection;
 
 /// The summarize tool results instruction.
-pub const SUMMARIZE_TOOL_RESULTS_SECTION: &str =
-    "When working with tool results, write down any important information you might need later in your response, as the original tool result may be cleared later.";
+pub const SUMMARIZE_TOOL_RESULTS_SECTION: &str = "When working with tool results, write down any important information you might need later in your response, as the original tool result may be cleared later.";
 
 /// The function result clearing section.
 ///

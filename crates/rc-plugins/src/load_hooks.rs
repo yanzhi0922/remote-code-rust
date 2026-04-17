@@ -87,10 +87,7 @@ pub struct LoadHooksResult {
 /// Load plugin hooks from a hooks configuration file.
 ///
 /// Reads the hooks JSON file and parses it into a structured configuration.
-pub fn load_plugin_hooks(
-    plugin_name: &str,
-    hooks_path: &Path,
-) -> LoadHooksResult {
+pub fn load_plugin_hooks(plugin_name: &str, hooks_path: &Path) -> LoadHooksResult {
     let mut errors = Vec::new();
 
     if !hooks_path.exists() {
@@ -150,9 +147,7 @@ pub fn load_plugin_hooks(
 }
 
 /// Parse a raw JSON hooks configuration.
-fn parse_hooks_config(
-    raw: &Value,
-) -> Result<HashMap<HookEvent, Vec<PluginHookMatcher>>, String> {
+fn parse_hooks_config(raw: &Value) -> Result<HashMap<HookEvent, Vec<PluginHookMatcher>>, String> {
     let mut hooks = HashMap::new();
 
     let obj = raw
@@ -168,9 +163,7 @@ fn parse_hooks_config(
         let matchers = match parse_matchers(event_value) {
             Ok(m) => m,
             Err(e) => {
-                return Err(format!(
-                    "invalid matchers for event '{event_name}': {e}"
-                ));
+                return Err(format!("invalid matchers for event '{event_name}': {e}"));
             }
         };
 
@@ -206,9 +199,7 @@ fn parse_hook_event(name: &str) -> Option<HookEvent> {
 }
 
 /// Parse matchers from a JSON value.
-fn parse_matchers(
-    value: &Value,
-) -> Result<Vec<PluginHookMatcher>, String> {
+fn parse_matchers(value: &Value) -> Result<Vec<PluginHookMatcher>, String> {
     let arr = value
         .as_array()
         .ok_or_else(|| "expected an array of matchers".to_owned())?;
@@ -272,12 +263,7 @@ pub fn count_hooks(config: &PluginHookConfig) -> usize {
     config
         .hooks
         .values()
-        .map(|matchers| {
-            matchers
-                .iter()
-                .map(|m| m.hooks.len())
-                .sum::<usize>()
-        })
+        .map(|matchers| matchers.iter().map(|m| m.hooks.len()).sum::<usize>())
         .sum()
 }
 
@@ -342,10 +328,7 @@ mod tests {
 
     #[test]
     fn load_plugin_hooks_nonexistent() {
-        let result = load_plugin_hooks(
-            "test-plugin",
-            Path::new("/nonexistent/hooks.json"),
-        );
+        let result = load_plugin_hooks("test-plugin", Path::new("/nonexistent/hooks.json"));
         assert!(result.config.is_none());
         assert!(result.errors.is_empty());
     }
@@ -394,10 +377,7 @@ mod tests {
 
     #[test]
     fn parse_hook_event_known() {
-        assert_eq!(
-            parse_hook_event("PreToolUse"),
-            Some(HookEvent::PreToolUse)
-        );
+        assert_eq!(parse_hook_event("PreToolUse"), Some(HookEvent::PreToolUse));
         assert_eq!(
             parse_hook_event("PostToolUse"),
             Some(HookEvent::PostToolUse)

@@ -34,7 +34,9 @@ fn get_shell_info_line(shell: &str, platform: &str) -> String {
     };
 
     if platform == "win32" {
-        format!("Shell: {shell_name} (use Unix shell syntax, not Windows \u{2014} e.g., /dev/null not NUL, forward slashes in paths)")
+        format!(
+            "Shell: {shell_name} (use Unix shell syntax, not Windows \u{2014} e.g., /dev/null not NUL, forward slashes in paths)"
+        )
     } else {
         format!("Shell: {shell_name}")
     }
@@ -60,9 +62,10 @@ impl SystemPromptSection for EnvInfoSection {
             .map(|c| format!("Assistant knowledge cutoff is {c}."))
             .unwrap_or_default();
 
-        let mut env_items: Vec<BulletItem> = vec![
-            BulletItem::Single(format!("Primary working directory: {}", ctx.cwd.display())),
-        ];
+        let mut env_items: Vec<BulletItem> = vec![BulletItem::Single(format!(
+            "Primary working directory: {}",
+            ctx.cwd.display()
+        ))];
 
         if ctx.is_worktree {
             env_items.push(BulletItem::Single(
@@ -87,10 +90,7 @@ impl SystemPromptSection for EnvInfoSection {
             ));
         }
 
-        env_items.push(BulletItem::Single(format!(
-            "Platform: {}",
-            ctx.platform
-        )));
+        env_items.push(BulletItem::Single(format!("Platform: {}", ctx.platform)));
         env_items.push(BulletItem::Single(get_shell_info_line(
             &ctx.shell,
             &ctx.platform,
@@ -195,7 +195,10 @@ mod tests {
 
     #[test]
     fn knowledge_cutoff_sonnet_4_6() {
-        assert_eq!(get_knowledge_cutoff("claude-sonnet-4-6"), Some("August 2025"));
+        assert_eq!(
+            get_knowledge_cutoff("claude-sonnet-4-6"),
+            Some("August 2025")
+        );
     }
 
     #[test]

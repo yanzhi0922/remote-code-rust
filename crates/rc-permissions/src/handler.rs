@@ -72,9 +72,7 @@ impl PermissionHandler for InteractiveHandler {
         // Check mode-based decisions first
         match ctx.mode {
             ExtendedPermissionMode::BypassPermissions => {
-                return PermissionDecisionV2::allow(Some(DecisionReason::Mode {
-                    mode: ctx.mode,
-                }));
+                return PermissionDecisionV2::allow(Some(DecisionReason::Mode { mode: ctx.mode }));
             }
             ExtendedPermissionMode::Plan => {
                 return PermissionDecisionV2::deny(
@@ -86,7 +84,10 @@ impl PermissionHandler for InteractiveHandler {
                 // Auto-deny if no explicit allow rule
                 let has_allow = rules.iter().any(|r| {
                     r.behavior == PermissionBehavior::Allow
-                        && r.matches(&ctx.tool_name, ctx.input.get("command").and_then(|v| v.as_str()))
+                        && r.matches(
+                            &ctx.tool_name,
+                            ctx.input.get("command").and_then(|v| v.as_str()),
+                        )
                 });
                 if has_allow {
                     return PermissionDecisionV2::allow(Some(DecisionReason::Mode {
@@ -99,7 +100,10 @@ impl PermissionHandler for InteractiveHandler {
                 );
             }
             ExtendedPermissionMode::AcceptEdits if self.auto_accept_edits => {
-                if ctx.tool_name == "Write" || ctx.tool_name == "Edit" || ctx.tool_name == "MultiEdit" {
+                if ctx.tool_name == "Write"
+                    || ctx.tool_name == "Edit"
+                    || ctx.tool_name == "MultiEdit"
+                {
                     return PermissionDecisionV2::allow(Some(DecisionReason::Mode {
                         mode: ctx.mode,
                     }));
@@ -111,17 +115,32 @@ impl PermissionHandler for InteractiveHandler {
         // Check rules
         for rule in rules {
             let content = match ctx.tool_name.as_str() {
-                "Bash" | "BashCommand" => ctx.input.get("command").and_then(|v| v.as_str()).map(String::from),
-                "Read" => ctx.input.get("file_path").and_then(|v| v.as_str()).map(String::from),
-                "Write" | "Edit" => ctx.input.get("file_path").or_else(|| ctx.input.get("path")).and_then(|v| v.as_str()).map(String::from),
+                "Bash" | "BashCommand" => ctx
+                    .input
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                "Read" => ctx
+                    .input
+                    .get("file_path")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                "Write" | "Edit" => ctx
+                    .input
+                    .get("file_path")
+                    .or_else(|| ctx.input.get("path"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
                 _ => None,
             };
-            
+
             if rule.matches(&ctx.tool_name, content.as_deref()) {
                 return match rule.behavior {
-                    PermissionBehavior::Allow => PermissionDecisionV2::allow(Some(
-                        DecisionReason::Rule { rule: rule.clone() },
-                    )),
+                    PermissionBehavior::Allow => {
+                        PermissionDecisionV2::allow(Some(DecisionReason::Rule {
+                            rule: rule.clone(),
+                        }))
+                    }
                     PermissionBehavior::Deny => PermissionDecisionV2::deny(
                         format!("Denied by {} rule", rule.value.tool_name),
                         DecisionReason::Rule { rule: rule.clone() },

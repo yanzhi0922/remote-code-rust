@@ -227,10 +227,7 @@ impl McpBatchOperation {
     pub fn group_by_server(&self) -> HashMap<&str, Vec<&BatchToolCall>> {
         let mut groups: HashMap<&str, Vec<&BatchToolCall>> = HashMap::new();
         for call in &self.calls {
-            groups
-                .entry(&call.server_name)
-                .or_default()
-                .push(call);
+            groups.entry(&call.server_name).or_default().push(call);
         }
         groups
     }
@@ -363,11 +360,7 @@ pub struct BatchResourceResult {
 impl BatchResourceResult {
     /// Create a successful result.
     #[must_use]
-    pub fn success(
-        fetch: BatchResourceFetch,
-        content: Vec<u8>,
-        mime_type: Option<String>,
-    ) -> Self {
+    pub fn success(fetch: BatchResourceFetch, content: Vec<u8>, mime_type: Option<String>) -> Self {
         Self {
             fetch,
             content: Some(content),
@@ -503,9 +496,9 @@ impl BatchResourceResults {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{McpCapabilityMatrix, McpServerConfig};
     use crate::connection::{DisabledServer, PendingServer};
     use crate::scope::{ConfigScope, ScopedMcpServerConfig};
-    use crate::config::{McpCapabilityMatrix, McpServerConfig};
     use crate::transport::McpTransportConfig;
     use crate::types::McpToolCallContent;
     use std::collections::BTreeMap;
@@ -585,7 +578,10 @@ mod tests {
         });
         assert_eq!(queue.pending_count(), 1);
         let updates = queue.flush();
-        assert!(matches!(updates[0].connection, McpServerConnection::Disabled(_)));
+        assert!(matches!(
+            updates[0].connection,
+            McpServerConnection::Disabled(_)
+        ));
     }
 
     #[test]
@@ -809,7 +805,10 @@ mod tests {
         assert!(result.is_success());
         assert!(!result.is_failure());
         assert_eq!(result.content.as_ref().map(|c| c.len()), Some(4));
-        assert_eq!(result.mime_type.as_deref(), Some("application/octet-stream"));
+        assert_eq!(
+            result.mime_type.as_deref(),
+            Some("application/octet-stream")
+        );
     }
 
     #[test]

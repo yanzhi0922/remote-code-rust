@@ -95,9 +95,7 @@ pub fn send_user_file(input: &Value, context: &ToolExecutionContext) -> Result<S
     let size_bytes = metadata.len();
 
     // Check size limit (default 10MB).
-    let max_size = input["max_size_bytes"]
-        .as_u64()
-        .unwrap_or(10 * 1024 * 1024);
+    let max_size = input["max_size_bytes"].as_u64().unwrap_or(10 * 1024 * 1024);
 
     if size_bytes > max_size {
         return Ok(json!({
@@ -126,9 +124,7 @@ pub fn send_user_file(input: &Value, context: &ToolExecutionContext) -> Result<S
 
     let category = FileCategory::from_extension(&extension);
     let mime_type = guess_mime_type(&extension);
-    let description = input["description"]
-        .as_str()
-        .unwrap_or("");
+    let description = input["description"].as_str().unwrap_or("");
 
     let file_info = UserFileInfo {
         name: file_name.clone(),
@@ -148,9 +144,7 @@ pub fn send_user_file(input: &Value, context: &ToolExecutionContext) -> Result<S
     } else {
         let text = std::fs::read_to_string(&full_path).context("failed to read text file")?;
         // Truncate if too large for text content.
-        let max_text_chars = input["max_text_chars"]
-            .as_u64()
-            .unwrap_or(50_000) as usize;
+        let max_text_chars = input["max_text_chars"].as_u64().unwrap_or(50_000) as usize;
         if text.len() > max_text_chars {
             json!(text[..max_text_chars].to_string() + "\n... (truncated)")
         } else {
@@ -277,7 +271,10 @@ mod tests {
     fn file_category_from_extension_binary() {
         assert_eq!(FileCategory::from_extension("exe"), FileCategory::Binary);
         assert_eq!(FileCategory::from_extension("zip"), FileCategory::Binary);
-        assert_eq!(FileCategory::from_extension("unknown"), FileCategory::Binary);
+        assert_eq!(
+            FileCategory::from_extension("unknown"),
+            FileCategory::Binary
+        );
     }
 
     #[test]

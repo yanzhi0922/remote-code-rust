@@ -3,8 +3,8 @@
 //! Implements the S256 code challenge method as specified in RFC 7636.
 //! Mirrors `services/oauth/crypto.ts`.
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use sha2::{Digest, Sha256};
 
 /// Generate a cryptographically-random `code_verifier` (43–128 chars,
@@ -91,10 +91,7 @@ fn splitmix64(state: &mut u64) -> u64 {
 }
 
 fn xoshiro256pp(s: &mut [u64; 4]) -> u64 {
-    let result = s[0]
-        .wrapping_add(s[3])
-        .rotate_left(23)
-        .wrapping_add(s[0]);
+    let result = s[0].wrapping_add(s[3]).rotate_left(23).wrapping_add(s[0]);
     let t = s[1].wrapping_shl(17);
     s[2] ^= s[0];
     s[3] ^= s[1];

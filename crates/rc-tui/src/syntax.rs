@@ -89,7 +89,10 @@ pub fn highlight_line(line: &str, lang: Language, colors: &SyntaxColors) -> Vec<
         Language::Json => highlight_json(line, colors),
         _ => {
             // Generic highlighting for unknown languages.
-            vec![Span::styled(line.to_owned(), Style::default().fg(colors.default))]
+            vec![Span::styled(
+                line.to_owned(),
+                Style::default().fg(colors.default),
+            )]
         }
     }
 }
@@ -105,8 +108,7 @@ pub fn highlight_code(code: &str, lang: Language, colors: &SyntaxColors) -> Vec<
 pub fn is_rust_keyword(word: &str) -> bool {
     matches!(
         word,
-        "fn"
-            | "let"
+        "fn" | "let"
             | "mut"
             | "if"
             | "else"
@@ -156,7 +158,9 @@ fn highlight_rust(line: &str, colors: &SyntaxColors) -> Vec<Span<'static>> {
             let comment: String = chars[i..].iter().collect();
             spans.push(Span::styled(
                 comment,
-                Style::default().fg(colors.comment).add_modifier(Modifier::ITALIC),
+                Style::default()
+                    .fg(colors.comment)
+                    .add_modifier(Modifier::ITALIC),
             ));
             break;
         }
@@ -182,7 +186,9 @@ fn highlight_rust(line: &str, colors: &SyntaxColors) -> Vec<Span<'static>> {
         // Number
         if chars[i].is_ascii_digit() {
             let start = i;
-            while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '_' || chars[i] == '.') {
+            while i < chars.len()
+                && (chars[i].is_ascii_digit() || chars[i] == '_' || chars[i] == '.')
+            {
                 i += 1;
             }
             let s: String = chars[start..i].iter().collect();
@@ -198,7 +204,9 @@ fn highlight_rust(line: &str, colors: &SyntaxColors) -> Vec<Span<'static>> {
             }
             let word: String = chars[start..i].iter().collect();
             let style = if is_rust_keyword(&word) {
-                Style::default().fg(colors.keyword).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(colors.keyword)
+                    .add_modifier(Modifier::BOLD)
             } else if i < chars.len() && chars[i] == '(' {
                 Style::default().fg(colors.function)
             } else if word.starts_with(char::is_uppercase) && word.len() > 1 {
@@ -290,8 +298,7 @@ fn highlight_shell(line: &str, colors: &SyntaxColors) -> Vec<Span<'static>> {
 fn is_shell_keyword(word: &str) -> bool {
     matches!(
         word,
-        "if"
-            | "then"
+        "if" | "then"
             | "else"
             | "fi"
             | "for"
@@ -350,12 +357,21 @@ fn highlight_json(line: &str, colors: &SyntaxColors) -> Vec<Span<'static>> {
         }
 
         // Number
-        if chars[i].is_ascii_digit() || (chars[i] == '-' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit()) {
+        if chars[i].is_ascii_digit()
+            || (chars[i] == '-' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit())
+        {
             let start = i;
             if chars[i] == '-' {
                 i += 1;
             }
-            while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.' || chars[i] == 'e' || chars[i] == 'E' || chars[i] == '+' || chars[i] == '-') {
+            while i < chars.len()
+                && (chars[i].is_ascii_digit()
+                    || chars[i] == '.'
+                    || chars[i] == 'e'
+                    || chars[i] == 'E'
+                    || chars[i] == '+'
+                    || chars[i] == '-')
+            {
                 i += 1;
             }
             let s: String = chars[start..i].iter().collect();

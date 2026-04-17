@@ -139,7 +139,8 @@ impl EnvironmentList {
 
     /// Sort environments by last active time (most recent first).
     pub fn sort_by_last_active(&mut self) {
-        self.environments.sort_by(|a, b| b.last_active.cmp(&a.last_active));
+        self.environments
+            .sort_by(|a, b| b.last_active.cmp(&a.last_active));
     }
 
     /// Sort environments by name (alphabetical).

@@ -105,20 +105,13 @@ pub enum IdeAction {
         new_content: String,
     },
     /// Apply an edit to a file.
-    ApplyEdit {
-        path: PathBuf,
-        content: String,
-    },
+    ApplyEdit { path: PathBuf, content: String },
     /// Get diagnostics for a file.
-    GetDiagnostics {
-        path: PathBuf,
-    },
+    GetDiagnostics { path: PathBuf },
     /// Get the current selection from the IDE.
     GetSelection,
     /// Send a notification to the IDE.
-    Notify {
-        message: String,
-    },
+    Notify { message: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -391,7 +384,10 @@ mod tests {
 
     #[test]
     fn test_connection_status_display() {
-        assert_eq!(IdeConnectionStatus::Disconnected.to_string(), "Disconnected");
+        assert_eq!(
+            IdeConnectionStatus::Disconnected.to_string(),
+            "Disconnected"
+        );
         assert_eq!(IdeConnectionStatus::Connecting.to_string(), "Connecting");
         assert_eq!(IdeConnectionStatus::Connected.to_string(), "Connected");
     }

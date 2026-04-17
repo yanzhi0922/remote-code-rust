@@ -221,11 +221,7 @@ impl HookExecutor {
     }
 
     /// Execute a single hook.
-    async fn execute_single_hook(
-        &self,
-        hook: &HookDefinition,
-        input: &HookInput,
-    ) -> HookOutcome {
+    async fn execute_single_hook(&self, hook: &HookDefinition, input: &HookInput) -> HookOutcome {
         let timeout = hook.timeout_duration(self.default_timeout_secs);
         let start = Instant::now();
 
@@ -233,9 +229,7 @@ impl HookExecutor {
             HookDefinition::Command(cmd) => {
                 self.execute_command_hook(cmd, input, timeout, start).await
             }
-            HookDefinition::Http(http) => {
-                self.execute_http_hook(http, input, timeout, start).await
-            }
+            HookDefinition::Http(http) => self.execute_http_hook(http, input, timeout, start).await,
             HookDefinition::Prompt(_prompt_hook) => {
                 // Prompt hooks evaluate the LLM prompt before it is sent.
                 // They require access to the current conversation messages and
@@ -295,7 +289,10 @@ impl HookExecutor {
                 let duration = start.elapsed();
                 HookOutcome::failed(
                     hook.clone(),
-                    format!("Callback hook '{}' must be resolved by caller", cb.callback_id),
+                    format!(
+                        "Callback hook '{}' must be resolved by caller",
+                        cb.callback_id
+                    ),
                     duration,
                 )
             }
@@ -342,9 +339,7 @@ impl HookExecutor {
                 let response = HookResponse::from_json_bytes(output.stdout.as_bytes())
                     .ok()
                     .flatten();
-                let blocked = response
-                    .as_ref()
-                    .is_some_and(|r| r.is_blocking());
+                let blocked = response.as_ref().is_some_and(|r| r.is_blocking());
 
                 let duration = start.elapsed();
                 HookOutcome {
@@ -426,11 +421,7 @@ impl HookExecutor {
             }
             Err(e) => {
                 let duration = start.elapsed();
-                HookOutcome::failed(
-                    HookDefinition::Http(http.clone()),
-                    e.to_string(),
-                    duration,
-                )
+                HookOutcome::failed(HookDefinition::Http(http.clone()), e.to_string(), duration)
             }
         }
     }
@@ -439,8 +430,12 @@ impl HookExecutor {
     fn hook_description(&self, hook: &HookDefinition) -> String {
         match hook {
             HookDefinition::Command(h) => format!("command: {}", h.command),
-            HookDefinition::Prompt(h) => format!("prompt: {}...", &h.prompt[..h.prompt.len().min(40)]),
-            HookDefinition::Agent(h) => format!("agent: {}...", &h.prompt[..h.prompt.len().min(40)]),
+            HookDefinition::Prompt(h) => {
+                format!("prompt: {}...", &h.prompt[..h.prompt.len().min(40)])
+            }
+            HookDefinition::Agent(h) => {
+                format!("agent: {}...", &h.prompt[..h.prompt.len().min(40)])
+            }
             HookDefinition::Http(h) => format!("http: {}", h.url),
             HookDefinition::Callback(h) => format!("callback: {}", h.callback_id),
             HookDefinition::Function(h) => format!("function: {}", h.function_id),
@@ -474,7 +469,13 @@ pub async fn run_shell_command(
         }
         HookShell::PowerShell => (
             "powershell",
-            vec!["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+            vec![
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                command,
+            ],
         ),
     };
 
@@ -485,9 +486,9 @@ pub async fn run_shell_command(
     child.stdout(std::process::Stdio::piped());
     child.stderr(std::process::Stdio::piped());
 
-    let mut spawned = child.spawn().map_err(|e| {
-        anyhow::anyhow!("Failed to spawn command hook '{command}': {e}")
-    })?;
+    let mut spawned = child
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("Failed to spawn command hook '{command}': {e}"))?;
 
     // Write stdin
     if let Some(mut stdin) = spawned.stdin.take() {
@@ -757,7 +758,9 @@ mod tests {
 
     #[test]
     fn ssrf_blocks_aws_metadata() {
-        assert!(!is_url_safe_for_hook("http://169.254.169.254/latest/meta-data/"));
+        assert!(!is_url_safe_for_hook(
+            "http://169.254.169.254/latest/meta-data/"
+        ));
     }
 
     #[test]

@@ -98,11 +98,12 @@ pub fn run_post_compact_cleanup(
     let mut removed = 0;
     let mut tokens_saved: u64 = 0;
 
-    let cutoff_from_end = if criteria.remove_older_than > 0 && messages.len() > criteria.remove_older_than {
-        messages.len() - criteria.remove_older_than
-    } else {
-        0
-    };
+    let cutoff_from_end =
+        if criteria.remove_older_than > 0 && messages.len() > criteria.remove_older_than {
+            messages.len() - criteria.remove_older_than
+        } else {
+            0
+        };
 
     // Track the last system message index for deduplication
     let last_system_idx = if criteria.deduplicate_system_messages {
@@ -131,9 +132,11 @@ pub fn run_post_compact_cleanup(
 
         // Deduplicate system messages (keep only the last one)
         if let Some(last_idx) = last_system_idx
-            && matches!(msg, Message::System(_)) && i != last_idx {
-                should_remove = true;
-            }
+            && matches!(msg, Message::System(_))
+            && i != last_idx
+        {
+            should_remove = true;
+        }
 
         if should_remove {
             removed += 1;
@@ -332,10 +335,7 @@ mod tests {
 
     #[test]
     fn cleanup_no_tombstone_removal_when_disabled() {
-        let msgs = vec![
-            make_user_msg("hello"),
-            make_tombstone_msg(),
-        ];
+        let msgs = vec![make_user_msg("hello"), make_tombstone_msg()];
         let criteria = CleanupCriteria {
             remove_tombstones: false,
             ..CleanupCriteria::default()
@@ -378,17 +378,17 @@ mod tests {
         };
         let (kept, result) = run_post_compact_cleanup(&msgs, &criteria);
         // Only the last system message should be kept
-        let system_count = kept.iter().filter(|m| matches!(m, Message::System(_))).count();
+        let system_count = kept
+            .iter()
+            .filter(|m| matches!(m, Message::System(_)))
+            .count();
         assert_eq!(system_count, 1);
         assert_eq!(result.removed_count, 2);
     }
 
     #[test]
     fn cleanup_no_changes_when_nothing_matches() {
-        let msgs = vec![
-            make_user_msg("hello"),
-            make_user_msg("world"),
-        ];
+        let msgs = vec![make_user_msg("hello"), make_user_msg("world")];
         let (kept, result) = run_post_compact_cleanup(&msgs, &CleanupCriteria::default());
         assert_eq!(kept.len(), 2);
         assert!(!result.has_changes());

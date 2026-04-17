@@ -19,16 +19,28 @@ fn ok<T, E: std::fmt::Display>(result: Result<T, E>) -> T {
 
 #[test]
 fn memory_type_dir_names() {
-    assert_eq!(rc_utils::memory_types::MemoryType::Project.dir_name(), "project");
+    assert_eq!(
+        rc_utils::memory_types::MemoryType::Project.dir_name(),
+        "project"
+    );
     assert_eq!(rc_utils::memory_types::MemoryType::User.dir_name(), "user");
-    assert_eq!(rc_utils::memory_types::MemoryType::Agent.dir_name(), "agent");
+    assert_eq!(
+        rc_utils::memory_types::MemoryType::Agent.dir_name(),
+        "agent"
+    );
 }
 
 #[test]
 fn memory_type_display() {
-    assert_eq!(rc_utils::memory_types::MemoryType::Project.to_string(), "project");
+    assert_eq!(
+        rc_utils::memory_types::MemoryType::Project.to_string(),
+        "project"
+    );
     assert_eq!(rc_utils::memory_types::MemoryType::User.to_string(), "user");
-    assert_eq!(rc_utils::memory_types::MemoryType::Agent.to_string(), "agent");
+    assert_eq!(
+        rc_utils::memory_types::MemoryType::Agent.to_string(),
+        "agent"
+    );
 }
 
 #[test]
@@ -45,7 +57,10 @@ fn memory_type_from_str_opt() {
         rc_utils::memory_types::MemoryType::from_str_opt("agent"),
         Some(rc_utils::memory_types::MemoryType::Agent)
     );
-    assert_eq!(rc_utils::memory_types::MemoryType::from_str_opt("unknown"), None);
+    assert_eq!(
+        rc_utils::memory_types::MemoryType::from_str_opt("unknown"),
+        None
+    );
 }
 
 #[test]
@@ -112,7 +127,8 @@ fn memory_entry_serialization_round_trip() {
 #[test]
 fn memory_dir_layout() {
     let base = PathBuf::from("/tmp/project");
-    let dir = rc_utils::memory_types::memory_dir(&base, rc_utils::memory_types::MemoryType::Project);
+    let dir =
+        rc_utils::memory_types::memory_dir(&base, rc_utils::memory_types::MemoryType::Project);
     assert_eq!(
         dir,
         PathBuf::from("/tmp/project/.remote-code/memory/project")
@@ -159,10 +175,23 @@ fn memory_store_save_and_load() {
 fn memory_store_creates_directory_on_save() {
     let temp = ok(tempfile::tempdir());
     let store = rc_utils::memory_store::MemoryStore::new(temp.path());
-    assert!(!store.scope_dir(rc_utils::memory_types::MemoryType::User).exists());
+    assert!(
+        !store
+            .scope_dir(rc_utils::memory_types::MemoryType::User)
+            .exists()
+    );
 
-    ok(store.save_memory("x", "content", rc_utils::memory_types::MemoryType::User, vec![]));
-    assert!(store.scope_dir(rc_utils::memory_types::MemoryType::User).exists());
+    ok(store.save_memory(
+        "x",
+        "content",
+        rc_utils::memory_types::MemoryType::User,
+        vec![],
+    ));
+    assert!(
+        store
+            .scope_dir(rc_utils::memory_types::MemoryType::User)
+            .exists()
+    );
 }
 
 #[test]
@@ -170,7 +199,12 @@ fn memory_store_delete_removes_entry() {
     let temp = ok(tempfile::tempdir());
     let store = rc_utils::memory_store::MemoryStore::new(temp.path());
 
-    ok(store.save_memory("del-me", "bye", rc_utils::memory_types::MemoryType::Project, vec![]));
+    ok(store.save_memory(
+        "del-me",
+        "bye",
+        rc_utils::memory_types::MemoryType::Project,
+        vec![],
+    ));
     assert!(store.exists("del-me", rc_utils::memory_types::MemoryType::Project));
 
     ok(store.delete_memory("del-me", rc_utils::memory_types::MemoryType::Project));
@@ -211,9 +245,24 @@ fn memory_store_list_empty_scope() {
 fn memory_store_list_sorted_by_key() {
     let temp = ok(tempfile::tempdir());
     let store = rc_utils::memory_store::MemoryStore::new(temp.path());
-    ok(store.save_memory("gamma", "C", rc_utils::memory_types::MemoryType::Project, vec![]));
-    ok(store.save_memory("alpha", "A", rc_utils::memory_types::MemoryType::Project, vec![]));
-    ok(store.save_memory("beta", "B", rc_utils::memory_types::MemoryType::Project, vec![]));
+    ok(store.save_memory(
+        "gamma",
+        "C",
+        rc_utils::memory_types::MemoryType::Project,
+        vec![],
+    ));
+    ok(store.save_memory(
+        "alpha",
+        "A",
+        rc_utils::memory_types::MemoryType::Project,
+        vec![],
+    ));
+    ok(store.save_memory(
+        "beta",
+        "B",
+        rc_utils::memory_types::MemoryType::Project,
+        vec![],
+    ));
 
     let list = ok(store.list_memories(rc_utils::memory_types::MemoryType::Project));
     assert_eq!(list.len(), 3);
@@ -251,7 +300,12 @@ fn memory_store_list_isolated_by_scope() {
 fn memory_store_list_all_memories() {
     let temp = ok(tempfile::tempdir());
     let store = rc_utils::memory_store::MemoryStore::new(temp.path());
-    ok(store.save_memory("p1", "P1", rc_utils::memory_types::MemoryType::Project, vec![]));
+    ok(store.save_memory(
+        "p1",
+        "P1",
+        rc_utils::memory_types::MemoryType::Project,
+        vec![],
+    ));
     ok(store.save_memory("u1", "U1", rc_utils::memory_types::MemoryType::User, vec![]));
 
     let all = ok(store.list_all_memories());
@@ -412,11 +466,27 @@ fn memory_store_all_tags() {
 fn memory_store_count() {
     let temp = ok(tempfile::tempdir());
     let store = rc_utils::memory_store::MemoryStore::new(temp.path());
-    assert_eq!(ok(store.count(rc_utils::memory_types::MemoryType::Project)), 0);
+    assert_eq!(
+        ok(store.count(rc_utils::memory_types::MemoryType::Project)),
+        0
+    );
 
-    ok(store.save_memory("a", "A", rc_utils::memory_types::MemoryType::Project, vec![]));
-    ok(store.save_memory("b", "B", rc_utils::memory_types::MemoryType::Project, vec![]));
-    assert_eq!(ok(store.count(rc_utils::memory_types::MemoryType::Project)), 2);
+    ok(store.save_memory(
+        "a",
+        "A",
+        rc_utils::memory_types::MemoryType::Project,
+        vec![],
+    ));
+    ok(store.save_memory(
+        "b",
+        "B",
+        rc_utils::memory_types::MemoryType::Project,
+        vec![],
+    ));
+    assert_eq!(
+        ok(store.count(rc_utils::memory_types::MemoryType::Project)),
+        2
+    );
 }
 
 // ─── Cross-crate: rc-utils MemoryStore → rc-tools BM25 search ────────────

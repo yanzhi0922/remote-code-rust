@@ -18,37 +18,96 @@ struct KeyBinding {
 pub fn render(f: &mut Frame, style: &StyleConfig, area: Rect) {
     let bindings = [
         // Mode
-        KeyBinding { keys: "Esc", description: "Normal mode" },
-        KeyBinding { keys: "i", description: "Insert mode" },
-        KeyBinding { keys: "v", description: "Visual mode" },
-        KeyBinding { keys: ":", description: "Command mode" },
-        KeyBinding { keys: "/", description: "Search mode" },
+        KeyBinding {
+            keys: "Esc",
+            description: "Normal mode",
+        },
+        KeyBinding {
+            keys: "i",
+            description: "Insert mode",
+        },
+        KeyBinding {
+            keys: "v",
+            description: "Visual mode",
+        },
+        KeyBinding {
+            keys: ":",
+            description: "Command mode",
+        },
+        KeyBinding {
+            keys: "/",
+            description: "Search mode",
+        },
         // Navigation
-        KeyBinding { keys: "j / ↓", description: "Scroll down" },
-        KeyBinding { keys: "k / ↑", description: "Scroll up" },
-        KeyBinding { keys: "G", description: "Jump to bottom" },
-        KeyBinding { keys: "gg", description: "Jump to top" },
-        KeyBinding { keys: "Ctrl-U", description: "Half page up" },
-        KeyBinding { keys: "Ctrl-D", description: "Half page down" },
+        KeyBinding {
+            keys: "j / ↓",
+            description: "Scroll down",
+        },
+        KeyBinding {
+            keys: "k / ↑",
+            description: "Scroll up",
+        },
+        KeyBinding {
+            keys: "G",
+            description: "Jump to bottom",
+        },
+        KeyBinding {
+            keys: "gg",
+            description: "Jump to top",
+        },
+        KeyBinding {
+            keys: "Ctrl-U",
+            description: "Half page up",
+        },
+        KeyBinding {
+            keys: "Ctrl-D",
+            description: "Half page down",
+        },
         // Input
-        KeyBinding { keys: "Enter", description: "Send message" },
-        KeyBinding { keys: "Shift+Enter", description: "New line" },
-        KeyBinding { keys: "Tab", description: "Toggle sidebar" },
-        KeyBinding { keys: "↑ / ↓", description: "Input history" },
-        KeyBinding { keys: "Ctrl-C", description: "Clear / Quit" },
+        KeyBinding {
+            keys: "Enter",
+            description: "Send message",
+        },
+        KeyBinding {
+            keys: "Shift+Enter",
+            description: "New line",
+        },
+        KeyBinding {
+            keys: "Tab",
+            description: "Toggle sidebar",
+        },
+        KeyBinding {
+            keys: "↑ / ↓",
+            description: "Input history",
+        },
+        KeyBinding {
+            keys: "Ctrl-C",
+            description: "Clear / Quit",
+        },
         // Commands
-        KeyBinding { keys: ":q", description: "Quit" },
-        KeyBinding { keys: ":help", description: "This panel" },
-        KeyBinding { keys: ":clear", description: "Clear chat" },
-        KeyBinding { keys: ":sidebar", description: "Toggle sidebar" },
-        KeyBinding { keys: "/help", description: "Slash commands" },
+        KeyBinding {
+            keys: ":q",
+            description: "Quit",
+        },
+        KeyBinding {
+            keys: ":help",
+            description: "This panel",
+        },
+        KeyBinding {
+            keys: ":clear",
+            description: "Clear chat",
+        },
+        KeyBinding {
+            keys: ":sidebar",
+            description: "Toggle sidebar",
+        },
+        KeyBinding {
+            keys: "/help",
+            description: "Slash commands",
+        },
     ];
 
-    let max_key_len = bindings
-        .iter()
-        .map(|b| b.keys.len())
-        .max()
-        .unwrap_or(10);
+    let max_key_len = bindings.iter().map(|b| b.keys.len()).max().unwrap_or(10);
 
     let mut lines = vec![
         Line::from(Span::styled(

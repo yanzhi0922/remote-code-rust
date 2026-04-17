@@ -189,9 +189,11 @@ mod tests {
     #[test]
     fn store_and_retrieve_resources() {
         let mut discovery = McpDiscovery::new();
-        let resources = vec![ServerResource::new("file:///data", "srv")
-            .with_name("Data")
-            .with_mime_type("text/csv")];
+        let resources = vec![
+            ServerResource::new("file:///data", "srv")
+                .with_name("Data")
+                .with_mime_type("text/csv"),
+        ];
         discovery.store("srv", vec![], resources.clone(), None);
         assert_eq!(discovery.resources("srv"), Some(resources.as_slice()));
         assert_eq!(discovery.total_resource_count(), 1);
@@ -200,12 +202,7 @@ mod tests {
     #[test]
     fn store_and_retrieve_instructions() {
         let mut discovery = McpDiscovery::new();
-        discovery.store(
-            "srv",
-            vec![],
-            vec![],
-            Some("Be careful".to_owned()),
-        );
+        discovery.store("srv", vec![], vec![], Some("Be careful".to_owned()));
         assert_eq!(
             discovery.instructions("srv"),
             Some(&Some("Be careful".to_owned()))

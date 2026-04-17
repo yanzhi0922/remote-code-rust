@@ -235,7 +235,10 @@ mod tests {
         let mut stt = MockStt::new();
         stt.start_listening().expect("start");
         stt.stop_listening().expect("stop");
-        assert_eq!(stt.state_history(), &[VoiceState::Idle, VoiceState::Listening]);
+        assert_eq!(
+            stt.state_history(),
+            &[VoiceState::Idle, VoiceState::Listening]
+        );
     }
 
     #[test]

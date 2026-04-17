@@ -120,7 +120,8 @@ fn render_heading(line: &str, level: usize, style: &StyleConfig) -> Line<'static
 
 /// Render a list item.
 fn render_list_item(line: &str, style: &StyleConfig) -> Line<'static> {
-    let text = line.strip_prefix("- ")
+    let text = line
+        .strip_prefix("- ")
         .or_else(|| line.strip_prefix("* "))
         .unwrap_or(line);
     Line::from(vec![
@@ -154,9 +155,7 @@ fn render_inline_formatting(text: &str, style: &StyleConfig) -> Line<'static> {
             if !code_text.is_empty() {
                 spans.push(Span::styled(
                     code_text,
-                    Style::default()
-                        .fg(style.code_fg)
-                        .bg(style.code_bg),
+                    Style::default().fg(style.code_fg).bg(style.code_bg),
                 ));
             }
             remaining = &remaining[end..];

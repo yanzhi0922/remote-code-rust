@@ -31,7 +31,6 @@ pub enum SpeculationMode {
     Aggressive,
 }
 
-
 impl SpeculationMode {
     /// Returns the minimum confidence threshold for speculative suggestions.
     #[must_use]
@@ -89,7 +88,6 @@ pub enum SuggestionCategory {
     /// A deployment or CI suggestion.
     Deploy,
 }
-
 
 /// A candidate suggestion with scoring metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -330,7 +328,11 @@ impl SuggestionFilter {
         }
 
         for pattern in &self.blocked_patterns {
-            if candidate.text.to_lowercase().contains(&pattern.to_lowercase()) {
+            if candidate
+                .text
+                .to_lowercase()
+                .contains(&pattern.to_lowercase())
+            {
                 return false;
             }
         }
@@ -591,12 +593,8 @@ pub fn generate_suggestions(
 
     if tools.contains(&"Edit") || tools.contains(&"Write") {
         candidates.push(
-            SuggestionCandidate::new(
-                "Run tests to verify changes",
-                0.8,
-                SuggestionCategory::Test,
-            )
-            .with_source("tool_pattern"),
+            SuggestionCandidate::new("Run tests to verify changes", 0.8, SuggestionCategory::Test)
+                .with_source("tool_pattern"),
         );
     }
 
@@ -604,39 +602,39 @@ pub fn generate_suggestions(
     if mode != SpeculationMode::Off
         && let Some(user_msg) = context.last_user_content()
     {
-            let lower = user_msg.to_lowercase();
-            if lower.contains("implement") || lower.contains("build") || lower.contains("create") {
-                candidates.push(
-                    SuggestionCandidate::new(
-                        "Add tests for the new code",
-                        mode.min_confidence(),
-                        SuggestionCategory::Test,
-                    )
-                    .with_source("speculation")
-                    .with_speculative(true),
-                );
-                candidates.push(
-                    SuggestionCandidate::new(
-                        "Review the implementation",
-                        mode.min_confidence() * 0.9,
-                        SuggestionCategory::Explore,
-                    )
-                    .with_source("speculation")
-                    .with_speculative(true),
-                );
-            }
+        let lower = user_msg.to_lowercase();
+        if lower.contains("implement") || lower.contains("build") || lower.contains("create") {
+            candidates.push(
+                SuggestionCandidate::new(
+                    "Add tests for the new code",
+                    mode.min_confidence(),
+                    SuggestionCategory::Test,
+                )
+                .with_source("speculation")
+                .with_speculative(true),
+            );
+            candidates.push(
+                SuggestionCandidate::new(
+                    "Review the implementation",
+                    mode.min_confidence() * 0.9,
+                    SuggestionCategory::Explore,
+                )
+                .with_source("speculation")
+                .with_speculative(true),
+            );
+        }
 
-            if lower.contains("fix") || lower.contains("bug") {
-                candidates.push(
-                    SuggestionCandidate::new(
-                        "Verify the fix works correctly",
-                        mode.min_confidence(),
-                        SuggestionCategory::Test,
-                    )
-                    .with_source("speculation")
-                    .with_speculative(true),
-                );
-            }
+        if lower.contains("fix") || lower.contains("bug") {
+            candidates.push(
+                SuggestionCandidate::new(
+                    "Verify the fix works correctly",
+                    mode.min_confidence(),
+                    SuggestionCategory::Test,
+                )
+                .with_source("speculation")
+                .with_speculative(true),
+            );
+        }
     }
 
     candidates
@@ -696,7 +694,10 @@ mod tests {
             SpeculationMode::from_str_opt("aggressive"),
             SpeculationMode::Aggressive
         );
-        assert_eq!(SpeculationMode::from_str_opt("unknown"), SpeculationMode::Off);
+        assert_eq!(
+            SpeculationMode::from_str_opt("unknown"),
+            SpeculationMode::Off
+        );
     }
 
     #[test]
@@ -795,10 +796,16 @@ mod tests {
     #[test]
     fn test_context_recent_tools() {
         let mut ctx = SuggestionContext::new();
-        ctx.messages
-            .push(ContextMessage::with_tools("assistant", "Reading", &["Read", "Grep"]));
-        ctx.messages
-            .push(ContextMessage::with_tools("assistant", "Editing", &["Edit"]));
+        ctx.messages.push(ContextMessage::with_tools(
+            "assistant",
+            "Reading",
+            &["Read", "Grep"],
+        ));
+        ctx.messages.push(ContextMessage::with_tools(
+            "assistant",
+            "Editing",
+            &["Edit"],
+        ));
         let tools = ctx.recent_tools();
         assert!(tools.contains(&"Edit"));
         assert!(tools.contains(&"Read"));
@@ -825,7 +832,11 @@ mod tests {
             ..SuggestionFilter::default()
         };
         let short = SuggestionCandidate::new("Hi", 0.9, SuggestionCategory::FollowUp);
-        let long = SuggestionCandidate::new("This is a very long suggestion", 0.9, SuggestionCategory::FollowUp);
+        let long = SuggestionCandidate::new(
+            "This is a very long suggestion",
+            0.9,
+            SuggestionCategory::FollowUp,
+        );
         assert!(filter.passes(&short));
         assert!(!filter.passes(&long));
     }
@@ -837,7 +848,8 @@ mod tests {
             ..SuggestionFilter::default()
         };
         let ok = SuggestionCandidate::new("Fix the bug", 0.9, SuggestionCategory::Fix);
-        let blocked = SuggestionCandidate::new("Delete all files", 0.9, SuggestionCategory::FollowUp);
+        let blocked =
+            SuggestionCandidate::new("Delete all files", 0.9, SuggestionCategory::FollowUp);
         assert!(filter.passes(&ok));
         assert!(!filter.passes(&blocked));
     }
@@ -905,11 +917,18 @@ mod tests {
         let mut ctx = SuggestionContext::new();
         ctx.is_interactive = true;
         ctx.assistant_turn_count = 5;
-        ctx.messages
-            .push(ContextMessage::with_tools("assistant", "Editing", &["Edit", "Write"]));
+        ctx.messages.push(ContextMessage::with_tools(
+            "assistant",
+            "Editing",
+            &["Edit", "Write"],
+        ));
 
         let results = engine.generate(&ctx);
-        assert!(results.iter().any(|r| r.category == SuggestionCategory::Test));
+        assert!(
+            results
+                .iter()
+                .any(|r| r.category == SuggestionCategory::Test)
+        );
     }
 
     #[test]
@@ -951,7 +970,11 @@ mod tests {
         let mut ctx = SuggestionContext::new();
         ctx.recent_errors = vec!["Type mismatch".to_string()];
         let results = generate_suggestions(&ctx, SpeculationMode::Off);
-        assert!(results.iter().any(|r| r.category == SuggestionCategory::Fix));
+        assert!(
+            results
+                .iter()
+                .any(|r| r.category == SuggestionCategory::Fix)
+        );
     }
 
     #[test]

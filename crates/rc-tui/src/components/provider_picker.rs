@@ -137,14 +137,12 @@ impl ProviderPicker {
         let mut lines = Vec::new();
 
         // Title.
-        lines.push(Line::from(vec![
-            Span::styled(
-                " Select Provider ".to_owned(),
-                Style::default()
-                    .fg(style.accent_color)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            " Select Provider ".to_owned(),
+            Style::default()
+                .fg(style.accent_color)
+                .add_modifier(Modifier::BOLD),
+        )]));
         lines.push(Line::from(""));
 
         for (i, provider) in self.providers.iter().enumerate() {
@@ -167,10 +165,7 @@ impl ProviderPicker {
             };
 
             lines.push(Line::from(vec![
-                Span::styled(
-                    format!(" {cursor} "),
-                    Style::default().fg(name_fg),
-                ),
+                Span::styled(format!(" {cursor} "), Style::default().fg(name_fg)),
                 Span::styled(
                     format!("{check} "),
                     Style::default().fg(if is_selected {
@@ -179,10 +174,7 @@ impl ProviderPicker {
                         name_fg
                     }),
                 ),
-                Span::styled(
-                    format!("{} ", provider.name),
-                    Style::default().fg(name_fg),
-                ),
+                Span::styled(format!("{} ", provider.name), Style::default().fg(name_fg)),
                 Span::styled(
                     provider.status.icon().to_owned(),
                     Style::default().fg(status_color),
@@ -265,9 +257,11 @@ mod tests {
 
     #[test]
     fn custom_providers() {
-        let providers = vec![
-            ProviderEntry::new("Test", "test", ProviderStatus::Connecting),
-        ];
+        let providers = vec![ProviderEntry::new(
+            "Test",
+            "test",
+            ProviderStatus::Connecting,
+        )];
         let picker = ProviderPicker::with_providers(providers);
         assert_eq!(picker.providers.len(), 1);
         assert_eq!(picker.providers[0].status, ProviderStatus::Connecting);

@@ -63,7 +63,6 @@ pub struct SessionMemoryCompactStrategy {
     pub session_memory_content: Option<String>,
 }
 
-
 impl SessionMemoryCompactStrategy {
     /// Create a new session-memory compact strategy with custom config.
     pub fn new(config: SessionMemoryCompactConfig) -> Self {
@@ -154,13 +153,14 @@ pub async fn session_memory_compact(
         });
     }
 
-    let messages_to_summarize: Vec<Message> =
-        messages.iter().take(split_index).cloned().collect();
+    let messages_to_summarize: Vec<Message> = messages.iter().take(split_index).cloned().collect();
     let messages_to_keep: Vec<Message> = messages.iter().skip(split_index).cloned().collect();
 
     // Build custom instructions including session memory
-    let custom_instructions = match (options.custom_instructions.as_deref(), session_memory_content)
-    {
+    let custom_instructions = match (
+        options.custom_instructions.as_deref(),
+        session_memory_content,
+    ) {
         (Some(ci), Some(sm)) => Some(format!("{ci}\n\nSession memory:\n{sm}")),
         (Some(ci), None) => Some(ci.to_string()),
         (None, Some(sm)) => Some(format!("Session memory:\n{sm}")),

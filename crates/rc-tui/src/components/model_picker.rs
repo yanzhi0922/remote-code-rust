@@ -115,14 +115,12 @@ impl ModelPicker {
         let mut lines = Vec::new();
 
         // Title.
-        lines.push(Line::from(vec![
-            Span::styled(
-                " Select Model ".to_owned(),
-                Style::default()
-                    .fg(style.accent_color)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            " Select Model ".to_owned(),
+            Style::default()
+                .fg(style.accent_color)
+                .add_modifier(Modifier::BOLD),
+        )]));
         lines.push(Line::from(""));
 
         // Group models by family.
@@ -137,14 +135,12 @@ impl ModelPicker {
                     "haiku" => "Haiku",
                     other => other,
                 };
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("  {family_label}"),
-                        Style::default()
-                            .fg(style.info_color)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    format!("  {family_label}"),
+                    Style::default()
+                        .fg(style.info_color)
+                        .add_modifier(Modifier::BOLD),
+                )]));
             }
 
             // Model entry.
@@ -153,7 +149,11 @@ impl ModelPicker {
 
             let cursor = if is_highlighted { "▸" } else { " " };
             let check = if is_selected { "●" } else { "○" };
-            let avail_icon = if model.available { "" } else { " (unavailable)" };
+            let avail_icon = if model.available {
+                ""
+            } else {
+                " (unavailable)"
+            };
 
             let fg = if !model.available {
                 style.info_color
@@ -164,17 +164,10 @@ impl ModelPicker {
             };
 
             lines.push(Line::from(vec![
-                Span::styled(
-                    format!(" {cursor} "),
-                    Style::default().fg(fg),
-                ),
+                Span::styled(format!(" {cursor} "), Style::default().fg(fg)),
                 Span::styled(
                     format!("{check} "),
-                    Style::default().fg(if is_selected {
-                        style.accent_color
-                    } else {
-                        fg
-                    }),
+                    Style::default().fg(if is_selected { style.accent_color } else { fg }),
                 ),
                 Span::styled(
                     format!("{}{avail_icon}", model.label),

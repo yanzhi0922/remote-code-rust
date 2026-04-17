@@ -153,7 +153,10 @@ mod tests {
     fn warning_state_display() {
         assert_eq!(CompactWarningState::None.to_string(), "none");
         assert_eq!(CompactWarningState::Warned.to_string(), "warned");
-        assert_eq!(CompactWarningState::Acknowledged.to_string(), "acknowledged");
+        assert_eq!(
+            CompactWarningState::Acknowledged.to_string(),
+            "acknowledged"
+        );
     }
 
     #[test]
