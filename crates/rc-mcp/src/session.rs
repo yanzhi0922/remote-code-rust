@@ -20,8 +20,10 @@ use crate::config::{McpConfig, McpServerConfig};
 use crate::error::{McpConfigError, McpRuntimeError};
 use crate::jsonrpc::{
     InitializeParams, JsonRpcEnvelope, JsonRpcNotification, JsonRpcRequest, McpInitializeResult,
-    McpToolsListResult, ToolCallParams, rpc_id_matches,
+    McpResourceContent, McpResourceReadResult, McpResourcesListResult, McpToolsListResult,
+    ResourceReadParams, ToolCallParams, rpc_id_matches,
 };
+use crate::resources::ServerResource;
 use crate::types::{
     McpClientInfo, McpServerInspection, McpToolCallResponse, McpToolCallResult,
 };
@@ -82,6 +84,65 @@ pub async fn call_tool(
                 StdioMcpSession::connect(server, command, args, cwd.as_deref(), env, client_info)
                     .await?;
             let result = session.call_tool(tool_name, arguments).await;
+            session.shutdown().await;
+            result
+        }
+        _ => Err(McpRuntimeError::UnsupportedTransport {
+            server: server.name.clone(),
+            transport: server.transport.kind(),
+        }),
+    }
+}
+
+/// List resources exposed by an MCP server.
+///
+/// Connects to the server via stdio, sends `resources/list`, and returns
+/// the available resources.
+pub async fn list_resources(
+    server: &McpServerConfig,
+    client_info: &McpClientInfo,
+) -> Result<Vec<ServerResource>, McpRuntimeError> {
+    match &server.transport {
+        crate::transport::McpTransportConfig::Stdio {
+            command,
+            args,
+            cwd,
+            env,
+        } => {
+            let mut session =
+                StdioMcpSession::connect(server, command, args, cwd.as_deref(), env, client_info)
+                    .await?;
+            let result = session.list_resources().await;
+            session.shutdown().await;
+            result
+        }
+        _ => Err(McpRuntimeError::UnsupportedTransport {
+            server: server.name.clone(),
+            transport: server.transport.kind(),
+        }),
+    }
+}
+
+/// Read a resource from an MCP server.
+///
+/// Connects to the server via stdio, sends `resources/read`, and returns
+/// the resource content.
+pub async fn read_resource(
+    server: &McpServerConfig,
+    client_info: &McpClientInfo,
+    uri: &str,
+) -> Result<Vec<McpResourceContent>, McpRuntimeError> {
+    match &server.transport {
+        crate::transport::McpTransportConfig::Stdio {
+            command,
+            args,
+            cwd,
+            env,
+        } => {
+            let mut session =
+                StdioMcpSession::connect(server, command, args, cwd.as_deref(), env, client_info)
+                    .await?;
+            let result = session.read_resource(uri).await;
             session.shutdown().await;
             result
         }
@@ -290,6 +351,75 @@ impl StdioMcpSession {
             server_info: self.initialized.server_info.clone(),
             result,
         })
+    }
+
+    /// List resources exposed by this MCP server.
+    async fn list_resources(&mut self) -> Result<Vec<ServerResource>, McpRuntimeError> {
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: 3,
+            method: "resources/list",
+            params: serde_json::json!({}),
+        };
+        write_message(
+            &mut self.stdin,
+            &self.server_name,
+            "resources/list request",
+            &request,
+        )
+        .await?;
+        let result: McpResourcesListResult = wait_for_response(
+            &mut self.lines,
+            &self.server_name,
+            3,
+            "resources/list response",
+            self.request_timeout_secs,
+        )
+        .await?;
+
+        let resources = result
+            .resources
+            .into_iter()
+            .map(|r| {
+                let mut sr = ServerResource::new(r.uri, &self.server_name);
+                sr.name = r.name;
+                sr.description = r.description;
+                sr.mime_type = r.mime_type;
+                sr
+            })
+            .collect();
+        Ok(resources)
+    }
+
+    /// Read a resource from this MCP server.
+    async fn read_resource(
+        &mut self,
+        uri: &str,
+    ) -> Result<Vec<McpResourceContent>, McpRuntimeError> {
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: 4,
+            method: "resources/read",
+            params: ResourceReadParams {
+                uri: uri.to_owned(),
+            },
+        };
+        write_message(
+            &mut self.stdin,
+            &self.server_name,
+            "resources/read request",
+            &request,
+        )
+        .await?;
+        let result: McpResourceReadResult = wait_for_response(
+            &mut self.lines,
+            &self.server_name,
+            4,
+            "resources/read response",
+            self.request_timeout_secs,
+        )
+        .await?;
+        Ok(result.contents)
     }
 
     async fn shutdown(&mut self) {

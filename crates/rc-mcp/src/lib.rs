@@ -89,7 +89,13 @@ pub use types::{
 pub use error::{McpConfigError, McpRuntimeError};
 
 // Session functions
-pub use session::{call_tool, discover_mcp_configs, inspect_server, load_discovered_mcp_configs};
+pub use session::{
+    call_tool, discover_mcp_configs, inspect_server, list_resources, load_discovered_mcp_configs,
+    read_resource,
+};
+
+// Resource types
+pub use jsonrpc::McpResourceContent;
 
 // Connection types
 pub use connection::McpServerConnection;

@@ -277,24 +277,97 @@ pub(crate) fn monitor_tool(input: &Value) -> Result<String> {
         .unwrap_or(1000);
 
     let snapshot = match target {
-        "agents" => json!({
-            "target": "agents",
-            "interval_ms": interval_ms,
-            "agents": [],
-            "message": "No agents registered in current context."
-        }),
-        "tasks" => json!({
-            "target": "tasks",
-            "interval_ms": interval_ms,
-            "tasks": [],
-            "message": "No tasks in current context. Use task_create to create tasks."
-        }),
-        "sessions" => json!({
-            "target": "sessions",
-            "interval_ms": interval_ms,
-            "sessions": [],
-            "message": "No active sessions in current context."
-        }),
+        "agents" => {
+            // Query running processes for agent-like activity.
+            let mut agent_processes = Vec::new();
+            if cfg!(windows) {
+                if let Ok(output) = std::process::Command::new("tasklist")
+                    .args(["/FO", "CSV", "/NH"])
+                    .output()
+                {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    for line in stdout.lines() {
+                        let parts: Vec<&str> = line.split("\",\"").collect();
+                        if parts.len() >= 2 {
+                            let name = parts[0].trim_matches('"');
+                            if name.to_lowercase().contains("remote-code")
+                                || name.to_lowercase().contains("node")
+                                || name.to_lowercase().contains("python")
+                            {
+                                agent_processes.push(json!({
+                                    "name": name,
+                                    "pid": parts[1].trim_matches('"').parse::<u64>().unwrap_or(0),
+                                }));
+                            }
+                        }
+                    }
+                }
+            } else if let Ok(output) = std::process::Command::new("ps")
+                .args(["aux"])
+                .output()
+            {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines().take(50) {
+                    if line.contains("remote-code") || line.contains("agent") {
+                        agent_processes.push(json!({ "entry": line.trim() }));
+                    }
+                }
+            }
+            json!({
+                "target": "agents",
+                "interval_ms": interval_ms,
+                "processes": agent_processes,
+                "count": agent_processes.len(),
+            })
+        }
+        "tasks" => {
+            // Read tasks from the task file if it exists.
+            let tasks_dir = std::env::temp_dir().join("remote-code-rust").join("tasks");
+            let mut task_list = Vec::new();
+            if tasks_dir.exists() {
+                if let Ok(entries) = std::fs::read_dir(&tasks_dir) {
+                    for entry in entries.flatten() {
+                        if let Some(name) = entry.file_name().to_str() {
+                            if name.ends_with(".json") {
+                                if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                                    if let Ok(task) = serde_json::from_str::<Value>(&content) {
+                                        task_list.push(task);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            json!({
+                "target": "tasks",
+                "interval_ms": interval_ms,
+                "tasks": task_list,
+                "count": task_list.len(),
+            })
+        }
+        "sessions" => {
+            // List session files in the .remote-code-rust directory.
+            let mut session_list = Vec::new();
+            let sessions_dir = std::env::temp_dir().join("remote-code-rust").join("sessions");
+            if sessions_dir.exists() {
+                if let Ok(entries) = std::fs::read_dir(&sessions_dir) {
+                    for entry in entries.flatten() {
+                        if let Some(name) = entry.file_name().to_str() {
+                            if name.ends_with(".json") {
+                                session_list.push(json!({ "id": name.trim_end_matches(".json") }));
+                            }
+                        }
+                    }
+                }
+            }
+            json!({
+                "target": "sessions",
+                "interval_ms": interval_ms,
+                "sessions": session_list,
+                "count": session_list.len(),
+            })
+        }
         _ => return Err(anyhow!("target must be 'agents', 'tasks', or 'sessions'")),
     };
     Ok(snapshot.to_string())
@@ -349,9 +422,44 @@ pub(crate) fn ctx_inspect_tool(input: &Value) -> Result<String> {
 }
 
 pub(crate) fn list_peers_tool() -> Result<String> {
-    Ok(json!({
-        "peers": [],
-        "message": "No peers registered in current context. Use team_create to create a team."
-    })
-    .to_string())
+    // Check for active swarm/team peers in the state directory.
+    let state_dir = std::env::temp_dir().join("remote-code-rust").join("teams");
+    let mut peers = Vec::new();
+    if state_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&state_dir) {
+            for entry in entries.flatten() {
+                if let Some(name) = entry.file_name().to_str() {
+                    if name.ends_with(".json") {
+                        if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                            if let Ok(team) = serde_json::from_str::<Value>(&content) {
+                                if let Some(members) = team.get("agents").and_then(Value::as_array)
+                                {
+                                    for member in members {
+                                        peers.push(json!({
+                                            "name": member.get("name").and_then(Value::as_str).unwrap_or("unknown"),
+                                            "role": member.get("role").and_then(Value::as_str).unwrap_or("worker"),
+                                            "team": team.get("objective").and_then(Value::as_str).unwrap_or("unknown"),
+                                        }));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if peers.is_empty() {
+        Ok(json!({
+            "peers": [],
+            "message": "No peers registered in current context. Use team_create to create a team."
+        })
+        .to_string())
+    } else {
+        Ok(json!({
+            "peers": peers,
+            "count": peers.len(),
+        })
+        .to_string())
+    }
 }

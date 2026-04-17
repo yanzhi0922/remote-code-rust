@@ -80,6 +80,54 @@ pub(crate) struct ToolCallParams<'a> {
     pub arguments: Value,
 }
 
+/// Result of the MCP `resources/list` method.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct McpResourcesListResult {
+    #[serde(default)]
+    pub resources: Vec<McpResourceEntry>,
+}
+
+/// A single resource returned by `resources/list`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct McpResourceEntry {
+    pub uri: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub mime_type: Option<String>,
+}
+
+/// Parameters for the MCP `resources/read` method.
+#[derive(Debug, Serialize)]
+pub(crate) struct ResourceReadParams {
+    pub uri: String,
+}
+
+/// A single content item returned by `resources/read`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpResourceContent {
+    pub uri: String,
+    #[serde(default)]
+    pub mime_type: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub blob: Option<String>,
+}
+
+/// Result of the MCP `resources/read` method.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct McpResourceReadResult {
+    #[serde(default)]
+    pub contents: Vec<McpResourceContent>,
+}
+
 /// Check whether a JSON-RPC response ID matches the expected request ID.
 pub(crate) fn rpc_id_matches(id: &Value, request_id: u64) -> bool {
     id.as_u64() == Some(request_id)
