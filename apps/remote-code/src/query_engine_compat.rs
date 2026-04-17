@@ -43,6 +43,12 @@ struct CompatSharedState {
     latest_request_id: Mutex<Option<String>>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CompatRunOverrides {
+    pub(crate) system_prompt: Option<String>,
+    pub(crate) allowed_tools: Option<Vec<String>>,
+}
+
 struct CompatObserver {
     config: RuntimeConfig,
     store: Arc<SessionStore>,
@@ -126,12 +132,51 @@ fn detect_git_worktree(cwd: &Path) -> bool {
     cwd.join(".git").is_file()
 }
 
-async fn build_runtime_system_prompt(config: &RuntimeConfig) -> Result<String> {
+fn expand_requested_tool_names(
+    requested_tools: &[String],
+    tool_specs: &[ToolSpec],
+) -> HashSet<String> {
+    if requested_tools.is_empty() {
+        return HashSet::new();
+    }
+
+    let requested = requested_tools
+        .iter()
+        .map(|tool| tool.as_str())
+        .collect::<HashSet<_>>();
+    let mut expanded = requested_tools.iter().cloned().collect::<HashSet<_>>();
+
+    for spec in tool_specs {
+        let mut aliases = HashSet::new();
+        insert_prompt_tool_aliases(spec, &mut aliases);
+        if aliases
+            .iter()
+            .any(|alias| requested.contains(alias.as_str()))
+        {
+            expanded.extend(aliases);
+            expanded.insert(spec.name.clone());
+            expanded.insert(spec.protocol_name.clone());
+        }
+    }
+
+    expanded
+}
+
+async fn build_runtime_system_prompt(
+    config: &RuntimeConfig,
+    overrides: &CompatRunOverrides,
+) -> Result<String> {
     let tool_specs = runtime_provider_tool_specs().await;
     let mcp_catalog = rc_tools::mcp_catalog::runtime_mcp_catalog().await;
     let mut enabled_tools = HashSet::new();
     for spec in &tool_specs {
         insert_prompt_tool_aliases(spec, &mut enabled_tools);
+    }
+    if let Some(requested_tools) = overrides.allowed_tools.as_ref() {
+        let allowed = expand_requested_tool_names(requested_tools, &tool_specs);
+        if !allowed.is_empty() {
+            enabled_tools.retain(|tool| allowed.contains(tool.as_str()));
+        }
     }
 
     let prompt_ctx = PromptContext {
@@ -174,14 +219,21 @@ async fn build_runtime_system_prompt(config: &RuntimeConfig) -> Result<String> {
         })
         .collect::<Vec<_>>()
         .join("\n\n");
-    Ok(prompt)
+
+    Ok(match overrides.system_prompt.as_deref() {
+        Some(agent_prompt) if !agent_prompt.trim().is_empty() => {
+            format!("{prompt}\n\n## Agent Instructions\n{agent_prompt}")
+        }
+        _ => prompt,
+    })
 }
 
 async fn refresh_runtime_system_prompt(
     config: &RuntimeConfig,
     conversation: &mut Vec<ConversationEntry>,
+    overrides: &CompatRunOverrides,
 ) -> Result<()> {
-    let prompt = build_runtime_system_prompt(config).await?;
+    let prompt = build_runtime_system_prompt(config, overrides).await?;
     if let Some(system_entry) = conversation
         .iter_mut()
         .find(|entry| matches!(entry.role, ConversationRole::System))
@@ -448,6 +500,7 @@ struct CompatToolRunner {
     shared: Arc<CompatSharedState>,
     broker: Arc<dyn PermissionBroker>,
     tool_context: ToolExecutionContext,
+    allowed_tools: Option<HashSet<String>>,
 }
 
 #[async_trait]
@@ -489,6 +542,18 @@ impl ToolRunner for CompatToolRunner {
         let raw_result = if let Some(blocked_reason) = &prepared.blocked_reason {
             ToolResult {
                 content: blocked_reason.clone(),
+                is_error: true,
+            }
+        } else if self
+            .allowed_tools
+            .as_ref()
+            .is_some_and(|allowed| !allowed.contains(effective_tool_call.name.as_str()))
+        {
+            ToolResult {
+                content: format!(
+                    "Tool `{}` is not allowed for this agent run.",
+                    effective_tool_call.name
+                ),
                 is_error: true,
             }
         } else {
@@ -621,13 +686,41 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
     conversation: &mut Vec<ConversationEntry>,
     prompt: &str,
 ) -> Result<PromptRunOutcome> {
+    run_prompt_with_query_engine_compat_overrides(
+        config,
+        store,
+        backend,
+        broker,
+        event_sink,
+        discovery,
+        hook_state,
+        conversation,
+        prompt,
+        CompatRunOverrides::default(),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
+    config: &RuntimeConfig,
+    store: &SessionStore,
+    backend: Arc<dyn ConversationBackend>,
+    broker: Arc<dyn PermissionBroker>,
+    event_sink: Option<PromptEventSink>,
+    discovery: &RuntimeHookDiscovery,
+    hook_state: &mut HookRunState,
+    conversation: &mut Vec<ConversationEntry>,
+    prompt: &str,
+    overrides: CompatRunOverrides,
+) -> Result<PromptRunOutcome> {
     let readiness = validate_provider_config(&config.provider);
     if !readiness.ok {
         return Err(anyhow!(readiness.issues.join(" ")));
     }
 
     let started = Instant::now();
-    refresh_runtime_system_prompt(config, conversation).await?;
+    refresh_runtime_system_prompt(config, conversation, &overrides).await?;
     let existing_messages = conversation
         .iter()
         .cloned()
@@ -669,12 +762,20 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
         event_sink: event_sink.clone(),
         include_partial_messages: config.include_partial_messages,
     });
+    let expanded_allowed_tools = match overrides.allowed_tools.as_ref() {
+        Some(requested_tools) => Some(expand_requested_tool_names(
+            requested_tools,
+            &runtime_provider_tool_specs().await,
+        )),
+        None => None,
+    };
     let tool_runner = Arc::new(CompatToolRunner {
         config: config.clone(),
         store: compat_store.clone(),
         discovery: discovery.clone(),
         shared: shared.clone(),
         broker,
+        allowed_tools: expanded_allowed_tools,
         tool_context: ToolExecutionContext {
             cwd: config.cwd.clone(),
             timeout_ms: config.provider.timeout_ms,

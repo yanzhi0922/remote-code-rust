@@ -881,10 +881,16 @@ fn to_anthropic_messages(conversation: &[ConversationEntry]) -> (String, Vec<Val
         .map(ConversationEntry::history_text)
         .collect::<Vec<_>>()
         .join("\n\n");
-    let messages = conversation
+    let non_system = conversation
         .iter()
         .filter(|entry| !matches!(entry.role, ConversationRole::System))
-        .map(|entry| match entry.role {
+        .collect::<Vec<_>>();
+    let mut messages = Vec::new();
+    let mut index = 0usize;
+
+    while index < non_system.len() {
+        let entry = non_system[index];
+        match entry.role {
             ConversationRole::User => {
                 let mut blocks = vec![json!({"type": "text", "text": entry.history_text()})];
                 for att in &entry.attachments {
@@ -897,10 +903,11 @@ fn to_anthropic_messages(conversation: &[ConversationEntry]) -> (String, Vec<Val
                         }
                     }));
                 }
-                json!({
+                messages.push(json!({
                     "role": "user",
                     "content": blocks,
-                })
+                }));
+                index += 1;
             }
             ConversationRole::Assistant => {
                 if entry.content_blocks.is_empty() {
@@ -916,30 +923,43 @@ fn to_anthropic_messages(conversation: &[ConversationEntry]) -> (String, Vec<Val
                             "input": call.input,
                         }));
                     }
-                    json!({
+                    messages.push(json!({
                         "role": "assistant",
                         "content": blocks,
-                    })
+                    }));
                 } else {
-                    json!({
+                    messages.push(json!({
                         "role": "assistant",
                         "content": entry.content_blocks,
-                    })
+                    }));
                 }
+                index += 1;
             }
-            ConversationRole::Tool => json!({
-                "role": "user",
-                "content": [{
-                    "type": "tool_result",
-                    "tool_use_id": entry.tool_call_id,
-                    "content": entry.text,
-                    "is_error": entry.is_error,
-                }],
-            }),
-            ConversationRole::System => Value::Null,
-        })
-        .filter(|value| !value.is_null())
-        .collect();
+            ConversationRole::Tool => {
+                let mut blocks = Vec::new();
+                while index < non_system.len()
+                    && matches!(non_system[index].role, ConversationRole::Tool)
+                {
+                    let tool_entry = non_system[index];
+                    blocks.push(json!({
+                        "type": "tool_result",
+                        "tool_use_id": tool_entry.tool_call_id,
+                        "content": tool_entry.text,
+                        "is_error": tool_entry.is_error,
+                    }));
+                    index += 1;
+                }
+                messages.push(json!({
+                    "role": "user",
+                    "content": blocks,
+                }));
+            }
+            ConversationRole::System => {
+                index += 1;
+            }
+        }
+    }
+
     (system, messages)
 }
 
@@ -1465,10 +1485,10 @@ pub fn is_prompt_too_long(error: &ProviderError) -> bool {
 mod tests {
     use super::{
         ProviderClient, apply_anthropic_request_metadata, mock_response, parse_anthropic_response,
-        parse_openai_response, strip_reasoning_tags, to_openai_messages,
+        parse_openai_response, strip_reasoning_tags, to_anthropic_messages, to_openai_messages,
     };
     use axum::{Json, Router, extract::State, routing::post};
-    use rc_core::ConversationEntry;
+    use rc_core::{ConversationEntry, ToolCall};
     use serde_json::json;
     use std::sync::{
         Arc,
@@ -1510,6 +1530,41 @@ mod tests {
     fn openai_messages_include_user_role() {
         let messages = to_openai_messages(&[ConversationEntry::user("ship it")]);
         assert_eq!(messages[0]["role"], "user");
+    }
+
+    #[test]
+    fn anthropic_messages_group_consecutive_tool_results() {
+        let mut assistant = ConversationEntry::assistant("");
+        assistant.tool_calls = vec![
+            ToolCall {
+                id: "call-1".to_owned(),
+                name: "read_file".to_owned(),
+                input: json!({"path":"src/main.rs"}),
+            },
+            ToolCall {
+                id: "call-2".to_owned(),
+                name: "read_file".to_owned(),
+                input: json!({"path":"src/lib.rs"}),
+            },
+        ];
+
+        let (_system, messages) = to_anthropic_messages(&[
+            ConversationEntry::user("inspect"),
+            assistant,
+            ConversationEntry::tool("call-1", "read_file", "main", false),
+            ConversationEntry::tool("call-2", "read_file", "lib", false),
+        ]);
+
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[2]["role"], "user");
+        let tool_results = messages[2]["content"]
+            .as_array()
+            .expect("tool results should be a content array");
+        assert_eq!(tool_results.len(), 2);
+        assert_eq!(tool_results[0]["type"], "tool_result");
+        assert_eq!(tool_results[0]["tool_use_id"], "call-1");
+        assert_eq!(tool_results[1]["tool_use_id"], "call-2");
     }
 
     #[test]

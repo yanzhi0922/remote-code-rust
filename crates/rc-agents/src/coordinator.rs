@@ -454,6 +454,14 @@ pub fn filter_worker_tools_for_display(tools: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    fn override_lock() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("coordinator override test lock")
+    }
 
     fn reset_state() {
         reset_coordinator_override();
@@ -494,6 +502,7 @@ mod tests {
 
     #[test]
     fn is_coordinator_mode_default_false() {
+        let _guard = override_lock();
         reset_state();
         // Explicitly set override to false to avoid interference from parallel tests
         // that may set COORDINATOR_OVERRIDE=true.
@@ -510,6 +519,7 @@ mod tests {
 
     #[test]
     fn match_session_mode_none_when_matching() {
+        let _guard = override_lock();
         reset_state();
         let _result = match_session_mode(Some(CoordinatorMode::Normal));
         // If env var is not set, this should be None (already matching normal)
@@ -518,6 +528,7 @@ mod tests {
 
     #[test]
     fn match_session_mode_switches_to_coordinator() {
+        let _guard = override_lock();
         reset_state();
         let result = match_session_mode(Some(CoordinatorMode::Coordinator));
         // Will switch if not already in coordinator mode
@@ -530,6 +541,7 @@ mod tests {
 
     #[test]
     fn match_session_mode_switches_to_normal() {
+        let _guard = override_lock();
         reset_state();
         // First set to coordinator
         COORDINATOR_OVERRIDE.store(true, Ordering::Relaxed);
@@ -545,6 +557,7 @@ mod tests {
 
     #[test]
     fn reset_coordinator_override_works() {
+        let _guard = override_lock();
         COORDINATOR_OVERRIDE.store(true, Ordering::Relaxed);
         COORDINATOR_OVERRIDE_SET.store(true, Ordering::Relaxed);
         assert!(is_coordinator_mode());
@@ -666,6 +679,7 @@ mod tests {
 
     #[test]
     fn get_coordinator_user_context_empty_when_not_coordinator() {
+        let _guard = override_lock();
         reset_state();
         let ctx = get_coordinator_user_context(&[], None, false);
         assert!(ctx.is_empty());
@@ -673,6 +687,7 @@ mod tests {
 
     #[test]
     fn get_coordinator_user_context_with_tools() {
+        let _guard = override_lock();
         reset_state();
         COORDINATOR_OVERRIDE.store(true, Ordering::SeqCst);
         COORDINATOR_OVERRIDE_SET.store(true, Ordering::SeqCst);
@@ -689,6 +704,7 @@ mod tests {
 
     #[test]
     fn get_coordinator_user_context_with_mcp() {
+        let _guard = override_lock();
         reset_state();
         COORDINATOR_OVERRIDE.store(true, Ordering::Relaxed);
         COORDINATOR_OVERRIDE_SET.store(true, Ordering::Relaxed);
@@ -703,6 +719,7 @@ mod tests {
 
     #[test]
     fn get_coordinator_user_context_simple_mode() {
+        let _guard = override_lock();
         reset_state();
         COORDINATOR_OVERRIDE.store(true, Ordering::Relaxed);
         COORDINATOR_OVERRIDE_SET.store(true, Ordering::Relaxed);

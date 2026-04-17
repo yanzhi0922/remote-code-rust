@@ -3932,6 +3932,7 @@ name = "rc-agents"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "serde",
  "serde_json",
@@ -4111,6 +4112,7 @@ name = "rc-integration-tests"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "rc-agents",
  "rc-auth",

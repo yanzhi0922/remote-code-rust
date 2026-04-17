@@ -34,6 +34,9 @@
 - 2026-04-17 又补了一条直接影响真实 coding 工作流的 MCP/provider 执行链路：[`crates/rc-tools/src/mcp_catalog.rs`](../crates/rc-tools/src/mcp_catalog.rs) 已把 runtime inspection 结果转成真实 `mcp__server__tool` catalog；[`crates/rc-tools/src/lib.rs`](../crates/rc-tools/src/lib.rs)、[`apps/remote-code/src/query_engine_compat.rs`](../apps/remote-code/src/query_engine_compat.rs)、[`apps/remote-code/src/conversation.rs`](../apps/remote-code/src/conversation.rs)、[`apps/remote-code-gui/src-tauri/src/lib.rs`](../apps/remote-code-gui/src-tauri/src/lib.rs) 与 [`apps/remote-code/src/headless.rs`](../apps/remote-code/src/headless.rs) 现已统一通过 runtime provider tool 视图校验/执行工具，不再把动态 MCP 工具错判成“unknown tool”；headless `init` 事件也会显式暴露这些直连 MCP 工具。
 - 同一 tranche 继续把 provider/system prompt 端接上真实 runtime MCP 工具与 MCP 指令：[`crates/rc-provider/src/lib.rs`](../crates/rc-provider/src/lib.rs) / [`crates/rc-provider/src/streaming.rs`](../crates/rc-provider/src/streaming.rs) 现会在 OpenAI / Anthropic / Bedrock / Vertex 路径下使用 runtime provider tool specs，并接受 Anthropic `server_tool_use`；[`apps/remote-code/src/query_engine_compat.rs`](../apps/remote-code/src/query_engine_compat.rs) 现会在 compat run 前用 [`rc-system-prompt`](../crates/rc-system-prompt/src/lib.rs) 生成带 MCP client instructions 与 Claude 风格工具别名的 system prompt。
 - 这条链路已经完成自动化与真实回归双重验证：新增 `compat_run_accepts_dynamic_mcp_tools` 回归测试；`cargo test -p rc-tools --lib`、`cargo test -p rc-provider --lib`、`cargo test -p remote-code`、`cargo test --workspace --quiet` 当前全部通过；并已在 `C:\Users\Yanzh\Desktop\cli-stress-test\task2-refactor` 用 MiniMax `minimax-m2.7` + Anthropic 协议实测 `mcp__context7__resolve-library-id` / `mcp__context7__query-docs` 真实成功调用，随后又在同一目录完成了一次真实文件编辑 + `cargo check` 的 coding 回归。
+- 2026-04-17 同一主线又把 `rc-agents` 从“可编译骨架”推进到宿主真实执行：[`crates/rc-agents/src/runner.rs`](../crates/rc-agents/src/runner.rs) 新增 `AgentExecutionRequest` / `AgentExecutor` / `run_with_executor()`，`run()` 会在没有宿主 executor 时显式拒绝假执行；[`apps/remote-code/src/agents.rs`](../apps/remote-code/src/agents.rs) 新增 `RemoteCodeAgentExecutor`，复用 `ProviderCompatBackend`、`SessionStore`、runtime hooks 与 [`apps/remote-code/src/query_engine_compat.rs`](../apps/remote-code/src/query_engine_compat.rs) 的 override seam，把 `agents plan` 接到真实 query-engine compat runtime，而不是停留在 scheduler-only 占位实现；相应 integration tests 也已补到 [`crates/rc-integration-tests/tests/agent_integration.rs`](../crates/rc-integration-tests/tests/agent_integration.rs)。
+- 同一 tranche 还修掉了两处直接导致 MiniMax Anthropic 兼容路径 400 的 transcript/tool-result 真缺陷：[`crates/rc-tools/src/delegate.rs`](../crates/rc-tools/src/delegate.rs) 现在会在 delegated conversation 中保留 assistant 原始 `history_text` / `content_blocks` / `tool_calls`，避免 tool result 引用失配；[`crates/rc-provider/src/lib.rs`](../crates/rc-provider/src/lib.rs) 现在会把连续 `tool` entry 聚合成单个 Anthropic `user.content[]` 中的多 `tool_result` block，符合 `.research/claude-code-rev` 对 user-message tool-result pairing 的处理方式，并新增对应回归测试。
+- `agents plan` 也已补上真实项目可用的默认工作目录 ownership：[`apps/remote-code/src/agents.rs`](../apps/remote-code/src/agents.rs) 现在会注入拥有当前 `cwd` 的 `workspace` implementer，避免在外部工程上只生成 `pending` snapshot 而没有可执行 agent。基于这套修复，已经在 `C:\Users\Yanzh\Desktop\cli-stress-test` 完成三组真实 MiniMax 回归：1) 直接 `agent` 工具 repro 不再出现 `tool result's tool id not found (2013)`；2) `agents plan` 在 `task2-refactor` 上真实完成只读分析；3) 在 `task2-refactor-agent-e2e` 副本上通过 `agents plan` 完成 `src/manager.rs:get_statistics()` 单次重构，随后独立 `cargo check` 与 `cargo run` 均通过。
 
 这意味着 Phase 1 的契约冻结与 Phase 2 的最小可运行引擎都已进入主干骨架阶段；当前主线重点已经从“搭骨架”进入“默认 compat + parity hardening”：
 
@@ -3207,15 +3210,15 @@ Claude Code 有一个完整的协调者/工人模式：
 - Worker 有 `IN_PROCESS_TEAMMATE_ALLOWED_TOOLS` 额外工具集
 - Coordinator 系统提示词包含完整的角色定义、工具说明、worker 管理、任务工作流
 
-remote-code **完全缺失**：
-- ❌ `isCoordinatorMode()` 检测
-- ❌ `matchSessionMode()` 会话模式匹配
-- ❌ `getCoordinatorUserContext()` 协调者上下文
-- ❌ `getCoordinatorSystemPrompt()` 协调者系统提示词
-- ❌ `COORDINATOR_MODE_ALLOWED_TOOLS` 工具白名单
-- ❌ `INTERNAL_WORKER_TOOLS` 内部 worker 工具
-- ❌ `<task-notification>` XML 结果格式
-- ❌ Worker 生命周期管理
+remote-code **已有基础 contract，但仍未完成 lifecycle parity**：
+- ✅ `is_coordinator_mode()` 检测
+- ✅ `match_session_mode()` 会话模式匹配
+- ✅ `get_coordinator_user_context()` 协调者上下文
+- ✅ `get_coordinator_system_prompt()` 协调者系统提示词
+- ✅ `coordinator_allowed_tools_set()` / `async_agent_allowed_tools_set()` 工具集
+- ✅ `<task-notification>` XML 结果格式
+- ❌ Worker 后台生命周期、任务恢复、结果回传主线程的完整 official parity 仍缺
+- ❌ 与 `send_message` / `team_*` / fork runtime 的宿主整合仍缺
 
 #### 21.4.2 Fork Subagent
 
@@ -3227,7 +3230,9 @@ Fork 是一种特殊的子代理，在后台运行，工具输出不污染主上
 - Fork 完成后通过 `<task-notification>` 通知主线程
 - 系统提示词中有专门的 fork 指导："If you ARE the fork — execute directly; do not re-delegate."
 
-remote-code **完全缺失**。
+remote-code **部分覆盖**：
+- ✅ [`crates/rc-agents/src/fork.rs`](../crates/rc-agents/src/fork.rs) 已有 fork transcript / content block 基础契约
+- ❌ app/CLI 层后台 fork 执行、主线程继续交互、完成后 `<task-notification>` 回流等行为仍缺
 
 #### 21.4.3 Verification Agent
 
@@ -3239,7 +3244,9 @@ remote-code **完全缺失**。
 - 结果为 PASS/FAIL/PARTIAL
 - FAIL 时修复后重新验证，循环直到 PASS
 
-remote-code **完全缺失**。
+remote-code **部分覆盖**：
+- ✅ 已有 built-in `verification_agent()` 定义，`agents plan` 也会按 role/phase 选择 verification agent
+- ❌ 独立 adversarial verification workflow、PASS/FAIL/PARTIAL gate、失败后循环修复仍缺
 
 #### 21.4.4 Explore Agent
 
@@ -3250,7 +3257,9 @@ remote-code **完全缺失**。
 - 比直接用 grep/glob 慢，但适合深度研究
 - 系统提示词中有专门的指导："For broader codebase exploration and deep research, use the Agent tool with subagent_type=explore"
 
-remote-code **完全缺失**。
+remote-code **部分覆盖**：
+- ✅ 已有 built-in `explore_agent()` 定义，`agents plan` 也会按 `explore/research` role 路由到 Explore agent
+- ❌ `EXPLORE_AGENT_MIN_QUERIES` 式自动切换、官方 prompt 细节与 query-threshold 策略仍缺
 
 #### 21.4.5 Proactive/Autonomous Mode
 
