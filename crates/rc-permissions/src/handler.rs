@@ -181,6 +181,12 @@ impl PermissionHandler for CoordinatorHandler {
 /// Swarm worker handler — delegates decisions to the swarm leader.
 pub struct SwarmWorkerHandler;
 
+impl Default for SwarmWorkerHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SwarmWorkerHandler {
     /// Create a new swarm worker handler.
     #[must_use]

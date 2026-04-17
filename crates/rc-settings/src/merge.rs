@@ -94,9 +94,8 @@ fn merge_into(target: &mut Settings, source: &Settings) {
     }
 
     // Merge permissions (concatenate arrays)
-    if source.permissions.is_some() {
+    if let Some(source_perms) = &source.permissions {
         let target_perms = target.permissions.get_or_insert_with(Default::default);
-        let source_perms = source.permissions.as_ref().unwrap();
 
         merge_string_vec(&mut target_perms.allow, &source_perms.allow);
         merge_string_vec(&mut target_perms.deny, &source_perms.deny);
@@ -108,17 +107,17 @@ fn merge_into(target: &mut Settings, source: &Settings) {
     }
 
     // Merge env (source overrides target keys)
-    if source.env.is_some() {
+    if let Some(source_env) = &source.env {
         let target_env = target.env.get_or_insert_with(Default::default);
-        for (k, v) in source.env.as_ref().unwrap() {
+        for (k, v) in source_env {
             target_env.insert(k.clone(), v.clone());
         }
     }
 
     // Merge providers
-    if source.providers.is_some() {
+    if let Some(source_providers) = &source.providers {
         let target_providers = target.providers.get_or_insert_with(Default::default);
-        for (k, v) in source.providers.as_ref().unwrap() {
+        for (k, v) in source_providers {
             target_providers.insert(k.clone(), v.clone());
         }
     }

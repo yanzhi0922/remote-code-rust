@@ -386,13 +386,13 @@ impl McpConnectionPool {
 
     /// Disconnect a specific server.
     pub fn disconnect_server(&mut self, name: &str, reason: DisconnectReason) -> bool {
-        if let Some(entry) = self.entries.get_mut(name) {
-            if entry.is_connected() {
-                entry.healthy = false;
-                entry.last_health_check = None;
-                let _ = self.lifecycle.disconnect(name, reason);
-                return true;
-            }
+        if let Some(entry) = self.entries.get_mut(name)
+            && entry.is_connected()
+        {
+            entry.healthy = false;
+            entry.last_health_check = None;
+            let _ = self.lifecycle.disconnect(name, reason);
+            return true;
         }
         false
     }

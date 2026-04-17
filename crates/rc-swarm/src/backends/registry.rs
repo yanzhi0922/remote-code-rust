@@ -153,7 +153,6 @@ pub async fn is_iterm2_available() -> bool {
         .expect_err("should not be true on Windows")
         .to_string()
         .contains("it2")
-        || false
 }
 
 /// Check if the `TERM_PROGRAM` environment variable indicates iTerm2.

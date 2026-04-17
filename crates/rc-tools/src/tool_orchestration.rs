@@ -71,7 +71,7 @@ pub fn analyse_dependencies(calls: &[OrchestratedToolCall]) -> Vec<ToolDependenc
         }
     }
 
-    for (_file, indices) in &file_groups {
+    for indices in file_groups.values() {
         // If there are both write-like and read-like tools on the same file,
         // the reads depend on the writes finishing first.
         let write_indices: Vec<usize> = indices
@@ -129,11 +129,11 @@ pub fn partition_tool_calls(calls: &[OrchestratedToolCall]) -> Vec<ToolBatch> {
 
     for call in calls {
         if call.is_concurrency_safe {
-            if let Some(last) = batches.last_mut() {
-                if last.is_concurrency_safe {
-                    last.tool_ids.push(call.id.clone());
-                    continue;
-                }
+            if let Some(last) = batches.last_mut()
+                && last.is_concurrency_safe
+            {
+                last.tool_ids.push(call.id.clone());
+                continue;
             }
             batches.push(ToolBatch {
                 is_concurrency_safe: true,

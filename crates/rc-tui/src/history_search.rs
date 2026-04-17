@@ -159,7 +159,7 @@ impl HistorySearchEngine {
             match mode {
                 SearchMode::Substring => {
                     if let Some(positions) = substring_match(&entry.text, query) {
-                        let score = compute_substring_score(&entry, &positions);
+                        let score = compute_substring_score(entry, &positions);
                         matches.push(SearchMatch {
                             index,
                             entry: entry.clone(),
@@ -271,6 +271,7 @@ impl HistoryNavigator {
     }
 
     /// Move to the next match. Returns `true` if moved.
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> bool {
         if self.results.is_empty() {
             return false;
@@ -419,10 +420,10 @@ fn compute_fuzzy_score(text: &str, positions: &[usize], query_len: usize) -> f64
     for &pos in positions {
         if pos == 0 {
             score += 15.0;
-        } else if let Some(prev) = text_chars.get(pos - 1) {
-            if *prev == ' ' || *prev == '_' || *prev == '-' || *prev == '/' {
-                score += 10.0;
-            }
+        } else if let Some(prev) = text_chars.get(pos - 1)
+            && (*prev == ' ' || *prev == '_' || *prev == '-' || *prev == '/')
+        {
+            score += 10.0;
         }
     }
 

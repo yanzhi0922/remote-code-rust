@@ -19,10 +19,11 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// Controls how aggressively the engine generates speculative suggestions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SpeculationMode {
     /// Speculation disabled — only direct suggestions.
+    #[default]
     Off,
     /// Conservative — only speculate when confidence is high.
     Conservative,
@@ -30,11 +31,6 @@ pub enum SpeculationMode {
     Aggressive,
 }
 
-impl Default for SpeculationMode {
-    fn default() -> Self {
-        Self::Off
-    }
-}
 
 impl SpeculationMode {
     /// Returns the minimum confidence threshold for speculative suggestions.
@@ -74,10 +70,11 @@ impl SpeculationMode {
 // ---------------------------------------------------------------------------
 
 /// Category of a suggestion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SuggestionCategory {
     /// A follow-up action related to the current task.
+    #[default]
     FollowUp,
     /// A fix for a detected error or issue.
     Fix,
@@ -93,11 +90,6 @@ pub enum SuggestionCategory {
     Deploy,
 }
 
-impl Default for SuggestionCategory {
-    fn default() -> Self {
-        Self::FollowUp
-    }
-}
 
 /// A candidate suggestion with scoring metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -321,16 +313,16 @@ impl SuggestionFilter {
     /// Returns whether a suggestion passes the filter.
     #[must_use]
     pub fn passes(&self, candidate: &SuggestionCandidate) -> bool {
-        if let Some(min) = self.min_confidence {
-            if candidate.confidence < min {
-                return false;
-            }
+        if let Some(min) = self.min_confidence
+            && candidate.confidence < min
+        {
+            return false;
         }
 
-        if let Some(max) = self.max_length {
-            if candidate.text.len() > max {
-                return false;
-            }
+        if let Some(max) = self.max_length
+            && candidate.text.len() > max
+        {
+            return false;
         }
 
         if self.exclude_speculative && candidate.speculative {
@@ -609,8 +601,9 @@ pub fn generate_suggestions(
     }
 
     // Speculative suggestions
-    if mode != SpeculationMode::Off {
-        if let Some(user_msg) = context.last_user_content() {
+    if mode != SpeculationMode::Off
+        && let Some(user_msg) = context.last_user_content()
+    {
             let lower = user_msg.to_lowercase();
             if lower.contains("implement") || lower.contains("build") || lower.contains("create") {
                 candidates.push(
@@ -644,7 +637,6 @@ pub fn generate_suggestions(
                     .with_speculative(true),
                 );
             }
-        }
     }
 
     candidates

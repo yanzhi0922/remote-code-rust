@@ -309,15 +309,14 @@ impl BatchOperationResults {
         for result in &self.results {
             if let Some(ref tool_result) = result.result {
                 for content in &tool_result.content {
-                    if content.kind == "text" {
-                        if let Some(text_val) = content.fields.get("text") {
-                            if let Some(s) = text_val.as_str() {
-                                if !text.is_empty() {
-                                    text.push('\n');
-                                }
-                                text.push_str(s);
-                            }
+                    if content.kind == "text"
+                        && let Some(text_val) = content.fields.get("text")
+                        && let Some(s) = text_val.as_str()
+                    {
+                        if !text.is_empty() {
+                            text.push('\n');
                         }
+                        text.push_str(s);
                     }
                 }
             }

@@ -365,19 +365,19 @@ impl NotificationManager {
 
     /// Dismiss a notification by ID.
     pub fn dismiss(&mut self, id: NotificationId) -> bool {
-        if let Some(notif) = self.notifications.iter_mut().find(|n| n.id == id) {
-            if notif.dismissible {
-                notif.dismiss();
-                let idx = self
-                    .notifications
-                    .iter()
-                    .position(|n| n.id == id);
-                if let Some(idx) = idx {
-                    let dismissed = self.notifications.remove(idx);
-                    self.push_history(dismissed);
-                }
-                return true;
+        if let Some(notif) = self.notifications.iter_mut().find(|n| n.id == id)
+            && notif.dismissible
+        {
+            notif.dismiss();
+            let idx = self
+                .notifications
+                .iter()
+                .position(|n| n.id == id);
+            if let Some(idx) = idx {
+                let dismissed = self.notifications.remove(idx);
+                self.push_history(dismissed);
             }
+            return true;
         }
         false
     }

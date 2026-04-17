@@ -457,6 +457,7 @@ impl ToolRunner for CompatToolRunner {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_prompt_with_query_engine_compat(
     config: &RuntimeConfig,
     store: &SessionStore,

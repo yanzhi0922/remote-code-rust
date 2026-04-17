@@ -213,7 +213,7 @@ impl ToolResultSummarizer {
             .iter()
             .take(5)
             .map(|&i| {
-                let line = lines.get(i - 1).map(|s| *s).unwrap_or("");
+                let line = lines.get(i - 1).copied().unwrap_or("");
                 if line.len() > 200 {
                     format!("L{i}: {}...", &line[..200])
                 } else {

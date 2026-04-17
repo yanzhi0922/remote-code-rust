@@ -79,9 +79,12 @@ pub trait ToolRunner: Send + Sync + 'static {
     ) -> JoinHandle<ToolExecutionResult>;
 }
 
+/// Signature for a tool execution function.
+type ToolExecFn = dyn Fn(&str, &str, &Value, &ProgressStream) -> ToolExecutionResult + Send + Sync;
+
 /// A simple function-pointer-based [`ToolRunner`].
 pub struct FnToolRunner {
-    pub f: Arc<dyn Fn(&str, &str, &Value, &ProgressStream) -> ToolExecutionResult + Send + Sync>,
+    pub f: Arc<ToolExecFn>,
 }
 
 impl ToolRunner for FnToolRunner {

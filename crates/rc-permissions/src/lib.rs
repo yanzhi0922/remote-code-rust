@@ -229,11 +229,11 @@ impl<B: PermissionBroker> LayeredPermissionBroker<B> {
     }
 
     pub fn audit_records(&self) -> Vec<PermissionAuditRecord> {
-        self.audit.lock().unwrap().clone()
+        self.audit.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     fn push_audit(&self, record: PermissionAuditRecord) {
-        self.audit.lock().unwrap().push(record);
+        self.audit.lock().unwrap_or_else(|e| e.into_inner()).push(record);
     }
 }
 
@@ -242,7 +242,7 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
     async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
         // Check session rules first (highest priority)
         {
-            let session = self.session_rules.read().unwrap();
+            let session = self.session_rules.read().unwrap_or_else(|e| e.into_inner());
             for rule in session.iter() {
                 if rule_matches_pattern(&rule.tool_pattern, &request.tool_name) {
                     return match rule.action {
@@ -283,7 +283,7 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
     }
 
     fn add_session_rule(&self, action: RuleAction, tool_pattern: String) -> Result<()> {
-        let mut session = self.session_rules.write().unwrap();
+        let mut session = self.session_rules.write().unwrap_or_else(|e| e.into_inner());
         session.push(SourceAwarePermissionRule {
             action,
             tool_pattern,
@@ -293,14 +293,14 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
     }
 
     fn clear_session_rules(&self) -> Result<usize> {
-        let mut session = self.session_rules.write().unwrap();
+        let mut session = self.session_rules.write().unwrap_or_else(|e| e.into_inner());
         let count = session.len();
         session.clear();
         Ok(count)
     }
 
     fn audit_records(&self) -> Vec<PermissionAuditRecord> {
-        self.audit.lock().unwrap().clone()
+        self.audit.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     fn layered_rules(&self) -> Vec<SourceAwarePermissionRule> {

@@ -154,29 +154,37 @@ pub fn resolve_dependency_closure(
     let mut visited: HashSet<PluginId> = HashSet::new();
     let mut stack: Vec<PluginId> = Vec::new();
 
+    struct WalkContext<'a> {
+        root_id: &'a str,
+        root_marketplace: Option<&'a str>,
+        lookup: &'a dyn Fn(&str) -> Option<DependencyLookupResult>,
+        already_enabled: &'a HashSet<PluginId>,
+        allowed_cross_marketplaces: &'a HashSet<String>,
+    }
+
+    struct WalkState<'a> {
+        closure: &'a mut Vec<PluginId>,
+        visited: &'a mut HashSet<PluginId>,
+        stack: &'a mut Vec<PluginId>,
+    }
+
     fn walk(
         id: &str,
         required_by: &str,
-        root_id: &str,
-        root_marketplace: Option<&str>,
-        lookup: &dyn Fn(&str) -> Option<DependencyLookupResult>,
-        already_enabled: &HashSet<PluginId>,
-        allowed_cross_marketplaces: &HashSet<String>,
-        closure: &mut Vec<PluginId>,
-        visited: &mut HashSet<PluginId>,
-        stack: &mut Vec<PluginId>,
+        ctx: &WalkContext<'_>,
+        state: &mut WalkState<'_>,
     ) -> Option<ResolutionResult> {
         // Skip already-enabled DEPENDENCIES (not root)
-        if id != root_id && already_enabled.contains(id) {
+        if id != ctx.root_id && ctx.already_enabled.contains(id) {
             return None;
         }
 
         // Security: block auto-install across marketplace boundaries
         let id_parsed = PluginIdentifier::parse(id);
         let id_marketplace = id_parsed.marketplace.as_deref();
-        if id_marketplace != root_marketplace {
+        if id_marketplace != ctx.root_marketplace {
             let is_allowed = id_marketplace.is_some_and(|m| {
-                allowed_cross_marketplaces.contains(m)
+                ctx.allowed_cross_marketplaces.contains(m)
             });
             if !is_allowed {
                 return Some(ResolutionResult::CrossMarketplace {
@@ -186,17 +194,17 @@ pub fn resolve_dependency_closure(
             }
         }
 
-        if stack.contains(&id.to_owned()) {
-            let mut chain = stack.clone();
+        if state.stack.contains(&id.to_owned()) {
+            let mut chain = state.stack.clone();
             chain.push(id.to_owned());
             return Some(ResolutionResult::Cycle { chain });
         }
-        if visited.contains(id) {
+        if state.visited.contains(id) {
             return None;
         }
-        visited.insert(id.to_owned());
+        state.visited.insert(id.to_owned());
 
-        let entry = match lookup(id) {
+        let entry = match (ctx.lookup)(id) {
             Some(e) => e,
             None => {
                 return Some(ResolutionResult::NotFound {
@@ -206,42 +214,33 @@ pub fn resolve_dependency_closure(
             }
         };
 
-        stack.push(id.to_owned());
+        state.stack.push(id.to_owned());
         for raw_dep in &entry.dependencies {
             let dep = qualify_dependency(raw_dep, id);
-            if let Some(err) = walk(
-                &dep,
-                id,
-                root_id,
-                root_marketplace,
-                lookup,
-                already_enabled,
-                allowed_cross_marketplaces,
-                closure,
-                visited,
-                stack,
-            ) {
+            if let Some(err) = walk(&dep, id, ctx, state) {
                 return Some(err);
             }
         }
-        stack.pop();
+        state.stack.pop();
 
-        closure.push(id.to_owned());
+        state.closure.push(id.to_owned());
         None
     }
 
-    if let Some(err) = walk(
-        root_id,
-        root_id,
+    let ctx = WalkContext {
         root_id,
         root_marketplace,
         lookup,
         already_enabled,
         allowed_cross_marketplaces,
-        &mut closure,
-        &mut visited,
-        &mut stack,
-    ) {
+    };
+    let mut state = WalkState {
+        closure: &mut closure,
+        visited: &mut visited,
+        stack: &mut stack,
+    };
+
+    if let Some(err) = walk(root_id, root_id, &ctx, &mut state) {
         return err;
     }
 
