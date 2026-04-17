@@ -20,7 +20,11 @@ pub enum MarketplaceSource {
     /// URL source.
     Url { url: String },
     /// Git repository source.
-    Git { url: String, #[serde(default)] ref_: Option<String> },
+    Git {
+        url: String,
+        #[serde(default)]
+        ref_: Option<String>,
+    },
     /// Local directory source.
     Directory { path: String },
     /// Local file source.
@@ -123,10 +127,7 @@ pub enum ReconcileProgressEvent {
         already_materialized: bool,
     },
     /// Failed to install.
-    Failed {
-        name: String,
-        error: String,
-    },
+    Failed { name: String, error: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -231,10 +232,7 @@ pub fn build_reconcile_plan(
 ///
 /// Takes the current set of installed plugin names and the desired set,
 /// returning actions to take.
-pub fn reconcile_plugins(
-    installed: &HashSet<String>,
-    desired: &HashSet<String>,
-) -> ReconcilePlan {
+pub fn reconcile_plugins(installed: &HashSet<String>, desired: &HashSet<String>) -> ReconcilePlan {
     let mut steps = Vec::new();
     let mut install_count = 0usize;
     let mut remove_count = 0usize;
@@ -287,9 +285,7 @@ pub fn reconcile_plugins(
 mod tests {
     use super::*;
 
-    fn make_declared(
-        entries: &[(&str, &str)],
-    ) -> HashMap<String, DeclaredMarketplace> {
+    fn make_declared(entries: &[(&str, &str)]) -> HashMap<String, DeclaredMarketplace> {
         entries
             .iter()
             .map(|(name, repo)| {
@@ -306,9 +302,7 @@ mod tests {
             .collect()
     }
 
-    fn make_materialized(
-        entries: &[(&str, &str)],
-    ) -> HashMap<String, KnownMarketplace> {
+    fn make_materialized(entries: &[(&str, &str)]) -> HashMap<String, KnownMarketplace> {
         entries
             .iter()
             .map(|(name, repo)| {
@@ -365,10 +359,7 @@ mod tests {
 
     #[test]
     fn build_reconcile_plan_installs_missing() {
-        let declared = make_declared(&[
-            ("mkt-a", "org/repo-a"),
-            ("mkt-b", "org/repo-b"),
-        ]);
+        let declared = make_declared(&[("mkt-a", "org/repo-a"), ("mkt-b", "org/repo-b")]);
         let materialized = HashSet::from(["mkt-a".to_owned()]);
         let plan = build_reconcile_plan(&declared, &materialized);
         assert_eq!(plan.install_count, 1);
@@ -378,20 +369,15 @@ mod tests {
     #[test]
     fn build_reconcile_plan_removes_orphans() {
         let declared = make_declared(&[("mkt-a", "org/repo-a")]);
-        let materialized = HashSet::from([
-            "mkt-a".to_owned(),
-            "orphan-mkt".to_owned(),
-        ]);
+        let materialized = HashSet::from(["mkt-a".to_owned(), "orphan-mkt".to_owned()]);
         let plan = build_reconcile_plan(&declared, &materialized);
         assert_eq!(plan.remove_count, 1);
     }
 
     #[test]
     fn reconcile_plugins_basic() {
-        let installed: HashSet<String> =
-            ["a".to_owned(), "b".to_owned()].into_iter().collect();
-        let desired: HashSet<String> =
-            ["b".to_owned(), "c".to_owned()].into_iter().collect();
+        let installed: HashSet<String> = ["a".to_owned(), "b".to_owned()].into_iter().collect();
+        let desired: HashSet<String> = ["b".to_owned(), "c".to_owned()].into_iter().collect();
         let plan = reconcile_plugins(&installed, &desired);
         assert_eq!(plan.install_count, 1);
         assert_eq!(plan.remove_count, 1);
@@ -416,10 +402,8 @@ mod tests {
 
     #[test]
     fn reconcile_plugins_all_match() {
-        let installed: HashSet<String> =
-            ["a".to_owned()].into_iter().collect();
-        let desired: HashSet<String> =
-            ["a".to_owned()].into_iter().collect();
+        let installed: HashSet<String> = ["a".to_owned()].into_iter().collect();
+        let desired: HashSet<String> = ["a".to_owned()].into_iter().collect();
         let plan = reconcile_plugins(&installed, &desired);
         assert_eq!(plan.install_count, 0);
         assert_eq!(plan.remove_count, 0);

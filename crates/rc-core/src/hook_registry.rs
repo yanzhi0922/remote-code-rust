@@ -75,9 +75,7 @@ impl HookRegistry {
     /// Check if any hooks are registered for a specific event.
     #[must_use]
     pub fn has_hooks_for_event(&self, event: HookEventKind) -> bool {
-        self.entries
-            .get(&event)
-            .is_some_and(|h| !h.is_empty())
+        self.entries.get(&event).is_some_and(|h| !h.is_empty())
             || self
                 .session_hooks
                 .get(&event)
@@ -93,11 +91,7 @@ impl HookRegistry {
     /// Merge session-specific hooks into the registry.
     ///
     /// Session hooks are stored separately and can be cleared independently.
-    pub fn merge_session_hooks(
-        &mut self,
-        event: HookEventKind,
-        matchers: Vec<HookMatcherEntry>,
-    ) {
+    pub fn merge_session_hooks(&mut self, event: HookEventKind, matchers: Vec<HookMatcherEntry>) {
         let entry = self.session_hooks.entry(event).or_default();
         entry.extend(matchers);
     }
@@ -205,10 +199,7 @@ impl HookRegistry {
     /// Register hooks from a settings map (event name → matchers).
     ///
     /// This is the primary loading path from configuration files.
-    pub fn register_from_settings(
-        &mut self,
-        settings: &HashMap<String, Vec<HookMatcherEntry>>,
-    ) {
+    pub fn register_from_settings(&mut self, settings: &HashMap<String, Vec<HookMatcherEntry>>) {
         for (event_name, matchers) in settings {
             if let Some(event) = parse_hook_event(event_name) {
                 self.register_hooks(event, matchers.clone());
@@ -263,10 +254,7 @@ mod tests {
     fn make_matcher(pattern: Option<&str>, cmds: &[&str]) -> HookMatcherEntry {
         HookMatcherEntry {
             matcher: pattern.map(String::from),
-            hooks: cmds
-                .iter()
-                .map(|c| make_command_hook(c, false))
-                .collect(),
+            hooks: cmds.iter().map(|c| make_command_hook(c, false)).collect(),
         }
     }
 
@@ -345,10 +333,7 @@ mod tests {
     #[test]
     fn active_events() {
         let mut registry = HookRegistry::new();
-        registry.register_hooks(
-            HookEventKind::PreToolUse,
-            vec![make_matcher(None, &["a"])],
-        );
+        registry.register_hooks(HookEventKind::PreToolUse, vec![make_matcher(None, &["a"])]);
         registry.register_hooks(
             HookEventKind::SessionStart,
             vec![make_matcher(None, &["b"])],
@@ -397,14 +382,8 @@ mod tests {
     #[test]
     fn clear_session_hooks_for_event() {
         let mut registry = HookRegistry::new();
-        registry.merge_session_hooks(
-            HookEventKind::PreToolUse,
-            vec![make_matcher(None, &["a"])],
-        );
-        registry.merge_session_hooks(
-            HookEventKind::PostToolUse,
-            vec![make_matcher(None, &["b"])],
-        );
+        registry.merge_session_hooks(HookEventKind::PreToolUse, vec![make_matcher(None, &["a"])]);
+        registry.merge_session_hooks(HookEventKind::PostToolUse, vec![make_matcher(None, &["b"])]);
         registry.clear_session_hooks_for_event(HookEventKind::PreToolUse);
 
         assert!(!registry.has_hooks_for_event(HookEventKind::PreToolUse));
@@ -450,14 +429,8 @@ mod tests {
     #[test]
     fn clear_all() {
         let mut registry = HookRegistry::new();
-        registry.register_hooks(
-            HookEventKind::PreToolUse,
-            vec![make_matcher(None, &["a"])],
-        );
-        registry.merge_session_hooks(
-            HookEventKind::PostToolUse,
-            vec![make_matcher(None, &["b"])],
-        );
+        registry.register_hooks(HookEventKind::PreToolUse, vec![make_matcher(None, &["a"])]);
+        registry.merge_session_hooks(HookEventKind::PostToolUse, vec![make_matcher(None, &["b"])]);
         registry.clear_all();
         assert!(!registry.has_any_hooks());
     }
@@ -525,10 +498,7 @@ mod tests {
         let mut settings = HashMap::new();
 
         for &name in crate::hook_matcher::HOOK_EVENT_NAMES {
-            settings.insert(
-                name.to_string(),
-                vec![make_matcher(None, &["generic.sh"])],
-            );
+            settings.insert(name.to_string(), vec![make_matcher(None, &["generic.sh"])]);
         }
 
         registry.register_from_settings(&settings);

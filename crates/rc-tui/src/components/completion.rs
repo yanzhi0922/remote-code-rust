@@ -66,9 +66,7 @@ pub fn render_completions(
 
             let selector = if is_selected { "▸" } else { " " };
             let label_style = if is_selected {
-                Style::default()
-                    .fg(color)
-                    .add_modifier(Modifier::BOLD)
+                Style::default().fg(color).add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(color)
             };

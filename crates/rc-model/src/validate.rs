@@ -26,10 +26,7 @@ pub enum ValidationError {
 /// 1. Non-empty after trimming.
 /// 2. Does not contain obviously invalid characters.
 /// 3. (Optional) Is present in the allowlist.
-pub fn validate_model_id(
-    id: &str,
-    allowlist: Option<&[String]>,
-) -> Result<(), ValidationError> {
+pub fn validate_model_id(id: &str, allowlist: Option<&[String]>) -> Result<(), ValidationError> {
     let trimmed = id.trim();
 
     if trimmed.is_empty() {
@@ -43,9 +40,10 @@ pub fn validate_model_id(
 
     // Check allowlist if configured.
     if let Some(list) = allowlist
-        && !crate::allowlist::is_model_allowed(trimmed, Some(list)) {
-            return Err(ValidationError::NotAllowed(trimmed.to_owned()));
-        }
+        && !crate::allowlist::is_model_allowed(trimmed, Some(list))
+    {
+        return Err(ValidationError::NotAllowed(trimmed.to_owned()));
+    }
 
     Ok(())
 }

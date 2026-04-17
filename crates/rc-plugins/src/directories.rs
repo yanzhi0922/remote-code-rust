@@ -121,11 +121,7 @@ impl PluginDirectoryManager {
     }
 
     /// Get the plugin install path within a marketplace.
-    pub fn get_plugin_install_path(
-        &self,
-        marketplace_name: &str,
-        plugin_name: &str,
-    ) -> PathBuf {
+    pub fn get_plugin_install_path(&self, marketplace_name: &str, plugin_name: &str) -> PathBuf {
         self.get_marketplace_named_dir(marketplace_name)
             .join(plugin_name)
     }
@@ -157,10 +153,7 @@ impl PluginDirectoryManager {
         if let Err(e) = fs::remove_dir_all(&dir) {
             // Only log if the directory actually existed
             if e.kind() != std::io::ErrorKind::NotFound {
-                tracing::warn!(
-                    "Failed to delete plugin data dir {}: {e}",
-                    dir.display()
-                );
+                tracing::warn!("Failed to delete plugin data dir {}: {e}", dir.display());
             }
         }
     }
@@ -229,7 +222,13 @@ pub fn get_plugin_seed_dirs() -> Vec<PathBuf> {
 fn sanitize_plugin_id(plugin_id: &str) -> String {
     plugin_id
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect()
 }
 
@@ -237,7 +236,9 @@ fn sanitize_plugin_id(plugin_id: &str) -> String {
 fn expand_tilde(path: &str) -> PathBuf {
     if let Some(rest) = path.strip_prefix('~') {
         // Handle ~/ or just ~
-        let rest = rest.strip_prefix(std::path::MAIN_SEPARATOR_STR).unwrap_or(rest);
+        let rest = rest
+            .strip_prefix(std::path::MAIN_SEPARATOR_STR)
+            .unwrap_or(rest);
         if let Some(base_dirs) = directories::BaseDirs::new() {
             return base_dirs.home_dir().join(rest);
         }
@@ -355,7 +356,9 @@ mod tests {
         let base = tmp.path().join("plugins");
         let mgr = PluginDirectoryManager::with_base_dir(base.clone());
 
-        let dir = mgr.get_plugin_data_dir("test-plugin").expect("get data dir");
+        let dir = mgr
+            .get_plugin_data_dir("test-plugin")
+            .expect("get data dir");
         assert!(dir.exists());
         assert!(dir.is_dir());
     }
@@ -367,10 +370,7 @@ mod tests {
         let mgr = PluginDirectoryManager::with_base_dir(base.clone());
 
         let path = mgr.get_marketplace_named_dir("anthropic-tools");
-        assert_eq!(
-            path,
-            base.join(MARKETPLACES_DIR).join("anthropic-tools")
-        );
+        assert_eq!(path, base.join(MARKETPLACES_DIR).join("anthropic-tools"));
     }
 
     #[test]
@@ -455,6 +455,9 @@ mod tests {
     #[test]
     fn test_default_impl() {
         let mgr = PluginDirectoryManager::default();
-        assert!(mgr.base_dir().to_string_lossy().contains("plugins") || mgr.base_dir().to_string_lossy().contains("cowork_plugins"));
+        assert!(
+            mgr.base_dir().to_string_lossy().contains("plugins")
+                || mgr.base_dir().to_string_lossy().contains("cowork_plugins")
+        );
     }
 }

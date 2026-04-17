@@ -23,8 +23,8 @@ pub fn load_settings_from_file(path: impl AsRef<Path>) -> Result<Settings> {
 /// # Errors
 /// Returns an error if the string is not valid JSON or doesn't match the settings schema.
 pub fn load_settings_from_str(content: &str) -> Result<Settings> {
-    let settings: Settings = serde_json::from_str(content)
-        .context("Failed to parse settings JSON")?;
+    let settings: Settings =
+        serde_json::from_str(content).context("Failed to parse settings JSON")?;
     Ok(settings)
 }
 
@@ -34,8 +34,7 @@ pub fn load_settings_from_str(content: &str) -> Result<Settings> {
 /// Returns an error if the file cannot be written.
 pub fn save_settings_to_file(settings: &Settings, path: impl AsRef<Path>) -> Result<()> {
     let path = path.as_ref();
-    let content = serde_json::to_string_pretty(settings)
-        .context("Failed to serialize settings")?;
+    let content = serde_json::to_string_pretty(settings).context("Failed to serialize settings")?;
 
     // Create parent directories if needed
     if let Some(parent) = path.parent() {

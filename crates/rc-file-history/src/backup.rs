@@ -140,10 +140,7 @@ pub fn restore_backup(
     let backup_path = resolve_backup_path(backup_dir, backup_file_name);
 
     if !backup_path.exists() {
-        anyhow::bail!(
-            "Backup file not found: {}",
-            backup_path.display()
-        );
+        anyhow::bail!("Backup file not found: {}", backup_path.display());
     }
 
     // Ensure the destination directory exists
@@ -178,12 +175,10 @@ pub fn check_origin_file_changed(
 
     // Compare content hashes
     match hash_file_contents(file_path) {
-        Ok(current_hash) => {
-            match &backup_record.content_hash {
-                Some(backup_hash) => current_hash != *backup_hash,
-                None => true,
-            }
-        }
+        Ok(current_hash) => match &backup_record.content_hash {
+            Some(backup_hash) => current_hash != *backup_hash,
+            None => true,
+        },
         Err(_) => true, // Assume changed on error
     }
 }
@@ -197,14 +192,15 @@ pub fn get_first_version_backup_name(
 ) -> Option<Option<String>> {
     for snapshot in snapshots {
         if let Some(backup) = snapshot.tracked_file_backups.get(tracking_path)
-            && backup.version == 1 {
-                // Return Some(None) for null backups, Some(Some(name)) for real backups
-                if backup.is_null() {
-                    return Some(None);
-                }
-                let name = get_backup_file_name(&backup.file_path, 1);
-                return Some(Some(name));
+            && backup.version == 1
+        {
+            // Return Some(None) for null backups, Some(Some(name)) for real backups
+            if backup.is_null() {
+                return Some(None);
             }
+            let name = get_backup_file_name(&backup.file_path, 1);
+            return Some(Some(name));
+        }
     }
     None // Could not find any first version
 }
@@ -216,9 +212,10 @@ pub fn get_first_version_backup_name(
 pub fn maybe_shorten_file_path(file_path: &str, cwd: &Path) -> String {
     let path = Path::new(file_path);
     if path.is_absolute()
-        && let Ok(relative) = path.strip_prefix(cwd) {
-            return relative.to_string_lossy().to_string();
-        }
+        && let Ok(relative) = path.strip_prefix(cwd)
+    {
+        return relative.to_string_lossy().to_string();
+    }
     file_path.to_string()
 }
 
@@ -276,11 +273,7 @@ mod tests {
 
     #[test]
     fn backup_with_hash() {
-        let rec = BackupRecord::with_hash(
-            "main.rs".to_string(),
-            2,
-            "abc123".to_string(),
-        );
+        let rec = BackupRecord::with_hash("main.rs".to_string(), 2, "abc123".to_string());
         assert!(!rec.is_null());
         assert_eq!(rec.version, 2);
         assert_eq!(rec.content_hash.as_deref(), Some("abc123"));
@@ -395,7 +388,11 @@ mod tests {
 
         // File didn't exist, now it does
         fs::write(&file_path, "new content").unwrap();
-        assert!(check_origin_file_changed(&file_path, &record, &tmp.path().join("backups")));
+        assert!(check_origin_file_changed(
+            &file_path,
+            &record,
+            &tmp.path().join("backups")
+        ));
     }
 
     #[test]
@@ -406,7 +403,11 @@ mod tests {
         let record = BackupRecord::null("still_missing.txt".to_string(), 1);
 
         // File still doesn't exist
-        assert!(!check_origin_file_changed(&file_path, &record, &tmp.path().join("backups")));
+        assert!(!check_origin_file_changed(
+            &file_path,
+            &record,
+            &tmp.path().join("backups")
+        ));
     }
 
     #[test]
@@ -462,11 +463,7 @@ mod tests {
 
     #[test]
     fn backup_record_serializes() {
-        let rec = BackupRecord::with_hash(
-            "main.rs".to_string(),
-            1,
-            "deadbeef".to_string(),
-        );
+        let rec = BackupRecord::with_hash("main.rs".to_string(), 1, "deadbeef".to_string());
         let json = serde_json::to_string(&rec).unwrap();
         assert!(json.contains("main.rs"));
         assert!(json.contains("deadbeef"));

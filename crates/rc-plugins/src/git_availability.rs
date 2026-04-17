@@ -4,8 +4,8 @@
 //! meets the minimum version requirement. Git is required for installing
 //! GitHub-based marketplaces.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result};
 use once_cell::sync::Lazy;
@@ -20,8 +20,7 @@ pub const MIN_GIT_VERSION: (u32, u32, u32) = (2, 0, 0);
 /// Regex to extract version from `git --version` output.
 /// Matches patterns like "git version 2.43.0" or "git version 2.43.0.windows.1".
 static GIT_VERSION_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"git version (\d+)\.(\d+)(?:\.(\d+))?")
-        .expect("GIT_VERSION_RE is a valid regex")
+    Regex::new(r"git version (\d+)\.(\d+)(?:\.(\d+))?").expect("GIT_VERSION_RE is a valid regex")
 });
 
 /// Cached git availability state.
@@ -58,8 +57,7 @@ impl std::fmt::Display for GitAvailability {
                 write!(
                     f,
                     "git version too low: detected {}.{}.{}, minimum {}.{}.{}",
-                    detected.0, detected.1, detected.2,
-                    minimum.0, minimum.1, minimum.2,
+                    detected.0, detected.1, detected.2, minimum.0, minimum.1, minimum.2,
                 )
             }
         }

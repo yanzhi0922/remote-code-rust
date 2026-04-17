@@ -62,7 +62,8 @@ impl std::fmt::Debug for PermissionSetup {
 impl PermissionSetup {
     /// Initialize the permission system with the given configuration.
     pub fn initialize(config: &PermissionSetupConfig) -> Self {
-        let mode = if (config.disable_bypass && config.mode == ExtendedPermissionMode::BypassPermissions)
+        let mode = if (config.disable_bypass
+            && config.mode == ExtendedPermissionMode::BypassPermissions)
             || (config.disable_auto && config.mode == ExtendedPermissionMode::Auto)
         {
             ExtendedPermissionMode::Default
@@ -70,7 +71,7 @@ impl PermissionSetup {
             config.mode
         };
 
-        let handler: Box<dyn PermissionHandler> = 
+        let handler: Box<dyn PermissionHandler> =
             Box::new(InteractiveHandler::new(config.auto_accept_edits));
 
         let default_rules = generate_default_rules();
@@ -192,6 +193,10 @@ mod tests {
     #[test]
     fn default_rules_include_read() {
         let rules = generate_default_rules();
-        assert!(rules.iter().any(|r| r.value.tool_name == "Read" && r.behavior == PermissionBehavior::Allow));
+        assert!(
+            rules
+                .iter()
+                .any(|r| r.value.tool_name == "Read" && r.behavior == PermissionBehavior::Allow)
+        );
     }
 }

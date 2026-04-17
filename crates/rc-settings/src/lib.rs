@@ -37,7 +37,7 @@ pub use hooks::{
 };
 pub use loader::{load_settings_from_file, load_settings_from_str};
 pub use mcp::{AllowedMcpServerEntry, DeniedMcpServerEntry, McpServerEntryMatcher};
-pub use merge::{merge_settings, SettingsLayer};
+pub use merge::{SettingsLayer, merge_settings};
 pub use permissions::PermissionSettings;
 pub use provider::{ProviderConfig, ProviderType};
 pub use sandbox::SandboxSettings;

@@ -113,11 +113,7 @@ fn classify_message(message: &Message) -> GroupType {
 fn rough_tokens_for_message(message: &Message) -> u64 {
     let text = format!("{message:?}");
     let len = text.len() as u64;
-    if len == 0 {
-        0
-    } else {
-        len.div_ceil(4)
-    }
+    if len == 0 { 0 } else { len.div_ceil(4) }
 }
 
 /// Group messages into logical turns.
@@ -194,11 +190,7 @@ pub fn merge_small_groups(groups: &[MessageGroup], min_tokens: u64) -> Vec<Messa
         }
         // If neither neighbour exists, keep as-is
         else {
-            result[i] = Some(
-                result[i]
-                    .take()
-                    .expect("just checked"),
-            );
+            result[i] = Some(result[i].take().expect("just checked"));
         }
     }
 
@@ -287,10 +279,7 @@ mod tests {
 
     #[test]
     fn group_messages_same_type_merged() {
-        let msgs = vec![
-            make_user_message("hello"),
-            make_user_message("world"),
-        ];
+        let msgs = vec![make_user_message("hello"), make_user_message("world")];
         let groups = group_messages(&msgs);
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].len(), 2);
@@ -339,13 +328,11 @@ mod tests {
 
     #[test]
     fn merge_small_groups_no_small() {
-        let groups = vec![
-            MessageGroup::with_messages(
-                vec![make_user_message(&"a".repeat(500))],
-                GroupType::UserTurn,
-                200,
-            ),
-        ];
+        let groups = vec![MessageGroup::with_messages(
+            vec![make_user_message(&"a".repeat(500))],
+            GroupType::UserTurn,
+            200,
+        )];
         let result = merge_small_groups(&groups, 100);
         assert_eq!(result.len(), 1);
     }
@@ -358,11 +345,7 @@ mod tests {
                 GroupType::UserTurn,
                 200,
             ),
-            MessageGroup::with_messages(
-                vec![make_user_message("tiny")],
-                GroupType::System,
-                5,
-            ),
+            MessageGroup::with_messages(vec![make_user_message("tiny")], GroupType::System, 5),
         ];
         let result = merge_small_groups(&groups, 100);
         assert_eq!(result.len(), 1);
@@ -372,11 +355,7 @@ mod tests {
     #[test]
     fn merge_small_groups_merges_into_next_when_no_prev() {
         let groups = vec![
-            MessageGroup::with_messages(
-                vec![make_user_message("tiny")],
-                GroupType::System,
-                5,
-            ),
+            MessageGroup::with_messages(vec![make_user_message("tiny")], GroupType::System, 5),
             MessageGroup::with_messages(
                 vec![make_user_message("big message")],
                 GroupType::UserTurn,

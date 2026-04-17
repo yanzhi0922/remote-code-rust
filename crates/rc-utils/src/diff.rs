@@ -296,10 +296,7 @@ mod tests {
             old_count: 2,
             new_start: 1,
             new_count: 1,
-            lines: vec![
-                " context".to_string(),
-                "-removed".to_string(),
-            ],
+            lines: vec![" context".to_string(), "-removed".to_string()],
         };
         assert_eq!(hunk.removed_count(), 1);
     }
@@ -459,7 +456,10 @@ diff --git a/file.rs b/file.rs
     #[test]
     fn escape_unescape_roundtrip() {
         let original = "foo & bar $baz";
-        assert_eq!(unescape_diff_markers(&escape_diff_markers(original)), original);
+        assert_eq!(
+            unescape_diff_markers(&escape_diff_markers(original)),
+            original
+        );
     }
 
     // --- DiffStats serialization ---

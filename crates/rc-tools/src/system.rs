@@ -302,10 +302,7 @@ pub(crate) fn monitor_tool(input: &Value) -> Result<String> {
                         }
                     }
                 }
-            } else if let Ok(output) = std::process::Command::new("ps")
-                .args(["aux"])
-                .output()
-            {
+            } else if let Ok(output) = std::process::Command::new("ps").args(["aux"]).output() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 for line in stdout.lines().take(50) {
                     if line.contains("remote-code") || line.contains("agent") {
@@ -349,7 +346,9 @@ pub(crate) fn monitor_tool(input: &Value) -> Result<String> {
         "sessions" => {
             // List session files in the .remote-code-rust directory.
             let mut session_list = Vec::new();
-            let sessions_dir = std::env::temp_dir().join("remote-code-rust").join("sessions");
+            let sessions_dir = std::env::temp_dir()
+                .join("remote-code-rust")
+                .join("sessions");
             if sessions_dir.exists() {
                 if let Ok(entries) = std::fs::read_dir(&sessions_dir) {
                     for entry in entries.flatten() {

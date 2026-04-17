@@ -24,13 +24,8 @@ where
 
     for request in &pending {
         let (decision, reason) = decide(request);
-        permission_sync::write_response(
-            team_name,
-            &request.request_id,
-            decision,
-            reason.clone(),
-        )
-        .await?;
+        permission_sync::write_response(team_name, &request.request_id, decision, reason.clone())
+            .await?;
 
         let mut resolved_req = request.clone();
         resolved_req.resolve(decision, reason);
@@ -46,11 +41,7 @@ pub async fn auto_approve(team_name: &str, request_id: &str) -> SwarmResult<()> 
 }
 
 /// Auto-deny a permission request with a reason.
-pub async fn auto_deny(
-    team_name: &str,
-    request_id: &str,
-    reason: &str,
-) -> SwarmResult<()> {
+pub async fn auto_deny(team_name: &str, request_id: &str, reason: &str) -> SwarmResult<()> {
     permission_sync::write_response(
         team_name,
         request_id,
@@ -85,7 +76,10 @@ pub fn default_decision(request: &SwarmPermissionRequest) -> (PermissionDecision
         // For now, deny with a reason.
         (
             PermissionDecision::Deny,
-            Some(format!("manual approval required for {}", request.tool_name)),
+            Some(format!(
+                "manual approval required for {}",
+                request.tool_name
+            )),
         )
     }
 }
@@ -144,7 +138,9 @@ mod tests {
             "read",
             serde_json::json!({"path": "/tmp"}),
         );
-        permission_sync::write_request("test-team", &req).await.expect("ok");
+        permission_sync::write_request("test-team", &req)
+            .await
+            .expect("ok");
 
         let resolved = process_pending_requests("test-team", |r| {
             if should_auto_approve(&r.tool_name) {
@@ -163,11 +159,10 @@ mod tests {
     #[tokio::test]
     async fn process_pending_empty() {
         let _td = TestDir::new();
-        let resolved = process_pending_requests("test-team", |_r| {
-            (PermissionDecision::Allow, None)
-        })
-        .await
-        .expect("ok");
+        let resolved =
+            process_pending_requests("test-team", |_r| (PermissionDecision::Allow, None))
+                .await
+                .expect("ok");
         assert!(resolved.is_empty());
     }
 
@@ -180,7 +175,9 @@ mod tests {
             "bash",
             serde_json::json!({"command": "ls"}),
         );
-        permission_sync::write_request("test-team", &req).await.expect("ok");
+        permission_sync::write_request("test-team", &req)
+            .await
+            .expect("ok");
 
         auto_approve("test-team", &req.request_id)
             .await
@@ -201,7 +198,9 @@ mod tests {
             "bash",
             serde_json::json!({"command": "rm -rf /"}),
         );
-        permission_sync::write_request("test-team", &req).await.expect("ok");
+        permission_sync::write_request("test-team", &req)
+            .await
+            .expect("ok");
 
         auto_deny("test-team", &req.request_id, "dangerous command")
             .await
@@ -234,24 +233,14 @@ mod tests {
 
     #[test]
     fn default_decision_read_tool() {
-        let req = SwarmPermissionRequest::new(
-            "team",
-            "worker",
-            "read",
-            serde_json::json!({}),
-        );
+        let req = SwarmPermissionRequest::new("team", "worker", "read", serde_json::json!({}));
         let (decision, _) = default_decision(&req);
         assert_eq!(decision, PermissionDecision::Allow);
     }
 
     #[test]
     fn default_decision_write_tool() {
-        let req = SwarmPermissionRequest::new(
-            "team",
-            "worker",
-            "write",
-            serde_json::json!({}),
-        );
+        let req = SwarmPermissionRequest::new("team", "worker", "write", serde_json::json!({}));
         let (decision, reason) = default_decision(&req);
         assert_eq!(decision, PermissionDecision::Deny);
         assert!(reason.is_some());

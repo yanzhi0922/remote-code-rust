@@ -121,7 +121,8 @@ impl QueryEngine {
         let budget_tracker = BudgetTracker::new(config.max_turns, None);
         let model_switcher = ModelSwitcher::new(&config.model);
         let chain_manager = ChainManager::new(config.max_chain_depth);
-        let failure_tracker = FailureTracker::new(config.failure_threshold, std::time::Duration::from_secs(30));
+        let failure_tracker =
+            FailureTracker::new(config.failure_threshold, std::time::Duration::from_secs(30));
         let stop_hook_manager = StopHookManager::new(config.stop_hook_max_retries);
         let structured_output = match &config.structured_output_schema {
             Some(schema) => StructuredOutputEnforcer::with_schema(schema.clone()),
@@ -175,7 +176,10 @@ impl QueryEngine {
         self.state.current_chain = Some(chain);
 
         // Transition state machine to Initializing
-        let _ = self.state.state_machine.transition(EnginePhase::Initializing);
+        let _ = self
+            .state
+            .state_machine
+            .transition(EnginePhase::Initializing);
 
         self.config.event_stream.emit(EngineEvent::QueryStarted {
             session_id: event_session_id(&context.session_id),

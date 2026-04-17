@@ -48,10 +48,7 @@ pub struct LoadLspResult {
 /// Checks for:
 /// 1. `.lsp.json` file in plugin directory
 /// 2. Manifest `lspServers` field
-pub fn load_plugin_lsp_servers(
-    plugin_name: &str,
-    plugin_root: &Path,
-) -> LoadLspResult {
+pub fn load_plugin_lsp_servers(plugin_name: &str, plugin_root: &Path) -> LoadLspResult {
     let mut servers = Vec::new();
     let mut errors = Vec::new();
 
@@ -61,9 +58,7 @@ pub fn load_plugin_lsp_servers(
         match load_lsp_from_file(plugin_name, &lsp_json_path) {
             Ok(mut s) => servers.append(&mut s),
             Err(e) => {
-                errors.push(format!(
-                    "failed to load .lsp.json: {e}"
-                ));
+                errors.push(format!("failed to load .lsp.json: {e}"));
             }
         }
     }
@@ -74,35 +69,25 @@ pub fn load_plugin_lsp_servers(
         .join(crate::PLUGIN_MANIFEST_FILE);
     if manifest_path.exists()
         && let Ok(content) = std::fs::read_to_string(&manifest_path)
-            && let Ok(raw) = serde_json::from_str::<Value>(&content)
-                && let Some(lsp_servers) = raw.get("lspServers") {
-                    match parse_lsp_servers(
-                        plugin_name,
-                        lsp_servers,
-                        &manifest_path,
-                    ) {
-                        Ok(mut s) => servers.append(&mut s),
-                        Err(e) => {
-                            errors.push(format!(
-                                "failed to parse manifest lspServers: {e}"
-                            ));
-                        }
-                    }
-                }
+        && let Ok(raw) = serde_json::from_str::<Value>(&content)
+        && let Some(lsp_servers) = raw.get("lspServers")
+    {
+        match parse_lsp_servers(plugin_name, lsp_servers, &manifest_path) {
+            Ok(mut s) => servers.append(&mut s),
+            Err(e) => {
+                errors.push(format!("failed to parse manifest lspServers: {e}"));
+            }
+        }
+    }
 
     LoadLspResult { servers, errors }
 }
 
 /// Load LSP servers from a `.lsp.json` file.
-fn load_lsp_from_file(
-    plugin_name: &str,
-    lsp_path: &Path,
-) -> Result<Vec<PluginLspConfig>, String> {
-    let content = std::fs::read_to_string(lsp_path)
-        .map_err(|e| format!("read error: {e}"))?;
+fn load_lsp_from_file(plugin_name: &str, lsp_path: &Path) -> Result<Vec<PluginLspConfig>, String> {
+    let content = std::fs::read_to_string(lsp_path).map_err(|e| format!("read error: {e}"))?;
 
-    let raw: Value =
-        serde_json::from_str(&content).map_err(|e| format!("parse error: {e}"))?;
+    let raw: Value = serde_json::from_str(&content).map_err(|e| format!("parse error: {e}"))?;
 
     parse_lsp_servers(plugin_name, &raw, lsp_path)
 }

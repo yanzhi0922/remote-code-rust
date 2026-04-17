@@ -31,7 +31,7 @@ pub fn check_filesystem_permission(
     additional_dirs: &[String],
 ) -> FilesystemCheckResult {
     let target = normalize_path(path, cwd);
-    
+
     // Always allow paths within cwd
     if target.starts_with(cwd) {
         return FilesystemCheckResult {
@@ -81,8 +81,10 @@ pub fn is_system_path(path: &str) -> bool {
         "C:\\Program Files",
         "C:\\ProgramData",
     ];
-    
-    system_prefixes.iter().any(|prefix| path.starts_with(prefix))
+
+    system_prefixes
+        .iter()
+        .any(|prefix| path.starts_with(prefix))
 }
 
 /// Check if a path is a hidden file/directory (starts with dot).

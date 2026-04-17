@@ -304,20 +304,14 @@ impl VimStateMachine {
                 self.mode = VimMode::Normal;
                 VimAction::ExitToNormal
             }
-            KeyCode::Char('c')
-                if key.modifiers.contains(KeyModifiers::CONTROL) =>
-            {
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.mode = VimMode::Normal;
                 VimAction::ExitToNormal
             }
-            KeyCode::Char('u')
-                if key.modifiers.contains(KeyModifiers::CONTROL) =>
-            {
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 VimAction::PageUp
             }
-            KeyCode::Char('d')
-                if key.modifiers.contains(KeyModifiers::CONTROL) =>
-            {
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 VimAction::PageDown
             }
             _ => VimAction::Noop,

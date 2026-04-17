@@ -15,8 +15,7 @@
 use std::collections::HashSet;
 
 use rc_core::{
-    AssistantContentBlock, Message, MessageBase, MessageOrigin, SystemMessage,
-    SystemMessageSubtype,
+    AssistantContentBlock, Message, MessageBase, MessageOrigin, SystemMessage, SystemMessageSubtype,
 };
 
 use crate::prompt::rough_token_count;
@@ -234,9 +233,7 @@ pub fn micro_compact(
         attachments: vec![Message::System(SystemMessage {
             base: MessageBase::with_origin(MessageOrigin::Compact),
             subtype: SystemMessageSubtype::MicrocompactBoundary,
-            text: format!(
-                "micro_compact: cleared={cleared_count}, tokens_saved={tokens_saved}"
-            ),
+            text: format!("micro_compact: cleared={cleared_count}, tokens_saved={tokens_saved}"),
             error: None,
         })],
         hook_results: Vec::new(),
@@ -318,10 +315,8 @@ pub fn estimate_messages_tokens(messages: &[Message]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rc_core::{
-        AssistantMessage, AssistantContentBlock, MessageBase, ToolUseSummaryMessage,
-    };
     use rc_core::message::UserMessage;
+    use rc_core::{AssistantContentBlock, AssistantMessage, MessageBase, ToolUseSummaryMessage};
 
     // -- Helper constructors --
 
@@ -413,19 +408,28 @@ mod tests {
         };
 
         let result = micro_compact(&messages, &config, None).expect("should succeed");
-        assert!(result.messages_removed >= 1, "should clear at least one old tool summary");
+        assert!(
+            result.messages_removed >= 1,
+            "should clear at least one old tool summary"
+        );
         assert!(result.tokens_saved > 0);
 
         // Verify the kept messages reflect the clearing
         let kept = &result.messages_to_keep;
-        let cleared_count = kept.iter().filter(|m| {
-            if let Message::ToolUseSummary(ts) = m {
-                ts.summary == TIME_BASED_MC_CLEARED_MESSAGE
-            } else {
-                false
-            }
-        }).count();
-        assert!(cleared_count >= 1, "at least one ToolUseSummary should be cleared");
+        let cleared_count = kept
+            .iter()
+            .filter(|m| {
+                if let Message::ToolUseSummary(ts) = m {
+                    ts.summary == TIME_BASED_MC_CLEARED_MESSAGE
+                } else {
+                    false
+                }
+            })
+            .count();
+        assert!(
+            cleared_count >= 1,
+            "at least one ToolUseSummary should be cleared"
+        );
     }
 
     #[test]
@@ -449,7 +453,9 @@ mod tests {
         let kept = &result.messages_to_keep;
         let tu2 = kept.iter().find_map(|m| {
             if let Message::ToolUseSummary(ts) = m {
-                if ts.tool_call_id == "tu-2" { return Some(ts.summary.clone()); }
+                if ts.tool_call_id == "tu-2" {
+                    return Some(ts.summary.clone());
+                }
             }
             None
         });
@@ -461,7 +467,11 @@ mod tests {
         let mut messages = Vec::new();
         for i in 0..10 {
             messages.push(make_assistant_with_tool_use(&format!("tu-{i}"), "Read"));
-            messages.push(make_tool_summary(&format!("tu-{i}"), "Read", &"x".repeat(4000)));
+            messages.push(make_tool_summary(
+                &format!("tu-{i}"),
+                "Read",
+                &"x".repeat(4000),
+            ));
         }
 
         let config = MicroCompactConfig {
@@ -492,7 +502,10 @@ mod tests {
         };
 
         let result = micro_compact(&messages, &config, None).expect("should succeed");
-        assert_eq!(result.messages_removed, 0, "non-compactable tools should not be cleared");
+        assert_eq!(
+            result.messages_removed, 0,
+            "non-compactable tools should not be cleared"
+        );
     }
 
     #[test]

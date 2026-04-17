@@ -106,11 +106,7 @@ impl McpConnectionManager {
             // Set initial state to Pending.
             let conn = McpServerConnection::Pending(PendingServer {
                 name: name.clone(),
-                config: self
-                    .configs
-                    .get(&name)
-                    .expect("just inserted")
-                    .clone(),
+                config: self.configs.get(&name).expect("just inserted").clone(),
                 reconnect_attempt: None,
                 max_reconnect_attempts: None,
             });
@@ -181,9 +177,7 @@ impl McpConnectionManager {
             .collect();
 
         for name in &names {
-            self.emit_event(McpLifecycleEvent::Connecting {
-                name: name.clone(),
-            });
+            self.emit_event(McpLifecycleEvent::Connecting { name: name.clone() });
         }
 
         // Connect servers sequentially in batches.
@@ -264,14 +258,13 @@ impl McpConnectionManager {
                 let resource_count = result.resources.len();
                 let instructions = result.instructions.clone();
 
-                let conn =
-                    McpServerConnection::Connected(ConnectedServer {
-                        name: name.to_owned(),
-                        capabilities: config.inner.capabilities.clone(),
-                        server_info: None,
-                        instructions,
-                        config: config.clone(),
-                    });
+                let conn = McpServerConnection::Connected(ConnectedServer {
+                    name: name.to_owned(),
+                    capabilities: config.inner.capabilities.clone(),
+                    server_info: None,
+                    instructions,
+                    config: config.clone(),
+                });
                 self.connections.insert(name.to_owned(), conn.clone());
                 self.reconnect_scheduler.report_success(name);
 
@@ -380,21 +373,16 @@ impl McpConnectionManager {
         tool_name: &str,
         arguments: Value,
     ) -> Result<McpToolCallResponse, McpRuntimeError> {
-        let config = self.configs.get(server_name).ok_or_else(|| {
-            McpRuntimeError::Protocol {
+        let config = self
+            .configs
+            .get(server_name)
+            .ok_or_else(|| McpRuntimeError::Protocol {
                 server: server_name.to_owned(),
                 phase: "call_tool",
                 message: "server not registered".to_owned(),
-            }
-        })?;
+            })?;
 
-        crate::session::call_tool(
-            &config.inner,
-            &self.client_info,
-            tool_name,
-            arguments,
-        )
-        .await
+        crate::session::call_tool(&config.inner, &self.client_info, tool_name, arguments).await
     }
 
     /// Register a lifecycle hook.

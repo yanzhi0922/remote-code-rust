@@ -63,11 +63,7 @@ impl TokenIndicator {
         let filled = filled.min(Self::BAR_WIDTH);
         let empty = Self::BAR_WIDTH - filled;
 
-        let bar_str = format!(
-            "{}{}",
-            "█".repeat(filled),
-            "░".repeat(empty)
-        );
+        let bar_str = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
 
         let label = format!(
             "Tokens: {}/{} ({:.1}%)",
@@ -75,15 +71,11 @@ impl TokenIndicator {
         );
 
         vec![
-            Line::from(vec![
-                Span::styled(
-                    label,
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled(bar_str, Style::default().fg(color)),
-            ]),
+            Line::from(vec![Span::styled(
+                label,
+                Style::default().add_modifier(Modifier::BOLD),
+            )]),
+            Line::from(vec![Span::styled(bar_str, Style::default().fg(color))]),
         ]
     }
 }
@@ -111,14 +103,10 @@ impl TokenWarning {
             data.percentage,
         );
 
-        Some(vec![
-            Line::from(vec![
-                Span::styled(
-                    msg,
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                ),
-            ]),
-        ])
+        Some(vec![Line::from(vec![Span::styled(
+            msg,
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )])])
     }
 }
 

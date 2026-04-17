@@ -105,10 +105,11 @@ impl ToolResultSummarizer {
             .rev()
             .collect();
 
-        let omitted = content.len().saturating_sub(head.len()).saturating_sub(tail.len());
-        format!(
-            "{head}\n\n... [{omitted} characters omitted] ...\n\n{tail}"
-        )
+        let omitted = content
+            .len()
+            .saturating_sub(head.len())
+            .saturating_sub(tail.len());
+        format!("{head}\n\n... [{omitted} characters omitted] ...\n\n{tail}")
     }
 }
 
@@ -116,9 +117,7 @@ impl ToolResultSummarizer {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SummaryResult {
     /// The content was within limits and doesn't need summarization.
-    NotNeeded {
-        content: String,
-    },
+    NotNeeded { content: String },
     /// The content was summarized.
     Summarized {
         original_length: usize,

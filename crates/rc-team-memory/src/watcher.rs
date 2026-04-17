@@ -78,7 +78,9 @@ impl MemoryWatcher {
         for cb in &self.callbacks {
             cb(event.clone());
         }
-        self.tx.send(Some(event)).map_err(|_| anyhow::anyhow!("no receivers"))?;
+        self.tx
+            .send(Some(event))
+            .map_err(|_| anyhow::anyhow!("no receivers"))?;
         Ok(())
     }
 

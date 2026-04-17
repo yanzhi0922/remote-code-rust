@@ -180,7 +180,9 @@ impl CollapseResult {
         if self.original_token_count == 0 {
             return 0.0;
         }
-        let saved = self.original_token_count.saturating_sub(self.collapsed_token_count);
+        let saved = self
+            .original_token_count
+            .saturating_sub(self.collapsed_token_count);
         f64::from(saved as u32) / f64::from(self.original_token_count as u32)
     }
 
@@ -245,10 +247,7 @@ impl CollapsePersistence {
     /// Return the total tokens saved across all collapses.
     #[must_use]
     pub fn total_tokens_saved(&self) -> usize {
-        self.history
-            .iter()
-            .map(|r| r.clone().tokens_saved())
-            .sum()
+        self.history.iter().map(|r| r.clone().tokens_saved()).sum()
     }
 
     /// Clear all collapse history.
@@ -338,17 +337,17 @@ impl ContextCollapseEngine {
         let original_tokens = estimate_messages_tokens(messages);
         let original_count = messages.len();
 
-        let mut result = CollapseResult::new(
-            usize::try_from(original_tokens).unwrap_or(usize::MAX),
-            0,
-        );
+        let mut result =
+            CollapseResult::new(usize::try_from(original_tokens).unwrap_or(usize::MAX), 0);
         let mut collapsed: Vec<rc_core::Message> = messages.to_vec();
 
         // Phase 1: Remove tombstones
         let before = collapsed.len();
         collapsed.retain(|m| !Self::is_tombstone(m));
         if collapsed.len() < before {
-            result.operations_applied.push(CollapseOperation::RemoveTombstones);
+            result
+                .operations_applied
+                .push(CollapseOperation::RemoveTombstones);
         }
 
         // Phase 2: Deduplicate system messages
@@ -362,10 +361,7 @@ impl ContextCollapseEngine {
 
         // Phase 3: Remove old tool results (keep recent window)
         let before = collapsed.len();
-        collapsed = Self::remove_old_tool_results(
-            &collapsed,
-            self.config.preserve_recent_messages,
-        );
+        collapsed = Self::remove_old_tool_results(&collapsed, self.config.preserve_recent_messages);
         if collapsed.len() < before {
             result
                 .operations_applied
@@ -585,7 +581,8 @@ impl crate::strategy::CompactStrategy for ContextCollapseStrategy {
 
         let tokens_saved = original_tokens.saturating_sub(estimate_messages_tokens(&collapsed));
         let pre_tokens = usize::try_from(original_tokens).unwrap_or(usize::MAX);
-        let post_tokens = usize::try_from(estimate_messages_tokens(&collapsed)).unwrap_or(usize::MAX);
+        let post_tokens =
+            usize::try_from(estimate_messages_tokens(&collapsed)).unwrap_or(usize::MAX);
         let ops_count = collapse_result.operations_applied.len();
         let removed_count = collapse_result.removed_message_count;
         let saved_by_collapse = collapse_result.tokens_saved();
@@ -607,7 +604,9 @@ impl crate::strategy::CompactStrategy for ContextCollapseStrategy {
         };
 
         if let Some(sink) = progress {
-            sink(crate::strategy::CompactProgressEvent::Completed(result.clone()));
+            sink(crate::strategy::CompactProgressEvent::Completed(
+                result.clone(),
+            ));
         }
 
         Ok(result)
@@ -660,10 +659,7 @@ pub fn detect_collapsible_spans(
                     start,
                     end: i,
                     estimated_tokens: span_tokens,
-                    description: format!(
-                        "tool results [{}..{})",
-                        start, i
-                    ),
+                    description: format!("tool results [{}..{})", start, i),
                 });
             }
             span_tokens = 0;
@@ -678,11 +674,7 @@ pub fn detect_collapsible_spans(
             start,
             end: messages.len(),
             estimated_tokens: span_tokens,
-            description: format!(
-                "tool results [{}..{})",
-                start,
-                messages.len()
-            ),
+            description: format!("tool results [{}..{})", start, messages.len()),
         });
     }
 
@@ -696,11 +688,11 @@ pub fn detect_collapsible_spans(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rc_core::message::MessageOrigin;
     use rc_core::{
         AssistantMessage, ConversationEntry, Message, MessageBase, SystemMessage,
         SystemMessageSubtype, ToolUseSummaryMessage,
     };
-    use rc_core::message::MessageOrigin;
 
     fn make_user_msg(text: &str) -> Message {
         Message::from(ConversationEntry::user(text))
@@ -827,7 +819,9 @@ mod tests {
             ..ContextCollapseConfig::default()
         };
         let engine = ContextCollapseEngine::new(config);
-        let messages = vec![make_user_msg("this is a message that should exceed the threshold")];
+        let messages = vec![make_user_msg(
+            "this is a message that should exceed the threshold",
+        )];
         assert!(engine.should_collapse(&messages));
     }
 
@@ -843,10 +837,16 @@ mod tests {
             .execute_collapse(&messages)
             .expect("collapse should succeed");
         assert!(collapsed.len() < messages.len());
-        assert!(result
-            .operations_applied
-            .contains(&CollapseOperation::RemoveTombstones));
-        assert!(collapsed.iter().all(|m| !matches!(m, Message::Tombstone(_))));
+        assert!(
+            result
+                .operations_applied
+                .contains(&CollapseOperation::RemoveTombstones)
+        );
+        assert!(
+            collapsed
+                .iter()
+                .all(|m| !matches!(m, Message::Tombstone(_)))
+        );
     }
 
     #[test]
@@ -887,9 +887,7 @@ mod tests {
         let (collapsed, _result) = engine
             .execute_collapse(&messages)
             .expect("collapse should succeed");
-        let has_system = collapsed
-            .iter()
-            .any(|m| matches!(m, Message::System(_)));
+        let has_system = collapsed.iter().any(|m| matches!(m, Message::System(_)));
         assert!(has_system);
     }
 
@@ -909,9 +907,11 @@ mod tests {
         let (collapsed, result) = engine
             .execute_collapse(&messages)
             .expect("collapse should succeed");
-        assert!(result
-            .operations_applied
-            .contains(&CollapseOperation::RemoveOldToolResults));
+        assert!(
+            result
+                .operations_applied
+                .contains(&CollapseOperation::RemoveOldToolResults)
+        );
         // Tool results in the old section should be removed
         let tool_count = collapsed
             .iter()
@@ -932,9 +932,11 @@ mod tests {
         let (collapsed, result) = engine
             .execute_collapse(&messages)
             .expect("collapse should succeed");
-        assert!(result
-            .operations_applied
-            .contains(&CollapseOperation::DeduplicateSystemMessages));
+        assert!(
+            result
+                .operations_applied
+                .contains(&CollapseOperation::DeduplicateSystemMessages)
+        );
         assert!(collapsed.len() < messages.len());
     }
 
@@ -1016,9 +1018,8 @@ mod tests {
             make_assistant_msg("world"),
         ];
         let options = CompactOptions::default();
-        let provider = FnSummaryProvider::new(|_msgs, _sys, _user| {
-            Box::pin(async { Ok("summary".into()) })
-        });
+        let provider =
+            FnSummaryProvider::new(|_msgs, _sys, _user| Box::pin(async { Ok("summary".into()) }));
         let result = strategy
             .compact(&messages, &options, &provider, None)
             .await
@@ -1045,9 +1046,8 @@ mod tests {
             make_user_msg("msg5"),
         ];
         let options = CompactOptions::default();
-        let provider = FnSummaryProvider::new(|_msgs, _sys, _user| {
-            Box::pin(async { Ok("summary".into()) })
-        });
+        let provider =
+            FnSummaryProvider::new(|_msgs, _sys, _user| Box::pin(async { Ok("summary".into()) }));
         let result = strategy
             .compact(&messages, &options, &provider, None)
             .await
@@ -1062,9 +1062,8 @@ mod tests {
         let strategy = ContextCollapseStrategy::with_defaults();
         let messages: Vec<Message> = Vec::new();
         let options = CompactOptions::default();
-        let provider = FnSummaryProvider::new(|_msgs, _sys, _user| {
-            Box::pin(async { Ok("summary".into()) })
-        });
+        let provider =
+            FnSummaryProvider::new(|_msgs, _sys, _user| Box::pin(async { Ok("summary".into()) }));
         let result = strategy
             .compact(&messages, &options, &provider, None)
             .await
@@ -1074,17 +1073,15 @@ mod tests {
 
     #[tokio::test]
     async fn strategy_compact_progress_events() {
-        use crate::strategy::{CompactOptions, CompactStrategy, FnSummaryProvider, CompactProgressEvent};
+        use crate::strategy::{
+            CompactOptions, CompactProgressEvent, CompactStrategy, FnSummaryProvider,
+        };
 
         let strategy = ContextCollapseStrategy::with_defaults();
-        let messages = vec![
-            make_user_msg("hello"),
-            make_tombstone("old"),
-        ];
+        let messages = vec![make_user_msg("hello"), make_tombstone("old")];
         let options = CompactOptions::default();
-        let provider = FnSummaryProvider::new(|_msgs, _sys, _user| {
-            Box::pin(async { Ok("summary".into()) })
-        });
+        let provider =
+            FnSummaryProvider::new(|_msgs, _sys, _user| Box::pin(async { Ok("summary".into()) }));
 
         let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let events_clone = events.clone();
@@ -1114,10 +1111,7 @@ mod tests {
 
     #[test]
     fn detect_spans_no_tool_messages() {
-        let messages = vec![
-            make_user_msg("hello"),
-            make_assistant_msg("world"),
-        ];
+        let messages = vec![make_user_msg("hello"), make_assistant_msg("world")];
         let spans = detect_collapsible_spans(&messages, 10);
         assert!(spans.is_empty());
     }
@@ -1131,16 +1125,18 @@ mod tests {
             make_assistant_msg("done"),
         ];
         let spans = detect_collapsible_spans(&messages, 10);
-        assert_eq!(spans.len(), 1, "should detect one span of consecutive tool results");
+        assert_eq!(
+            spans.len(),
+            1,
+            "should detect one span of consecutive tool results"
+        );
         assert_eq!(spans[0].start, 1);
         assert_eq!(spans[0].end, 3);
     }
 
     #[test]
     fn detect_spans_below_threshold() {
-        let messages = vec![
-            make_tool_summary("tc-1", "bash", "short"),
-        ];
+        let messages = vec![make_tool_summary("tc-1", "bash", "short")];
         let spans = detect_collapsible_spans(&messages, 10_000);
         assert!(spans.is_empty(), "short span should be below threshold");
     }

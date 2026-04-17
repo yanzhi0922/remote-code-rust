@@ -57,7 +57,7 @@ impl BypassKillswitchState {
         if !self.active {
             return false;
         }
-        
+
         if let (Some(activated), Some(ttl)) = (self.activated_at, self.ttl) {
             activated.elapsed() < ttl
         } else {
@@ -125,7 +125,7 @@ mod tests {
         state.activate("security alert".to_string());
         assert!(state.is_active());
         assert_eq!(state.reason, Some("security alert".to_string()));
-        
+
         state.deactivate();
         assert!(!state.is_active());
     }
@@ -134,11 +134,11 @@ mod tests {
     fn killswitch_manager_thread_safe() {
         let manager = BypassKillswitchManager::new();
         assert!(!manager.is_bypass_disabled());
-        
+
         manager.activate("test".to_string());
         assert!(manager.is_bypass_disabled());
         assert_eq!(manager.reason(), Some("test".to_string()));
-        
+
         manager.deactivate();
         assert!(!manager.is_bypass_disabled());
     }
@@ -148,7 +148,7 @@ mod tests {
         let mut state = BypassKillswitchState::new();
         state.ttl = Some(Duration::from_millis(1));
         state.activate("test".to_string());
-        
+
         // Wait for TTL to expire
         std::thread::sleep(Duration::from_millis(10));
         assert!(!state.is_active());

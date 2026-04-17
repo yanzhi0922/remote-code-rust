@@ -72,7 +72,10 @@ mod tests {
     fn system_reminders_always_included() {
         let section = SystemRemindersSection;
         let result = section.compute(&test_ctx()).expect("compute ok");
-        assert!(result.is_some(), "system reminders section should always be Some");
+        assert!(
+            result.is_some(),
+            "system reminders section should always be Some"
+        );
     }
 
     #[test]

@@ -129,10 +129,7 @@ mod tests {
             BulletItem::Nested(vec!["sub1".to_string()]),
         ];
         let result = section_with_bullets("My Section", &items);
-        assert_eq!(
-            result,
-            "# My Section\n - item1\n  - sub1"
-        );
+        assert_eq!(result, "# My Section\n - item1\n  - sub1");
     }
 
     #[test]

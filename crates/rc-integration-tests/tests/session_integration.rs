@@ -62,8 +62,7 @@ fn session_stats_round_trips() {
         },
     };
     let json = serde_json::to_string(&stats).expect("serialize stats");
-    let decoded: rc_session::SessionStats =
-        serde_json::from_str(&json).expect("deserialize stats");
+    let decoded: rc_session::SessionStats = serde_json::from_str(&json).expect("deserialize stats");
     assert_eq!(decoded.total_events, 100);
     assert_eq!(decoded.conversation_entries, 50);
     assert_eq!(decoded.tool_call_count, 10);
@@ -116,7 +115,13 @@ fn session_store_creates_and_lists_sessions() {
     let session_id = uuid::Uuid::new_v4();
 
     store
-        .ensure_session(session_id, Path::new("/tmp"), "anthropic", Some("claude-sonnet-4-20250514"), Some("Test Session"))
+        .ensure_session(
+            session_id,
+            Path::new("/tmp"),
+            "anthropic",
+            Some("claude-sonnet-4-20250514"),
+            Some("Test Session"),
+        )
         .expect("session should be created");
 
     let sessions = store.list_sessions().expect("should list sessions");
@@ -142,7 +147,10 @@ fn session_store_append_conversation_entries() {
         .append_conversation_entry(session_id, &rc_core::ConversationEntry::user("hello"))
         .expect("should append user entry");
     store
-        .append_conversation_entry(session_id, &rc_core::ConversationEntry::assistant("hi there"))
+        .append_conversation_entry(
+            session_id,
+            &rc_core::ConversationEntry::assistant("hi there"),
+        )
         .expect("should append assistant entry");
     store
         .append_conversation_entry(
@@ -152,7 +160,9 @@ fn session_store_append_conversation_entries() {
         .expect("should append tool entry");
 
     // Verify via load_conversation
-    let conversation = store.load_conversation(session_id).expect("should load conversation");
+    let conversation = store
+        .load_conversation(session_id)
+        .expect("should load conversation");
     assert_eq!(conversation.len(), 3);
 }
 
@@ -169,7 +179,11 @@ fn session_store_append_named_events() {
         .expect("session should be created");
 
     store
-        .append_named_event(session_id, "tool_result", serde_json::json!({"tool": "read_file"}))
+        .append_named_event(
+            session_id,
+            "tool_result",
+            serde_json::json!({"tool": "read_file"}),
+        )
         .expect("should append named event");
 
     let events = store.load_events(session_id).expect("should load events");
@@ -185,20 +199,32 @@ fn session_store_archive_and_restore() {
     let session_id = uuid::Uuid::new_v4();
 
     store
-        .ensure_session(session_id, Path::new("/tmp"), "anthropic", None, Some("Archive Test"))
+        .ensure_session(
+            session_id,
+            Path::new("/tmp"),
+            "anthropic",
+            None,
+            Some("Archive Test"),
+        )
         .expect("session should be created");
 
     // Archive
-    store.set_archived(session_id, true).expect("should archive");
+    store
+        .set_archived(session_id, true)
+        .expect("should archive");
 
     let active = store.list_active_sessions().expect("should list active");
     assert!(active.is_empty());
 
-    let archived = store.list_archived_sessions().expect("should list archived");
+    let archived = store
+        .list_archived_sessions()
+        .expect("should list archived");
     assert_eq!(archived.len(), 1);
 
     // Restore
-    store.set_archived(session_id, false).expect("should restore");
+    store
+        .set_archived(session_id, false)
+        .expect("should restore");
     let active = store.list_active_sessions().expect("should list active");
     assert_eq!(active.len(), 1);
 }
@@ -234,8 +260,14 @@ async fn transcript_storage_write_and_read() {
     // Read back
     let entries = storage.read_all().await.expect("should read entries");
     assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0].kind(), rc_transcript::TranscriptEntryKind::Conversation);
-    assert_eq!(entries[1].kind(), rc_transcript::TranscriptEntryKind::NamedEvent);
+    assert_eq!(
+        entries[0].kind(),
+        rc_transcript::TranscriptEntryKind::Conversation
+    );
+    assert_eq!(
+        entries[1].kind(),
+        rc_transcript::TranscriptEntryKind::NamedEvent
+    );
 }
 
 #[tokio::test]

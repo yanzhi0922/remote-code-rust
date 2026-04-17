@@ -51,18 +51,12 @@ pub struct LoadAgentsResult {
 ///
 /// Walks the `agents/` directory and extracts agent definitions from
 /// markdown files.
-pub fn load_plugin_agents(
-    plugin_name: &str,
-    agents_dir: &Path,
-) -> LoadAgentsResult {
+pub fn load_plugin_agents(plugin_name: &str, agents_dir: &Path) -> LoadAgentsResult {
     let mut agents = Vec::new();
     let mut errors = Vec::new();
 
     if !agents_dir.exists() {
-        return LoadAgentsResult {
-            agents,
-            errors,
-        };
+        return LoadAgentsResult { agents, errors };
     }
 
     if !agents_dir.is_dir() {
@@ -70,28 +64,20 @@ pub fn load_plugin_agents(
             "agents path {} is not a directory",
             agents_dir.display()
         ));
-        return LoadAgentsResult {
-            agents,
-            errors,
-        };
+        return LoadAgentsResult { agents, errors };
     }
 
     let markdown_entries = walk_markdown_paths(agents_dir);
 
     for (file_path, _namespace) in markdown_entries {
-        let relative = file_path
-            .strip_prefix(agents_dir)
-            .unwrap_or(&file_path);
+        let relative = file_path.strip_prefix(agents_dir).unwrap_or(&file_path);
 
         let agent_name = build_agent_name(plugin_name, relative);
 
         let content = match std::fs::read_to_string(&file_path) {
             Ok(c) => c,
             Err(e) => {
-                errors.push(format!(
-                    "failed to read agent {}: {e}",
-                    file_path.display()
-                ));
+                errors.push(format!("failed to read agent {}: {e}", file_path.display()));
                 continue;
             }
         };
@@ -111,10 +97,7 @@ pub fn load_plugin_agents(
 
     agents.sort_by(|a, b| a.name.cmp(&b.name));
 
-    LoadAgentsResult {
-        agents,
-        errors,
-    }
+    LoadAgentsResult { agents, errors }
 }
 
 /// Build a fully-qualified agent name from a plugin name and file path.
@@ -201,28 +184,20 @@ mod tests {
             "# Test Runner\nRun the test suite.",
         )
         .expect("write");
-        fs::write(
-            agents_dir.join("linter.md"),
-            "# Linter\nLint the codebase.",
-        )
-        .expect("write");
+        fs::write(agents_dir.join("linter.md"), "# Linter\nLint the codebase.").expect("write");
 
         let result = load_plugin_agents("my-plugin", &agents_dir);
         assert_eq!(result.agents.len(), 2);
         assert!(result.errors.is_empty());
 
-        let names: Vec<&str> =
-            result.agents.iter().map(|a| a.name.as_str()).collect();
+        let names: Vec<&str> = result.agents.iter().map(|a| a.name.as_str()).collect();
         assert!(names.contains(&"my-plugin:linter"));
         assert!(names.contains(&"my-plugin:test-runner"));
     }
 
     #[test]
     fn load_plugin_agents_nonexistent_directory() {
-        let result = load_plugin_agents(
-            "my-plugin",
-            Path::new("/nonexistent/agents"),
-        );
+        let result = load_plugin_agents("my-plugin", Path::new("/nonexistent/agents"));
         assert!(result.agents.is_empty());
         assert!(result.errors.is_empty());
     }

@@ -243,8 +243,7 @@ mod tests {
 
     #[test]
     fn custom_escalation_tiers() {
-        let mut recovery =
-            MaxTokensRecovery::new().with_escalation_tokens([4096, 8192, 32768]);
+        let mut recovery = MaxTokensRecovery::new().with_escalation_tokens([4096, 8192, 32768]);
         let action = recovery.handle_truncation(4096).unwrap();
 
         match action {
@@ -305,7 +304,10 @@ mod tests {
 
         // 65536 → continuation
         let a4 = recovery.handle_truncation(65536).unwrap();
-        assert!(matches!(a4, MaxTokensRecoveryAction::ContinueWithMessage { .. }));
+        assert!(matches!(
+            a4,
+            MaxTokensRecoveryAction::ContinueWithMessage { .. }
+        ));
 
         assert_eq!(recovery.recovery_count(), 4);
     }

@@ -1214,7 +1214,9 @@ args = ["profile.py"]"#,
             RuntimeOverrides::default(),
         )
         .expect("unfiltered config");
-        assert!(resolve_runtime_mcp_server(&unfiltered, "shared", &[]).is_err());
+        let resolution =
+            resolve_runtime_mcp_server(&unfiltered, "shared", &[]).expect("unfiltered resolve");
+        assert_eq!(resolution.entry.origin_kind, "cwd");
     }
 
     #[test]

@@ -33,7 +33,7 @@ pub fn strip_markdown(markdown: &str) -> String {
     result = strip_code_blocks(&result).0;
 
     // Remove images: ![alt](url) -> alt
-    result = replace_balanced(&result, "![" , "]", "(", ")");
+    result = replace_balanced(&result, "![", "]", "(", ")");
 
     // Remove links: [text](url) -> text
     result = replace_links(&result);
@@ -74,7 +74,12 @@ fn replace_delimited(text: &str, delimiter: &str) -> String {
         if let Some(end) = result[after_start..].find(delimiter) {
             let end_pos = after_start + end;
             let inner = result[after_start..end_pos].to_string();
-            result = format!("{}{}{}", &result[..start], inner, &result[end_pos + delimiter.len()..]);
+            result = format!(
+                "{}{}{}",
+                &result[..start],
+                inner,
+                &result[end_pos + delimiter.len()..]
+            );
         } else {
             break;
         }
@@ -91,12 +96,19 @@ fn replace_links(text: &str) -> String {
             let text_end = bracket_start + bracket_end;
             let link_text = result[text_start..text_end].to_string();
             let after_bracket = text_end + 1;
-            if after_bracket < result.len() && result.as_bytes()[after_bracket] == b'('
-                && let Some(paren_end) = result[after_bracket..].find(')') {
-                    let full_end = after_bracket + paren_end + 1;
-                    result = format!("{}{}{}", &result[..bracket_start], link_text, &result[full_end..]);
-                    continue;
-                }
+            if after_bracket < result.len()
+                && result.as_bytes()[after_bracket] == b'('
+                && let Some(paren_end) = result[after_bracket..].find(')')
+            {
+                let full_end = after_bracket + paren_end + 1;
+                result = format!(
+                    "{}{}{}",
+                    &result[..bracket_start],
+                    link_text,
+                    &result[full_end..]
+                );
+                continue;
+            }
             // Not a link, just a bracket.
             break;
         } else {
@@ -114,12 +126,14 @@ fn replace_balanced(text: &str, prefix: &str, _mid: &str, _open: &str, _close: &
         if let Some(bracket_end) = result[after_prefix..].find(']') {
             let alt_text = result[after_prefix..after_prefix + bracket_end].to_string();
             let after_bracket = after_prefix + bracket_end + 1;
-            if after_bracket < result.len() && result.as_bytes()[after_bracket] == b'('
-                && let Some(paren_end) = result[after_bracket..].find(')') {
-                    let full_end = after_bracket + paren_end + 1;
-                    result = format!("{}{}{}", &result[..start], alt_text, &result[full_end..]);
-                    continue;
-                }
+            if after_bracket < result.len()
+                && result.as_bytes()[after_bracket] == b'('
+                && let Some(paren_end) = result[after_bracket..].find(')')
+            {
+                let full_end = after_bracket + paren_end + 1;
+                result = format!("{}{}{}", &result[..start], alt_text, &result[full_end..]);
+                continue;
+            }
             break;
         } else {
             break;
@@ -305,7 +319,10 @@ pub fn render_markdown_to_terminal(markdown: &str) -> String {
 
         // Code block fences.
         if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            let lang = trimmed.trim_start_matches('`').trim_start_matches('~').trim();
+            let lang = trimmed
+                .trim_start_matches('`')
+                .trim_start_matches('~')
+                .trim();
             if !lang.is_empty() {
                 output.push_str(&format!("┌─ {lang} "));
                 output.push_str(&"─".repeat(40usize.saturating_sub(lang.len() + 4)));

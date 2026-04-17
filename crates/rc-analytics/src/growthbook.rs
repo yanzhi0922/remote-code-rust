@@ -152,32 +152,29 @@ impl FeatureFlags {
             return Ok(());
         }
         let client = reqwest::Client::new();
-        let resp = client
-            .get(&config.api_endpoint)
-            .send()
-            .await;
+        let resp = client.get(&config.api_endpoint).send().await;
         match resp {
-            Ok(r) if r.status().is_success() => {
-                match r.json::<serde_json::Value>().await {
-                    Ok(body) => {
-                        if let Some(flags_map) = body.get("features").and_then(|f| f.as_object()) {
-                            if let Ok(mut flags) = self.flags.lock() {
-                                flags.clear();
-                                for (key, value) in flags_map {
-                                    if let Ok(flag) = serde_json::from_value::<FeatureFlag>(value.clone()) {
-                                        flags.insert(key.clone(), flag);
-                                    }
+            Ok(r) if r.status().is_success() => match r.json::<serde_json::Value>().await {
+                Ok(body) => {
+                    if let Some(flags_map) = body.get("features").and_then(|f| f.as_object()) {
+                        if let Ok(mut flags) = self.flags.lock() {
+                            flags.clear();
+                            for (key, value) in flags_map {
+                                if let Ok(flag) =
+                                    serde_json::from_value::<FeatureFlag>(value.clone())
+                                {
+                                    flags.insert(key.clone(), flag);
                                 }
                             }
                         }
-                        Ok(())
                     }
-                    Err(e) => {
-                        tracing::warn!("GrowthBook: failed to parse response: {e}");
-                        Ok(())
-                    }
+                    Ok(())
                 }
-            }
+                Err(e) => {
+                    tracing::warn!("GrowthBook: failed to parse response: {e}");
+                    Ok(())
+                }
+            },
             Ok(r) => {
                 tracing::warn!("GrowthBook API returned status {}", r.status());
                 Ok(())

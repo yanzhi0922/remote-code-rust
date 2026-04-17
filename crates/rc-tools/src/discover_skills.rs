@@ -157,7 +157,11 @@ impl Bm25SkillSearchEngine {
             .filter(|r| r.score > 0.0)
             .collect();
 
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(max_results);
         results
     }
@@ -177,10 +181,8 @@ impl Bm25SkillSearchEngine {
             let document_freq = df.get(token).copied().unwrap_or(0) as f64;
 
             // IDF component: log((N - df + 0.5) / (df + 0.5) + 1)
-            let idf = ((self.doc_count as f64 - document_freq + 0.5)
-                / (document_freq + 0.5)
-                + 1.0)
-                .ln();
+            let idf =
+                ((self.doc_count as f64 - document_freq + 0.5) / (document_freq + 0.5) + 1.0).ln();
 
             // TF component: (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * dl/avgdl))
             let tf_component = if self.avg_dl > 0.0 {
@@ -269,10 +271,11 @@ pub fn parse_skill_metadata(content: &str, path: &Path) -> Result<SkillMetadata>
 
         // Extract name from first H1 heading.
         if name.is_empty()
-            && let Some(heading) = trimmed.strip_prefix("# ") {
-                name = heading.to_string();
-                continue;
-            }
+            && let Some(heading) = trimmed.strip_prefix("# ")
+        {
+            name = heading.to_string();
+            continue;
+        }
 
         // Extract description from "description:" or "Description:" field.
         if description.is_empty() {
@@ -291,7 +294,10 @@ pub fn parse_skill_metadata(content: &str, path: &Path) -> Result<SkillMetadata>
 
         // Extract triggers from "triggers:" or "trigger:" or "when:" field.
         let lower = trimmed.to_lowercase();
-        if lower.starts_with("triggers:") || lower.starts_with("trigger:") || lower.starts_with("when:") {
+        if lower.starts_with("triggers:")
+            || lower.starts_with("trigger:")
+            || lower.starts_with("when:")
+        {
             let trigger_str = trimmed
                 .find(':')
                 .map(|idx| trimmed[idx + 1..].trim())
@@ -346,9 +352,10 @@ pub fn scan_skills_dir(dir: &Path) -> Vec<SkillMetadata> {
             let skill_file = path.join("SKILL.md");
             if skill_file.exists()
                 && let Ok(content) = std::fs::read_to_string(&skill_file)
-                    && let Ok(metadata) = parse_skill_metadata(&content, &skill_file) {
-                        skills.push(metadata);
-                    }
+                && let Ok(metadata) = parse_skill_metadata(&content, &skill_file)
+            {
+                skills.push(metadata);
+            }
         }
     }
 
@@ -368,9 +375,7 @@ pub fn discover_skills(input: &Value, context: &ToolExecutionContext) -> Result<
         return Err(anyhow!("query cannot be empty"));
     }
 
-    let max_results = input["max_results"]
-        .as_u64()
-        .unwrap_or(MAX_RESULTS as u64) as usize;
+    let max_results = input["max_results"].as_u64().unwrap_or(MAX_RESULTS as u64) as usize;
 
     // Build search engine from available skills.
     let mut engine = Bm25SkillSearchEngine::new();
@@ -523,8 +528,8 @@ mod tests {
     #[test]
     fn parse_skill_metadata_extracts_name_from_heading() {
         let content = "# My Skill\nSome description here.";
-        let meta =
-            parse_skill_metadata(content, Path::new("/tmp/skills/my-skill/SKILL.md")).expect("parse");
+        let meta = parse_skill_metadata(content, Path::new("/tmp/skills/my-skill/SKILL.md"))
+            .expect("parse");
         assert_eq!(meta.name, "My Skill");
     }
 
@@ -547,9 +552,8 @@ mod tests {
     #[test]
     fn parse_skill_metadata_uses_dir_name_as_fallback() {
         let content = "Just some content without headings.";
-        let meta =
-            parse_skill_metadata(content, Path::new("/tmp/skills/my-cool-skill/SKILL.md"))
-                .expect("parse");
+        let meta = parse_skill_metadata(content, Path::new("/tmp/skills/my-cool-skill/SKILL.md"))
+            .expect("parse");
         assert_eq!(meta.name, "my-cool-skill");
     }
 
@@ -643,8 +647,7 @@ mod tests {
         let results = engine.search("rust programming", 10);
         assert!(!results.is_empty());
         // Both rust skills should appear, but the one with more matches should rank higher.
-        let rust_results: Vec<&str> =
-            results.iter().map(|r| r.skill.name.as_str()).collect();
+        let rust_results: Vec<&str> = results.iter().map(|r| r.skill.name.as_str()).collect();
         assert!(rust_results.iter().any(|n| *n == "rust-expert"));
         assert!(rust_results.iter().any(|n| *n == "rust-beginner"));
     }
@@ -684,16 +687,8 @@ mod tests {
     #[test]
     fn bm25_engine_multiple_skills_same_trigger() {
         let mut engine = Bm25SkillSearchEngine::new();
-        engine.add_skill(test_skill(
-            "skill-a",
-            "Rust development tool",
-            &["rust"],
-        ));
-        engine.add_skill(test_skill(
-            "skill-b",
-            "Rust testing framework",
-            &["rust"],
-        ));
+        engine.add_skill(test_skill("skill-a", "Rust development tool", &["rust"]));
+        engine.add_skill(test_skill("skill-b", "Rust testing framework", &["rust"]));
         let results = engine.search("rust", 10);
         assert_eq!(results.len(), 2);
     }

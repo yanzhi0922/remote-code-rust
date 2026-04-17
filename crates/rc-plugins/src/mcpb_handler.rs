@@ -82,10 +82,7 @@ impl McpbHandler {
     ///
     /// Reads the MCPB file, validates it, and extracts it to the install
     /// directory.
-    pub fn install_from_mcpb(
-        &self,
-        mcpb_path: &Path,
-    ) -> McpbInstallResult {
+    pub fn install_from_mcpb(&self, mcpb_path: &Path) -> McpbInstallResult {
         if !mcpb_path.exists() {
             return McpbInstallResult {
                 metadata: McpbMetadata {
@@ -98,10 +95,7 @@ impl McpbHandler {
                 },
                 install_path: PathBuf::new(),
                 success: false,
-                error: Some(format!(
-                    "MCPB file not found: {}",
-                    mcpb_path.display()
-                )),
+                error: Some(format!("MCPB file not found: {}", mcpb_path.display())),
             };
         }
 
@@ -145,8 +139,7 @@ impl McpbHandler {
             }
         };
 
-        let install_path =
-            self.install_base.join(&metadata.name);
+        let install_path = self.install_base.join(&metadata.name);
 
         McpbInstallResult {
             metadata,
@@ -159,11 +152,7 @@ impl McpbHandler {
     /// Create an MCPB archive from a plugin directory.
     ///
     /// Bundles the plugin directory into a `.mcpb` archive.
-    pub fn create_mcpb(
-        &self,
-        plugin_dir: &Path,
-        output_path: &Path,
-    ) -> McpbCreateResult {
+    pub fn create_mcpb(&self, plugin_dir: &Path, output_path: &Path) -> McpbCreateResult {
         let manifest_path = plugin_dir
             .join(crate::PLUGIN_MANIFEST_DIR)
             .join(crate::PLUGIN_MANIFEST_FILE);
@@ -186,24 +175,23 @@ impl McpbHandler {
             }
         };
 
-        let manifest: serde_json::Value =
-            match serde_json::from_str(&content) {
-                Ok(v) => v,
-                Err(_) => {
-                    return McpbCreateResult {
-                        output_path: output_path.to_path_buf(),
-                        metadata: McpbMetadata {
-                            name: String::new(),
-                            version: String::new(),
-                            description: None,
-                            author: None,
-                            source_path: plugin_dir.to_path_buf(),
-                            content_hash: None,
-                        },
-                        size_bytes: 0,
-                    };
-                }
-            };
+        let manifest: serde_json::Value = match serde_json::from_str(&content) {
+            Ok(v) => v,
+            Err(_) => {
+                return McpbCreateResult {
+                    output_path: output_path.to_path_buf(),
+                    metadata: McpbMetadata {
+                        name: String::new(),
+                        version: String::new(),
+                        description: None,
+                        author: None,
+                        source_path: plugin_dir.to_path_buf(),
+                        content_hash: None,
+                    },
+                    size_bytes: 0,
+                };
+            }
+        };
 
         let metadata = McpbMetadata {
             name: manifest
@@ -237,10 +225,7 @@ impl McpbHandler {
 }
 
 /// Parse MCPB manifest from raw bytes.
-fn parse_mcpb_manifest(
-    content: &[u8],
-    source_path: &Path,
-) -> Result<McpbMetadata, String> {
+fn parse_mcpb_manifest(content: &[u8], source_path: &Path) -> Result<McpbMetadata, String> {
     let raw: serde_json::Value =
         serde_json::from_slice(content).map_err(|e| format!("invalid JSON: {e}"))?;
 

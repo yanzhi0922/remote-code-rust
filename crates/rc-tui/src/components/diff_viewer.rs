@@ -59,7 +59,6 @@ pub fn render_diff(
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for dl in diff_lines.iter().take(max_lines) {
-
         let (prefix, color) = match dl.kind {
             DiffLineKind::Context => (" ", style.status_fg),
             DiffLineKind::Add => ("+", style.mode_insert),

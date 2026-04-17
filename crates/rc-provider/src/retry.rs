@@ -134,9 +134,10 @@ pub fn compute_retry_delay(
     retry_after: Option<Duration>,
 ) -> Duration {
     if let Some(retry_after) = retry_after
-        && config.respect_retry_after {
-            return retry_after;
-        }
+        && config.respect_retry_after
+    {
+        return retry_after;
+    }
 
     let multiplier = 2u64.saturating_pow(attempt.min(16));
     let base_ms = config
@@ -173,11 +174,7 @@ pub fn compute_retry_delay(
 ///
 /// Returns an error if all retry attempts are exhausted or if the operation
 /// fails with a non-retryable error.
-pub async fn with_retry<T, F, Fut>(
-    config: &RetryConfig,
-    model: &str,
-    operation: F,
-) -> Result<T>
+pub async fn with_retry<T, F, Fut>(config: &RetryConfig, model: &str, operation: F) -> Result<T>
 where
     F: Fn(RetryContext) -> Fut,
     Fut: std::future::Future<Output = Result<T>>,
@@ -194,8 +191,9 @@ where
                 let error_str = error.to_string().to_ascii_lowercase();
 
                 // Check if this is a non-retryable error.
-                let is_non_retryable =
-                    error_str.contains("401") || error_str.contains("403") || error_str.contains("404");
+                let is_non_retryable = error_str.contains("401")
+                    || error_str.contains("403")
+                    || error_str.contains("404");
 
                 if is_non_retryable {
                     return Err(error);

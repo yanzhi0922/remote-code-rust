@@ -205,7 +205,10 @@ mod tests {
 
     #[test]
     fn agent_type_from_str_opt() {
-        assert_eq!(AgentType::from_str_opt("sub_agent"), Some(AgentType::SubAgent));
+        assert_eq!(
+            AgentType::from_str_opt("sub_agent"),
+            Some(AgentType::SubAgent)
+        );
         assert_eq!(AgentType::from_str_opt("fork"), Some(AgentType::Fork));
         assert_eq!(AgentType::from_str_opt("unknown"), None);
     }

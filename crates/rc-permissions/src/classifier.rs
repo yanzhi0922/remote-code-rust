@@ -4,8 +4,8 @@
 //! `src/utils/permissions/bashClassifier.ts`, and
 //! `src/utils/permissions/classifierShared.ts`.
 
-use async_trait::async_trait;
 use crate::dangerous_patterns::{has_dangerous_patterns, is_critically_dangerous};
+use async_trait::async_trait;
 
 /// Result from a classifier evaluation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,14 +75,7 @@ impl YoloClassifier {
     }
 
     /// Known-safe read-only tools that can always be auto-approved.
-    const SAFE_READ_TOOLS: &[&str] = &[
-        "Read",
-        "Grep",
-        "Glob",
-        "LS",
-        "WebFetch",
-        "WebSearch",
-    ];
+    const SAFE_READ_TOOLS: &[&str] = &["Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch"];
 
     /// Known-safe bash command prefixes.
     const SAFE_BASH_PREFIXES: &[&str] = &[
@@ -136,12 +129,12 @@ impl YoloClassifier {
     #[must_use]
     pub fn is_safe_bash_command(command: &str) -> bool {
         let trimmed = command.trim();
-        
+
         // Reject if dangerous patterns detected
         if is_critically_dangerous(trimmed) {
             return false;
         }
-        
+
         // Check safe prefixes
         for prefix in Self::SAFE_BASH_PREFIXES {
             if trimmed.starts_with(prefix) {
@@ -153,7 +146,7 @@ impl YoloClassifier {
                 return true;
             }
         }
-        
+
         false
     }
 }
@@ -186,47 +179,61 @@ impl PermissionClassifier for YoloClassifier {
 
         // Bash commands
         if (tool_name == "Bash" || tool_name == "BashCommand")
-            && let Some(command) = input.get("command").and_then(|v| v.as_str()) {
-                if Self::is_safe_bash_command(command) {
-                    return ClassifierResult {
-                        should_allow: true,
-                        confidence: 90,
-                        reason: format!("Bash command '{}' is in safe list", truncate_command(command, 40)),
-                        classifier_name: self.name().to_string(),
-                    };
-                }
-                if is_critically_dangerous(command) {
-                    return ClassifierResult {
-                        should_allow: false,
-                        confidence: 99,
-                        reason: format!("Bash command '{}' matches critical danger pattern", truncate_command(command, 40)),
-                        classifier_name: self.name().to_string(),
-                    };
-                }
+            && let Some(command) = input.get("command").and_then(|v| v.as_str())
+        {
+            if Self::is_safe_bash_command(command) {
+                return ClassifierResult {
+                    should_allow: true,
+                    confidence: 90,
+                    reason: format!(
+                        "Bash command '{}' is in safe list",
+                        truncate_command(command, 40)
+                    ),
+                    classifier_name: self.name().to_string(),
+                };
             }
+            if is_critically_dangerous(command) {
+                return ClassifierResult {
+                    should_allow: false,
+                    confidence: 99,
+                    reason: format!(
+                        "Bash command '{}' matches critical danger pattern",
+                        truncate_command(command, 40)
+                    ),
+                    classifier_name: self.name().to_string(),
+                };
+            }
+        }
 
         // File write tools — check path safety
         if (tool_name == "Write" || tool_name == "Edit" || tool_name == "MultiEdit")
-            && let Some(path) = input.get("file_path").or_else(|| input.get("path")).and_then(|v| v.as_str()) {
-                // Reject writes outside cwd
-                if path.starts_with("/etc/") || path.starts_with("/usr/") || path.starts_with("/sys/") {
-                    return ClassifierResult {
-                        should_allow: false,
-                        confidence: 95,
-                        reason: format!("Write to system path '{}' blocked", path),
-                        classifier_name: self.name().to_string(),
-                    };
-                }
-                // Allow writes within project
-                if !path.starts_with("..") && !path.starts_with("~") {
-                    return ClassifierResult {
-                        should_allow: true,
-                        confidence: 80,
-                        reason: format!("Write to project file '{}' allowed", truncate_command(path, 40)),
-                        classifier_name: self.name().to_string(),
-                    };
-                }
+            && let Some(path) = input
+                .get("file_path")
+                .or_else(|| input.get("path"))
+                .and_then(|v| v.as_str())
+        {
+            // Reject writes outside cwd
+            if path.starts_with("/etc/") || path.starts_with("/usr/") || path.starts_with("/sys/") {
+                return ClassifierResult {
+                    should_allow: false,
+                    confidence: 95,
+                    reason: format!("Write to system path '{}' blocked", path),
+                    classifier_name: self.name().to_string(),
+                };
             }
+            // Allow writes within project
+            if !path.starts_with("..") && !path.starts_with("~") {
+                return ClassifierResult {
+                    should_allow: true,
+                    confidence: 80,
+                    reason: format!(
+                        "Write to project file '{}' allowed",
+                        truncate_command(path, 40)
+                    ),
+                    classifier_name: self.name().to_string(),
+                };
+            }
+        }
 
         ClassifierResult {
             should_allow: false,
@@ -247,11 +254,11 @@ impl BashClassifier {
     #[must_use]
     pub fn classify_command(command: &str) -> BashCommandCategory {
         let trimmed = command.trim();
-        
+
         if is_critically_dangerous(trimmed) {
             return BashCommandCategory::Critical;
         }
-        
+
         if has_dangerous_patterns(trimmed) {
             return BashCommandCategory::Dangerous;
         }
@@ -263,17 +270,34 @@ impl BashClassifier {
 
         // Check for common development commands
         let dev_prefixes = [
-            "npm run", "npm test", "npm start", "npm build",
-            "cargo run", "cargo test", "cargo build", "cargo check", "cargo clippy",
-            "make", "pytest", "jest", "vitest",
-            "go test", "go build", "go run",
-            "python ", "python3 ",
+            "npm run",
+            "npm test",
+            "npm start",
+            "npm build",
+            "cargo run",
+            "cargo test",
+            "cargo build",
+            "cargo check",
+            "cargo clippy",
+            "make",
+            "pytest",
+            "jest",
+            "vitest",
+            "go test",
+            "go build",
+            "go run",
+            "python ",
+            "python3 ",
             "node ",
-            "git add", "git commit", "git checkout", "git stash",
-            "docker compose", "docker-compose",
+            "git add",
+            "git commit",
+            "git checkout",
+            "git stash",
+            "docker compose",
+            "docker-compose",
             "kubectl",
         ];
-        
+
         for prefix in dev_prefixes {
             if trimmed.starts_with(prefix) {
                 return BashCommandCategory::Development;
@@ -316,7 +340,9 @@ mod tests {
     async fn yolo_allows_read_tools() {
         let classifier = YoloClassifier::new(true);
         for tool in YoloClassifier::SAFE_READ_TOOLS {
-            let result = classifier.classify(tool, &serde_json::json!({}), "/tmp").await;
+            let result = classifier
+                .classify(tool, &serde_json::json!({}), "/tmp")
+                .await;
             assert!(result.should_allow, "{} should be allowed", tool);
         }
     }
@@ -324,68 +350,94 @@ mod tests {
     #[tokio::test]
     async fn yolo_allows_safe_bash() {
         let classifier = YoloClassifier::new(true);
-        let result = classifier.classify(
-            "Bash",
-            &serde_json::json!({"command": "git status"}),
-            "/tmp",
-        ).await;
+        let result = classifier
+            .classify(
+                "Bash",
+                &serde_json::json!({"command": "git status"}),
+                "/tmp",
+            )
+            .await;
         assert!(result.should_allow);
     }
 
     #[tokio::test]
     async fn yolo_blocks_critical_commands() {
         let classifier = YoloClassifier::new(true);
-        let result = classifier.classify(
-            "Bash",
-            &serde_json::json!({"command": "rm -rf /"}),
-            "/tmp",
-        ).await;
+        let result = classifier
+            .classify("Bash", &serde_json::json!({"command": "rm -rf /"}), "/tmp")
+            .await;
         assert!(!result.should_allow);
     }
 
     #[tokio::test]
     async fn yolo_disabled_blocks_everything() {
         let classifier = YoloClassifier::new(false);
-        let result = classifier.classify("Read", &serde_json::json!({}), "/tmp").await;
+        let result = classifier
+            .classify("Read", &serde_json::json!({}), "/tmp")
+            .await;
         assert!(!result.should_allow);
     }
 
     #[tokio::test]
     async fn yolo_allows_project_writes() {
         let classifier = YoloClassifier::new(true);
-        let result = classifier.classify(
-            "Write",
-            &serde_json::json!({"file_path": "src/main.rs"}),
-            "/tmp",
-        ).await;
+        let result = classifier
+            .classify(
+                "Write",
+                &serde_json::json!({"file_path": "src/main.rs"}),
+                "/tmp",
+            )
+            .await;
         assert!(result.should_allow);
     }
 
     #[tokio::test]
     async fn yolo_blocks_system_writes() {
         let classifier = YoloClassifier::new(true);
-        let result = classifier.classify(
-            "Write",
-            &serde_json::json!({"file_path": "/etc/passwd"}),
-            "/tmp",
-        ).await;
+        let result = classifier
+            .classify(
+                "Write",
+                &serde_json::json!({"file_path": "/etc/passwd"}),
+                "/tmp",
+            )
+            .await;
         assert!(!result.should_allow);
     }
 
     #[test]
     fn bash_classifier_categories() {
-        assert_eq!(BashClassifier::classify_command("git status"), BashCommandCategory::Safe);
+        assert_eq!(
+            BashClassifier::classify_command("git status"),
+            BashCommandCategory::Safe
+        );
         // "cargo test" is in SAFE_BASH_PREFIXES, so it's Safe not Development
-        assert_eq!(BashClassifier::classify_command("cargo test"), BashCommandCategory::Safe);
-        assert_eq!(BashClassifier::classify_command("npm run build"), BashCommandCategory::Development);
-        assert_eq!(BashClassifier::classify_command("rm -rf /"), BashCommandCategory::Critical);
-        assert_eq!(BashClassifier::classify_command("sudo rm foo"), BashCommandCategory::Dangerous);
-        assert_eq!(BashClassifier::classify_command("some-unknown-cmd"), BashCommandCategory::Unknown);
+        assert_eq!(
+            BashClassifier::classify_command("cargo test"),
+            BashCommandCategory::Safe
+        );
+        assert_eq!(
+            BashClassifier::classify_command("npm run build"),
+            BashCommandCategory::Development
+        );
+        assert_eq!(
+            BashClassifier::classify_command("rm -rf /"),
+            BashCommandCategory::Critical
+        );
+        assert_eq!(
+            BashClassifier::classify_command("sudo rm foo"),
+            BashCommandCategory::Dangerous
+        );
+        assert_eq!(
+            BashClassifier::classify_command("some-unknown-cmd"),
+            BashCommandCategory::Unknown
+        );
     }
 
     #[test]
     fn safe_bash_command_no_chaining() {
         assert!(YoloClassifier::is_safe_bash_command("git status"));
-        assert!(!YoloClassifier::is_safe_bash_command("git status && rm -rf /"));
+        assert!(!YoloClassifier::is_safe_bash_command(
+            "git status && rm -rf /"
+        ));
     }
 }

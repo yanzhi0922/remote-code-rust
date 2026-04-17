@@ -136,13 +136,9 @@ impl Default for CompactOptions {
 #[derive(Debug, Clone)]
 pub enum CompactProgressEvent {
     /// Compaction has started with the given strategy.
-    Started {
-        strategy: CompactStrategyType,
-    },
+    Started { strategy: CompactStrategyType },
     /// Progress update: N messages have been processed so far.
-    Summarizing {
-        messages_processed: usize,
-    },
+    Summarizing { messages_processed: usize },
     /// Compaction completed successfully.
     Completed(CompactionResult),
     /// Compaction failed with an error message.
@@ -178,8 +174,13 @@ pub trait SummaryProvider: Send + Sync {
 /// Uses `Pin<Box<dyn Future>>` to avoid complex lifetime bounds.
 pub struct FnSummaryProvider<F>
 where
-    F: Fn(Vec<Message>, String, String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, anyhow::Error>> + Send>>
-        + Send
+    F: Fn(
+            Vec<Message>,
+            String,
+            String,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<String, anyhow::Error>> + Send>,
+        > + Send
         + Sync,
 {
     f: F,
@@ -187,8 +188,13 @@ where
 
 impl<F> FnSummaryProvider<F>
 where
-    F: Fn(Vec<Message>, String, String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, anyhow::Error>> + Send>>
-        + Send
+    F: Fn(
+            Vec<Message>,
+            String,
+            String,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<String, anyhow::Error>> + Send>,
+        > + Send
         + Sync,
 {
     /// Create a new callback-based summary provider.
@@ -200,8 +206,13 @@ where
 #[async_trait::async_trait]
 impl<F> SummaryProvider for FnSummaryProvider<F>
 where
-    F: Fn(Vec<Message>, String, String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, anyhow::Error>> + Send>>
-        + Send
+    F: Fn(
+            Vec<Message>,
+            String,
+            String,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<String, anyhow::Error>> + Send>,
+        > + Send
         + Sync,
 {
     async fn generate_summary(

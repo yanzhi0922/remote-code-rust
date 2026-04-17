@@ -115,13 +115,11 @@ pub struct FlagEntry {
 // ---------------------------------------------------------------------------
 
 /// In-memory store of plugin flags.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct FlagStore {
     /// Map from plugin ID to its flag entry.
     pub flags: HashMap<String, FlagEntry>,
 }
-
 
 impl FlagStore {
     /// Create a new empty flag store.
@@ -279,7 +277,12 @@ mod tests {
     fn flag_and_check() {
         let mut store = FlagStore::new();
         assert!(!store.is_flagged("p@m"));
-        store.flag_plugin("p@m", PluginFlag::Security, FlagSeverity::High, Some("CVE".into()));
+        store.flag_plugin(
+            "p@m",
+            PluginFlag::Security,
+            FlagSeverity::High,
+            Some("CVE".into()),
+        );
         assert!(store.is_flagged("p@m"));
         assert_eq!(store.len(), 1);
     }
@@ -353,7 +356,12 @@ mod tests {
         let mut store = FlagStore::new();
         store.flag_plugin("low@m", PluginFlag::Delisted, FlagSeverity::Low, None);
         store.flag_plugin("high@m", PluginFlag::Security, FlagSeverity::High, None);
-        store.flag_plugin("crit@m", PluginFlag::Malicious, FlagSeverity::Critical, None);
+        store.flag_plugin(
+            "crit@m",
+            PluginFlag::Malicious,
+            FlagSeverity::Critical,
+            None,
+        );
 
         let high_or_above = store.flags_above_severity(FlagSeverity::High);
         assert_eq!(high_or_above.len(), 2);
@@ -372,7 +380,12 @@ mod tests {
         let path = dir.path().join("flagged-plugins.json");
 
         let mut store = FlagStore::new();
-        store.flag_plugin("a@m", PluginFlag::Security, FlagSeverity::High, Some("vuln".into()));
+        store.flag_plugin(
+            "a@m",
+            PluginFlag::Security,
+            FlagSeverity::High,
+            Some("vuln".into()),
+        );
         store.flag_plugin("b@m", PluginFlag::Delisted, FlagSeverity::Low, None);
 
         save_flags(&store, &path).expect("save");
@@ -394,6 +407,9 @@ mod tests {
     fn flags_path_helper() {
         let dir = PathBuf::from("/home/user/.claude/plugins");
         let p = flags_path(&dir);
-        assert_eq!(p, PathBuf::from("/home/user/.claude/plugins/flagged-plugins.json"));
+        assert_eq!(
+            p,
+            PathBuf::from("/home/user/.claude/plugins/flagged-plugins.json")
+        );
     }
 }

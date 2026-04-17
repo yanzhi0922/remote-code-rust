@@ -78,13 +78,13 @@ impl ClaudeAiProxyFetch {
         method: &str,
         body: Option<serde_json::Value>,
     ) -> Result<ProxyRequest, McpRuntimeError> {
-        let access_token = self
-            .proxy_config
-            .access_token
-            .as_deref()
-            .ok_or_else(|| McpRuntimeError::Proxy {
-                message: "no access token configured for proxy".to_owned(),
-            })?;
+        let access_token =
+            self.proxy_config
+                .access_token
+                .as_deref()
+                .ok_or_else(|| McpRuntimeError::Proxy {
+                    message: "no access token configured for proxy".to_owned(),
+                })?;
 
         let url = format!(
             "{}/proxy/{}/{}",
@@ -92,10 +92,7 @@ impl ClaudeAiProxyFetch {
         );
 
         let mut headers = HashMap::new();
-        headers.insert(
-            "Authorization".to_owned(),
-            format!("Bearer {access_token}"),
-        );
+        headers.insert("Authorization".to_owned(), format!("Bearer {access_token}"));
         headers.insert("Content-Type".to_owned(), "application/json".to_owned());
 
         Ok(ProxyRequest {
@@ -183,10 +180,7 @@ mod tests {
             .expect("build request");
 
         assert_eq!(req.method, "GET");
-        assert_eq!(
-            req.url,
-            "https://api.claude.ai/proxy/proxy-123/tools/list"
-        );
+        assert_eq!(req.url, "https://api.claude.ai/proxy/proxy-123/tools/list");
         assert_eq!(
             req.headers.get("Authorization").map(|s| s.as_str()),
             Some("Bearer test-token-abc")

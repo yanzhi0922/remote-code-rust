@@ -50,6 +50,5 @@ pub mod types;
 pub use error::{SwarmError, SwarmResult};
 pub use types::{
     BackendType, MailboxMessage, MailboxMessageType, PermissionDecision, SpawnConfig,
-    SwarmPermissionRequest, TeamAllowedPath, TeamFile, TeamMember, TeammateIdentity,
-    TeammateState,
+    SwarmPermissionRequest, TeamAllowedPath, TeamFile, TeamMember, TeammateIdentity, TeammateState,
 };

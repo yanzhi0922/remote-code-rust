@@ -69,9 +69,7 @@ pub async fn run_query_loop(
 
     loop {
         // Transition: Initializing -> BuildingPrompt
-        let _ = state
-            .state_machine
-            .transition(EnginePhase::BuildingPrompt);
+        let _ = state.state_machine.transition(EnginePhase::BuildingPrompt);
 
         let budget = QueryBudgetState {
             turn: state.turn,
@@ -117,19 +115,14 @@ pub async fn run_query_loop(
         // --- Preprocessing pipeline ---
         let context_usage = compute_context_usage(state, config);
         let max_context = config.context_manager.available_budget() as usize;
-        let _preprocessing_result = preprocessing_pipeline.run(
-            &mut state.messages,
-            context_usage,
-            max_context,
-        );
+        let _preprocessing_result =
+            preprocessing_pipeline.run(&mut state.messages, context_usage, max_context);
 
         let mut legacy_conversation = state.legacy_conversation();
         maybe_compact_conversation(config, state, &mut legacy_conversation).await;
 
         // Transition: BuildingPrompt -> CallingProvider
-        let _ = state
-            .state_machine
-            .transition(EnginePhase::CallingProvider);
+        let _ = state.state_machine.transition(EnginePhase::CallingProvider);
 
         let response = if matches!(
             config.provider_invocation_mode,
@@ -159,7 +152,9 @@ pub async fn run_query_loop(
                                     strategy: "reactive".to_owned(),
                                     before_messages: before_len,
                                     after_messages: after_len,
-                                    summary: Some("reactive compact applied after prompt-too-long".to_owned()),
+                                    summary: Some(
+                                        "reactive compact applied after prompt-too-long".to_owned(),
+                                    ),
                                 },
                             });
                             continue; // Retry the turn
@@ -174,24 +169,25 @@ pub async fn run_query_loop(
 
                 // --- Model fallback ---
                 if is_model_overloaded_error(&error)
-                    && let Some(fallback) = config.fallback_model.as_deref() {
-                        let switch_result = state.model_switcher.switch_to(
-                            fallback,
-                            crate::model_switch::SwitchReason::Fallback,
-                        );
-                        if switch_result.is_switched() {
-                            let _ = config.observer
-                                .on_event(QueryObserverEvent::MessagesAppended {
-                                    session_id: context.session_id.clone(),
-                                    appended: vec![crate::message_utils::create_info_message(
-                                        &format!("Switched to fallback model: {fallback}"),
-                                    )],
-                                    total_messages: state.messages.len(),
-                                })
-                                .await;
-                            continue; // Retry with fallback model
-                        }
+                    && let Some(fallback) = config.fallback_model.as_deref()
+                {
+                    let switch_result = state
+                        .model_switcher
+                        .switch_to(fallback, crate::model_switch::SwitchReason::Fallback);
+                    if switch_result.is_switched() {
+                        let _ = config
+                            .observer
+                            .on_event(QueryObserverEvent::MessagesAppended {
+                                session_id: context.session_id.clone(),
+                                appended: vec![crate::message_utils::create_info_message(
+                                    &format!("Switched to fallback model: {fallback}"),
+                                )],
+                                total_messages: state.messages.len(),
+                            })
+                            .await;
+                        continue; // Retry with fallback model
                     }
+                }
 
                 state.consecutive_failures += 1;
                 let _ = state.failure_tracker.record_failure();
@@ -208,48 +204,49 @@ pub async fn run_query_loop(
 
         // --- Max-output-tokens recovery ---
         if is_max_tokens_truncated(&response.stop_reason)
-            && let Some(action) = max_tokens_recovery.handle_truncation(
-                estimate_current_max_tokens(&state.usage),
-            ) {
-                match action {
-                    MaxTokensRecoveryAction::Escalate { new_max_tokens: _ } => {
-                        // The escalation is handled by updating the request
-                        // parameters on the next iteration. For now, emit an
-                        // event and continue the loop so the assistant response
-                        // is processed normally and the next turn uses the
-                        // escalated limit.
-                        config.event_stream.emit(EngineEvent::StateUpdated {
-                            state_snapshot: state_snapshot(state, 0),
-                        });
-                    }
-                    MaxTokensRecoveryAction::ContinueWithMessage {
-                        max_tokens: _,
-                        continuation_message,
-                    } => {
-                        // Append the assistant's truncated response
-                        let assistant_message = assistant_message_from_response(&response);
-                        state.messages.push(assistant_message.clone());
-                        // Append the continuation prompt
-                        state.messages.push(continuation_message.clone());
-                        let _ = config.observer
-                            .on_event(QueryObserverEvent::MessagesAppended {
-                                session_id: context.session_id.clone(),
-                                appended: vec![continuation_message],
-                                total_messages: state.messages.len(),
-                            })
-                            .await;
-                        config.event_stream.emit(EngineEvent::StateUpdated {
-                            state_snapshot: state_snapshot(state, 0),
-                        });
-                        continue; // Next turn will pick up the continuation
-                    }
-                    MaxTokensRecoveryAction::Exhausted => {
-                        // Surface the truncation — the response is still
-                        // processed below, but the stop_reason indicates
-                        // truncation.
-                    }
+            && let Some(action) =
+                max_tokens_recovery.handle_truncation(estimate_current_max_tokens(&state.usage))
+        {
+            match action {
+                MaxTokensRecoveryAction::Escalate { new_max_tokens: _ } => {
+                    // The escalation is handled by updating the request
+                    // parameters on the next iteration. For now, emit an
+                    // event and continue the loop so the assistant response
+                    // is processed normally and the next turn uses the
+                    // escalated limit.
+                    config.event_stream.emit(EngineEvent::StateUpdated {
+                        state_snapshot: state_snapshot(state, 0),
+                    });
+                }
+                MaxTokensRecoveryAction::ContinueWithMessage {
+                    max_tokens: _,
+                    continuation_message,
+                } => {
+                    // Append the assistant's truncated response
+                    let assistant_message = assistant_message_from_response(&response);
+                    state.messages.push(assistant_message.clone());
+                    // Append the continuation prompt
+                    state.messages.push(continuation_message.clone());
+                    let _ = config
+                        .observer
+                        .on_event(QueryObserverEvent::MessagesAppended {
+                            session_id: context.session_id.clone(),
+                            appended: vec![continuation_message],
+                            total_messages: state.messages.len(),
+                        })
+                        .await;
+                    config.event_stream.emit(EngineEvent::StateUpdated {
+                        state_snapshot: state_snapshot(state, 0),
+                    });
+                    continue; // Next turn will pick up the continuation
+                }
+                MaxTokensRecoveryAction::Exhausted => {
+                    // Surface the truncation — the response is still
+                    // processed below, but the stop_reason indicates
+                    // truncation.
                 }
             }
+        }
 
         // Transition: CallingProvider -> ProcessingResponse
         let _ = state
@@ -286,9 +283,7 @@ pub async fn run_query_loop(
 
         if response.tool_calls.is_empty() {
             // Transition: ProcessingResponse -> Finalizing (handled by caller)
-            let _ = state
-                .state_machine
-                .transition(EnginePhase::Finalizing);
+            let _ = state.state_machine.transition(EnginePhase::Finalizing);
             return Ok(QueryResult {
                 state: state.clone(),
                 final_text: (!response.text.trim().is_empty()).then_some(response.text),
@@ -299,9 +294,7 @@ pub async fn run_query_loop(
         }
 
         // Transition: ProcessingResponse -> ExecutingTools
-        let _ = state
-            .state_machine
-            .transition(EnginePhase::ExecutingTools);
+        let _ = state.state_machine.transition(EnginePhase::ExecutingTools);
 
         let checkpoints = checkpoints_for_tool_batch(state, context, &assistant_message, &response);
         for checkpoint in &checkpoints {

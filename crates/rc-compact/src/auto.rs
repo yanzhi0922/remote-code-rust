@@ -8,8 +8,8 @@ use rc_core::Message;
 use crate::engine::compact_conversation;
 use crate::prompt::rough_token_count;
 use crate::strategy::{
-    CompactOptions, CompactStrategy, CompactStrategyType, CompactionResult,
-    ProgressCallback, SummaryProvider,
+    CompactOptions, CompactStrategy, CompactStrategyType, CompactionResult, ProgressCallback,
+    SummaryProvider,
 };
 
 // ---------------------------------------------------------------------------
@@ -173,8 +173,7 @@ impl CompactStrategy for AutoCompactStrategy {
             ..options.clone()
         };
 
-        let mut result =
-            compact_conversation(messages, &auto_options, provider, progress).await?;
+        let mut result = compact_conversation(messages, &auto_options, provider, progress).await?;
         result.strategy_used = CompactStrategyType::Auto;
         Ok(result)
     }

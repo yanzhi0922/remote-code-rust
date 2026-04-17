@@ -4627,6 +4627,7 @@ dependencies = [
  "rc-runner",
  "rc-session",
  "rc-skills",
+ "rc-system-prompt",
  "rc-telemetry",
  "rc-tools",
  "rc-tui",

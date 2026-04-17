@@ -128,10 +128,11 @@ impl FailureTracker {
     pub fn try_half_open(&mut self) -> bool {
         if self.state == CircuitState::Open
             && let Some(last_failure) = self.last_failure_time
-                && last_failure.elapsed() >= self.cooldown_duration {
-                    self.state = CircuitState::HalfOpen;
-                    return true;
-                }
+            && last_failure.elapsed() >= self.cooldown_duration
+        {
+            self.state = CircuitState::HalfOpen;
+            return true;
+        }
         false
     }
 

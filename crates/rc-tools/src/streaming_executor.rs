@@ -219,10 +219,7 @@ impl StreamingToolExecutor {
             status: ToolStatus::Queued,
         };
 
-        state.tools.push(TrackedTool {
-            call,
-            result: None,
-        });
+        state.tools.push(TrackedTool { call, result: None });
 
         self.try_dispatch(&mut state);
     }
@@ -271,9 +268,10 @@ impl StreamingToolExecutor {
         loop {
             {
                 let state = self.state.lock().expect("lock");
-                let all_done = state.tools.iter().all(|t| {
-                    matches!(t.call.status, ToolStatus::Completed | ToolStatus::Yielded)
-                });
+                let all_done = state
+                    .tools
+                    .iter()
+                    .all(|t| matches!(t.call.status, ToolStatus::Completed | ToolStatus::Yielded));
                 if all_done {
                     break;
                 }
@@ -287,14 +285,20 @@ impl StreamingToolExecutor {
     #[must_use]
     pub fn has_unfinished_tools(&self) -> bool {
         let state = self.state.lock().expect("lock");
-        state.tools.iter().any(|t| !matches!(t.call.status, ToolStatus::Yielded))
+        state
+            .tools
+            .iter()
+            .any(|t| !matches!(t.call.status, ToolStatus::Yielded))
     }
 
     /// Whether any tool is currently executing.
     #[must_use]
     pub fn has_executing_tools(&self) -> bool {
         let state = self.state.lock().expect("lock");
-        state.tools.iter().any(|t| t.call.status == ToolStatus::Executing)
+        state
+            .tools
+            .iter()
+            .any(|t| t.call.status == ToolStatus::Executing)
     }
 
     /// Number of tools in the executor (all statuses).
@@ -305,7 +309,13 @@ impl StreamingToolExecutor {
 
     /// Snapshot of all tracked tool calls and their statuses.
     pub fn tracked_calls(&self) -> Vec<TrackedToolCall> {
-        self.state.lock().expect("lock").tools.iter().map(|t| t.call.clone()).collect()
+        self.state
+            .lock()
+            .expect("lock")
+            .tools
+            .iter()
+            .map(|t| t.call.clone())
+            .collect()
     }
 
     /// Mark a tool as errored, which cancels sibling bash-like tools.
@@ -334,7 +344,11 @@ impl StreamingToolExecutor {
 
     fn try_dispatch(&self, state: &mut SharedState) {
         let max = self.config.max_concurrency;
-        let executing_count = state.tools.iter().filter(|t| t.call.status == ToolStatus::Executing).count();
+        let executing_count = state
+            .tools
+            .iter()
+            .filter(|t| t.call.status == ToolStatus::Executing)
+            .count();
 
         // Collect indices of tools to dispatch
         let mut to_dispatch: Vec<usize> = Vec::new();
@@ -393,8 +407,13 @@ impl StreamingToolExecutor {
                     }
                     drop(s);
                     Self::dispatch_queued(
-                        &state_arc, &runner, &progress, &notify,
-                        max_concurrency, timeout, max_bytes,
+                        &state_arc,
+                        &runner,
+                        &progress,
+                        &notify,
+                        max_concurrency,
+                        timeout,
+                        max_bytes,
                     );
                     notify.notify_waiters();
                     return;
@@ -404,7 +423,9 @@ impl StreamingToolExecutor {
                 if has_errored {
                     let r = ToolExecutionResult {
                         tool_call_id: id.clone(),
-                        content: "<tool_use_error>Cancelled: parallel tool call errored</tool_use_error>".into(),
+                        content:
+                            "<tool_use_error>Cancelled: parallel tool call errored</tool_use_error>"
+                                .into(),
                         is_error: true,
                         duration: start.elapsed(),
                     };
@@ -415,8 +436,13 @@ impl StreamingToolExecutor {
                     }
                     drop(s);
                     Self::dispatch_queued(
-                        &state_arc, &runner, &progress, &notify,
-                        max_concurrency, timeout, max_bytes,
+                        &state_arc,
+                        &runner,
+                        &progress,
+                        &notify,
+                        max_concurrency,
+                        timeout,
+                        max_bytes,
                     );
                     notify.notify_waiters();
                     return;
@@ -445,8 +471,13 @@ impl StreamingToolExecutor {
                             }
                             drop(s);
                             Self::dispatch_queued(
-                                &state_arc, &runner, &progress, &notify,
-                                max_concurrency, timeout, max_bytes,
+                                &state_arc,
+                                &runner,
+                                &progress,
+                                &notify,
+                                max_concurrency,
+                                timeout,
+                                max_bytes,
                             );
                             notify.notify_waiters();
                             return;
@@ -482,8 +513,13 @@ impl StreamingToolExecutor {
                 // After completing, try to dispatch any queued tools that
                 // were blocked by this non-concurrent tool.
                 Self::dispatch_queued(
-                    &state_arc, &runner, &progress, &notify,
-                    max_concurrency, timeout, max_bytes,
+                    &state_arc,
+                    &runner,
+                    &progress,
+                    &notify,
+                    max_concurrency,
+                    timeout,
+                    max_bytes,
                 );
                 notify.notify_waiters();
             });
@@ -502,7 +538,11 @@ impl StreamingToolExecutor {
         max_bytes: usize,
     ) {
         let mut state = state_arc.lock().expect("lock");
-        let executing_count = state.tools.iter().filter(|t| t.call.status == ToolStatus::Executing).count();
+        let executing_count = state
+            .tools
+            .iter()
+            .filter(|t| t.call.status == ToolStatus::Executing)
+            .count();
         let mut to_dispatch: Vec<usize> = Vec::new();
         let mut current_executing = executing_count;
 
@@ -559,8 +599,13 @@ impl StreamingToolExecutor {
                             }
                             drop(s);
                             Self::dispatch_queued(
-                                &state_arc, &runner, &progress, &notify,
-                                max_concurrency, timeout, max_bytes,
+                                &state_arc,
+                                &runner,
+                                &progress,
+                                &notify,
+                                max_concurrency,
+                                timeout,
+                                max_bytes,
                             );
                             notify.notify_waiters();
                             return;
@@ -592,8 +637,13 @@ impl StreamingToolExecutor {
                     }
                 }
                 Self::dispatch_queued(
-                    &state_arc, &runner, &progress, &notify,
-                    max_concurrency, timeout, max_bytes,
+                    &state_arc,
+                    &runner,
+                    &progress,
+                    &notify,
+                    max_concurrency,
+                    timeout,
+                    max_bytes,
                 );
                 notify.notify_waiters();
             });

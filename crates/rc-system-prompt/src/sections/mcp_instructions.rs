@@ -4,8 +4,8 @@
 
 use anyhow::Result;
 
-use crate::{McpClientInfo, PromptContext};
 use crate::sections::SystemPromptSection;
+use crate::{McpClientInfo, PromptContext};
 
 /// The MCP instructions section.
 pub struct McpInstructionsSection;

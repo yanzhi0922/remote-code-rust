@@ -31,10 +31,7 @@ pub const STRUCTURED_OUTPUTS_BETA: &str = "structured-outputs-2025-05-14";
 pub const TOKEN_EFFICIENT_TOOLS_BETA: &str = "token-efficient-tools-2025-02-19";
 
 /// Default beta headers for Anthropic first-party requests.
-pub const DEFAULT_BETA_HEADERS: &[&str] = &[
-    PROMPT_CACHING_BETA,
-    PDFS_BETA,
-];
+pub const DEFAULT_BETA_HEADERS: &[&str] = &[PROMPT_CACHING_BETA, PDFS_BETA];
 
 // ---------------------------------------------------------------------------
 // get_extra_body_params
@@ -59,33 +56,35 @@ pub fn get_extra_body_params(beta_headers: Option<&[String]>) -> Value {
     // Parse user-supplied extra body parameters.
     if let Ok(extra_body_str) = std::env::var("CLAUDE_CODE_EXTRA_BODY")
         && !extra_body_str.is_empty()
-            && let Ok(parsed) = serde_json::from_str::<Value>(&extra_body_str)
-                && parsed.is_object() {
-                    // Shallow clone — we don't want to mutate the original.
-                    result = parsed;
-                }
+        && let Ok(parsed) = serde_json::from_str::<Value>(&extra_body_str)
+        && parsed.is_object()
+    {
+        // Shallow clone — we don't want to mutate the original.
+        result = parsed;
+    }
 
     // Merge beta headers into anthropic_beta array.
     if let Some(headers) = beta_headers
-        && !headers.is_empty() {
-            let existing: Vec<String> = result
-                .get("anthropic_beta")
-                .and_then(Value::as_array)
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(Value::as_str)
-                        .map(String::from)
-                        .collect()
-                })
-                .unwrap_or_default();
+        && !headers.is_empty()
+    {
+        let existing: Vec<String> = result
+            .get("anthropic_beta")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(Value::as_str)
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default();
 
-            let merged: Vec<String> = existing
-                .into_iter()
-                .chain(headers.iter().cloned())
-                .collect();
+        let merged: Vec<String> = existing
+            .into_iter()
+            .chain(headers.iter().cloned())
+            .collect();
 
-            result["anthropic_beta"] = json!(merged);
-        }
+        result["anthropic_beta"] = json!(merged);
+    }
 
     result
 }
@@ -176,7 +175,9 @@ pub fn get_beta_headers(
 /// # Errors
 ///
 /// Returns an error if the header value contains invalid bytes.
-pub fn build_beta_header_value(betas: &[String]) -> Result<HeaderValue, reqwest::header::InvalidHeaderValue> {
+pub fn build_beta_header_value(
+    betas: &[String],
+) -> Result<HeaderValue, reqwest::header::InvalidHeaderValue> {
     let value = betas.join(",");
     HeaderValue::from_str(&value)
 }
@@ -240,10 +241,12 @@ mod tests {
     fn get_extra_body_params_none_betas_returns_empty() {
         // When no betas and no env var, result should be empty or have no anthropic_beta.
         let params = get_extra_body_params(None);
-        assert!(params
-            .get("anthropic_beta")
-            .and_then(Value::as_array)
-            .is_none_or(|a| a.is_empty()));
+        assert!(
+            params
+                .get("anthropic_beta")
+                .and_then(Value::as_array)
+                .is_none_or(|a| a.is_empty())
+        );
     }
 
     #[test]

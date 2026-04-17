@@ -1,9 +1,11 @@
 use std::collections::HashSet;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use chrono::Local;
 use rc_config::{RuntimeConfig, validate_provider_config};
 use rc_core::{ConversationEntry, ConversationRole, Message, ToolCall, ToolResult};
 use rc_permissions::PermissionBroker;
@@ -15,7 +17,14 @@ use rc_query_engine::{
 };
 use rc_session::SessionStore;
 use rc_session::resume_state::{PendingToolCall, ResumeState};
-use rc_tools::{ToolExecutionContext, builtin_tool_specs, execute_tool_call};
+use rc_system_prompt::{
+    McpClientInfo as PromptMcpClientInfo, PromptContext, SystemPromptBuilder,
+    cache::SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+};
+use rc_tools::{
+    ToolExecutionContext, ToolSpec, execute_tool_call, runtime_provider_tool_spec,
+    runtime_provider_tool_specs,
+};
 use tokio::sync::Mutex;
 
 use crate::conversation::{
@@ -40,6 +49,150 @@ struct CompatObserver {
     shared: Arc<CompatSharedState>,
     event_sink: Option<PromptEventSink>,
     include_partial_messages: bool,
+}
+
+fn insert_prompt_tool_aliases(spec: &ToolSpec, enabled_tools: &mut HashSet<String>) {
+    enabled_tools.insert(spec.name.clone());
+    enabled_tools.insert(spec.protocol_name.clone());
+    match spec.name.as_str() {
+        "read_file" => {
+            enabled_tools.insert("Read".to_owned());
+        }
+        "write_file" => {
+            enabled_tools.insert("Write".to_owned());
+        }
+        "edit_file" | "replace_in_file" => {
+            enabled_tools.insert("Edit".to_owned());
+        }
+        "bash_command" => {
+            enabled_tools.insert("Bash".to_owned());
+        }
+        "glob" => {
+            enabled_tools.insert("Glob".to_owned());
+        }
+        "grep" => {
+            enabled_tools.insert("Grep".to_owned());
+        }
+        "ask_user" => {
+            enabled_tools.insert("AskUserQuestion".to_owned());
+        }
+        "agent" => {
+            enabled_tools.insert("Agent".to_owned());
+        }
+        "task_create" => {
+            enabled_tools.insert("Task".to_owned());
+            enabled_tools.insert("TaskCreate".to_owned());
+        }
+        "todo_write" => {
+            enabled_tools.insert("TodoWrite".to_owned());
+        }
+        "send_message" => {
+            enabled_tools.insert("SendMessage".to_owned());
+        }
+        "skill_execute" | "discover_skills" => {
+            enabled_tools.insert("Skill".to_owned());
+        }
+        "sleep" => {
+            enabled_tools.insert("Sleep".to_owned());
+        }
+        _ => {}
+    }
+}
+
+fn detect_shell_name() -> String {
+    if cfg!(windows) {
+        return "powershell".to_owned();
+    }
+    std::env::var("SHELL").unwrap_or_else(|_| "bash".to_owned())
+}
+
+fn detect_os_version() -> String {
+    std::env::var("OS").unwrap_or_else(|_| std::env::consts::OS.to_owned())
+}
+
+fn detect_git_repository(cwd: &Path) -> bool {
+    if cwd.join(".git").exists() {
+        return true;
+    }
+    std::process::Command::new("git")
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .is_some_and(|output| output.status.success())
+}
+
+fn detect_git_worktree(cwd: &Path) -> bool {
+    cwd.join(".git").is_file()
+}
+
+async fn build_runtime_system_prompt(config: &RuntimeConfig) -> Result<String> {
+    let tool_specs = runtime_provider_tool_specs().await;
+    let mcp_catalog = rc_tools::mcp_catalog::runtime_mcp_catalog().await;
+    let mut enabled_tools = HashSet::new();
+    for spec in &tool_specs {
+        insert_prompt_tool_aliases(spec, &mut enabled_tools);
+    }
+
+    let prompt_ctx = PromptContext {
+        model: config
+            .provider
+            .model
+            .clone()
+            .unwrap_or_else(|| "unknown".to_owned()),
+        cwd: config.cwd.clone(),
+        is_git: detect_git_repository(&config.cwd),
+        platform: std::env::consts::OS.to_owned(),
+        shell: detect_shell_name(),
+        os_version: detect_os_version(),
+        enabled_tools,
+        language: None,
+        output_style: None,
+        mcp_clients: mcp_catalog
+            .clients
+            .into_iter()
+            .map(|client| PromptMcpClientInfo {
+                name: client.server_name,
+                instructions: client.instructions,
+            })
+            .collect(),
+        is_worktree: detect_git_worktree(&config.cwd),
+        additional_dirs: Vec::new(),
+        is_non_interactive: config.print_mode
+            || !matches!(config.output_format, rc_core::OutputFormat::Text),
+        is_fork_subagent_enabled: true,
+        session_start_date: Local::now().format("%Y-%m-%d").to_string(),
+    };
+
+    let mut builder = SystemPromptBuilder::with_default_sections();
+    let prompt = builder
+        .build(&prompt_ctx)?
+        .into_iter()
+        .filter(|block| {
+            let trimmed = block.trim();
+            !trimmed.is_empty() && trimmed != SYSTEM_PROMPT_DYNAMIC_BOUNDARY
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    Ok(prompt)
+}
+
+async fn refresh_runtime_system_prompt(
+    config: &RuntimeConfig,
+    conversation: &mut Vec<ConversationEntry>,
+) -> Result<()> {
+    let prompt = build_runtime_system_prompt(config).await?;
+    if let Some(system_entry) = conversation
+        .iter_mut()
+        .find(|entry| matches!(entry.role, ConversationRole::System))
+    {
+        system_entry.text = prompt;
+        system_entry.history_text = None;
+        system_entry.content_blocks.clear();
+        return Ok(());
+    }
+    conversation.insert(0, ConversationEntry::system(prompt));
+    Ok(())
 }
 
 impl CompatObserver {
@@ -304,9 +457,8 @@ impl ToolRunner for CompatToolRunner {
         tool_call: &ToolCall,
         _context: &ProcessUserInputContext,
     ) -> Result<ToolRunResult> {
-        let _ = builtin_tool_specs()
-            .into_iter()
-            .find(|spec| spec.name == tool_call.name)
+        let _ = runtime_provider_tool_spec(&tool_call.name)
+            .await
             .ok_or_else(|| anyhow!("unknown tool {}", tool_call.name))?;
 
         let (prepared, pre_messages) = {
@@ -475,6 +627,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
     }
 
     let started = Instant::now();
+    refresh_runtime_system_prompt(config, conversation).await?;
     let existing_messages = conversation
         .iter()
         .cloned()
@@ -785,6 +938,7 @@ mod tests {
         ConversationEntry, ConversationRole, InputFormat, OutputFormat, PermissionMode,
         ProviderProtocol, ProviderResponse, SubAgentCompletion, ToolCall, UsageSummary,
     };
+    use rc_mcp::{McpCapabilityMatrix, McpServerConfig, McpTransportConfig};
     use rc_permissions::{
         LayeredPermissionBroker, PermissionBroker, PermissionDecision, PermissionRequest,
         StaticPermissionBroker,
@@ -792,11 +946,22 @@ mod tests {
     use rc_provider::{ConversationBackend, ProviderCompatBackend, StreamingCallbacks};
     use rc_query_engine::{QueryObserver, QueryObserverEvent};
     use rc_session::SessionStore;
+    use rc_tools::mcp_catalog::clear_runtime_mcp_catalog_cache;
+    use rc_tools::{
+        RuntimeMcpServerPolicyEntry, ToolRuntimePolicy, configure_tool_runtime_policy,
+        current_tool_runtime_policy,
+    };
+    use serde_json::json;
+    use std::collections::BTreeMap;
+    use std::process::Command as ProcessCommand;
+    use std::sync::OnceLock;
     use tempfile::{TempDir, tempdir};
 
     use super::{CompatObserver, CompatSharedState, run_prompt_with_query_engine_compat};
     use crate::conversation::{PromptEventSink, PromptStreamEvent, initialize_conversation};
     use crate::hooks::{HookRunState, RuntimeHookDiscovery};
+
+    static RUNTIME_POLICY_TEST_MUTEX: OnceLock<StdMutex<()>> = OnceLock::new();
 
     fn mock_config_and_store() -> (TempDir, RuntimeConfig, SessionStore) {
         let tempdir = tempdir().expect("tempdir");
@@ -836,6 +1001,99 @@ mod tests {
             StaticPermissionBroker::from_mode(config.permission_mode),
             Vec::new(),
         ))
+    }
+
+    fn python_command() -> Option<(String, Vec<String>)> {
+        let probe = |cmd: &str, args: &[&str]| -> bool {
+            let mut cmd = ProcessCommand::new(cmd);
+            cmd.args(args).args(["-c", "import json"]);
+            cmd.output().is_ok_and(|output| output.status.success())
+        };
+
+        if let Ok(path) = std::env::var("PYTHON")
+            && probe(&path, &[])
+        {
+            return Some((path, Vec::new()));
+        }
+
+        for candidate in ["python", "python3"] {
+            if probe(candidate, &[]) {
+                return Some((candidate.to_owned(), Vec::new()));
+            }
+        }
+
+        if cfg!(windows) && probe("py", &["-3"]) {
+            return Some(("py".to_owned(), vec!["-3".to_owned()]));
+        }
+
+        None
+    }
+
+    fn mock_mcp_round_trip_server_script() -> &'static str {
+        r#"
+import json
+import sys
+
+while True:
+    raw = sys.stdin.readline()
+    if not raw:
+        break
+    raw = raw.strip()
+    if not raw:
+        continue
+    message = json.loads(raw)
+    method = message.get("method")
+    message_id = message.get("id")
+
+    if method == "initialize":
+        print(json.dumps({
+            "jsonrpc": "2.0",
+            "id": message_id,
+            "result": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "mock-mcp", "version": "0.1.0"},
+                "instructions": "Use mock MCP tools when they are available."
+            }
+        }), flush=True)
+    elif method == "notifications/initialized":
+        continue
+    elif method == "tools/list":
+        print(json.dumps({
+            "jsonrpc": "2.0",
+            "id": message_id,
+            "result": {
+                "tools": [{
+                    "name": "resolve-library-id",
+                    "description": "Resolve a library identifier",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "libraryName": {"type": "string"}
+                        },
+                        "required": ["libraryName"]
+                    }
+                }]
+            }
+        }), flush=True)
+    elif method == "tools/call":
+        library_name = message["params"]["arguments"]["libraryName"]
+        print(json.dumps({
+            "jsonrpc": "2.0",
+            "id": message_id,
+            "result": {
+                "content": [{"type": "text", "text": f"resolved: {library_name}"}],
+                "structuredContent": {"library": library_name},
+                "isError": False
+            }
+        }), flush=True)
+    else:
+        print(json.dumps({
+            "jsonrpc": "2.0",
+            "id": message_id,
+            "error": {"code": -32601, "message": "unknown method"}
+        }), flush=True)
+"#
     }
 
     #[derive(Default)]
@@ -1004,6 +1262,60 @@ mod tests {
         }
     }
 
+    struct DynamicMcpRoundTripBackend;
+
+    #[async_trait::async_trait]
+    impl ConversationBackend for DynamicMcpRoundTripBackend {
+        async fn complete(&self, conversation: &[ConversationEntry]) -> Result<ProviderResponse> {
+            let has_tool_result_after_latest_user = conversation
+                .iter()
+                .rev()
+                .take_while(|entry| entry.role != ConversationRole::User)
+                .find(|entry| entry.role == ConversationRole::Tool)
+                .cloned();
+
+            if let Some(tool_entry) = has_tool_result_after_latest_user {
+                return Ok(ProviderResponse {
+                    text: format!("dynamic MCP tool result: {}", tool_entry.text),
+                    history_text: None,
+                    thinking: None,
+                    content_blocks: Vec::new(),
+                    tool_calls: Vec::new(),
+                    request_id: None,
+                    usage: UsageSummary::default(),
+                    stop_reason: "end_turn".to_owned(),
+                });
+            }
+
+            Ok(ProviderResponse {
+                text: "calling dynamic MCP tool".to_owned(),
+                history_text: None,
+                thinking: None,
+                content_blocks: Vec::new(),
+                tool_calls: vec![ToolCall {
+                    id: "mcp-dynamic-1".to_owned(),
+                    name: "mcp__mock__resolve-library-id".to_owned(),
+                    input: json!({"libraryName": "tokio"}),
+                }],
+                request_id: None,
+                usage: UsageSummary::default(),
+                stop_reason: "tool_use".to_owned(),
+            })
+        }
+
+        async fn complete_streaming(
+            &self,
+            conversation: &[ConversationEntry],
+            _callbacks: Option<StreamingCallbacks>,
+        ) -> Result<ProviderResponse> {
+            self.complete(conversation).await
+        }
+
+        fn sub_agent_completion(&self) -> Arc<dyn SubAgentCompletion> {
+            Arc::new(DummySubAgentCompletion)
+        }
+    }
+
     #[tokio::test]
     async fn compat_run_persists_basic_mock_result() {
         let (_tempdir, config, store) = mock_config_and_store();
@@ -1112,6 +1424,85 @@ mod tests {
         assert!(resume_state.pending_tool_calls.is_empty());
         let events = store.load_events(config.session_id).expect("events");
         assert!(events.iter().any(|event| event.event_type == "tool_result"));
+    }
+
+    #[tokio::test]
+    async fn compat_run_accepts_dynamic_mcp_tools() {
+        let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX
+            .get_or_init(|| StdMutex::new(()))
+            .lock()
+            .expect("runtime policy test mutex");
+        let Some((python, mut prefix_args)) = python_command() else {
+            eprintln!("Skipping dynamic MCP compat test because Python is unavailable.");
+            return;
+        };
+
+        let (_tempdir, config, store) = mock_config_and_store();
+        let script = config.cwd.join("mock_mcp_round_trip.py");
+        fs::write(&script, mock_mcp_round_trip_server_script()).expect("mock mcp script");
+        prefix_args.push(script.display().to_string());
+
+        let original_policy = current_tool_runtime_policy();
+        configure_tool_runtime_policy(ToolRuntimePolicy {
+            allowed_tools: Vec::new(),
+            disallowed_tools: Vec::new(),
+            task_output_dir: None,
+            mcp_servers: vec![RuntimeMcpServerPolicyEntry {
+                origin_kind: "cwd".to_owned(),
+                origin_name: "workspace".to_owned(),
+                config_path: config.cwd.join(".mcp.json"),
+                server: McpServerConfig {
+                    name: "mock".to_owned(),
+                    enabled: true,
+                    transport: McpTransportConfig::Stdio {
+                        command: python,
+                        args: prefix_args,
+                        cwd: Some(config.cwd.clone()),
+                        env: BTreeMap::new(),
+                    },
+                    capabilities: McpCapabilityMatrix::default(),
+                    startup_timeout_secs: Some(3),
+                    request_timeout_secs: Some(3),
+                    metadata: BTreeMap::new(),
+                },
+            }],
+            shell_policy: Default::default(),
+        })
+        .expect("set runtime policy");
+        clear_runtime_mcp_catalog_cache().await;
+
+        let run_result = async {
+            let discovery = RuntimeHookDiscovery::default();
+            let mut conversation = initialize_conversation(&store, &config, Some("resolve tokio"))
+                .expect("conversation");
+            let mut hook_state = HookRunState::load(&store, config.session_id).expect("hook state");
+
+            run_prompt_with_query_engine_compat(
+                &config,
+                &store,
+                Arc::new(DynamicMcpRoundTripBackend),
+                mock_broker(&config),
+                None,
+                &discovery,
+                &mut hook_state,
+                &mut conversation,
+                "resolve tokio",
+            )
+            .await
+            .map(|outcome| (outcome, conversation))
+        }
+        .await;
+
+        clear_runtime_mcp_catalog_cache().await;
+        configure_tool_runtime_policy(original_policy).expect("restore runtime policy");
+
+        let (outcome, conversation) = run_result.expect("compat run should succeed");
+        assert!(outcome.text.contains("resolved: tokio"));
+        assert!(conversation.iter().any(|entry| {
+            entry.role == ConversationRole::Tool
+                && entry.tool_call_id.as_deref() == Some("mcp-dynamic-1")
+                && entry.name.as_deref() == Some("mcp__mock__resolve-library-id")
+        }));
     }
 
     #[tokio::test]

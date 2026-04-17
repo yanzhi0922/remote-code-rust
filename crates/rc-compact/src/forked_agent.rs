@@ -99,7 +99,10 @@ fn default_config() -> ForkedAgentCompactConfig {
 
 /// Count messages that carry tool-result content.
 fn count_tool_results(messages: &[Message]) -> usize {
-    messages.iter().filter(|m| is_tool_result_message(m)).count()
+    messages
+        .iter()
+        .filter(|m| is_tool_result_message(m))
+        .count()
 }
 
 /// Check whether a message represents a tool result.
@@ -110,10 +113,12 @@ fn is_tool_result_message(msg: &Message) -> bool {
 /// Replace the content of a tool-result message with a placeholder.
 fn replace_tool_result_content(msg: &Message, placeholder: &str) -> Message {
     match msg {
-        Message::ToolUseSummary(summary) => Message::ToolUseSummary(rc_core::ToolUseSummaryMessage {
-            summary: placeholder.to_owned(),
-            ..summary.clone()
-        }),
+        Message::ToolUseSummary(summary) => {
+            Message::ToolUseSummary(rc_core::ToolUseSummaryMessage {
+                summary: placeholder.to_owned(),
+                ..summary.clone()
+            })
+        }
         other => other.clone(),
     }
 }

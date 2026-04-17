@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
@@ -247,40 +247,20 @@ pub fn resolve_runtime_mcp_server(
     server_name: &str,
     extra_config_paths: &[PathBuf],
 ) -> Result<RuntimeMcpResolution> {
-    let mut discovery = discover_runtime_mcp_servers(config, extra_config_paths);
-    let mut matches = discovery
+    let discovery = discover_runtime_mcp_servers(config, extra_config_paths);
+    let match_entry = discovery
         .servers
         .iter()
         .filter(|entry| entry.server.name == server_name)
         .cloned()
-        .collect::<Vec<_>>();
+        .next();
 
-    match matches.len() {
-        0 => Err(anyhow!("No MCP server named `{server_name}` was found")),
-        1 => Ok(RuntimeMcpResolution {
-            entry: matches.pop().expect("single server match must exist"),
+    match match_entry {
+        Some(entry) => Ok(RuntimeMcpResolution {
+            entry,
             warnings: discovery.warnings,
         }),
-        _ => {
-            let candidates = matches
-                .into_iter()
-                .map(|entry| {
-                    format!(
-                        "{}:{} ({})",
-                        entry.origin_kind,
-                        entry.origin_name,
-                        entry.config_path.display()
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            discovery.warnings.push(format!(
-                "Multiple MCP servers named `{server_name}` were discovered; use a unique config layout"
-            ));
-            Err(anyhow!(
-                "MCP server `{server_name}` is ambiguous across: {candidates}"
-            ))
-        }
+        None => Err(anyhow!("No MCP server named `{server_name}` was found")),
     }
 }
 
@@ -290,41 +270,7 @@ pub fn discover_runtime_mcp_servers(
 ) -> RuntimeMcpDiscovery {
     let mut discovery = RuntimeMcpDiscovery::default();
     let mut loaded_paths = BTreeSet::new();
-    if setting_source_enabled(config, SettingSource::Project) {
-        load_runtime_mcp_file(
-            &mut discovery,
-            &mut loaded_paths,
-            "cwd",
-            &config.cwd.display().to_string(),
-            &config.cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
-        );
-    }
-    if setting_source_enabled(config, SettingSource::User) {
-        load_runtime_mcp_file(
-            &mut discovery,
-            &mut loaded_paths,
-            "profile",
-            &config.paths.profile_dir.display().to_string(),
-            &config
-                .paths
-                .profile_dir
-                .join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
-        );
-    }
-    for path in extra_config_paths {
-        let candidate = if path.is_dir() {
-            path.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE)
-        } else {
-            path.clone()
-        };
-        load_runtime_mcp_file(
-            &mut discovery,
-            &mut loaded_paths,
-            "explicit",
-            &path.display().to_string(),
-            &candidate,
-        );
-    }
+    let mut merged_servers = BTreeMap::<String, RuntimeMcpServerEntry>::new();
 
     if setting_source_enabled(config, SettingSource::User) && config.paths.plugins_dir.exists() {
         match rc_plugins::discover_plugins(&config.paths.plugins_dir) {
@@ -335,8 +281,8 @@ pub fn discover_runtime_mcp_servers(
                             continue;
                         }
                         match rc_mcp::McpConfig::load(&path) {
-                            Ok(config) => push_runtime_mcp_servers(
-                                &mut discovery.servers,
+                            Ok(config) => merge_runtime_mcp_servers(
+                                &mut merged_servers,
                                 "plugin",
                                 &plugin.manifest.name,
                                 &path,
@@ -356,6 +302,47 @@ pub fn discover_runtime_mcp_servers(
         }
     }
 
+    if setting_source_enabled(config, SettingSource::User) {
+        load_runtime_mcp_candidates_in_dir(
+            &mut merged_servers,
+            &mut discovery,
+            &mut loaded_paths,
+            "profile",
+            &config.paths.profile_dir.display().to_string(),
+            &config.paths.profile_dir,
+        );
+    }
+    if setting_source_enabled(config, SettingSource::Project) {
+        load_runtime_project_mcp_hierarchy(
+            &mut merged_servers,
+            &mut discovery,
+            &mut loaded_paths,
+            &config.cwd,
+        );
+    }
+    for path in extra_config_paths {
+        if path.is_dir() {
+            load_runtime_mcp_candidates_in_dir(
+                &mut merged_servers,
+                &mut discovery,
+                &mut loaded_paths,
+                "explicit",
+                &path.display().to_string(),
+                path,
+            );
+        } else {
+            load_runtime_mcp_file(
+                &mut merged_servers,
+                &mut discovery,
+                &mut loaded_paths,
+                "explicit",
+                &path.display().to_string(),
+                path,
+            );
+        }
+    }
+
+    discovery.servers = merged_servers.into_values().collect();
     discovery.servers.sort_by(|left, right| {
         left.server
             .name
@@ -364,6 +351,93 @@ pub fn discover_runtime_mcp_servers(
             .then_with(|| left.origin_name.cmp(&right.origin_name))
     });
     discovery
+}
+
+fn project_directory_chain(cwd: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let mut current = cwd.to_path_buf();
+
+    while current.parent().is_some() {
+        dirs.push(current.clone());
+        if let Some(parent) = current.parent() {
+            current = parent.to_path_buf();
+        }
+    }
+
+    dirs.reverse();
+    dirs
+}
+
+fn load_runtime_project_mcp_hierarchy(
+    servers: &mut BTreeMap<String, RuntimeMcpServerEntry>,
+    discovery: &mut RuntimeMcpDiscovery,
+    loaded_paths: &mut BTreeSet<PathBuf>,
+    cwd: &Path,
+) {
+    let cwd_string = cwd.display().to_string();
+
+    for dir in project_directory_chain(cwd) {
+        if dir == cwd {
+            load_runtime_mcp_file(
+                servers,
+                discovery,
+                loaded_paths,
+                "cwd",
+                &cwd_string,
+                &dir.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            );
+        }
+        load_runtime_mcp_file(
+            servers,
+            discovery,
+            loaded_paths,
+            "cwd",
+            &cwd_string,
+            &dir.join(rc_mcp::DEFAULT_PROJECT_MCP_CONFIG_FILE),
+        );
+    }
+}
+
+fn load_runtime_mcp_candidates_in_dir(
+    servers: &mut BTreeMap<String, RuntimeMcpServerEntry>,
+    discovery: &mut RuntimeMcpDiscovery,
+    loaded_paths: &mut BTreeSet<PathBuf>,
+    origin_kind: &'static str,
+    origin_name: &str,
+    dir: &Path,
+) {
+    let candidates = [
+        dir.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+        dir.join(rc_mcp::DEFAULT_PROJECT_MCP_CONFIG_FILE),
+    ];
+    let existing = candidates
+        .iter()
+        .filter(|candidate| candidate.exists())
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if existing.is_empty() {
+        if origin_kind == "explicit" {
+            discovery.warnings.push(format!(
+                "Explicit MCP config directory {} did not contain {} or {}",
+                dir.display(),
+                rc_mcp::DEFAULT_MCP_CONFIG_FILE,
+                rc_mcp::DEFAULT_PROJECT_MCP_CONFIG_FILE,
+            ));
+        }
+        return;
+    }
+
+    for candidate in existing {
+        load_runtime_mcp_file(
+            servers,
+            discovery,
+            loaded_paths,
+            origin_kind,
+            origin_name,
+            &candidate,
+        );
+    }
 }
 
 fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool {
@@ -437,6 +511,7 @@ fn summarize_runtime_mcp(
 }
 
 fn load_runtime_mcp_file(
+    servers: &mut BTreeMap<String, RuntimeMcpServerEntry>,
     discovery: &mut RuntimeMcpDiscovery,
     loaded_paths: &mut BTreeSet<PathBuf>,
     origin_kind: &'static str,
@@ -456,13 +531,7 @@ fn load_runtime_mcp_file(
         return;
     }
     match rc_mcp::McpConfig::load(path) {
-        Ok(config) => push_runtime_mcp_servers(
-            &mut discovery.servers,
-            origin_kind,
-            origin_name,
-            path,
-            config,
-        ),
+        Ok(config) => merge_runtime_mcp_servers(servers, origin_kind, origin_name, path, config),
         Err(error) => discovery.warnings.push(format!(
             "Failed to load MCP config {}: {error}",
             path.display()
@@ -470,20 +539,24 @@ fn load_runtime_mcp_file(
     }
 }
 
-fn push_runtime_mcp_servers(
-    servers: &mut Vec<RuntimeMcpServerEntry>,
+fn merge_runtime_mcp_servers(
+    servers: &mut BTreeMap<String, RuntimeMcpServerEntry>,
     origin_kind: &'static str,
     origin_name: &str,
     config_path: &Path,
     config: rc_mcp::McpConfig,
 ) {
     for server in config.servers.into_values() {
-        servers.push(RuntimeMcpServerEntry {
-            origin_kind,
-            origin_name: origin_name.to_string(),
-            config_path: config_path.to_path_buf(),
-            server,
-        });
+        let server_name = server.name.clone();
+        servers.insert(
+            server_name,
+            RuntimeMcpServerEntry {
+                origin_kind,
+                origin_name: origin_name.to_string(),
+                config_path: config_path.to_path_buf(),
+                server,
+            },
+        );
     }
 }
 
@@ -498,7 +571,7 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn runtime_mcp_inventory_summary_counts_origins_and_duplicates() {
+    fn runtime_mcp_inventory_summary_resolves_higher_precedence_duplicates() {
         let tempdir = tempdir().expect("tempdir");
         let cwd = tempdir.path().join("workspace");
         let profile = tempdir.path().join(".remote-code-rust");
@@ -548,15 +621,15 @@ mod tests {
         .expect("config");
 
         let summary = runtime_mcp_inventory_summary(&config, &[]);
-        assert_eq!(summary.total_servers, 4);
-        assert_eq!(summary.enabled_servers, 3);
+        assert_eq!(summary.total_servers, 3);
+        assert_eq!(summary.enabled_servers, 2);
         assert_eq!(summary.disabled_servers, 1);
         assert_eq!(summary.unique_server_names, 3);
-        assert_eq!(summary.ambiguous_server_names, 1);
+        assert_eq!(summary.ambiguous_server_names, 0);
         assert_eq!(summary.origins.cwd, 2);
-        assert_eq!(summary.origins.profile, 1);
+        assert_eq!(summary.origins.profile, 0);
         assert_eq!(summary.origins.plugin, 1);
-        assert_eq!(summary.status_counts.pending, 3);
+        assert_eq!(summary.status_counts.pending, 2);
         assert_eq!(summary.status_counts.disabled, 1);
     }
 

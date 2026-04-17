@@ -4,11 +4,7 @@
 //! builds a prompt from the skill's instructions and references, and returns
 //! a [`SkillExecutionResult`] containing the constructed prompt and metadata.
 
-use std::{
-    collections::HashMap,
-    fs,
-    path::PathBuf,
-};
+use std::{collections::HashMap, fs, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -222,10 +218,7 @@ impl SkillExecutor {
         }
 
         if !context.args.is_empty() {
-            prompt.push_str(&format!(
-                "\n\n## Arguments\n\n{}",
-                context.args.join(" ")
-            ));
+            prompt.push_str(&format!("\n\n## Arguments\n\n{}", context.args.join(" ")));
         }
 
         // Truncate if needed
@@ -248,10 +241,7 @@ impl SkillExecutor {
         // Check for missing references
         for ref_path in &skill.metadata.references {
             if !ref_path.exists() {
-                warnings.push(format!(
-                    "Reference file not found: {}",
-                    ref_path.display()
-                ));
+                warnings.push(format!("Reference file not found: {}", ref_path.display()));
             }
         }
 
@@ -277,12 +267,11 @@ impl SkillExecutor {
             if !ref_path.exists() {
                 continue;
             }
-            let content = fs::read_to_string(ref_path).map_err(|source| {
-                ExecutorError::ReadReference {
+            let content =
+                fs::read_to_string(ref_path).map_err(|source| ExecutorError::ReadReference {
                     path: ref_path.clone(),
                     source,
-                }
-            })?;
+                })?;
             let name = ref_path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
@@ -331,11 +320,7 @@ impl SkillExecutor {
     pub fn matches_query(skill: &SkillDocument, query: &str) -> bool {
         let lower = query.to_ascii_lowercase();
         skill.metadata.slug.to_ascii_lowercase().contains(&lower)
-            || skill
-                .metadata
-                .title
-                .to_ascii_lowercase()
-                .contains(&lower)
+            || skill.metadata.title.to_ascii_lowercase().contains(&lower)
             || skill
                 .metadata
                 .summary
@@ -354,7 +339,9 @@ impl SkillExecutor {
 // ---------------------------------------------------------------------------
 
 /// Validate multiple skills and return a list of results.
-pub fn validate_skills(skills: &[SkillDocument]) -> Vec<(&SkillDocument, Result<(), ExecutorError>)> {
+pub fn validate_skills(
+    skills: &[SkillDocument],
+) -> Vec<(&SkillDocument, Result<(), ExecutorError>)> {
     let executor = SkillExecutor::new();
     skills
         .iter()
@@ -380,7 +367,7 @@ pub fn filter_skills_by_query<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SkillMetadata, SkillDocument};
+    use crate::{SkillDocument, SkillMetadata};
     use std::fs;
     use tempfile::tempdir;
 
@@ -536,7 +523,10 @@ mod tests {
             temp.path(),
             "ref-skill",
             "# Ref Skill\n\nSee references.",
-            &[("guide.md", "This is the guide."), ("tips.md", "Helpful tips.")],
+            &[
+                ("guide.md", "This is the guide."),
+                ("tips.md", "Helpful tips."),
+            ],
         );
         let executor = SkillExecutor::new();
         let ctx = SkillExecutionContext::new(temp.path());
@@ -560,7 +550,11 @@ mod tests {
             .with_env("PROJECT", "RemoteCode");
         let result = ok(executor.execute_skill(&skill, &ctx));
         assert_eq!(result.env_vars_interpolated, 2);
-        assert!(result.prompt.contains("Hello Alice, welcome to RemoteCode!"));
+        assert!(
+            result
+                .prompt
+                .contains("Hello Alice, welcome to RemoteCode!")
+        );
     }
 
     #[test]
@@ -615,10 +609,7 @@ mod tests {
         let executor = SkillExecutor::new();
         let ctx = SkillExecutionContext::new(temp.path());
         let result = ok(executor.execute_skill(&skill, &ctx));
-        assert!(result
-            .warnings
-            .iter()
-            .any(|w| w.contains("not found")));
+        assert!(result.warnings.iter().any(|w| w.contains("not found")));
         assert_eq!(result.references_loaded, 0);
     }
 
@@ -727,8 +718,7 @@ mod tests {
             warnings: vec!["warn1".to_owned()],
         };
         let json = serde_json::to_string(&result).expect("serialize");
-        let deserialized: SkillExecutionResult =
-            serde_json::from_str(&json).expect("deserialize");
+        let deserialized: SkillExecutionResult = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(result, deserialized);
     }
 
@@ -737,10 +727,7 @@ mod tests {
     #[test]
     fn interpolation_no_match() {
         let executor = SkillExecutor::new();
-        let (text, count) = executor.interpolate_env_vars(
-            "Hello {{UNKNOWN}}",
-            &HashMap::new(),
-        );
+        let (text, count) = executor.interpolate_env_vars("Hello {{UNKNOWN}}", &HashMap::new());
         assert_eq!(count, 0);
         assert_eq!(text, "Hello {{UNKNOWN}}");
     }
@@ -750,10 +737,7 @@ mod tests {
         let executor = SkillExecutor::new();
         let mut env = HashMap::new();
         env.insert("NAME".to_owned(), "Bob".to_owned());
-        let (text, count) = executor.interpolate_env_vars(
-            "Hi {{NAME}}, bye {{NAME}}!",
-            &env,
-        );
+        let (text, count) = executor.interpolate_env_vars("Hi {{NAME}}, bye {{NAME}}!", &env);
         assert_eq!(count, 1);
         assert_eq!(text, "Hi Bob, bye Bob!");
     }

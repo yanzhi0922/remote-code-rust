@@ -25,8 +25,8 @@ pub mod diff_stats;
 pub mod snapshot;
 pub mod state;
 
-pub use backup::{create_backup, restore_backup, BackupRecord};
-pub use diff_stats::{compute_diff_stats_for_file, DiffStats};
+pub use backup::{BackupRecord, create_backup, restore_backup};
+pub use diff_stats::{DiffStats, compute_diff_stats_for_file};
 pub use snapshot::{FileHistorySnapshot, MAX_SNAPSHOTS};
 pub use state::{FileHistoryState, file_history_can_restore, rewind_to_snapshot};
 
@@ -59,10 +59,7 @@ pub fn track_edit(
 }
 
 /// Create a snapshot of all tracked files.
-pub fn make_snapshot(
-    state: &mut FileHistoryState,
-    message_id: &str,
-) -> anyhow::Result<()> {
+pub fn make_snapshot(state: &mut FileHistoryState, message_id: &str) -> anyhow::Result<()> {
     state.create_snapshot(message_id.to_string());
     Ok(())
 }

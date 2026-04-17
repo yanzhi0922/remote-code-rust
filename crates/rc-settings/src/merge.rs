@@ -123,12 +123,27 @@ fn merge_into(target: &mut Settings, source: &Settings) {
     }
 
     // Merge arrays (concatenate)
-    merge_string_vec(&mut target.enabled_mcpjson_servers, &source.enabled_mcpjson_servers);
-    merge_string_vec(&mut target.disabled_mcpjson_servers, &source.disabled_mcpjson_servers);
-    merge_string_vec(&mut target.allowed_http_hook_urls, &source.allowed_http_hook_urls);
-    merge_string_vec(&mut target.http_hook_allowed_env_vars, &source.http_hook_allowed_env_vars);
+    merge_string_vec(
+        &mut target.enabled_mcpjson_servers,
+        &source.enabled_mcpjson_servers,
+    );
+    merge_string_vec(
+        &mut target.disabled_mcpjson_servers,
+        &source.disabled_mcpjson_servers,
+    );
+    merge_string_vec(
+        &mut target.allowed_http_hook_urls,
+        &source.allowed_http_hook_urls,
+    );
+    merge_string_vec(
+        &mut target.http_hook_allowed_env_vars,
+        &source.http_hook_allowed_env_vars,
+    );
     merge_string_vec(&mut target.available_models, &source.available_models);
-    merge_string_vec(&mut target.company_announcements, &source.company_announcements);
+    merge_string_vec(
+        &mut target.company_announcements,
+        &source.company_announcements,
+    );
 }
 
 /// Merge two optional string vectors by concatenating.
@@ -245,7 +260,9 @@ mod tests {
         };
         let project = Settings {
             env: Some(
-                vec![("KEY2".to_string(), "project2".to_string())].into_iter().collect(),
+                vec![("KEY2".to_string(), "project2".to_string())]
+                    .into_iter()
+                    .collect(),
             ),
             ..Default::default()
         };
@@ -265,10 +282,7 @@ mod tests {
             ..Default::default()
         };
         let project = Settings {
-            enabled_mcpjson_servers: Some(vec![
-                "server-a".to_string(),
-                "server-b".to_string(),
-            ]),
+            enabled_mcpjson_servers: Some(vec!["server-a".to_string(), "server-b".to_string()]),
             ..Default::default()
         };
         let result = merge_settings(&[

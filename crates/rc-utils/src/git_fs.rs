@@ -55,9 +55,7 @@ pub fn read_git_config(content: &str) -> Vec<GitConfigEntry> {
                 current_section = inner[..space_pos].to_string();
                 let rest = &inner[space_pos + 1..];
                 // Strip quotes from subsection.
-                current_subsection = Some(
-                    rest.trim_matches('"').to_string(),
-                );
+                current_subsection = Some(rest.trim_matches('"').to_string());
             } else {
                 current_section = inner.to_string();
                 current_subsection = None;
@@ -160,8 +158,8 @@ pub fn resolve_ref(git_dir: &Path, reference: &str) -> Result<String> {
     }
 
     if reference == "HEAD" {
-        let head_content = std::fs::read_to_string(git_dir.join("HEAD"))
-            .with_context(|| "Cannot read HEAD")?;
+        let head_content =
+            std::fs::read_to_string(git_dir.join("HEAD")).with_context(|| "Cannot read HEAD")?;
         let head_ref = head_content.trim();
         if !head_ref.starts_with("ref: ") {
             return Ok(head_ref.to_string());
@@ -204,8 +202,8 @@ pub fn resolve_ref(git_dir: &Path, reference: &str) -> Result<String> {
 pub fn get_common_dir(git_dir: &Path) -> Result<PathBuf> {
     let commondir_file = git_dir.join("commondir");
     if commondir_file.exists() {
-        let content = std::fs::read_to_string(&commondir_file)
-            .with_context(|| "Cannot read commondir")?;
+        let content =
+            std::fs::read_to_string(&commondir_file).with_context(|| "Cannot read commondir")?;
         let relative = content.trim();
         Ok(git_dir.join(relative))
     } else {
@@ -296,7 +294,10 @@ mod tests {
         let entries = read_git_config(content);
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].section, "remote");
-        assert_eq!(entries[0].subsection.as_ref().expect("subsection"), "origin");
+        assert_eq!(
+            entries[0].subsection.as_ref().expect("subsection"),
+            "origin"
+        );
         assert_eq!(entries[0].key, "url");
     }
 

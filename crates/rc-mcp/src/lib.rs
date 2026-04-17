@@ -67,14 +67,12 @@ pub(crate) mod jsonrpc;
 
 // Constants
 pub use session::{
-    DEFAULT_MCP_CONFIG_FILE, DEFAULT_MCP_PROTOCOL_VERSION, DEFAULT_REQUEST_TIMEOUT_SECS,
-    DEFAULT_STARTUP_TIMEOUT_SECS,
+    DEFAULT_MCP_CONFIG_FILE, DEFAULT_MCP_PROTOCOL_VERSION, DEFAULT_PROJECT_MCP_CONFIG_FILE,
+    DEFAULT_REQUEST_TIMEOUT_SECS, DEFAULT_STARTUP_TIMEOUT_SECS,
 };
 
 // Config types
-pub use config::{
-    DiscoveredMcpConfig, McpCapabilityMatrix, McpConfig, McpServerConfig,
-};
+pub use config::{DiscoveredMcpConfig, McpCapabilityMatrix, McpConfig, McpServerConfig};
 
 // Transport types
 pub use transport::{McpTransport, McpTransportConfig};
@@ -149,8 +147,7 @@ pub use oauth::{
 pub use elicitation::{
     AutoCancelElicitationHandler, AutoDeclineElicitationHandler, CallbackElicitationHandler,
     ElicitationHandler, ElicitationParams, ElicitationRequestEvent, ElicitationResult,
-    ElicitationType, ElicitationWaitingState, QueuedElicitationHandler,
-    TimeoutElicitationHandler,
+    ElicitationType, ElicitationWaitingState, QueuedElicitationHandler, TimeoutElicitationHandler,
 };
 
 // Channel

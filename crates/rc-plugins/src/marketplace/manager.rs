@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -124,10 +123,7 @@ impl MarketplaceManager {
     ///
     /// In a real implementation, this would fetch from the source URL/repo.
     /// Here it returns a placeholder result.
-    pub fn refresh_marketplace(
-        &mut self,
-        name: &str,
-    ) -> Result<(), String> {
+    pub fn refresh_marketplace(&mut self, name: &str) -> Result<(), String> {
         let _marketplace = self
             .marketplaces
             .get(name)
@@ -137,9 +133,7 @@ impl MarketplaceManager {
         let index = MarketplaceIndex {
             name: name.to_owned(),
             entries: Vec::new(),
-            fetched_at: Some(
-                chrono::Utc::now().to_rfc3339(),
-            ),
+            fetched_at: Some(chrono::Utc::now().to_rfc3339()),
         };
 
         self.indices.insert(name.to_owned(), index);
@@ -147,10 +141,7 @@ impl MarketplaceManager {
     }
 
     /// Get a cached marketplace index.
-    pub fn get_marketplace_index(
-        &self,
-        name: &str,
-    ) -> Option<&MarketplaceIndex> {
+    pub fn get_marketplace_index(&self, name: &str) -> Option<&MarketplaceIndex> {
         self.indices.get(name)
     }
 
@@ -167,9 +158,7 @@ impl MarketplaceManager {
         } else {
             // Search all marketplaces
             for index in self.indices.values() {
-                if let Some(entry) =
-                    index.entries.iter().find(|e| e.name == plugin_name)
-                {
+                if let Some(entry) = index.entries.iter().find(|e| e.name == plugin_name) {
                     return Some(entry);
                 }
             }
@@ -178,19 +167,13 @@ impl MarketplaceManager {
     }
 
     /// Search for plugins across all marketplaces.
-    pub fn search_plugins(
-        &self,
-        query: &str,
-    ) -> Vec<&MarketplaceEntry> {
+    pub fn search_plugins(&self, query: &str) -> Vec<&MarketplaceEntry> {
         let query_lower = query.to_lowercase();
         let mut results = Vec::new();
 
         for index in self.indices.values() {
             for entry in &index.entries {
-                let matches_name = entry
-                    .name
-                    .to_lowercase()
-                    .contains(&query_lower);
+                let matches_name = entry.name.to_lowercase().contains(&query_lower);
                 let matches_desc = entry
                     .description
                     .as_ref()

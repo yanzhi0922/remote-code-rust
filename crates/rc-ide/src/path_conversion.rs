@@ -30,7 +30,11 @@ pub fn to_remote_path(local_path: &str) -> String {
         let chars: Vec<char> = local_path.chars().collect();
         if chars.len() >= 2 && chars[1] == ':' {
             let letter = chars[0].to_ascii_lowercase();
-            let rest = if local_path.len() > 2 { &local_path[2..] } else { "" };
+            let rest = if local_path.len() > 2 {
+                &local_path[2..]
+            } else {
+                ""
+            };
             let rest_unix = rest.replace('\\', "/");
             return format!("/{letter}{rest_unix}");
         }
@@ -88,12 +92,18 @@ mod tests {
 
     #[test]
     fn remote_from_windows() {
-        assert_eq!(to_remote_path(r"C:\Users\foo\bar.rs"), "/c/Users/foo/bar.rs");
+        assert_eq!(
+            to_remote_path(r"C:\Users\foo\bar.rs"),
+            "/c/Users/foo/bar.rs"
+        );
     }
 
     #[test]
     fn remote_from_windows_lowercase_drive() {
-        assert_eq!(to_remote_path(r"d:\project\src\main.rs"), "/d/project/src/main.rs");
+        assert_eq!(
+            to_remote_path(r"d:\project\src\main.rs"),
+            "/d/project/src/main.rs"
+        );
     }
 
     #[test]
@@ -103,7 +113,10 @@ mod tests {
 
     #[test]
     fn remote_from_mixed_slashes() {
-        assert_eq!(to_remote_path(r"C:\Users/foo\bar.rs"), "/c/Users/foo/bar.rs");
+        assert_eq!(
+            to_remote_path(r"C:\Users/foo\bar.rs"),
+            "/c/Users/foo/bar.rs"
+        );
     }
 
     #[test]
@@ -118,7 +131,10 @@ mod tests {
 
     #[test]
     fn local_preserves_drive_case() {
-        assert_eq!(to_local_path("/d/project/src/main.rs"), r"D:\project\src\main.rs");
+        assert_eq!(
+            to_local_path("/d/project/src/main.rs"),
+            r"D:\project\src\main.rs"
+        );
     }
 
     #[test]
@@ -148,7 +164,10 @@ mod tests {
 
     #[test]
     fn convert_path_identity() {
-        assert_eq!(convert_path("/foo/bar", IdeType::VsCode, IdeType::JetBrains), "/foo/bar");
+        assert_eq!(
+            convert_path("/foo/bar", IdeType::VsCode, IdeType::JetBrains),
+            "/foo/bar"
+        );
     }
 
     #[test]

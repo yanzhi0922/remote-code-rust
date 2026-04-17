@@ -185,9 +185,9 @@ pub fn process_thinking_blocks(blocks: &[Value]) -> Vec<ProcessedThinkingBlock> 
                         .and_then(Value::as_str)
                         .unwrap_or("")
                         .to_string();
-                    Some(ProcessedThinkingBlock::Redacted(RedactedThinkingBlock::new(
-                        data,
-                    )))
+                    Some(ProcessedThinkingBlock::Redacted(
+                        RedactedThinkingBlock::new(data),
+                    ))
                 }
                 _ => None,
             }
@@ -223,11 +223,7 @@ impl DeferredToolConfig {
 
     /// Create a new deferred tool configuration.
     #[must_use]
-    pub fn new(
-        enabled: bool,
-        always_load_tools: Vec<String>,
-        deferred_tools: Vec<String>,
-    ) -> Self {
+    pub fn new(enabled: bool, always_load_tools: Vec<String>, deferred_tools: Vec<String>) -> Self {
         Self {
             enabled,
             always_load_tools,
@@ -344,7 +340,12 @@ pub struct FoundTool {
 impl FoundTool {
     /// Create a new found tool.
     #[must_use]
-    pub fn new(name: String, description: String, search_hint: String, relevance_score: f64) -> Self {
+    pub fn new(
+        name: String,
+        description: String,
+        search_hint: String,
+        relevance_score: f64,
+    ) -> Self {
         Self {
             name,
             description,
@@ -385,10 +386,7 @@ pub fn is_deferred_tool_call(tool_name: &str, _input: &Value) -> bool {
 /// # Returns
 ///
 /// A vector of tool JSON values where deferred tools are replaced with placeholders.
-pub fn build_deferred_tool_list(
-    all_tools: &[Value],
-    config: &DeferredToolConfig,
-) -> Vec<Value> {
+pub fn build_deferred_tool_list(all_tools: &[Value], config: &DeferredToolConfig) -> Vec<Value> {
     if !config.enabled {
         return all_tools.to_vec();
     }
@@ -612,8 +610,8 @@ impl PromptCacheScope {
     pub fn ttl_seconds(&self) -> Option<u64> {
         match self {
             PromptCacheScope::None => None,
-            PromptCacheScope::Short => Some(300),  // 5 minutes
-            PromptCacheScope::Hour => Some(3600),   // 1 hour
+            PromptCacheScope::Short => Some(300), // 5 minutes
+            PromptCacheScope::Hour => Some(3600), // 1 hour
         }
     }
 
@@ -622,9 +620,7 @@ impl PromptCacheScope {
     pub fn to_cache_control(&self) -> Option<Value> {
         match self {
             PromptCacheScope::None => None,
-            PromptCacheScope::Short | PromptCacheScope::Hour => {
-                Some(json!({"type": "ephemeral"}))
-            }
+            PromptCacheScope::Short | PromptCacheScope::Hour => Some(json!({"type": "ephemeral"})),
         }
     }
 }
@@ -736,8 +732,7 @@ mod tests {
     fn thinking_config_serialization_roundtrip() {
         let config = ThinkingConfig::streaming(15_000);
         let json_str = serde_json::to_string(&config).expect("serialize");
-        let deserialized: ThinkingConfig =
-            serde_json::from_str(&json_str).expect("deserialize");
+        let deserialized: ThinkingConfig = serde_json::from_str(&json_str).expect("deserialize");
         assert_eq!(config, deserialized);
     }
 
@@ -754,10 +749,7 @@ mod tests {
 
     #[test]
     fn thinking_block_with_signature() {
-        let block = ThinkingBlock::with_signature(
-            "reasoning".to_string(),
-            "sig_abc".to_string(),
-        );
+        let block = ThinkingBlock::with_signature("reasoning".to_string(), "sig_abc".to_string());
         assert_eq!(block.text, "reasoning");
         assert_eq!(block.signature.as_deref(), Some("sig_abc"));
     }
@@ -892,22 +884,15 @@ mod tests {
 
     #[test]
     fn deferred_tool_config_is_deferred_when_disabled() {
-        let config = DeferredToolConfig::new(
-            false,
-            vec![],
-            vec!["rare_tool".to_string()],
-        );
+        let config = DeferredToolConfig::new(false, vec![], vec!["rare_tool".to_string()]);
         // Even though "rare_tool" is in deferred_tools, config is disabled
         assert!(!config.is_deferred("rare_tool"));
     }
 
     #[test]
     fn deferred_tool_config_is_always_loaded() {
-        let config = DeferredToolConfig::new(
-            true,
-            vec!["bash".to_string(), "read".to_string()],
-            vec![],
-        );
+        let config =
+            DeferredToolConfig::new(true, vec!["bash".to_string(), "read".to_string()], vec![]);
         assert!(config.is_always_loaded("bash"));
         assert!(config.is_always_loaded("read"));
         assert!(!config.is_always_loaded("write"));
@@ -915,11 +900,7 @@ mod tests {
 
     #[test]
     fn deferred_tool_config_serialization_roundtrip() {
-        let config = DeferredToolConfig::new(
-            true,
-            vec!["bash".into()],
-            vec!["rare".into()],
-        );
+        let config = DeferredToolConfig::new(true, vec!["bash".into()], vec!["rare".into()]);
         let json_str = serde_json::to_string(&config).expect("serialize");
         let back: DeferredToolConfig = serde_json::from_str(&json_str).expect("deserialize");
         assert_eq!(config, back);
@@ -1020,11 +1001,7 @@ mod tests {
             json!({"name": "bash", "description": "Run commands", "input_schema": {}}),
             json!({"name": "rare_tool", "description": "Rare tool", "input_schema": {}}),
         ];
-        let config = DeferredToolConfig::new(
-            true,
-            vec!["bash".into()],
-            vec!["rare_tool".into()],
-        );
+        let config = DeferredToolConfig::new(true, vec!["bash".into()], vec!["rare_tool".into()]);
         let result = build_deferred_tool_list(&tools, &config);
         assert_eq!(result.len(), 2);
 
@@ -1036,7 +1013,12 @@ mod tests {
         // rare_tool is deferred — replaced with placeholder
         assert_eq!(result[1]["name"], "rare_tool");
         assert_eq!(result[1]["deferred"], true);
-        assert!(result[1]["description"].as_str().unwrap().contains("deferred"));
+        assert!(
+            result[1]["description"]
+                .as_str()
+                .unwrap()
+                .contains("deferred")
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1186,9 +1168,7 @@ mod tests {
 
     #[test]
     fn apply_cache_control_none_does_nothing() {
-        let mut messages = vec![
-            json!({"role": "user", "content": "hello"}),
-        ];
+        let mut messages = vec![json!({"role": "user", "content": "hello"})];
         apply_cache_control(&mut messages, PromptCacheScope::None);
         assert!(messages[0].get("cache_control").is_none());
     }

@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::backends::types::{CreatePaneResult, PaneConfig, PaneId, PaneStatus};
 use crate::backends::PaneBackend;
+use crate::backends::types::{CreatePaneResult, PaneConfig, PaneId, PaneStatus};
 use crate::error::{SwarmError, SwarmResult};
 
 /// A constructed iTerm2 command (not executed).
@@ -125,11 +125,7 @@ impl PaneBackend for ItermBackend {
     }
 
     async fn create_pane(&self, config: &PaneConfig) -> SwarmResult<CreatePaneResult> {
-        let cmd = build_create_split_command(
-            &config.name,
-            &config.cwd,
-            config.command.as_deref(),
-        );
+        let cmd = build_create_split_command(&config.name, &config.cwd, config.command.as_deref());
         tracing::debug!("iterm2 create pane command: {}", cmd.to_command_string());
 
         let pane_id = {
@@ -229,7 +225,11 @@ mod tests {
 
     #[test]
     fn iterm_command_to_string() {
-        let cmd = ItermCommand::new(vec!["split-pane".to_owned(), "--title".to_owned(), "my pane".to_owned()]);
+        let cmd = ItermCommand::new(vec![
+            "split-pane".to_owned(),
+            "--title".to_owned(),
+            "my pane".to_owned(),
+        ]);
         let s = cmd.to_command_string();
         assert!(s.starts_with("it2"));
         assert!(s.contains("split-pane"));
@@ -248,16 +248,28 @@ mod tests {
     #[tokio::test]
     async fn iterm_backend_second_pane() {
         let backend = ItermBackend::new();
-        backend.create_pane(&PaneConfig::new("w1", "/tmp", BackendType::ITerm2)).await.expect("ok");
-        let result = backend.create_pane(&PaneConfig::new("w2", "/tmp", BackendType::ITerm2)).await.expect("ok");
+        backend
+            .create_pane(&PaneConfig::new("w1", "/tmp", BackendType::ITerm2))
+            .await
+            .expect("ok");
+        let result = backend
+            .create_pane(&PaneConfig::new("w2", "/tmp", BackendType::ITerm2))
+            .await
+            .expect("ok");
         assert!(!result.is_first_teammate);
     }
 
     #[tokio::test]
     async fn iterm_backend_list_panes() {
         let backend = ItermBackend::new();
-        backend.create_pane(&PaneConfig::new("w1", "/tmp", BackendType::ITerm2)).await.expect("ok");
-        backend.create_pane(&PaneConfig::new("w2", "/tmp", BackendType::ITerm2)).await.expect("ok");
+        backend
+            .create_pane(&PaneConfig::new("w1", "/tmp", BackendType::ITerm2))
+            .await
+            .expect("ok");
+        backend
+            .create_pane(&PaneConfig::new("w2", "/tmp", BackendType::ITerm2))
+            .await
+            .expect("ok");
         let panes = backend.list_panes().await.expect("should list");
         assert_eq!(panes.len(), 2);
     }
@@ -265,8 +277,14 @@ mod tests {
     #[tokio::test]
     async fn iterm_backend_destroy_pane() {
         let backend = ItermBackend::new();
-        let result = backend.create_pane(&PaneConfig::new("w1", "/tmp", BackendType::ITerm2)).await.expect("ok");
-        backend.destroy_pane(&result.pane_id).await.expect("should destroy");
+        let result = backend
+            .create_pane(&PaneConfig::new("w1", "/tmp", BackendType::ITerm2))
+            .await
+            .expect("ok");
+        backend
+            .destroy_pane(&result.pane_id)
+            .await
+            .expect("should destroy");
         let panes = backend.list_panes().await.expect("ok");
         assert!(panes.is_empty());
     }
@@ -274,7 +292,10 @@ mod tests {
     #[tokio::test]
     async fn iterm_backend_pane_status() {
         let backend = ItermBackend::new();
-        let result = backend.create_pane(&PaneConfig::new("w1", "/tmp", BackendType::ITerm2)).await.expect("ok");
+        let result = backend
+            .create_pane(&PaneConfig::new("w1", "/tmp", BackendType::ITerm2))
+            .await
+            .expect("ok");
         let status = backend.pane_status(&result.pane_id).await.expect("ok");
         assert_eq!(status, PaneStatus::Running);
     }
@@ -282,21 +303,32 @@ mod tests {
     #[tokio::test]
     async fn iterm_backend_pane_status_not_found() {
         let backend = ItermBackend::new();
-        let status = backend.pane_status(&"nonexistent".to_owned()).await.expect("ok");
+        let status = backend
+            .pane_status(&"nonexistent".to_owned())
+            .await
+            .expect("ok");
         assert_eq!(status, PaneStatus::NotFound);
     }
 
     #[tokio::test]
     async fn iterm_backend_send_to_pane() {
         let backend = ItermBackend::new();
-        let result = backend.create_pane(&PaneConfig::new("w1", "/tmp", BackendType::ITerm2)).await.expect("ok");
-        backend.send_to_pane(&result.pane_id, "hello").await.expect("should send");
+        let result = backend
+            .create_pane(&PaneConfig::new("w1", "/tmp", BackendType::ITerm2))
+            .await
+            .expect("ok");
+        backend
+            .send_to_pane(&result.pane_id, "hello")
+            .await
+            .expect("should send");
     }
 
     #[tokio::test]
     async fn iterm_backend_send_to_nonexistent() {
         let backend = ItermBackend::new();
-        let result = backend.send_to_pane(&"nonexistent".to_owned(), "hello").await;
+        let result = backend
+            .send_to_pane(&"nonexistent".to_owned(), "hello")
+            .await;
         assert!(result.is_err());
     }
 

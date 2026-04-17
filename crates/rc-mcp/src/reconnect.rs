@@ -238,12 +238,7 @@ impl CircuitBreakerReconnect {
     /// Create with sensible defaults.
     #[must_use]
     pub fn default_strategy() -> Self {
-        Self::new(
-            3,
-            Duration::from_secs(30),
-            Duration::from_secs(2),
-            20,
-        )
+        Self::new(3, Duration::from_secs(30), Duration::from_secs(2), 20)
     }
 
     /// Get the circuit state for a server.
@@ -361,11 +356,7 @@ impl ReconnectScheduler {
 
     /// Create a new scheduler with custom parameters.
     #[must_use]
-    pub fn with_params(
-        max_attempts: u32,
-        initial_backoff_ms: u64,
-        max_backoff_ms: u64,
-    ) -> Self {
+    pub fn with_params(max_attempts: u32, initial_backoff_ms: u64, max_backoff_ms: u64) -> Self {
         Self {
             max_attempts,
             initial_backoff_ms,
@@ -382,13 +373,14 @@ impl ReconnectScheduler {
     /// If the maximum attempts have been exceeded, returns
     /// [`ReconnectAction::GiveUp`].
     pub fn schedule_reconnect(&mut self, server_name: String) -> ReconnectAction {
-        let state = self.pending.entry(server_name.clone()).or_insert_with(|| {
-            ReconnectState {
+        let state = self
+            .pending
+            .entry(server_name.clone())
+            .or_insert_with(|| ReconnectState {
                 attempt: 0,
                 next_attempt_at: Instant::now(),
                 aborted: false,
-            }
-        });
+            });
 
         if state.aborted {
             return ReconnectAction::GiveUp;
@@ -467,10 +459,7 @@ impl ReconnectScheduler {
     /// Return the number of servers with pending reconnects.
     #[must_use]
     pub fn pending_count(&self) -> usize {
-        self.pending
-            .values()
-            .filter(|s| !s.aborted)
-            .count()
+        self.pending.values().filter(|s| !s.aborted).count()
     }
 }
 
@@ -478,7 +467,9 @@ impl ReconnectScheduler {
 fn compute_backoff(attempt: u32, initial_backoff_ms: u64, max_backoff_ms: u64) -> Duration {
     let exponent = attempt.saturating_sub(1);
     let multiplier = 2_u64.saturating_pow(exponent);
-    let backoff_ms = initial_backoff_ms.saturating_mul(multiplier).min(max_backoff_ms);
+    let backoff_ms = initial_backoff_ms
+        .saturating_mul(multiplier)
+        .min(max_backoff_ms);
     Duration::from_millis(backoff_ms)
 }
 
@@ -566,12 +557,30 @@ mod tests {
 
     #[test]
     fn backoff_increases_exponentially() {
-        assert_eq!(compute_backoff(1, 1000, 30_000), Duration::from_millis(1000));
-        assert_eq!(compute_backoff(2, 1000, 30_000), Duration::from_millis(2000));
-        assert_eq!(compute_backoff(3, 1000, 30_000), Duration::from_millis(4000));
-        assert_eq!(compute_backoff(4, 1000, 30_000), Duration::from_millis(8000));
-        assert_eq!(compute_backoff(5, 1000, 30_000), Duration::from_millis(16_000));
-        assert_eq!(compute_backoff(6, 1000, 30_000), Duration::from_millis(30_000)); // capped
+        assert_eq!(
+            compute_backoff(1, 1000, 30_000),
+            Duration::from_millis(1000)
+        );
+        assert_eq!(
+            compute_backoff(2, 1000, 30_000),
+            Duration::from_millis(2000)
+        );
+        assert_eq!(
+            compute_backoff(3, 1000, 30_000),
+            Duration::from_millis(4000)
+        );
+        assert_eq!(
+            compute_backoff(4, 1000, 30_000),
+            Duration::from_millis(8000)
+        );
+        assert_eq!(
+            compute_backoff(5, 1000, 30_000),
+            Duration::from_millis(16_000)
+        );
+        assert_eq!(
+            compute_backoff(6, 1000, 30_000),
+            Duration::from_millis(30_000)
+        ); // capped
     }
 
     #[test]
@@ -610,11 +619,8 @@ mod tests {
 
     #[test]
     fn exp_backoff_second_attempt_waits() {
-        let strategy = ExponentialBackoffReconnect::new(
-            5,
-            Duration::from_secs(1),
-            Duration::from_secs(30),
-        );
+        let strategy =
+            ExponentialBackoffReconnect::new(5, Duration::from_secs(1), Duration::from_secs(30));
         match strategy.next_action(2) {
             ReconnectAction::WaitFor(d) => assert_eq!(d, Duration::from_secs(1)),
             other => panic!("expected WaitFor, got {other:?}"),
@@ -623,11 +629,8 @@ mod tests {
 
     #[test]
     fn exp_backoff_exceeds_max_gives_up() {
-        let strategy = ExponentialBackoffReconnect::new(
-            3,
-            Duration::from_secs(1),
-            Duration::from_secs(30),
-        );
+        let strategy =
+            ExponentialBackoffReconnect::new(3, Duration::from_secs(1), Duration::from_secs(30));
         assert_eq!(strategy.next_action(4), ReconnectAction::GiveUp);
     }
 
@@ -643,11 +646,8 @@ mod tests {
 
     #[test]
     fn exp_backoff_can_retry_under_limit() {
-        let mut strategy = ExponentialBackoffReconnect::new(
-            3,
-            Duration::from_secs(1),
-            Duration::from_secs(30),
-        );
+        let mut strategy =
+            ExponentialBackoffReconnect::new(3, Duration::from_secs(1), Duration::from_secs(30));
         assert!(strategy.can_retry("srv"));
         strategy.record_failure("srv");
         assert!(strategy.can_retry("srv"));
@@ -669,11 +669,8 @@ mod tests {
 
     #[test]
     fn exp_backoff_backoff_caps_at_max() {
-        let strategy = ExponentialBackoffReconnect::new(
-            10,
-            Duration::from_secs(1),
-            Duration::from_secs(5),
-        );
+        let strategy =
+            ExponentialBackoffReconnect::new(10, Duration::from_secs(1), Duration::from_secs(5));
         match strategy.next_action(10) {
             ReconnectAction::WaitFor(d) => assert!(d <= Duration::from_secs(5)),
             other => panic!("expected WaitFor, got {other:?}"),
@@ -690,12 +687,8 @@ mod tests {
 
     #[test]
     fn circuit_breaker_opens_after_threshold() {
-        let mut cb = CircuitBreakerReconnect::new(
-            3,
-            Duration::from_secs(30),
-            Duration::from_secs(2),
-            20,
-        );
+        let mut cb =
+            CircuitBreakerReconnect::new(3, Duration::from_secs(30), Duration::from_secs(2), 20);
         cb.record_failure("srv");
         cb.record_failure("srv");
         assert_eq!(cb.circuit_state("srv"), CircuitState::Closed);
@@ -705,12 +698,8 @@ mod tests {
 
     #[test]
     fn circuit_breaker_success_closes() {
-        let mut cb = CircuitBreakerReconnect::new(
-            2,
-            Duration::from_secs(30),
-            Duration::from_secs(2),
-            20,
-        );
+        let mut cb =
+            CircuitBreakerReconnect::new(2, Duration::from_secs(30), Duration::from_secs(2), 20);
         cb.record_failure("srv");
         cb.record_failure("srv");
         assert_eq!(cb.circuit_state("srv"), CircuitState::Open);

@@ -65,10 +65,7 @@ pub fn detect_provider(config: &ProviderConfig) -> ModelProvider {
             "vertex" => return ModelProvider::GcpVertex { project: None },
             "foundry" | "openai_compatible" => {
                 return ModelProvider::OpenAiCompatible {
-                    base_url: config
-                        .openai_base_url
-                        .clone()
-                        .unwrap_or_default(),
+                    base_url: config.openai_base_url.clone().unwrap_or_default(),
                 };
             }
             _ => {}
@@ -224,7 +221,9 @@ mod tests {
     #[test]
     fn first_party_url_check() {
         assert!(is_first_party_base_url("https://api.anthropic.com/v1"));
-        assert!(is_first_party_base_url("https://api-staging.anthropic.com/v1"));
+        assert!(is_first_party_base_url(
+            "https://api-staging.anthropic.com/v1"
+        ));
         assert!(!is_first_party_base_url("https://my-proxy.example.com"));
     }
 }

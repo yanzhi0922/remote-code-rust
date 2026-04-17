@@ -448,10 +448,8 @@ mod tests {
 
     #[test]
     fn callback_handler_delegates() {
-        let handler = CallbackElicitationHandler::new(|_event| {
-            ElicitationResult::Accept {
-                content: json!("user-response"),
-            }
+        let handler = CallbackElicitationHandler::new(|_event| ElicitationResult::Accept {
+            content: json!("user-response"),
         });
         let event = make_event("Enter value");
         let result = handler.handle_elicitation(event);
@@ -517,8 +515,7 @@ mod tests {
         assert!(!waiting.is_completed());
         assert!(!waiting.is_expired());
 
-        let completed =
-            ElicitationWaitingState::Completed(Box::new(ElicitationResult::Decline));
+        let completed = ElicitationWaitingState::Completed(Box::new(ElicitationResult::Decline));
         assert!(!completed.is_waiting());
         assert!(completed.is_completed());
         assert!(!completed.is_expired());
@@ -626,9 +623,7 @@ mod tests {
 
     #[test]
     fn timeout_handler_delegates_when_not_timed_out() {
-        let inner = CallbackElicitationHandler::new(|_| {
-            ElicitationResult::accept_text("response")
-        });
+        let inner = CallbackElicitationHandler::new(|_| ElicitationResult::accept_text("response"));
         let handler = TimeoutElicitationHandler::new(inner);
         let event = ElicitationRequestEvent::new(
             "srv",
@@ -647,9 +642,8 @@ mod tests {
 
     #[test]
     fn timeout_handler_cancels_when_timed_out() {
-        let inner = CallbackElicitationHandler::new(|_| {
-            ElicitationResult::accept_text("should not reach")
-        });
+        let inner =
+            CallbackElicitationHandler::new(|_| ElicitationResult::accept_text("should not reach"));
         let handler = TimeoutElicitationHandler::new(inner);
         let mut event = ElicitationRequestEvent::new(
             "srv",
@@ -670,21 +664,13 @@ mod tests {
 
     #[test]
     fn event_is_timed_out_without_timeout() {
-        let event = ElicitationRequestEvent::new(
-            "srv",
-            "req-1",
-            ElicitationParams::text("test"),
-        );
+        let event = ElicitationRequestEvent::new("srv", "req-1", ElicitationParams::text("test"));
         assert!(!event.is_timed_out());
     }
 
     #[test]
     fn event_elapsed() {
-        let event = ElicitationRequestEvent::new(
-            "srv",
-            "req-1",
-            ElicitationParams::text("test"),
-        );
+        let event = ElicitationRequestEvent::new("srv", "req-1", ElicitationParams::text("test"));
         // Should be near-zero
         let elapsed = event.elapsed();
         assert!(elapsed < Duration::from_secs(1));

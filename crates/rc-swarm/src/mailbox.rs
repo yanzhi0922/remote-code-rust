@@ -56,11 +56,12 @@ pub async fn read_messages(team_name: &str, agent_name: &str) -> SwarmResult<Vec
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
         if let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string())
-            && name.ends_with(MAILBOX_MESSAGE_EXT) {
-                let content = fs::read_to_string(&path).await?;
-                let msg: MailboxMessage = serde_json::from_str(&content)?;
-                messages.push(msg);
-            }
+            && name.ends_with(MAILBOX_MESSAGE_EXT)
+        {
+            let content = fs::read_to_string(&path).await?;
+            let msg: MailboxMessage = serde_json::from_str(&content)?;
+            messages.push(msg);
+        }
     }
 
     // Sort by timestamp.
@@ -214,7 +215,12 @@ mod tests {
     async fn test_read_unread_messages() {
         let _td = TestDir::new();
         let msg1 = MailboxMessage::new("lead", "worker-1", MailboxMessageType::Text, "hello");
-        let msg2 = MailboxMessage::new("lead", "worker-1", MailboxMessageType::TaskAssignment, "task");
+        let msg2 = MailboxMessage::new(
+            "lead",
+            "worker-1",
+            MailboxMessageType::TaskAssignment,
+            "task",
+        );
         send_message("test-team", &msg1).await.expect("ok");
         send_message("test-team", &msg2).await.expect("ok");
 
@@ -255,9 +261,7 @@ mod tests {
             .await
             .expect("should delete");
 
-        let messages = read_messages("test-team", "worker-1")
-            .await
-            .expect("ok");
+        let messages = read_messages("test-team", "worker-1").await.expect("ok");
         assert!(messages.is_empty());
     }
 
@@ -281,18 +285,14 @@ mod tests {
             .expect("should clear");
         assert_eq!(removed, 2);
 
-        let messages = read_messages("test-team", "worker-1")
-            .await
-            .expect("ok");
+        let messages = read_messages("test-team", "worker-1").await.expect("ok");
         assert!(messages.is_empty());
     }
 
     #[tokio::test]
     async fn test_clear_empty_mailbox() {
         let _td = TestDir::new();
-        let removed = clear_mailbox("test-team", "worker-1")
-            .await
-            .expect("ok");
+        let removed = clear_mailbox("test-team", "worker-1").await.expect("ok");
         assert_eq!(removed, 0);
     }
 
@@ -356,9 +356,7 @@ mod tests {
         send_message("test-team", &msg2).await.expect("ok");
         send_message("test-team", &msg1).await.expect("ok");
 
-        let messages = read_messages("test-team", "worker-1")
-            .await
-            .expect("ok");
+        let messages = read_messages("test-team", "worker-1").await.expect("ok");
         assert_eq!(messages[0].content, "first");
         assert_eq!(messages[1].content, "second");
     }

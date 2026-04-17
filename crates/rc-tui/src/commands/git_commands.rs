@@ -112,9 +112,7 @@ pub fn dispatch_branch(input: &str, config: &RuntimeConfig) {
             if name.is_empty() {
                 println!("Usage: /branch create <branch-name>");
             } else {
-                println!(
-                    "Branch '{name}' — use the Bash tool to run: git checkout -b {name}"
-                );
+                println!("Branch '{name}' — use the Bash tool to run: git checkout -b {name}");
             }
         }
         "switch" => {
@@ -122,9 +120,7 @@ pub fn dispatch_branch(input: &str, config: &RuntimeConfig) {
             if name.is_empty() {
                 println!("Usage: /branch switch <branch-name>");
             } else {
-                println!(
-                    "Switch to '{name}' — use the Bash tool to run: git checkout {name}"
-                );
+                println!("Switch to '{name}' — use the Bash tool to run: git checkout {name}");
             }
         }
         other => {

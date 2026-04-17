@@ -46,8 +46,8 @@ pub fn build_attribution_header() -> Result<HeaderValue, reqwest::header::Invali
 /// # Errors
 ///
 /// Returns an error if the header value contains invalid bytes.
-pub fn build_attribution_header_pair(
-) -> Result<(HeaderName, HeaderValue), reqwest::header::InvalidHeaderValue> {
+pub fn build_attribution_header_pair()
+-> Result<(HeaderName, HeaderValue), reqwest::header::InvalidHeaderValue> {
     let name = HeaderName::from_static(ATTRIBUTION_HEADER);
     let value = build_attribution_header()?;
     Ok((name, value))

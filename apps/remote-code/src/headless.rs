@@ -19,7 +19,7 @@ use rc_protocol::{
 };
 use rc_provider::ProviderCompatBackend;
 use rc_session::SessionStore;
-use rc_tools::runtime_builtin_tool_specs;
+use rc_tools::runtime_provider_tool_specs;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tracing::warn;
@@ -56,7 +56,8 @@ pub(crate) async fn run_headless(
             }),
             version: RUNTIME_VERSION.to_owned(),
             cwd: config.cwd.display().to_string(),
-            tools: runtime_builtin_tool_specs()
+            tools: runtime_provider_tool_specs()
+                .await
                 .into_iter()
                 .map(|tool| tool.protocol_name)
                 .collect(),

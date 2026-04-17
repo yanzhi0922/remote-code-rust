@@ -56,11 +56,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
     };
 
     let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::NONE)
-                .title(title),
-        )
+        .block(Block::default().borders(Borders::NONE).title(title))
         .wrap(Wrap { trim: false })
         .scroll((scroll_offset as u16, 0));
 
@@ -70,8 +66,8 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::ChatMessage;
     use crate::app::App;
+    use crate::message::ChatMessage;
 
     #[test]
     fn empty_app_renders_without_panic() {

@@ -70,7 +70,9 @@ mod tests {
     #[test]
     fn intro_section_contains_cyber_risk() {
         let section = IntroSection;
-        let result = section.compute(&test_ctx()).expect("compute should succeed");
+        let result = section
+            .compute(&test_ctx())
+            .expect("compute should succeed");
         let content = result.expect("should return Some");
         assert!(content.contains(CYBER_RISK_INSTRUCTION));
     }
@@ -78,7 +80,9 @@ mod tests {
     #[test]
     fn intro_section_contains_url_warning() {
         let section = IntroSection;
-        let result = section.compute(&test_ctx()).expect("compute should succeed");
+        let result = section
+            .compute(&test_ctx())
+            .expect("compute should succeed");
         let content = result.expect("should return Some");
         assert!(content.contains("NEVER generate or guess URLs"));
     }
@@ -100,7 +104,9 @@ mod tests {
     #[test]
     fn intro_without_output_style() {
         let section = IntroSection;
-        let result = section.compute(&test_ctx()).expect("compute should succeed");
+        let result = section
+            .compute(&test_ctx())
+            .expect("compute should succeed");
         let content = result.expect("should return Some");
         assert!(content.contains("software engineering tasks"));
     }

@@ -31,12 +31,11 @@ pub static ALLOWED_OFFICIAL_MARKETPLACE_NAMES: Lazy<HashSet<&'static str>> = Laz
 });
 
 /// Official marketplaces that should NOT auto-update by default.
-pub static NO_AUTO_UPDATE_OFFICIAL_MARKETPLACES: Lazy<HashSet<&'static str>> =
-    Lazy::new(|| {
-        let mut set = HashSet::new();
-        set.insert("knowledge-work-plugins");
-        set
-    });
+pub static NO_AUTO_UPDATE_OFFICIAL_MARKETPLACES: Lazy<HashSet<&'static str>> = Lazy::new(|| {
+    let mut set = HashSet::new();
+    set.insert("knowledge-work-plugins");
+    set
+});
 
 /// Pattern to detect names that impersonate official Anthropic/Claude
 /// marketplaces.
@@ -52,9 +51,8 @@ pub static BLOCKED_OFFICIAL_NAME_PATTERN: Lazy<Regex> = Lazy::new(|| {
 
 /// Pattern to detect non-ASCII characters that could be used for homograph
 /// attacks.
-static NON_ASCII_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"[^\u{0020}-\u{007E}]").expect("NON_ASCII_PATTERN is a valid regex")
-});
+static NON_ASCII_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"[^\u{0020}-\u{007E}]").expect("NON_ASCII_PATTERN is a valid regex"));
 
 /// The official GitHub organization for Anthropic marketplaces.
 pub const OFFICIAL_GITHUB_ORG: &str = "anthropics";
@@ -908,7 +906,10 @@ mod tests {
 
     #[test]
     fn test_is_marketplace_auto_update_explicit_overrides() {
-        assert!(!is_marketplace_auto_update("claude-code-marketplace", Some(false)));
+        assert!(!is_marketplace_auto_update(
+            "claude-code-marketplace",
+            Some(false)
+        ));
         assert!(is_marketplace_auto_update("my-marketplace", Some(true)));
     }
 
@@ -1035,8 +1036,7 @@ mod tests {
             user_config: None,
         };
         let json = serde_json::to_string(&manifest).expect("serialize");
-        let deserialized: PluginManifestSchema =
-            serde_json::from_str(&json).expect("deserialize");
+        let deserialized: PluginManifestSchema = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(manifest, deserialized);
     }
 
@@ -1049,8 +1049,7 @@ mod tests {
             sparse_paths: None,
         };
         let json = serde_json::to_string(&source).expect("serialize");
-        let deserialized: MarketplaceSourceKind =
-            serde_json::from_str(&json).expect("deserialize");
+        let deserialized: MarketplaceSourceKind = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(source, deserialized);
     }
 
@@ -1090,7 +1089,9 @@ mod tests {
     fn test_settings_plugin_entry_simple() {
         let json = r#""code-formatter@anthropic-tools""#;
         let entry: SettingsPluginEntrySchema = serde_json::from_str(json).expect("parse");
-        assert!(matches!(entry, SettingsPluginEntrySchema::Simple(s) if s == "code-formatter@anthropic-tools"));
+        assert!(
+            matches!(entry, SettingsPluginEntrySchema::Simple(s) if s == "code-formatter@anthropic-tools")
+        );
     }
 
     #[test]

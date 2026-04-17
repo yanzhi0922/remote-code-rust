@@ -59,10 +59,7 @@ pub fn render_rewind(config: &RuntimeConfig, store: &SessionStore) {
         Ok(bundle) => {
             let entries = bundle.conversation.len();
             println!("  transcript entries: {entries}");
-            println!(
-                "  tool calls:         {}",
-                bundle.stats.tool_call_count
-            );
+            println!("  tool calls:         {}", bundle.stats.tool_call_count);
             println!("  errors:             {}", bundle.stats.error_count);
             println!(
                 "  last stop:          {}",
@@ -102,7 +99,11 @@ fn render_export_json(config: &RuntimeConfig, store: &SessionStore) {
             println!("  entries: {entries}");
             println!(
                 "  path:   {}",
-                config.paths.sessions_dir.join(format!("{}.json", config.session_id)).display()
+                config
+                    .paths
+                    .sessions_dir
+                    .join(format!("{}.json", config.session_id))
+                    .display()
             );
         }
         Err(error) => println!("Export failed: {error}"),
@@ -117,7 +118,11 @@ fn render_export_markdown(config: &RuntimeConfig, store: &SessionStore) {
             println!("  entries: {entries}");
             println!(
                 "  path:   {}",
-                config.paths.artifacts_dir.join(format!("{}.md", config.session_id)).display()
+                config
+                    .paths
+                    .artifacts_dir
+                    .join(format!("{}.md", config.session_id))
+                    .display()
             );
         }
         Err(error) => println!("Export failed: {error}"),
@@ -163,11 +168,7 @@ pub fn render_summary(config: &RuntimeConfig, store: &SessionStore) {
 
 /// Dispatch `/tag` — manage session tags.
 pub fn dispatch_tag(input: &str, config: &RuntimeConfig) {
-    let remainder = input
-        .trim()
-        .strip_prefix("/tag")
-        .unwrap_or_default()
-        .trim();
+    let remainder = input.trim().strip_prefix("/tag").unwrap_or_default().trim();
 
     if remainder.is_empty() || remainder == "list" {
         println!("Session tags for {}:", config.session_id);

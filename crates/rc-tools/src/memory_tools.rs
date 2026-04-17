@@ -165,7 +165,11 @@ pub(crate) fn memory_search_tool(input: &Value, context: &ToolExecutionContext) 
     if results.is_empty() {
         Ok(format!("No memories found matching '{query}'."))
     } else {
-        let mut output = format!("Found {} memory entries matching '{}':\n", results.len(), query);
+        let mut output = format!(
+            "Found {} memory entries matching '{}':\n",
+            results.len(),
+            query
+        );
         for stored in &results {
             output.push_str(&format!(
                 "  [{}] {} (scope: {}, tags: {})\n",
@@ -258,11 +262,8 @@ pub(crate) fn memory_delete_tool(input: &Value, context: &ToolExecutionContext) 
 
 /// Parse a scope string into a [`MemoryType`].
 fn parse_scope(s: &str) -> Result<MemoryType> {
-    MemoryType::from_str_opt(s).ok_or_else(|| {
-        anyhow!(
-            "invalid scope '{s}'. Must be 'project', 'user', or 'agent'"
-        )
-    })
+    MemoryType::from_str_opt(s)
+        .ok_or_else(|| anyhow!("invalid scope '{s}'. Must be 'project', 'user', or 'agent'"))
 }
 
 // ---------------------------------------------------------------------------

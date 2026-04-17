@@ -116,10 +116,7 @@ fn check_mcp(config: &RuntimeConfig) {
 fn check_config(config: &RuntimeConfig) {
     println!("[config]");
     println!("  profile_dir: {}", config.paths.profile_dir.display());
-    println!(
-        "  permission_mode: {:?}",
-        config.permission_mode
-    );
+    println!("  permission_mode: {:?}", config.permission_mode);
     println!(
         "  effort: {}",
         config.effort.as_deref().unwrap_or("(default)")

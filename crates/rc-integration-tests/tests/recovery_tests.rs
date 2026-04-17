@@ -89,7 +89,13 @@ fn session_recovery_full_cycle() {
     {
         let store = rc_session::SessionStore::open(paths.clone()).expect("store should open");
         store
-            .ensure_session(session_id, std::path::Path::new("/tmp"), "anthropic", None, Some("Recovery Test"))
+            .ensure_session(
+                session_id,
+                std::path::Path::new("/tmp"),
+                "anthropic",
+                None,
+                Some("Recovery Test"),
+            )
             .expect("should create session");
 
         store
@@ -107,7 +113,9 @@ fn session_recovery_full_cycle() {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].session_id, session_id);
 
-        let conversation = store.load_conversation(session_id).expect("should load conversation");
+        let conversation = store
+            .load_conversation(session_id)
+            .expect("should load conversation");
         assert_eq!(conversation.len(), 2);
     }
 }
@@ -128,7 +136,10 @@ fn mcp_reconnect_scheduler_recovery() {
 
     // Simulate recovery — success
     let action = scheduler.schedule_reconnect("server-1".to_owned());
-    assert!(matches!(action, rc_mcp::ReconnectAction::ConnectNow | rc_mcp::ReconnectAction::WaitFor(..)));
+    assert!(matches!(
+        action,
+        rc_mcp::ReconnectAction::ConnectNow | rc_mcp::ReconnectAction::WaitFor(..)
+    ));
 
     scheduler.report_success("server-1");
     assert!(!scheduler.is_reconnecting("server-1"));
@@ -150,7 +161,8 @@ fn mcp_connection_state_recovery() {
         request_timeout_secs: None,
         metadata: BTreeMap::new(),
     };
-    let scoped = rc_mcp::scope::ScopedMcpServerConfig::new(config, rc_mcp::scope::ConfigScope::Local);
+    let scoped =
+        rc_mcp::scope::ScopedMcpServerConfig::new(config, rc_mcp::scope::ConfigScope::Local);
 
     // Simulate: was connected → failed → pending → reconnecting
     let failed = rc_mcp::McpServerConnection::Failed(rc_mcp::connection::FailedServer {
@@ -196,12 +208,7 @@ async fn swarm_teammate_reconnection() {
     let mut team = rc_swarm::TeamFile::new("reconnect-team", "lead-1");
 
     // Add a member with session ID (needed for reconnection)
-    let mut member = rc_swarm::TeamMember::new(
-        "agent-1",
-        "worker-1",
-        "pane-0",
-        "/tmp/workdir",
-    );
+    let mut member = rc_swarm::TeamMember::new("agent-1", "worker-1", "pane-0", "/tmp/workdir");
     member.session_id = Some("session-abc".to_owned());
     member.backend_type = Some(rc_swarm::BackendType::InProcess);
     member.is_active = Some(true);

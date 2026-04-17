@@ -80,10 +80,22 @@ fn render_list() {
 /// Dispatch `/terminalSetup` — show terminal setup information.
 pub fn render_terminal_setup(config: &RuntimeConfig) {
     println!("Terminal setup:");
-    println!("  term:      {}", std::env::var("TERM").unwrap_or_else(|_| "(unknown)".to_owned()));
-    println!("  term_prog: {}", std::env::var("TERM_PROGRAM").unwrap_or_else(|_| "(unknown)".to_owned()));
-    println!("  shell:     {}", std::env::var("SHELL").unwrap_or_else(|_| "(unknown)".to_owned()));
-    println!("  editor:    {}", std::env::var("EDITOR").unwrap_or_else(|_| "(none)".to_owned()));
+    println!(
+        "  term:      {}",
+        std::env::var("TERM").unwrap_or_else(|_| "(unknown)".to_owned())
+    );
+    println!(
+        "  term_prog: {}",
+        std::env::var("TERM_PROGRAM").unwrap_or_else(|_| "(unknown)".to_owned())
+    );
+    println!(
+        "  shell:     {}",
+        std::env::var("SHELL").unwrap_or_else(|_| "(unknown)".to_owned())
+    );
+    println!(
+        "  editor:    {}",
+        std::env::var("EDITOR").unwrap_or_else(|_| "(none)".to_owned())
+    );
     println!("  session:   {}", config.session_id);
     println!();
     println!("  Tips:");

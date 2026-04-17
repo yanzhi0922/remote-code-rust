@@ -11,10 +11,10 @@ pub mod registry;
 pub mod tmux;
 pub mod types;
 
-use async_trait::async_trait;
 use crate::backends::types::{CreatePaneResult, PaneConfig, PaneId, PaneStatus};
 use crate::error::SwarmResult;
 use crate::types::SpawnConfig;
+use async_trait::async_trait;
 
 /// Trait for managing terminal panes.
 ///

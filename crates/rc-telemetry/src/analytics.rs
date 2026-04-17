@@ -270,10 +270,7 @@ impl AnalyticsSink for BufferedSink {
 
 impl BufferedSink {
     /// Flush the buffer while the lock is already held.
-    fn flush_locked(
-        &self,
-        buf: &mut Vec<(AnalyticsEvent, EventMetadata)>,
-    ) -> Result<()> {
+    fn flush_locked(&self, buf: &mut Vec<(AnalyticsEvent, EventMetadata)>) -> Result<()> {
         for (event, metadata) in buf.drain(..) {
             self.inner.send_event(&event, &metadata)?;
         }
@@ -572,10 +569,19 @@ mod tests {
     fn feature_flag_parsing_logic() {
         // Test the underlying parsing logic without modifying env vars.
         // The default case (no env var set) returns true.
-        assert!(matches!("true".to_lowercase().as_str(), "true" | "1" | "yes"));
+        assert!(matches!(
+            "true".to_lowercase().as_str(),
+            "true" | "1" | "yes"
+        ));
         assert!(matches!("1".to_lowercase().as_str(), "true" | "1" | "yes"));
-        assert!(matches!("yes".to_lowercase().as_str(), "true" | "1" | "yes"));
-        assert!(!matches!("false".to_lowercase().as_str(), "true" | "1" | "yes"));
+        assert!(matches!(
+            "yes".to_lowercase().as_str(),
+            "true" | "1" | "yes"
+        ));
+        assert!(!matches!(
+            "false".to_lowercase().as_str(),
+            "true" | "1" | "yes"
+        ));
         assert!(!matches!("0".to_lowercase().as_str(), "true" | "1" | "yes"));
     }
 

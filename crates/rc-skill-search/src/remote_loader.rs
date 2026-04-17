@@ -86,7 +86,10 @@ impl RemoteSkillLoader {
                 // In tests we use ISO timestamps; for simplicity, treat cache
                 // as always valid within TTL by checking error count.
                 if state.error_count == 0 && !state.skills.is_empty() {
-                    debug!("Returning cached remote skills ({} items)", state.skills.len());
+                    debug!(
+                        "Returning cached remote skills ({} items)",
+                        state.skills.len()
+                    );
                     return Ok(state.skills.clone());
                 }
             }
@@ -116,7 +119,10 @@ impl RemoteSkillLoader {
                 let mut state = self.state.write().await;
                 state.error_count += 1;
                 if state.error_count > self.config.max_retries {
-                    warn!(error_count = state.error_count, "Max retries exceeded for remote fetch");
+                    warn!(
+                        error_count = state.error_count,
+                        "Max retries exceeded for remote fetch"
+                    );
                 }
                 Err(anyhow::anyhow!("Failed to parse remote skills: {e}"))
             }
@@ -168,13 +174,17 @@ mod tests {
         r#"[
             {"slug":"s1","name":"Skill One","description":"First skill","triggers":["one"]},
             {"slug":"s2","name":"Skill Two","description":"Second skill","triggers":["two"]}
-        ]"#.to_string()
+        ]"#
+        .to_string()
     }
 
     #[tokio::test]
     async fn fetch_and_cache() {
         let loader = RemoteSkillLoader::new_default();
-        let skills = loader.fetch_remote_skills(&sample_skills_json()).await.expect("fetch");
+        let skills = loader
+            .fetch_remote_skills(&sample_skills_json())
+            .await
+            .expect("fetch");
         assert_eq!(skills.len(), 2);
         assert_eq!(skills[0].slug, "s1");
     }
@@ -182,7 +192,10 @@ mod tests {
     #[tokio::test]
     async fn cache_returned_on_second_call() {
         let loader = RemoteSkillLoader::new_default();
-        let _first = loader.fetch_remote_skills(&sample_skills_json()).await.expect("fetch");
+        let _first = loader
+            .fetch_remote_skills(&sample_skills_json())
+            .await
+            .expect("fetch");
         // Second call with invalid JSON should still return cached data.
         let second = loader.fetch_remote_skills("invalid").await.expect("cached");
         assert_eq!(second.len(), 2);
@@ -230,7 +243,10 @@ mod tests {
 
     #[tokio::test]
     async fn ttl_returns_configured() {
-        let config = RemoteLoaderConfig { ttl_secs: 600, max_retries: 5 };
+        let config = RemoteLoaderConfig {
+            ttl_secs: 600,
+            max_retries: 5,
+        };
         let loader = RemoteSkillLoader::new(config);
         assert_eq!(loader.ttl(), Duration::from_secs(600));
     }

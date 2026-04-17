@@ -4,11 +4,7 @@
 //! file system under `.remote-code/memory/`. Each entry is stored as a
 //! JSON file keyed by a user-provided name.
 
-use std::{
-    collections::HashMap,
-    fs,
-    path::PathBuf,
-};
+use std::{collections::HashMap, fs, path::PathBuf};
 
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
@@ -88,8 +84,8 @@ impl MemoryStore {
     /// Load a memory entry by key and scope.
     pub fn load_memory(&self, key: &str, scope: MemoryType) -> Result<StoredMemory> {
         let path = self.scope_dir(scope).join(format!("{key}.json"));
-        let content = fs::read_to_string(&path)
-            .map_err(|e| anyhow!("failed to read memory `{key}`: {e}"))?;
+        let content =
+            fs::read_to_string(&path).map_err(|e| anyhow!("failed to read memory `{key}`: {e}"))?;
         let entry: MemoryEntry = serde_json::from_str(&content)
             .map_err(|e| anyhow!("failed to parse memory `{key}`: {e}"))?;
 
@@ -161,11 +157,7 @@ impl MemoryStore {
         for scope in MemoryType::all_values() {
             let entries = self.list_memories(*scope)?;
             for stored in entries {
-                let content_match = stored
-                    .entry
-                    .content
-                    .to_ascii_lowercase()
-                    .contains(&lower);
+                let content_match = stored.entry.content.to_ascii_lowercase().contains(&lower);
                 let tag_match = stored
                     .entry
                     .tags
@@ -293,7 +285,9 @@ mod tests {
     fn delete_nonexistent_fails() {
         let temp = ok(tempdir());
         let store = MemoryStore::new(temp.path());
-        let err = store.delete_memory("ghost", MemoryType::Project).unwrap_err();
+        let err = store
+            .delete_memory("ghost", MemoryType::Project)
+            .unwrap_err();
         assert!(err.to_string().contains("ghost"));
     }
 
@@ -359,7 +353,12 @@ mod tests {
     fn search_by_content() {
         let temp = ok(tempdir());
         let store = MemoryStore::new(temp.path());
-        ok(store.save_memory("note1", "Rust programming tips", MemoryType::Project, vec![]));
+        ok(store.save_memory(
+            "note1",
+            "Rust programming tips",
+            MemoryType::Project,
+            vec![],
+        ));
         ok(store.save_memory("note2", "Python data science", MemoryType::Project, vec![]));
 
         let results = ok(store.search_memory("rust"));
@@ -377,12 +376,7 @@ mod tests {
             MemoryType::Project,
             vec!["important".to_owned()],
         ));
-        ok(store.save_memory(
-            "untagged",
-            "content",
-            MemoryType::Project,
-            vec![],
-        ));
+        ok(store.save_memory("untagged", "content", MemoryType::Project, vec![]));
 
         let results = ok(store.search_memory("important"));
         assert_eq!(results.len(), 1);
@@ -393,7 +387,12 @@ mod tests {
     fn search_by_key() {
         let temp = ok(tempdir());
         let store = MemoryStore::new(temp.path());
-        ok(store.save_memory("deploy-notes", "deploy content", MemoryType::Project, vec![]));
+        ok(store.save_memory(
+            "deploy-notes",
+            "deploy content",
+            MemoryType::Project,
+            vec![],
+        ));
         ok(store.save_memory("test-notes", "test content", MemoryType::Project, vec![]));
 
         let results = ok(store.search_memory("deploy"));
@@ -449,7 +448,12 @@ mod tests {
         let temp = ok(tempdir());
         let store = MemoryStore::new(temp.path());
         ok(store.save_memory("upd", "original", MemoryType::Project, vec![]));
-        ok(store.update_memory("upd", "updated", MemoryType::Project, vec!["new-tag".to_owned()]));
+        ok(store.update_memory(
+            "upd",
+            "updated",
+            MemoryType::Project,
+            vec!["new-tag".to_owned()],
+        ));
 
         let loaded = ok(store.load_memory("upd", MemoryType::Project));
         assert_eq!(loaded.entry.content, "updated");
@@ -486,7 +490,10 @@ mod tests {
         ));
 
         let tags = ok(store.all_tags());
-        assert_eq!(tags, vec!["code".to_owned(), "rust".to_owned(), "tips".to_owned()]);
+        assert_eq!(
+            tags,
+            vec!["code".to_owned(), "rust".to_owned(), "tips".to_owned()]
+        );
     }
 
     // --- scope_dir ---

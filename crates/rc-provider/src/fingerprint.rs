@@ -7,8 +7,8 @@
 //! Based on upstream Claude Code's `computeFingerprintFromMessages` in
 //! `utils/fingerprint.ts`.
 
-use sha2::{Digest, Sha256};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 // ---------------------------------------------------------------------------
 // Fingerprint computation
@@ -34,10 +34,7 @@ pub fn compute_message_fingerprint(messages: &[Value]) -> String {
 
     for message in messages {
         // Extract role and content for a stable fingerprint.
-        let role = message
-            .get("role")
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        let role = message.get("role").and_then(Value::as_str).unwrap_or("");
         let content = message.get("content").cloned().unwrap_or(Value::Null);
 
         // Create a canonical representation.
@@ -51,7 +48,9 @@ pub fn compute_message_fingerprint(messages: &[Value]) -> String {
             Value::Object(map) => {
                 let mut pairs: Vec<_> = map.into_iter().collect();
                 pairs.sort_by(|a, b| a.0.cmp(&b.0));
-                pairs.into_iter().collect::<serde_json::Map<String, Value>>()
+                pairs
+                    .into_iter()
+                    .collect::<serde_json::Map<String, Value>>()
             }
             other => {
                 // Shouldn't happen, but handle gracefully.
@@ -66,8 +65,7 @@ pub fn compute_message_fingerprint(messages: &[Value]) -> String {
             sort_content_keys(content_val);
         }
 
-        let bytes = serde_json::to_string(&canonical_obj)
-            .unwrap_or_default();
+        let bytes = serde_json::to_string(&canonical_obj).unwrap_or_default();
         hasher.update(bytes.as_bytes());
     }
 

@@ -38,9 +38,7 @@ impl ManagedPluginManager {
     ///
     /// Plugin IDs in `"name@marketplace"` format are parsed to extract names.
     /// Only boolean `true` entries are considered managed.
-    pub fn from_enabled_plugins(
-        enabled: &HashMap<String, bool>,
-    ) -> Self {
+    pub fn from_enabled_plugins(enabled: &HashMap<String, bool>) -> Self {
         let mut managed = HashSet::new();
         let mut sources = HashMap::new();
 
@@ -52,10 +50,7 @@ impl ManagedPluginManager {
                 let name = &plugin_id[..at_pos];
                 if !name.is_empty() {
                     managed.insert(name.to_owned());
-                    sources.insert(
-                        name.to_owned(),
-                        "policy".to_owned(),
-                    );
+                    sources.insert(name.to_owned(), "policy".to_owned());
                 }
             }
         }
@@ -64,11 +59,7 @@ impl ManagedPluginManager {
     }
 
     /// Add a managed plugin.
-    pub fn add_managed_plugin(
-        &mut self,
-        name: &str,
-        source: &str,
-    ) {
+    pub fn add_managed_plugin(&mut self, name: &str, source: &str) {
         self.managed.insert(name.to_owned());
         self.sources.insert(name.to_owned(), source.to_owned());
     }
@@ -98,10 +89,7 @@ impl ManagedPluginManager {
     ///
     /// Ensures all managed plugins are present in the marketplace.
     /// Returns the list of plugins that need to be installed.
-    pub fn sync_managed_plugins(
-        &self,
-        available_in_marketplace: &[String],
-    ) -> Vec<String> {
+    pub fn sync_managed_plugins(&self, available_in_marketplace: &[String]) -> Vec<String> {
         self.managed
             .iter()
             .filter(|name| !available_in_marketplace.contains(name))

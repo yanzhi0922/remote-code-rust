@@ -573,12 +573,7 @@ mod tests {
     fn progress_stream_close_ignores_emit() {
         let stream = ProgressStream::new();
         stream.close();
-        stream.emit(
-            "tc-1",
-            ToolProgressData::Spinner {
-                message: None,
-            },
-        );
+        stream.emit("tc-1", ToolProgressData::Spinner { message: None });
         assert!(stream.is_empty());
         assert!(stream.is_closed());
     }
@@ -593,12 +588,7 @@ mod tests {
                 .expect("lock")
                 .push(data.kind_name().to_owned());
         }));
-        stream.emit(
-            "tc-1",
-            ToolProgressData::Spinner {
-                message: None,
-            },
-        );
+        stream.emit("tc-1", ToolProgressData::Spinner { message: None });
         stream.emit(
             "tc-2",
             ToolProgressData::ProgressBar {

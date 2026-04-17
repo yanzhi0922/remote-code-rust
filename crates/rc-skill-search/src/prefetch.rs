@@ -104,7 +104,12 @@ mod tests {
         let index = Arc::new(RwLock::new(SearchIndex::new()));
         {
             let mut idx = index.write().await;
-            idx.index_skill(&sample_skill("deploy", "Deploy", "Deploy things", &["deploy"]));
+            idx.index_skill(&sample_skill(
+                "deploy",
+                "Deploy",
+                "Deploy things",
+                &["deploy"],
+            ));
             idx.index_skill(&sample_skill("build", "Build", "Build things", &["build"]));
         }
         SkillPrefetcher::new(index)

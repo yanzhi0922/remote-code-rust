@@ -324,9 +324,12 @@ impl LocalBridge {
     /// # Errors
     /// Returns an error if the receiver has been dropped.
     pub fn send_sync(&self, event: BridgeEvent) -> Result<()> {
-        self.sender
-            .send(event)
-            .map_err(|e| anyhow::anyhow!("local bridge send failed: {}", e.0.event_id().unwrap_or("unknown")))
+        self.sender.send(event).map_err(|e| {
+            anyhow::anyhow!(
+                "local bridge send failed: {}",
+                e.0.event_id().unwrap_or("unknown")
+            )
+        })
     }
 }
 
@@ -343,9 +346,12 @@ impl BridgeTransport for LocalBridge {
             self.connected.load(Ordering::Relaxed),
             "local bridge is not connected"
         );
-        self.sender
-            .send(event)
-            .map_err(|e| anyhow::anyhow!("local bridge send failed: {}", e.0.event_id().unwrap_or("unknown")))?;
+        self.sender.send(event).map_err(|e| {
+            anyhow::anyhow!(
+                "local bridge send failed: {}",
+                e.0.event_id().unwrap_or("unknown")
+            )
+        })?;
         Ok(())
     }
 
@@ -594,7 +600,11 @@ impl<T: BridgeTransport> BridgeClient<T> {
     ///
     /// # Errors
     /// Returns an error if the send fails.
-    pub async fn send_status(&self, status: BridgeStatus, message: impl Into<String>) -> Result<()> {
+    pub async fn send_status(
+        &self,
+        status: BridgeStatus,
+        message: impl Into<String>,
+    ) -> Result<()> {
         let event = BridgeEvent::status_update(status, message);
         self.transport.send(event).await
     }
@@ -699,7 +709,9 @@ mod tests {
     fn bridge_event_status_update_creation() {
         let event = BridgeEvent::status_update(BridgeStatus::Processing, "thinking...");
         match event {
-            BridgeEvent::StatusUpdate { status, message, .. } => {
+            BridgeEvent::StatusUpdate {
+                status, message, ..
+            } => {
                 assert_eq!(status, BridgeStatus::Processing);
                 assert_eq!(message, "thinking...");
             }
@@ -731,12 +743,10 @@ mod tests {
             },
         ];
         for original in events {
-            let json =
-                serde_json::to_string(&original).expect("serialization should succeed");
+            let json = serde_json::to_string(&original).expect("serialization should succeed");
             let parsed: BridgeEvent =
                 serde_json::from_str(&json).expect("deserialization should succeed");
-            let json2 =
-                serde_json::to_string(&parsed).expect("re-serialization should succeed");
+            let json2 = serde_json::to_string(&parsed).expect("re-serialization should succeed");
             assert_eq!(json, json2, "roundtrip mismatch for {original:?}");
         }
     }
@@ -778,7 +788,10 @@ mod tests {
         bridge.connect().await.expect("connect should succeed");
         assert!(bridge.is_connected());
 
-        bridge.disconnect().await.expect("disconnect should succeed");
+        bridge
+            .disconnect()
+            .await
+            .expect("disconnect should succeed");
         assert!(!bridge.is_connected());
     }
 
@@ -863,7 +876,10 @@ mod tests {
         bridge.connect().await.expect("connect should succeed");
         assert!(bridge.is_connected());
 
-        bridge.disconnect().await.expect("disconnect should succeed");
+        bridge
+            .disconnect()
+            .await
+            .expect("disconnect should succeed");
         assert!(!bridge.is_connected());
     }
 
@@ -921,7 +937,10 @@ mod tests {
             .await
             .expect("request_permission should succeed");
 
-        let events = client.collect_available().await.expect("collect should succeed");
+        let events = client
+            .collect_available()
+            .await
+            .expect("collect should succeed");
         assert_eq!(events.len(), 2);
         assert!(matches!(events[0], BridgeEvent::ToolResult { .. }));
         assert!(matches!(events[1], BridgeEvent::PermissionRequest { .. }));

@@ -62,10 +62,7 @@ impl TeamMemoryService {
     ///
     /// For each pair of (local, remote) entries sharing the same ID, the entry
     /// with the later `updated_at` timestamp wins.
-    pub fn resolve_conflicts(
-        local: &[MemoryEntry],
-        remote: &[MemoryEntry],
-    ) -> Vec<MemoryEntry> {
+    pub fn resolve_conflicts(local: &[MemoryEntry], remote: &[MemoryEntry]) -> Vec<MemoryEntry> {
         let mut merged: HashMap<String, MemoryEntry> = HashMap::new();
 
         for entry in local {
@@ -89,10 +86,7 @@ impl TeamMemoryService {
     ///
     /// Entries with the same content and type are deduplicated, keeping the
     /// one with the most recent `updated_at`.
-    pub fn merge_memories(
-        local: &[MemoryEntry],
-        remote: &[MemoryEntry],
-    ) -> Vec<MemoryEntry> {
+    pub fn merge_memories(local: &[MemoryEntry], remote: &[MemoryEntry]) -> Vec<MemoryEntry> {
         // Key by (content, memory_type) for dedup
         let mut dedup: HashMap<(String, MemoryType), MemoryEntry> = HashMap::new();
 
@@ -186,10 +180,8 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(1));
         remote_entry.touch();
 
-        let resolved = TeamMemoryService::resolve_conflicts(
-            &[local_entry.clone()],
-            &[remote_entry.clone()],
-        );
+        let resolved =
+            TeamMemoryService::resolve_conflicts(&[local_entry.clone()], &[remote_entry.clone()]);
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].content, "remote version");
     }

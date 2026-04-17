@@ -26,18 +26,12 @@ pub fn render_tool_call(
             "  {icon} [tool] {} ({duration_s:.1}s) — collapsed",
             tool_call.tool_name
         );
-        vec![Line::from(Span::styled(
-            header,
-            Style::default().fg(color),
-        ))]
+        vec![Line::from(Span::styled(header, Style::default().fg(color)))]
     } else {
         let mut lines = Vec::new();
 
         // Header line.
-        let header = format!(
-            "  {icon} [tool] {} ({duration_s:.1}s)",
-            tool_call.tool_name
-        );
+        let header = format!("  {icon} [tool] {} ({duration_s:.1}s)", tool_call.tool_name);
         lines.push(Line::from(Span::styled(
             header,
             Style::default().fg(color).add_modifier(Modifier::BOLD),
@@ -45,10 +39,8 @@ pub fn render_tool_call(
 
         // Input preview.
         if !tool_call.input.is_empty() {
-            let input_preview = crate::message::truncate_text(
-                &tool_call.input,
-                width.saturating_sub(6),
-            );
+            let input_preview =
+                crate::message::truncate_text(&tool_call.input, width.saturating_sub(6));
             lines.push(Line::from(Span::styled(
                 format!("    Input: {input_preview}"),
                 Style::default().fg(style.info_color),
@@ -58,10 +50,7 @@ pub fn render_tool_call(
         // Output lines.
         if !tool_call.output.is_empty() {
             for line in tool_call.output.lines().take(10) {
-                let truncated = crate::message::truncate_text(
-                    line,
-                    width.saturating_sub(4),
-                );
+                let truncated = crate::message::truncate_text(line, width.saturating_sub(4));
                 lines.push(Line::from(Span::styled(
                     format!("    {truncated}"),
                     Style::default().fg(style.status_fg),
@@ -101,7 +90,12 @@ mod tests {
         let style = StyleConfig::dark();
         let lines = render_tool_call(&tc, 80, &style);
         assert_eq!(lines.len(), 1);
-        assert!(lines[0].spans.iter().any(|s| s.content.contains("collapsed")));
+        assert!(
+            lines[0]
+                .spans
+                .iter()
+                .any(|s| s.content.contains("collapsed"))
+        );
     }
 
     #[test]

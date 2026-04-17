@@ -106,7 +106,10 @@ impl AuthCodeListener {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let mut buf = vec![0u8; 4096];
         let mut stream = stream;
-        let n = stream.read(&mut buf).await.map_err(AuthCodeListenerError::Io)?;
+        let n = stream
+            .read(&mut buf)
+            .await
+            .map_err(AuthCodeListenerError::Io)?;
         let request = String::from_utf8_lossy(&buf[..n]);
 
         // Parse the HTTP request line to extract the path + query
@@ -121,9 +124,7 @@ impl AuthCodeListener {
         let is_automatic = code.is_some() && state.as_deref() == Some(&expected_state);
 
         match (code, state) {
-            (Some(auth_code), Some(received_state))
-                if received_state == expected_state =>
-            {
+            (Some(auth_code), Some(received_state)) if received_state == expected_state => {
                 // Redirect browser to success page
                 let response = format!(
                     "HTTP/1.1 302 Found\r\nLocation: {success_url}\r\nContent-Length: 0\r\n\r\n"

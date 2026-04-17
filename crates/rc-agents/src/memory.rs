@@ -363,18 +363,24 @@ pub fn restore_from_snapshot(snapshot: &AgentMemorySnapshot) -> AgentMemory {
 /// Compute the diff between two memory snapshots.
 ///
 /// Returns the facts added, removed, and unchanged.
-pub fn diff_snapshots(
-    old: &AgentMemorySnapshot,
-    new: &AgentMemorySnapshot,
-) -> MemorySnapshotDiff {
+pub fn diff_snapshots(old: &AgentMemorySnapshot, new: &AgentMemorySnapshot) -> MemorySnapshotDiff {
     use std::collections::BTreeSet;
 
     let old_set: BTreeSet<&str> = old.facts.iter().map(|s| s.as_str()).collect();
     let new_set: BTreeSet<&str> = new.facts.iter().map(|s| s.as_str()).collect();
 
-    let added: Vec<String> = new_set.difference(&old_set).map(|s| (*s).to_owned()).collect();
-    let removed: Vec<String> = old_set.difference(&new_set).map(|s| (*s).to_owned()).collect();
-    let unchanged: Vec<String> = old_set.intersection(&new_set).map(|s| (*s).to_owned()).collect();
+    let added: Vec<String> = new_set
+        .difference(&old_set)
+        .map(|s| (*s).to_owned())
+        .collect();
+    let removed: Vec<String> = old_set
+        .difference(&new_set)
+        .map(|s| (*s).to_owned())
+        .collect();
+    let unchanged: Vec<String> = old_set
+        .intersection(&new_set)
+        .map(|s| (*s).to_owned())
+        .collect();
 
     MemorySnapshotDiff {
         added,
@@ -452,8 +458,9 @@ mod tests {
             .expect("some");
 
         let loaded_facts: HashSet<_> = loaded.facts.into_iter().collect();
-        let expected_facts: HashSet<_> =
-            vec!["fact 1".to_owned(), "fact 2".to_owned()].into_iter().collect();
+        let expected_facts: HashSet<_> = vec!["fact 1".to_owned(), "fact 2".to_owned()]
+            .into_iter()
+            .collect();
         assert_eq!(loaded_facts, expected_facts);
     }
 
@@ -466,7 +473,10 @@ mod tests {
 
     #[test]
     fn sanitize_agent_type() {
-        assert_eq!(sanitize_agent_type_for_path("my-plugin:my-agent"), "my-plugin-my-agent");
+        assert_eq!(
+            sanitize_agent_type_for_path("my-plugin:my-agent"),
+            "my-plugin-my-agent"
+        );
         assert_eq!(sanitize_agent_type_for_path("simple"), "simple");
     }
 

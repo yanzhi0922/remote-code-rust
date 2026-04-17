@@ -170,7 +170,10 @@ mod tests {
 
     #[test]
     fn memory_type_from_str_opt() {
-        assert_eq!(MemoryType::from_str_opt("project"), Some(MemoryType::Project));
+        assert_eq!(
+            MemoryType::from_str_opt("project"),
+            Some(MemoryType::Project)
+        );
         assert_eq!(MemoryType::from_str_opt("user"), Some(MemoryType::User));
         assert_eq!(MemoryType::from_str_opt("agent"), Some(MemoryType::Agent));
         assert_eq!(MemoryType::from_str_opt("unknown"), None);
@@ -227,10 +230,7 @@ mod tests {
     #[test]
     fn memory_dir_project() {
         let dir = memory_dir(Path::new("/project"), MemoryType::Project);
-        assert_eq!(
-            dir,
-            PathBuf::from("/project/.remote-code/memory/project")
-        );
+        assert_eq!(dir, PathBuf::from("/project/.remote-code/memory/project"));
     }
 
     #[test]
@@ -249,11 +249,7 @@ mod tests {
 
     #[test]
     fn memory_file_path_test() {
-        let path = memory_file_path(
-            Path::new("/project"),
-            MemoryType::Project,
-            "notes.md",
-        );
+        let path = memory_file_path(Path::new("/project"), MemoryType::Project, "notes.md");
         assert_eq!(
             path,
             PathBuf::from("/project/.remote-code/memory/project/notes.md")

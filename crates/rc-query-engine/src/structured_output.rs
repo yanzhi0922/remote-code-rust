@@ -69,34 +69,38 @@ impl StructuredOutputEnforcer {
 
         // Check required fields for objects
         if let Some(required) = schema.get("required").and_then(|r| r.as_array())
-            && let Some(obj) = value.as_object() {
-                for field in required {
-                    if let Some(field_name) = field.as_str()
-                        && !obj.contains_key(field_name) {
-                            return Err(StructuredOutputError::MissingRequiredField {
-                                field: field_name.to_string(),
-                            });
-                        }
+            && let Some(obj) = value.as_object()
+        {
+            for field in required {
+                if let Some(field_name) = field.as_str()
+                    && !obj.contains_key(field_name)
+                {
+                    return Err(StructuredOutputError::MissingRequiredField {
+                        field: field_name.to_string(),
+                    });
                 }
             }
+        }
 
         // Check enum constraint
         if let Some(enum_values) = schema.get("enum").and_then(|e| e.as_array())
-            && !enum_values.contains(value) {
-                return Err(StructuredOutputError::EnumViolation {
-                    value: value.clone(),
-                    allowed: enum_values.clone(),
-                });
-            }
+            && !enum_values.contains(value)
+        {
+            return Err(StructuredOutputError::EnumViolation {
+                value: value.clone(),
+                allowed: enum_values.clone(),
+            });
+        }
 
         Ok(())
     }
 
     /// Attempt to parse a string as JSON and validate it.
     pub fn parse_and_validate(&self, text: &str) -> Result<Value, StructuredOutputError> {
-        let value: Value = serde_json::from_str(text).map_err(|e| StructuredOutputError::ParseError {
-            message: e.to_string(),
-        })?;
+        let value: Value =
+            serde_json::from_str(text).map_err(|e| StructuredOutputError::ParseError {
+                message: e.to_string(),
+            })?;
         self.validate(&value)?;
         Ok(value)
     }
@@ -116,31 +120,35 @@ impl StructuredOutputEnforcer {
             "object" => {
                 if value.is_string()
                     && let Ok(parsed) = serde_json::from_str::<Value>(value.as_str().unwrap_or(""))
-                        && parsed.is_object() {
-                            return parsed;
-                        }
+                    && parsed.is_object()
+                {
+                    return parsed;
+                }
                 value.clone()
             }
             "array" => {
                 if value.is_string()
                     && let Ok(parsed) = serde_json::from_str::<Value>(value.as_str().unwrap_or(""))
-                        && parsed.is_array() {
-                            return parsed;
-                        }
+                    && parsed.is_array()
+                {
+                    return parsed;
+                }
                 value.clone()
             }
             "number" => {
                 if let Some(s) = value.as_str()
-                    && let Ok(n) = s.parse::<f64>() {
-                        return Value::from(n);
-                    }
+                    && let Ok(n) = s.parse::<f64>()
+                {
+                    return Value::from(n);
+                }
                 value.clone()
             }
             "boolean" => {
                 if let Some(s) = value.as_str()
-                    && let Ok(b) = s.parse::<bool>() {
-                        return Value::from(b);
-                    }
+                    && let Ok(b) = s.parse::<bool>()
+                {
+                    return Value::from(b);
+                }
                 value.clone()
             }
             _ => value.clone(),
@@ -162,10 +170,7 @@ pub enum StructuredOutputError {
     #[error("missing required field: {field}")]
     MissingRequiredField { field: String },
     #[error("enum violation: value not in allowed set")]
-    EnumViolation {
-        value: Value,
-        allowed: Vec<Value>,
-    },
+    EnumViolation { value: Value, allowed: Vec<Value> },
     #[error("JSON parse error: {message}")]
     ParseError { message: String },
 }
@@ -196,11 +201,13 @@ mod tests {
 
     #[test]
     fn enforcer_validates_type_constraint() {
-        let enforcer =
-            StructuredOutputEnforcer::with_schema(json!({"type": "object"}));
+        let enforcer = StructuredOutputEnforcer::with_schema(json!({"type": "object"}));
         assert!(enforcer.validate(&json!({"key": "value"})).is_ok());
         let result = enforcer.validate(&json!("not an object"));
-        assert!(matches!(result, Err(StructuredOutputError::TypeMismatch { .. })));
+        assert!(matches!(
+            result,
+            Err(StructuredOutputError::TypeMismatch { .. })
+        ));
     }
 
     #[test]
@@ -209,9 +216,15 @@ mod tests {
             "type": "object",
             "required": ["name", "age"]
         }));
-        assert!(enforcer.validate(&json!({"name": "test", "age": 25})).is_ok());
+        assert!(
+            enforcer
+                .validate(&json!({"name": "test", "age": 25}))
+                .is_ok()
+        );
         let result = enforcer.validate(&json!({"name": "test"}));
-        assert!(matches!(result, Err(StructuredOutputError::MissingRequiredField { field }) if field == "age"));
+        assert!(
+            matches!(result, Err(StructuredOutputError::MissingRequiredField { field }) if field == "age")
+        );
     }
 
     #[test]
@@ -235,8 +248,7 @@ mod tests {
 
     #[test]
     fn enforcer_parse_and_validate() {
-        let enforcer =
-            StructuredOutputEnforcer::with_schema(json!({"type": "object"}));
+        let enforcer = StructuredOutputEnforcer::with_schema(json!({"type": "object"}));
         let result = enforcer.parse_and_validate(r#"{"key": "value"}"#);
         assert!(result.is_ok());
         let bad = enforcer.parse_and_validate("not json");
@@ -245,8 +257,7 @@ mod tests {
 
     #[test]
     fn enforcer_coerce_string_to_object() {
-        let enforcer =
-            StructuredOutputEnforcer::with_schema(json!({"type": "object"}));
+        let enforcer = StructuredOutputEnforcer::with_schema(json!({"type": "object"}));
         let coerced = enforcer.coerce(&json!(r#"{"a":1}"#));
         // String value that looks like JSON object should be coerced
         assert!(coerced.is_object() || coerced.is_string());

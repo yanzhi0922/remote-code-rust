@@ -741,9 +741,9 @@ impl NormalizedMessage {
         match self {
             Self::UserText { .. } | Self::UserAttachment { .. } => NormalizedOrigin::User,
             Self::AssistantText { .. } | Self::Thinking { .. } => NormalizedOrigin::Assistant,
-            Self::ToolCall { .. }
-            | Self::ToolResult { .. }
-            | Self::ToolSummary { .. } => NormalizedOrigin::Tool,
+            Self::ToolCall { .. } | Self::ToolResult { .. } | Self::ToolSummary { .. } => {
+                NormalizedOrigin::Tool
+            }
             Self::SystemInfo { .. }
             | Self::SystemError { .. }
             | Self::SystemCompactBoundary { .. }
@@ -877,7 +877,10 @@ impl NormalizedMessage {
                     .as_deref()
                     .map(|r| format!(" ({r})"))
                     .unwrap_or_default();
-                format!("[permission: {}]{reason_text}", if *allowed { "allowed" } else { "denied" })
+                format!(
+                    "[permission: {}]{reason_text}",
+                    if *allowed { "allowed" } else { "denied" }
+                )
             }
             Self::StatusUpdate { message, .. } => message.clone(),
             Self::AgentDispatched { task, .. } => format!("[agent dispatched] {task}"),
@@ -888,7 +891,9 @@ impl NormalizedMessage {
                 format!("[agent complete: {status}] {summary}")
             }
             Self::SubtaskStarted { description, .. } => format!("[subtask started] {description}"),
-            Self::SubtaskProgress { turn, max_turns, .. } => {
+            Self::SubtaskProgress {
+                turn, max_turns, ..
+            } => {
                 format!("[subtask progress: turn {turn}/{max_turns}]")
             }
             Self::SubtaskCompleted {
@@ -908,10 +913,15 @@ impl NormalizedMessage {
                 ratio,
                 estimated_tokens,
                 ..
-            } => format!("[context] {:.0}% ({estimated_tokens} tokens)", ratio * 100.0),
+            } => format!(
+                "[context] {:.0}% ({estimated_tokens} tokens)",
+                ratio * 100.0
+            ),
             Self::StreamStart { protocol, .. } => format!("[stream start: {protocol}]"),
             Self::StreamEnd {
-                chunks, duration_ms, ..
+                chunks,
+                duration_ms,
+                ..
             } => format!("[stream end: {chunks} chunks in {duration_ms}ms]"),
         }
     }
@@ -1182,8 +1192,8 @@ mod tests {
     #[test]
     fn from_conversation_entry_user() {
         let entry = ConversationEntry::user("hello");
-        let msg = NormalizedMessage::from_conversation_entry(&entry)
-            .expect("should convert user entry");
+        let msg =
+            NormalizedMessage::from_conversation_entry(&entry).expect("should convert user entry");
         assert_eq!(msg.origin(), NormalizedOrigin::User);
     }
 
@@ -1206,8 +1216,8 @@ mod tests {
     #[test]
     fn from_conversation_entry_tool() {
         let entry = ConversationEntry::tool("tc-1", "bash", "ok", false);
-        let msg = NormalizedMessage::from_conversation_entry(&entry)
-            .expect("should convert tool entry");
+        let msg =
+            NormalizedMessage::from_conversation_entry(&entry).expect("should convert tool entry");
         assert_eq!(msg.origin(), NormalizedOrigin::Tool);
     }
 
@@ -1285,7 +1295,8 @@ mod tests {
             timestamp: Utc::now(),
         };
         let json = serde_json::to_string(&msg).expect("serialize");
-        let parsed: SystemCompactBoundaryMessage = serde_json::from_str(&json).expect("deserialize");
+        let parsed: SystemCompactBoundaryMessage =
+            serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed.messages_removed, 50);
     }
 
@@ -1297,7 +1308,8 @@ mod tests {
             timestamp: Utc::now(),
         };
         let json = serde_json::to_string(&msg).expect("serialize");
-        let parsed: SystemMicrocompactBoundaryMessage = serde_json::from_str(&json).expect("deserialize");
+        let parsed: SystemMicrocompactBoundaryMessage =
+            serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed.description, "cleared old tool results");
     }
 
@@ -1310,7 +1322,8 @@ mod tests {
             timestamp: Utc::now(),
         };
         let json = serde_json::to_string(&msg).expect("serialize");
-        let parsed: SystemPermissionRetryMessage = serde_json::from_str(&json).expect("deserialize");
+        let parsed: SystemPermissionRetryMessage =
+            serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed.tool_name, "bash");
     }
 
@@ -1337,7 +1350,8 @@ mod tests {
             timestamp: Utc::now(),
         };
         let json = serde_json::to_string(&msg).expect("serialize");
-        let parsed: SystemStopHookSummaryMessage = serde_json::from_str(&json).expect("deserialize");
+        let parsed: SystemStopHookSummaryMessage =
+            serde_json::from_str(&json).expect("deserialize");
         assert!(!parsed.is_error);
     }
 

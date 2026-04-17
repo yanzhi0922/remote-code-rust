@@ -55,8 +55,7 @@ impl DatadogExporter {
             obj.insert("dd_api_key".to_string(), serde_json::json!(self.api_key));
         }
 
-        serde_json::to_string(&payload)
-            .map_err(|e| anyhow::anyhow!("Failed to format event: {e}"))
+        serde_json::to_string(&payload).map_err(|e| anyhow::anyhow!("Failed to format event: {e}"))
     }
 }
 

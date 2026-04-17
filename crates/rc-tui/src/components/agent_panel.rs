@@ -74,12 +74,10 @@ pub struct AgentListRenderer;
 impl AgentListRenderer {
     /// Header line for the agent list.
     fn header() -> Line<'static> {
-        Line::from(vec![
-            Span::styled(
-                "Agents".to_string(),
-                Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-            ),
-        ])
+        Line::from(vec![Span::styled(
+            "Agents".to_string(),
+            Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        )])
     }
 
     /// Render the full agent list as lines.
@@ -105,10 +103,7 @@ impl AgentListRenderer {
                 Style::default().add_modifier(Modifier::BOLD),
             );
             let detail_span = Span::styled(
-                format!(
-                    " [{}] tools:{}",
-                    agent.agent_type, agent.tool_count
-                ),
+                format!(" [{}] tools:{}", agent.agent_type, agent.tool_count),
                 Style::default().fg(Color::DarkGray),
             );
             lines.push(Line::from(vec![icon_span, name_span, detail_span]));
@@ -129,20 +124,15 @@ impl AgentDetailRenderer {
     /// Render detailed information about one agent.
     pub fn render(agent: &AgentEntry) -> Vec<Line<'static>> {
         vec![
-            Line::from(vec![
-                Span::styled(
-                    format!(" {} {}", agent.status.icon(), agent.name),
-                    Style::default()
-                        .fg(agent.status.color())
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]),
+            Line::from(vec![Span::styled(
+                format!(" {} {}", agent.status.icon(), agent.name),
+                Style::default()
+                    .fg(agent.status.color())
+                    .add_modifier(Modifier::BOLD),
+            )]),
             Line::from(vec![
                 Span::raw("  Type: "),
-                Span::styled(
-                    agent.agent_type.clone(),
-                    Style::default().fg(Color::Cyan),
-                ),
+                Span::styled(agent.agent_type.clone(), Style::default().fg(Color::Cyan)),
             ]),
             Line::from(vec![
                 Span::raw("  Status: "),
@@ -213,8 +203,7 @@ mod tests {
     #[test]
     fn test_list_render_header() {
         let lines = AgentListRenderer::render(&[]);
-        let header_content: String =
-            lines[0].spans.iter().map(|s| s.content.clone()).collect();
+        let header_content: String = lines[0].spans.iter().map(|s| s.content.clone()).collect();
         assert_eq!(header_content, "Agents");
     }
 

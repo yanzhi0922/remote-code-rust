@@ -25,10 +25,7 @@ pub enum CacheScope {
 ///
 /// Returns `{"type": "ephemeral"}` with optional `ttl` and `scope` fields.
 #[must_use]
-pub fn get_cache_control(
-    scope: Option<CacheScope>,
-    use_1h_ttl: bool,
-) -> Value {
+pub fn get_cache_control(scope: Option<CacheScope>, use_1h_ttl: bool) -> Value {
     let mut control = json!({
         "type": "ephemeral"
     });
@@ -84,9 +81,10 @@ pub fn is_prompt_caching_enabled(model: &str) -> bool {
     if std::env::var("DISABLE_PROMPT_CACHING_HAIKU")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
-        && (model_lower.contains("haiku") || model_lower.contains("flash")) {
-            return false;
-        }
+        && (model_lower.contains("haiku") || model_lower.contains("flash"))
+    {
+        return false;
+    }
 
     true
 }
@@ -118,47 +116,51 @@ pub fn add_cache_breakpoints(body: &mut Value, use_1h_ttl: bool) {
                 "cache_control": cache_control.clone(),
             }]);
         } else if let Some(system_arr) = system.as_array_mut()
-            && let Some(last) = system_arr.last_mut() {
-                last["cache_control"] = cache_control.clone();
-            }
+            && let Some(last) = system_arr.last_mut()
+        {
+            last["cache_control"] = cache_control.clone();
+        }
     }
 
     // 2. Tools — sort by name for deterministic cache keys, mark last.
     if let Some(tools) = body.get_mut("tools")
-        && let Some(tools_arr) = tools.as_array_mut() {
-            // Sort tools by name for deterministic ordering.
-            tools_arr.sort_by(|a, b| {
-                let name_a = a.get("name").and_then(Value::as_str).unwrap_or("");
-                let name_b = b.get("name").and_then(Value::as_str).unwrap_or("");
-                name_a.cmp(name_b)
-            });
-            if let Some(last_tool) = tools_arr.last_mut() {
-                last_tool["cache_control"] = cache_control.clone();
-            }
+        && let Some(tools_arr) = tools.as_array_mut()
+    {
+        // Sort tools by name for deterministic ordering.
+        tools_arr.sort_by(|a, b| {
+            let name_a = a.get("name").and_then(Value::as_str).unwrap_or("");
+            let name_b = b.get("name").and_then(Value::as_str).unwrap_or("");
+            name_a.cmp(name_b)
+        });
+        if let Some(last_tool) = tools_arr.last_mut() {
+            last_tool["cache_control"] = cache_control.clone();
         }
+    }
 
     // 3. Most recent user message — mark last content block.
     if let Some(messages) = body.get_mut("messages")
-        && let Some(msg_arr) = messages.as_array_mut() {
-            for msg in msg_arr.iter_mut().rev() {
-                if msg.get("role").and_then(Value::as_str) == Some("user") {
-                    if let Some(content) = msg.get_mut("content") {
-                        if content.is_string() {
-                            let text = content.as_str().unwrap_or("").to_owned();
-                            *content = json!([{
-                                "type": "text",
-                                "text": text,
-                                "cache_control": cache_control.clone(),
-                            }]);
-                        } else if let Some(content_arr) = content.as_array_mut()
-                            && let Some(last_block) = content_arr.last_mut() {
-                                last_block["cache_control"] = cache_control.clone();
-                            }
+        && let Some(msg_arr) = messages.as_array_mut()
+    {
+        for msg in msg_arr.iter_mut().rev() {
+            if msg.get("role").and_then(Value::as_str) == Some("user") {
+                if let Some(content) = msg.get_mut("content") {
+                    if content.is_string() {
+                        let text = content.as_str().unwrap_or("").to_owned();
+                        *content = json!([{
+                            "type": "text",
+                            "text": text,
+                            "cache_control": cache_control.clone(),
+                        }]);
+                    } else if let Some(content_arr) = content.as_array_mut()
+                        && let Some(last_block) = content_arr.last_mut()
+                    {
+                        last_block["cache_control"] = cache_control.clone();
                     }
-                    break;
                 }
+                break;
             }
         }
+    }
 }
 
 #[cfg(test)]
@@ -195,7 +197,10 @@ mod tests {
         });
         add_cache_breakpoints(&mut body, false);
 
-        let system = body.get("system").and_then(Value::as_array).expect("system should be array");
+        let system = body
+            .get("system")
+            .and_then(Value::as_array)
+            .expect("system should be array");
         assert_eq!(system.len(), 1);
         assert_eq!(system[0]["cache_control"]["type"], "ephemeral");
     }
@@ -212,7 +217,10 @@ mod tests {
         });
         add_cache_breakpoints(&mut body, false);
 
-        let system = body.get("system").and_then(Value::as_array).expect("system should be array");
+        let system = body
+            .get("system")
+            .and_then(Value::as_array)
+            .expect("system should be array");
         // Only the last block should have cache_control.
         assert!(system[0].get("cache_control").is_none());
         assert_eq!(system[1]["cache_control"]["type"], "ephemeral");
@@ -230,7 +238,10 @@ mod tests {
         });
         add_cache_breakpoints(&mut body, false);
 
-        let tools = body.get("tools").and_then(Value::as_array).expect("tools should be array");
+        let tools = body
+            .get("tools")
+            .and_then(Value::as_array)
+            .expect("tools should be array");
         // Tools should be sorted by name.
         assert_eq!(tools[0]["name"], "a_tool");
         assert_eq!(tools[1]["name"], "b_tool");
@@ -252,17 +263,28 @@ mod tests {
         });
         add_cache_breakpoints(&mut body, false);
 
-        let messages = body.get("messages").and_then(Value::as_array).expect("messages should be array");
+        let messages = body
+            .get("messages")
+            .and_then(Value::as_array)
+            .expect("messages should be array");
         // First user message should NOT have cache_control.
-        assert!(messages[0].get("content").and_then(Value::as_array).is_none()
-            || messages[0]
+        assert!(
+            messages[0]
                 .get("content")
-                .and_then(|c| c.as_array().and_then(|a| a.first()))
-                .and_then(|b| b.get("cache_control"))
-                .is_none());
+                .and_then(Value::as_array)
+                .is_none()
+                || messages[0]
+                    .get("content")
+                    .and_then(|c| c.as_array().and_then(|a| a.first()))
+                    .and_then(|b| b.get("cache_control"))
+                    .is_none()
+        );
         // Last user message should have cache_control.
         let last_user = &messages[2];
-        let content = last_user.get("content").and_then(Value::as_array).expect("content should be array");
+        let content = last_user
+            .get("content")
+            .and_then(Value::as_array)
+            .expect("content should be array");
         assert_eq!(content[0]["cache_control"]["type"], "ephemeral");
     }
 }

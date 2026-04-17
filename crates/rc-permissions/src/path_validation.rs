@@ -42,9 +42,7 @@ pub fn validate_path(path: &str) -> PathValidation {
             }
         }
         if depth < 0 {
-            return PathValidation::Invalid(
-                "Path traversal goes above root".into(),
-            );
+            return PathValidation::Invalid("Path traversal goes above root".into());
         }
     }
 
@@ -61,7 +59,7 @@ pub fn validate_path(path: &str) -> PathValidation {
 pub fn is_within_root(path: &str, root: &str) -> bool {
     let path_abs = Path::new(path);
     let root_abs = Path::new(root);
-    
+
     if path_abs.is_absolute() && root_abs.is_absolute() {
         path_abs.starts_with(root_abs)
     } else {
@@ -86,20 +84,35 @@ mod tests {
 
     #[test]
     fn valid_paths() {
-        assert!(matches!(validate_path("src/main.rs"), PathValidation::Valid));
-        assert!(matches!(validate_path("/home/user/file.txt"), PathValidation::Valid));
-        assert!(matches!(validate_path("relative/path"), PathValidation::Valid));
+        assert!(matches!(
+            validate_path("src/main.rs"),
+            PathValidation::Valid
+        ));
+        assert!(matches!(
+            validate_path("/home/user/file.txt"),
+            PathValidation::Valid
+        ));
+        assert!(matches!(
+            validate_path("relative/path"),
+            PathValidation::Valid
+        ));
     }
 
     #[test]
     fn null_byte_rejected() {
-        assert!(matches!(validate_path("file\0.txt"), PathValidation::Invalid(_)));
+        assert!(matches!(
+            validate_path("file\0.txt"),
+            PathValidation::Invalid(_)
+        ));
     }
 
     #[test]
     fn traversal_above_root_rejected() {
         // "../../../etc/passwd" has 3 ParentDir and 2 Normal, net depth = -1
-        assert!(matches!(validate_path("../../../etc/passwd"), PathValidation::Invalid(_)));
+        assert!(matches!(
+            validate_path("../../../etc/passwd"),
+            PathValidation::Invalid(_)
+        ));
     }
 
     #[test]
@@ -110,7 +123,10 @@ mod tests {
     #[test]
     fn overly_long_path_rejected() {
         let long_path = "a".repeat(5000);
-        assert!(matches!(validate_path(&long_path), PathValidation::Invalid(_)));
+        assert!(matches!(
+            validate_path(&long_path),
+            PathValidation::Invalid(_)
+        ));
     }
 
     #[test]

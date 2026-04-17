@@ -231,10 +231,7 @@ impl SkillSearchIndex {
             self.postings
                 .entry(term.clone())
                 .or_default()
-                .push(Posting {
-                    doc_idx,
-                    tf: *tf,
-                });
+                .push(Posting { doc_idx, tf: *tf });
         }
 
         self.documents.push(doc);
@@ -252,10 +249,7 @@ impl SkillSearchIndex {
 
     /// Removes a document by slug. Returns `true` if found and removed.
     pub fn remove_document(&mut self, slug: &str) -> bool {
-        let doc_idx = self
-            .documents
-            .iter()
-            .position(|d| d.slug == slug);
+        let doc_idx = self.documents.iter().position(|d| d.slug == slug);
 
         let idx = match doc_idx {
             Some(i) => i,
@@ -317,7 +311,11 @@ impl SkillSearchIndex {
             let idf = ((n - df + 0.5) / (df + 0.5) + 1.0).ln();
 
             for posting in postings {
-                let dl = self.doc_lengths.get(posting.doc_idx).copied().unwrap_or(0.0);
+                let dl = self
+                    .doc_lengths
+                    .get(posting.doc_idx)
+                    .copied()
+                    .unwrap_or(0.0);
 
                 // TF component: (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * dl/avgdl))
                 let tf_norm = if self.avg_dl > 0.0 {
@@ -377,8 +375,7 @@ impl SkillSearchIndex {
 // ---------------------------------------------------------------------------
 
 /// Prefetch state for skill content.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum PrefetchState {
     /// Not yet fetched.
     #[default]
@@ -390,7 +387,6 @@ pub enum PrefetchState {
     /// Fetch failed.
     Failed,
 }
-
 
 /// Tracks prefetch status for skill documents.
 #[derive(Debug, Clone, Default)]
@@ -408,7 +404,9 @@ impl SkillPrefetch {
 
     /// Registers a skill for prefetching.
     pub fn register(&mut self, slug: impl Into<String>) {
-        self.states.entry(slug.into()).or_insert(PrefetchState::Pending);
+        self.states
+            .entry(slug.into())
+            .or_insert(PrefetchState::Pending);
     }
 
     /// Marks a skill as in-progress.
@@ -435,7 +433,10 @@ impl SkillPrefetch {
     /// Returns the prefetch state for a skill.
     #[must_use]
     pub fn state(&self, slug: &str) -> PrefetchState {
-        self.states.get(slug).copied().unwrap_or(PrefetchState::Pending)
+        self.states
+            .get(slug)
+            .copied()
+            .unwrap_or(PrefetchState::Pending)
     }
 
     /// Returns the number of pending prefetches.
@@ -708,7 +709,11 @@ mod tests {
     fn test_index_search_basic() {
         let mut index = SkillSearchIndex::new();
         index.add_document(make_test_doc("rust-dev", "Rust Development", &["rust"]));
-        index.add_document(make_test_doc("python-dev", "Python Development", &["python"]));
+        index.add_document(make_test_doc(
+            "python-dev",
+            "Python Development",
+            &["python"],
+        ));
 
         let results = index.search("rust", 10);
         assert_eq!(results.len(), 1);
@@ -858,7 +863,11 @@ mod tests {
     fn test_engine_index_and_search() {
         let mut engine = SkillSearchEngine::new();
         engine.index_skill(make_test_doc("rust-dev", "Rust Development", &["rust"]));
-        engine.index_skill(make_test_doc("python-dev", "Python Development", &["python"]));
+        engine.index_skill(make_test_doc(
+            "python-dev",
+            "Python Development",
+            &["python"],
+        ));
 
         let results = engine.search("rust", 10);
         assert_eq!(results.len(), 1);

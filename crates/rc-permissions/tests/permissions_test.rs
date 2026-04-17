@@ -1,7 +1,7 @@
 use rc_permissions::{
-    PermissionBroker, PermissionClass, PermissionDecision, PermissionRequest,
-    StaticPermissionBroker, LayeredPermissionBroker, SourceAwarePermissionRule,
-    RuleAction, RuleSource, classify_tool, rule_matches_pattern,
+    LayeredPermissionBroker, PermissionBroker, PermissionClass, PermissionDecision,
+    PermissionRequest, RuleAction, RuleSource, SourceAwarePermissionRule, StaticPermissionBroker,
+    classify_tool, rule_matches_pattern,
 };
 
 // ── classify_tool tests ───────────────────────────────────────
@@ -202,7 +202,9 @@ async fn layered_broker_session_rule_highest_priority() {
     }];
     let layered = LayeredPermissionBroker::new(fallback, rules);
     // Session rule denies Bash
-    layered.add_session_rule(RuleAction::Deny, "Bash".to_owned()).unwrap();
+    layered
+        .add_session_rule(RuleAction::Deny, "Bash".to_owned())
+        .unwrap();
     let decision = layered
         .decide(PermissionRequest {
             tool_name: "Bash".to_owned(),
@@ -221,8 +223,12 @@ async fn layered_broker_session_rule_highest_priority() {
 fn layered_broker_clear_session_rules_returns_count() {
     let fallback = StaticPermissionBroker::new(true);
     let layered = LayeredPermissionBroker::new(fallback, vec![]);
-    layered.add_session_rule(RuleAction::Allow, "Read".to_owned()).unwrap();
-    layered.add_session_rule(RuleAction::Deny, "Bash".to_owned()).unwrap();
+    layered
+        .add_session_rule(RuleAction::Allow, "Read".to_owned())
+        .unwrap();
+    layered
+        .add_session_rule(RuleAction::Deny, "Bash".to_owned())
+        .unwrap();
     let count = layered.clear_session_rules().unwrap();
     assert_eq!(count, 2);
 }

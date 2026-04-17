@@ -42,6 +42,6 @@ pub use providers::{
     detect_provider, is_first_party_base_url, provider_model_id,
 };
 pub use validate::{
-    ValidationError, get_canonical_name, get_public_model_display_name, normalize_model_string_for_api,
-    validate_model_id,
+    ValidationError, get_canonical_name, get_public_model_display_name,
+    normalize_model_string_for_api, validate_model_id,
 };

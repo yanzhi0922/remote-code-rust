@@ -84,10 +84,7 @@ mod tests {
         assert!(!cache.contains("test_section"));
         cache.set("test_section", Some("hello".to_string()));
         assert!(cache.contains("test_section"));
-        assert_eq!(
-            cache.get("test_section"),
-            Some(&Some("hello".to_string()))
-        );
+        assert_eq!(cache.get("test_section"), Some(&Some("hello".to_string())));
     }
 
     #[test]

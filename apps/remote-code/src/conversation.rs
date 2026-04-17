@@ -23,8 +23,9 @@ use rc_skills::SkillDocument;
 use rc_tools::{
     ProgressCallback, ToolExecutionContext,
     agent::{DelegateProgressEvent, parse_delegate_progress_event},
-    builtin_tool_specs, execute_tool_call,
+    execute_tool_call,
     mcp_runtime::discover_runtime_mcp_servers,
+    runtime_provider_tool_spec,
     tasks::load_persisted_ui_task_snapshots,
 };
 use rc_ui_bridge::UiTaskNode;
@@ -827,9 +828,8 @@ async fn run_prompt_legacy(
         )?;
 
         for tool_call in &response.tool_calls {
-            let _ = builtin_tool_specs()
-                .into_iter()
-                .find(|spec| spec.name == tool_call.name)
+            let _ = runtime_provider_tool_spec(&tool_call.name)
+                .await
                 .ok_or_else(|| anyhow!("unknown tool {}", tool_call.name))?;
 
             let prepared = apply_pre_tool_use_hooks(

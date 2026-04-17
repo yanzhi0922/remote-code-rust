@@ -222,10 +222,8 @@ impl ToolOrchestrator {
             }
             DispatchStrategy::Auto => {
                 let batches = partition_tool_calls(calls);
-                let call_map: HashMap<&str, &OrchestratedToolCall> = calls
-                    .iter()
-                    .map(|c| (c.id.as_str(), c))
-                    .collect();
+                let call_map: HashMap<&str, &OrchestratedToolCall> =
+                    calls.iter().map(|c| (c.id.as_str(), c)).collect();
 
                 for batch in &batches {
                     let batch_calls: Vec<&OrchestratedToolCall> = batch
@@ -262,11 +260,8 @@ impl ToolOrchestrator {
         results: &mut HashMap<String, ToolExecutionResult>,
     ) -> Result<()> {
         for call in calls {
-            let executor = StreamingToolExecutor::new(
-                Arc::clone(&self.runner),
-                self.config.clone(),
-                None,
-            );
+            let executor =
+                StreamingToolExecutor::new(Arc::clone(&self.runner), self.config.clone(), None);
             executor.add_tool(
                 &call.id,
                 &call.name,
@@ -288,11 +283,8 @@ impl ToolOrchestrator {
         calls: &[OrchestratedToolCall],
         results: &mut HashMap<String, ToolExecutionResult>,
     ) -> Result<()> {
-        let executor = StreamingToolExecutor::new(
-            Arc::clone(&self.runner),
-            self.config.clone(),
-            None,
-        );
+        let executor =
+            StreamingToolExecutor::new(Arc::clone(&self.runner), self.config.clone(), None);
         for call in calls {
             executor.add_tool(
                 &call.id,
@@ -316,11 +308,8 @@ impl ToolOrchestrator {
         results: &mut HashMap<String, ToolExecutionResult>,
     ) -> Result<()> {
         for call in calls {
-            let executor = StreamingToolExecutor::new(
-                Arc::clone(&self.runner),
-                self.config.clone(),
-                None,
-            );
+            let executor =
+                StreamingToolExecutor::new(Arc::clone(&self.runner), self.config.clone(), None);
             executor.add_tool(&call.id, &call.name, &call.input, false);
             let mut batch_results = executor.wait_for_remaining().await;
             for r in batch_results.drain(..) {
@@ -335,11 +324,8 @@ impl ToolOrchestrator {
         calls: &[&OrchestratedToolCall],
         results: &mut HashMap<String, ToolExecutionResult>,
     ) -> Result<()> {
-        let executor = StreamingToolExecutor::new(
-            Arc::clone(&self.runner),
-            self.config.clone(),
-            None,
-        );
+        let executor =
+            StreamingToolExecutor::new(Arc::clone(&self.runner), self.config.clone(), None);
         for call in calls {
             executor.add_tool(&call.id, &call.name, &call.input, true);
         }
@@ -472,10 +458,7 @@ mod tests {
 
     #[test]
     fn partition_two_unsafe_not_grouped() {
-        let calls = vec![
-            call("1", "bash", false),
-            call("2", "bash", false),
-        ];
+        let calls = vec![call("1", "bash", false), call("2", "bash", false)];
         let batches = partition_tool_calls(&calls);
         assert_eq!(batches.len(), 2);
         assert!(!batches[0].is_concurrency_safe);
@@ -486,10 +469,7 @@ mod tests {
 
     #[test]
     fn analyse_deps_no_deps() {
-        let calls = vec![
-            call("1", "read", true),
-            call("2", "read", true),
-        ];
+        let calls = vec![call("1", "read", true), call("2", "read", true)];
         assert!(analyse_dependencies(&calls).is_empty());
     }
 
@@ -532,12 +512,9 @@ mod tests {
 
     #[tokio::test]
     async fn orchestrator_serial_strategy() {
-        let orch =
-            ToolOrchestrator::new(Arc::new(OkRunner), config()).with_strategy(DispatchStrategy::SerialOnly);
-        let calls = vec![
-            call("1", "read", true),
-            call("2", "bash", false),
-        ];
+        let orch = ToolOrchestrator::new(Arc::new(OkRunner), config())
+            .with_strategy(DispatchStrategy::SerialOnly);
+        let calls = vec![call("1", "read", true), call("2", "bash", false)];
         let result = orch.execute(&calls).await.expect("execute");
         assert_eq!(result.results.len(), 2);
         assert_eq!(result.strategy, DispatchStrategy::SerialOnly);
@@ -547,10 +524,7 @@ mod tests {
     async fn orchestrator_force_parallel_strategy() {
         let orch = ToolOrchestrator::new(Arc::new(OkRunner), config())
             .with_strategy(DispatchStrategy::ForceParallel);
-        let calls = vec![
-            call("1", "bash", false),
-            call("2", "bash", false),
-        ];
+        let calls = vec![call("1", "bash", false), call("2", "bash", false)];
         let result = orch.execute(&calls).await.expect("execute");
         assert_eq!(result.results.len(), 2);
         assert_eq!(result.strategy, DispatchStrategy::ForceParallel);

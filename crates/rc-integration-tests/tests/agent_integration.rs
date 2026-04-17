@@ -49,7 +49,10 @@ fn agent_definition_with_all_fields_serializes() {
     assert_eq!(decoded.disallowed_tools, vec!["Bash"]);
     assert_eq!(decoded.model.as_deref(), Some("haiku"));
     assert!(decoded.background);
-    assert_eq!(decoded.isolation, rc_agents::definition::AgentIsolation::Worktree);
+    assert_eq!(
+        decoded.isolation,
+        rc_agents::definition::AgentIsolation::Worktree
+    );
 }
 
 #[test]
@@ -120,11 +123,7 @@ fn runner_resolves_wildcard_tools() {
         working_dir: PathBuf::from("."),
     };
     let runner = rc_agents::AgentRunner::new(def, config);
-    let available = vec![
-        "Read".to_owned(),
-        "Write".to_owned(),
-        "Bash".to_owned(),
-    ];
+    let available = vec!["Read".to_owned(), "Write".to_owned(), "Bash".to_owned()];
     let resolved = runner.resolve_tools(&available);
     assert_eq!(resolved.len(), 3);
 }
@@ -227,23 +226,21 @@ fn is_fork_child_returns_false_for_normal_messages() {
 
 #[test]
 fn build_fork_messages_with_tool_use_blocks() {
-    let parent = vec![
-        rc_agents::fork::ForkMessage {
-            role: "assistant".to_owned(),
-            content: vec![
-                rc_agents::fork::ForkContentBlock::ToolUse {
-                    id: "tu-1".to_owned(),
-                    name: "Read".to_owned(),
-                    input: serde_json::json!({"path": "/tmp/test.rs"}),
-                },
-                rc_agents::fork::ForkContentBlock::ToolUse {
-                    id: "tu-2".to_owned(),
-                    name: "Write".to_owned(),
-                    input: serde_json::json!({"path": "/tmp/out.rs"}),
-                },
-            ],
-        },
-    ];
+    let parent = vec![rc_agents::fork::ForkMessage {
+        role: "assistant".to_owned(),
+        content: vec![
+            rc_agents::fork::ForkContentBlock::ToolUse {
+                id: "tu-1".to_owned(),
+                name: "Read".to_owned(),
+                input: serde_json::json!({"path": "/tmp/test.rs"}),
+            },
+            rc_agents::fork::ForkContentBlock::ToolUse {
+                id: "tu-2".to_owned(),
+                name: "Write".to_owned(),
+                input: serde_json::json!({"path": "/tmp/out.rs"}),
+            },
+        ],
+    }];
     let result = rc_agents::fork::build_fork_messages(&parent, "do something");
     // Should produce placeholder results + directive
     assert!(!result.is_empty());
@@ -266,8 +263,7 @@ fn coordinator_mode_display() {
 fn coordinator_mode_serialization_round_trip() {
     let mode = rc_agents::CoordinatorMode::Coordinator;
     let json = serde_json::to_string(&mode).expect("serialize");
-    let decoded: rc_agents::CoordinatorMode =
-        serde_json::from_str(&json).expect("deserialize");
+    let decoded: rc_agents::CoordinatorMode = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(mode, decoded);
 }
 
@@ -331,8 +327,7 @@ fn worker_config_serialization_round_trip() {
         working_dir: Some("/tmp".to_owned()),
     };
     let json = serde_json::to_string(&config).expect("serialize");
-    let decoded: rc_agents::WorkerConfig =
-        serde_json::from_str(&json).expect("deserialize");
+    let decoded: rc_agents::WorkerConfig = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(decoded.description, "serialize test");
     assert_eq!(decoded.max_turns, 42);
     assert!(decoded.simple_mode);
@@ -350,9 +345,11 @@ fn checkpoint_save_and_load_round_trip() {
 
     ok(rc_agents::resume::save_agent_checkpoint(temp.path(), &cp));
 
-    let loaded =
-        ok(rc_agents::resume::load_agent_checkpoint(temp.path(), "agent-1"))
-            .expect("checkpoint should exist");
+    let loaded = ok(rc_agents::resume::load_agent_checkpoint(
+        temp.path(),
+        "agent-1",
+    ))
+    .expect("checkpoint should exist");
     assert_eq!(loaded.agent_id, "agent-1");
     assert_eq!(loaded.agent_type, "general-purpose");
     assert_eq!(loaded.message_count(), 2);
@@ -426,8 +423,7 @@ fn agent_task_creation_and_serialization() {
     assert!(task.owner.is_none());
 
     let json = serde_json::to_string(&task).expect("serialize task");
-    let decoded: rc_agents::AgentTask =
-        serde_json::from_str(&json).expect("deserialize task");
+    let decoded: rc_agents::AgentTask = serde_json::from_str(&json).expect("deserialize task");
     assert_eq!(decoded.title, "Implement feature X");
     assert_eq!(decoded.state, rc_agents::TaskState::Pending);
 }
@@ -454,8 +450,7 @@ fn context_slice_default_and_serialization() {
         token_estimate: 42,
     };
     let json = serde_json::to_string(&slice).expect("serialize");
-    let decoded: rc_agents::ContextSlice =
-        serde_json::from_str(&json).expect("deserialize");
+    let decoded: rc_agents::ContextSlice = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(decoded.summary, "test context");
     assert_eq!(decoded.token_estimate, 42);
 }

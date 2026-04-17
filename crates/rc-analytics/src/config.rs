@@ -107,7 +107,10 @@ mod tests {
     fn config_with_endpoint_enables_analytics() {
         let config = AnalyticsConfig::with_endpoint("https://analytics.example.com");
         assert!(config.enabled);
-        assert_eq!(config.endpoint, Some("https://analytics.example.com".to_string()));
+        assert_eq!(
+            config.endpoint,
+            Some("https://analytics.example.com".to_string())
+        );
     }
 
     #[test]
@@ -124,8 +127,7 @@ mod tests {
 
     #[test]
     fn config_serialization_roundtrip() {
-        let config = AnalyticsConfig::with_endpoint("https://example.com")
-            .with_api_key("key123");
+        let config = AnalyticsConfig::with_endpoint("https://example.com").with_api_key("key123");
         let json = serde_json::to_string(&config).expect("serialize");
         let parsed: AnalyticsConfig = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(config, parsed);

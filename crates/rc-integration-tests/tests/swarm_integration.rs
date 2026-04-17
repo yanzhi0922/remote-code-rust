@@ -3,7 +3,6 @@
 //! Tests TeamFile CRUD, permission sync, mailbox operations,
 //! backend registry, leader bridge, and reconnection.
 
-
 // ─── TeamFile CRUD ──────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -26,12 +25,7 @@ async fn team_file_create_read_update_delete() {
     assert_eq!(loaded.lead_agent_id, "lead-1");
 
     // Update (add member)
-    let member = rc_swarm::TeamMember::new(
-        "agent-1",
-        "worker-1",
-        "pane-0",
-        "/tmp/workdir",
-    );
+    let member = rc_swarm::TeamMember::new("agent-1", "worker-1", "pane-0", "/tmp/workdir");
     rc_swarm::team_helpers::add_member("test-team", member)
         .await
         .expect("should add member");
@@ -109,9 +103,18 @@ fn team_name_validation() {
 
 #[test]
 fn team_name_sanitization() {
-    assert_eq!(rc_swarm::team_helpers::sanitize_team_name("my team"), "my_team");
-    assert_eq!(rc_swarm::team_helpers::sanitize_team_name("test/path"), "test_path");
-    assert_eq!(rc_swarm::team_helpers::sanitize_team_name("valid-name"), "valid-name");
+    assert_eq!(
+        rc_swarm::team_helpers::sanitize_team_name("my team"),
+        "my_team"
+    );
+    assert_eq!(
+        rc_swarm::team_helpers::sanitize_team_name("test/path"),
+        "test_path"
+    );
+    assert_eq!(
+        rc_swarm::team_helpers::sanitize_team_name("valid-name"),
+        "valid-name"
+    );
 }
 
 // ─── Permission sync ────────────────────────────────────────────────────────
@@ -286,21 +289,13 @@ fn leader_bridge_auto_approve_rules() {
 
 #[test]
 fn leader_bridge_default_decision() {
-    let request = rc_swarm::SwarmPermissionRequest::new(
-        "team",
-        "worker",
-        "read",
-        serde_json::json!({}),
-    );
+    let request =
+        rc_swarm::SwarmPermissionRequest::new("team", "worker", "read", serde_json::json!({}));
     let (decision, _reason) = rc_swarm::leader_bridge::default_decision(&request);
     assert_eq!(decision, rc_swarm::PermissionDecision::Allow);
 
-    let write_request = rc_swarm::SwarmPermissionRequest::new(
-        "team",
-        "worker",
-        "write",
-        serde_json::json!({}),
-    );
+    let write_request =
+        rc_swarm::SwarmPermissionRequest::new("team", "worker", "write", serde_json::json!({}));
     let (decision, _reason) = rc_swarm::leader_bridge::default_decision(&write_request);
     assert_eq!(decision, rc_swarm::PermissionDecision::Deny);
 }
@@ -334,8 +329,7 @@ fn teammate_identity_serialization() {
         backend_type: rc_swarm::BackendType::InProcess,
     };
     let json = serde_json::to_string(&identity).expect("serialize");
-    let decoded: rc_swarm::TeammateIdentity =
-        serde_json::from_str(&json).expect("deserialize");
+    let decoded: rc_swarm::TeammateIdentity = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(decoded.agent_id, "agent-1");
     assert!(!decoded.is_lead);
 }
@@ -360,7 +354,6 @@ fn spawn_config_construction() {
 
     // Verify serialization round-trip
     let json = serde_json::to_string(&config).expect("should serialize");
-    let decoded: rc_swarm::SpawnConfig =
-        serde_json::from_str(&json).expect("should deserialize");
+    let decoded: rc_swarm::SpawnConfig = serde_json::from_str(&json).expect("should deserialize");
     assert_eq!(decoded, config);
 }

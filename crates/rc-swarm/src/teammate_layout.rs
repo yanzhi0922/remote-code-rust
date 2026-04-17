@@ -40,7 +40,11 @@ pub fn layout_summary(team: &TeamFile) -> String {
     } else {
         summary.push_str("Teammates:\n");
         for (i, member) in team.members.iter().enumerate() {
-            let color = member.color.as_deref().expect("should have color").to_owned();
+            let color = member
+                .color
+                .as_deref()
+                .expect("should have color")
+                .to_owned();
             summary.push_str(&format!(
                 "  {} [{}] - {} ({})\n",
                 i + 1,

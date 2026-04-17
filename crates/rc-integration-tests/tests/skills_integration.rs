@@ -52,7 +52,10 @@ fn discover_skills_sorts_by_slug() {
     for name in ["zeta-skill", "alpha-skill", "mid-skill"] {
         let dir = temp.path().join(name);
         ok(fs::create_dir_all(&dir));
-        ok(fs::write(dir.join("SKILL.md"), format!("# {name}\n\nDesc.\n")));
+        ok(fs::write(
+            dir.join("SKILL.md"),
+            format!("# {name}\n\nDesc.\n"),
+        ));
     }
 
     let skills = ok(rc_skills::discover_skills(temp.path()));
@@ -99,7 +102,10 @@ fn bundled_skills_all_have_names() {
 fn bundled_skill_from_name_round_trip() {
     for skill in rc_skills::bundled::BundledSkill::all() {
         let name = skill.name();
-        assert_eq!(rc_skills::bundled::BundledSkill::from_name(name), Some(*skill));
+        assert_eq!(
+            rc_skills::bundled::BundledSkill::from_name(name),
+            Some(*skill)
+        );
     }
 }
 
@@ -132,7 +138,10 @@ fn resolve_skill_finds_user_defined() {
     ok(fs::create_dir_all(&root));
     ok(fs::write(root.join("SKILL.md"), "# My Skill\n\nCustom.\n"));
 
-    let result = ok(rc_skills::bundled::resolve_skill("my-skill", &[temp.path()]));
+    let result = ok(rc_skills::bundled::resolve_skill(
+        "my-skill",
+        &[temp.path()],
+    ));
     assert!(result.is_some());
     assert_eq!(result.expect("skill").metadata.slug, "my-skill");
 }
@@ -195,17 +204,15 @@ fn search_engine_prefetch_tracking() {
 
 #[test]
 fn search_convenience_function() {
-    let docs = vec![
-        rc_skills::search::SkillDocument {
-            slug: "deploy".to_owned(),
-            title: "Deploy".to_owned(),
-            summary: "Deploy to cloud".to_owned(),
-            tags: vec!["deploy".to_owned()],
-            triggers: vec![],
-            tools: vec![],
-            instructions: String::new(),
-        },
-    ];
+    let docs = vec![rc_skills::search::SkillDocument {
+        slug: "deploy".to_owned(),
+        title: "Deploy".to_owned(),
+        summary: "Deploy to cloud".to_owned(),
+        tags: vec!["deploy".to_owned()],
+        triggers: vec![],
+        tools: vec![],
+        instructions: String::new(),
+    }];
     let results = rc_skills::search::search_skills(&docs, "deploy", 5);
     assert_eq!(results.len(), 1);
 }
@@ -217,7 +224,10 @@ fn executor_validates_valid_skill() {
     let temp = ok(tempfile::tempdir());
     let root = temp.path().join("valid-skill");
     ok(fs::create_dir_all(&root));
-    ok(fs::write(root.join("SKILL.md"), "# Valid\n\nInstructions here."));
+    ok(fs::write(
+        root.join("SKILL.md"),
+        "# Valid\n\nInstructions here.",
+    ));
 
     let skill = rc_skills::SkillDocument {
         metadata: rc_skills::SkillMetadata {
@@ -275,7 +285,10 @@ fn executor_builds_prompt_with_references() {
     let refs_dir = root.join("references");
     ok(fs::create_dir_all(&refs_dir));
     ok(fs::write(refs_dir.join("guide.md"), "This is the guide."));
-    ok(fs::write(root.join("SKILL.md"), "# Ref Skill\n\nUse the guide."));
+    ok(fs::write(
+        root.join("SKILL.md"),
+        "# Ref Skill\n\nUse the guide.",
+    ));
 
     let skill = rc_skills::SkillDocument {
         metadata: rc_skills::SkillMetadata {
@@ -330,8 +343,7 @@ fn executor_interpolates_env_vars() {
     };
 
     let executor = rc_skills::executor::SkillExecutor::new();
-    let ctx = rc_skills::executor::SkillExecutionContext::new(&root)
-        .with_env("ENV", "production");
+    let ctx = rc_skills::executor::SkillExecutionContext::new(&root).with_env("ENV", "production");
     let result = ok(executor.execute_skill(&skill, &ctx));
     assert_eq!(result.env_vars_interpolated, 1);
     assert!(result.prompt.contains("production"));
@@ -393,8 +405,7 @@ fn skill_metadata_serialization_round_trip() {
         assets: vec![],
     };
     let json = serde_json::to_string(&meta).expect("serialize");
-    let decoded: rc_skills::SkillMetadata =
-        serde_json::from_str(&json).expect("deserialize");
+    let decoded: rc_skills::SkillMetadata = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(decoded.slug, "test-meta");
     assert_eq!(decoded.tags, vec!["test"]);
 }
@@ -435,7 +446,10 @@ fn filter_skills_by_query() {
     let temp = ok(tempfile::tempdir());
     let root = temp.path().join("filter-skill");
     ok(fs::create_dir_all(&root));
-    ok(fs::write(root.join("SKILL.md"), "# Deploy Skill\n\nDeploy apps."));
+    ok(fs::write(
+        root.join("SKILL.md"),
+        "# Deploy Skill\n\nDeploy apps.",
+    ));
 
     let skill = ok(rc_skills::load_skill(root.join("SKILL.md")));
     let skills = vec![skill];

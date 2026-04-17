@@ -9,14 +9,11 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::dependency::{
-    DependencyLookupResult, ResolutionResult, resolve_dependency_closure,
-};
+use crate::dependency::{DependencyLookupResult, ResolutionResult, resolve_dependency_closure};
 use crate::{
-    PluginBundle, PluginHostInfo, PluginRuntimeInspection,
-    PluginValidationReport, PluginRuntimeError,
-    discover_plugins, load_plugin_from_root, validate_plugin_bundle,
-    inspect_runtime,
+    PluginBundle, PluginHostInfo, PluginRuntimeError, PluginRuntimeInspection,
+    PluginValidationReport, discover_plugins, inspect_runtime, load_plugin_from_root,
+    validate_plugin_bundle,
 };
 
 // ---------------------------------------------------------------------------
@@ -110,10 +107,8 @@ pub fn load_plugin_from_directory(
     directory: &Path,
     options: &PluginLoadOptions,
 ) -> Result<PluginLoadResult, LoaderError> {
-    let bundle = load_plugin_from_root(directory).map_err(|_e| {
-        LoaderError::NotFound {
-            path: directory.to_path_buf(),
-        }
+    let bundle = load_plugin_from_root(directory).map_err(|_e| LoaderError::NotFound {
+        path: directory.to_path_buf(),
     })?;
 
     let validation = if options.validate {
@@ -126,12 +121,13 @@ pub fn load_plugin_from_directory(
     // Check for validation errors in strict mode
     if options.strict
         && let Some(ref report) = validation
-            && !report.errors.is_empty() {
-                return Err(LoaderError::ValidationFailed {
-                    plugin_name: bundle.manifest.name.clone(),
-                    errors: report.errors.clone(),
-                });
-            }
+        && !report.errors.is_empty()
+    {
+        return Err(LoaderError::ValidationFailed {
+            plugin_name: bundle.manifest.name.clone(),
+            errors: report.errors.clone(),
+        });
+    }
 
     let mut warnings = Vec::new();
     if let Some(ref report) = validation {
@@ -212,9 +208,8 @@ pub fn load_all_plugins(
     root: &Path,
     options: &PluginLoadOptions,
 ) -> Result<Vec<PluginLoadResult>, LoaderError> {
-    let bundles = discover_plugins(root).map_err(|e| LoaderError::Io(
-        std::io::Error::other(e.to_string()),
-    ))?;
+    let bundles = discover_plugins(root)
+        .map_err(|e| LoaderError::Io(std::io::Error::other(e.to_string())))?;
 
     let mut results = Vec::new();
     for bundle in bundles {
@@ -278,7 +273,13 @@ mod tests {
 
         assert_eq!(result.bundle.manifest.name, "test-plugin");
         assert!(result.validation.is_some());
-        assert!(result.warnings.is_empty() || result.validation.as_ref().is_some_and(|v| v.warnings == result.warnings));
+        assert!(
+            result.warnings.is_empty()
+                || result
+                    .validation
+                    .as_ref()
+                    .is_some_and(|v| v.warnings == result.warnings)
+        );
     }
 
     #[test]
@@ -313,7 +314,10 @@ mod tests {
             ..PluginLoadOptions::default()
         };
         let result = load_plugin_from_directory(root, &options);
-        assert!(result.is_err(), "strict mode should fail on validation errors");
+        assert!(
+            result.is_err(),
+            "strict mode should fail on validation errors"
+        );
     }
 
     #[test]
@@ -336,8 +340,10 @@ mod tests {
         let results = ok(load_all_plugins(temp.path(), &options));
 
         assert_eq!(results.len(), 2);
-        let names: Vec<&str> =
-            results.iter().map(|r| r.bundle.manifest.name.as_str()).collect();
+        let names: Vec<&str> = results
+            .iter()
+            .map(|r| r.bundle.manifest.name.as_str())
+            .collect();
         assert!(names.contains(&"alpha"));
         assert!(names.contains(&"beta"));
     }

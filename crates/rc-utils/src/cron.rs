@@ -263,11 +263,13 @@ pub fn next_run(
             return None;
         }
 
-        if cron.month.matches(month, 1, 12) && cron.day_of_month.matches(day, 1, 31)
+        if cron.month.matches(month, 1, 12)
+            && cron.day_of_month.matches(day, 1, 31)
             && cron.hour.matches(hour, 0, 23)
-                && cron.minute.matches(minute, 0, 59) {
-                    return Some((minute, hour, day, month));
-                }
+            && cron.minute.matches(minute, 0, 59)
+        {
+            return Some((minute, hour, day, month));
+        }
 
         // Advance by one minute.
         minute += 1;

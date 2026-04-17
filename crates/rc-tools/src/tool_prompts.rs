@@ -1099,7 +1099,8 @@ pub fn file_edit_tool_prompt() -> String {
     # Important\n\
     - Do NOT include `// rest of code unchanged` or similar placeholders.\n\
     - ALWAYS provide the COMPLETE intended content in each replace block.\n\
-    - Partial updates or placeholders are STRICTLY FORBIDDEN.".to_owned()
+    - Partial updates or placeholders are STRICTLY FORBIDDEN."
+        .to_owned()
 }
 
 /// Returns the file-read tool prompt with detailed reading instructions.
@@ -1121,7 +1122,8 @@ pub fn file_read_tool_prompt() -> String {
     - Always read a file before editing it — the edit tool requires a prior read.\n\
     - For very large files, read in chunks using start_line/end_line to avoid truncation.\n\
     - Supports text extraction from PDF and DOCX files.\n\
-    - Lines longer than 2000 characters are truncated in the output.".to_owned()
+    - Lines longer than 2000 characters are truncated in the output."
+        .to_owned()
 }
 
 /// Returns the file-write tool prompt with detailed writing instructions.
@@ -1255,18 +1257,70 @@ mod tests {
     #[test]
     fn all_prompts_are_non_empty() {
         let prompts = [
-            LIST_DIRECTORY, READ_FILE, SEARCH_TEXT, WRITE_FILE, REPLACE_IN_FILE,
-            EDIT_FILE, BASH_COMMAND, GLOB, GREP, WEB_FETCH, ASK_USER, TODO_WRITE,
-            CONFIG_READ, AGENT, WEB_SEARCH, LSP, TASK_CREATE, TASK_GET, TASK_LIST,
-            TASK_STOP, TASK_UPDATE, NOTEBOOK_EDIT, SKILL_DISCOVER, SKILL_EXECUTE,
-            SEND_MESSAGE, ENTER_PLAN_MODE, EXIT_PLAN_MODE, SLEEP, SNIP, TOOL_SEARCH,
-            VERIFY_PLAN, TERMINAL_CAPTURE, MONITOR, BRIEF, CTX_INSPECT,
-            SEND_USER_FILE, MCP_CALL, MCP_AUTH, LIST_MCP_RESOURCES,
-            READ_MCP_RESOURCE, TEAM_CREATE, TEAM_DELETE, TEAM_STATUS, TEAM_LIST,
-            REVIEW_ARTIFACT, SCHEDULE_CRON, WORKFLOW, DAEMON, REMOTE_TRIGGER,
-            ENTER_WORKTREE, EXIT_WORKTREE, LIST_WORKTREES, POWERSHELL, REPL,
-            WEB_BROWSER, TUNGSTEN, OVERFLOW_TEST, SYNTHETIC_OUTPUT, VOICE_INPUT,
-            SUGGEST_PR, MEMORY_READ, MEMORY_WRITE, LIST_PEERS, DISCOVER_SKILLS,
+            LIST_DIRECTORY,
+            READ_FILE,
+            SEARCH_TEXT,
+            WRITE_FILE,
+            REPLACE_IN_FILE,
+            EDIT_FILE,
+            BASH_COMMAND,
+            GLOB,
+            GREP,
+            WEB_FETCH,
+            ASK_USER,
+            TODO_WRITE,
+            CONFIG_READ,
+            AGENT,
+            WEB_SEARCH,
+            LSP,
+            TASK_CREATE,
+            TASK_GET,
+            TASK_LIST,
+            TASK_STOP,
+            TASK_UPDATE,
+            NOTEBOOK_EDIT,
+            SKILL_DISCOVER,
+            SKILL_EXECUTE,
+            SEND_MESSAGE,
+            ENTER_PLAN_MODE,
+            EXIT_PLAN_MODE,
+            SLEEP,
+            SNIP,
+            TOOL_SEARCH,
+            VERIFY_PLAN,
+            TERMINAL_CAPTURE,
+            MONITOR,
+            BRIEF,
+            CTX_INSPECT,
+            SEND_USER_FILE,
+            MCP_CALL,
+            MCP_AUTH,
+            LIST_MCP_RESOURCES,
+            READ_MCP_RESOURCE,
+            TEAM_CREATE,
+            TEAM_DELETE,
+            TEAM_STATUS,
+            TEAM_LIST,
+            REVIEW_ARTIFACT,
+            SCHEDULE_CRON,
+            WORKFLOW,
+            DAEMON,
+            REMOTE_TRIGGER,
+            ENTER_WORKTREE,
+            EXIT_WORKTREE,
+            LIST_WORKTREES,
+            POWERSHELL,
+            REPL,
+            WEB_BROWSER,
+            TUNGSTEN,
+            OVERFLOW_TEST,
+            SYNTHETIC_OUTPUT,
+            VOICE_INPUT,
+            SUGGEST_PR,
+            MEMORY_READ,
+            MEMORY_WRITE,
+            LIST_PEERS,
+            DISCOVER_SKILLS,
             BROADCAST_MESSAGE,
         ];
         for prompt in &prompts {
@@ -1369,23 +1423,76 @@ mod tests {
     fn prompt_count_covers_all_builtin_tools() {
         // Count all non-empty prompts returned by get_prompt for known tool names
         let known_tools = [
-            "list_directory", "read_file", "search_text", "write_file",
-            "replace_in_file", "edit_file", "bash_command", "glob", "grep",
-            "web_fetch", "ask_user", "todo_write", "config_read", "agent",
-            "web_search", "lsp", "task_create", "task_get", "task_list",
-            "task_stop", "task_update", "notebook_edit", "skill_discover",
-            "skill_execute", "send_message", "enter_plan_mode", "exit_plan_mode",
-            "sleep", "snip", "tool_search", "verify_plan", "terminal_capture",
-            "monitor", "brief", "ctx_inspect", "send_user_file", "mcp_call",
-            "mcp_auth", "list_mcp_resources", "read_mcp_resource", "team_create",
-            "team_delete", "team_status", "team_list", "review_artifact",
-            "schedule_cron", "workflow", "daemon", "remote_trigger",
-            "enter_worktree", "exit_worktree", "list_worktrees", "powershell",
-            "repl", "web_browser", "tungsten", "overflow_test",
-            "synthetic_output", "voice_input", "suggest_pr", "memory_read",
-            "memory_write", "list_peers", "discover_skills", "broadcast_message",
+            "list_directory",
+            "read_file",
+            "search_text",
+            "write_file",
+            "replace_in_file",
+            "edit_file",
+            "bash_command",
+            "glob",
+            "grep",
+            "web_fetch",
+            "ask_user",
+            "todo_write",
+            "config_read",
+            "agent",
+            "web_search",
+            "lsp",
+            "task_create",
+            "task_get",
+            "task_list",
+            "task_stop",
+            "task_update",
+            "notebook_edit",
+            "skill_discover",
+            "skill_execute",
+            "send_message",
+            "enter_plan_mode",
+            "exit_plan_mode",
+            "sleep",
+            "snip",
+            "tool_search",
+            "verify_plan",
+            "terminal_capture",
+            "monitor",
+            "brief",
+            "ctx_inspect",
+            "send_user_file",
+            "mcp_call",
+            "mcp_auth",
+            "list_mcp_resources",
+            "read_mcp_resource",
+            "team_create",
+            "team_delete",
+            "team_status",
+            "team_list",
+            "review_artifact",
+            "schedule_cron",
+            "workflow",
+            "daemon",
+            "remote_trigger",
+            "enter_worktree",
+            "exit_worktree",
+            "list_worktrees",
+            "powershell",
+            "repl",
+            "web_browser",
+            "tungsten",
+            "overflow_test",
+            "synthetic_output",
+            "voice_input",
+            "suggest_pr",
+            "memory_read",
+            "memory_write",
+            "list_peers",
+            "discover_skills",
+            "broadcast_message",
         ];
-        let covered = known_tools.iter().filter(|t| !get_prompt(t).is_empty()).count();
+        let covered = known_tools
+            .iter()
+            .filter(|t| !get_prompt(t).is_empty())
+            .count();
         assert_eq!(
             covered,
             known_tools.len(),
@@ -1414,18 +1521,34 @@ mod tests {
     #[test]
     fn bash_tool_prompt_contains_key_phrases() {
         let prompt = bash_tool_prompt();
-        assert!(prompt.contains("run_in_background"), "should mention background usage");
-        assert!(prompt.contains("Committing changes"), "should mention committing");
+        assert!(
+            prompt.contains("run_in_background"),
+            "should mention background usage"
+        );
+        assert!(
+            prompt.contains("Committing changes"),
+            "should mention committing"
+        );
         assert!(prompt.contains("sandbox"), "should mention sandbox");
-        assert!(prompt.contains("Git Safety Protocol"), "should mention git safety");
-        assert!(prompt.contains("pull request"), "should mention PR creation");
+        assert!(
+            prompt.contains("Git Safety Protocol"),
+            "should mention git safety"
+        );
+        assert!(
+            prompt.contains("pull request"),
+            "should mention PR creation"
+        );
     }
 
     #[test]
     fn file_edit_tool_prompt_is_non_empty_and_long() {
         let prompt = file_edit_tool_prompt();
         assert!(!prompt.is_empty());
-        assert!(prompt.len() > 200, "should be >200 chars, got {}", prompt.len());
+        assert!(
+            prompt.len() > 200,
+            "should be >200 chars, got {}",
+            prompt.len()
+        );
         assert!(prompt.contains("search"), "should mention search");
         assert!(prompt.contains("replace"), "should mention replace");
     }
@@ -1434,7 +1557,11 @@ mod tests {
     fn file_read_tool_prompt_is_non_empty_and_long() {
         let prompt = file_read_tool_prompt();
         assert!(!prompt.is_empty());
-        assert!(prompt.len() > 200, "should be >200 chars, got {}", prompt.len());
+        assert!(
+            prompt.len() > 200,
+            "should be >200 chars, got {}",
+            prompt.len()
+        );
         assert!(prompt.contains("start_line"), "should mention start_line");
         assert!(prompt.contains("end_line"), "should mention end_line");
     }
@@ -1443,7 +1570,11 @@ mod tests {
     fn file_write_tool_prompt_is_non_empty_and_long() {
         let prompt = file_write_tool_prompt();
         assert!(!prompt.is_empty());
-        assert!(prompt.len() > 200, "should be >200 chars, got {}", prompt.len());
+        assert!(
+            prompt.len() > 200,
+            "should be >200 chars, got {}",
+            prompt.len()
+        );
         assert!(prompt.contains("COMPLETE"), "should mention COMPLETE");
         assert!(prompt.contains("append"), "should mention append");
     }
@@ -1452,7 +1583,11 @@ mod tests {
     fn agent_tool_prompt_is_non_empty_and_long() {
         let prompt = agent_tool_prompt();
         assert!(!prompt.is_empty());
-        assert!(prompt.len() > 200, "should be >200 chars, got {}", prompt.len());
+        assert!(
+            prompt.len() > 200,
+            "should be >200 chars, got {}",
+            prompt.len()
+        );
         assert!(prompt.contains("sub-agent"), "should mention sub-agent");
         assert!(prompt.contains("prompt"), "should mention prompt");
     }

@@ -5,11 +5,11 @@
 
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 
+use crate::backends::TeammateExecutor;
 use crate::backends::in_process::InProcessBackend;
 use crate::backends::pane_executor::PaneExecutor;
-use crate::backends::TeammateExecutor;
 use crate::backends::types::CreatePaneResult;
 use crate::error::SwarmResult;
 use crate::types::{SpawnConfig, TeammateState};
@@ -46,7 +46,8 @@ impl InProcessRunner {
     #[must_use]
     pub fn new() -> Self {
         let backend = Arc::new(InProcessBackend::new());
-        let executor = PaneExecutor::new(Arc::clone(&backend) as Arc<dyn crate::backends::PaneBackend>);
+        let executor =
+            PaneExecutor::new(Arc::clone(&backend) as Arc<dyn crate::backends::PaneBackend>);
         Self {
             backend,
             executor,

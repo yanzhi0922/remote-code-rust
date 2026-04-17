@@ -12,11 +12,10 @@ use crate::schemas::ALLOWED_OFFICIAL_MARKETPLACE_NAMES;
 // ---------------------------------------------------------------------------
 
 /// Source configuration for the official Anthropic plugins marketplace.
-pub const OFFICIAL_MARKETPLACE_SOURCE: OfficialMarketplaceSource =
-    OfficialMarketplaceSource {
-        source: "github",
-        repo: "anthropics/claude-plugins-official",
-    };
+pub const OFFICIAL_MARKETPLACE_SOURCE: OfficialMarketplaceSource = OfficialMarketplaceSource {
+    source: "github",
+    repo: "anthropics/claude-plugins-official",
+};
 
 /// Display name for the official marketplace.
 pub const OFFICIAL_MARKETPLACE_NAME: &str = "claude-plugins-official";
@@ -91,11 +90,8 @@ pub fn get_official_marketplaces() -> &'static [OfficialMarketplace] {
 
 /// Check if a marketplace name is official.
 pub fn is_official_marketplace(name: &str) -> bool {
-    ALLOWED_OFFICIAL_MARKETPLACE_NAMES
-        .contains(&name.to_lowercase().as_str())
-        || OFFICIAL_MARKETPLACES
-            .iter()
-            .any(|mkt| mkt.name == name)
+    ALLOWED_OFFICIAL_MARKETPLACE_NAMES.contains(&name.to_lowercase().as_str())
+        || OFFICIAL_MARKETPLACES.iter().any(|mkt| mkt.name == name)
 }
 
 // ---------------------------------------------------------------------------
@@ -117,10 +113,7 @@ mod tests {
 
     #[test]
     fn official_marketplace_name() {
-        assert_eq!(
-            OFFICIAL_MARKETPLACE_NAME,
-            "claude-plugins-official"
-        );
+        assert_eq!(OFFICIAL_MARKETPLACE_NAME, "claude-plugins-official");
     }
 
     #[test]

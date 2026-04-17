@@ -64,10 +64,10 @@ pub enum ExitReason {
     /// A hook aborted the operation.
     HookAbort {
         /// Hook that caused the abort.
-            hook_name: String,
-            /// Why the hook aborted.
-            #[serde(default, skip_serializing_if = "Option::is_none")]
-            detail: Option<String>,
+        hook_name: String,
+        /// Why the hook aborted.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
     },
     /// A tool execution failed critically.
     ToolFailure {
@@ -123,7 +123,10 @@ impl ExitReason {
     /// Check if this exit reason represents a normal (non-error) exit.
     #[must_use]
     pub fn is_normal(&self) -> bool {
-        matches!(self, Self::Completed | Self::Cancelled | Self::UserInterrupt)
+        matches!(
+            self,
+            Self::Completed | Self::Cancelled | Self::UserInterrupt
+        )
     }
 
     /// Check if this exit reason is recoverable (the session could potentially continue).
@@ -186,9 +189,7 @@ impl ExitReason {
             Self::CostLimitExceeded {
                 limit_usd,
                 actual_usd,
-            } => format!(
-                "Cost limit exceeded: ${actual_usd:.2} > ${limit_usd:.2}"
-            ),
+            } => format!("Cost limit exceeded: ${actual_usd:.2} > ${limit_usd:.2}"),
             Self::Timeout { timeout_seconds } => {
                 format!("Operation timed out after {timeout_seconds}s.")
             }
@@ -588,10 +589,7 @@ mod tests {
 
         tracker.track(ExitReason::Completed);
         assert_eq!(tracker.count(), 1);
-        assert_eq!(
-            tracker.last_reason(),
-            Some(&ExitReason::Completed)
-        );
+        assert_eq!(tracker.last_reason(), Some(&ExitReason::Completed));
     }
 
     #[test]
@@ -669,8 +667,7 @@ mod tests {
     fn exit_record_serialization() {
         let record = ExitRecord::new(ExitReason::Completed).with_context("test context");
         let json = serde_json::to_string(&record).expect("serialize should succeed");
-        let parsed: ExitRecord =
-            serde_json::from_str(&json).expect("deserialize should succeed");
+        let parsed: ExitRecord = serde_json::from_str(&json).expect("deserialize should succeed");
         assert_eq!(parsed.reason, ExitReason::Completed);
         assert_eq!(parsed.context.as_deref(), Some("test context"));
     }

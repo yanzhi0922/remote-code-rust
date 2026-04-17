@@ -29,10 +29,7 @@ pub enum ToolProgressEvent {
         result: ToolProgressResult,
     },
     /// A tool has failed.
-    Failed {
-        tool_call_id: String,
-        error: String,
-    },
+    Failed { tool_call_id: String, error: String },
 }
 
 impl ToolProgressEvent {

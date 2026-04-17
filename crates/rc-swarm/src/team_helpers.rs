@@ -52,7 +52,9 @@ pub fn sanitize_team_name(name: &str) -> String {
 /// and contains only alphanumeric characters, hyphens, and underscores.
 pub fn validate_team_name(name: &str) -> SwarmResult<()> {
     if name.is_empty() {
-        return Err(SwarmError::InvalidTeamName("name cannot be empty".to_owned()));
+        return Err(SwarmError::InvalidTeamName(
+            "name cannot be empty".to_owned(),
+        ));
     }
     if name.len() > 64 {
         return Err(SwarmError::InvalidTeamName(
@@ -78,7 +80,9 @@ pub fn validate_team_name(name: &str) -> SwarmResult<()> {
 /// Validate an agent name.
 pub fn validate_agent_name(name: &str) -> SwarmResult<()> {
     if name.is_empty() {
-        return Err(SwarmError::InvalidAgentName("name cannot be empty".to_owned()));
+        return Err(SwarmError::InvalidAgentName(
+            "name cannot be empty".to_owned(),
+        ));
     }
     if name.len() > 32 {
         return Err(SwarmError::InvalidAgentName(
@@ -207,10 +211,11 @@ pub async fn add_member(team_name: &str, member: TeamMember) -> SwarmResult<Team
 /// Remove a member from a team.
 pub async fn remove_member(team_name: &str, agent_name: &str) -> SwarmResult<TeamFile> {
     let mut team = read_team(team_name).await?;
-    team.remove_member(agent_name).ok_or_else(|| SwarmError::TeammateNotFound {
-        agent_name: agent_name.to_owned(),
-        team_name: team_name.to_owned(),
-    })?;
+    team.remove_member(agent_name)
+        .ok_or_else(|| SwarmError::TeammateNotFound {
+            agent_name: agent_name.to_owned(),
+            team_name: team_name.to_owned(),
+        })?;
     update_team(&team).await?;
     Ok(team)
 }
@@ -222,12 +227,12 @@ pub async fn update_member_status(
     is_active: bool,
 ) -> SwarmResult<TeamFile> {
     let mut team = read_team(team_name).await?;
-    let member = team.find_member_mut(agent_name).ok_or_else(|| {
-        SwarmError::TeammateNotFound {
+    let member = team
+        .find_member_mut(agent_name)
+        .ok_or_else(|| SwarmError::TeammateNotFound {
             agent_name: agent_name.to_owned(),
             team_name: team_name.to_owned(),
-        }
-    })?;
+        })?;
     member.is_active = Some(is_active);
     update_team(&team).await?;
     Ok(team)
@@ -246,9 +251,10 @@ pub async fn list_teams() -> SwarmResult<Vec<String>> {
         if path.is_dir() {
             let team_file = path.join(TEAM_FILE_NAME);
             if team_file.exists()
-                && let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string()) {
-                    teams.push(name);
-                }
+                && let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string())
+            {
+                teams.push(name);
+            }
         }
     }
     Ok(teams)
@@ -406,7 +412,9 @@ mod tests {
         let updated = add_member("member-team", member).await.expect("should add");
         assert_eq!(updated.members.len(), 1);
 
-        let updated = remove_member("member-team", "worker-1").await.expect("should remove");
+        let updated = remove_member("member-team", "worker-1")
+            .await
+            .expect("should remove");
         assert!(updated.members.is_empty());
     }
 
@@ -457,8 +465,12 @@ mod tests {
     #[tokio::test]
     async fn test_list_teams_multiple() {
         let _td = TestDir::new();
-        create_team(&TeamFile::new("team-a", "lead-1")).await.expect("ok");
-        create_team(&TeamFile::new("team-b", "lead-2")).await.expect("ok");
+        create_team(&TeamFile::new("team-a", "lead-1"))
+            .await
+            .expect("ok");
+        create_team(&TeamFile::new("team-b", "lead-2"))
+            .await
+            .expect("ok");
 
         let teams = list_teams().await.expect("should list");
         assert_eq!(teams.len(), 2);

@@ -159,9 +159,7 @@ fn render_set(config: &RuntimeConfig, key: &str, value: &str) {
             return;
         }
     };
-    println!(
-        "Config change: {key}: {current} -> {value} (requires restart to take effect)"
-    );
+    println!("Config change: {key}: {current} -> {value} (requires restart to take effect)");
 }
 
 /// Returns the set of recognized config keys for tab-completion and validation.

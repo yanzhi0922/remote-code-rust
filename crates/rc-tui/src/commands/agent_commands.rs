@@ -20,7 +20,10 @@ pub fn dispatch_fork(input: &str, config: &RuntimeConfig) {
     println!("  session:     {}", config.session_id);
     println!("  description: {description}");
     println!("  cwd:         {}", config.cwd.display());
-    println!("  model:       {}", config.provider.model.as_deref().unwrap_or("(default)"));
+    println!(
+        "  model:       {}",
+        config.provider.model.as_deref().unwrap_or("(default)")
+    );
     println!("  (sub-agent will run in a separate process)");
 }
 

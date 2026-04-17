@@ -65,7 +65,9 @@ impl TombstoneManager {
     /// Filter a list of message IDs, returning only non-orphaned ones.
     #[must_use]
     pub fn filter_orphaned<'a>(&self, ids: &'a [String]) -> Vec<&'a String> {
-        ids.iter().filter(|id| !self.orphaned_ids.contains(id.as_str())).collect()
+        ids.iter()
+            .filter(|id| !self.orphaned_ids.contains(id.as_str()))
+            .collect()
     }
 
     /// Returns all tombstoned IDs.

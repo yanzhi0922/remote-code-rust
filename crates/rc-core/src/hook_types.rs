@@ -580,9 +580,7 @@ pub enum HookSpecificOutputV2 {
         watch_paths: Option<Vec<String>>,
     },
     /// Output for WorktreeCreate events.
-    WorktreeCreate {
-        worktree_path: String,
-    },
+    WorktreeCreate { worktree_path: String },
 }
 
 /// Decision for PermissionRequest hook-specific output.
@@ -1060,10 +1058,7 @@ mod tests {
         };
         output.parse_stdout();
         assert!(output.parsed_json.is_some());
-        assert_eq!(
-            output.parsed_json.as_ref().unwrap()["decision"],
-            "approve"
-        );
+        assert_eq!(output.parsed_json.as_ref().unwrap()["decision"], "approve");
     }
 
     #[test]

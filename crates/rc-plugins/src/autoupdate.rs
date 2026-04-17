@@ -32,8 +32,7 @@ pub struct AutoUpdateResult {
 }
 
 /// Result of checking all plugins for updates.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct AutoUpdateCheckResult {
     /// Total number of plugins checked.
     pub checked_count: usize,
@@ -46,7 +45,6 @@ pub struct AutoUpdateCheckResult {
     /// Individual results.
     pub results: Vec<AutoUpdateResult>,
 }
-
 
 /// Configuration for auto-update behavior.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,10 +82,7 @@ fn default_true() -> bool {
 ///
 /// Uses the stored value if set, otherwise defaults based on whether it's an
 /// official Anthropic marketplace.
-pub fn should_auto_update(
-    marketplace_name: &str,
-    config: &AutoUpdateConfig,
-) -> bool {
+pub fn should_auto_update(marketplace_name: &str, config: &AutoUpdateConfig) -> bool {
     if !config.enabled {
         return false;
     }
@@ -111,11 +106,10 @@ pub fn check_for_updates(
 ) -> AutoUpdateCheckResult {
     let mut result = AutoUpdateCheckResult::default();
 
-    let version_map: std::collections::HashMap<&str, &str> =
-        marketplace_versions
-            .iter()
-            .map(|(id, v)| (id.as_str(), v.as_str()))
-            .collect();
+    let version_map: std::collections::HashMap<&str, &str> = marketplace_versions
+        .iter()
+        .map(|(id, v)| (id.as_str(), v.as_str()))
+        .collect();
 
     for (plugin_id, current_version) in installed_plugins {
         result.checked_count += 1;
@@ -248,10 +242,7 @@ mod tests {
         let marketplace: Vec<(String, String)> = vec![];
         let result = check_for_updates(&installed, &marketplace);
         assert_eq!(result.checked_count, 1);
-        let error_result = result
-            .results
-            .iter()
-            .find(|r| r.error.is_some());
+        let error_result = result.results.iter().find(|r| r.error.is_some());
         assert!(error_result.is_some());
     }
 
@@ -264,10 +255,7 @@ mod tests {
 
     #[test]
     fn get_auto_update_marketplaces_filters() {
-        let known = vec![
-            "claude-code-marketplace".to_owned(),
-            "my-custom".to_owned(),
-        ];
+        let known = vec!["claude-code-marketplace".to_owned(), "my-custom".to_owned()];
         let config = AutoUpdateConfig::default();
         let result = get_auto_update_marketplaces(&known, &config);
         // claude-code-marketplace is official and should auto-update

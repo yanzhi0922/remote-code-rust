@@ -143,10 +143,8 @@ mod tests {
 
     #[test]
     fn from_pairs() {
-        let counts = PluginInstallCounts::from_pairs(&[
-            ("a@mkt".to_owned(), 10),
-            ("b@mkt".to_owned(), 20),
-        ]);
+        let counts =
+            PluginInstallCounts::from_pairs(&[("a@mkt".to_owned(), 10), ("b@mkt".to_owned(), 20)]);
         assert_eq!(counts.len(), 2);
         assert_eq!(counts.get_install_count("a@mkt"), 10);
         assert_eq!(counts.get_install_count("b@mkt"), 20);

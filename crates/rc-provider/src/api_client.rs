@@ -23,7 +23,7 @@ use crate::beta_headers::{self, get_beta_headers};
 use crate::cache_headers::{add_cache_breakpoints, is_prompt_caching_enabled, should_1h_cache_ttl};
 use crate::effort_params::configure_effort_params;
 use crate::fingerprint::compute_message_fingerprint;
-use crate::max_tokens::{get_max_output_tokens_for_model, adjust_params_for_non_streaming};
+use crate::max_tokens::{adjust_params_for_non_streaming, get_max_output_tokens_for_model};
 use crate::retry::{RetryConfig, with_retry};
 
 // ---------------------------------------------------------------------------
@@ -240,7 +240,10 @@ impl ApiClient {
                 let status = response.status().as_u16();
                 if status >= 400 {
                     let text = response.text().await.unwrap_or_default();
-                    return Err(anyhow!("streaming request failed ({status}): {}", truncate(&text)));
+                    return Err(anyhow!(
+                        "streaming request failed ({status}): {}",
+                        truncate(&text)
+                    ));
                 }
 
                 Ok(response)
@@ -490,10 +493,7 @@ impl ApiClient {
                 "budget_tokens": budget,
             });
             // Ensure max_tokens > budget_tokens.
-            let current_max = body
-                .get("max_tokens")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
+            let current_max = body.get("max_tokens").and_then(Value::as_u64).unwrap_or(0);
             if current_max <= u64::from(budget) {
                 body["max_tokens"] = json!(u64::from(budget) + 4096);
             }
@@ -554,16 +554,14 @@ impl ApiClient {
         );
 
         if !betas.is_empty()
-            && let Ok((name, value)) = beta_headers::build_beta_header_pair(&betas) {
-                headers.insert(name, value);
-            }
+            && let Ok((name, value)) = beta_headers::build_beta_header_pair(&betas)
+        {
+            headers.insert(name, value);
+        }
 
         // Attribution header.
         if let Ok(value) = build_attribution_header() {
-            headers.insert(
-                HeaderName::from_static("x-attribution"),
-                value,
-            );
+            headers.insert(HeaderName::from_static("x-attribution"), value);
         }
 
         Ok(headers)
@@ -688,10 +686,7 @@ fn parse_query_result(raw: &str) -> Result<QueryResult> {
             .get("stop_reason")
             .and_then(Value::as_str)
             .map(String::from),
-        request_id: payload
-            .get("id")
-            .and_then(Value::as_str)
-            .map(String::from),
+        request_id: payload.get("id").and_then(Value::as_str).map(String::from),
     })
 }
 
@@ -759,13 +754,11 @@ impl From<QueryResult> for ProviderResponse {
             .content
             .iter()
             .filter_map(|block| match block {
-                ContentBlock::ToolUse { id, name, input } => {
-                    Some(rc_core::ToolCall {
-                        id: id.clone(),
-                        name: name.clone(),
-                        input: input.clone(),
-                    })
-                }
+                ContentBlock::ToolUse { id, name, input } => Some(rc_core::ToolCall {
+                    id: id.clone(),
+                    name: name.clone(),
+                    input: input.clone(),
+                }),
                 _ => None,
             })
             .collect();

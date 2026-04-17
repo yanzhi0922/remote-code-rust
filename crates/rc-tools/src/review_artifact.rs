@@ -91,9 +91,9 @@ pub enum CommentSeverity {
 /// # Errors
 /// Returns an error if required parameters are missing or invalid.
 pub fn review_artifact(input: &Value, context: &ToolExecutionContext) -> Result<String> {
-    let action = input["action"]
-        .as_str()
-        .ok_or_else(|| anyhow!("action is required (view_diff, add_comment, update_status, get_comments, summary)"))?;
+    let action = input["action"].as_str().ok_or_else(|| {
+        anyhow!("action is required (view_diff, add_comment, update_status, get_comments, summary)")
+    })?;
 
     let artifact_id = input["artifact_id"]
         .as_str()
@@ -109,7 +109,9 @@ pub fn review_artifact(input: &Value, context: &ToolExecutionContext) -> Result<
         "update_status" => update_status(artifact_id, input),
         "get_comments" => get_comments(artifact_id),
         "summary" => review_summary(artifact_id),
-        _ => Err(anyhow!("unknown action: '{action}'. Valid actions: view_diff, add_comment, update_status, get_comments, summary")),
+        _ => Err(anyhow!(
+            "unknown action: '{action}'. Valid actions: view_diff, add_comment, update_status, get_comments, summary"
+        )),
     }
 }
 
@@ -125,9 +127,7 @@ fn view_diff(artifact_id: &str, input: &Value, context: &ToolExecutionContext) -
         .output();
 
     let diff_stat = match diff_output {
-        Ok(out) if out.status.success() => {
-            String::from_utf8_lossy(&out.stdout).to_string()
-        }
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).to_string(),
         _ => "Unable to retrieve diff. Git may not be available.".to_string(),
     };
 
@@ -152,9 +152,7 @@ fn add_comment(artifact_id: &str, input: &Value) -> Result<String> {
         return Err(anyhow!("comment cannot be empty"));
     }
 
-    let author = input["author"]
-        .as_str()
-        .unwrap_or("reviewer");
+    let author = input["author"].as_str().unwrap_or("reviewer");
 
     let severity = input["severity"]
         .as_str()
@@ -201,9 +199,7 @@ fn update_status(artifact_id: &str, input: &Value) -> Result<String> {
 
     let status = ReviewStatus::from_str_lossy(status_str)?;
 
-    let reviewer = input["reviewer"]
-        .as_str()
-        .unwrap_or("reviewer");
+    let reviewer = input["reviewer"].as_str().unwrap_or("reviewer");
 
     Ok(json!({
         "type": "review_status_updated",
@@ -251,8 +247,8 @@ fn review_summary(artifact_id: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     fn test_context() -> ToolExecutionContext {
         ToolExecutionContext {
@@ -268,11 +264,26 @@ mod tests {
 
     #[test]
     fn review_status_from_str_valid() {
-        assert_eq!(ReviewStatus::from_str_lossy("pending").unwrap(), ReviewStatus::Pending);
-        assert_eq!(ReviewStatus::from_str_lossy("approved").unwrap(), ReviewStatus::Approved);
-        assert_eq!(ReviewStatus::from_str_lossy("rejected").unwrap(), ReviewStatus::Rejected);
-        assert_eq!(ReviewStatus::from_str_lossy("in_progress").unwrap(), ReviewStatus::InProgress);
-        assert_eq!(ReviewStatus::from_str_lossy("changes_requested").unwrap(), ReviewStatus::ChangesRequested);
+        assert_eq!(
+            ReviewStatus::from_str_lossy("pending").unwrap(),
+            ReviewStatus::Pending
+        );
+        assert_eq!(
+            ReviewStatus::from_str_lossy("approved").unwrap(),
+            ReviewStatus::Approved
+        );
+        assert_eq!(
+            ReviewStatus::from_str_lossy("rejected").unwrap(),
+            ReviewStatus::Rejected
+        );
+        assert_eq!(
+            ReviewStatus::from_str_lossy("in_progress").unwrap(),
+            ReviewStatus::InProgress
+        );
+        assert_eq!(
+            ReviewStatus::from_str_lossy("changes_requested").unwrap(),
+            ReviewStatus::ChangesRequested
+        );
     }
 
     #[test]
@@ -282,8 +293,14 @@ mod tests {
 
     #[test]
     fn review_status_from_str_alternate_formats() {
-        assert_eq!(ReviewStatus::from_str_lossy("in-progress").unwrap(), ReviewStatus::InProgress);
-        assert_eq!(ReviewStatus::from_str_lossy("changes-requested").unwrap(), ReviewStatus::ChangesRequested);
+        assert_eq!(
+            ReviewStatus::from_str_lossy("in-progress").unwrap(),
+            ReviewStatus::InProgress
+        );
+        assert_eq!(
+            ReviewStatus::from_str_lossy("changes-requested").unwrap(),
+            ReviewStatus::ChangesRequested
+        );
     }
 
     #[test]

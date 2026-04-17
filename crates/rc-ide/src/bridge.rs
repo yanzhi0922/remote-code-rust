@@ -7,8 +7,8 @@ use crate::config::IdeConfig;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{debug, warn};
 
 // ---------------------------------------------------------------------------
@@ -53,8 +53,16 @@ impl IdeNotification {
     }
 
     /// Create a notification with metadata.
-    pub fn with_metadata(kind: NotificationKind, message: String, metadata: HashMap<String, String>) -> Self {
-        Self { kind, message, metadata }
+    pub fn with_metadata(
+        kind: NotificationKind,
+        message: String,
+        metadata: HashMap<String, String>,
+    ) -> Self {
+        Self {
+            kind,
+            message,
+            metadata,
+        }
     }
 }
 
@@ -106,12 +114,18 @@ pub struct IdeResponse {
 impl IdeResponse {
     /// Create a successful response.
     pub fn ok(data: Value) -> Self {
-        Self { success: true, data: Some(data) }
+        Self {
+            success: true,
+            data: Some(data),
+        }
     }
 
     /// Create a successful response with no data.
     pub fn ok_empty() -> Self {
-        Self { success: true, data: None }
+        Self {
+            success: true,
+            data: None,
+        }
     }
 
     /// Create a failure response.
@@ -243,7 +257,10 @@ mod tests {
     fn request_action_when_connected() {
         let bridge = IdeBridge::new(test_config());
         bridge.connect().expect("connect");
-        let action = IdeAction::new(ActionKind::FileOpen, serde_json::json!({"path": "/tmp/a.rs"}));
+        let action = IdeAction::new(
+            ActionKind::FileOpen,
+            serde_json::json!({"path": "/tmp/a.rs"}),
+        );
         let response = bridge.request_action(&action).expect("request");
         assert!(response.success);
     }
@@ -267,8 +284,12 @@ mod tests {
     fn notification_with_metadata() {
         let mut meta = HashMap::new();
         meta.insert("file".to_string(), "/tmp/x.rs".to_string());
-        let n = IdeNotification::with_metadata(NotificationKind::FileModified, "changed".into(), meta);
-        assert_eq!(n.metadata.get("file").map(|s| s.as_str()), Some("/tmp/x.rs"));
+        let n =
+            IdeNotification::with_metadata(NotificationKind::FileModified, "changed".into(), meta);
+        assert_eq!(
+            n.metadata.get("file").map(|s| s.as_str()),
+            Some("/tmp/x.rs")
+        );
     }
 
     #[test]

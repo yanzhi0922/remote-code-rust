@@ -40,9 +40,7 @@ pub async fn web_browser(input: &Value, _context: &ToolExecutionContext) -> Resu
         ));
     }
 
-    let action = input["action"]
-        .as_str()
-        .unwrap_or("fetch");
+    let action = input["action"].as_str().unwrap_or("fetch");
 
     let max_chars = input["max_chars"]
         .as_u64()
@@ -62,9 +60,7 @@ pub async fn web_browser(input: &Value, _context: &ToolExecutionContext) -> Resu
 
 /// Fetch the full HTML content of a URL.
 async fn fetch_url(url: &str, max_chars: usize) -> Result<String> {
-    let response = reqwest::get(url)
-        .await
-        .context("failed to fetch URL")?;
+    let response = reqwest::get(url).await.context("failed to fetch URL")?;
 
     let status = response.status();
     if !status.is_success() {
@@ -224,7 +220,8 @@ async fn screenshot(url: &str) -> Result<String> {
 
 /// Extract links from HTML content.
 fn extract_links_from_html(html: &str, base_url: &str) -> Vec<String> {
-    let href_re = Regex::new(r#"href\s*=\s*["']([^"']+)["']"#).unwrap_or_else(|_| Regex::new("a^").expect("fallback regex"));
+    let href_re = Regex::new(r#"href\s*=\s*["']([^"']+)["']"#)
+        .unwrap_or_else(|_| Regex::new("a^").expect("fallback regex"));
     let mut links = Vec::new();
 
     for cap in href_re.captures_iter(html) {
@@ -234,7 +231,10 @@ fn extract_links_from_html(html: &str, base_url: &str) -> Vec<String> {
         } else if href.starts_with('/') {
             let base = base_url.trim_end_matches('/');
             format!("{base}{href}")
-        } else if href.starts_with('#') || href.starts_with("mailto:") || href.starts_with("javascript:") {
+        } else if href.starts_with('#')
+            || href.starts_with("mailto:")
+            || href.starts_with("javascript:")
+        {
             continue;
         } else {
             let base = base_url.trim_end_matches('/');
@@ -251,9 +251,12 @@ fn extract_links_from_html(html: &str, base_url: &str) -> Vec<String> {
 /// Strip HTML tags from content, leaving plain text.
 fn strip_html_tags(html: &str) -> String {
     // Remove script and style tags with content.
-    let script_re = Regex::new(r"(?is)<script[^>]*>.*?</script>").unwrap_or_else(|_| Regex::new("a^").expect("fallback regex"));
-    let style_re = Regex::new(r"(?is)<style[^>]*>.*?</style>").unwrap_or_else(|_| Regex::new("a^").expect("fallback regex"));
-    let tag_re = Regex::new(r"<[^>]+>").unwrap_or_else(|_| Regex::new("a^").expect("fallback regex"));
+    let script_re = Regex::new(r"(?is)<script[^>]*>.*?</script>")
+        .unwrap_or_else(|_| Regex::new("a^").expect("fallback regex"));
+    let style_re = Regex::new(r"(?is)<style[^>]*>.*?</style>")
+        .unwrap_or_else(|_| Regex::new("a^").expect("fallback regex"));
+    let tag_re =
+        Regex::new(r"<[^>]+>").unwrap_or_else(|_| Regex::new("a^").expect("fallback regex"));
 
     let text = script_re.replace_all(html, "").to_string();
     let text = style_re.replace_all(&text, "").to_string();
@@ -270,7 +273,8 @@ fn strip_html_tags(html: &str) -> String {
         .replace(&format!("{amp}nbsp;"), " ");
 
     // Collapse whitespace.
-    let whitespace_re = Regex::new(r"\s+").unwrap_or_else(|_| Regex::new("a^").expect("fallback regex"));
+    let whitespace_re =
+        Regex::new(r"\s+").unwrap_or_else(|_| Regex::new("a^").expect("fallback regex"));
     whitespace_re.replace_all(&text, " ").trim().to_string()
 }
 
@@ -281,8 +285,8 @@ fn strip_html_tags(html: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     fn test_context() -> ToolExecutionContext {
         ToolExecutionContext {
@@ -314,21 +318,24 @@ mod tests {
 
     #[test]
     fn extract_links_skips_mailto() {
-        let html = r#"<a href="mailto:test@example.com">Email</a><a href="https://example.com">Link</a>"#;
+        let html =
+            r#"<a href="mailto:test@example.com">Email</a><a href="https://example.com">Link</a>"#;
         let links = extract_links_from_html(html, "https://example.com");
         assert!(!links.iter().any(|l| l.starts_with("mailto:")));
     }
 
     #[test]
     fn extract_links_skips_javascript() {
-        let html = r#"<a href="javascript:void(0)">Click</a><a href="https://example.com">Link</a>"#;
+        let html =
+            r#"<a href="javascript:void(0)">Click</a><a href="https://example.com">Link</a>"#;
         let links = extract_links_from_html(html, "https://example.com");
         assert!(!links.iter().any(|l| l.starts_with("javascript:")));
     }
 
     #[test]
     fn extract_links_deduplicates() {
-        let html = r#"<a href="https://example.com">Link1</a><a href="https://example.com">Link2</a>"#;
+        let html =
+            r#"<a href="https://example.com">Link1</a><a href="https://example.com">Link2</a>"#;
         let links = extract_links_from_html(html, "https://example.com");
         assert_eq!(links.len(), 1);
     }

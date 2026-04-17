@@ -16,8 +16,7 @@ use crate::{PluginBundle, discover_plugins};
 // ---------------------------------------------------------------------------
 
 /// Result of refreshing all plugins.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct RefreshResult {
     /// Number of enabled plugins after refresh.
     pub enabled_count: usize,
@@ -40,7 +39,6 @@ pub struct RefreshResult {
     /// List of warnings encountered.
     pub warnings: Vec<String>,
 }
-
 
 /// Result of refreshing marketplace plugins.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,19 +80,19 @@ pub fn refresh_plugins(root: &Path) -> RefreshResult {
                     result.mcp_count += 1;
                 }
                 if let Some(skills_root) = plugin.skills_root()
-                    && skills_root.exists() {
-                        result.command_count += 1;
-                    }
+                    && skills_root.exists()
+                {
+                    result.command_count += 1;
+                }
 
                 // Validate and collect errors
                 let report = crate::validate_plugin_bundle(plugin);
                 if !report.errors.is_empty() {
                     result.error_count += 1;
                     for err in &report.errors {
-                        result.errors.push(format!(
-                            "{}: {}",
-                            plugin.manifest.name, err
-                        ));
+                        result
+                            .errors
+                            .push(format!("{}: {}", plugin.manifest.name, err));
                     }
                 }
                 result.warnings.extend(
@@ -153,10 +151,7 @@ pub fn refresh_marketplace_plugins(
 }
 
 /// Check if a refresh is needed by comparing current state with previous.
-pub fn is_refresh_needed(
-    current_plugins: &[PluginBundle],
-    previous_count: usize,
-) -> bool {
+pub fn is_refresh_needed(current_plugins: &[PluginBundle], previous_count: usize) -> bool {
     current_plugins.len() != previous_count
 }
 
@@ -239,10 +234,7 @@ mod tests {
 
     #[test]
     fn refresh_marketplace_plugins_nonexistent() {
-        let result = refresh_marketplace_plugins(
-            Path::new("/nonexistent"),
-            "test",
-        );
+        let result = refresh_marketplace_plugins(Path::new("/nonexistent"), "test");
         assert!(!result.success);
         assert!(result.error.is_some());
     }

@@ -163,9 +163,7 @@ pub fn mcp_auth(input: &Value, context: &ToolExecutionContext) -> Result<String>
                 .to_string())
             }
         }
-        _ => Err(anyhow!(
-            "action must be 'login', 'logout', or 'status'"
-        )),
+        _ => Err(anyhow!("action must be 'login', 'logout', or 'status'")),
     }
 }
 
@@ -176,8 +174,8 @@ pub fn mcp_auth(input: &Value, context: &ToolExecutionContext) -> Result<String>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     fn test_context() -> ToolExecutionContext {
@@ -310,7 +308,11 @@ mod tests {
         assert_eq!(parsed["status"], "authenticated");
 
         // Verify file was created.
-        let auth_file = temp.path().join(".remote-code-rust").join("mcp-auth").join("my-server.json");
+        let auth_file = temp
+            .path()
+            .join(".remote-code-rust")
+            .join("mcp-auth")
+            .join("my-server.json");
         assert!(auth_file.exists());
     }
 
@@ -358,7 +360,11 @@ mod tests {
         assert_eq!(parsed["status"], "logged_out");
 
         // File should be removed.
-        let auth_file = temp.path().join(".remote-code-rust").join("mcp-auth").join("test-server.json");
+        let auth_file = temp
+            .path()
+            .join(".remote-code-rust")
+            .join("mcp-auth")
+            .join("test-server.json");
         assert!(!auth_file.exists());
     }
 

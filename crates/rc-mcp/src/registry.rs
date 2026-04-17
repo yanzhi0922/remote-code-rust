@@ -148,10 +148,7 @@ mod tests {
     #[test]
     fn load_from_urls_adds_entries() {
         let mut reg = OfficialMcpRegistry::new();
-        reg.load_from_urls(&[
-            "https://example.com/mcp",
-            "https://other.com/mcp",
-        ]);
+        reg.load_from_urls(&["https://example.com/mcp", "https://other.com/mcp"]);
         assert_eq!(reg.count(), 2);
         assert!(reg.is_loaded());
     }

@@ -13,14 +13,10 @@ pub mod file_ops;
 pub mod git;
 pub mod hooks;
 pub mod lsp;
+pub mod mcp_catalog;
 pub mod mcp_resource_tools;
 pub mod mcp_runtime;
 pub mod mcp_tools;
-pub mod streaming_executor;
-pub mod tool_hooks;
-pub mod tool_orchestration;
-pub mod tool_progress;
-pub mod tool_result_summary;
 pub mod memory_tools;
 pub mod misc;
 pub mod plan_mode;
@@ -31,15 +27,20 @@ pub mod send_message;
 pub mod send_user_file;
 pub mod shell;
 pub mod specs;
+pub mod streaming_executor;
 pub mod system;
 pub mod task_output;
 pub mod tasks;
 pub mod team_tools;
+pub mod tool_hooks;
+pub mod tool_orchestration;
+pub mod tool_progress;
+pub mod tool_prompts;
+pub mod tool_result_summary;
 pub mod web;
 pub mod web_browser;
-pub mod worktree_tools;
 pub mod workflow;
-pub mod tool_prompts;
+pub mod worktree_tools;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -122,6 +123,30 @@ pub fn runtime_builtin_tool_specs() -> Vec<ToolSpec> {
         .into_iter()
         .filter(|spec| tool_allowed_by_policy(&spec.name, &policy))
         .collect()
+}
+
+pub async fn runtime_provider_tool_specs() -> Vec<ToolSpec> {
+    let mut specs = runtime_builtin_tool_specs();
+    specs.extend(mcp_catalog::runtime_mcp_tool_specs().await);
+    specs
+}
+
+pub async fn runtime_provider_tool_spec(name: &str) -> Option<ToolSpec> {
+    if let Some(spec) = runtime_builtin_tool_specs()
+        .into_iter()
+        .find(|spec| spec.name == name)
+    {
+        return Some(spec);
+    }
+
+    if !name.starts_with("mcp__") {
+        return None;
+    }
+
+    mcp_catalog::resolve_runtime_mcp_tool(name)
+        .await
+        .ok()
+        .map(|tool| tool.tool_spec)
 }
 
 /// Specification for a single built-in tool.
@@ -337,10 +362,20 @@ pub async fn execute_tool_call(
     context: &ToolExecutionContext,
     broker: &dyn PermissionBroker,
 ) -> Result<ToolResult> {
-    let spec = builtin_tool_specs()
-        .into_iter()
-        .find(|spec| spec.name == call.name)
-        .ok_or_else(|| anyhow!("unknown tool {}", call.name))?;
+    let spec = runtime_provider_tool_spec(&call.name)
+        .await
+        .unwrap_or_else(|| ToolSpec {
+            name: call.name.clone(),
+            protocol_name: call.name.clone(),
+            permission_tool_name: call.name.clone(),
+            description: String::new(),
+            requires_permission: true,
+            input_schema: Value::Null,
+        });
+
+    if spec.description.is_empty() {
+        return Err(anyhow!("unknown tool {}", call.name));
+    }
 
     if !tool_allowed_by_runtime(&spec.name) {
         return Ok(ToolResult {
@@ -454,6 +489,9 @@ pub async fn execute_tool_call(
         "broadcast_message" => send_message::broadcast_message(&call.input, context),
         "review_artifact" => review_artifact::review_artifact(&call.input, context),
         "send_user_file" => send_user_file::send_user_file(&call.input, context),
+        _ if call.name.starts_with("mcp__") => {
+            mcp_catalog::execute_runtime_mcp_tool(&call.name, &call.input).await
+        }
         _ => Err(anyhow!("unsupported tool {}", spec.name)),
     };
 
@@ -507,7 +545,7 @@ fn tool_allowed_by_runtime(tool_name: &str) -> bool {
     tool_allowed_by_policy(tool_name, &policy)
 }
 
-fn tool_allowed_by_policy(tool_name: &str, policy: &ToolRuntimePolicy) -> bool {
+pub(crate) fn tool_allowed_by_policy(tool_name: &str, policy: &ToolRuntimePolicy) -> bool {
     let normalized_name = tool_name.trim().to_ascii_lowercase();
     if !policy.allowed_tools.is_empty() && !policy.allowed_tools.contains(&normalized_name) {
         return false;

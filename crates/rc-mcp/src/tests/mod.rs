@@ -11,13 +11,13 @@ use std::process::Command as ProcessCommand;
 use tempfile::tempdir;
 
 use crate::config::{McpCapabilityMatrix, McpConfig, McpServerConfig};
+use crate::error::{McpConfigError, McpRuntimeError};
 use crate::session::{
-    call_tool, discover_mcp_configs, inspect_server, load_discovered_mcp_configs,
-    DEFAULT_MCP_CONFIG_FILE,
+    DEFAULT_MCP_CONFIG_FILE, call_tool, discover_mcp_configs, inspect_server,
+    load_discovered_mcp_configs,
 };
 use crate::transport::{McpTransport, McpTransportConfig};
 use crate::types::McpClientInfo;
-use crate::error::{McpConfigError, McpRuntimeError};
 
 fn ok<T, E: std::fmt::Display>(result: Result<T, E>) -> T {
     match result {
@@ -551,8 +551,14 @@ fn connection_states_have_correct_type_tags() {
         }),
     ];
 
-    let types: Vec<&str> = states.iter().map(|s: &McpServerConnection| s.connection_type()).collect();
-    assert_eq!(types, vec!["connected", "failed", "needs-auth", "pending", "disabled"]);
+    let types: Vec<&str> = states
+        .iter()
+        .map(|s: &McpServerConnection| s.connection_type())
+        .collect();
+    assert_eq!(
+        types,
+        vec!["connected", "failed", "needs-auth", "pending", "disabled"]
+    );
 }
 
 #[test]

@@ -72,7 +72,7 @@ pub(crate) async fn list_mcp_resources_tool(
             return Ok(json!({
                 "server": server_name,
                 "resources": [],
-                "message": format!("MCP server '{}' not found in runtime policy. Configure it in .remote-code-rust/mcp.toml or settings.", server_name)
+                "message": format!("MCP server '{}' not found in runtime policy. Configure it in .remote-code-rust/mcp.toml, a Claude-style .mcp.json, or settings.", server_name)
             })
             .to_string());
         }

@@ -37,8 +37,12 @@ pub enum SecureStorageError {
 #[async_trait]
 pub trait SecureStorage: Send + Sync {
     /// Store a secret value under the given key.
-    async fn save(&self, service: &str, account: &str, secret: &str)
-        -> Result<(), SecureStorageError>;
+    async fn save(
+        &self,
+        service: &str,
+        account: &str,
+        secret: &str,
+    ) -> Result<(), SecureStorageError>;
 
     /// Retrieve a secret value.
     async fn load(
@@ -48,8 +52,7 @@ pub trait SecureStorage: Send + Sync {
     ) -> Result<Option<String>, SecureStorageError>;
 
     /// Delete a stored secret.
-    async fn delete(&self, service: &str, account: &str)
-        -> Result<(), SecureStorageError>;
+    async fn delete(&self, service: &str, account: &str) -> Result<(), SecureStorageError>;
 }
 
 /// Return the platform-appropriate secure storage implementation.
@@ -112,16 +115,9 @@ impl SecureStorage for MockSecureStorage {
             .cloned())
     }
 
-    async fn delete(
-        &self,
-        service: &str,
-        account: &str,
-    ) -> Result<(), SecureStorageError> {
+    async fn delete(&self, service: &str, account: &str) -> Result<(), SecureStorageError> {
         let key = storage_key(service, account);
-        self.store
-            .lock()
-            .expect("mock storage lock")
-            .remove(&key);
+        self.store.lock().expect("mock storage lock").remove(&key);
         Ok(())
     }
 }

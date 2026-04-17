@@ -23,7 +23,6 @@ pub enum MessagePriority {
     High,
 }
 
-
 /// A structured agent message.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentMessage {
@@ -98,9 +97,7 @@ pub fn send_message(input: &Value, _context: &ToolExecutionContext) -> Result<St
 
     let priority = parse_priority(input["priority"].as_str());
     let correlation_id = input["correlation_id"].as_str().map(String::from);
-    let sender = input["sender"]
-        .as_str()
-        .unwrap_or("coordinator");
+    let sender = input["sender"].as_str().unwrap_or("coordinator");
 
     let mut msg = AgentMessage::new(sender, recipient, message);
     msg.priority = priority;
@@ -137,9 +134,7 @@ pub fn broadcast_message(input: &Value, _context: &ToolExecutionContext) -> Resu
     }
 
     let priority = parse_priority(input["priority"].as_str());
-    let sender = input["sender"]
-        .as_str()
-        .unwrap_or("coordinator");
+    let sender = input["sender"].as_str().unwrap_or("coordinator");
 
     let recipients: Vec<String> = input["recipients"]
         .as_array()
@@ -183,8 +178,8 @@ fn parse_priority(priority: Option<&str>) -> MessagePriority {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     fn test_context() -> ToolExecutionContext {
         ToolExecutionContext {
@@ -364,7 +359,12 @@ mod tests {
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(parsed["status"], "queued");
         assert_eq!(parsed["type"], "broadcast_message");
-        assert!(parsed["broadcast_id"].as_str().unwrap().starts_with("broadcast-"));
+        assert!(
+            parsed["broadcast_id"]
+                .as_str()
+                .unwrap()
+                .starts_with("broadcast-")
+        );
     }
 
     #[test]

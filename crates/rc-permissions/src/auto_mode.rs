@@ -10,8 +10,7 @@ use std::time::Instant;
 use crate::classifier::ClassifierResult;
 
 /// State of the auto permission mode.
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct AutoModeState {
     /// Whether auto mode is currently active.
     pub active: bool,
@@ -28,7 +27,6 @@ pub struct AutoModeState {
     /// Cooldown until next auto-approval (ms).
     pub cooldown_ms: u64,
 }
-
 
 impl AutoModeState {
     /// Create a new auto mode state.
@@ -156,14 +154,14 @@ mod tests {
     fn auto_mode_record_results() {
         let mut state = AutoModeState::new();
         state.activate();
-        
+
         let allow = ClassifierResult::allow("safe", 90);
         let deny = ClassifierResult::deny("unsafe", 80);
-        
+
         state.record_result(&allow);
         state.record_result(&allow);
         state.record_result(&deny);
-        
+
         assert_eq!(state.auto_approved_count, 2);
         assert_eq!(state.auto_denied_count, 1);
         assert_eq!(state.total_decisions(), 3);
@@ -176,10 +174,10 @@ mod tests {
         assert!(!manager.is_active());
         manager.activate();
         assert!(manager.is_active());
-        
+
         let result = ClassifierResult::allow("test", 95);
         manager.record_result(&result);
-        
+
         let snap = manager.snapshot();
         assert_eq!(snap.auto_approved_count, 1);
     }

@@ -210,11 +210,12 @@ pub fn build_mcp_tools_param(config: &McpToolConfig) -> Option<Value> {
 /// * `config` — The MCP tool configuration.
 pub fn merge_mcp_tools_into_body(body: &mut Value, config: &McpToolConfig) {
     if let Some(params) = build_mcp_tools_param(config)
-        && let Value::Object(map) = params {
-            for (key, value) in map {
-                body[key] = value;
-            }
+        && let Value::Object(map) = params
+    {
+        for (key, value) in map {
+            body[key] = value;
         }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -241,7 +242,10 @@ mod tests {
         let def = McpServerToolDef::new("srv".to_string(), "tool".to_string())
             .with_description("A test tool".to_string())
             .with_input_schema(json!({"type": "object", "properties": {}}));
-        assert_eq!(def.description.as_ref().expect("description"), "A test tool");
+        assert_eq!(
+            def.description.as_ref().expect("description"),
+            "A test tool"
+        );
         assert_eq!(def.input_schema["type"], "object");
     }
 
@@ -256,8 +260,7 @@ mod tests {
         let def = McpServerToolDef::new("srv".to_string(), "tool".to_string())
             .with_description("desc".to_string());
         let json = serde_json::to_string(&def).expect("serialize");
-        let deserialized: McpServerToolDef =
-            serde_json::from_str(&json).expect("deserialize");
+        let deserialized: McpServerToolDef = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(def, deserialized);
     }
 
@@ -273,9 +276,7 @@ mod tests {
 
     #[test]
     fn mcp_tool_config_new() {
-        let tools = vec![
-            McpServerToolDef::new("s1".to_string(), "t1".to_string()),
-        ];
+        let tools = vec![McpServerToolDef::new("s1".to_string(), "t1".to_string())];
         let config = McpToolConfig::new(tools);
         assert_eq!(config.tools.len(), 1);
     }
@@ -326,9 +327,10 @@ mod tests {
 
     #[test]
     fn mcp_tool_config_serialization_roundtrip() {
-        let config = McpToolConfig::new(vec![
-            McpServerToolDef::new("srv".to_string(), "tool".to_string()),
-        ]);
+        let config = McpToolConfig::new(vec![McpServerToolDef::new(
+            "srv".to_string(),
+            "tool".to_string(),
+        )]);
         let json = serde_json::to_string(&config).expect("serialize");
         let deserialized: McpToolConfig = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(config, deserialized);
@@ -381,9 +383,10 @@ mod tests {
     #[test]
     fn merge_mcp_tools_into_body_with_tools() {
         let mut body = json!({"model": "test"});
-        let config = McpToolConfig::new(vec![
-            McpServerToolDef::new("s".to_string(), "t".to_string()),
-        ]);
+        let config = McpToolConfig::new(vec![McpServerToolDef::new(
+            "s".to_string(),
+            "t".to_string(),
+        )]);
         merge_mcp_tools_into_body(&mut body, &config);
         assert!(body.get("mcpTools").is_some());
         assert_eq!(body["model"], "test");

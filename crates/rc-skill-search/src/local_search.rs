@@ -230,7 +230,11 @@ impl SearchIndex {
             })
             .collect();
 
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(limit);
         results
     }
@@ -453,19 +457,9 @@ mod tests {
     fn search_ranking_by_field_boost() {
         let mut index = SearchIndex::new();
         // Skill A: "deploy" only in description
-        index.index_skill(&sample_skill(
-            "a",
-            "Something Else",
-            "deploy things",
-            &[],
-        ));
+        index.index_skill(&sample_skill("a", "Something Else", "deploy things", &[]));
         // Skill B: "deploy" in name (higher boost)
-        index.index_skill(&sample_skill(
-            "b",
-            "Deploy Tool",
-            "a tool",
-            &[],
-        ));
+        index.index_skill(&sample_skill("b", "Deploy Tool", "a tool", &[]));
         let results = index.search("deploy", 10);
         assert!(results.len() >= 2, "should have 2 results");
         assert_eq!(results[0].skill_slug, "b", "name match should rank higher");
@@ -474,18 +468,8 @@ mod tests {
     #[test]
     fn search_trigger_boost() {
         let mut index = SearchIndex::new();
-        index.index_skill(&sample_skill(
-            "a",
-            "Skill A",
-            "a description",
-            &["deploy"],
-        ));
-        index.index_skill(&sample_skill(
-            "b",
-            "Skill B",
-            "a description",
-            &[],
-        ));
+        index.index_skill(&sample_skill("a", "Skill A", "a description", &["deploy"]));
+        index.index_skill(&sample_skill("b", "Skill B", "a description", &[]));
         let results = index.search("deploy", 10);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].skill_slug, "a");
@@ -524,7 +508,10 @@ mod tests {
         let results = index.search("deploy azure", 10);
         assert!(!results.is_empty());
         let r = &results[0];
-        assert!(r.matched_terms.contains(&"deploy".to_string()) || r.matched_terms.contains(&"azure".to_string()));
+        assert!(
+            r.matched_terms.contains(&"deploy".to_string())
+                || r.matched_terms.contains(&"azure".to_string())
+        );
     }
 
     #[test]

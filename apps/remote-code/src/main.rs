@@ -1113,7 +1113,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_runtime_mcp_server_rejects_ambiguous_names() {
+    fn resolve_runtime_mcp_server_prefers_higher_precedence_source() {
         let tempdir = tempdir().unwrap_or_else(|error| panic!("tempdir failed: {error}"));
         let cwd = tempdir.path().join("workspace");
         let profile = tempdir.path().join(".remote-code-rust");
@@ -1149,9 +1149,9 @@ mod tests {
         )
         .unwrap_or_else(|error| panic!("config load failed: {error}"));
 
-        let error = resolve_runtime_mcp_server(&config, "shared", &[])
-            .expect_err("duplicate names should be rejected");
-        assert!(error.to_string().contains("ambiguous"));
+        let resolution = resolve_runtime_mcp_server(&config, "shared", &[])
+            .expect("higher-precedence shared server should resolve");
+        assert_eq!(resolution.entry.origin_kind, "cwd");
     }
 
     #[tokio::test]

@@ -166,9 +166,15 @@ mod tests {
             base_url: Some("https://custom.api.com".to_string()),
             ..Default::default()
         };
-        assert_eq!(config.effective_base_url("https://default.com"), "https://custom.api.com");
+        assert_eq!(
+            config.effective_base_url("https://default.com"),
+            "https://custom.api.com"
+        );
 
         let empty = ProviderConfig::default();
-        assert_eq!(empty.effective_base_url("https://default.com"), "https://default.com");
+        assert_eq!(
+            empty.effective_base_url("https://default.com"),
+            "https://default.com"
+        );
     }
 }

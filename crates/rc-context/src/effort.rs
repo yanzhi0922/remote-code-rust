@@ -12,9 +12,7 @@ use serde::{Deserialize, Serialize};
 /// Effort level for model reasoning.
 ///
 /// Controls how much thinking/reasoning the model applies to a request.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum EffortLevel {
     /// Quick, straightforward implementation with minimal overhead.
@@ -247,9 +245,7 @@ pub fn resolve_applied_effort(
 
     // API rejects 'max' on non-Opus-4.6 models — downgrade to 'high'
     match resolved {
-        Some(EffortValue::Level(EffortLevel::Max))
-            if !model_supports_max_effort(model, config) =>
-        {
+        Some(EffortValue::Level(EffortLevel::Max)) if !model_supports_max_effort(model, config) => {
             Some(EffortValue::Level(EffortLevel::High))
         }
         other => other,
@@ -278,10 +274,7 @@ pub fn get_effort_suffix(
 /// Get the default effort level for a model.
 ///
 /// Equivalent to `getDefaultEffortForModel()` in effort.ts.
-pub fn get_default_effort_for_model(
-    model: &str,
-    config: &EffortConfig,
-) -> Option<EffortValue> {
+pub fn get_default_effort_for_model(model: &str, config: &EffortConfig) -> Option<EffortValue> {
     // Ant users may have a default model effort override
     if config.is_ant_user {
         if let Some(ref effort) = config.ant_default_model_effort {
@@ -320,15 +313,11 @@ pub fn get_default_effort_for_model(
 pub fn get_effort_level_description(level: EffortLevel) -> &'static str {
     match level {
         EffortLevel::Low => "Quick, straightforward implementation with minimal overhead",
-        EffortLevel::Medium => {
-            "Balanced approach with standard implementation and testing"
-        }
+        EffortLevel::Medium => "Balanced approach with standard implementation and testing",
         EffortLevel::High => {
             "Comprehensive implementation with extensive testing and documentation"
         }
-        EffortLevel::Max => {
-            "Maximum capability with deepest reasoning (Opus 4.6 only)"
-        }
+        EffortLevel::Max => "Maximum capability with deepest reasoning (Opus 4.6 only)",
     }
 }
 
@@ -342,11 +331,8 @@ pub fn get_displayed_effort_level(
     app_state_effort: Option<EffortValue>,
     config: &EffortConfig,
 ) -> EffortLevel {
-    let resolved =
-        resolve_applied_effort(model, app_state_effort, None, config);
-    resolved
-        .map(|v| v.to_level())
-        .unwrap_or(EffortLevel::High)
+    let resolved = resolve_applied_effort(model, app_state_effort, None, config);
+    resolved.map(|v| v.to_level()).unwrap_or(EffortLevel::High)
 }
 
 /// Determine what effort value should be persisted when the user picks a model.
@@ -365,13 +351,7 @@ pub fn resolve_picker_effort_persistence(
         picked
     } else {
         // Only persist if it differs from the model default
-        picked.and_then(|p| {
-            if p != model_default {
-                Some(p)
-            } else {
-                None
-            }
-        })
+        picked.and_then(|p| if p != model_default { Some(p) } else { None })
     }
 }
 
@@ -379,17 +359,12 @@ pub fn resolve_picker_effort_persistence(
 ///
 /// Equivalent to `toPersistableEffort()` in effort.ts.
 /// Numeric values are never persisted. 'max' is only persisted for ant users.
-pub fn to_persistable_effort(
-    value: Option<EffortValue>,
-    is_ant_user: bool,
-) -> Option<EffortLevel> {
+pub fn to_persistable_effort(value: Option<EffortValue>, is_ant_user: bool) -> Option<EffortLevel> {
     match value {
         Some(EffortValue::Level(level @ EffortLevel::Low))
         | Some(EffortValue::Level(level @ EffortLevel::Medium))
         | Some(EffortValue::Level(level @ EffortLevel::High)) => Some(level),
-        Some(EffortValue::Level(EffortLevel::Max)) if is_ant_user => {
-            Some(EffortLevel::Max)
-        }
+        Some(EffortValue::Level(EffortLevel::Max)) if is_ant_user => Some(EffortLevel::Max),
         _ => None,
     }
 }
@@ -479,10 +454,7 @@ mod tests {
             ..Default::default()
         };
         let result = get_default_effort_for_model("claude-opus-4-6", &config);
-        assert_eq!(
-            result,
-            Some(EffortValue::Level(EffortLevel::Medium))
-        );
+        assert_eq!(result, Some(EffortValue::Level(EffortLevel::Medium)));
     }
 
     #[test]
@@ -506,24 +478,15 @@ mod tests {
     #[test]
     fn test_to_persistable_effort() {
         assert_eq!(
-            to_persistable_effort(
-                Some(EffortValue::Level(EffortLevel::High)),
-                false
-            ),
+            to_persistable_effort(Some(EffortValue::Level(EffortLevel::High)), false),
             Some(EffortLevel::High)
         );
         assert_eq!(
-            to_persistable_effort(
-                Some(EffortValue::Level(EffortLevel::Max)),
-                false
-            ),
+            to_persistable_effort(Some(EffortValue::Level(EffortLevel::Max)), false),
             None
         );
         assert_eq!(
-            to_persistable_effort(
-                Some(EffortValue::Level(EffortLevel::Max)),
-                true
-            ),
+            to_persistable_effort(Some(EffortValue::Level(EffortLevel::Max)), true),
             Some(EffortLevel::Max)
         );
         assert_eq!(

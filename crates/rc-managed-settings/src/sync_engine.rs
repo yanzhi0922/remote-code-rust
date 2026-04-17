@@ -113,9 +113,7 @@ impl ManagedSettingsService {
     pub fn get_effective_settings(&self) -> Vec<ManagedSetting> {
         let guard = self.settings.lock().expect("lock");
         let mut settings: Vec<ManagedSetting> = guard.values().cloned().collect();
-        settings.sort_by(|a, b| {
-            b.effective_priority().cmp(&a.effective_priority())
-        });
+        settings.sort_by(|a, b| b.effective_priority().cmp(&a.effective_priority()));
         settings
     }
 
@@ -127,10 +125,7 @@ impl ManagedSettingsService {
 
     /// Set a remote setting (for testing sync scenarios).
     pub fn set_remote(&self, setting: ManagedSetting) {
-        self.remote_settings
-            .lock()
-            .expect("lock")
-            .push(setting);
+        self.remote_settings.lock().expect("lock").push(setting);
     }
 
     /// Get the configured sync interval.
@@ -180,7 +175,11 @@ mod tests {
     #[test]
     fn apply_settings_rejects_restricted() {
         let svc = ManagedSettingsService::new();
-        let settings = vec![ManagedSetting::new("api_key", json!("secret"), SettingSource::Local)];
+        let settings = vec![ManagedSetting::new(
+            "api_key",
+            json!("secret"),
+            SettingSource::Local,
+        )];
         let applied = svc.apply_settings(&settings).expect("apply");
         assert!(applied.is_empty());
     }

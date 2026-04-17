@@ -50,9 +50,7 @@ pub fn build_auth_url(params: &super::types::BuildAuthUrlParams, config: &OAuthC
         config.manual_redirect_url.as_str()
     } else {
         // leak to static lifetime is fine — this is a short-lived URL
-        Box::leak(
-            format!("http://localhost:{}/callback", params.port).into_boxed_str(),
-        )
+        Box::leak(format!("http://localhost:{}/callback", params.port).into_boxed_str())
     };
 
     let scopes = if params.inference_only {
@@ -150,10 +148,12 @@ pub async fn refresh_oauth_token(
     refresh_token: &str,
     scopes: Option<&[String]>,
 ) -> Result<OAuthTokens, OAuthClientError> {
-    let default_scopes = ["org:inference".to_owned(),
+    let default_scopes = [
+        "org:inference".to_owned(),
         "user:profile".to_owned(),
         "user:api_keys".to_owned(),
-        "org:api_keys".to_owned()];
+        "org:api_keys".to_owned(),
+    ];
     let scope_str = scopes
         .map(|s| s.join(" "))
         .unwrap_or_else(|| default_scopes.join(" "));
@@ -180,8 +180,7 @@ pub async fn refresh_oauth_token(
     }
 
     let data: OAuthTokenExchangeResponse = response.json().await?;
-    let expires_at = chrono::Utc::now().timestamp_millis()
-        + (data.expires_in as i64) * 1000;
+    let expires_at = chrono::Utc::now().timestamp_millis() + (data.expires_in as i64) * 1000;
 
     info!("OAuth token refresh succeeded");
     Ok(OAuthTokens {
@@ -315,13 +314,13 @@ pub async fn run_oauth_flow(
         }
     };
 
-    let token_account = token_response.account.map(|a| {
-        super::types::TokenAccountInfo {
+    let token_account = token_response
+        .account
+        .map(|a| super::types::TokenAccountInfo {
             uuid: a.uuid,
             email_address: a.email_address,
             organization_uuid: token_response.organization.map(|o| o.uuid),
-        }
-    });
+        });
 
     Ok(OAuthFlowResult {
         tokens,

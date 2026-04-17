@@ -214,15 +214,10 @@ pub enum TransportConfig {
         ide_running_in_windows: Option<bool>,
     },
     /// In-process SDK transport.
-    Sdk {
-        name: String,
-    },
+    Sdk { name: String },
     /// Claude.ai proxy transport.
     #[serde(rename = "claudeai-proxy")]
-    ClaudeAiProxy {
-        url: String,
-        id: String,
-    },
+    ClaudeAiProxy { url: String, id: String },
 }
 
 impl TransportConfig {
@@ -276,10 +271,16 @@ mod tests {
 
     #[test]
     fn transport_kind_to_legacy() {
-        assert_eq!(McpTransportKind::Stdio.to_legacy(), Some(McpTransport::Stdio));
+        assert_eq!(
+            McpTransportKind::Stdio.to_legacy(),
+            Some(McpTransport::Stdio)
+        );
         assert_eq!(McpTransportKind::Http.to_legacy(), Some(McpTransport::Http));
         assert_eq!(McpTransportKind::Sse.to_legacy(), Some(McpTransport::Http));
-        assert_eq!(McpTransportKind::WebSocket.to_legacy(), Some(McpTransport::WebSocket));
+        assert_eq!(
+            McpTransportKind::WebSocket.to_legacy(),
+            Some(McpTransport::WebSocket)
+        );
         assert_eq!(McpTransportKind::Sdk.to_legacy(), None);
         assert_eq!(McpTransportKind::ClaudeAiProxy.to_legacy(), None);
     }
@@ -288,15 +289,30 @@ mod tests {
     fn transport_kind_display() {
         assert_eq!(McpTransportKind::Stdio.to_string(), "stdio");
         assert_eq!(McpTransportKind::SseIde.to_string(), "sse-ide");
-        assert_eq!(McpTransportKind::ClaudeAiProxy.to_string(), "claudeai-proxy");
+        assert_eq!(
+            McpTransportKind::ClaudeAiProxy.to_string(),
+            "claudeai-proxy"
+        );
     }
 
     #[test]
     fn infer_transport_kind_urls() {
-        assert_eq!(infer_transport_kind("https://example.com"), McpTransport::Http);
-        assert_eq!(infer_transport_kind("http://localhost:8080"), McpTransport::Http);
-        assert_eq!(infer_transport_kind("wss://example.com/ws"), McpTransport::WebSocket);
-        assert_eq!(infer_transport_kind("ws://localhost:9090"), McpTransport::WebSocket);
+        assert_eq!(
+            infer_transport_kind("https://example.com"),
+            McpTransport::Http
+        );
+        assert_eq!(
+            infer_transport_kind("http://localhost:8080"),
+            McpTransport::Http
+        );
+        assert_eq!(
+            infer_transport_kind("wss://example.com/ws"),
+            McpTransport::WebSocket
+        );
+        assert_eq!(
+            infer_transport_kind("ws://localhost:9090"),
+            McpTransport::WebSocket
+        );
         assert_eq!(infer_transport_kind("custom://other"), McpTransport::Stdio);
     }
 

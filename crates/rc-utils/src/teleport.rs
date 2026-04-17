@@ -152,7 +152,11 @@ pub struct GitBundleResult {
 /// A vector of command-line arguments for `git bundle create`.
 #[must_use]
 pub fn create_git_bundle_args(output_path: &str, base_ref: Option<&str>) -> Vec<String> {
-    let mut args = vec!["bundle".to_string(), "create".to_string(), output_path.to_string()];
+    let mut args = vec![
+        "bundle".to_string(),
+        "create".to_string(),
+        output_path.to_string(),
+    ];
 
     if let Some(base) = base_ref {
         args.push(format!("{base}..HEAD"));
@@ -185,7 +189,7 @@ pub fn generate_session_title(first_message: &str, max_length: usize) -> String 
     // Take the first non-empty line.
     let first_line = first_message
         .lines()
-       .find(|line| !line.trim().is_empty())
+        .find(|line| !line.trim().is_empty())
         .unwrap_or("");
 
     let title = first_line.trim();
@@ -291,17 +295,19 @@ mod tests {
     #[test]
     fn create_git_bundle_args_all() {
         let args = create_git_bundle_args("/tmp/bundle.gitbundle", None);
-        assert_eq!(args, vec![
-            "bundle", "create", "/tmp/bundle.gitbundle", "--all"
-        ]);
+        assert_eq!(
+            args,
+            vec!["bundle", "create", "/tmp/bundle.gitbundle", "--all"]
+        );
     }
 
     #[test]
     fn create_git_bundle_args_with_base() {
         let args = create_git_bundle_args("/tmp/bundle.gitbundle", Some("main"));
-        assert_eq!(args, vec![
-            "bundle", "create", "/tmp/bundle.gitbundle", "main..HEAD"
-        ]);
+        assert_eq!(
+            args,
+            vec!["bundle", "create", "/tmp/bundle.gitbundle", "main..HEAD"]
+        );
     }
 
     // --- generate_session_title ---

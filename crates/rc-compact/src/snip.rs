@@ -257,7 +257,10 @@ fn message_token_count_and_desc(msg: &Message) -> (u64, String) {
             let tokens = rough_token_count(&m.summary);
             (
                 tokens,
-                format!("tool {}:{} ({} tokens)", m.tool_name, m.tool_call_id, tokens),
+                format!(
+                    "tool {}:{} ({} tokens)",
+                    m.tool_name, m.tool_call_id, tokens
+                ),
             )
         }
         Message::CollapsedReadSearch(m) => {
@@ -356,10 +359,10 @@ fn estimate_single_message_tokens(msg: &Message) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rc_core::message::UserMessage;
     use rc_core::{
         AssistantMessage, CollapsedReadSearchMessage, MessageBase, ToolUseSummaryMessage,
     };
-    use rc_core::message::UserMessage;
 
     // -- Helper constructors --
 
@@ -479,10 +482,10 @@ mod tests {
             },
         };
         let messages = vec![
-            make_user_msg("short"),                                   // idx 0 — preserved (head)
-            make_user_msg(&"x".repeat(1000)),                         // idx 1 — snippable (middle)
-            make_user_msg(&"y".repeat(1000)),                         // idx 2 — snippable (middle)
-            make_assistant_msg(&"z".repeat(1000)),                    // idx 3 — preserved (tail)
+            make_user_msg("short"),                // idx 0 — preserved (head)
+            make_user_msg(&"x".repeat(1000)),      // idx 1 — snippable (middle)
+            make_user_msg(&"y".repeat(1000)),      // idx 2 — snippable (middle)
+            make_assistant_msg(&"z".repeat(1000)), // idx 3 — preserved (tail)
         ];
         let result = snip_compact(&messages, &config, None).expect("should succeed");
         assert_eq!(result.messages_removed, 2); // middle messages snipped

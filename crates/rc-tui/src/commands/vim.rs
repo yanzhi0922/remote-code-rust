@@ -7,11 +7,7 @@ use rc_config::RuntimeConfig;
 
 /// Dispatch the `/vim` command.
 pub fn dispatch(input: &str, config: &RuntimeConfig) {
-    let subcommand = input
-        .trim()
-        .strip_prefix("/vim")
-        .unwrap_or_default()
-        .trim();
+    let subcommand = input.trim().strip_prefix("/vim").unwrap_or_default().trim();
 
     match subcommand {
         "on" => enable_vim(config),

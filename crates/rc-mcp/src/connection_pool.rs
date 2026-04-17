@@ -142,7 +142,10 @@ pub struct PoolConfig {
     #[serde(default = "default_max_parallel")]
     pub max_parallel_connections: usize,
     /// Health check interval.
-    #[serde(default = "default_health_check_interval_secs", with = "serde_duration_secs")]
+    #[serde(
+        default = "default_health_check_interval_secs",
+        with = "serde_duration_secs"
+    )]
     pub health_check_interval: Duration,
     /// Connection timeout for each server.
     #[serde(default = "default_connect_timeout_secs", with = "serde_duration_secs")]
@@ -239,7 +242,8 @@ impl McpConnectionPool {
     pub fn add_server(&mut self, connection: McpServerConnection) {
         let name = connection.name().to_owned();
         self.lifecycle.register_server(&name);
-        self.entries.insert(name.clone(), PoolEntry::new(name, connection));
+        self.entries
+            .insert(name.clone(), PoolEntry::new(name, connection));
     }
 
     /// Remove a server from the pool.
@@ -519,9 +523,9 @@ impl PoolConnectionStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{McpCapabilityMatrix, McpServerConfig};
     use crate::connection::{DisabledServer, PendingServer};
     use crate::scope::{ConfigScope, ScopedMcpServerConfig};
-    use crate::config::{McpCapabilityMatrix, McpServerConfig};
     use crate::transport::McpTransportConfig;
     use std::collections::BTreeMap;
 
@@ -727,29 +731,35 @@ mod tests {
         pool.add_server(connected_connection("srv2"));
         pool.add_server(pending_connection("srv3"));
 
-        pool.update_tools("srv1", vec![McpToolDescriptor {
-            name: "tool-a".to_owned(),
-            title: None,
-            description: None,
-            input_schema: serde_json::json!({}),
-            annotations: serde_json::json!({}),
-        }]);
-        pool.update_tools("srv2", vec![
-            McpToolDescriptor {
-                name: "tool-b".to_owned(),
+        pool.update_tools(
+            "srv1",
+            vec![McpToolDescriptor {
+                name: "tool-a".to_owned(),
                 title: None,
                 description: None,
                 input_schema: serde_json::json!({}),
                 annotations: serde_json::json!({}),
-            },
-            McpToolDescriptor {
-                name: "tool-c".to_owned(),
-                title: None,
-                description: None,
-                input_schema: serde_json::json!({}),
-                annotations: serde_json::json!({}),
-            },
-        ]);
+            }],
+        );
+        pool.update_tools(
+            "srv2",
+            vec![
+                McpToolDescriptor {
+                    name: "tool-b".to_owned(),
+                    title: None,
+                    description: None,
+                    input_schema: serde_json::json!({}),
+                    annotations: serde_json::json!({}),
+                },
+                McpToolDescriptor {
+                    name: "tool-c".to_owned(),
+                    title: None,
+                    description: None,
+                    input_schema: serde_json::json!({}),
+                    annotations: serde_json::json!({}),
+                },
+            ],
+        );
 
         let all_tools = pool.all_tools();
         assert_eq!(all_tools.len(), 3); // 1 from srv1 + 2 from srv2
@@ -850,7 +860,10 @@ mod tests {
         let config = PoolConfig::default();
         let json = serde_json::to_string(&config).expect("serialize");
         let back: PoolConfig = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back.max_parallel_connections, config.max_parallel_connections);
+        assert_eq!(
+            back.max_parallel_connections,
+            config.max_parallel_connections
+        );
         assert_eq!(back.health_check_interval, config.health_check_interval);
         assert_eq!(back.auto_reconnect, config.auto_reconnect);
     }
@@ -872,15 +885,16 @@ mod tests {
     fn all_resources_aggregates() {
         let mut pool = McpConnectionPool::new();
         pool.add_server(connected_connection("srv1"));
-        pool.update_resources("srv1", vec![
-            ServerResource::new("file:///a", "srv1"),
-            ServerResource::new("file:///b", "srv1"),
-        ]);
+        pool.update_resources(
+            "srv1",
+            vec![
+                ServerResource::new("file:///a", "srv1"),
+                ServerResource::new("file:///b", "srv1"),
+            ],
+        );
 
         pool.add_server(pending_connection("srv2"));
-        pool.update_resources("srv2", vec![
-            ServerResource::new("file:///c", "srv2"),
-        ]);
+        pool.update_resources("srv2", vec![ServerResource::new("file:///c", "srv2")]);
 
         let all_resources = pool.all_resources();
         assert_eq!(all_resources.len(), 2); // Only srv1 is connected

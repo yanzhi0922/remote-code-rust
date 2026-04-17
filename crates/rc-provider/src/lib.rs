@@ -47,7 +47,7 @@ use rc_config::ProviderConfig;
 use rc_core::{
     ConversationEntry, ConversationRole, ProviderProtocol, ProviderResponse, ToolCall, UsageSummary,
 };
-use rc_tools::runtime_builtin_tool_specs;
+use rc_tools::runtime_provider_tool_specs;
 use reqwest::Client;
 use reqwest::header::{
     ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, RETRY_AFTER,
@@ -275,6 +275,7 @@ impl ProviderClient {
         let is_reasoning_model = model_name.starts_with("o1")
             || model_name.starts_with("o3")
             || model_name.starts_with("o4");
+        let tools = current_openai_tool_schemas().await;
 
         let mut body = if is_reasoning_model {
             // Reasoning models (o1/o3/o4-mini) do not support temperature
@@ -282,10 +283,7 @@ impl ProviderClient {
             json!({
                 "model": provider.model,
                 "messages": to_openai_messages(conversation),
-                "tools": runtime_builtin_tool_specs()
-                    .into_iter()
-                    .map(|tool| tool.to_openai_schema())
-                    .collect::<Vec<_>>(),
+                "tools": tools,
                 "tool_choice": "auto",
                 "max_completion_tokens": provider.max_output_tokens,
                 "stream": false,
@@ -294,10 +292,7 @@ impl ProviderClient {
             json!({
                 "model": provider.model,
                 "messages": to_openai_messages(conversation),
-                "tools": runtime_builtin_tool_specs()
-                    .into_iter()
-                    .map(|tool| tool.to_openai_schema())
-                    .collect::<Vec<_>>(),
+                "tools": tools,
                 "tool_choice": "auto",
                 "temperature": 0.1,
                 "max_tokens": provider.max_output_tokens,
@@ -333,14 +328,12 @@ impl ProviderClient {
         conversation: &[ConversationEntry],
     ) -> Result<ProviderResponse> {
         let (system, messages) = to_anthropic_messages(conversation);
+        let tools = current_anthropic_tool_schemas().await;
         let mut body = json!({
             "model": provider.model,
             "system": system,
             "messages": messages,
-            "tools": runtime_builtin_tool_specs()
-                .into_iter()
-                .map(|tool| tool.to_anthropic_schema())
-                .collect::<Vec<_>>(),
+            "tools": tools,
             "max_tokens": provider.max_output_tokens,
             "stream": false,
         });
@@ -400,14 +393,12 @@ impl ProviderClient {
 
         // Build Anthropic-format body for Claude models on Bedrock.
         let (system, messages) = to_anthropic_messages(conversation);
+        let tools = current_anthropic_tool_schemas().await;
         let mut body = json!({
             "anthropic_version": "bedrock-2023-05-31",
             "system": system,
             "messages": messages,
-            "tools": runtime_builtin_tool_specs()
-                .into_iter()
-                .map(|tool| tool.to_anthropic_schema())
-                .collect::<Vec<_>>(),
+            "tools": tools,
             "max_tokens": provider.max_output_tokens,
         });
         apply_anthropic_request_metadata(&mut body, provider);
@@ -542,14 +533,12 @@ impl ProviderClient {
 
         // Build Anthropic-format body for Claude models on Vertex AI.
         let (system, messages) = to_anthropic_messages(conversation);
+        let tools = current_anthropic_tool_schemas().await;
         let mut body = json!({
             "anthropic_version": "vertex-2023-10-16",
             "system": system,
             "messages": messages,
-            "tools": runtime_builtin_tool_specs()
-                .into_iter()
-                .map(|tool| tool.to_anthropic_schema())
-                .collect::<Vec<_>>(),
+            "tools": tools,
             "max_tokens": provider.max_output_tokens,
         });
         apply_anthropic_request_metadata(&mut body, provider);
@@ -673,7 +662,7 @@ impl ProviderClient {
 }
 
 fn is_retryable_http_status(status: u16) -> bool {
-    matches!(status, 408 | 429 | 500 | 502 | 503 | 504)
+    matches!(status, 408 | 429 | 500 | 502 | 503 | 504 | 529)
 }
 
 fn is_retryable_transport_error(error: &reqwest::Error) -> bool {
@@ -954,6 +943,22 @@ fn to_anthropic_messages(conversation: &[ConversationEntry]) -> (String, Vec<Val
     (system, messages)
 }
 
+async fn current_openai_tool_schemas() -> Vec<Value> {
+    runtime_provider_tool_specs()
+        .await
+        .into_iter()
+        .map(|tool| tool.to_openai_schema())
+        .collect()
+}
+
+async fn current_anthropic_tool_schemas() -> Vec<Value> {
+    runtime_provider_tool_specs()
+        .await
+        .into_iter()
+        .map(|tool| tool.to_anthropic_schema())
+        .collect()
+}
+
 fn parse_openai_response(status: u16, raw_text: String) -> Result<ProviderResponse> {
     let payload: Value = serde_json::from_str(&raw_text)
         .with_context(|| format!("provider returned non-JSON output: {}", truncate(&raw_text)))?;
@@ -1062,8 +1067,7 @@ fn parse_anthropic_response(status: u16, raw_text: String) -> Result<ProviderRes
         .join("\n");
     let tool_calls = blocks
         .iter()
-        .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
-        .filter_map(parse_anthropic_tool_call)
+        .filter_map(parse_anthropic_tool_like_call)
         .collect::<Vec<_>>();
     let thinking_text: String = blocks
         .iter()
@@ -1132,6 +1136,13 @@ fn parse_anthropic_tool_call(value: &Value) -> Option<ToolCall> {
     Some(ToolCall { id, name, input })
 }
 
+fn parse_anthropic_tool_like_call(value: &Value) -> Option<ToolCall> {
+    match value.get("type").and_then(Value::as_str) {
+        Some("tool_use") | Some("server_tool_use") => parse_anthropic_tool_call(value),
+        _ => None,
+    }
+}
+
 fn coerce_text_content(content: Option<&Value>) -> String {
     match content {
         Some(Value::String(value)) => value.clone(),
@@ -1188,7 +1199,7 @@ fn mock_response(conversation: &[ConversationEntry]) -> ProviderResponse {
         {
             vec![ToolCall {
                 id: "mock-tool-call-1".to_owned(),
-                name: runtime_builtin_tool_specs()
+                name: rc_tools::builtin_tool_specs()
                     .first()
                     .map_or_else(|| "list_directory".to_owned(), |tool| tool.name.clone()),
                 input: json!({"path": ".", "recursive": false, "max_entries": 32}),
@@ -1607,6 +1618,60 @@ mod tests {
 
         server.abort();
         assert_eq!(response.text, "retried ok");
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn provider_retries_529_then_succeeds() {
+        async fn handler(
+            State(attempts): State<Arc<AtomicUsize>>,
+        ) -> (axum::http::StatusCode, Json<serde_json::Value>) {
+            let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+            if attempt == 0 {
+                return (
+                    axum::http::StatusCode::from_u16(529).expect("529 status"),
+                    Json(json!({"error": {"message": "overloaded"}})),
+                );
+            }
+            (
+                axum::http::StatusCode::OK,
+                Json(json!({
+                    "choices": [{"message": {"content": "retried 529 ok"}}],
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 4}
+                })),
+            )
+        }
+
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap_or_else(|error| panic!("listener bind failed: {error}"));
+        let address = listener
+            .local_addr()
+            .unwrap_or_else(|error| panic!("local addr failed: {error}"));
+        let server_attempts = Arc::clone(&attempts);
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new()
+                    .route("/chat/completions", post(handler))
+                    .with_state(server_attempts),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("server failed: {error}"));
+        });
+
+        let client = ProviderClient::new().unwrap_or_else(|error| panic!("client failed: {error}"));
+        let response = client
+            .complete(
+                &test_provider_config(format!("http://{address}/chat/completions")),
+                &[ConversationEntry::user("hello")],
+            )
+            .await
+            .unwrap_or_else(|error| panic!("completion failed: {error}"));
+
+        server.abort();
+        assert_eq!(response.text, "retried 529 ok");
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
     }
 

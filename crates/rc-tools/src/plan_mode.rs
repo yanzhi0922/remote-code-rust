@@ -10,8 +10,7 @@ use serde_json::{Value, json};
 use super::ToolExecutionContext;
 
 /// Plan mode state tracked in the execution context.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum PlanModeState {
     /// Normal execution mode — tools can make modifications.
     #[default]
@@ -30,7 +29,6 @@ impl PlanModeState {
         matches!(self, Self::Plan { .. })
     }
 }
-
 
 /// Enter plan mode.
 ///
@@ -54,9 +52,7 @@ pub fn enter_plan_mode(input: &Value, _context: &ToolExecutionContext) -> Result
         .as_str()
         .unwrap_or("No specific constraints.");
 
-    let scope = input["scope"]
-        .as_str()
-        .unwrap_or("full project");
+    let scope = input["scope"].as_str().unwrap_or("full project");
 
     Ok(json!({
         "type": "enter_plan_mode",
@@ -96,9 +92,7 @@ pub fn enter_plan_mode(input: &Value, _context: &ToolExecutionContext) -> Result
 /// Returns an error if the plan summary is invalid.
 pub fn exit_plan_mode(input: &Value, _context: &ToolExecutionContext) -> Result<String> {
     let plan_summary = input["plan_summary"].as_str().unwrap_or("");
-    let plan_id = input["plan_id"]
-        .as_str()
-        .unwrap_or("unknown");
+    let plan_id = input["plan_id"].as_str().unwrap_or("unknown");
 
     let steps_planned = input["steps_planned"]
         .as_array()
@@ -128,8 +122,8 @@ pub fn exit_plan_mode(input: &Value, _context: &ToolExecutionContext) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     fn test_context() -> ToolExecutionContext {
         ToolExecutionContext {
@@ -194,7 +188,9 @@ mod tests {
         let context = test_context();
         let result = enter_plan_mode(&input, &context).unwrap();
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
-        let allowed = parsed["allowed_operations"].as_array().expect("allowed array");
+        let allowed = parsed["allowed_operations"]
+            .as_array()
+            .expect("allowed array");
         assert!(allowed.len() > 0);
         assert!(allowed.iter().any(|v| v == "read_file"));
     }
@@ -205,7 +201,9 @@ mod tests {
         let context = test_context();
         let result = enter_plan_mode(&input, &context).unwrap();
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
-        let blocked = parsed["blocked_operations"].as_array().expect("blocked array");
+        let blocked = parsed["blocked_operations"]
+            .as_array()
+            .expect("blocked array");
         assert!(blocked.iter().any(|v| v == "write_file"));
         assert!(blocked.iter().any(|v| v == "bash_command"));
     }
@@ -231,7 +229,10 @@ mod tests {
         let result = exit_plan_mode(&input, &context).unwrap();
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(parsed["type"], "exit_plan_mode");
-        assert_eq!(parsed["message"], "Exiting plan mode. Resuming normal execution.");
+        assert_eq!(
+            parsed["message"],
+            "Exiting plan mode. Resuming normal execution."
+        );
     }
 
     #[test]

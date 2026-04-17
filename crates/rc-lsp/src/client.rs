@@ -160,8 +160,10 @@ impl LspClient {
             .unwrap_or_else(|e| e.into_inner())
             .insert(id, response);
 
-        *self.server_capabilities.write().unwrap_or_else(|e| e.into_inner()) =
-            Some(serde_json::json!({}));
+        *self
+            .server_capabilities
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = Some(serde_json::json!({}));
 
         // Send initialized notification
         self.send_notification("initialized", Some(serde_json::json!({})))?;

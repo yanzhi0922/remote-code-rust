@@ -58,12 +58,8 @@ pub fn load_agents_from_dir(dir: &Path, source: AgentSource) -> Result<Vec<Agent
     }
 
     let mut agents = Vec::new();
-    let entries = fs::read_dir(dir).with_context(|| {
-        format!(
-            "Failed to read agent directory: {}",
-            dir.display()
-        )
-    })?;
+    let entries = fs::read_dir(dir)
+        .with_context(|| format!("Failed to read agent directory: {}", dir.display()))?;
 
     for entry in entries {
         let entry = match entry {
@@ -101,13 +97,9 @@ pub fn load_agents_from_dir(dir: &Path, source: AgentSource) -> Result<Vec<Agent
 ///
 /// Parses YAML frontmatter for metadata (tools, model, etc.) and uses the
 /// body as the system prompt.
-pub fn load_agent_from_markdown(
-    path: &Path,
-    source: AgentSource,
-) -> Result<AgentDefinition> {
-    let content = fs::read_to_string(path).with_context(|| {
-        format!("Failed to read agent file: {}", path.display())
-    })?;
+pub fn load_agent_from_markdown(path: &Path, source: AgentSource) -> Result<AgentDefinition> {
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read agent file: {}", path.display()))?;
 
     let filename = path
         .file_stem()
@@ -117,7 +109,10 @@ pub fn load_agent_from_markdown(
 
     let (frontmatter, body) = parse_frontmatter(&content);
 
-    let mut agent = AgentDefinition::new(&filename, frontmatter.description.as_deref().unwrap_or(&filename));
+    let mut agent = AgentDefinition::new(
+        &filename,
+        frontmatter.description.as_deref().unwrap_or(&filename),
+    );
     agent.source = source;
     agent.base_dir = path
         .parent()
@@ -167,21 +162,12 @@ pub fn load_agent_from_markdown(
 ///   }
 /// }
 /// ```
-pub fn load_agents_from_json(
-    path: &Path,
-    source: AgentSource,
-) -> Result<Vec<AgentDefinition>> {
-    let content = fs::read_to_string(path).with_context(|| {
-        format!("Failed to read agent JSON file: {}", path.display())
-    })?;
+pub fn load_agents_from_json(path: &Path, source: AgentSource) -> Result<Vec<AgentDefinition>> {
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read agent JSON file: {}", path.display()))?;
 
-    let entries: std::collections::HashMap<String, AgentFileEntry> =
-        serde_json::from_str(&content).with_context(|| {
-            format!(
-                "Failed to parse agent JSON file: {}",
-                path.display()
-            )
-        })?;
+    let entries: std::collections::HashMap<String, AgentFileEntry> = serde_json::from_str(&content)
+        .with_context(|| format!("Failed to parse agent JSON file: {}", path.display()))?;
 
     let base_dir = path
         .parent()
@@ -334,10 +320,7 @@ fn unquote(s: &str) -> &str {
     s.trim()
         .strip_prefix('"')
         .and_then(|s| s.strip_suffix('"'))
-        .or_else(|| {
-            s.strip_prefix('\'')
-                .and_then(|s| s.strip_suffix('\''))
-        })
+        .or_else(|| s.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
         .unwrap_or(s)
 }
 
@@ -436,7 +419,10 @@ mod tests {
         assert_eq!(agent.when_to_use, "Test agent");
         assert_eq!(agent.tools, vec!["Bash"]);
         assert_eq!(agent.source, AgentSource::Project);
-        assert_eq!(agent.system_prompt.as_deref(), Some("You are a test agent."));
+        assert_eq!(
+            agent.system_prompt.as_deref(),
+            Some("You are a test agent.")
+        );
     }
 
     #[test]
@@ -476,22 +462,21 @@ mod tests {
         let result = load_all_agents(Some(dir.path()), None);
         // Should have built-in agents + custom
         assert!(result.active_agents.len() > 6);
-        assert!(result
-            .active_agents
-            .iter()
-            .any(|a| a.agent_type == "custom"));
+        assert!(
+            result
+                .active_agents
+                .iter()
+                .any(|a| a.agent_type == "custom")
+        );
     }
 
     #[test]
     fn resolve_active_agents_deduplicates() {
-        let agents = vec![
-            AgentDefinition::new("test", "built-in"),
-            {
-                let mut d = AgentDefinition::new("test", "user override");
-                d.source = AgentSource::User;
-                d
-            },
-        ];
+        let agents = vec![AgentDefinition::new("test", "built-in"), {
+            let mut d = AgentDefinition::new("test", "user override");
+            d.source = AgentSource::User;
+            d
+        }];
 
         let active = resolve_active_agents(&agents);
         // Should have exactly one "test" agent

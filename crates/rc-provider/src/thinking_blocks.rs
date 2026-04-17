@@ -143,10 +143,7 @@ pub fn parse_thinking_delta(block: &Value) -> Option<ThinkingDelta> {
     if block_type != "thinking_delta" {
         return None;
     }
-    let thinking = block
-        .get("thinking")
-        .and_then(Value::as_str)?
-        .to_string();
+    let thinking = block.get("thinking").and_then(Value::as_str)?.to_string();
     Some(ThinkingDelta { thinking })
 }
 
@@ -166,10 +163,7 @@ pub fn parse_signature_delta(block: &Value) -> Option<SignatureDelta> {
     if block_type != "signature_delta" {
         return None;
     }
-    let signature = block
-        .get("signature")
-        .and_then(Value::as_str)?
-        .to_string();
+    let signature = block.get("signature").and_then(Value::as_str)?.to_string();
     Some(SignatureDelta { signature })
 }
 
@@ -212,10 +206,7 @@ pub fn redact_thinking_blocks(blocks: &[Value]) -> Vec<Value> {
 #[must_use]
 pub fn is_thinking_block(block: &Value) -> bool {
     let block_type = block.get("type").and_then(Value::as_str).unwrap_or("");
-    matches!(
-        block_type,
-        "thinking" | "signature" | "redacted_thinking"
-    )
+    matches!(block_type, "thinking" | "signature" | "redacted_thinking")
 }
 
 /// Extract all thinking text from a message's content blocks.
@@ -287,8 +278,7 @@ mod tests {
     fn thinking_config_serialization_roundtrip() {
         let config = ThinkingConfig::new(1234);
         let json = serde_json::to_string(&config).expect("serialize");
-        let deserialized: ThinkingConfig =
-            serde_json::from_str(&json).expect("deserialize");
+        let deserialized: ThinkingConfig = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(config, deserialized);
     }
 

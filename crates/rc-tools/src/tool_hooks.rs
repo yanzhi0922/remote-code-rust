@@ -103,11 +103,7 @@ pub trait ToolHook: Send + Sync + 'static {
     fn name(&self) -> &str;
 
     /// Run as a PreToolUse hook.  Return `None` to skip / pass through.
-    fn pre_tool_use(
-        &self,
-        tool_name: &str,
-        tool_input: &Value,
-    ) -> Result<Option<PreHookResult>>;
+    fn pre_tool_use(&self, tool_name: &str, tool_input: &Value) -> Result<Option<PreHookResult>>;
 
     /// Run as a PostToolUse hook.  Return `None` to skip.
     fn post_tool_use(
@@ -361,11 +357,7 @@ impl ToolHook for AlwaysAllowHook {
         "always_allow"
     }
 
-    fn pre_tool_use(
-        &self,
-        _tool_name: &str,
-        _tool_input: &Value,
-    ) -> Result<Option<PreHookResult>> {
+    fn pre_tool_use(&self, _tool_name: &str, _tool_input: &Value) -> Result<Option<PreHookResult>> {
         Ok(Some(PreHookResult {
             behavior: HookBehavior::Allow,
             message: None,
@@ -396,11 +388,7 @@ impl ToolHook for AlwaysDenyHook {
         "always_deny"
     }
 
-    fn pre_tool_use(
-        &self,
-        _tool_name: &str,
-        _tool_input: &Value,
-    ) -> Result<Option<PreHookResult>> {
+    fn pre_tool_use(&self, _tool_name: &str, _tool_input: &Value) -> Result<Option<PreHookResult>> {
         Ok(Some(PreHookResult {
             behavior: HookBehavior::Deny,
             message: Some(self.reason.clone()),
@@ -432,11 +420,7 @@ impl ToolHook for InputModifierHook {
         "input_modifier"
     }
 
-    fn pre_tool_use(
-        &self,
-        _tool_name: &str,
-        tool_input: &Value,
-    ) -> Result<Option<PreHookResult>> {
+    fn pre_tool_use(&self, _tool_name: &str, tool_input: &Value) -> Result<Option<PreHookResult>> {
         let mut input = tool_input.clone();
         if let Some(obj) = input.as_object_mut() {
             obj.insert(self.key.clone(), self.value.clone());
@@ -559,7 +543,9 @@ mod tests {
             key: "extra".into(),
             value: Value::Bool(true),
         }));
-        let result = mgr.run_pre_hooks("read_file", &Value::Object(serde_json::Map::new())).expect("ok");
+        let result = mgr
+            .run_pre_hooks("read_file", &Value::Object(serde_json::Map::new()))
+            .expect("ok");
         assert_eq!(result.decision, Some(HookBehavior::Allow));
         let input = result.final_input.expect("input");
         assert_eq!(input.get("extra"), Some(&Value::Bool(true)));
@@ -603,7 +589,9 @@ mod tests {
     fn post_hook_modifies_output() {
         let mut mgr = ToolHookManager::new();
         mgr.register(Arc::new(PostModifierHook));
-        let result = mgr.run_post_hooks("read_file", &Value::Null, "hello", false).expect("ok");
+        let result = mgr
+            .run_post_hooks("read_file", &Value::Null, "hello", false)
+            .expect("ok");
         assert_eq!(result.updated_output.as_deref(), Some("modified: hello"));
         assert_eq!(result.additional_contexts.len(), 1);
     }
@@ -658,7 +646,9 @@ mod tests {
         mgr.register(Arc::new(FailureLoggerHook {
             logged: Arc::clone(&logged),
         }));
-        let result = mgr.run_post_failure_hooks("bash", &Value::Null, "exit code 1").expect("ok");
+        let result = mgr
+            .run_post_failure_hooks("bash", &Value::Null, "exit code 1")
+            .expect("ok");
         assert_eq!(result.additional_contexts.len(), 1);
         let inner = logged.lock().expect("lock");
         assert_eq!(inner.as_deref(), Some("bash: exit code 1"));

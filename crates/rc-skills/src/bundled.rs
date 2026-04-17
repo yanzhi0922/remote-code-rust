@@ -243,9 +243,7 @@ pub fn resolve_skill(
 }
 
 /// List all available skills (bundled + user-defined).
-pub fn list_all_skills(
-    search_dirs: &[&Path],
-) -> Result<Vec<SkillDocument>, crate::SkillError> {
+pub fn list_all_skills(search_dirs: &[&Path]) -> Result<Vec<SkillDocument>, crate::SkillError> {
     let mut all = get_bundled_skills();
 
     for dir in search_dirs {

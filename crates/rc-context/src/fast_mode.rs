@@ -75,7 +75,6 @@ pub enum FastModeState {
     },
 }
 
-
 /// Simplified fast mode state for display purposes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -103,7 +102,6 @@ pub enum OrgFastModeStatus {
         reason: FastModeDisabledReason,
     },
 }
-
 
 /// Configuration for fast mode resolution.
 ///
@@ -182,9 +180,7 @@ impl FastModeRuntime {
         if let FastModeState::Cooldown { until, .. } = &inner.state
             && *until <= Utc::now()
         {
-            tracing::debug!(
-                "Fast mode cooldown expired, re-enabling fast mode"
-            );
+            tracing::debug!("Fast mode cooldown expired, re-enabling fast mode");
             inner.state = FastModeState::Available;
         }
         inner.state.clone()
@@ -193,17 +189,10 @@ impl FastModeRuntime {
     /// Trigger a fast mode cooldown period.
     ///
     /// Called when a rate limit or overloaded response is received.
-    pub fn trigger_cooldown(
-        &self,
-        duration: Duration,
-        reason: CooldownReason,
-    ) {
-        let until = Utc::now() + chrono::Duration::from_std(duration)
-            .expect("valid duration");
+    pub fn trigger_cooldown(&self, duration: Duration, reason: CooldownReason) {
+        let until = Utc::now() + chrono::Duration::from_std(duration).expect("valid duration");
         let cooldown_secs = duration.as_secs();
-        tracing::debug!(
-            "Fast mode cooldown triggered ({reason:?}), duration {cooldown_secs}s"
-        );
+        tracing::debug!("Fast mode cooldown triggered ({reason:?}), duration {cooldown_secs}s");
         let mut inner = self.inner.lock().expect("fast mode runtime lock");
         inner.state = FastModeState::Cooldown { until, reason };
     }
@@ -307,19 +296,13 @@ pub fn get_initial_fast_mode_setting(
 /// Check if fast mode is available given the current configuration.
 ///
 /// Equivalent to `isFastModeAvailable()` in fastMode.ts.
-pub fn is_fast_mode_available(
-    config: &FastModeConfig,
-    org_status: &OrgFastModeStatus,
-) -> bool {
+pub fn is_fast_mode_available(config: &FastModeConfig, org_status: &OrgFastModeStatus) -> bool {
     if !config.enabled {
         return false;
     }
 
     // Not available in SDK mode unless opted in
-    if config.is_non_interactive_sdk
-        && !config.kairos_active
-        && !config.flag_fast_mode
-    {
+    if config.is_non_interactive_sdk && !config.kairos_active && !config.flag_fast_mode {
         return false;
     }
 
@@ -339,11 +322,7 @@ pub fn is_fast_mode_available(
 ///
 /// Equivalent to `getFastModeModel()` in fastMode.ts.
 pub fn get_fast_mode_model(enable_1m: bool) -> &'static str {
-    if enable_1m {
-        "opus[1m]"
-    } else {
-        "opus"
-    }
+    if enable_1m { "opus[1m]" } else { "opus" }
 }
 
 /// Get the simplified fast mode state for display.
@@ -385,18 +364,14 @@ pub fn get_disabled_reason_message(
                 "Fast mode unavailable during evaluation. Please purchase credits."
             }
         }
-        FastModeDisabledReason::Preference => {
-            "Fast mode has been disabled by your organization"
-        }
+        FastModeDisabledReason::Preference => "Fast mode has been disabled by your organization",
         FastModeDisabledReason::ExtraUsageDisabled => {
             "Fast mode requires extra usage billing · /extra-usage to enable"
         }
         FastModeDisabledReason::NetworkError => {
             "Fast mode unavailable due to network connectivity issues"
         }
-        FastModeDisabledReason::Unknown => {
-            "Fast mode is currently unavailable"
-        }
+        FastModeDisabledReason::Unknown => "Fast mode is currently unavailable",
     }
 }
 
@@ -405,22 +380,16 @@ pub fn get_disabled_reason_message(
 /// Equivalent to `getOverageDisabledMessage()` in fastMode.ts.
 pub fn get_overage_disabled_message(reason: Option<&str>) -> &'static str {
     match reason {
-        Some("out_of_credits") => {
-            "Fast mode disabled · extra usage credits exhausted"
-        }
+        Some("out_of_credits") => "Fast mode disabled · extra usage credits exhausted",
         Some("org_level_disabled" | "org_service_level_disabled") => {
             "Fast mode disabled · extra usage disabled by your organization"
         }
-        Some("org_level_disabled_until") => {
-            "Fast mode disabled · extra usage spending cap reached"
-        }
+        Some("org_level_disabled_until") => "Fast mode disabled · extra usage spending cap reached",
         Some("member_level_disabled") => {
             "Fast mode disabled · extra usage disabled for your account"
         }
         Some(
-            "seat_tier_level_disabled"
-            | "seat_tier_zero_credit_limit"
-            | "member_zero_credit_limit",
+            "seat_tier_level_disabled" | "seat_tier_zero_credit_limit" | "member_zero_credit_limit",
         ) => "Fast mode disabled · extra usage not available for your plan",
         Some("overage_not_provisioned" | "no_limits_configured") => {
             "Fast mode requires extra usage billing · /extra-usage to enable"

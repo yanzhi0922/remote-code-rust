@@ -231,17 +231,19 @@ impl App {
     /// Append streaming content to the last assistant message.
     pub fn append_to_last_assistant(&mut self, content: &str) {
         if let Some(last) = self.messages.last_mut()
-            && last.role == MessageRole::Assistant {
-                last.content.push_str(content);
-            }
+            && last.role == MessageRole::Assistant
+        {
+            last.content.push_str(content);
+        }
     }
 
     /// Add a tool call to the last assistant message.
     pub fn add_tool_call(&mut self, tool_call: ToolCallInfo) {
         if let Some(last) = self.messages.last_mut()
-            && last.role == MessageRole::Assistant {
-                last.tool_calls.push(tool_call);
-            }
+            && last.role == MessageRole::Assistant
+        {
+            last.tool_calls.push(tool_call);
+        }
     }
 
     /// Get the current input text.
@@ -485,7 +487,10 @@ mod tests {
         app.cursor = app.input.len();
         // Move left from end.
         app.cursor_left();
-        assert!(app.cursor < app.input.len(), "cursor should move left from end");
+        assert!(
+            app.cursor < app.input.len(),
+            "cursor should move left from end"
+        );
         // Move right — should advance by one char.
         let before_right = app.cursor;
         app.cursor_right();
@@ -495,7 +500,11 @@ mod tests {
         assert_eq!(app.cursor, 0, "home should set cursor to 0");
         // End should go to len.
         app.cursor_end();
-        assert_eq!(app.cursor, app.input.len(), "end should set cursor to input len");
+        assert_eq!(
+            app.cursor,
+            app.input.len(),
+            "end should set cursor to input len"
+        );
     }
 
     #[test]

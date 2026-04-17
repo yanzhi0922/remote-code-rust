@@ -12,7 +12,7 @@ use rc_config::ProviderConfig;
 use rc_core::{
     ConversationEntry, ConversationRole, ProviderProtocol, ProviderResponse, ToolCall, UsageSummary,
 };
-use rc_tools::runtime_builtin_tool_specs;
+use rc_tools::runtime_provider_tool_specs;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::{
@@ -149,13 +149,15 @@ impl ProviderClient {
         conversation: &[ConversationEntry],
         callbacks: Option<&StreamingCallbacks>,
     ) -> Result<ProviderResponse> {
+        let tools = runtime_provider_tool_specs()
+            .await
+            .into_iter()
+            .map(|tool| tool.to_openai_schema())
+            .collect::<Vec<_>>();
         let body = json!({
             "model": provider.model,
             "messages": to_openai_messages(conversation),
-            "tools": runtime_builtin_tool_specs()
-                .into_iter()
-                .map(|tool| tool.to_openai_schema())
-                .collect::<Vec<_>>(),
+            "tools": tools,
             "tool_choice": "auto",
             "temperature": 0.1,
             "max_tokens": provider.max_output_tokens,
@@ -325,14 +327,16 @@ impl ProviderClient {
         callbacks: Option<&StreamingCallbacks>,
     ) -> Result<ProviderResponse> {
         let (system, messages) = to_anthropic_messages(conversation);
+        let tools = runtime_provider_tool_specs()
+            .await
+            .into_iter()
+            .map(|tool| tool.to_anthropic_schema())
+            .collect::<Vec<_>>();
         let mut body = json!({
             "model": provider.model,
             "system": system,
             "messages": messages,
-            "tools": runtime_builtin_tool_specs()
-                .into_iter()
-                .map(|tool| tool.to_anthropic_schema())
-                .collect::<Vec<_>>(),
+            "tools": tools,
             "max_tokens": provider.max_output_tokens,
             "stream": true,
         });
@@ -451,7 +455,7 @@ impl ProviderClient {
                                         thinking_parts.push(thinking.to_owned());
                                     }
                                 }
-                                "tool_use" => {
+                                "tool_use" | "server_tool_use" => {
                                     let id = content_block
                                         .and_then(|b| b.get("id"))
                                         .and_then(Value::as_str)
@@ -472,6 +476,7 @@ impl ProviderClient {
                                     tool_use_accumulators.insert(
                                         index,
                                         AnthropicToolUseAccumulator {
+                                            block_type: block_type.to_owned(),
                                             id,
                                             name,
                                             partial_json: String::new(),
@@ -564,36 +569,29 @@ impl ProviderClient {
         }
 
         let raw_text = text_parts.join("");
-        let tool_calls: Vec<ToolCall> = tool_use_accumulators
-            .into_iter()
-            .filter_map(|(_, acc)| {
-                if acc.id.is_empty() || acc.name.is_empty() {
-                    return None;
-                }
-                let input = if acc.partial_json.is_empty() {
-                    json!({})
-                } else {
-                    serde_json::from_str(&acc.partial_json)
-                        .ok()
-                        .unwrap_or_else(|| json!({}))
-                };
-                Some(ToolCall {
-                    id: acc.id,
-                    name: acc.name,
-                    input,
-                })
-            })
-            .collect();
-
-        if !tool_calls.is_empty() {
-            for tc in &tool_calls {
-                content_blocks.push(json!({
-                    "type": "tool_use",
-                    "id": tc.id,
-                    "name": tc.name,
-                    "input": tc.input,
-                }));
+        let mut tool_calls = Vec::new();
+        for acc in tool_use_accumulators.values() {
+            if acc.id.is_empty() || acc.name.is_empty() {
+                continue;
             }
+            let input = if acc.partial_json.is_empty() {
+                json!({})
+            } else {
+                serde_json::from_str::<Value>(&acc.partial_json)
+                    .ok()
+                    .unwrap_or_else(|| json!({}))
+            };
+            tool_calls.push(ToolCall {
+                id: acc.id.clone(),
+                name: acc.name.clone(),
+                input: input.clone(),
+            });
+            content_blocks.push(json!({
+                "type": acc.block_type,
+                "id": acc.id,
+                "name": acc.name,
+                "input": input,
+            }));
         }
 
         let thinking_text = if thinking_parts.is_empty() {
@@ -683,7 +681,7 @@ impl ProviderClient {
 }
 
 fn is_retryable_http_status(status: u16) -> bool {
-    matches!(status, 408 | 429 | 500 | 502 | 503 | 504)
+    matches!(status, 408 | 429 | 500 | 502 | 503 | 504 | 529)
 }
 
 fn wrap_streaming_callbacks(
@@ -781,7 +779,7 @@ struct OpenAiToolCallAccumulator {
 mod tests {
     use anyhow::anyhow;
 
-    use super::should_fallback_after_streaming_error;
+    use super::{is_retryable_http_status, should_fallback_after_streaming_error};
 
     #[test]
     fn streaming_errors_fallback_before_tool_activity() {
@@ -806,9 +804,15 @@ mod tests {
             false,
         ));
     }
+
+    #[test]
+    fn overloaded_529_is_retryable_for_streaming_requests() {
+        assert!(is_retryable_http_status(529));
+    }
 }
 
 struct AnthropicToolUseAccumulator {
+    block_type: String,
     id: String,
     name: String,
     partial_json: String,
