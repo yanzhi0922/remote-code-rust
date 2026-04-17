@@ -402,6 +402,241 @@ pub enum NormalizedMessage {
     },
 }
 
+// ---------------------------------------------------------------------------
+// Standalone message-type structs (Claude Code parity)
+// ---------------------------------------------------------------------------
+
+/// Thinking block content emitted by the model during extended reasoning.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemThinkingMessage {
+    /// Unique message identifier.
+    pub id: String,
+    /// The thinking/reasoning content.
+    pub content: String,
+    /// When the message was created.
+    pub timestamp: DateTime<Utc>,
+}
+
+/// Compact boundary marker — inserted after a full or partial compaction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemCompactBoundaryMessage {
+    /// Unique message identifier.
+    pub id: String,
+    /// Summary of what was compacted.
+    pub summary: String,
+    /// Number of messages removed during compaction.
+    pub messages_removed: usize,
+    /// When the message was created.
+    pub timestamp: DateTime<Utc>,
+}
+
+/// Microcompact boundary marker — inserted after a micro-compaction pass.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemMicrocompactBoundaryMessage {
+    /// Unique message identifier.
+    pub id: String,
+    /// Description of what was micro-compacted.
+    pub description: String,
+    /// When the message was created.
+    pub timestamp: DateTime<Utc>,
+}
+
+/// Permission retry notification — indicates a permission prompt was re-shown.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemPermissionRetryMessage {
+    /// Unique message identifier.
+    pub id: String,
+    /// The tool that required permission.
+    pub tool_name: String,
+    /// Reason for the retry.
+    pub reason: String,
+    /// When the message was created.
+    pub timestamp: DateTime<Utc>,
+}
+
+/// Memory saved notification — confirms that session memory was persisted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemMemorySavedMessage {
+    /// Unique message identifier.
+    pub id: String,
+    /// Scope of the saved memory (e.g., "global", "project").
+    pub scope: String,
+    /// Number of bytes written.
+    pub bytes_written: u64,
+    /// When the message was created.
+    pub timestamp: DateTime<Utc>,
+}
+
+/// Stop hook summary — output from a stop-hook execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemStopHookSummaryMessage {
+    /// Unique message identifier.
+    pub id: String,
+    /// Name of the stop hook that ran.
+    pub hook_name: String,
+    /// Hook execution output.
+    pub output: String,
+    /// Whether the hook reported an error.
+    #[serde(default)]
+    pub is_error: bool,
+    /// When the message was created.
+    pub timestamp: DateTime<Utc>,
+}
+
+/// Away summary — summarises activity while the user was away.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemAwaySummaryMessage {
+    /// Unique message identifier.
+    pub id: String,
+    /// Summary of what happened while away.
+    pub summary: String,
+    /// Number of messages that occurred.
+    pub message_count: usize,
+    /// When the message was created.
+    pub timestamp: DateTime<Utc>,
+}
+
+/// Agents killed notification — one or more sub-agents were terminated.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemAgentsKilledMessage {
+    /// Unique message identifier.
+    pub id: String,
+    /// IDs of the killed agents.
+    pub agent_ids: Vec<String>,
+    /// Reason for termination.
+    pub reason: String,
+    /// When the message was created.
+    pub timestamp: DateTime<Utc>,
+}
+
+/// API metrics — token usage and latency statistics for an API call.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemApiMetricsMessage {
+    /// Unique message identifier.
+    pub id: String,
+    /// Input tokens consumed.
+    pub input_tokens: u64,
+    /// Output tokens produced.
+    pub output_tokens: u64,
+    /// Latency in milliseconds.
+    pub latency_ms: u64,
+    /// Model identifier used.
+    pub model: String,
+    /// When the message was created.
+    pub timestamp: DateTime<Utc>,
+}
+
+/// API error — an error returned by the model provider.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemAPIErrorMessage {
+    /// Unique message identifier.
+    pub id: String,
+    /// Error code or category.
+    pub error_code: String,
+    /// Human-readable error message.
+    pub error_message: String,
+    /// Whether the error is retryable.
+    #[serde(default)]
+    pub retryable: bool,
+    /// When the message was created.
+    pub timestamp: DateTime<Utc>,
+}
+
+/// File snapshot — records the state of a file at a point in time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemFileSnapshotMessage {
+    /// Unique message identifier.
+    pub id: String,
+    /// File path (relative to workspace).
+    pub path: String,
+    /// Hash of the file contents.
+    pub content_hash: String,
+    /// File size in bytes.
+    pub size_bytes: u64,
+    /// When the message was created.
+    pub timestamp: DateTime<Utc>,
+}
+
+/// Hook result — output from a hook execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookResultMessageType {
+    /// Unique message identifier.
+    pub id: String,
+    /// Hook name.
+    pub hook_name: String,
+    /// Hook output.
+    pub output: String,
+    /// Whether the hook failed.
+    #[serde(default)]
+    pub is_error: bool,
+    /// When the message was created.
+    pub timestamp: DateTime<Utc>,
+}
+
+/// Tool use summary — condensed representation of a tool invocation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolUseSummaryMessageType {
+    /// Unique message identifier.
+    pub id: String,
+    /// Tool call ID.
+    pub tool_call_id: String,
+    /// Tool name.
+    pub tool_name: String,
+    /// Summary text.
+    pub summary: String,
+    /// Whether the tool invocation resulted in an error.
+    #[serde(default)]
+    pub is_error: bool,
+    /// When the message was created.
+    pub timestamp: DateTime<Utc>,
+}
+
+/// Tombstone — marks a deleted/replaced message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TombstoneMessageType {
+    /// Unique message identifier.
+    pub id: String,
+    /// IDs of the replaced messages.
+    pub replaced_ids: Vec<String>,
+    /// Summary of the replaced content.
+    pub summary: String,
+    /// When the message was created.
+    pub timestamp: DateTime<Utc>,
+}
+
+/// Progress indicator — shows ongoing work status.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProgressMessageType {
+    /// Unique message identifier.
+    pub id: String,
+    /// Progress stage.
+    pub stage: String,
+    /// Status message.
+    pub status: String,
+    /// Optional percentage (0-100).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub percent: Option<u8>,
+    /// When the message was created.
+    pub timestamp: DateTime<Utc>,
+}
+
+/// Attachment — a file attached to a message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachmentMessageType {
+    /// Unique message identifier.
+    pub id: String,
+    /// File path of the attachment.
+    pub path: String,
+    /// MIME type of the attachment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    /// Size in bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+    /// When the message was created.
+    pub timestamp: DateTime<Utc>,
+}
+
 impl NormalizedMessage {
     /// Generate a new unique ID.
     fn new_id() -> String {
@@ -1021,5 +1256,227 @@ mod tests {
         let now = Utc::now();
         let diff = now.timestamp() - msg.timestamp().timestamp();
         assert!(diff.abs() < 5, "timestamp should be close to now");
+    }
+
+    // ── Standalone message-type serde round-trip tests ────────────────
+
+    fn new_id() -> String {
+        Uuid::new_v4().to_string()
+    }
+
+    #[test]
+    fn system_thinking_message_serde_roundtrip() {
+        let msg = SystemThinkingMessage {
+            id: new_id(),
+            content: "reasoning about the problem".to_owned(),
+            timestamp: Utc::now(),
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        let parsed: SystemThinkingMessage = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.content, msg.content);
+    }
+
+    #[test]
+    fn system_compact_boundary_message_serde_roundtrip() {
+        let msg = SystemCompactBoundaryMessage {
+            id: new_id(),
+            summary: "compacted 50 messages".to_owned(),
+            messages_removed: 50,
+            timestamp: Utc::now(),
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        let parsed: SystemCompactBoundaryMessage = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.messages_removed, 50);
+    }
+
+    #[test]
+    fn system_microcompact_boundary_message_serde_roundtrip() {
+        let msg = SystemMicrocompactBoundaryMessage {
+            id: new_id(),
+            description: "cleared old tool results".to_owned(),
+            timestamp: Utc::now(),
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        let parsed: SystemMicrocompactBoundaryMessage = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.description, "cleared old tool results");
+    }
+
+    #[test]
+    fn system_permission_retry_message_serde_roundtrip() {
+        let msg = SystemPermissionRetryMessage {
+            id: new_id(),
+            tool_name: "bash".to_owned(),
+            reason: "user denied".to_owned(),
+            timestamp: Utc::now(),
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        let parsed: SystemPermissionRetryMessage = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.tool_name, "bash");
+    }
+
+    #[test]
+    fn system_memory_saved_message_serde_roundtrip() {
+        let msg = SystemMemorySavedMessage {
+            id: new_id(),
+            scope: "project".to_owned(),
+            bytes_written: 2048,
+            timestamp: Utc::now(),
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        let parsed: SystemMemorySavedMessage = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.bytes_written, 2048);
+    }
+
+    #[test]
+    fn system_stop_hook_summary_message_serde_roundtrip() {
+        let msg = SystemStopHookSummaryMessage {
+            id: new_id(),
+            hook_name: "post-stop".to_owned(),
+            output: "cleaned up".to_owned(),
+            is_error: false,
+            timestamp: Utc::now(),
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        let parsed: SystemStopHookSummaryMessage = serde_json::from_str(&json).expect("deserialize");
+        assert!(!parsed.is_error);
+    }
+
+    #[test]
+    fn system_away_summary_message_serde_roundtrip() {
+        let msg = SystemAwaySummaryMessage {
+            id: new_id(),
+            summary: "3 tasks completed".to_owned(),
+            message_count: 15,
+            timestamp: Utc::now(),
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        let parsed: SystemAwaySummaryMessage = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.message_count, 15);
+    }
+
+    #[test]
+    fn system_agents_killed_message_serde_roundtrip() {
+        let msg = SystemAgentsKilledMessage {
+            id: new_id(),
+            agent_ids: vec!["agent-1".to_owned(), "agent-2".to_owned()],
+            reason: "timeout".to_owned(),
+            timestamp: Utc::now(),
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        let parsed: SystemAgentsKilledMessage = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.agent_ids.len(), 2);
+    }
+
+    #[test]
+    fn system_api_metrics_message_serde_roundtrip() {
+        let msg = SystemApiMetricsMessage {
+            id: new_id(),
+            input_tokens: 5000,
+            output_tokens: 1200,
+            latency_ms: 3500,
+            model: "claude-sonnet-4-20250514".to_owned(),
+            timestamp: Utc::now(),
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        let parsed: SystemApiMetricsMessage = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.input_tokens, 5000);
+    }
+
+    #[test]
+    fn system_api_error_message_serde_roundtrip() {
+        let msg = SystemAPIErrorMessage {
+            id: new_id(),
+            error_code: "rate_limit".to_owned(),
+            error_message: "Too many requests".to_owned(),
+            retryable: true,
+            timestamp: Utc::now(),
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        let parsed: SystemAPIErrorMessage = serde_json::from_str(&json).expect("deserialize");
+        assert!(parsed.retryable);
+    }
+
+    #[test]
+    fn system_file_snapshot_message_serde_roundtrip() {
+        let msg = SystemFileSnapshotMessage {
+            id: new_id(),
+            path: "src/main.rs".to_owned(),
+            content_hash: "abc123".to_owned(),
+            size_bytes: 4096,
+            timestamp: Utc::now(),
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        let parsed: SystemFileSnapshotMessage = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.path, "src/main.rs");
+    }
+
+    #[test]
+    fn hook_result_message_type_serde_roundtrip() {
+        let msg = HookResultMessageType {
+            id: new_id(),
+            hook_name: "pre-commit".to_owned(),
+            output: "all checks passed".to_owned(),
+            is_error: false,
+            timestamp: Utc::now(),
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        let parsed: HookResultMessageType = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.hook_name, "pre-commit");
+    }
+
+    #[test]
+    fn tool_use_summary_message_type_serde_roundtrip() {
+        let msg = ToolUseSummaryMessageType {
+            id: new_id(),
+            tool_call_id: "tc-1".to_owned(),
+            tool_name: "bash".to_owned(),
+            summary: "ran tests".to_owned(),
+            is_error: false,
+            timestamp: Utc::now(),
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        let parsed: ToolUseSummaryMessageType = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.tool_call_id, "tc-1");
+    }
+
+    #[test]
+    fn tombstone_message_type_serde_roundtrip() {
+        let msg = TombstoneMessageType {
+            id: new_id(),
+            replaced_ids: vec!["msg-1".to_owned()],
+            summary: "old content".to_owned(),
+            timestamp: Utc::now(),
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        let parsed: TombstoneMessageType = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.replaced_ids.len(), 1);
+    }
+
+    #[test]
+    fn progress_message_type_serde_roundtrip() {
+        let msg = ProgressMessageType {
+            id: new_id(),
+            stage: "thinking".to_owned(),
+            status: "processing".to_owned(),
+            percent: Some(75),
+            timestamp: Utc::now(),
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        let parsed: ProgressMessageType = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.percent, Some(75));
+    }
+
+    #[test]
+    fn attachment_message_type_serde_roundtrip() {
+        let msg = AttachmentMessageType {
+            id: new_id(),
+            path: "image.png".to_owned(),
+            mime_type: Some("image/png".to_owned()),
+            size_bytes: Some(1024),
+            timestamp: Utc::now(),
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        let parsed: AttachmentMessageType = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.path, "image.png");
     }
 }

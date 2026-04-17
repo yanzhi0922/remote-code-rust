@@ -61,12 +61,15 @@
 //! }
 //! ```
 
+pub mod api_micro;
 pub mod attachment;
 pub mod auto;
 pub mod compact_warning;
 pub mod context_collapse;
 pub mod engine;
+pub mod forked_agent;
 pub mod grouping;
+pub mod mc_config;
 pub mod micro;
 pub mod post_compact;
 pub mod prompt;
@@ -170,4 +173,24 @@ pub use attachment::{
 pub use context_collapse::{
     CollapseOperation, CollapsePersistence, CollapseResult, ContextCollapseConfig,
     ContextCollapseEngine, Ratio64,
+};
+
+// ---------------------------------------------------------------------------
+// Re-exports: forked agent compact
+// ---------------------------------------------------------------------------
+
+pub use forked_agent::{compact_for_fork, should_compact_for_fork, ForkedAgentCompactConfig};
+
+// ---------------------------------------------------------------------------
+// Re-exports: API microcompact
+// ---------------------------------------------------------------------------
+
+pub use api_micro::{api_microcompact, estimate_savings, ApiMicrocompactConfig, CompactResult, TokenSavings};
+
+// ---------------------------------------------------------------------------
+// Re-exports: microcompact configuration
+// ---------------------------------------------------------------------------
+
+pub use mc_config::{
+    should_use_microcompact, CachedMcConfig, McConfig, McStrategy, TimeBasedConfig,
 };
