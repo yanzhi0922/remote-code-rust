@@ -12,13 +12,39 @@ use walkdir::WalkDir;
 
 use super::{IGNORED_DIRS, ToolExecutionContext};
 
+/// Normalize a path for comparison by stripping the Windows `\\?\` UNC prefix
+/// that `canonicalize()` adds on Windows.
+fn normalize_for_comparison(path: PathBuf) -> PathBuf {
+    let s = path.to_string_lossy();
+    if let Some(stripped) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(stripped)
+    } else {
+        path
+    }
+}
+
 pub(crate) fn resolve_workspace_path(cwd: &Path, maybe_relative: Option<&str>) -> Result<PathBuf> {
     let candidate = match maybe_relative {
         Some(path) if !path.trim().is_empty() => cwd.join(path),
         _ => cwd.to_path_buf(),
     };
-    let canonical_cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
-    let canonical_candidate = candidate.canonicalize().unwrap_or(candidate.clone());
+    // Canonicalize the cwd (always exists).
+    let canonical_cwd = normalize_for_comparison(
+        cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf()),
+    );
+    // For the candidate, try to canonicalize the parent dir (which likely exists)
+    // and append the file name. This handles the case where the target file
+    // doesn't exist yet (e.g., write_file creating a new file).
+    let canonical_candidate = if candidate.exists() {
+        normalize_for_comparison(candidate.canonicalize().unwrap_or(candidate.clone()))
+    } else {
+        let parent = candidate.parent().unwrap_or(cwd);
+        let file_name = candidate.file_name().unwrap_or_default();
+        let canonical_parent = normalize_for_comparison(
+            parent.canonicalize().unwrap_or_else(|_| parent.to_path_buf()),
+        );
+        canonical_parent.join(file_name)
+    };
     if !canonical_candidate.starts_with(&canonical_cwd) {
         return Err(anyhow!(
             "path {} escapes the workspace {}",
