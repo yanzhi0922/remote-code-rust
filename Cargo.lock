@@ -4150,6 +4150,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rc-managed-settings"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "rc-mcp"
 version = "0.1.0"
 dependencies = [
@@ -4362,6 +4376,19 @@ dependencies = [
  "rc-core",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "rc-team-memory"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "regex",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
