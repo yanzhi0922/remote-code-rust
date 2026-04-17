@@ -143,12 +143,50 @@ impl FeatureFlags {
 
     /// Refresh flags from a remote source.
     ///
-    /// In a real implementation, this would fetch from the GrowthBook API.
-    /// For now, it's a placeholder that returns Ok.
-    pub async fn refresh_flags(&self, _config: &GrowthBookConfig) -> anyhow::Result<()> {
-        // Placeholder: in production, this would make an HTTP request
-        // to the GrowthBook API and update the flags map.
-        Ok(())
+    /// Fetches feature flags from the GrowthBook API endpoint specified in
+    /// the configuration. On success, the in-memory flag map is replaced
+    /// with the fetched data. On failure, the existing flags are preserved
+    /// and the error is logged.
+    pub async fn refresh_flags(&self, config: &GrowthBookConfig) -> anyhow::Result<()> {
+        if config.api_endpoint.is_empty() {
+            return Ok(());
+        }
+        let client = reqwest::Client::new();
+        let resp = client
+            .get(&config.api_endpoint)
+            .send()
+            .await;
+        match resp {
+            Ok(r) if r.status().is_success() => {
+                match r.json::<serde_json::Value>().await {
+                    Ok(body) => {
+                        if let Some(flags_map) = body.get("features").and_then(|f| f.as_object()) {
+                            if let Ok(mut flags) = self.flags.lock() {
+                                flags.clear();
+                                for (key, value) in flags_map {
+                                    if let Ok(flag) = serde_json::from_value::<FeatureFlag>(value.clone()) {
+                                        flags.insert(key.clone(), flag);
+                                    }
+                                }
+                            }
+                        }
+                        Ok(())
+                    }
+                    Err(e) => {
+                        tracing::warn!("GrowthBook: failed to parse response: {e}");
+                        Ok(())
+                    }
+                }
+            }
+            Ok(r) => {
+                tracing::warn!("GrowthBook API returned status {}", r.status());
+                Ok(())
+            }
+            Err(e) => {
+                tracing::warn!("GrowthBook API request failed: {e}");
+                Ok(())
+            }
+        }
     }
 
     /// Number of flags currently loaded.
