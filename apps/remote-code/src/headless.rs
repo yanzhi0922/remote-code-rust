@@ -473,6 +473,33 @@ impl PermissionBroker for ChannelPermissionBroker {
     }
 
     async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
+        // Auto-approve in bypass-permissions mode (all tools).
+        if matches!(self.mode, PermissionMode::BypassPermissions) {
+            return PermissionDecision::allow();
+        }
+
+        // Auto-approve in dont-ask mode when the tool class is auto-allowed.
+        if matches!(self.mode, PermissionMode::DontAsk) {
+            let class = rc_permissions::classify_tool(&request.tool_name);
+            if rc_permissions::auto_allows(self.mode, class) {
+                return PermissionDecision::allow();
+            }
+        }
+
+        // Auto-approve file edits in accept-edits mode.
+        if matches!(self.mode, PermissionMode::AcceptEdits) {
+            let class = rc_permissions::classify_tool(&request.tool_name);
+            if rc_permissions::auto_allows(self.mode, class) {
+                return PermissionDecision::allow();
+            }
+        }
+
+        // Plan mode: deny all tool execution.
+        if matches!(self.mode, PermissionMode::Plan) {
+            return PermissionDecision::deny("Plan mode — tool execution is disabled.");
+        }
+
+        // Default mode: emit permission request and wait for external response.
         let request_id = Uuid::new_v4().to_string();
         let (tx, rx) = oneshot::channel();
         self.pending_permissions
