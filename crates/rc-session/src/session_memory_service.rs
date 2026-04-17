@@ -81,9 +81,11 @@ impl SessionMemoryConfig {
 
 /// Source of a memory entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Default)]
 #[serde(rename_all = "snake_case")]
 pub enum MemorySource {
     /// Extracted automatically from conversation.
+    #[default]
     AutoExtraction,
     /// Manually added by the user.
     Manual,
@@ -93,11 +95,6 @@ pub enum MemorySource {
     SubAgent,
 }
 
-impl Default for MemorySource {
-    fn default() -> Self {
-        Self::AutoExtraction
-    }
-}
 
 /// A single memory entry in the session memory store.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -323,8 +320,8 @@ impl SessionMemoryStore {
         let has_met_token_threshold = self.has_met_update_threshold(current_token_count);
         let has_met_tool_call_threshold = self.has_met_tool_call_threshold();
 
-        let should_extract = (has_met_token_threshold && has_met_tool_call_threshold)
-            || (has_met_token_threshold && !has_tool_calls_in_last_turn);
+        let should_extract = (!has_tool_calls_in_last_turn || has_met_tool_call_threshold)
+            && has_met_token_threshold;
 
         if should_extract {
             self.record_extraction_token_count(current_token_count);
@@ -596,8 +593,8 @@ pub fn load_session_memory(markdown: &str) -> Result<SessionMemoryStore> {
         let trimmed = line.trim();
 
         // Category headers
-        if trimmed.starts_with("## ") {
-            current_category = Some(trimmed[3..].trim().to_string());
+        if let Some(stripped) = trimmed.strip_prefix("## ") {
+            current_category = Some(stripped.trim().to_string());
             continue;
         }
 
@@ -607,18 +604,17 @@ pub fn load_session_memory(markdown: &str) -> Result<SessionMemoryStore> {
         }
 
         // List items: - **key**: value
-        if trimmed.starts_with("- **") {
-            if let Some(rest) = trimmed.strip_prefix("- **") {
-                if let Some(end_idx) = rest.find("**: ") {
-                    let key = &rest[..end_idx];
-                    let value = &rest[end_idx + 4..];
-                    let mut entry = MemoryEntry::new(key, value);
-                    if let Some(cat) = &current_category {
-                        entry = entry.with_category(cat.clone());
-                    }
-                    store.add_entry(entry);
-                }
+        if trimmed.starts_with("- **")
+            && let Some(rest) = trimmed.strip_prefix("- **")
+            && let Some(end_idx) = rest.find("**: ")
+        {
+            let key = &rest[..end_idx];
+            let value = &rest[end_idx + 4..];
+            let mut entry = MemoryEntry::new(key, value);
+            if let Some(cat) = &current_category {
+                entry = entry.with_category(cat.clone());
             }
+            store.add_entry(entry);
         }
     }
 

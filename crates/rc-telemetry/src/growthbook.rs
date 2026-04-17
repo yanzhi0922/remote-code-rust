@@ -402,6 +402,7 @@ impl FeatureGate {
 
 /// A remote evaluation response from the GrowthBook server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct RemoteEvalResponse {
     /// Map of feature key → evaluated value.
     pub features: HashMap<String, FeatureValue>,
@@ -411,15 +412,6 @@ pub struct RemoteEvalResponse {
     pub timestamp: u64,
 }
 
-impl Default for RemoteEvalResponse {
-    fn default() -> Self {
-        Self {
-            features: HashMap::new(),
-            forced: false,
-            timestamp: 0,
-        }
-    }
-}
 
 /// Tracks experiment data for exposure logging.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -585,7 +577,7 @@ impl GrowthBookClient {
     /// Returns whether the client has been initialized.
     #[must_use]
     pub fn is_initialized(&self) -> bool {
-        self.initialized.read().map_or(false, |g| *g)
+        self.initialized.read().is_ok_and(|g| *g)
     }
 
     /// Gets a feature value by key, using the cached (possibly stale) value.
@@ -676,7 +668,7 @@ impl GrowthBookClient {
     pub fn log_exposure(&self, feature: &str) -> bool {
         let should_log = {
             let exposures = self.logged_exposures.read().ok();
-            exposures.as_ref().map_or(false, |e| !e.contains(feature))
+            exposures.as_ref().is_some_and(|e| !e.contains(feature))
         };
 
         if !should_log {
@@ -687,7 +679,7 @@ impl GrowthBookClient {
             .experiments
             .read()
             .ok()
-            .map_or(false, |e| e.contains_key(feature));
+            .is_some_and(|e| e.contains_key(feature));
 
         if has_experiment {
             if let Ok(mut guard) = self.logged_exposures.write() {

@@ -195,13 +195,12 @@ impl VirtualScrollState {
 
         // Find the last item whose top edge is before viewport_bottom.
         let mut end = start;
-        for i in start..self.items.len() {
-            let item_top = offsets[i];
+        for (rel_i, &item_top) in offsets[start..self.items.len()].iter().enumerate() {
             if item_top >= viewport_bottom {
-                end = i;
+                end = start + rel_i;
                 break;
             }
-            end = i + 1;
+            end = start + rel_i + 1;
         }
         if end < start {
             end = start;

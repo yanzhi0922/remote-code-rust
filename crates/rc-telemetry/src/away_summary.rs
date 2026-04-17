@@ -264,7 +264,7 @@ impl AwaySummaryTracker {
     /// Returns whether the user is considered "away" based on idle threshold.
     #[must_use]
     pub fn is_away(&self) -> bool {
-        self.last_activity.map_or(true, |last| {
+        self.last_activity.is_none_or(|last| {
             last.elapsed() >= Duration::from_secs(self.config.idle_threshold_secs)
         })
     }
@@ -388,14 +388,14 @@ fn build_heuristic_summary(
     let mut parts = Vec::new();
 
     // Include session memory context if available
-    if let Some(memory) = session_memory {
-        if !memory.is_empty() {
-            // Extract first line as high-level context
-            if let Some(first_line) = memory.lines().next() {
-                let trimmed = first_line.trim();
-                if !trimmed.is_empty() && trimmed.len() < 100 {
-                    parts.push(format!("Context: {trimmed}"));
-                }
+    if let Some(memory) = session_memory
+        && !memory.is_empty()
+    {
+        // Extract first line as high-level context
+        if let Some(first_line) = memory.lines().next() {
+            let trimmed = first_line.trim();
+            if !trimmed.is_empty() && trimmed.len() < 100 {
+                parts.push(format!("Context: {trimmed}"));
             }
         }
     }

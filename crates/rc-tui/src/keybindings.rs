@@ -592,10 +592,10 @@ impl KeyBindingRegistry {
             return Some(*action);
         }
         // Fall back to Global.
-        if context != KeyBindingContext::Global {
-            if let Some(action) = self.lookup.get(&(KeyBindingContext::Global, keystroke.clone())) {
-                return Some(*action);
-            }
+        if context != KeyBindingContext::Global
+            && let Some(action) = self.lookup.get(&(KeyBindingContext::Global, keystroke.clone()))
+        {
+            return Some(*action);
         }
         None
     }
@@ -667,12 +667,12 @@ impl KeyBindingRegistry {
             }
         }
         // Fall back to Global.
-        if context != KeyBindingContext::Global {
-            if let Some(bindings) = self.bindings.get(&KeyBindingContext::Global) {
-                for b in bindings {
-                    if b.action == action {
-                        return Some(b.keystroke.display());
-                    }
+        if context != KeyBindingContext::Global
+            && let Some(bindings) = self.bindings.get(&KeyBindingContext::Global)
+        {
+            for b in bindings {
+                if b.action == action {
+                    return Some(b.keystroke.display());
                 }
             }
         }

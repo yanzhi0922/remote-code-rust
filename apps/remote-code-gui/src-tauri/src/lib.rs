@@ -1544,15 +1544,18 @@ fn mcp_transport_to_display(transport: McpTransport) -> String {
     .to_owned()
 }
 
+/// Transport fields extracted from an MCP server config for display.
+struct McpTransportFields {
+    command: Option<String>,
+    url: Option<String>,
+    args: Vec<String>,
+    cwd: Option<String>,
+    env_keys: Vec<String>,
+}
+
 fn mcp_server_transport_fields(
     server: &McpServerConfig,
-) -> (
-    Option<String>,
-    Option<String>,
-    Vec<String>,
-    Option<String>,
-    Vec<String>,
-) {
+) -> McpTransportFields {
     match &server.transport {
         McpTransportConfig::Stdio {
             command,
@@ -1562,19 +1565,25 @@ fn mcp_server_transport_fields(
         } => {
             let mut env_keys = env.keys().cloned().collect::<Vec<_>>();
             env_keys.sort();
-            (
-                Some(command.clone()),
-                None,
-                args.clone(),
-                cwd.as_ref().map(|path| path.display().to_string()),
+            McpTransportFields {
+                command: Some(command.clone()),
+                url: None,
+                args: args.clone(),
+                cwd: cwd.as_ref().map(|path| path.display().to_string()),
                 env_keys,
-            )
+            }
         }
         McpTransportConfig::Http { url, headers }
         | McpTransportConfig::WebSocket { url, headers } => {
             let mut env_keys = headers.keys().cloned().collect::<Vec<_>>();
             env_keys.sort();
-            (None, Some(url.clone()), Vec::new(), None, env_keys)
+            McpTransportFields {
+                command: None,
+                url: Some(url.clone()),
+                args: Vec::new(),
+                cwd: None,
+                env_keys,
+            }
         }
     }
 }
@@ -1584,7 +1593,7 @@ fn mcp_server_to_dto(
     server: McpServerConfig,
     live: Option<McpServerLiveDto>,
 ) -> McpServerDto {
-    let (command, url, args, cwd, env_keys) = mcp_server_transport_fields(&server);
+    let fields = mcp_server_transport_fields(&server);
     let mut metadata_keys = server.metadata.keys().cloned().collect::<Vec<_>>();
     metadata_keys.sort();
     McpServerDto {
@@ -1592,11 +1601,11 @@ fn mcp_server_to_dto(
         enabled: server.enabled,
         transport: mcp_transport_to_display(server.transport.kind()),
         config_path: config_path.display().to_string(),
-        command,
-        url,
-        args,
-        cwd,
-        env_keys,
+        command: fields.command,
+        url: fields.url,
+        args: fields.args,
+        cwd: fields.cwd,
+        env_keys: fields.env_keys,
         metadata_keys,
         startup_timeout_secs: server.startup_timeout_secs,
         request_timeout_secs: server.request_timeout_secs,
@@ -1606,7 +1615,7 @@ fn mcp_server_to_dto(
 
 fn runtime_mcp_server_to_dto(observation: RuntimeMcpServerObservation) -> RuntimeMcpServerDto {
     let entry = observation.entry;
-    let (command, url, args, cwd, env_keys) = mcp_server_transport_fields(&entry.server);
+    let fields = mcp_server_transport_fields(&entry.server);
     let mut metadata_keys = entry.server.metadata.keys().cloned().collect::<Vec<_>>();
     metadata_keys.sort();
     let live = match (observation.inspection, observation.error) {
@@ -1622,11 +1631,11 @@ fn runtime_mcp_server_to_dto(observation: RuntimeMcpServerObservation) -> Runtim
         origin_name: entry.origin_name,
         config_path: entry.config_path.display().to_string(),
         transport: mcp_transport_to_display(entry.server.transport.kind()),
-        command,
-        url,
-        args,
-        cwd,
-        env_keys,
+        command: fields.command,
+        url: fields.url,
+        args: fields.args,
+        cwd: fields.cwd,
+        env_keys: fields.env_keys,
         metadata_keys,
         startup_timeout_secs: entry.server.startup_timeout_secs,
         request_timeout_secs: entry.server.request_timeout_secs,

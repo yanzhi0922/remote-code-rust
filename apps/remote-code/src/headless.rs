@@ -359,6 +359,7 @@ async fn forward_prompt_stream_events<W: Write + Send + 'static>(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_headless_prompt_once<W: Write + Send + 'static>(
     emitter: Arc<Mutex<ProtocolEmitter<W>>>,
     config: &RuntimeConfig,

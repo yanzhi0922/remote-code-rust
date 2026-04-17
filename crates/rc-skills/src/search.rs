@@ -378,8 +378,10 @@ impl SkillSearchIndex {
 
 /// Prefetch state for skill content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum PrefetchState {
     /// Not yet fetched.
+    #[default]
     Pending,
     /// Fetch in progress.
     InProgress,
@@ -389,11 +391,6 @@ pub enum PrefetchState {
     Failed,
 }
 
-impl Default for PrefetchState {
-    fn default() -> Self {
-        Self::Pending
-    }
-}
 
 /// Tracks prefetch status for skill documents.
 #[derive(Debug, Clone, Default)]

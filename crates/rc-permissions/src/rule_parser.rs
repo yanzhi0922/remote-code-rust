@@ -33,10 +33,10 @@ pub fn discover_permission_rule_files(
         .map(|path| normalize_rule_path(cwd, path))
         .collect::<Vec<_>>();
     let mut files = Vec::new();
-    files.extend(settings_files.iter().cloned().map(|path| {
+    files.extend(settings_files.iter().map(|path| {
         (
             path.clone(),
-            classify_settings_rule_source(&path, cwd, profile_dir, &explicit_cli_paths),
+            classify_settings_rule_source(path, cwd, profile_dir, &explicit_cli_paths),
         )
     }));
 

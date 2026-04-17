@@ -62,9 +62,9 @@ impl std::fmt::Debug for PermissionSetup {
 impl PermissionSetup {
     /// Initialize the permission system with the given configuration.
     pub fn initialize(config: &PermissionSetupConfig) -> Self {
-        let mode = if config.disable_bypass && config.mode == ExtendedPermissionMode::BypassPermissions {
-            ExtendedPermissionMode::Default
-        } else if config.disable_auto && config.mode == ExtendedPermissionMode::Auto {
+        let mode = if (config.disable_bypass && config.mode == ExtendedPermissionMode::BypassPermissions)
+            || (config.disable_auto && config.mode == ExtendedPermissionMode::Auto)
+        {
             ExtendedPermissionMode::Default
         } else {
             config.mode

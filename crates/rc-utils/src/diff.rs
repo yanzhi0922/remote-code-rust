@@ -260,7 +260,6 @@ pub fn escape_diff_markers(text: &str) -> String {
 #[must_use]
 pub fn unescape_diff_markers(text: &str) -> String {
     text.replace("&#36;", "$")
-        .replace("&", "&")
 }
 
 // ---------------------------------------------------------------------------

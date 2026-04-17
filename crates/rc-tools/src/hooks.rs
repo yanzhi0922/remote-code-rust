@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use rc_core::hook_executor::{HookBatchResult, HookExecutor};
 use rc_core::hook_matcher::match_hooks;
 use rc_core::hook_registry::HookRegistry;
-use rc_core::hook_types::{HookDefinition, HookInput, HookMatcherEntry};
+use rc_core::hook_types::{HookInput, HookMatcherEntry};
 use rc_core::hooks::HookEventKind;
 use rc_core::HookShell;
 
@@ -308,7 +308,7 @@ impl HookExecutionContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rc_core::hook_types::{HookCommand, HookMatcherEntry};
+    use rc_core::hook_types::{HookCommand, HookDefinition, HookMatcherEntry};
 
     fn make_command_hook(cmd: &str) -> HookDefinition {
         HookDefinition::Command(HookCommand {

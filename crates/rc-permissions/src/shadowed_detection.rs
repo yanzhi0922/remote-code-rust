@@ -65,11 +65,9 @@ pub fn detect_shadowed_rules(rules: &[PermissionRuleV2]) -> Vec<ShadowedRule> {
     sorted.sort_by_key(|(_, r)| source_priority(r.source));
 
     // Check each rule against all higher-priority rules
-    for i in 0..sorted.len() {
-        let (_, rule) = sorted[i];
+    for (i, (_, rule)) in sorted.iter().enumerate() {
         
-        for j in 0..i {
-            let (_, other) = sorted[j];
+        for (_, other) in sorted.iter().take(i) {
             
             // Check if `other` shadows `rule`
             if rules_overlap(other, rule) {
@@ -84,8 +82,8 @@ pub fn detect_shadowed_rules(rules: &[PermissionRuleV2]) -> Vec<ShadowedRule> {
                 };
                 
                 shadowed.push(ShadowedRule {
-                    shadowed: rule.clone(),
-                    shadowed_by: other.clone(),
+                    shadowed: (*rule).clone(),
+                    shadowed_by: (*other).clone(),
                     reason,
                 });
                 break; // Only report the first shadowing rule
