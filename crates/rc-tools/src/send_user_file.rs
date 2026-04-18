@@ -315,8 +315,8 @@ mod tests {
         let input = json!({});
         let context = test_context_with_cwd(Path::new("/tmp"));
         let result = send_user_file(&input, &context);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("file_path"));
+        let error = result.expect_err("missing file_path should fail");
+        assert!(error.to_string().contains("file_path"));
     }
 
     #[test]
@@ -332,8 +332,8 @@ mod tests {
         let input = json!({"file_path": "nonexistent.txt"});
         let context = test_context_with_cwd(Path::new("/tmp"));
         let result = send_user_file(&input, &context);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not found"));
+        let error = result.expect_err("nonexistent file should fail");
+        assert!(error.to_string().contains("not found"));
     }
 
     #[test]
@@ -343,7 +343,7 @@ mod tests {
 
         let input = json!({"file_path": "test.txt", "description": "A test file"});
         let context = test_context_with_cwd(temp.path());
-        let result = send_user_file(&input, &context).unwrap();
+        let result = send_user_file(&input, &context).expect("text file should be read");
 
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(parsed["status"], "ready");
@@ -361,7 +361,7 @@ mod tests {
 
         let input = json!({"file_path": "test.bin"});
         let context = test_context_with_cwd(temp.path());
-        let result = send_user_file(&input, &context).unwrap();
+        let result = send_user_file(&input, &context).expect("binary file should be encoded");
 
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(parsed["status"], "ready");
@@ -378,7 +378,7 @@ mod tests {
 
         let input = json!({"file_path": "large.txt", "max_size_bytes": 100});
         let context = test_context_with_cwd(temp.path());
-        let result = send_user_file(&input, &context).unwrap();
+        let result = send_user_file(&input, &context).expect("oversized file should be handled");
 
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(parsed["status"], "too_large");
@@ -392,7 +392,7 @@ mod tests {
 
         let input = json!({"file_path": "big.txt", "max_text_chars": 100});
         let context = test_context_with_cwd(temp.path());
-        let result = send_user_file(&input, &context).unwrap();
+        let result = send_user_file(&input, &context).expect("large text file should be handled");
 
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
         let text = parsed["content"].as_str().expect("content string");
@@ -422,7 +422,7 @@ mod tests {
 
         let input = json!({"file_path": "screenshot.png"});
         let context = test_context_with_cwd(temp.path());
-        let result = send_user_file(&input, &context).unwrap();
+        let result = send_user_file(&input, &context).expect("image file should be detected");
 
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(parsed["file_info"]["category"], "image");
@@ -436,7 +436,7 @@ mod tests {
 
         let input = json!({"file_path": "data.csv"});
         let context = test_context_with_cwd(temp.path());
-        let result = send_user_file(&input, &context).unwrap();
+        let result = send_user_file(&input, &context).expect("data file should be detected");
 
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(parsed["file_info"]["category"], "data");

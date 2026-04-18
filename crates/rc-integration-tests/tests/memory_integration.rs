@@ -217,7 +217,7 @@ fn memory_store_delete_nonexistent_fails() {
     let store = rc_utils::memory_store::MemoryStore::new(temp.path());
     let err = store
         .delete_memory("ghost", rc_utils::memory_types::MemoryType::Project)
-        .unwrap_err();
+        .expect_err("deleting a missing memory should fail");
     assert!(err.to_string().contains("ghost"));
 }
 
@@ -227,7 +227,7 @@ fn memory_store_load_nonexistent_fails() {
     let store = rc_utils::memory_store::MemoryStore::new(temp.path());
     let err = store
         .load_memory("nope", rc_utils::memory_types::MemoryType::Project)
-        .unwrap_err();
+        .expect_err("loading a missing memory should fail");
     assert!(err.to_string().contains("nope"));
 }
 
@@ -436,7 +436,7 @@ fn memory_store_update_nonexistent_fails() {
             rc_utils::memory_types::MemoryType::Project,
             vec![],
         )
-        .unwrap_err();
+        .expect_err("updating a missing memory should fail");
     assert!(err.to_string().contains("ghost"));
 }
 

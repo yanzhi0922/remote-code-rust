@@ -12,16 +12,18 @@ use rc_config::ProviderConfig;
 use rc_core::{
     ConversationEntry, ConversationRole, ProviderProtocol, ProviderResponse, ToolCall, UsageSummary,
 };
-use rc_tools::runtime_provider_tool_specs;
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::Duration;
 
-use crate::{ProviderClient, build_headers, to_anthropic_messages, to_openai_messages};
+use crate::{
+    ProviderClient, build_headers, current_openai_tool_schemas,
+    prepare_anthropic_request_surface, to_openai_messages,
+};
 
 // ---------------------------------------------------------------------------
 // Streaming callbacks
@@ -149,11 +151,7 @@ impl ProviderClient {
         conversation: &[ConversationEntry],
         callbacks: Option<&StreamingCallbacks>,
     ) -> Result<ProviderResponse> {
-        let tools = runtime_provider_tool_specs()
-            .await
-            .into_iter()
-            .map(|tool| tool.to_openai_schema())
-            .collect::<Vec<_>>();
+        let tools = current_openai_tool_schemas(provider, conversation).await;
         let body = json!({
             "model": provider.model,
             "messages": to_openai_messages(conversation),
@@ -326,12 +324,8 @@ impl ProviderClient {
         conversation: &[ConversationEntry],
         callbacks: Option<&StreamingCallbacks>,
     ) -> Result<ProviderResponse> {
-        let (system, messages) = to_anthropic_messages(conversation);
-        let tools = runtime_provider_tool_specs()
-            .await
-            .into_iter()
-            .map(|tool| tool.to_anthropic_schema())
-            .collect::<Vec<_>>();
+        let (system, messages, tools) =
+            prepare_anthropic_request_surface(provider, conversation).await;
         let mut body = json!({
             "model": provider.model,
             "system": system,
@@ -366,13 +360,10 @@ impl ProviderClient {
             .send_streaming_request(provider, base_url, &body, "anthropic-compatible")
             .await?;
 
-        let mut text_parts: Vec<String> = Vec::new();
-        let mut content_blocks: Vec<Value> = Vec::new();
-        let mut tool_use_accumulators: HashMap<usize, AnthropicToolUseAccumulator> = HashMap::new();
-        let mut current_text_block_index: Option<usize> = None;
+        let mut content_block_accumulators: BTreeMap<usize, AnthropicContentAccumulator> =
+            BTreeMap::new();
         let mut usage = UsageSummary::default();
         let mut stop_reason = "end_turn".to_owned();
-        let mut thinking_parts: Vec<String> = Vec::new();
         let mut request_id: Option<String> = None;
 
         let mut stream = response.bytes_stream();
@@ -443,17 +434,32 @@ impl ProviderClient {
 
                             match block_type {
                                 "text" => {
-                                    current_text_block_index = Some(index);
+                                    let text = content_block
+                                        .and_then(|b| b.get("text"))
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("")
+                                        .to_owned();
+                                    content_block_accumulators
+                                        .insert(index, AnthropicContentAccumulator::Text { text });
                                 }
                                 "thinking" => {
-                                    // Thinking block — accumulate thinking deltas.
-                                    // The content_block itself may contain initial thinking text.
-                                    if let Some(thinking) = content_block
+                                    let thinking = content_block
                                         .and_then(|b| b.get("thinking"))
+                                        .or_else(|| content_block.and_then(|b| b.get("text")))
                                         .and_then(Value::as_str)
-                                    {
-                                        thinking_parts.push(thinking.to_owned());
-                                    }
+                                        .unwrap_or("")
+                                        .to_owned();
+                                    let signature = content_block
+                                        .and_then(|b| b.get("signature"))
+                                        .and_then(Value::as_str)
+                                        .map(ToOwned::to_owned);
+                                    content_block_accumulators.insert(
+                                        index,
+                                        AnthropicContentAccumulator::Thinking {
+                                            thinking,
+                                            signature,
+                                        },
+                                    );
                                 }
                                 "tool_use" | "server_tool_use" => {
                                     let id = content_block
@@ -473,14 +479,16 @@ impl ProviderClient {
                                     {
                                         cb(&id, &name);
                                     }
-                                    tool_use_accumulators.insert(
+                                    content_block_accumulators.insert(
                                         index,
-                                        AnthropicToolUseAccumulator {
-                                            block_type: block_type.to_owned(),
-                                            id,
-                                            name,
-                                            partial_json: String::new(),
-                                        },
+                                        AnthropicContentAccumulator::ToolUse(
+                                            AnthropicToolUseAccumulator {
+                                                block_type: block_type.to_owned(),
+                                                id,
+                                                name,
+                                                partial_json: String::new(),
+                                            },
+                                        ),
                                     );
                                 }
                                 _ => {}
@@ -502,12 +510,27 @@ impl ProviderClient {
                                 && let Some(thinking) = delta
                                     .and_then(|d| d.get("thinking"))
                                     .and_then(Value::as_str)
+                                && let Some(AnthropicContentAccumulator::Thinking {
+                                    thinking: existing,
+                                    ..
+                                }) = content_block_accumulators.get_mut(&index)
                             {
-                                thinking_parts.push(thinking.to_owned());
-                            } else if (delta_type == "text_delta"
-                                || current_text_block_index == Some(index))
+                                existing.push_str(thinking);
+                            } else if delta_type == "signature_delta"
+                                && let Some(signature) = delta
+                                    .and_then(|d| d.get("signature"))
+                                    .and_then(Value::as_str)
+                                && let Some(AnthropicContentAccumulator::Thinking {
+                                    signature: existing,
+                                    ..
+                                }) = content_block_accumulators.get_mut(&index)
+                            {
+                                *existing = Some(signature.to_owned());
+                            } else if delta_type == "text_delta"
                                 && let Some(text) =
                                     delta.and_then(|d| d.get("text")).and_then(Value::as_str)
+                                && let Some(AnthropicContentAccumulator::Text { text: existing }) =
+                                    content_block_accumulators.get_mut(&index)
                             {
                                 // Fire on_text_delta callback.
                                 if let Some(cb) =
@@ -515,15 +538,19 @@ impl ProviderClient {
                                 {
                                     cb(text);
                                 }
-                                text_parts.push(text.to_owned());
+                                existing.push_str(text);
                             }
 
                             if (delta_type == "input_json_delta"
-                                || tool_use_accumulators.contains_key(&index))
+                                || matches!(
+                                    content_block_accumulators.get(&index),
+                                    Some(AnthropicContentAccumulator::ToolUse(_))
+                                ))
                                 && let Some(partial) = delta
                                     .and_then(|d| d.get("partial_json"))
                                     .and_then(Value::as_str)
-                                && let Some(acc) = tool_use_accumulators.get_mut(&index)
+                                && let Some(AnthropicContentAccumulator::ToolUse(acc)) =
+                                    content_block_accumulators.get_mut(&index)
                             {
                                 // Fire on_tool_call_delta callback.
                                 if let Some(cb) = callbacks
@@ -535,14 +562,7 @@ impl ProviderClient {
                                 acc.partial_json.push_str(partial);
                             }
                         }
-                        "content_block_stop" => {
-                            #[allow(clippy::cast_possible_truncation)]
-                            let index =
-                                event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
-                            if current_text_block_index == Some(index) {
-                                current_text_block_index = None;
-                            }
-                        }
+                        "content_block_stop" => {}
                         "message_delta" => {
                             if let Some(delta) = event.get("delta")
                                 && let Some(reason) =
@@ -568,37 +588,8 @@ impl ProviderClient {
             }
         }
 
-        let raw_text = text_parts.join("");
-        let mut tool_calls = Vec::new();
-        for acc in tool_use_accumulators.values() {
-            if acc.id.is_empty() || acc.name.is_empty() {
-                continue;
-            }
-            let input = if acc.partial_json.is_empty() {
-                json!({})
-            } else {
-                serde_json::from_str::<Value>(&acc.partial_json)
-                    .ok()
-                    .unwrap_or_else(|| json!({}))
-            };
-            tool_calls.push(ToolCall {
-                id: acc.id.clone(),
-                name: acc.name.clone(),
-                input: input.clone(),
-            });
-            content_blocks.push(json!({
-                "type": acc.block_type,
-                "id": acc.id,
-                "name": acc.name,
-                "input": input,
-            }));
-        }
-
-        let thinking_text = if thinking_parts.is_empty() {
-            None
-        } else {
-            Some(thinking_parts.join(""))
-        };
+        let (raw_text, thinking_text, content_blocks, tool_calls) =
+            finalize_anthropic_content_blocks(content_block_accumulators);
         Ok(ProviderResponse {
             text: crate::strip_reasoning_tags(&raw_text),
             history_text: Some(raw_text),
@@ -620,10 +611,11 @@ impl ProviderClient {
     ) -> Result<reqwest::Response> {
         let mut attempt = 0u32;
         loop {
+            maybe_dump_streaming_request_body(label, body);
             let response = self
                 .http
                 .post(base_url)
-                .headers(build_headers(provider)?)
+                .headers(build_headers(provider, Some(body))?)
                 .timeout(Duration::from_millis(provider.timeout_ms))
                 .json(body)
                 .send()
@@ -682,6 +674,19 @@ impl ProviderClient {
 
 fn is_retryable_http_status(status: u16) -> bool {
     matches!(status, 408 | 429 | 500 | 502 | 503 | 504 | 529)
+}
+
+fn maybe_dump_streaming_request_body(label: &str, body: &Value) {
+    let Ok(dir) = std::env::var("REMOTE_CODE_DUMP_PROVIDER_REQUEST_DIR") else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    let _ = std::fs::create_dir_all(&dir);
+    let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
+    let path = dir.join(format!("{timestamp}-{label}.json"));
+    if let Ok(bytes) = serde_json::to_vec_pretty(body) {
+        let _ = std::fs::write(path, bytes);
+    }
 }
 
 fn wrap_streaming_callbacks(
@@ -775,11 +780,110 @@ struct OpenAiToolCallAccumulator {
     arguments: String,
 }
 
+struct AnthropicToolUseAccumulator {
+    block_type: String,
+    id: String,
+    name: String,
+    partial_json: String,
+}
+
+enum AnthropicContentAccumulator {
+    Text {
+        text: String,
+    },
+    Thinking {
+        thinking: String,
+        signature: Option<String>,
+    },
+    ToolUse(AnthropicToolUseAccumulator),
+}
+
+fn finalize_anthropic_content_blocks(
+    accumulators: BTreeMap<usize, AnthropicContentAccumulator>,
+) -> (String, Option<String>, Vec<Value>, Vec<ToolCall>) {
+    let mut raw_text_parts = Vec::new();
+    let mut thinking_parts = Vec::new();
+    let mut content_blocks = Vec::new();
+    let mut tool_calls = Vec::new();
+
+    for accumulator in accumulators.into_values() {
+        match accumulator {
+            AnthropicContentAccumulator::Text { text } => {
+                if text.is_empty() {
+                    continue;
+                }
+                raw_text_parts.push(text.clone());
+                content_blocks.push(json!({
+                    "type": "text",
+                    "text": text,
+                }));
+            }
+            AnthropicContentAccumulator::Thinking {
+                thinking,
+                signature,
+            } => {
+                if thinking.is_empty() && signature.is_none() {
+                    continue;
+                }
+                if !thinking.is_empty() {
+                    thinking_parts.push(thinking.clone());
+                }
+                let mut block = json!({
+                    "type": "thinking",
+                    "thinking": thinking,
+                });
+                if let Some(signature) = signature {
+                    block["signature"] = Value::String(signature);
+                }
+                content_blocks.push(block);
+            }
+            AnthropicContentAccumulator::ToolUse(acc) => {
+                if acc.id.is_empty() || acc.name.is_empty() {
+                    continue;
+                }
+                let input = if acc.partial_json.is_empty() {
+                    json!({})
+                } else {
+                    serde_json::from_str::<Value>(&acc.partial_json)
+                        .ok()
+                        .unwrap_or_else(|| json!({}))
+                };
+                tool_calls.push(ToolCall {
+                    id: acc.id.clone(),
+                    name: acc.name.clone(),
+                    input: input.clone(),
+                });
+                content_blocks.push(json!({
+                    "type": acc.block_type,
+                    "id": acc.id,
+                    "name": acc.name,
+                    "input": input,
+                }));
+            }
+        }
+    }
+
+    let raw_text = raw_text_parts.join("");
+    let thinking_text = if thinking_parts.is_empty() {
+        None
+    } else {
+        Some(thinking_parts.join(""))
+    };
+
+    (raw_text, thinking_text, content_blocks, tool_calls)
+}
+
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
+    use serde_json::json;
+    use std::collections::BTreeMap;
 
-    use super::{is_retryable_http_status, should_fallback_after_streaming_error};
+    use super::{
+        AnthropicContentAccumulator, AnthropicToolUseAccumulator,
+        finalize_anthropic_content_blocks, is_retryable_http_status,
+        should_fallback_after_streaming_error,
+    };
 
     #[test]
     fn streaming_errors_fallback_before_tool_activity() {
@@ -809,11 +913,55 @@ mod tests {
     fn overloaded_529_is_retryable_for_streaming_requests() {
         assert!(is_retryable_http_status(529));
     }
-}
 
-struct AnthropicToolUseAccumulator {
-    block_type: String,
-    id: String,
-    name: String,
-    partial_json: String,
+    #[test]
+    fn anthropic_streaming_finalizer_preserves_block_order_and_text() {
+        let mut accumulators = BTreeMap::new();
+        accumulators.insert(
+            0,
+            AnthropicContentAccumulator::Thinking {
+                thinking: "plan".to_owned(),
+                signature: Some("sig".to_owned()),
+            },
+        );
+        accumulators.insert(
+            1,
+            AnthropicContentAccumulator::Text {
+                text: "reply".to_owned(),
+            },
+        );
+        accumulators.insert(
+            2,
+            AnthropicContentAccumulator::ToolUse(AnthropicToolUseAccumulator {
+                block_type: "tool_use".to_owned(),
+                id: "call-2".to_owned(),
+                name: "read_file".to_owned(),
+                partial_json: r#"{"path":"src/lib.rs"}"#.to_owned(),
+            }),
+        );
+        accumulators.insert(
+            3,
+            AnthropicContentAccumulator::ToolUse(AnthropicToolUseAccumulator {
+                block_type: "tool_use".to_owned(),
+                id: "call-3".to_owned(),
+                name: "read_file".to_owned(),
+                partial_json: r#"{"path":"src/main.rs"}"#.to_owned(),
+            }),
+        );
+
+        let (raw_text, thinking_text, content_blocks, tool_calls) =
+            finalize_anthropic_content_blocks(accumulators);
+
+        assert_eq!(raw_text, "reply");
+        assert_eq!(thinking_text.as_deref(), Some("plan"));
+        assert_eq!(content_blocks.len(), 4);
+        assert_eq!(content_blocks[0]["type"], "thinking");
+        assert_eq!(content_blocks[0]["signature"], "sig");
+        assert_eq!(content_blocks[1]["type"], "text");
+        assert_eq!(content_blocks[2]["id"], "call-2");
+        assert_eq!(content_blocks[3]["id"], "call-3");
+        assert_eq!(tool_calls[0].id, "call-2");
+        assert_eq!(tool_calls[1].id, "call-3");
+        assert_eq!(tool_calls[0].input, json!({"path":"src/lib.rs"}));
+    }
 }

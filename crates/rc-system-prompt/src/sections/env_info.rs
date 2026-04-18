@@ -47,7 +47,7 @@ pub struct EnvInfoSection;
 
 impl SystemPromptSection for EnvInfoSection {
     fn name(&self) -> &str {
-        "env_info"
+        "env_info_simple"
     }
 
     fn compute(&self, ctx: &PromptContext) -> Result<Option<String>> {
@@ -75,7 +75,7 @@ impl SystemPromptSection for EnvInfoSection {
 
         env_items.push(BulletItem::Nested(vec![format!(
             "Is a git repository: {}",
-            if ctx.is_git { "Yes" } else { "No" }
+            if ctx.is_git { "true" } else { "false" }
         )]));
 
         if !ctx.additional_dirs.is_empty() {
@@ -106,6 +106,18 @@ impl SystemPromptSection for EnvInfoSection {
         if !cutoff_msg.is_empty() {
             env_items.push(BulletItem::Single(cutoff_msg));
         }
+        env_items.push(BulletItem::Single(
+            "The most recent Claude model family is Claude 4.5/4.6. Model IDs \u{2014} Opus 4.6: 'claude-opus-4-6', Sonnet 4.6: 'claude-sonnet-4-6', Haiku 4.5: 'claude-haiku-4-5-20251001'. When building AI applications, default to the latest and most capable Claude models."
+                .to_string(),
+        ));
+        env_items.push(BulletItem::Single(
+            "Claude Code is available as a CLI in the terminal, desktop app (Mac/Windows), web app (claude.ai/code), and IDE extensions (VS Code, JetBrains)."
+                .to_string(),
+        ));
+        env_items.push(BulletItem::Single(
+            "Fast mode for Claude Code uses the same Claude Opus 4.6 model with faster output. It does NOT switch to a different model. It can be toggled with /fast."
+                .to_string(),
+        ));
 
         let mut lines = vec![
             "# Environment".to_string(),
@@ -135,6 +147,7 @@ mod tests {
             language: None,
             output_style: None,
             mcp_clients: vec![],
+            mcp_instructions_delta_enabled: false,
             is_worktree: false,
             additional_dirs: vec![],
             is_non_interactive: false,
@@ -164,7 +177,7 @@ mod tests {
         let section = EnvInfoSection;
         let result = section.compute(&test_ctx()).expect("compute ok");
         let content = result.expect("should be Some");
-        assert!(content.contains("Is a git repository: Yes"));
+        assert!(content.contains("Is a git repository: true"));
     }
 
     #[test]

@@ -4,11 +4,15 @@
 use std::process::Stdio;
 
 use anyhow::{Context, Result, anyhow};
+use rc_core::ToolResult;
 use serde_json::{Value, json};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
-use super::{ToolExecutionContext, ToolRegistry, runtime_builtin_tool_specs};
+use super::{
+    ToolExecutionContext, runtime_provider_tool_specs, runtime_tool_search_candidate_specs,
+};
+use crate::search::ToolSearchEngine;
 
 pub(crate) fn todo_write(input: &Value, context: &ToolExecutionContext) -> Result<String> {
     let todos = input
@@ -129,7 +133,109 @@ pub(crate) fn snip_tool(input: &Value, context: &ToolExecutionContext) -> Result
     ))
 }
 
-pub(crate) fn tool_search_tool(input: &Value) -> Result<String> {
+fn build_runtime_tool_search_index(specs: &[crate::ToolSpec]) -> ToolSearchEngine {
+    let mut engine = ToolSearchEngine::new();
+    for spec in specs {
+        let search_terms = spec.tool_search_terms();
+        let tags = search_terms.iter().map(String::as_str).collect::<Vec<_>>();
+        engine.add_tool(&spec.name, &spec.description, &tags);
+    }
+    engine
+}
+
+fn select_requested_tool_specs<'a>(
+    specs: &'a [crate::ToolSpec],
+    query: &str,
+    max_results: usize,
+) -> (Vec<&'a crate::ToolSpec>, Vec<String>) {
+    let requested = query
+        .strip_prefix("select:")
+        .unwrap_or(query)
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>();
+
+    let mut selected = Vec::new();
+    let mut missing = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+
+    for requested_name in requested {
+        let matched = specs.iter().find(|spec| {
+            spec.name.eq_ignore_ascii_case(requested_name)
+                || spec.protocol_name.eq_ignore_ascii_case(requested_name)
+        });
+        if let Some(spec) = matched {
+            if seen.insert(spec.name.clone()) {
+                selected.push(spec);
+            }
+        } else {
+            missing.push(requested_name.to_owned());
+        }
+
+        if selected.len() >= max_results {
+            break;
+        }
+    }
+
+    (selected, missing)
+}
+
+fn tool_search_result_payload(
+    query: &str,
+    total_deferred_tools: usize,
+    matches: &[String],
+    missing: &[String],
+) -> Value {
+    let mut data = json!({
+        "matches": matches,
+        "query": query,
+        "total_deferred_tools": total_deferred_tools,
+    });
+    if !missing.is_empty()
+        && let Some(object) = data.as_object_mut()
+    {
+        object.insert("missing".to_owned(), json!(missing));
+    }
+
+    json!({ "data": data })
+}
+
+fn tool_search_result(
+    query: &str,
+    total_deferred_tools: usize,
+    matches: Vec<String>,
+    missing: Vec<String>,
+) -> ToolResult {
+    if matches.is_empty() {
+        let mut message = "No matching deferred tools found".to_owned();
+        if !missing.is_empty() {
+            message.push_str(&format!(". Missing requested tools: {}", missing.join(", ")));
+        }
+        return ToolResult {
+            content: message,
+            is_error: false,
+            content_blocks: Vec::new(),
+        };
+    }
+
+    ToolResult {
+        content: tool_search_result_payload(query, total_deferred_tools, &matches, &missing)
+            .to_string(),
+        is_error: false,
+        content_blocks: matches
+            .into_iter()
+            .map(|tool_name| {
+                json!({
+                    "type": "tool_reference",
+                    "tool_name": tool_name,
+                })
+            })
+            .collect(),
+    }
+}
+
+pub(crate) async fn tool_search_tool(input: &Value) -> Result<ToolResult> {
     let query = input
         .get("query")
         .and_then(Value::as_str)
@@ -139,46 +245,27 @@ pub(crate) fn tool_search_tool(input: &Value) -> Result<String> {
         .and_then(Value::as_u64)
         .unwrap_or(5) as usize;
 
-    // Use BM25 search engine for relevance-ranked results.
-    let registry = ToolRegistry::new();
-    let results = registry.search(query, max_results);
+    let specs = runtime_tool_search_candidate_specs().await;
+    if query.trim_start().starts_with("select:") {
+        let (selected, missing) = select_requested_tool_specs(&specs, query, max_results);
+        let matches = selected
+            .into_iter()
+            .map(|spec| spec.name.clone())
+            .collect::<Vec<_>>();
+        return Ok(tool_search_result(query, specs.len(), matches, missing));
+    }
+
+    let engine = build_runtime_tool_search_index(&specs);
+    let results = engine.search(query, max_results);
 
     if results.is_empty() {
-        // Fallback: return all tools with a note
-        let specs = runtime_builtin_tool_specs();
-        let matches: Vec<Value> = specs
-            .iter()
-            .take(max_results)
-            .map(|spec| {
-                json!({
-                    "name": spec.name,
-                    "protocol_name": spec.protocol_name,
-                    "description": spec.description,
-                })
-            })
-            .collect();
-        Ok(json!({
-            "query": query,
-            "results": matches,
-            "note": "No BM25 matches found. Showing first available tools."
-        })
-        .to_string())
+        Ok(tool_search_result(query, specs.len(), Vec::new(), Vec::new()))
     } else {
-        let matches: Vec<Value> = results
+        let matches = results
             .iter()
-            .map(|r| {
-                json!({
-                    "name": r.name,
-                    "score": format!("{:.4}", r.score),
-                    "description": r.description,
-                })
-            })
-            .collect();
-        Ok(json!({
-            "query": query,
-            "results": matches,
-        })
-        .to_string())
+            .map(|result| result.name.clone())
+            .collect::<Vec<_>>();
+        Ok(tool_search_result(query, specs.len(), matches, Vec::new()))
     }
 }
 
@@ -321,18 +408,16 @@ pub(crate) fn monitor_tool(input: &Value) -> Result<String> {
             // Read tasks from the task file if it exists.
             let tasks_dir = std::env::temp_dir().join("remote-code-rust").join("tasks");
             let mut task_list = Vec::new();
-            if tasks_dir.exists() {
-                if let Ok(entries) = std::fs::read_dir(&tasks_dir) {
-                    for entry in entries.flatten() {
-                        if let Some(name) = entry.file_name().to_str() {
-                            if name.ends_with(".json") {
-                                if let Ok(content) = std::fs::read_to_string(entry.path()) {
-                                    if let Ok(task) = serde_json::from_str::<Value>(&content) {
-                                        task_list.push(task);
-                                    }
-                                }
-                            }
-                        }
+            if tasks_dir.exists()
+                && let Ok(entries) = std::fs::read_dir(&tasks_dir)
+            {
+                for entry in entries.flatten() {
+                    if let Some(name) = entry.file_name().to_str()
+                        && name.ends_with(".json")
+                        && let Ok(content) = std::fs::read_to_string(entry.path())
+                        && let Ok(task) = serde_json::from_str::<Value>(&content)
+                    {
+                        task_list.push(task);
                     }
                 }
             }
@@ -349,14 +434,14 @@ pub(crate) fn monitor_tool(input: &Value) -> Result<String> {
             let sessions_dir = std::env::temp_dir()
                 .join("remote-code-rust")
                 .join("sessions");
-            if sessions_dir.exists() {
-                if let Ok(entries) = std::fs::read_dir(&sessions_dir) {
-                    for entry in entries.flatten() {
-                        if let Some(name) = entry.file_name().to_str() {
-                            if name.ends_with(".json") {
-                                session_list.push(json!({ "id": name.trim_end_matches(".json") }));
-                            }
-                        }
+            if sessions_dir.exists()
+                && let Ok(entries) = std::fs::read_dir(&sessions_dir)
+            {
+                for entry in entries.flatten() {
+                    if let Some(name) = entry.file_name().to_str()
+                        && name.ends_with(".json")
+                    {
+                        session_list.push(json!({ "id": name.trim_end_matches(".json") }));
                     }
                 }
             }
@@ -394,12 +479,12 @@ pub(crate) fn brief_tool(input: &Value) -> Result<String> {
     ))
 }
 
-pub(crate) fn ctx_inspect_tool(input: &Value) -> Result<String> {
+pub(crate) async fn ctx_inspect_tool(input: &Value) -> Result<String> {
     let action = input["action"]
         .as_str()
         .ok_or_else(|| anyhow!("action is required (tokens, messages, or tools)"))?;
 
-    let specs = runtime_builtin_tool_specs();
+    let specs = runtime_provider_tool_specs().await;
     match action {
         "tokens" => Ok(json!({
             "estimated_tokens": "N/A (requires tokenizer)",

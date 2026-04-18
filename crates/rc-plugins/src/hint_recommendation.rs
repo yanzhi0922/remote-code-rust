@@ -201,8 +201,10 @@ mod tests {
     #[test]
     fn get_recommendations_disabled() {
         let recs = vec![make_rec("a@mkt", "a", "mkt")];
-        let mut state = HintRecommendationState::default();
-        state.disabled = true;
+        let state = HintRecommendationState {
+            disabled: true,
+            ..HintRecommendationState::default()
+        };
 
         let result = get_plugin_recommendations(&recs, &state, &HashSet::new());
         assert!(result.is_empty());

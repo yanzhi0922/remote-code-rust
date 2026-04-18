@@ -14,6 +14,9 @@ use serde_json::Value;
 
 use crate::observer::{NoopQueryObserver, QueryObserver};
 
+pub type PostCompactTransform =
+    dyn Fn(Vec<rc_core::ConversationEntry>) -> Vec<rc_core::ConversationEntry> + Send + Sync;
+
 /// Query effort hint aligned with Claude Code's runtime knobs.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -177,6 +180,7 @@ pub struct QueryEngineConfig {
     pub tool_result_max_length: usize,
     /// Maximum chain nesting depth for sub-queries.
     pub max_chain_depth: u32,
+    pub post_compact_transform: Option<Arc<PostCompactTransform>>,
     #[allow(dead_code)]
     pub metadata: Value,
 }
@@ -209,6 +213,7 @@ impl QueryEngineConfig {
             enable_tool_summarization: true,
             tool_result_max_length: 10_000,
             max_chain_depth: 4,
+            post_compact_transform: None,
             metadata: Value::Null,
         }
     }
@@ -240,6 +245,12 @@ impl QueryEngineConfig {
     #[must_use]
     pub fn with_max_parallel_tools(mut self, max: usize) -> Self {
         self.max_parallel_tools = max;
+        self
+    }
+
+    #[must_use]
+    pub fn with_post_compact_transform(mut self, transform: Arc<PostCompactTransform>) -> Self {
+        self.post_compact_transform = Some(transform);
         self
     }
 }

@@ -664,7 +664,11 @@ mod tests {
     #[test]
     fn session_cache_path_format() {
         let path = session_cache_path(Path::new("/tmp"), "abc123");
-        assert!(path.to_str().unwrap().contains("rc-plugin-session-abc123"));
+        assert!(
+            path.to_str()
+                .expect("session cache path should be valid utf-8 in test")
+                .contains("rc-plugin-session-abc123")
+        );
     }
 
     #[test]

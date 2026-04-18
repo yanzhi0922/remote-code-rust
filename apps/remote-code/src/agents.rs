@@ -4,11 +4,12 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use rc_agents::builtins::{explore_agent, general_purpose_agent, plan_agent, verification_agent};
+use rc_agents::constants::FORK_SUBAGENT_TYPE;
 use rc_agents::{
     AgentDefinition, AgentExecutionRequest, AgentExecutor, AgentIdentity, AgentRunConfig,
     AgentRunResult, AgentRunner, AgentScheduler, AgentTask,
 };
-use rc_config::RuntimeConfig;
+use rc_config::{RuntimeConfig, restamp_runtime_session};
 use rc_core::{
     ConversationEntry as CoreConversationEntry, ConversationRole, ProviderProtocol,
     ProviderResponse, SubAgentCompletion, SubAgentExecutionRequest, SubAgentExecutionResult,
@@ -17,12 +18,15 @@ use rc_model::model::{ResolveContext, parse_user_specified_model_with_ctx};
 use rc_model::{
     ModelProvider, detect_provider, is_first_party_base_url, is_model_alias, provider_model_id,
 };
-use rc_permissions::{
-    LayeredPermissionBroker, PermissionBroker, StaticPermissionBroker, load_layered_rules,
-};
 use rc_provider::{ProviderClient, ProviderCompatBackend};
 use rc_session::SessionStore;
-use rc_tools::{ToolSpec, runtime_provider_tool_specs};
+use rc_tools::{
+    ToolSpec,
+    runtime_plan_mode::{
+        build_runtime_plan_mode, copy_plan_mode_state_for_fork, install_plan_mode_runtime,
+    },
+    runtime_provider_tool_specs,
+};
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
@@ -232,7 +236,8 @@ impl AgentExecutor for RemoteCodeAgentExecutor {
     async fn execute(&self, request: AgentExecutionRequest) -> Result<AgentRunResult> {
         let mut config = self.base_config.clone();
         config.cwd = request.working_dir.clone();
-        config.session_id = Uuid::new_v4();
+        let parent_session_id = self.base_config.session_id;
+        restamp_runtime_session(&mut config, Uuid::new_v4());
         config.max_turns = usize::try_from(request.max_turns).unwrap_or(usize::MAX);
         config.session_name = Some(format!(
             "agent:{}:{}",
@@ -244,19 +249,28 @@ impl AgentExecutor for RemoteCodeAgentExecutor {
         }
 
         let store = SessionStore::open(config.paths.clone())?;
+        store.ensure_session_with_parent(
+            config.session_id,
+            &config.cwd,
+            &config.provider.name,
+            config.provider.model.as_deref(),
+            config.session_name.as_deref(),
+            Some(parent_session_id),
+        )?;
+        if request.agent_type.eq_ignore_ascii_case(FORK_SUBAGENT_TYPE) {
+            let _copied = copy_plan_mode_state_for_fork(
+                &store,
+                &config.paths,
+                parent_session_id,
+                config.session_id,
+            )?;
+        }
         let backend = Arc::new(ProviderCompatBackend::new(
             Arc::new(ProviderClient::new()?),
             &config.provider,
         ));
-        let broker: Arc<dyn PermissionBroker> = Arc::new(LayeredPermissionBroker::new(
-            StaticPermissionBroker::from_mode(config.permission_mode),
-            load_layered_rules(
-                &config.cwd,
-                &config.paths.profile_dir,
-                &config.settings_files,
-                &config.cli_settings_files,
-            ),
-        ));
+        let (plan_mode_controller, broker) = build_runtime_plan_mode(&config, &store)?;
+        let _plan_mode_runtime = install_plan_mode_runtime(plan_mode_controller)?;
         let discovery = discover_runtime_hooks(&config, &[]);
         let mut conversation = initialize_conversation(&store, &config, Some(&request.task))?;
         append_conversation_context(&mut conversation, &request.context);
@@ -346,12 +360,12 @@ fn resolve_requested_agent_model(
 fn detect_model_provider(config: &RuntimeConfig, base_url: Option<&str>) -> ModelProvider {
     match config.provider.protocol {
         ProviderProtocol::Anthropic => {
-            if let Some(base_url) = base_url {
-                if !is_first_party_base_url(base_url) {
-                    return ModelProvider::OpenAiCompatible {
-                        base_url: base_url.to_owned(),
-                    };
-                }
+            if let Some(base_url) = base_url
+                && !is_first_party_base_url(base_url)
+            {
+                return ModelProvider::OpenAiCompatible {
+                    base_url: base_url.to_owned(),
+                };
             }
             ModelProvider::Anthropic
         }

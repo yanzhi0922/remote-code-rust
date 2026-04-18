@@ -10,8 +10,8 @@ use anyhow::Result;
 use rc_config::{RUNTIME_VERSION, RuntimeConfig};
 use rc_core::{InputFormat, OutputFormat, PermissionMode, SessionState};
 use rc_permissions::{
-    LayeredPermissionBroker, PermissionBroker, PermissionDecision, PermissionRequest,
-    load_layered_rules,
+    LayeredPermissionBroker, PermissionBroker, PermissionClass, PermissionDecision,
+    PermissionRequest, load_layered_rules,
 };
 use rc_protocol::{
     InitPayload, PermissionRequestPayload, ProtocolEmitter, ProtocolInput, ResultPayload,
@@ -19,6 +19,7 @@ use rc_protocol::{
 };
 use rc_provider::ProviderCompatBackend;
 use rc_session::SessionStore;
+use rc_tools::runtime_plan_mode::{RuntimePlanModeController, install_plan_mode_runtime};
 use rc_tools::runtime_provider_tool_specs;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::{Mutex, mpsc, oneshot};
@@ -78,18 +79,14 @@ pub(crate) async fn run_headless(
         oneshot::Sender<PermissionDecision>,
     >::new()));
     let interrupted = Arc::new(AtomicBool::new(false));
-    let broker = Arc::new(LayeredPermissionBroker::new(
-        ChannelPermissionBroker {
-            mode: config.permission_mode,
-            emitter: emitter.clone(),
-            pending_permissions: pending_permissions.clone(),
-        },
-        load_layered_rules(
-            &config.cwd,
-            &config.paths.profile_dir,
-            &config.settings_files,
-            &config.cli_settings_files,
-        ),
+    let controller_store = SessionStore::open(config.paths.clone())?;
+    let plan_mode_controller = RuntimePlanModeController::load(config, &controller_store)?;
+    let _plan_mode_runtime = install_plan_mode_runtime(plan_mode_controller.clone())?;
+    let broker: Arc<dyn PermissionBroker> = Arc::new(HeadlessPermissionBroker::new(
+        config,
+        plan_mode_controller,
+        emitter.clone(),
+        pending_permissions.clone(),
     ));
     let (prompt_tx, mut prompt_rx) = mpsc::channel::<String>(8);
 
@@ -187,8 +184,7 @@ pub(crate) async fn run_headless(
 }
 
 pub(crate) fn should_run_headless(config: &RuntimeConfig) -> bool {
-    config.print_mode
-        || matches!(config.input_format, InputFormat::StreamJson)
+    matches!(config.input_format, InputFormat::StreamJson)
         || matches!(config.output_format, OutputFormat::StreamJson)
 }
 
@@ -453,51 +449,54 @@ async fn resolve_pending_permission<W: Write + Send>(
 }
 
 #[derive(Clone)]
-struct ChannelPermissionBroker {
-    mode: PermissionMode,
+struct ChannelPermissionFallbackBroker {
+    controller: Arc<RuntimePlanModeController>,
     emitter: Arc<Mutex<ProtocolEmitter<io::Stdout>>>,
     pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
 }
 
-impl std::fmt::Debug for ChannelPermissionBroker {
+impl std::fmt::Debug for ChannelPermissionFallbackBroker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ChannelPermissionBroker")
-            .field("mode", &self.mode)
+        f.debug_struct("ChannelPermissionFallbackBroker")
+            .field("mode", &self.controller.current_mode())
             .finish_non_exhaustive()
     }
 }
 
 #[async_trait::async_trait]
-impl PermissionBroker for ChannelPermissionBroker {
+impl PermissionBroker for ChannelPermissionFallbackBroker {
     fn mode(&self) -> Option<PermissionMode> {
-        Some(self.mode)
+        Some(self.controller.current_mode())
     }
 
     async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
+        let mode = self.controller.current_mode();
+
         // Auto-approve in bypass-permissions mode (all tools).
-        if matches!(self.mode, PermissionMode::BypassPermissions) {
+        if matches!(mode, PermissionMode::BypassPermissions) {
             return PermissionDecision::allow();
         }
 
         // Auto-approve in dont-ask mode when the tool class is auto-allowed.
-        if matches!(self.mode, PermissionMode::DontAsk) {
+        if matches!(mode, PermissionMode::DontAsk) {
             let class = rc_permissions::classify_tool(&request.tool_name);
-            if rc_permissions::auto_allows(self.mode, class) {
+            if rc_permissions::auto_allows(mode, class) {
                 return PermissionDecision::allow();
             }
         }
 
         // Auto-approve file edits in accept-edits mode.
-        if matches!(self.mode, PermissionMode::AcceptEdits) {
+        if matches!(mode, PermissionMode::AcceptEdits) {
             let class = rc_permissions::classify_tool(&request.tool_name);
-            if rc_permissions::auto_allows(self.mode, class) {
+            if rc_permissions::auto_allows(mode, class) {
                 return PermissionDecision::allow();
             }
         }
 
-        // Plan mode: deny all tool execution.
-        if matches!(self.mode, PermissionMode::Plan) {
-            return PermissionDecision::deny("Plan mode — tool execution is disabled.");
+        if matches!(mode, PermissionMode::Plan) {
+            return PermissionDecision::deny(
+                "Plan mode is active. Only read-only tools and plan-file edits are allowed.",
+            );
         }
 
         // Default mode: emit permission request and wait for external response.
@@ -530,6 +529,84 @@ impl PermissionBroker for ChannelPermissionBroker {
             Ok(decision) => decision,
             Err(_) => PermissionDecision::deny("Permission request channel closed."),
         }
+    }
+}
+
+struct HeadlessPermissionBroker {
+    controller: Arc<RuntimePlanModeController>,
+    inner: LayeredPermissionBroker<ChannelPermissionFallbackBroker>,
+}
+
+impl HeadlessPermissionBroker {
+    fn new(
+        config: &RuntimeConfig,
+        controller: Arc<RuntimePlanModeController>,
+        emitter: Arc<Mutex<ProtocolEmitter<io::Stdout>>>,
+        pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
+    ) -> Self {
+        let inner = LayeredPermissionBroker::new(
+            ChannelPermissionFallbackBroker {
+                controller: controller.clone(),
+                emitter,
+                pending_permissions,
+            },
+            load_layered_rules(
+                &config.cwd,
+                &config.paths.profile_dir,
+                &config.settings_files,
+                &config.cli_settings_files,
+            ),
+        );
+        Self { controller, inner }
+    }
+
+    fn decide_plan_mode(&self, request: PermissionRequest) -> PermissionDecision {
+        match request.resolved_permission_class() {
+            PermissionClass::Read => PermissionDecision::allow(),
+            PermissionClass::Edit if self.controller.plan_file_matches_request(&request) => {
+                PermissionDecision::allow()
+            }
+            PermissionClass::Edit => PermissionDecision::deny(
+                "Plan mode is active. Only the current plan file may be edited.",
+            ),
+            _ => PermissionDecision::deny(
+                "Plan mode is active. Only read-only tools and plan-file edits are allowed.",
+            ),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl PermissionBroker for HeadlessPermissionBroker {
+    async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
+        if self.controller.current_mode() == PermissionMode::Plan {
+            return self.decide_plan_mode(request);
+        }
+        self.inner.decide(request).await
+    }
+
+    fn mode(&self) -> Option<PermissionMode> {
+        Some(self.controller.current_mode())
+    }
+
+    fn add_session_rule(
+        &self,
+        action: rc_permissions::RuleAction,
+        tool_pattern: String,
+    ) -> Result<()> {
+        self.inner.add_session_rule(action, tool_pattern)
+    }
+
+    fn clear_session_rules(&self) -> Result<usize> {
+        self.inner.clear_session_rules()
+    }
+
+    fn audit_records(&self) -> Vec<rc_permissions::PermissionAuditRecord> {
+        self.inner.audit_records()
+    }
+
+    fn layered_rules(&self) -> Vec<rc_permissions::SourceAwarePermissionRule> {
+        self.inner.layered_rules()
     }
 }
 

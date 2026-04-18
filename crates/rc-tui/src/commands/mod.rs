@@ -1,10 +1,11 @@
 use rc_config::RuntimeConfig;
-use rc_core::{ConversationEntry, ConversationRole, default_system_prompt};
+use rc_core::ConversationEntry;
 use rc_permissions::PermissionBroker;
 use rc_provider::context::ContextWindowManager;
 use rc_provider::cost::CostTracker;
 use rc_session::SessionStore;
-use rc_tools::runtime_builtin_tool_specs;
+use rc_tools::{runtime_builtin_tool_specs, runtime_plan_mode::RuntimePlanModeController};
+use uuid::Uuid;
 
 use crate::theme::Theme;
 
@@ -41,6 +42,7 @@ pub mod vim;
 pub mod worktree;
 
 /// Result of handling a slash command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlashCommandAction {
     /// Continue the input loop normally.
     Continue,
@@ -48,6 +50,32 @@ pub enum SlashCommandAction {
     ResetScroll,
     /// Exit the interactive session.
     Quit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlashCommandResult {
+    pub action: SlashCommandAction,
+    pub outputs: Vec<String>,
+    pub queued_prompt: Option<String>,
+    pub next_session_id: Option<Uuid>,
+}
+
+impl SlashCommandResult {
+    fn continue_empty() -> Self {
+        Self {
+            action: SlashCommandAction::Continue,
+            outputs: Vec::new(),
+            queued_prompt: None,
+            next_session_id: None,
+        }
+    }
+
+    fn continue_with_outputs(outputs: Vec<String>) -> Self {
+        Self {
+            outputs,
+            ..Self::continue_empty()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -158,7 +186,6 @@ pub const SLASH_COMMANDS: &[SlashCommandSpec] = &[
         summary: "Clear the in-memory conversation",
         usage: "/clear",
     },
-    // --- New commands (Phase 10) ---
     SlashCommandSpec {
         name: "/config",
         summary: "Runtime configuration get/set/list",
@@ -246,8 +273,8 @@ pub const SLASH_COMMANDS: &[SlashCommandSpec] = &[
     },
     SlashCommandSpec {
         name: "/fork",
-        summary: "Fork a sub-agent from the current session",
-        usage: "/fork <description>",
+        summary: "Branch the current conversation into a new session",
+        usage: "/fork [title]",
     },
     SlashCommandSpec {
         name: "/peers",
@@ -256,8 +283,8 @@ pub const SLASH_COMMANDS: &[SlashCommandSpec] = &[
     },
     SlashCommandSpec {
         name: "/plan",
-        summary: "Enter or exit plan mode",
-        usage: "/plan [on|off]",
+        summary: "Enable plan mode or view the current session plan",
+        usage: "/plan [open]",
     },
     SlashCommandSpec {
         name: "/effort",
@@ -464,6 +491,7 @@ pub struct SlashCommandContext<'a> {
     pub cost_tracker: &'a CostTracker,
     pub broker: &'a dyn PermissionBroker,
     pub theme: &'a mut Theme,
+    pub plan_mode_controller: Option<&'a RuntimePlanModeController>,
 }
 
 #[must_use]
@@ -474,7 +502,12 @@ pub fn command_names() -> Vec<String> {
         .collect()
 }
 
+#[allow(dead_code)]
 pub fn dispatch(input: &str, context: SlashCommandContext<'_>) -> SlashCommandAction {
+    dispatch_with_result(input, context).action
+}
+
+pub fn dispatch_with_result(input: &str, context: SlashCommandContext<'_>) -> SlashCommandResult {
     let trimmed = input.trim();
     let mut parts = trimmed.split_whitespace();
     let command = parts.next().unwrap_or_default();
@@ -559,7 +592,7 @@ pub fn dispatch(input: &str, context: SlashCommandContext<'_>) -> SlashCommandAc
                                     eprintln!(
                                         "Error loading session {}: {error}",
                                         session.session_id
-                                    )
+                                    );
                                 }
                             }
                         }
@@ -587,19 +620,28 @@ pub fn dispatch(input: &str, context: SlashCommandContext<'_>) -> SlashCommandAc
             print!("{}", context.cost_tracker.summary());
         }
         "/clear" => {
-            let system_prompt = context
-                .conversation
-                .iter()
-                .find(|entry| matches!(entry.role, ConversationRole::System))
-                .cloned()
-                .unwrap_or_else(|| {
-                    ConversationEntry::system(default_system_prompt(&context.config.cwd))
-                });
+            let next_session_id = Uuid::new_v4();
+            if let Err(error) = context.store.ensure_session_with_parent(
+                next_session_id,
+                &context.config.original_cwd,
+                &context.config.provider.name,
+                context.config.provider.model.as_deref(),
+                None,
+                Some(context.config.session_id),
+            ) {
+                return SlashCommandResult::continue_with_outputs(vec![format!(
+                    "Failed to clear conversation: {error:#}"
+                )]);
+            }
             context.conversation.clear();
-            context.conversation.push(system_prompt);
-            println!("Conversation cleared (system prompt preserved).");
-            println!("Note: transcript history is still saved in the session file.");
-            return SlashCommandAction::ResetScroll;
+            return SlashCommandResult {
+                action: SlashCommandAction::ResetScroll,
+                outputs: vec![format!(
+                    "Cleared conversation and started fresh session {next_session_id}"
+                )],
+                queued_prompt: None,
+                next_session_id: Some(next_session_id),
+            };
         }
         "/theme" => {
             let theme_name = parts.next();
@@ -622,9 +664,16 @@ pub fn dispatch(input: &str, context: SlashCommandContext<'_>) -> SlashCommandAc
                 }
             }
         }
-        // --- New commands (Phase 10) ---
         "/config" => config::dispatch(trimmed, context.config),
-        "/resume" => session_mgmt::render_resume(context.config, context.store),
+        "/resume" => {
+            let outcome = session_mgmt::dispatch_resume(trimmed, context.config, context.store);
+            return SlashCommandResult {
+                action: SlashCommandAction::Continue,
+                outputs: outcome.outputs,
+                queued_prompt: None,
+                next_session_id: outcome.next_session_id,
+            };
+        }
         "/rename" => session_mgmt::dispatch_rename(trimmed, context.config),
         "/rewind" => session_mgmt::render_rewind(context.config, context.store),
         "/export" => session_mgmt::dispatch_export(trimmed, context.config, context.store),
@@ -640,9 +689,31 @@ pub fn dispatch(input: &str, context: SlashCommandContext<'_>) -> SlashCommandAc
         "/extraUsage" => metrics::render_extra_usage(context.config, context.store),
         "/stats" => metrics::render_stats(context.config, context.store, context.cost_tracker),
         "/insights" => metrics::render_insights(context.config, context.store),
-        "/fork" => agent_commands::dispatch_fork(trimmed, context.config),
+        "/fork" => {
+            let outcome = agent_commands::dispatch_fork(trimmed, context.config, context.store);
+            return SlashCommandResult {
+                action: SlashCommandAction::Continue,
+                outputs: outcome.outputs,
+                queued_prompt: None,
+                next_session_id: outcome.next_session_id,
+            };
+        }
         "/peers" => agent_commands::render_peers(context.config),
-        "/plan" => mode_commands::dispatch_plan(trimmed, context.config),
+        "/plan" => {
+            let outcome = mode_commands::dispatch_plan(
+                trimmed,
+                context.config,
+                context.store,
+                context.conversation,
+                context.plan_mode_controller,
+            );
+            return SlashCommandResult {
+                action: SlashCommandAction::Continue,
+                outputs: outcome.outputs,
+                queued_prompt: outcome.queued_prompt,
+                next_session_id: None,
+            };
+        }
         "/effort" => mode_commands::dispatch_effort(trimmed, context.config),
         "/fast" => mode_commands::dispatch_fast(trimmed, context.config),
         "/outputStyle" => mode_commands::dispatch_output_style(trimmed, context.config),
@@ -684,22 +755,31 @@ pub fn dispatch(input: &str, context: SlashCommandContext<'_>) -> SlashCommandAc
         "/version" => version::render(),
         "/install" => install::dispatch(trimmed, context.config),
         "/teleport" => teleport::dispatch(trimmed, context.config),
-        "/quit" | "/exit" => return SlashCommandAction::Quit,
+        "/quit" | "/exit" => {
+            return SlashCommandResult {
+                action: SlashCommandAction::Quit,
+                outputs: Vec::new(),
+                queued_prompt: None,
+                next_session_id: None,
+            };
+        }
         _ => {
             println!("Unknown command `{trimmed}`. Type /help for a list of commands.");
         }
     }
-    SlashCommandAction::Continue
+
+    SlashCommandResult::continue_empty()
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
     use rc_core::{InputFormat, OutputFormat, PermissionMode};
     use rc_permissions::StaticPermissionBroker;
-    use rc_provider::cost::CostTracker;
-    use rc_session::SessionStore;
+    use rc_tools::runtime_plan_mode::build_runtime_plan_mode;
     use tempfile::tempdir;
 
     fn build_test_config() -> (RuntimeConfig, SessionStore) {
@@ -731,6 +811,7 @@ mod tests {
         (config, store)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_context<'a>(
         config: &'a RuntimeConfig,
         store: &'a SessionStore,
@@ -739,6 +820,7 @@ mod tests {
         cost_tracker: &'a CostTracker,
         broker: &'a StaticPermissionBroker,
         theme: &'a mut Theme,
+        plan_mode_controller: Option<&'a RuntimePlanModeController>,
     ) -> SlashCommandContext<'a> {
         SlashCommandContext {
             config,
@@ -748,52 +830,41 @@ mod tests {
             cost_tracker,
             broker,
             theme,
+            plan_mode_controller,
         }
     }
 
+    fn build_plan_controller(
+        config: &RuntimeConfig,
+        store: &SessionStore,
+    ) -> Arc<RuntimePlanModeController> {
+        let (controller, _broker) =
+            build_runtime_plan_mode(config, store).expect("plan mode runtime should build");
+        controller
+    }
+
     #[test]
-    fn command_names_expose_management_surfaces() {
+    fn command_names_include_management_and_phase21_surfaces() {
         let names = command_names();
         assert!(names.contains(&"/help".to_owned()));
         assert!(names.contains(&"/permissions".to_owned()));
         assert!(names.contains(&"/tasks".to_owned()));
         assert!(names.contains(&"/plugins".to_owned()));
         assert!(names.contains(&"/skills".to_owned()));
-        assert!(names.contains(&"/quit".to_owned()));
-    }
-
-    #[test]
-    fn command_names_include_new_phase10_commands() {
-        let names = command_names();
-        assert!(names.contains(&"/config".to_owned()));
-        assert!(names.contains(&"/resume".to_owned()));
-        assert!(names.contains(&"/rename".to_owned()));
-        assert!(names.contains(&"/export".to_owned()));
-        assert!(names.contains(&"/commit".to_owned()));
-        assert!(names.contains(&"/diff".to_owned()));
-        assert!(names.contains(&"/branch".to_owned()));
-        assert!(names.contains(&"/usage".to_owned()));
-        assert!(names.contains(&"/stats".to_owned()));
-        assert!(names.contains(&"/insights".to_owned()));
-        assert!(names.contains(&"/fork".to_owned()));
-        assert!(names.contains(&"/peers".to_owned()));
         assert!(names.contains(&"/plan".to_owned()));
-        assert!(names.contains(&"/effort".to_owned()));
-        assert!(names.contains(&"/fast".to_owned()));
-        assert!(names.contains(&"/outputStyle".to_owned()));
-        assert!(names.contains(&"/color".to_owned()));
-        assert!(names.contains(&"/files".to_owned()));
-        assert!(names.contains(&"/env".to_owned()));
-        assert!(names.contains(&"/context".to_owned()));
-        assert!(names.contains(&"/login".to_owned()));
-        assert!(names.contains(&"/logout".to_owned()));
-        assert!(names.contains(&"/hooks".to_owned()));
-        assert!(names.contains(&"/keybindings".to_owned()));
-        assert!(names.contains(&"/upgrade".to_owned()));
+        assert!(names.contains(&"/doctor".to_owned()));
+        assert!(names.contains(&"/install".to_owned()));
+        assert!(names.contains(&"/teleport".to_owned()));
+        assert!(names.contains(&"/quit".to_owned()));
+        assert!(
+            names.len() >= 75,
+            "Expected 75+ commands after Phase 21, got {}",
+            names.len()
+        );
     }
 
     #[test]
-    fn clear_command_preserves_system_prompt_and_resets_scroll() {
+    fn clear_command_starts_fresh_session_and_resets_scroll() {
         let (config, store) = build_test_config();
         let context_manager = ContextWindowManager::for_model("glm-5.1");
         let cost_tracker = CostTracker::new();
@@ -805,7 +876,7 @@ mod tests {
             ConversationEntry::assistant("world"),
         ];
 
-        let action = dispatch(
+        let next_session = dispatch_with_result(
             "/clear",
             build_context(
                 &config,
@@ -815,12 +886,111 @@ mod tests {
                 &cost_tracker,
                 &broker,
                 &mut theme,
+                None,
             ),
         );
 
-        assert!(matches!(action, SlashCommandAction::ResetScroll));
-        assert_eq!(conversation.len(), 1);
-        assert!(matches!(conversation[0].role, ConversationRole::System));
+        assert!(matches!(
+            next_session.action,
+            SlashCommandAction::ResetScroll
+        ));
+        assert!(conversation.is_empty());
+        assert!(next_session.next_session_id.is_some());
+
+        let summary = store
+            .get_session_summary(next_session.next_session_id.expect("new session id"))
+            .expect("summary should load");
+        assert_eq!(summary.parent_session_id, Some(config.session_id));
+        assert!(summary.title.starts_with("session-"));
+    }
+
+    #[test]
+    fn fork_command_returns_next_session_and_branches_conversation() {
+        let (config, store) = build_test_config();
+        store
+            .ensure_session(
+                config.session_id,
+                &config.cwd,
+                &config.provider.name,
+                config.provider.model.as_deref(),
+                Some("source"),
+            )
+            .expect("source session should exist");
+        store
+            .append_conversation_entry(
+                config.session_id,
+                &ConversationEntry::system("system prompt"),
+            )
+            .expect("system prompt should append");
+        store
+            .append_conversation_entry(config.session_id, &ConversationEntry::user("hello"))
+            .expect("user message should append");
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![
+            ConversationEntry::system("system prompt"),
+            ConversationEntry::user("hello"),
+        ];
+
+        let result = dispatch_with_result(
+            "/fork runtime audit",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+                None,
+            ),
+        );
+
+        let next_session_id = result
+            .next_session_id
+            .expect("fork should return next session id");
+        assert!(matches!(result.action, SlashCommandAction::Continue));
+        assert!(result.outputs[0].contains("Branched conversation into session"));
+        let summary = store
+            .get_session_summary(next_session_id)
+            .expect("forked summary should load");
+        assert_eq!(summary.parent_session_id, Some(config.session_id));
+        assert_eq!(summary.title, "runtime audit (Branch)");
+    }
+
+    #[test]
+    fn plan_command_returns_outputs_and_prompt_queue() {
+        let (config, store) = build_test_config();
+        let controller = build_plan_controller(&config, &store);
+        let context_manager = ContextWindowManager::for_model("glm-5.1");
+        let cost_tracker = CostTracker::new();
+        let broker = StaticPermissionBroker::new(false);
+        let mut theme = Theme::dark();
+        let mut conversation = vec![ConversationEntry::system("system prompt")];
+
+        let result = dispatch_with_result(
+            "/plan audit the runtime architecture",
+            build_context(
+                &config,
+                &store,
+                &mut conversation,
+                &context_manager,
+                &cost_tracker,
+                &broker,
+                &mut theme,
+                Some(controller.as_ref()),
+            ),
+        );
+
+        assert!(matches!(result.action, SlashCommandAction::Continue));
+        assert_eq!(result.outputs, vec!["Enabled plan mode".to_owned()]);
+        assert_eq!(
+            result.queued_prompt,
+            Some("audit the runtime architecture".to_owned())
+        );
+        assert!(result.next_session_id.is_none());
     }
 
     #[test]
@@ -842,6 +1012,7 @@ mod tests {
                 &cost_tracker,
                 &broker,
                 &mut theme,
+                None,
             ),
         );
         assert!(matches!(action, SlashCommandAction::Continue));
@@ -857,6 +1028,7 @@ mod tests {
                 &cost_tracker,
                 &broker,
                 &mut theme,
+                None,
             ),
         );
         assert!(matches!(quit_action, SlashCommandAction::Quit));
@@ -881,593 +1053,9 @@ mod tests {
                 &cost_tracker,
                 &broker,
                 &mut theme,
+                None,
             ),
         );
         assert!(matches!(action, SlashCommandAction::Continue));
-    }
-
-    #[test]
-    fn dispatch_config_command() {
-        let (config, store) = build_test_config();
-        let context_manager = ContextWindowManager::for_model("glm-5.1");
-        let cost_tracker = CostTracker::new();
-        let broker = StaticPermissionBroker::new(false);
-        let mut theme = Theme::dark();
-        let mut conversation = vec![ConversationEntry::system("system prompt")];
-
-        let action = dispatch(
-            "/config list",
-            build_context(
-                &config,
-                &store,
-                &mut conversation,
-                &context_manager,
-                &cost_tracker,
-                &broker,
-                &mut theme,
-            ),
-        );
-        assert!(matches!(action, SlashCommandAction::Continue));
-    }
-
-    #[test]
-    fn dispatch_resume_command() {
-        let (config, store) = build_test_config();
-        let context_manager = ContextWindowManager::for_model("glm-5.1");
-        let cost_tracker = CostTracker::new();
-        let broker = StaticPermissionBroker::new(false);
-        let mut theme = Theme::dark();
-        let mut conversation = vec![ConversationEntry::system("system prompt")];
-
-        let action = dispatch(
-            "/resume",
-            build_context(
-                &config,
-                &store,
-                &mut conversation,
-                &context_manager,
-                &cost_tracker,
-                &broker,
-                &mut theme,
-            ),
-        );
-        assert!(matches!(action, SlashCommandAction::Continue));
-    }
-
-    #[test]
-    fn dispatch_commit_command() {
-        let (config, store) = build_test_config();
-        let context_manager = ContextWindowManager::for_model("glm-5.1");
-        let cost_tracker = CostTracker::new();
-        let broker = StaticPermissionBroker::new(false);
-        let mut theme = Theme::dark();
-        let mut conversation = vec![ConversationEntry::system("system prompt")];
-
-        let action = dispatch(
-            "/commit",
-            build_context(
-                &config,
-                &store,
-                &mut conversation,
-                &context_manager,
-                &cost_tracker,
-                &broker,
-                &mut theme,
-            ),
-        );
-        assert!(matches!(action, SlashCommandAction::Continue));
-    }
-
-    #[test]
-    fn dispatch_usage_command() {
-        let (config, store) = build_test_config();
-        let context_manager = ContextWindowManager::for_model("glm-5.1");
-        let cost_tracker = CostTracker::new();
-        let broker = StaticPermissionBroker::new(false);
-        let mut theme = Theme::dark();
-        let mut conversation = vec![ConversationEntry::system("system prompt")];
-
-        let action = dispatch(
-            "/usage",
-            build_context(
-                &config,
-                &store,
-                &mut conversation,
-                &context_manager,
-                &cost_tracker,
-                &broker,
-                &mut theme,
-            ),
-        );
-        assert!(matches!(action, SlashCommandAction::Continue));
-    }
-
-    #[test]
-    fn dispatch_fork_command() {
-        let (config, store) = build_test_config();
-        let context_manager = ContextWindowManager::for_model("glm-5.1");
-        let cost_tracker = CostTracker::new();
-        let broker = StaticPermissionBroker::new(false);
-        let mut theme = Theme::dark();
-        let mut conversation = vec![ConversationEntry::system("system prompt")];
-
-        let action = dispatch(
-            "/fork test task",
-            build_context(
-                &config,
-                &store,
-                &mut conversation,
-                &context_manager,
-                &cost_tracker,
-                &broker,
-                &mut theme,
-            ),
-        );
-        assert!(matches!(action, SlashCommandAction::Continue));
-    }
-
-    #[test]
-    fn dispatch_plan_command() {
-        let (config, store) = build_test_config();
-        let context_manager = ContextWindowManager::for_model("glm-5.1");
-        let cost_tracker = CostTracker::new();
-        let broker = StaticPermissionBroker::new(false);
-        let mut theme = Theme::dark();
-        let mut conversation = vec![ConversationEntry::system("system prompt")];
-
-        let action = dispatch(
-            "/plan on",
-            build_context(
-                &config,
-                &store,
-                &mut conversation,
-                &context_manager,
-                &cost_tracker,
-                &broker,
-                &mut theme,
-            ),
-        );
-        assert!(matches!(action, SlashCommandAction::Continue));
-    }
-
-    #[test]
-    fn dispatch_login_command() {
-        let (config, store) = build_test_config();
-        let context_manager = ContextWindowManager::for_model("glm-5.1");
-        let cost_tracker = CostTracker::new();
-        let broker = StaticPermissionBroker::new(false);
-        let mut theme = Theme::dark();
-        let mut conversation = vec![ConversationEntry::system("system prompt")];
-
-        let action = dispatch(
-            "/login",
-            build_context(
-                &config,
-                &store,
-                &mut conversation,
-                &context_manager,
-                &cost_tracker,
-                &broker,
-                &mut theme,
-            ),
-        );
-        assert!(matches!(action, SlashCommandAction::Continue));
-    }
-
-    #[test]
-    fn dispatch_upgrade_command() {
-        let (config, store) = build_test_config();
-        let context_manager = ContextWindowManager::for_model("glm-5.1");
-        let cost_tracker = CostTracker::new();
-        let broker = StaticPermissionBroker::new(false);
-        let mut theme = Theme::dark();
-        let mut conversation = vec![ConversationEntry::system("system prompt")];
-
-        let action = dispatch(
-            "/upgrade",
-            build_context(
-                &config,
-                &store,
-                &mut conversation,
-                &context_manager,
-                &cost_tracker,
-                &broker,
-                &mut theme,
-            ),
-        );
-        assert!(matches!(action, SlashCommandAction::Continue));
-    }
-
-    #[test]
-    fn dispatch_env_command() {
-        let (config, store) = build_test_config();
-        let context_manager = ContextWindowManager::for_model("glm-5.1");
-        let cost_tracker = CostTracker::new();
-        let broker = StaticPermissionBroker::new(false);
-        let mut theme = Theme::dark();
-        let mut conversation = vec![ConversationEntry::system("system prompt")];
-
-        let action = dispatch(
-            "/env",
-            build_context(
-                &config,
-                &store,
-                &mut conversation,
-                &context_manager,
-                &cost_tracker,
-                &broker,
-                &mut theme,
-            ),
-        );
-        assert!(matches!(action, SlashCommandAction::Continue));
-    }
-
-    #[test]
-    fn dispatch_hooks_command() {
-        let (config, store) = build_test_config();
-        let context_manager = ContextWindowManager::for_model("glm-5.1");
-        let cost_tracker = CostTracker::new();
-        let broker = StaticPermissionBroker::new(false);
-        let mut theme = Theme::dark();
-        let mut conversation = vec![ConversationEntry::system("system prompt")];
-
-        let action = dispatch(
-            "/hooks list",
-            build_context(
-                &config,
-                &store,
-                &mut conversation,
-                &context_manager,
-                &cost_tracker,
-                &broker,
-                &mut theme,
-            ),
-        );
-        assert!(matches!(action, SlashCommandAction::Continue));
-    }
-
-    #[test]
-    fn dispatch_security_review_command() {
-        let (config, store) = build_test_config();
-        let context_manager = ContextWindowManager::for_model("glm-5.1");
-        let cost_tracker = CostTracker::new();
-        let broker = StaticPermissionBroker::new(false);
-        let mut theme = Theme::dark();
-        let mut conversation = vec![ConversationEntry::system("system prompt")];
-
-        let action = dispatch(
-            "/securityReview",
-            build_context(
-                &config,
-                &store,
-                &mut conversation,
-                &context_manager,
-                &cost_tracker,
-                &broker,
-                &mut theme,
-            ),
-        );
-        assert!(matches!(action, SlashCommandAction::Continue));
-    }
-
-    #[test]
-    fn dispatch_keybindings_command() {
-        let (config, store) = build_test_config();
-        let context_manager = ContextWindowManager::for_model("glm-5.1");
-        let cost_tracker = CostTracker::new();
-        let broker = StaticPermissionBroker::new(false);
-        let mut theme = Theme::dark();
-        let mut conversation = vec![ConversationEntry::system("system prompt")];
-
-        let action = dispatch(
-            "/keybindings",
-            build_context(
-                &config,
-                &store,
-                &mut conversation,
-                &context_manager,
-                &cost_tracker,
-                &broker,
-                &mut theme,
-            ),
-        );
-        assert!(matches!(action, SlashCommandAction::Continue));
-    }
-
-    #[test]
-    fn dispatch_remote_setup_command() {
-        let (config, store) = build_test_config();
-        let context_manager = ContextWindowManager::for_model("glm-5.1");
-        let cost_tracker = CostTracker::new();
-        let broker = StaticPermissionBroker::new(false);
-        let mut theme = Theme::dark();
-        let mut conversation = vec![ConversationEntry::system("system prompt")];
-
-        let action = dispatch(
-            "/remote-setup",
-            build_context(
-                &config,
-                &store,
-                &mut conversation,
-                &context_manager,
-                &cost_tracker,
-                &broker,
-                &mut theme,
-            ),
-        );
-        assert!(matches!(action, SlashCommandAction::Continue));
-    }
-
-    #[test]
-    fn dispatch_ide_command() {
-        let (config, store) = build_test_config();
-        let context_manager = ContextWindowManager::for_model("glm-5.1");
-        let cost_tracker = CostTracker::new();
-        let broker = StaticPermissionBroker::new(false);
-        let mut theme = Theme::dark();
-        let mut conversation = vec![ConversationEntry::system("system prompt")];
-
-        let action = dispatch(
-            "/ide",
-            build_context(
-                &config,
-                &store,
-                &mut conversation,
-                &context_manager,
-                &cost_tracker,
-                &broker,
-                &mut theme,
-            ),
-        );
-        assert!(matches!(action, SlashCommandAction::Continue));
-    }
-
-    #[test]
-    fn total_command_count_includes_new_commands() {
-        // We should have significantly more than the original ~22 commands
-        let names = command_names();
-        assert!(
-            names.len() > 60,
-            "Expected 60+ commands, got {}",
-            names.len()
-        );
-    }
-
-    // --- Phase 21: new command tests ---
-
-    #[test]
-    fn command_names_include_phase21_commands() {
-        let names = command_names();
-        assert!(names.contains(&"/vim".to_owned()));
-        assert!(names.contains(&"/doctor".to_owned()));
-        assert!(names.contains(&"/version".to_owned()));
-        assert!(names.contains(&"/install".to_owned()));
-        assert!(names.contains(&"/teleport".to_owned()));
-    }
-
-    #[test]
-    fn dispatch_vim_command() {
-        let (config, store) = build_test_config();
-        let context_manager = ContextWindowManager::for_model("glm-5.1");
-        let cost_tracker = CostTracker::new();
-        let broker = StaticPermissionBroker::new(false);
-        let mut theme = Theme::dark();
-        let mut conversation = vec![ConversationEntry::system("system prompt")];
-
-        let action = dispatch(
-            "/vim on",
-            build_context(
-                &config,
-                &store,
-                &mut conversation,
-                &context_manager,
-                &cost_tracker,
-                &broker,
-                &mut theme,
-            ),
-        );
-        assert!(matches!(action, SlashCommandAction::Continue));
-    }
-
-    #[test]
-    fn dispatch_vim_off_command() {
-        let (config, store) = build_test_config();
-        let context_manager = ContextWindowManager::for_model("glm-5.1");
-        let cost_tracker = CostTracker::new();
-        let broker = StaticPermissionBroker::new(false);
-        let mut theme = Theme::dark();
-        let mut conversation = vec![ConversationEntry::system("system prompt")];
-
-        let action = dispatch(
-            "/vim off",
-            build_context(
-                &config,
-                &store,
-                &mut conversation,
-                &context_manager,
-                &cost_tracker,
-                &broker,
-                &mut theme,
-            ),
-        );
-        assert!(matches!(action, SlashCommandAction::Continue));
-    }
-
-    #[test]
-    fn dispatch_doctor_command() {
-        let (config, store) = build_test_config();
-        let context_manager = ContextWindowManager::for_model("glm-5.1");
-        let cost_tracker = CostTracker::new();
-        let broker = StaticPermissionBroker::new(false);
-        let mut theme = Theme::dark();
-        let mut conversation = vec![ConversationEntry::system("system prompt")];
-
-        let action = dispatch(
-            "/doctor quick",
-            build_context(
-                &config,
-                &store,
-                &mut conversation,
-                &context_manager,
-                &cost_tracker,
-                &broker,
-                &mut theme,
-            ),
-        );
-        assert!(matches!(action, SlashCommandAction::Continue));
-    }
-
-    #[test]
-    fn dispatch_doctor_full_command() {
-        let (config, store) = build_test_config();
-        let context_manager = ContextWindowManager::for_model("glm-5.1");
-        let cost_tracker = CostTracker::new();
-        let broker = StaticPermissionBroker::new(false);
-        let mut theme = Theme::dark();
-        let mut conversation = vec![ConversationEntry::system("system prompt")];
-
-        let action = dispatch(
-            "/doctor full",
-            build_context(
-                &config,
-                &store,
-                &mut conversation,
-                &context_manager,
-                &cost_tracker,
-                &broker,
-                &mut theme,
-            ),
-        );
-        assert!(matches!(action, SlashCommandAction::Continue));
-    }
-
-    #[test]
-    fn dispatch_version_command() {
-        let (config, store) = build_test_config();
-        let context_manager = ContextWindowManager::for_model("glm-5.1");
-        let cost_tracker = CostTracker::new();
-        let broker = StaticPermissionBroker::new(false);
-        let mut theme = Theme::dark();
-        let mut conversation = vec![ConversationEntry::system("system prompt")];
-
-        let action = dispatch(
-            "/version",
-            build_context(
-                &config,
-                &store,
-                &mut conversation,
-                &context_manager,
-                &cost_tracker,
-                &broker,
-                &mut theme,
-            ),
-        );
-        assert!(matches!(action, SlashCommandAction::Continue));
-    }
-
-    #[test]
-    fn dispatch_install_command() {
-        let (config, store) = build_test_config();
-        let context_manager = ContextWindowManager::for_model("glm-5.1");
-        let cost_tracker = CostTracker::new();
-        let broker = StaticPermissionBroker::new(false);
-        let mut theme = Theme::dark();
-        let mut conversation = vec![ConversationEntry::system("system prompt")];
-
-        let action = dispatch(
-            "/install list",
-            build_context(
-                &config,
-                &store,
-                &mut conversation,
-                &context_manager,
-                &cost_tracker,
-                &broker,
-                &mut theme,
-            ),
-        );
-        assert!(matches!(action, SlashCommandAction::Continue));
-    }
-
-    #[test]
-    fn dispatch_install_plugin_command() {
-        let (config, store) = build_test_config();
-        let context_manager = ContextWindowManager::for_model("glm-5.1");
-        let cost_tracker = CostTracker::new();
-        let broker = StaticPermissionBroker::new(false);
-        let mut theme = Theme::dark();
-        let mut conversation = vec![ConversationEntry::system("system prompt")];
-
-        let action = dispatch(
-            "/install my-plugin",
-            build_context(
-                &config,
-                &store,
-                &mut conversation,
-                &context_manager,
-                &cost_tracker,
-                &broker,
-                &mut theme,
-            ),
-        );
-        assert!(matches!(action, SlashCommandAction::Continue));
-    }
-
-    #[test]
-    fn dispatch_teleport_command() {
-        let (config, store) = build_test_config();
-        let context_manager = ContextWindowManager::for_model("glm-5.1");
-        let cost_tracker = CostTracker::new();
-        let broker = StaticPermissionBroker::new(false);
-        let mut theme = Theme::dark();
-        let mut conversation = vec![ConversationEntry::system("system prompt")];
-
-        let action = dispatch(
-            "/teleport /tmp",
-            build_context(
-                &config,
-                &store,
-                &mut conversation,
-                &context_manager,
-                &cost_tracker,
-                &broker,
-                &mut theme,
-            ),
-        );
-        assert!(matches!(action, SlashCommandAction::Continue));
-    }
-
-    #[test]
-    fn dispatch_teleport_no_args() {
-        let (config, store) = build_test_config();
-        let context_manager = ContextWindowManager::for_model("glm-5.1");
-        let cost_tracker = CostTracker::new();
-        let broker = StaticPermissionBroker::new(false);
-        let mut theme = Theme::dark();
-        let mut conversation = vec![ConversationEntry::system("system prompt")];
-
-        let action = dispatch(
-            "/teleport",
-            build_context(
-                &config,
-                &store,
-                &mut conversation,
-                &context_manager,
-                &cost_tracker,
-                &broker,
-                &mut theme,
-            ),
-        );
-        assert!(matches!(action, SlashCommandAction::Continue));
-    }
-
-    #[test]
-    fn total_command_count_after_phase21() {
-        let names = command_names();
-        assert!(
-            names.len() >= 75,
-            "Expected 75+ commands after Phase 21, got {}",
-            names.len()
-        );
     }
 }

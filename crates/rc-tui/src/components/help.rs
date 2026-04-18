@@ -174,7 +174,6 @@ pub fn render(f: &mut Frame, style: &StyleConfig, area: Rect) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::style::StyleConfig;
 
     #[test]

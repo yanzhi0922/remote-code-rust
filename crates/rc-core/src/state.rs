@@ -432,16 +432,18 @@ mod tests {
 
     #[test]
     fn serde_roundtrip_extended() {
-        let mut state = AppState::default();
-        state.cwd = Some(PathBuf::from("/home/user/project"));
-        state.model = Some("claude-3.5-sonnet".to_owned());
+        let mut state = AppState {
+            cwd: Some(PathBuf::from("/home/user/project")),
+            model: Some("claude-3.5-sonnet".to_owned()),
+            ..AppState::default()
+        };
         state.add_mcp_server("memory");
         state.enable_feature("tool_search");
         state.record_api_call(500, 0.02);
         state.is_coordinator_mode = true;
 
-        let json = serde_json::to_string(&state).unwrap();
-        let parsed: AppState = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&state).expect("serialize state");
+        let parsed: AppState = serde_json::from_str(&json).expect("deserialize state");
         assert_eq!(parsed.cwd, Some(PathBuf::from("/home/user/project")));
         assert_eq!(parsed.model, Some("claude-3.5-sonnet".to_owned()));
         assert!(parsed.mcp_servers.contains("memory"));

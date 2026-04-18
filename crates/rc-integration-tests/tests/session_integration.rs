@@ -24,6 +24,7 @@ fn make_paths(dir: &tempfile::TempDir) -> rc_config::AppPaths {
 fn session_summary_round_trips() {
     let summary = rc_session::SessionSummary {
         session_id: uuid::Uuid::new_v4(),
+        parent_session_id: None,
         title: "Test Session".to_owned(),
         cwd: std::path::PathBuf::from("/tmp/test"),
         provider_name: "anthropic".to_owned(),
@@ -73,6 +74,7 @@ fn session_bundle_round_trips() {
     let bundle = rc_session::SessionBundle {
         summary: rc_session::SessionSummary {
             session_id: uuid::Uuid::new_v4(),
+            parent_session_id: None,
             title: "Bundle Test".to_owned(),
             cwd: std::path::PathBuf::from("/tmp"),
             provider_name: "openai".to_owned(),

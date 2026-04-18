@@ -20,7 +20,9 @@ mod tasks_cli;
 mod updater;
 mod worktree_cli;
 
-use anyhow::Result;
+use std::io::{self, IsTerminal, Read};
+
+use anyhow::{Result, anyhow};
 use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
 use rc_session::SessionStore;
 use rc_telemetry::install_tracing;
@@ -53,6 +55,7 @@ use worktree_cli::run_worktree;
 #[tokio::main]
 async fn main() -> Result<()> {
     install_tracing("remote_code_rust", false)?;
+    let permission_mode_explicit = permission_mode_override_was_explicit();
     let cli = Cli::parse();
 
     let resume_session = resolve_resume_session(&cli)?;
@@ -90,7 +93,7 @@ async fn main() -> Result<()> {
     let store = SessionStore::open(config.paths.clone())?;
     if resume_session.is_some() {
         restore_session_context(&store, &mut config)?;
-        reapply_cli_overrides(&cli, &mut config);
+        reapply_cli_overrides(&cli, &mut config, permission_mode_explicit);
     }
     configure_runtime_policy(&config)?;
     if cli.show_setting_sources && !should_run_headless(&config) {
@@ -121,9 +124,16 @@ async fn main() -> Result<()> {
         Some(Commands::Skills { command }) => run_skills(&config, command),
         Some(Commands::Migrate { command }) => run_migrate(&config, command),
         Some(Commands::Resume(args)) => {
-            let prompt = join_prompt(args.prompt);
+            let prompt = resolve_prompt_input(&config, args.prompt)?;
             if should_run_headless(&config) {
                 run_headless(&config, prompt).await
+            } else if config.print_mode {
+                let prompt = prompt.ok_or_else(|| {
+                    anyhow!(
+                        "Input must be provided either through stdin or as a prompt argument when using --print"
+                    )
+                })?;
+                run_oneshot_text(&config, &store, prompt).await
             } else if let Some(prompt) = prompt {
                 run_oneshot_text(&config, &store, prompt).await
             } else {
@@ -140,9 +150,16 @@ async fn main() -> Result<()> {
             }
         }
         None => {
-            let prompt = join_prompt(cli.prompt);
+            let prompt = resolve_prompt_input(&config, cli.prompt)?;
             if should_run_headless(&config) {
                 run_headless(&config, prompt).await
+            } else if config.print_mode {
+                let prompt = prompt.ok_or_else(|| {
+                    anyhow!(
+                        "Input must be provided either through stdin or as a prompt argument when using --print"
+                    )
+                })?;
+                run_oneshot_text(&config, &store, prompt).await
             } else if let Some(prompt) = prompt {
                 run_oneshot_text(&config, &store, prompt).await
             } else {
@@ -381,6 +398,39 @@ async fn run_ssh(args: cli::SshArgs) -> Result<()> {
 
 fn join_prompt(parts: Vec<String>) -> Option<String> {
     let prompt = parts.join(" ");
+    let trimmed = prompt.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
+}
+
+fn permission_mode_override_was_explicit() -> bool {
+    std::env::var_os("REMOTE_CODE_PERMISSION_MODE").is_some()
+        || std::env::args_os().skip(1).any(|arg| {
+            let arg = arg.to_string_lossy();
+            arg == "--permission-mode" || arg.starts_with("--permission-mode=")
+        })
+}
+
+fn resolve_prompt_input(
+    config: &rc_config::RuntimeConfig,
+    parts: Vec<String>,
+) -> Result<Option<String>> {
+    let prompt = join_prompt(parts);
+    if prompt.is_some() || !config.print_mode || should_run_headless(config) {
+        return Ok(prompt);
+    }
+    if io::stdin().is_terminal() {
+        return Ok(None);
+    }
+    let mut stdin = String::new();
+    io::stdin().read_to_string(&mut stdin)?;
+    Ok(normalize_prompt(stdin))
+}
+
+fn normalize_prompt(prompt: String) -> Option<String> {
     let trimmed = prompt.trim();
     if trimmed.is_empty() {
         None

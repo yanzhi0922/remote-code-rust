@@ -280,6 +280,7 @@ mod tests {
             base: MessageBase::default(),
             text: "hello".into(),
             attachments: Vec::new(),
+            provider_content_blocks: Vec::new(),
         });
         assert!(has_text_blocks(&msg));
     }
@@ -290,6 +291,7 @@ mod tests {
             base: MessageBase::default(),
             text: String::new(),
             attachments: Vec::new(),
+            provider_content_blocks: Vec::new(),
         });
         assert!(!has_text_blocks(&msg));
     }
@@ -300,6 +302,7 @@ mod tests {
             base: MessageBase::default(),
             text: "hello".into(),
             attachments: Vec::new(),
+            provider_content_blocks: Vec::new(),
         })];
         let config = SessionMemoryCompactConfig {
             min_text_block_messages: 5,

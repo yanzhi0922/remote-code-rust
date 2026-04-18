@@ -1229,7 +1229,7 @@ mod tests {
         assert_eq!(output.plugins.len(), 2);
 
         config.allowed_setting_sources = vec![SettingSource::Local];
-        let discovery = discover_runtime_plugins(&config, &[explicit_root.clone()]);
+        let discovery = discover_runtime_plugins(&config, std::slice::from_ref(&explicit_root));
         assert_eq!(discovery.plugins.len(), 1);
         assert_eq!(discovery.plugins[0].origin_kind, "explicit");
         assert_eq!(discovery.plugins[0].bundle.manifest.version, "0.2.0");

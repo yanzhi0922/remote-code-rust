@@ -181,6 +181,7 @@ mod tests {
             language: None,
             output_style: None,
             mcp_clients: vec![],
+            mcp_instructions_delta_enabled: false,
             is_worktree: false,
             additional_dirs: vec![],
             is_non_interactive: false,

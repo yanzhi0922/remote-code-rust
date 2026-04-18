@@ -65,7 +65,6 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::app::App;
     use crate::message::ChatMessage;
 

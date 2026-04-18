@@ -39,6 +39,7 @@ pub mod message;
 pub mod notifications;
 pub mod output_styles;
 pub mod render;
+mod runtime_hooks;
 pub mod scroll;
 pub mod style;
 pub mod syntax;
@@ -60,24 +61,39 @@ use crossterm::terminal::{
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use rc_config::RuntimeConfig;
+use rc_config::{RuntimeConfig, restamp_runtime_session};
 use rc_core::ConversationEntry;
-use rc_permissions::{
-    LayeredPermissionBroker, PermissionBroker, StaticPermissionBroker, load_layered_rules,
-};
+use rc_permissions::PermissionBroker;
 use rc_provider::context::ContextWindowManager;
 use rc_provider::cost::CostTracker;
 use rc_provider::{ConversationBackend, ProviderClient, ProviderCompatBackend};
 use rc_session::resume_state::{PendingToolCall, ResumeState};
+use rc_session::runtime_context::{
+    persist_runtime_config_session_context, repair_interrupted_tool_batch,
+    restore_runtime_config_session_context,
+};
 use rc_session::{SessionStore, conversation::ensure_conversation_initialized};
 use rc_tools::{
-    ToolExecutionContext,
+    ToolExecutionContext, ToolRuntimePolicy,
     agent::{parse_delegate_progress_event, render_delegate_progress_event},
-    execute_tool_call,
+    configure_tool_runtime_policy, execute_tool_call,
+    mcp_catalog::clear_runtime_mcp_catalog_cache,
+    mcp_runtime::runtime_mcp_policy_entries,
+    plan_mode::normalize_exit_plan_mode_tool_calls,
+    runtime_plan_mode::{
+        build_runtime_plan_mode, inject_plan_mode_runtime_messages, install_plan_mode_runtime,
+    },
+    shell::ShellExecutionPolicy,
+    tasks::stop_and_clear_tracked_tasks,
 };
 
 use app::{App, AppAction};
 use event::{convert_event, handle_event};
+use runtime_hooks::{
+    PreparedToolCall, SessionHookRunOutcome, ToolHookRunOutcome, apply_post_tool_hooks,
+    apply_pre_tool_use_hooks, discover_runtime_session_hooks, ensure_session_start_hooks,
+    run_session_end_hooks,
+};
 
 // ---------------------------------------------------------------------------
 // Public types re-exports
@@ -154,23 +170,19 @@ pub fn run_dashboard(config: &RuntimeConfig, store: &SessionStore) -> Result<()>
 /// - Slash commands for session management
 /// - Full Vim mode with ratatui rendering
 #[allow(clippy::too_many_lines)]
-pub async fn run_tui_app(config: RuntimeConfig, store: &SessionStore) -> Result<()> {
+pub async fn run_tui_app(mut config: RuntimeConfig, store: &SessionStore) -> Result<()> {
     let provider_client = Arc::new(ProviderClient::new()?);
-    let backend = ProviderCompatBackend::new(Arc::clone(&provider_client), &config.provider);
-    let broker = LayeredPermissionBroker::new(
-        StaticPermissionBroker::from_mode(config.permission_mode),
-        load_layered_rules(
-            &config.cwd,
-            &config.paths.profile_dir,
-            &config.settings_files,
-            &config.cli_settings_files,
-        ),
-    );
+    let mut backend = ProviderCompatBackend::new(Arc::clone(&provider_client), &config.provider);
+    let (mut plan_mode_controller, mut broker) = build_runtime_plan_mode(&config, store)?;
+    let mut _plan_mode_runtime_guard = install_plan_mode_runtime(plan_mode_controller.clone())?;
+    let mut session_hooks = discover_runtime_session_hooks(&config);
 
     let model_name = config.provider.model.as_deref().unwrap_or("unknown");
     let context_manager = ContextWindowManager::for_model(model_name);
     let cost_tracker = CostTracker::new();
     let mut conversation = load_or_create_conversation(store, &config)?;
+    let startup_hook_outcome =
+        ensure_session_start_hooks(&session_hooks, &config, store, &mut conversation).await?;
 
     // Set up ratatui terminal.
     enable_raw_mode()?;
@@ -184,18 +196,8 @@ pub async fn run_tui_app(config: RuntimeConfig, store: &SessionStore) -> Result<
     app.status.model_name = model_name.to_owned();
     app.model_info.name = model_name.to_owned();
     app.model_info.provider = config.provider.name.clone();
-
-    // Add welcome messages.
-    app.add_message(ChatMessage::system(
-        "Remote Code Rust — Interactive Mode".to_owned(),
-    ));
-    app.add_message(ChatMessage::system(format!(
-        "Session: {} | Model: {} | Provider: {}",
-        config.session_id, model_name, config.provider.name,
-    )));
-    app.add_message(ChatMessage::system(
-        "Type /help for commands, /quit to exit. Vim mode: Esc=normal, i=insert.".to_owned(),
-    ));
+    seed_session_banner_messages(&mut app, &config);
+    render_session_hook_outcome(&mut app, &startup_hook_outcome);
 
     let mut theme = theme::Theme::dark();
 
@@ -257,9 +259,10 @@ pub async fn run_tui_app(config: RuntimeConfig, store: &SessionStore) -> Result<
                     &backend,
                     &config,
                     store,
+                    &session_hooks,
                     &mut conversation,
                     &context_manager,
-                    &broker,
+                    broker.as_ref(),
                     &cost_tracker,
                     &input,
                 )
@@ -295,6 +298,17 @@ pub async fn run_tui_app(config: RuntimeConfig, store: &SessionStore) -> Result<
                 terminal = Terminal::new(new_backend)?;
             }
             AppAction::SlashCommand(cmd) => {
+                let is_clear_command = cmd.trim() == "/clear";
+                let mut pre_outputs = Vec::new();
+                if is_clear_command {
+                    match run_session_end_hooks(&session_hooks, &config, store).await {
+                        Ok(outcome) => {
+                            pre_outputs.extend(outcome.warnings);
+                        }
+                        Err(error) => pre_outputs
+                            .push(format!("SessionEnd hook error before /clear: {error:#}")),
+                    }
+                }
                 let sc_action = handle_slash_command_safe(
                     &cmd,
                     &config,
@@ -302,10 +316,17 @@ pub async fn run_tui_app(config: RuntimeConfig, store: &SessionStore) -> Result<
                     &mut conversation,
                     &context_manager,
                     &cost_tracker,
-                    &broker,
+                    broker.as_ref(),
                     &mut theme,
+                    Some(plan_mode_controller.as_ref()),
                 );
-                match sc_action {
+                let action = sc_action.action;
+                let outputs = sc_action.outputs;
+                let queued_prompt = sc_action.queued_prompt;
+                let next_session_id = sc_action.next_session_id;
+                let mut post_switch_hook_outcome = SessionHookRunOutcome::default();
+
+                match action {
                     slash_commands::SlashCommandAction::Quit => {
                         // Restore terminal before exiting.
                         disable_raw_mode()?;
@@ -323,8 +344,102 @@ pub async fn run_tui_app(config: RuntimeConfig, store: &SessionStore) -> Result<
                     slash_commands::SlashCommandAction::Continue => {}
                 }
 
-                // Add slash command output as a message.
-                app.add_message(ChatMessage::system(format!("Executed: {cmd}")));
+                if let Some(next_session_id) = next_session_id {
+                    if is_clear_command {
+                        stop_and_clear_tracked_tasks("stopped by session clear")?;
+                    }
+                    clear_runtime_mcp_catalog_cache().await;
+                    restamp_runtime_session(&mut config, next_session_id);
+                    restore_runtime_session_context(store, &mut config)?;
+                    refresh_runtime_tool_policy(&config)?;
+                    backend =
+                        ProviderCompatBackend::new(Arc::clone(&provider_client), &config.provider);
+                    let (new_controller, new_broker) = build_runtime_plan_mode(&config, store)?;
+                    plan_mode_controller = new_controller;
+                    broker = new_broker;
+                    _plan_mode_runtime_guard =
+                        install_plan_mode_runtime(plan_mode_controller.clone())?;
+                    session_hooks = discover_runtime_session_hooks(&config);
+                    conversation = load_or_create_conversation(store, &config)?;
+                    match ensure_session_start_hooks(
+                        &session_hooks,
+                        &config,
+                        store,
+                        &mut conversation,
+                    )
+                    .await
+                    {
+                        Ok(outcome) => post_switch_hook_outcome = outcome,
+                        Err(error) => {
+                            post_switch_hook_outcome.warnings.push(format!(
+                                "SessionStart hook error for session {}: {error:#}",
+                                config.session_id
+                            ));
+                        }
+                    }
+                    if is_clear_command {
+                        seed_session_banner_messages(&mut app, &config);
+                    }
+                }
+
+                if outputs.is_empty() && pre_outputs.is_empty() {
+                    app.add_message(ChatMessage::system(format!("Executed: {cmd}")));
+                } else {
+                    for output in pre_outputs {
+                        app.add_message(ChatMessage::system(output));
+                    }
+                    for output in outputs {
+                        app.add_message(ChatMessage::system(output));
+                    }
+                }
+                render_session_hook_outcome(&mut app, &post_switch_hook_outcome);
+
+                if let Some(prompt) = queued_prompt {
+                    app.add_message(ChatMessage::user(prompt.clone()));
+
+                    disable_raw_mode()?;
+                    crossterm::execute!(io::stdout(), LeaveAlternateScreen)?;
+
+                    if let Err(error) = run_conversation_turn(
+                        &backend,
+                        &config,
+                        store,
+                        &session_hooks,
+                        &mut conversation,
+                        &context_manager,
+                        broker.as_ref(),
+                        &cost_tracker,
+                        &prompt,
+                    )
+                    .await
+                    {
+                        let err_str = format!("{error:#}");
+                        let is_transient = err_str.contains("timeout")
+                            || err_str.contains("429")
+                            || err_str.contains("rate limit")
+                            || err_str.contains("503")
+                            || err_str.contains("500")
+                            || err_str.contains("connection");
+                        if is_transient {
+                            eprintln!("⚠ Transient error (recovered): {err_str}");
+                            eprintln!(
+                                "  Your session is preserved. The next request will retry automatically."
+                            );
+                        } else {
+                            eprintln!("⚠ Error: {err_str}");
+                            eprintln!(
+                                "  Your message was saved. Type to continue or /help for options."
+                            );
+                        }
+                    }
+
+                    app.status.cost = cost_tracker.total_cost_usd();
+
+                    enable_raw_mode()?;
+                    crossterm::execute!(io::stdout(), EnterAlternateScreen)?;
+                    let new_backend = CrosstermBackend::new(io::stdout());
+                    terminal = Terminal::new(new_backend)?;
+                }
             }
         }
     }
@@ -343,6 +458,78 @@ pub async fn run_tui_app(config: RuntimeConfig, store: &SessionStore) -> Result<
     Ok(())
 }
 
+fn refresh_runtime_tool_policy(config: &RuntimeConfig) -> Result<()> {
+    configure_tool_runtime_policy(ToolRuntimePolicy {
+        allowed_tools: config.allowed_tools.clone(),
+        disallowed_tools: config.disallowed_tools.clone(),
+        task_output_dir: Some(
+            config
+                .paths
+                .artifacts_dir
+                .join("tasks")
+                .join(config.session_id.to_string()),
+        ),
+        shell_policy: ShellExecutionPolicy {
+            block_inline_cwd: true,
+            allow_background: true,
+            block_destructive_git: true,
+            max_capture_chars: 16_000,
+            output_dir: Some(
+                config
+                    .paths
+                    .artifacts_dir
+                    .join("shell")
+                    .join(config.session_id.to_string()),
+            ),
+        },
+        mcp_servers: runtime_mcp_policy_entries(config, &[]),
+    })
+}
+
+fn seed_session_banner_messages(app: &mut App, config: &RuntimeConfig) {
+    let model_name = config.provider.model.as_deref().unwrap_or("unknown");
+    app.reset_for_new_session();
+    app.status.model_name = model_name.to_owned();
+    app.model_info.name = model_name.to_owned();
+    app.model_info.provider = config.provider.name.clone();
+    app.add_message(ChatMessage::system(
+        "Remote Code Rust — Interactive Mode".to_owned(),
+    ));
+    app.add_message(ChatMessage::system(format!(
+        "Session: {} | Model: {} | Provider: {}",
+        config.session_id, model_name, config.provider.name,
+    )));
+    app.add_message(ChatMessage::system(
+        "Type /help for commands, /quit to exit. Vim mode: Esc=normal, i=insert.".to_owned(),
+    ));
+}
+
+fn restore_runtime_session_context(store: &SessionStore, config: &mut RuntimeConfig) -> Result<()> {
+    restore_runtime_config_session_context(store, config)
+}
+
+fn render_session_hook_outcome(app: &mut App, outcome: &SessionHookRunOutcome) {
+    for warning in &outcome.warnings {
+        app.add_message(ChatMessage::system(format!("Hook warning: {warning}")));
+    }
+    for entry in &outcome.appended_entries {
+        match entry.role {
+            rc_core::ConversationRole::User => {
+                app.add_message(ChatMessage::user(entry.text.clone()));
+            }
+            rc_core::ConversationRole::Assistant => {
+                app.add_message(ChatMessage::assistant(entry.text.clone()));
+            }
+            rc_core::ConversationRole::System => {
+                app.add_message(ChatMessage::system(entry.text.clone()));
+            }
+            rc_core::ConversationRole::Tool => {
+                app.add_message(ChatMessage::tool(entry.text.clone()));
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Conversation logic (preserved from original)
 // ---------------------------------------------------------------------------
@@ -352,14 +539,18 @@ fn load_or_create_conversation(
     store: &SessionStore,
     config: &RuntimeConfig,
 ) -> Result<Vec<ConversationEntry>> {
-    ensure_conversation_initialized(
+    persist_runtime_config_session_context(store, config)?;
+    let mut conversation = ensure_conversation_initialized(
         store,
         config.session_id,
         &config.cwd,
         &config.provider.name,
         config.provider.model.as_deref(),
         config.session_name.as_deref(),
-    )
+    )?;
+    repair_interrupted_tool_batch(store, config.session_id, &mut conversation)?;
+    inject_plan_mode_runtime_messages(store, config.session_id, &mut conversation)?;
+    Ok(conversation)
 }
 
 /// Run a full multi-turn conversation turn.
@@ -374,6 +565,7 @@ async fn run_conversation_turn(
     backend: &dyn ConversationBackend,
     config: &RuntimeConfig,
     store: &SessionStore,
+    discovery: &runtime_hooks::RuntimeSessionHookDiscovery,
     conversation: &mut Vec<ConversationEntry>,
     context_manager: &ContextWindowManager,
     broker: &dyn PermissionBroker,
@@ -430,7 +622,8 @@ async fn run_conversation_turn(
         }
 
         // Call provider
-        let response = backend.complete(conversation).await?;
+        let mut response = backend.complete(conversation).await?;
+        normalize_exit_plan_mode_tool_calls(&mut response.tool_calls);
         total_input_tokens += response.usage.input_tokens;
         total_output_tokens += response.usage.output_tokens;
 
@@ -495,19 +688,35 @@ async fn run_conversation_turn(
             let tool_start = std::time::Instant::now();
             println!("  ⏳ [tool] {} — running...", tool_call.name);
             let audit_count_before = broker.audit_records().len();
+            let PreparedToolCall {
+                call: effective_tool_call,
+                blocked_reason,
+                appended_entries: pre_hook_entries,
+            } = apply_pre_tool_use_hooks(discovery, config, store, conversation, tool_call).await?;
+            print_hook_entries(&pre_hook_entries);
 
-            let tool_result = match execute_tool_call(tool_call, &tool_context, broker).await {
-                Ok(result) => result,
-                Err(error) => {
-                    let elapsed = tool_start.elapsed();
-                    eprintln!(
-                        "  ✗ [tool] {} — error ({:.1}s): {error}",
-                        tool_call.name,
-                        elapsed.as_secs_f64()
-                    );
-                    rc_core::ToolResult {
-                        content: format!("Tool execution error: {error}"),
-                        is_error: true,
+            let mut tool_result = match blocked_reason {
+                Some(reason) => rc_core::ToolResult {
+                    content: reason,
+                    is_error: true,
+                    content_blocks: Vec::new(),
+                },
+                None => {
+                    match execute_tool_call(&effective_tool_call, &tool_context, broker).await {
+                        Ok(result) => result,
+                        Err(error) => {
+                            let elapsed = tool_start.elapsed();
+                            eprintln!(
+                                "  ✗ [tool] {} — error ({:.1}s): {error}",
+                                effective_tool_call.name,
+                                elapsed.as_secs_f64()
+                            );
+                            rc_core::ToolResult {
+                                content: format!("Tool execution error: {error}"),
+                                is_error: true,
+                                content_blocks: Vec::new(),
+                            }
+                        }
                     }
                 }
             };
@@ -523,25 +732,38 @@ async fn run_conversation_turn(
                     serde_json::to_value(&audit)?,
                 )?;
             }
+            let ToolHookRunOutcome {
+                appended_entries: post_hook_entries,
+            } = apply_post_tool_hooks(
+                discovery,
+                config,
+                store,
+                conversation,
+                &effective_tool_call,
+                &mut tool_result,
+            )
+            .await?;
+            print_hook_entries(&post_hook_entries);
             let elapsed = tool_start.elapsed();
             let status = if tool_result.is_error { "✗" } else { "✓" };
             println!(
                 "  {status} [tool] {} — done ({:.1}s)",
-                tool_call.name,
+                effective_tool_call.name,
                 elapsed.as_secs_f64()
             );
 
             let truncated_output =
                 context_manager.truncate_tool_output_default(&tool_result.content);
 
-            print_tool_result(&tool_call.name, &tool_result, &truncated_output);
+            print_tool_result(&effective_tool_call.name, &tool_result, &truncated_output);
 
-            let tool_entry = ConversationEntry::tool(
-                tool_call.id.clone(),
-                tool_call.name.clone(),
+            let mut tool_entry = ConversationEntry::tool(
+                effective_tool_call.id.clone(),
+                effective_tool_call.name.clone(),
                 truncated_output,
                 tool_result.is_error,
             );
+            tool_entry.content_blocks = tool_result.content_blocks.clone();
             store.append_conversation_entry(config.session_id, &tool_entry)?;
             conversation.push(tool_entry);
         }
@@ -566,7 +788,8 @@ fn handle_slash_command_safe(
     cost_tracker: &CostTracker,
     broker: &dyn PermissionBroker,
     theme: &mut theme::Theme,
-) -> slash_commands::SlashCommandAction {
+    plan_mode_controller: Option<&rc_tools::runtime_plan_mode::RuntimePlanModeController>,
+) -> slash_commands::SlashCommandResult {
     slash_commands::handle_slash_command(
         input,
         config,
@@ -576,6 +799,7 @@ fn handle_slash_command_safe(
         cost_tracker,
         broker,
         theme,
+        plan_mode_controller,
     )
 }
 
@@ -602,6 +826,17 @@ fn print_tool_result(tool_name: &str, result: &rc_core::ToolResult, display_text
     }
 }
 
+fn print_hook_entries(entries: &[ConversationEntry]) {
+    for entry in entries {
+        match entry.role {
+            rc_core::ConversationRole::System | rc_core::ConversationRole::User => {
+                println!("{}", entry.text);
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Truncate a string for display purposes.
 fn truncate_display(text: &str, max_chars: usize) -> String {
     if text.chars().count() <= max_chars {
@@ -615,6 +850,13 @@ fn truncate_display(text: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
+    use rc_core::{
+        ConversationRole, InputFormat, OutputFormat, PermissionMode, ProviderProtocol, ToolCall,
+    };
+    use rc_session::SessionStore;
+    use rc_session::resume_state::{PendingToolCall, ResumeState};
+    use tempfile::tempdir;
 
     #[test]
     fn truncate_display_short() {
@@ -644,5 +886,78 @@ mod tests {
     fn vim_mode_labels() {
         assert_eq!(VimMode::Normal.label(), "NORMAL");
         assert_eq!(VimMode::Insert.label(), "INSERT");
+    }
+
+    fn test_config() -> (tempfile::TempDir, RuntimeConfig, SessionStore) {
+        let tempdir = tempdir().expect("tempdir should succeed");
+        let config = load_runtime_config(
+            Some(tempdir.path().to_path_buf()),
+            Some(tempdir.path().join(".remote-code-rust")),
+            None,
+            PermissionMode::Default,
+            InputFormat::Text,
+            OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            8,
+            ProviderOverrides {
+                provider: Some("mock-provider".to_owned()),
+                base_url: Some("https://example.invalid/anthropic".to_owned()),
+                api_key: Some("secret".to_owned()),
+                model: Some("mock-model".to_owned()),
+                protocol: Some(ProviderProtocol::Anthropic),
+            },
+            RuntimeOverrides::default(),
+        )
+        .expect("config should load");
+        let store = SessionStore::open(config.paths.clone()).expect("store should open");
+        (tempdir, config, store)
+    }
+
+    #[test]
+    fn load_or_create_conversation_repairs_interrupted_tool_batches() {
+        let (_tempdir, config, store) = test_config();
+
+        let _ = load_or_create_conversation(&store, &config).expect("conversation should load");
+
+        let mut assistant = ConversationEntry::assistant("");
+        assistant.tool_calls.push(ToolCall {
+            id: "call-1".to_owned(),
+            name: "replace_in_file".to_owned(),
+            input: serde_json::json!({"path": "src/lib.rs"}),
+        });
+        store
+            .append_conversation_entry(config.session_id, &assistant)
+            .expect("assistant should append");
+        store
+            .save_resume_state(
+                config.session_id,
+                &ResumeState::from_pending_calls(vec![PendingToolCall {
+                    id: "call-1".to_owned(),
+                    name: "replace_in_file".to_owned(),
+                    input: serde_json::json!({"path": "src/lib.rs"}),
+                }]),
+            )
+            .expect("resume state should save");
+
+        let repaired =
+            load_or_create_conversation(&store, &config).expect("conversation should repair");
+        let repaired_tool = repaired
+            .iter()
+            .find(|entry| entry.role == ConversationRole::Tool)
+            .expect("synthetic tool result should exist");
+        assert_eq!(repaired_tool.tool_call_id.as_deref(), Some("call-1"));
+        assert!(repaired_tool.is_error);
+        assert!(repaired_tool.text.contains("interrupted"));
+
+        let transcript = store
+            .load_transcript(config.session_id)
+            .expect("transcript should load");
+        let persisted = transcript
+            .latest_named_event_as::<serde_json::Value>("session_context")
+            .expect("session context event should exist");
+        assert!(persisted.is_some());
     }
 }

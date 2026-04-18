@@ -193,7 +193,7 @@ mod tests {
         assert_eq!(state.snapshot_count(), 1);
         assert_eq!(state.snapshot_sequence, 1);
 
-        let snap = state.latest_snapshot().unwrap();
+        let snap = state.latest_snapshot().expect("snapshot should be created");
         assert_eq!(snap.message_id, "msg-1");
         assert!(snap.tracked_file_backups.contains_key("src/main.rs"));
     }
@@ -206,18 +206,18 @@ mod tests {
         state.create_snapshot("msg-1".to_string());
         state.create_snapshot("msg-2".to_string());
 
-        let snap1 = state.get_snapshot(0).unwrap();
-        let snap2 = state.get_snapshot(1).unwrap();
+        let snap1 = state.get_snapshot(0).expect("first snapshot should exist");
+        let snap2 = state.get_snapshot(1).expect("second snapshot should exist");
 
         let v1 = snap1
             .tracked_file_backups
             .get("src/main.rs")
-            .unwrap()
+            .expect("tracked backup should exist")
             .version;
         let v2 = snap2
             .tracked_file_backups
             .get("src/main.rs")
-            .unwrap()
+            .expect("tracked backup should exist")
             .version;
 
         assert_eq!(v1, 1);
@@ -254,7 +254,7 @@ mod tests {
         state.track_file("b.txt".to_string());
         state.create_snapshot("msg-1".to_string());
 
-        let backups = rewind_to_snapshot(&state, 0).unwrap();
+        let backups = rewind_to_snapshot(&state, 0).expect("snapshot rewind should succeed");
         assert_eq!(backups.len(), 2);
     }
 

@@ -159,6 +159,7 @@ impl HookExecutionContext {
             cwd: cwd.map(String::from),
             user_prompt: None,
             tool_use_id: None,
+            tool_result: None,
         };
 
         self.executor.execute_hooks(&matched.hooks, &input).await

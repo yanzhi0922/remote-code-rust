@@ -359,8 +359,8 @@ mod tests {
         let input = json!({"message": "hello"});
         let context = test_context();
         let result = send_message(&input, &context).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("recipient"));
+        let error = result.expect_err("missing recipient should fail");
+        assert!(error.to_string().contains("recipient"));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -368,8 +368,8 @@ mod tests {
         let input = json!({"recipient": "agent-1"});
         let context = test_context();
         let result = send_message(&input, &context).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("message"));
+        let error = result.expect_err("missing message should fail");
+        assert!(error.to_string().contains("message"));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -398,12 +398,19 @@ mod tests {
             "message": "hello"
         });
         let context = test_context();
-        let result = send_message(&input, &context).await.unwrap();
+        let result = send_message(&input, &context)
+            .await
+            .expect("send_message should succeed");
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(parsed["status"], "queued");
         assert_eq!(parsed["to"], "agent-1");
         assert_eq!(parsed["content"], "hello");
-        assert!(parsed["id"].as_str().unwrap().starts_with("msg-"));
+        assert!(
+            parsed["id"]
+                .as_str()
+                .expect("message id should be a string")
+                .starts_with("msg-")
+        );
         let stored = mailbox::read_messages("test-team", "agent-1")
             .await
             .expect("read mailbox");
@@ -422,7 +429,9 @@ mod tests {
             "priority": "high"
         });
         let context = test_context();
-        let result = send_message(&input, &context).await.unwrap();
+        let result = send_message(&input, &context)
+            .await
+            .expect("priority send_message should succeed");
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(parsed["priority"], "high");
     }
@@ -438,7 +447,9 @@ mod tests {
             "correlation_id": "corr-123"
         });
         let context = test_context();
-        let result = send_message(&input, &context).await.unwrap();
+        let result = send_message(&input, &context)
+            .await
+            .expect("correlated send_message should succeed");
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(parsed["correlation_id"], "corr-123");
     }
@@ -453,7 +464,9 @@ mod tests {
             "message": "hello"
         });
         let context = test_context();
-        let result = send_message(&input, &context).await.unwrap();
+        let result = send_message(&input, &context)
+            .await
+            .expect("default sender send_message should succeed");
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(parsed["from"], "coordinator");
     }
@@ -469,7 +482,9 @@ mod tests {
             "sender": "worker-1"
         });
         let context = test_context();
-        let result = send_message(&input, &context).await.unwrap();
+        let result = send_message(&input, &context)
+            .await
+            .expect("custom sender send_message should succeed");
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(parsed["from"], "worker-1");
     }
@@ -496,14 +511,16 @@ mod tests {
         let _guard = setup_team(&temp, "broadcast-team").await;
         let input = json!({"team_name": "broadcast-team", "message": "Hello everyone!"});
         let context = test_context();
-        let result = broadcast_message(&input, &context).await.unwrap();
+        let result = broadcast_message(&input, &context)
+            .await
+            .expect("broadcast_message should succeed");
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(parsed["status"], "queued");
         assert_eq!(parsed["type"], "broadcast_message");
         assert!(
             parsed["broadcast_id"]
                 .as_str()
-                .unwrap()
+                .expect("broadcast_id should be a string")
                 .starts_with("broadcast-")
         );
         let agent_1 = mailbox::read_messages("broadcast-team", "agent-1")
@@ -540,7 +557,9 @@ mod tests {
             "priority": "high"
         });
         let context = test_context();
-        let result = broadcast_message(&input, &context).await.unwrap();
+        let result = broadcast_message(&input, &context)
+            .await
+            .expect("priority broadcast_message should succeed");
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(parsed["priority"], "high");
     }

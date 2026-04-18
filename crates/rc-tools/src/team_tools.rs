@@ -288,8 +288,8 @@ mod tests {
         let input = json!({});
         let context = test_context();
         let result = team_delete(&input, &context);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("team_name"));
+        let error = result.expect_err("missing team_name should fail");
+        assert!(error.to_string().contains("team_name"));
     }
 
     #[test]
@@ -305,8 +305,8 @@ mod tests {
         let input = json!({"team_name": "nonexistent-team-xyz-123"});
         let context = test_context();
         let result = team_delete(&input, &context);
-        assert!(result.is_ok());
-        let parsed: Value = serde_json::from_str(&result.unwrap()).expect("valid json");
+        let output = result.expect("nonexistent team should still return JSON");
+        let parsed: Value = serde_json::from_str(&output).expect("valid json");
         assert_eq!(parsed["status"], "not_found");
     }
 
@@ -329,7 +329,8 @@ mod tests {
         });
 
         assert!(result.is_ok());
-        let parsed: Value = serde_json::from_str(&result.unwrap()).expect("valid json");
+        let output = result.expect("team_delete should succeed");
+        let parsed: Value = serde_json::from_str(&output).expect("valid json");
         assert_eq!(parsed["status"], "deleted");
     }
 
@@ -343,7 +344,8 @@ mod tests {
         });
 
         assert!(result.is_ok());
-        let parsed: Value = serde_json::from_str(&result.unwrap()).expect("valid json");
+        let output = result.expect("team_list should succeed");
+        let parsed: Value = serde_json::from_str(&output).expect("valid json");
         assert_eq!(parsed["total"], 0);
     }
 
@@ -365,7 +367,8 @@ mod tests {
         });
 
         assert!(result.is_ok());
-        let parsed: Value = serde_json::from_str(&result.unwrap()).expect("valid json");
+        let output = result.expect("team_list should succeed");
+        let parsed: Value = serde_json::from_str(&output).expect("valid json");
         assert_eq!(parsed["total"], 1);
         let teams = parsed["teams"].as_array().expect("teams array");
         assert_eq!(teams[0]["name"], "my-team");
@@ -392,7 +395,12 @@ mod tests {
         std::fs::create_dir_all(&team_dir).expect("create dir");
 
         let result = cleanup_team_resources(&team_dir, "empty-team");
-        assert!(result["mailbox"].as_str().unwrap() == "not_found");
+        assert_eq!(
+            result["mailbox"]
+                .as_str()
+                .expect("mailbox state should be a string"),
+            "not_found"
+        );
     }
 
     #[test]
@@ -403,7 +411,8 @@ mod tests {
             team_list(&input, &context)
         });
         assert!(result.is_ok());
-        let parsed: Value = serde_json::from_str(&result.unwrap()).expect("valid json");
+        let output = result.expect("team_list should succeed");
+        let parsed: Value = serde_json::from_str(&output).expect("valid json");
         assert_eq!(parsed["total"], 0);
     }
 
@@ -411,7 +420,7 @@ mod tests {
     fn team_delete_json_output_format() {
         let input = json!({"team_name": "nonexistent-xyz"});
         let context = test_context();
-        let result = team_delete(&input, &context).unwrap();
+        let result = team_delete(&input, &context).expect("team_delete should succeed");
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
         assert!(parsed.get("team_name").is_some());
         assert!(parsed.get("status").is_some());

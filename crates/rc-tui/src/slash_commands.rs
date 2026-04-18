@@ -6,11 +6,12 @@ use rc_permissions::PermissionBroker;
 use rc_provider::context::ContextWindowManager;
 use rc_provider::cost::CostTracker;
 use rc_session::SessionStore;
+use rc_tools::runtime_plan_mode::RuntimePlanModeController;
 
 use crate::commands;
 use crate::theme::Theme;
 
-pub use crate::commands::SlashCommandAction;
+pub use crate::commands::{SlashCommandAction, SlashCommandResult};
 // Re-export for convenience.
 
 /// Handle slash commands via the modular command registry.
@@ -24,8 +25,9 @@ pub fn handle_slash_command(
     cost_tracker: &CostTracker,
     broker: &dyn PermissionBroker,
     theme: &mut Theme,
-) -> SlashCommandAction {
-    commands::dispatch(
+    plan_mode_controller: Option<&RuntimePlanModeController>,
+) -> SlashCommandResult {
+    commands::dispatch_with_result(
         input,
         commands::SlashCommandContext {
             config,
@@ -35,6 +37,7 @@ pub fn handle_slash_command(
             cost_tracker,
             broker,
             theme,
+            plan_mode_controller,
         },
     )
 }

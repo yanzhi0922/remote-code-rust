@@ -47,13 +47,14 @@ use rc_config::ProviderConfig;
 use rc_core::{
     ConversationEntry, ConversationRole, ProviderProtocol, ProviderResponse, ToolCall, UsageSummary,
 };
-use rc_tools::runtime_provider_tool_specs;
+use rc_tools::{ToolSpec, runtime_provider_tool_specs, runtime_visible_provider_tool_specs};
 use reqwest::Client;
 use reqwest::header::{
     ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, RETRY_AFTER,
     USER_AGENT,
 };
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -275,7 +276,7 @@ impl ProviderClient {
         let is_reasoning_model = model_name.starts_with("o1")
             || model_name.starts_with("o3")
             || model_name.starts_with("o4");
-        let tools = current_openai_tool_schemas().await;
+        let tools = current_openai_tool_schemas(provider, conversation).await;
 
         let mut body = if is_reasoning_model {
             // Reasoning models (o1/o3/o4-mini) do not support temperature
@@ -327,8 +328,8 @@ impl ProviderClient {
         provider: &ProviderConfig,
         conversation: &[ConversationEntry],
     ) -> Result<ProviderResponse> {
-        let (system, messages) = to_anthropic_messages(conversation);
-        let tools = current_anthropic_tool_schemas().await;
+        let (system, messages, tools) =
+            prepare_anthropic_request_surface(provider, conversation).await;
         let mut body = json!({
             "model": provider.model,
             "system": system,
@@ -392,8 +393,8 @@ impl ProviderClient {
             .ok_or_else(|| anyhow!("Bedrock provider requires a model ID (e.g. anthropic.claude-sonnet-4-20250514-v1:0)"))?;
 
         // Build Anthropic-format body for Claude models on Bedrock.
-        let (system, messages) = to_anthropic_messages(conversation);
-        let tools = current_anthropic_tool_schemas().await;
+        let (system, messages, tools) =
+            prepare_anthropic_request_surface(provider, conversation).await;
         let mut body = json!({
             "anthropic_version": "bedrock-2023-05-31",
             "system": system,
@@ -402,6 +403,9 @@ impl ProviderClient {
             "max_tokens": provider.max_output_tokens,
         });
         apply_anthropic_request_metadata(&mut body, provider);
+        if body_uses_tool_search_features(Some(&body)) {
+            merge_anthropic_beta_body_param(&mut body, beta_headers::TOOL_SEARCH_BETA_3P);
+        }
         let payload =
             serde_json::to_vec(&body).context("failed to serialise Bedrock request body")?;
 
@@ -532,8 +536,8 @@ impl ProviderClient {
             .unwrap_or_else(|_| "us-east5".to_string());
 
         // Build Anthropic-format body for Claude models on Vertex AI.
-        let (system, messages) = to_anthropic_messages(conversation);
-        let tools = current_anthropic_tool_schemas().await;
+        let (system, messages, tools) =
+            prepare_anthropic_request_surface(provider, conversation).await;
         let mut body = json!({
             "anthropic_version": "vertex-2023-10-16",
             "system": system,
@@ -542,6 +546,9 @@ impl ProviderClient {
             "max_tokens": provider.max_output_tokens,
         });
         apply_anthropic_request_metadata(&mut body, provider);
+        if body_uses_tool_search_features(Some(&body)) {
+            merge_anthropic_beta_body_param(&mut body, beta_headers::TOOL_SEARCH_BETA_3P);
+        }
 
         // Construct Vertex AI URL.
         let url = format!(
@@ -624,10 +631,11 @@ impl ProviderClient {
     ) -> Result<(u16, String)> {
         let mut attempt = 0u32;
         loop {
+            maybe_dump_request_body(label, body);
             let response = self
                 .http
                 .post(base_url)
-                .headers(build_headers(provider)?)
+                .headers(build_headers(provider, Some(body))?)
                 .timeout(Duration::from_millis(provider.timeout_ms))
                 .json(body)
                 .send()
@@ -658,6 +666,19 @@ impl ProviderClient {
                 }
             }
         }
+    }
+}
+
+fn maybe_dump_request_body(label: &str, body: &Value) {
+    let Ok(dir) = std::env::var("REMOTE_CODE_DUMP_PROVIDER_REQUEST_DIR") else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    let _ = std::fs::create_dir_all(&dir);
+    let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
+    let path = dir.join(format!("{timestamp}-{label}.json"));
+    if let Ok(bytes) = serde_json::to_vec_pretty(body) {
+        let _ = std::fs::write(path, bytes);
     }
 }
 
@@ -753,7 +774,7 @@ pub(crate) fn apply_anthropic_request_metadata(body: &mut Value, provider: &Prov
     });
 }
 
-fn build_headers(provider: &ProviderConfig) -> Result<HeaderMap> {
+fn build_headers(provider: &ProviderConfig, body: Option<&Value>) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
@@ -775,9 +796,16 @@ fn build_headers(provider: &ProviderConfig) -> Result<HeaderMap> {
             HeaderValue::from_static("2023-06-01"),
         );
         // Claude Code typically sends these beta features.
+        let mut betas = vec!["prompt-caching-2024-07-31", "pdfs-2024-09-25"];
+        if body_uses_global_prompt_cache_scope(body) {
+            betas.push("prompt-caching-scope-2026-01-05");
+        }
+        if body_uses_tool_search_features(body) {
+            betas.push(beta_headers::TOOL_SEARCH_BETA_1P);
+        }
         headers.insert(
             HeaderName::from_static("anthropic-beta"),
-            HeaderValue::from_static("prompt-caching-2024-07-31,pdfs-2024-09-25"),
+            HeaderValue::from_str(&betas.join(","))?,
         );
     } else {
         headers.insert(
@@ -809,6 +837,81 @@ fn build_headers(provider: &ProviderConfig) -> Result<HeaderMap> {
     Ok(headers)
 }
 
+fn body_uses_global_prompt_cache_scope(body: Option<&Value>) -> bool {
+    body.and_then(|payload| payload.get("system"))
+        .and_then(Value::as_array)
+        .is_some_and(|blocks| {
+            blocks.iter().any(|block| {
+                block
+                    .get("cache_control")
+                    .and_then(|cache| cache.get("scope"))
+                    .and_then(Value::as_str)
+                    == Some("global")
+            })
+        })
+}
+
+fn body_uses_tool_search_features(body: Option<&Value>) -> bool {
+    let Some(payload) = body else {
+        return false;
+    };
+
+    let uses_defer_loading = payload
+        .get("tools")
+        .and_then(Value::as_array)
+        .is_some_and(|tools| {
+            tools.iter().any(|tool| {
+                tool.get("defer_loading").and_then(Value::as_bool) == Some(true)
+                    || tool.get("name").and_then(Value::as_str) == Some("tool_search")
+            })
+        });
+    if uses_defer_loading {
+        return true;
+    }
+
+    payload
+        .get("messages")
+        .and_then(Value::as_array)
+        .is_some_and(|messages| {
+            messages.iter().any(|message| {
+                message
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .is_some_and(|content| {
+                        content.iter().any(|block| {
+                            block.get("type").and_then(Value::as_str) == Some("tool_result")
+                                && block
+                                    .get("content")
+                                    .and_then(Value::as_array)
+                                    .is_some_and(|tool_result_content| {
+                                        tool_result_content
+                                            .iter()
+                                            .any(is_tool_reference_block)
+                                    })
+                        })
+                    })
+            })
+        })
+}
+
+fn merge_anthropic_beta_body_param(body: &mut Value, beta: &str) {
+    let mut betas = body
+        .get("anthropic_beta")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if !betas.iter().any(|existing| existing == beta) {
+        betas.push(beta.to_owned());
+    }
+    body["anthropic_beta"] = json!(betas);
+}
+
 fn to_openai_messages(conversation: &[ConversationEntry]) -> Vec<Value> {
     conversation
         .iter()
@@ -818,14 +921,18 @@ fn to_openai_messages(conversation: &[ConversationEntry]) -> Vec<Value> {
                 "content": entry.history_text(),
             }),
             ConversationRole::User => {
-                if entry.attachments.is_empty() {
+                if entry.content_blocks.is_empty() && entry.attachments.is_empty() {
                     json!({
                         "role": "user",
                         "content": entry.history_text(),
                     })
                 } else {
                     let mut parts = Vec::new();
-                    parts.push(json!({"type": "text", "text": entry.history_text()}));
+                    if !entry.content_blocks.is_empty() {
+                        parts.extend(entry.content_blocks.clone());
+                    } else {
+                        parts.push(json!({"type": "text", "text": entry.history_text()}));
+                    }
                     for att in &entry.attachments {
                         parts.push(json!({
                             "type": "image_url",
@@ -874,13 +981,81 @@ fn to_openai_messages(conversation: &[ConversationEntry]) -> Vec<Value> {
         .collect()
 }
 
-fn to_anthropic_messages(conversation: &[ConversationEntry]) -> (String, Vec<Value>) {
-    let system = conversation
+fn anthropic_user_blocks(entry: &ConversationEntry) -> Vec<Value> {
+    let mut blocks = if entry.content_blocks.is_empty() {
+        vec![json!({"type": "text", "text": entry.history_text()})]
+    } else {
+        entry.content_blocks.clone()
+    };
+    for att in &entry.attachments {
+        blocks.push(json!({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": att.media_type.mime_type(),
+                "data": att.data,
+            }
+        }));
+    }
+    blocks
+}
+
+fn anthropic_tool_result_block(tool_entry: &ConversationEntry) -> Value {
+    let mut tool_result = json!({
+        "type": "tool_result",
+        "tool_use_id": tool_entry.tool_call_id,
+        "content": if tool_entry.content_blocks.is_empty() {
+            Value::String(tool_entry.text.clone())
+        } else {
+            Value::Array(tool_entry.content_blocks.clone())
+        },
+    });
+    if tool_entry.is_error {
+        tool_result["is_error"] = Value::Bool(true);
+    }
+    tool_result
+}
+
+fn append_anthropic_user_blocks(target: &mut Vec<Value>, mut addition: Vec<Value>) {
+    let seam_is_text = target
+        .last()
+        .and_then(|block| block.get("type"))
+        .and_then(Value::as_str)
+        == Some("text")
+        && addition
+            .first()
+            .and_then(|block| block.get("type"))
+            .and_then(Value::as_str)
+            == Some("text");
+
+    if seam_is_text
+        && let Some(Value::Object(last_block)) = target.last_mut()
+        && let Some(Value::String(text)) = last_block.get_mut("text")
+    {
+        text.push('\n');
+    }
+
+    target.append(&mut addition);
+}
+
+fn to_anthropic_messages(conversation: &[ConversationEntry]) -> (Vec<Value>, Vec<Value>) {
+    let mut system = Vec::new();
+    for entry in conversation
         .iter()
         .filter(|entry| matches!(entry.role, ConversationRole::System))
-        .map(ConversationEntry::history_text)
-        .collect::<Vec<_>>()
-        .join("\n\n");
+    {
+        if entry.content_blocks.is_empty() {
+            let text = entry.history_text();
+            if !text.is_empty() {
+                system.push(json!({
+                    "type": "text",
+                    "text": text,
+                }));
+            }
+        } else {
+            system.extend(entry.content_blocks.iter().cloned());
+        }
+    }
     let non_system = conversation
         .iter()
         .filter(|entry| !matches!(entry.role, ConversationRole::System))
@@ -891,24 +1066,6 @@ fn to_anthropic_messages(conversation: &[ConversationEntry]) -> (String, Vec<Val
     while index < non_system.len() {
         let entry = non_system[index];
         match entry.role {
-            ConversationRole::User => {
-                let mut blocks = vec![json!({"type": "text", "text": entry.history_text()})];
-                for att in &entry.attachments {
-                    blocks.push(json!({
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": att.media_type.mime_type(),
-                            "data": att.data,
-                        }
-                    }));
-                }
-                messages.push(json!({
-                    "role": "user",
-                    "content": blocks,
-                }));
-                index += 1;
-            }
             ConversationRole::Assistant => {
                 if entry.content_blocks.is_empty() {
                     let mut blocks = Vec::new();
@@ -935,51 +1092,190 @@ fn to_anthropic_messages(conversation: &[ConversationEntry]) -> (String, Vec<Val
                 }
                 index += 1;
             }
-            ConversationRole::Tool => {
-                let mut blocks = Vec::new();
+            ConversationRole::User | ConversationRole::Tool => {
+                let mut tool_results = Vec::new();
+                let mut user_blocks = Vec::new();
+
                 while index < non_system.len()
-                    && matches!(non_system[index].role, ConversationRole::Tool)
+                    && !matches!(non_system[index].role, ConversationRole::Assistant)
                 {
-                    let tool_entry = non_system[index];
-                    let mut tool_result = json!({
-                        "type": "tool_result",
-                        "tool_use_id": tool_entry.tool_call_id,
-                        "content": tool_entry.text,
-                    });
-                    if tool_entry.is_error {
-                        tool_result["is_error"] = Value::Bool(true);
+                    let grouped_entry = non_system[index];
+                    match grouped_entry.role {
+                        ConversationRole::User => append_anthropic_user_blocks(
+                            &mut user_blocks,
+                            anthropic_user_blocks(grouped_entry),
+                        ),
+                        ConversationRole::Tool => {
+                            tool_results.push(anthropic_tool_result_block(grouped_entry));
+                        }
+                        ConversationRole::System | ConversationRole::Assistant => {}
                     }
-                    blocks.push(tool_result);
                     index += 1;
                 }
-                messages.push(json!({
-                    "role": "user",
-                    "content": blocks,
-                }));
+
+                let mut content = tool_results;
+                content.extend(user_blocks);
+                if !content.is_empty() {
+                    messages.push(json!({
+                        "role": "user",
+                        "content": content,
+                    }));
+                }
             }
-            ConversationRole::System => {
-                index += 1;
-            }
+            ConversationRole::System => index += 1,
         }
     }
 
     (system, messages)
 }
 
-async fn current_openai_tool_schemas() -> Vec<Value> {
-    runtime_provider_tool_specs()
+fn model_supports_tool_reference(model: Option<&str>) -> bool {
+    !model
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .contains("haiku")
+}
+
+fn provider_uses_tool_search(provider: &ProviderConfig, specs: &[ToolSpec]) -> bool {
+    matches!(
+        provider.protocol,
+        ProviderProtocol::Anthropic | ProviderProtocol::Bedrock | ProviderProtocol::Vertex
+    ) && model_supports_tool_reference(provider.model.as_deref())
+        && specs.iter().any(ToolSpec::is_tool_search)
+        && specs.iter().any(ToolSpec::is_deferred)
+}
+
+async fn current_provider_tool_specs_for_request(
+    provider: &ProviderConfig,
+    conversation: &[ConversationEntry],
+) -> Vec<ToolSpec> {
+    let specs = runtime_provider_tool_specs().await;
+    if provider_uses_tool_search(provider, &specs) {
+        return runtime_visible_provider_tool_specs(conversation).await;
+    }
+
+    specs
+        .into_iter()
+        .filter(|spec| !spec.is_tool_search())
+        .collect()
+}
+
+async fn current_openai_tool_schemas(
+    provider: &ProviderConfig,
+    conversation: &[ConversationEntry],
+) -> Vec<Value> {
+    current_provider_tool_specs_for_request(provider, conversation)
         .await
         .into_iter()
         .map(|tool| tool.to_openai_schema())
         .collect()
 }
 
-async fn current_anthropic_tool_schemas() -> Vec<Value> {
-    runtime_provider_tool_specs()
-        .await
+async fn current_anthropic_tool_schemas(
+    provider: &ProviderConfig,
+    conversation: &[ConversationEntry],
+) -> Vec<Value> {
+    let specs = current_provider_tool_specs_for_request(provider, conversation).await;
+    let tool_search_enabled = provider_uses_tool_search(provider, &specs);
+    specs
         .into_iter()
-        .map(|tool| tool.to_anthropic_schema())
+        .map(|tool| {
+            tool.to_anthropic_schema_with_options(tool_search_enabled && tool.is_deferred())
+        })
         .collect()
+}
+
+fn tool_search_enabled_from_tool_schemas(tools: &[Value]) -> bool {
+    tools
+        .iter()
+        .any(|tool| tool.get("name").and_then(Value::as_str) == Some("tool_search"))
+}
+
+fn available_tool_names_from_schemas(tools: &[Value]) -> BTreeSet<String> {
+    tools.iter()
+        .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn is_tool_reference_block(block: &Value) -> bool {
+    block.get("type").and_then(Value::as_str) == Some("tool_reference")
+}
+
+fn normalize_anthropic_tool_result_content_blocks(
+    content_blocks: &[Value],
+    available_tool_names: &BTreeSet<String>,
+    tool_search_enabled: bool,
+) -> Vec<Value> {
+    let filtered = content_blocks
+        .iter()
+        .filter(|block| {
+            if !is_tool_reference_block(block) {
+                return true;
+            }
+            if !tool_search_enabled {
+                return false;
+            }
+            block.get("tool_name")
+                .and_then(Value::as_str)
+                .is_none_or(|tool_name| available_tool_names.contains(tool_name))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if !filtered.is_empty() {
+        return filtered;
+    }
+
+    vec![json!({
+        "type": "text",
+        "text": if tool_search_enabled {
+            "[Tool references removed - tools no longer available]"
+        } else {
+            "[Tool references removed - tool search not enabled]"
+        },
+    })]
+}
+
+fn normalize_anthropic_conversation_for_tool_search(
+    conversation: &[ConversationEntry],
+    available_tool_names: &BTreeSet<String>,
+    tool_search_enabled: bool,
+) -> Vec<ConversationEntry> {
+    conversation
+        .iter()
+        .cloned()
+        .map(|mut entry| {
+            if entry.role != ConversationRole::Tool
+                || entry.content_blocks.is_empty()
+                || !entry.content_blocks.iter().any(is_tool_reference_block)
+            {
+                return entry;
+            }
+
+            entry.content_blocks = normalize_anthropic_tool_result_content_blocks(
+                &entry.content_blocks,
+                available_tool_names,
+                tool_search_enabled,
+            );
+            entry
+        })
+        .collect()
+}
+
+async fn prepare_anthropic_request_surface(
+    provider: &ProviderConfig,
+    conversation: &[ConversationEntry],
+) -> (Vec<Value>, Vec<Value>, Vec<Value>) {
+    let tools = current_anthropic_tool_schemas(provider, conversation).await;
+    let available_tool_names = available_tool_names_from_schemas(&tools);
+    let normalized_conversation = normalize_anthropic_conversation_for_tool_search(
+        conversation,
+        &available_tool_names,
+        tool_search_enabled_from_tool_schemas(&tools),
+    );
+    let (system, messages) = to_anthropic_messages(&normalized_conversation);
+    (system, messages, tools)
 }
 
 fn parse_openai_response(status: u16, raw_text: String) -> Result<ProviderResponse> {
@@ -1260,6 +1556,24 @@ fn strip_reasoning_tags(text: &str) -> String {
     remaining.trim().to_owned()
 }
 
+fn normalize_tool_cache_order(tools: &mut Vec<Value>) {
+    let mut builtin_tools = Vec::new();
+    let mut mcp_tools = Vec::new();
+    for tool in std::mem::take(tools) {
+        let is_mcp_tool = tool
+            .get("name")
+            .and_then(Value::as_str)
+            .is_some_and(|name| name.starts_with("mcp__"));
+        if is_mcp_tool {
+            mcp_tools.push(tool);
+        } else {
+            builtin_tools.push(tool);
+        }
+    }
+    builtin_tools.extend(mcp_tools);
+    *tools = builtin_tools;
+}
+
 /// Add stable Anthropic prompt caching markers (`cache_control: {"type": "ephemeral"}`)
 /// to strategic locations in the request body so that the system prompt,
 /// tool definitions, and the most recent user message are cached server-side.
@@ -1267,17 +1581,12 @@ fn strip_reasoning_tags(text: &str) -> String {
 /// When `is_resume` is true (conversation has prior tool results), the tool list
 /// is kept exactly as-is to avoid `deferred_tools_delta` cache-miss issues.
 fn add_stable_cache_control(body: &mut Value, is_resume: bool) {
-    // 0. Stabilize tool ordering — sort tools by name for deterministic cache keys.
-    //    This ensures the same tool set always produces the same prefix regardless of
-    //    HashMap iteration order or registration order.
+    // 0. Keep built-in tools as a stable prefix and append MCP tools after them.
+    //    The runtime already produces deterministic ordering within each bucket.
     if let Some(tools) = body.get_mut("tools")
         && let Some(tools_arr) = tools.as_array_mut()
     {
-        tools_arr.sort_by(|a, b| {
-            let name_a = a.get("name").and_then(Value::as_str).unwrap_or("");
-            let name_b = b.get("name").and_then(Value::as_str).unwrap_or("");
-            name_a.cmp(name_b)
-        });
+        normalize_tool_cache_order(tools_arr);
     }
 
     // 1. System message — always ensure array format with cache_control.
@@ -1290,6 +1599,9 @@ fn add_stable_cache_control(body: &mut Value, is_resume: bool) {
                 "cache_control": {"type": "ephemeral"}
             }]);
         } else if let Some(system_arr) = system.as_array_mut()
+            && !system_arr
+                .iter()
+                .any(|block| block.get("cache_control").is_some())
             && let Some(last) = system_arr.last_mut()
         {
             last["cache_control"] = json!({"type": "ephemeral"});
@@ -1487,7 +1799,8 @@ pub fn is_prompt_too_long(error: &ProviderError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        ProviderClient, apply_anthropic_request_metadata, mock_response, parse_anthropic_response,
+        ProviderClient, add_stable_cache_control, apply_anthropic_request_metadata, build_headers,
+        current_anthropic_tool_schemas, mock_response, parse_anthropic_response,
         parse_openai_response, strip_reasoning_tags, to_anthropic_messages, to_openai_messages,
     };
     use axum::{Json, Router, extract::State, routing::post};
@@ -1524,6 +1837,136 @@ mod tests {
     }
 
     #[test]
+    fn cache_control_keeps_builtin_tools_before_mcp_tools() {
+        let mut body = json!({
+            "tools": [
+                {"name": "mcp__zeta__search"},
+                {"name": "read_file"},
+                {"name": "mcp__alpha__lookup"},
+                {"name": "write_file"}
+            ]
+        });
+
+        add_stable_cache_control(&mut body, false);
+
+        let tool_names = body["tools"]
+            .as_array()
+            .unwrap_or_else(|| panic!("tools array"))
+            .iter()
+            .filter_map(|tool| tool.get("name").and_then(serde_json::Value::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            tool_names,
+            vec![
+                "read_file",
+                "write_file",
+                "mcp__zeta__search",
+                "mcp__alpha__lookup",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn anthropic_tool_schemas_only_include_discovered_deferred_tools() {
+        let mut provider = test_provider_config("https://api.anthropic.com/v1/messages".to_owned());
+        provider.protocol = rc_core::ProviderProtocol::Anthropic;
+
+        let initial = current_anthropic_tool_schemas(&provider, &[])
+            .await
+            .into_iter()
+            .filter_map(|tool| {
+                tool.get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+            .collect::<Vec<_>>();
+
+        assert!(initial.iter().any(|name| name == "tool_search"));
+        assert!(initial.iter().any(|name| name == "read_file"));
+        assert!(!initial.iter().any(|name| name == "web_fetch"));
+
+        let discovered = current_anthropic_tool_schemas(&provider, &[ConversationEntry::tool(
+            "tool-1",
+            "tool_search",
+            r#"{"query":"web","results":[{"name":"web_fetch"}]}"#,
+            false,
+        )])
+        .await;
+
+        assert!(discovered.iter().any(|tool| tool.get("name").and_then(serde_json::Value::as_str) == Some("web_fetch")));
+        assert!(discovered.iter().any(|tool| {
+            tool.get("name").and_then(serde_json::Value::as_str) == Some("web_fetch")
+                && tool.get("defer_loading").and_then(serde_json::Value::as_bool) == Some(true)
+        }));
+    }
+
+    #[test]
+    fn cache_control_preserves_existing_system_cache_markers() {
+        let mut body = json!({
+            "system": [
+                {
+                    "type": "text",
+                    "text": "static",
+                    "cache_control": {"type": "ephemeral", "scope": "global"}
+                },
+                {
+                    "type": "text",
+                    "text": "dynamic"
+                }
+            ]
+        });
+
+        add_stable_cache_control(&mut body, false);
+
+        let system = body["system"].as_array().expect("system array");
+        assert_eq!(system[0]["cache_control"]["scope"], "global");
+        assert!(system[1].get("cache_control").is_none());
+    }
+
+    #[test]
+    fn anthropic_headers_include_prompt_caching_scope_when_requested() {
+        let mut provider = test_provider_config("https://api.anthropic.com/v1/messages".to_owned());
+        provider.protocol = rc_core::ProviderProtocol::Anthropic;
+        let body = json!({
+            "system": [
+                {
+                    "type": "text",
+                    "text": "static",
+                    "cache_control": {"type": "ephemeral", "scope": "global"}
+                }
+            ]
+        });
+
+        let headers = build_headers(&provider, Some(&body)).expect("headers");
+        let beta = headers
+            .get("anthropic-beta")
+            .expect("anthropic-beta header")
+            .to_str()
+            .expect("anthropic-beta header should be utf8");
+        assert!(beta.contains("prompt-caching-scope-2026-01-05"));
+    }
+
+    #[test]
+    fn anthropic_headers_include_tool_search_beta_when_tool_search_is_active() {
+        let mut provider = test_provider_config("https://api.anthropic.com/v1/messages".to_owned());
+        provider.protocol = rc_core::ProviderProtocol::Anthropic;
+        let body = json!({
+            "tools": [
+                {"name": "tool_search"},
+                {"name": "web_fetch", "defer_loading": true}
+            ]
+        });
+
+        let headers = build_headers(&provider, Some(&body)).expect("headers");
+        let beta = headers
+            .get("anthropic-beta")
+            .expect("anthropic-beta header")
+            .to_str()
+            .expect("anthropic-beta header should be utf8");
+        assert!(beta.contains(crate::beta_headers::TOOL_SEARCH_BETA_1P));
+    }
+
+    #[test]
     fn mock_provider_uses_latest_prompt() {
         let response = mock_response(&[ConversationEntry::user("hello world")]);
         assert!(response.text.contains("hello world"));
@@ -1536,7 +1979,27 @@ mod tests {
     }
 
     #[test]
-    fn anthropic_messages_emit_each_tool_result_as_separate_user_message() {
+    fn openai_messages_preserve_user_content_blocks() {
+        let mut reminder = ConversationEntry::user(String::new());
+        reminder.history_text = Some("__meta__".to_owned());
+        reminder.content_blocks = vec![json!({
+            "type": "text",
+            "text": "<system-reminder>\nlate connect\n</system-reminder>",
+        })];
+
+        let messages = to_openai_messages(&[reminder]);
+        let content = messages[0]["content"]
+            .as_array()
+            .expect("content blocks array");
+        assert_eq!(content[0]["type"], "text");
+        assert!(content[0]["text"]
+            .as_str()
+            .expect("text")
+            .contains("system-reminder"));
+    }
+
+    #[test]
+    fn anthropic_messages_emit_standalone_tool_results_when_no_user_prompt_follows() {
         let mut assistant = ConversationEntry::assistant("");
         assistant.tool_calls = vec![
             ToolCall {
@@ -1572,6 +2035,82 @@ mod tests {
     }
 
     #[test]
+    fn anthropic_messages_prepend_tool_results_to_following_user_message() {
+        let mut assistant = ConversationEntry::assistant("");
+        assistant.tool_calls = vec![ToolCall {
+            id: "call-1".to_owned(),
+            name: "replace_in_file".to_owned(),
+            input: json!({"path":"src/main.rs"}),
+        }];
+
+        let (_system, messages) = to_anthropic_messages(&[
+            ConversationEntry::user("inspect"),
+            assistant,
+            ConversationEntry::tool("call-1", "replace_in_file", "interrupted", true),
+            ConversationEntry::user("continue the interrupted task"),
+        ]);
+
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[2]["role"], "user");
+        let content = messages[2]["content"]
+            .as_array()
+            .expect("merged user message should be a content array");
+        assert_eq!(content[0]["type"], "tool_result");
+        assert_eq!(content[0]["tool_use_id"], "call-1");
+        assert_eq!(content[0]["is_error"], true);
+        assert_eq!(content[1]["type"], "text");
+        assert_eq!(content[1]["text"], "continue the interrupted task");
+    }
+
+    #[test]
+    fn anthropic_messages_fold_interleaved_resume_prompts_into_one_user_turn() {
+        let mut assistant = ConversationEntry::assistant("");
+        assistant.tool_calls = vec![ToolCall {
+            id: "call-1".to_owned(),
+            name: "replace_in_file".to_owned(),
+            input: json!({"path":"src/tests.rs"}),
+        }];
+
+        let (_system, messages) = to_anthropic_messages(&[
+            ConversationEntry::user("original prompt"),
+            assistant,
+            ConversationEntry::user("resume prompt 1"),
+            ConversationEntry::tool("call-1", "replace_in_file", "interrupted", true),
+            ConversationEntry::user("resume prompt 2"),
+            ConversationEntry::user("resume prompt 3"),
+        ]);
+
+        assert_eq!(messages.len(), 3);
+        let content = messages[2]["content"]
+            .as_array()
+            .expect("folded user turn should be a content array");
+        assert_eq!(content[0]["type"], "tool_result");
+        assert_eq!(content[0]["tool_use_id"], "call-1");
+        assert_eq!(content[1]["type"], "text");
+        assert_eq!(content[1]["text"], "resume prompt 1\n");
+        assert_eq!(content[2]["type"], "text");
+        assert_eq!(content[2]["text"], "resume prompt 2\n");
+        assert_eq!(content[3]["type"], "text");
+        assert_eq!(content[3]["text"], "resume prompt 3");
+    }
+
+    #[test]
+    fn anthropic_messages_preserve_system_content_blocks() {
+        let mut system = ConversationEntry::system("flattened fallback");
+        system.content_blocks = vec![
+            json!({"type": "text", "text": "block 1"}),
+            json!({"type": "text", "text": "block 2"}),
+        ];
+
+        let (system_blocks, _messages) = to_anthropic_messages(&[system]);
+
+        assert_eq!(system_blocks.len(), 2);
+        assert_eq!(system_blocks[0]["text"], "block 1");
+        assert_eq!(system_blocks[1]["text"], "block 2");
+    }
+
+    #[test]
     fn anthropic_messages_only_emit_is_error_for_failed_tool_results() {
         let mut assistant = ConversationEntry::assistant("");
         assistant.tool_calls = vec![ToolCall {
@@ -1590,6 +2129,32 @@ mod tests {
             .as_array()
             .expect("tool results should be a content array");
         assert_eq!(tool_results[0]["is_error"], true);
+    }
+
+    #[test]
+    fn anthropic_tool_results_preserve_structured_content_blocks() {
+        let mut assistant = ConversationEntry::assistant("");
+        assistant.tool_calls = vec![ToolCall {
+            id: "call-1".to_owned(),
+            name: "tool_search".to_owned(),
+            input: json!({"query":"select:read_mcp_resource"}),
+        }];
+
+        let mut tool = ConversationEntry::tool("call-1", "tool_search", "structured", false);
+        tool.content_blocks = vec![json!({
+            "type": "tool_reference",
+            "tool_name": "read_mcp_resource",
+        })];
+
+        let (_system, messages) =
+            to_anthropic_messages(&[ConversationEntry::user("load tool"), assistant, tool]);
+        let tool_results = messages[2]["content"]
+            .as_array()
+            .expect("tool results should be a content array");
+        assert_eq!(tool_results[0]["type"], "tool_result");
+        assert!(tool_results[0]["content"].is_array());
+        assert_eq!(tool_results[0]["content"][0]["type"], "tool_reference");
+        assert_eq!(tool_results[0]["content"][0]["tool_name"], "read_mcp_resource");
     }
 
     #[test]

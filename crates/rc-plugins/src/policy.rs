@@ -339,7 +339,12 @@ mod tests {
         let policy = make_policy(&[], &[], None, true);
         let result = check_plugin_policy(&policy, "p@m", Some("m"), 0);
         assert!(!result.allowed);
-        assert!(result.reason.unwrap().contains("approval"));
+        assert!(
+            result
+                .reason
+                .expect("blocked policy should include a reason")
+                .contains("approval")
+        );
     }
 
     #[test]
@@ -386,7 +391,7 @@ mod tests {
     #[test]
     fn merge_single_returns_clone() {
         let p = make_policy(&["s"], &["b"], Some(1), true);
-        let merged = merge_policies(&[p.clone()]);
+        let merged = merge_policies(std::slice::from_ref(&p));
         assert_eq!(merged, p);
     }
 

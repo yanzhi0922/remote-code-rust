@@ -68,6 +68,5 @@ mod tests {
     #[test]
     fn backend_module_compiles() {
         // If this compiles, the module structure is correct.
-        assert!(true);
     }
 }

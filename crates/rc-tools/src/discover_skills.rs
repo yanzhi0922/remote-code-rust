@@ -578,8 +578,8 @@ mod tests {
         let input = json!({});
         let context = ToolExecutionContext::default();
         let result = discover_skills(&input, &context);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("query"));
+        let error = result.expect_err("missing query should return an error");
+        assert!(error.to_string().contains("query"));
     }
 
     #[test]
@@ -595,9 +595,10 @@ mod tests {
         let input = json!({"query": "nonexistent-skill-xyz-123"});
         let context = ToolExecutionContext::default();
         let result = discover_skills(&input, &context);
-        assert!(result.is_ok());
-        let parsed: Value = serde_json::from_str(&result.unwrap()).expect("valid json");
-        assert_eq!(parsed["results"].as_array().unwrap().len(), 0);
+        let output = result.expect("no-result query should still return JSON");
+        let parsed: Value = serde_json::from_str(&output).expect("valid json");
+        let results = parsed["results"].as_array().expect("results array");
+        assert_eq!(results.len(), 0);
     }
 
     #[test]
@@ -648,8 +649,8 @@ mod tests {
         assert!(!results.is_empty());
         // Both rust skills should appear, but the one with more matches should rank higher.
         let rust_results: Vec<&str> = results.iter().map(|r| r.skill.name.as_str()).collect();
-        assert!(rust_results.iter().any(|n| *n == "rust-expert"));
-        assert!(rust_results.iter().any(|n| *n == "rust-beginner"));
+        assert!(rust_results.contains(&"rust-expert"));
+        assert!(rust_results.contains(&"rust-beginner"));
     }
 
     #[test]

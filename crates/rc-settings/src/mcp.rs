@@ -192,9 +192,10 @@ mod tests {
             server_command: None,
             server_url: None,
         };
-        let json = serde_json::to_string(&entry).unwrap();
+        let json = serde_json::to_string(&entry).expect("MCP entry should serialize");
         assert!(json.contains("test-server"));
-        let deserialized: AllowedMcpServerEntry = serde_json::from_str(&json).unwrap();
+        let deserialized: AllowedMcpServerEntry =
+            serde_json::from_str(&json).expect("MCP entry should deserialize");
         assert_eq!(deserialized.server_name, Some("test-server".to_string()));
     }
 }

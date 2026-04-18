@@ -629,28 +629,6 @@ fn start_agent_tracking(
     Ok((task_id, parent_task_id, depth))
 }
 
-pub(crate) fn enter_plan_mode(input: &Value) -> Result<String> {
-    let objective = input["objective"]
-        .as_str()
-        .ok_or_else(|| anyhow!("objective is required"))?;
-
-    Ok(json!({
-        "type": "enter_plan_mode",
-        "objective": objective,
-        "message": format!("Entering plan mode. Objective: {objective}"),
-        "note": "In plan mode, tools are read-only. No modifications will be made."
-    })
-    .to_string())
-}
-
-pub(crate) fn exit_plan_mode(_input: &Value) -> Result<String> {
-    Ok(json!({
-        "type": "exit_plan_mode",
-        "message": "Exiting plan mode. Resuming normal execution."
-    })
-    .to_string())
-}
-
 /// Truncate a string to `max_bytes` bytes, respecting UTF-8 boundaries.
 fn truncate_str(text: &str, max_bytes: usize) -> String {
     if text.len() <= max_bytes {

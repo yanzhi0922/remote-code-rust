@@ -272,7 +272,7 @@ mod tests {
             .as_secs();
         let info = RateLimitInfo::new(10, 100, now + 60);
         let secs = info.seconds_until_reset();
-        assert!(secs >= 59 && secs <= 61, "expected ~60, got {secs}");
+        assert!((59..=61).contains(&secs), "expected ~60, got {secs}");
     }
 
     #[test]

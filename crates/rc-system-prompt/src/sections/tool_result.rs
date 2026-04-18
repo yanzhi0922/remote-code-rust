@@ -1,4 +1,4 @@
-//! Tool Result Clearing + Summarize section.
+//! Tool result clearing and summarize sections.
 //!
 //! Matches `getFunctionResultClearingSection()` and `SUMMARIZE_TOOL_RESULTS_SECTION`
 //! in Claude Code's `prompts.ts`.
@@ -11,24 +11,32 @@ use crate::sections::SystemPromptSection;
 /// The summarize tool results instruction.
 pub const SUMMARIZE_TOOL_RESULTS_SECTION: &str = "When working with tool results, write down any important information you might need later in your response, as the original tool result may be cleared later.";
 
-/// The function result clearing section.
+/// Function result clearing section.
 ///
-/// Only included when cached microcompact is enabled and the model is supported.
-/// For now, returns the summarize guidance unconditionally.
+/// This is gated in Claude Code by the cached microcompact feature and runtime
+/// model support. External builds normally omit it, but the section name and
+/// position must still exist in the registry.
+pub struct FunctionResultClearingSection;
+
+impl SystemPromptSection for FunctionResultClearingSection {
+    fn name(&self) -> &str {
+        "frc"
+    }
+
+    fn compute(&self, _ctx: &PromptContext) -> Result<Option<String>> {
+        Ok(None)
+    }
+}
+
+/// Summarize tool results section.
 pub struct ToolResultSection;
 
 impl SystemPromptSection for ToolResultSection {
     fn name(&self) -> &str {
-        "tool_result"
+        "summarize_tool_results"
     }
 
     fn compute(&self, _ctx: &PromptContext) -> Result<Option<String>> {
-        // In the full implementation, this would check:
-        // 1. Whether cached microcompact is enabled
-        // 2. Whether the model is supported
-        // 3. Whether systemPromptSuggestSummaries is true
-        //
-        // For now, always include the summarize guidance.
         Ok(Some(SUMMARIZE_TOOL_RESULTS_SECTION.to_string()))
     }
 }
@@ -61,6 +69,7 @@ mod tests {
             language: None,
             output_style: None,
             mcp_clients: vec![],
+            mcp_instructions_delta_enabled: false,
             is_worktree: false,
             additional_dirs: vec![],
             is_non_interactive: false,
@@ -89,5 +98,13 @@ mod tests {
     fn summarize_constant_is_sensible() {
         assert!(SUMMARIZE_TOOL_RESULTS_SECTION.len() > 50);
         assert!(SUMMARIZE_TOOL_RESULTS_SECTION.contains("tool result"));
+    }
+
+    #[test]
+    fn function_result_clearing_section_is_gated_off_by_default() {
+        let section = FunctionResultClearingSection;
+        let result = section.compute(&test_ctx()).expect("compute ok");
+        assert!(result.is_none());
+        assert_eq!(section.name(), "frc");
     }
 }

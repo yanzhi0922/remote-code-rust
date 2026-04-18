@@ -561,12 +561,15 @@ fn default_stop_reason() -> String {
 }
 
 /// Result of executing a tool.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolResult {
     /// The tool output content.
     pub content: String,
     /// Whether the tool execution resulted in an error.
     pub is_error: bool,
+    /// Provider-facing structured content blocks (for example `tool_reference`).
+    #[serde(default)]
+    pub content_blocks: Vec<Value>,
 }
 
 /// Fully-resolved execution request for a concrete sub-agent runtime.

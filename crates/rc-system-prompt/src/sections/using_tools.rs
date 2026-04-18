@@ -20,39 +20,76 @@ const TODO_WRITE_TOOL_NAME: &str = "TodoWrite";
 /// The "Using your tools" section.
 pub struct UsingToolsSection;
 
+fn has_tool(ctx: &PromptContext, candidates: &[&str]) -> bool {
+    candidates
+        .iter()
+        .any(|name| ctx.enabled_tools.contains(*name))
+}
+
 impl SystemPromptSection for UsingToolsSection {
     fn name(&self) -> &str {
         "using_tools"
     }
 
     fn compute(&self, ctx: &PromptContext) -> Result<Option<String>> {
-        let task_tool_name = if ctx.enabled_tools.contains(TASK_CREATE_TOOL_NAME) {
+        let task_tool_name = if has_tool(ctx, &[TASK_CREATE_TOOL_NAME, "task_create", "TaskCreate"])
+        {
             Some(TASK_CREATE_TOOL_NAME)
-        } else if ctx.enabled_tools.contains(TODO_WRITE_TOOL_NAME) {
+        } else if has_tool(ctx, &[TODO_WRITE_TOOL_NAME, "todo_write"]) {
             Some(TODO_WRITE_TOOL_NAME)
         } else {
             None
         };
 
-        let provided_tool_subitems = vec![
-            format!("To read files use {FILE_READ_TOOL_NAME} instead of cat, head, tail, or sed"),
-            format!("To edit files use {FILE_EDIT_TOOL_NAME} instead of sed or awk"),
-            format!(
+        let mut provided_tool_subitems = Vec::new();
+        if has_tool(ctx, &[FILE_READ_TOOL_NAME, "read_file", "ReadFile"]) {
+            provided_tool_subitems.push(format!(
+                "To read files use {FILE_READ_TOOL_NAME} instead of cat, head, tail, or sed"
+            ));
+        }
+        if has_tool(
+            ctx,
+            &[
+                FILE_EDIT_TOOL_NAME,
+                "edit_file",
+                "EditFile",
+                "replace_in_file",
+                "ReplaceInFile",
+            ],
+        ) {
+            provided_tool_subitems.push(format!(
+                "To edit files use {FILE_EDIT_TOOL_NAME} instead of sed or awk"
+            ));
+        }
+        if has_tool(ctx, &[FILE_WRITE_TOOL_NAME, "write_file", "WriteFile"]) {
+            provided_tool_subitems.push(format!(
                 "To create files use {FILE_WRITE_TOOL_NAME} instead of cat with heredoc or echo redirection"
-            ),
-            format!("To search for files use {GLOB_TOOL_NAME} instead of find or ls"),
-            format!("To search the content of files, use {GREP_TOOL_NAME} instead of grep or rg"),
-            format!(
+            ));
+        }
+        if has_tool(ctx, &[GLOB_TOOL_NAME, "glob"]) {
+            provided_tool_subitems.push(format!(
+                "To search for files use {GLOB_TOOL_NAME} instead of find or ls"
+            ));
+        }
+        if has_tool(ctx, &[GREP_TOOL_NAME, "grep"]) {
+            provided_tool_subitems.push(format!(
+                "To search the content of files, use {GREP_TOOL_NAME} instead of grep or rg"
+            ));
+        }
+        if has_tool(ctx, &[BASH_TOOL_NAME, "bash_command"]) {
+            provided_tool_subitems.push(format!(
                 "Reserve using the {BASH_TOOL_NAME} exclusively for system commands and terminal operations that require shell execution. If you are unsure and there is a relevant dedicated tool, default to using the dedicated tool and only fallback on using the {BASH_TOOL_NAME} tool for these if it is absolutely necessary."
-            ),
-        ];
+            ));
+        }
 
-        let mut items: Vec<BulletItem> = vec![
-            BulletItem::Single(format!(
+        let mut items: Vec<BulletItem> = Vec::new();
+
+        if !provided_tool_subitems.is_empty() {
+            items.push(BulletItem::Single(format!(
                 "Do NOT use the {BASH_TOOL_NAME} to run commands when a relevant dedicated tool is provided. Using dedicated tools allows the user to better understand and review your work. This is CRITICAL to assisting the user:"
-            )),
-            BulletItem::Nested(provided_tool_subitems),
-        ];
+            )));
+            items.push(BulletItem::Nested(provided_tool_subitems));
+        }
 
         if let Some(task_name) = task_tool_name {
             items.push(BulletItem::Single(format!(
@@ -63,6 +100,10 @@ impl SystemPromptSection for UsingToolsSection {
         items.push(BulletItem::Single(
             "You can call multiple tools in a single response. If you intend to call multiple tools and there are no dependencies between them, make all independent tool calls in parallel. Maximize use of parallel tool calls where possible to increase efficiency. However, if some tool calls depend on previous calls to inform dependent values, do NOT call these tools in parallel and instead call them sequentially. For instance, if one operation must complete before another starts, run these operations sequentially instead.".to_string(),
         ));
+
+        if items.is_empty() {
+            return Ok(None);
+        }
 
         Ok(Some(section_with_bullets("Using your tools", &items)))
     }
@@ -85,6 +126,7 @@ mod tests {
             language: None,
             output_style: None,
             mcp_clients: vec![],
+            mcp_instructions_delta_enabled: false,
             is_worktree: false,
             additional_dirs: vec![],
             is_non_interactive: false,
@@ -97,7 +139,7 @@ mod tests {
     fn using_tools_starts_with_header() {
         let section = UsingToolsSection;
         let result = section
-            .compute(&test_ctx_with_tools(&[]))
+            .compute(&test_ctx_with_tools(&[FILE_READ_TOOL_NAME, BASH_TOOL_NAME]))
             .expect("compute ok");
         let content = result.expect("should be Some");
         assert!(content.starts_with("# Using your tools"));
@@ -107,7 +149,12 @@ mod tests {
     fn using_tools_mentions_dedicated_tools() {
         let section = UsingToolsSection;
         let result = section
-            .compute(&test_ctx_with_tools(&[]))
+            .compute(&test_ctx_with_tools(&[
+                FILE_READ_TOOL_NAME,
+                FILE_EDIT_TOOL_NAME,
+                FILE_WRITE_TOOL_NAME,
+                BASH_TOOL_NAME,
+            ]))
             .expect("compute ok");
         let content = result.expect("should be Some");
         assert!(content.contains(FILE_READ_TOOL_NAME));
@@ -130,9 +177,22 @@ mod tests {
     fn using_tools_mentions_parallel_execution() {
         let section = UsingToolsSection;
         let result = section
-            .compute(&test_ctx_with_tools(&[]))
+            .compute(&test_ctx_with_tools(&[BASH_TOOL_NAME]))
             .expect("compute ok");
         let content = result.expect("should be Some");
         assert!(content.contains("parallel"));
+    }
+
+    #[test]
+    fn using_tools_omits_unavailable_dedicated_tools() {
+        let section = UsingToolsSection;
+        let result = section
+            .compute(&test_ctx_with_tools(&[BASH_TOOL_NAME]))
+            .expect("compute ok");
+        let content = result.expect("should be Some");
+        assert!(!content.contains(FILE_READ_TOOL_NAME));
+        assert!(!content.contains(FILE_EDIT_TOOL_NAME));
+        assert!(!content.contains(FILE_WRITE_TOOL_NAME));
+        assert!(content.contains(BASH_TOOL_NAME));
     }
 }

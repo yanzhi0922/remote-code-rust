@@ -461,36 +461,6 @@ impl StdioMcpSession {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::resolve_stdio_command;
-
-    #[test]
-    fn resolve_stdio_command_preserves_explicit_extension() {
-        assert_eq!(resolve_stdio_command("python.exe"), "python.exe");
-    }
-
-    #[test]
-    fn resolve_stdio_command_preserves_relative_paths() {
-        assert_eq!(
-            resolve_stdio_command(".\\scripts\\server.cmd"),
-            ".\\scripts\\server.cmd"
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn resolve_stdio_command_prefers_windows_wrappers_when_available() {
-        let resolved = resolve_stdio_command("npx");
-        assert!(
-            resolved.eq_ignore_ascii_case("npx")
-                || resolved.to_ascii_lowercase().ends_with("npx.cmd")
-                || resolved.to_ascii_lowercase().ends_with("npx.exe"),
-            "unexpected resolved command: {resolved}"
-        );
-    }
-}
-
 async fn write_message<T: Serialize>(
     stdin: &mut ChildStdin,
     server: &str,
@@ -589,4 +559,34 @@ async fn wait_for_response<T: DeserializeOwned>(
 async fn shutdown_child(child: &mut Child) {
     let _ = child.start_kill();
     let _ = child.wait().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_stdio_command;
+
+    #[test]
+    fn resolve_stdio_command_preserves_explicit_extension() {
+        assert_eq!(resolve_stdio_command("python.exe"), "python.exe");
+    }
+
+    #[test]
+    fn resolve_stdio_command_preserves_relative_paths() {
+        assert_eq!(
+            resolve_stdio_command(".\\scripts\\server.cmd"),
+            ".\\scripts\\server.cmd"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolve_stdio_command_prefers_windows_wrappers_when_available() {
+        let resolved = resolve_stdio_command("npx");
+        assert!(
+            resolved.eq_ignore_ascii_case("npx")
+                || resolved.to_ascii_lowercase().ends_with("npx.cmd")
+                || resolved.to_ascii_lowercase().ends_with("npx.exe"),
+            "unexpected resolved command: {resolved}"
+        );
+    }
 }

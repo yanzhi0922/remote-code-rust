@@ -374,6 +374,11 @@ mod tests {
         })
         .await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("401"));
+        assert!(
+            result
+                .expect_err("non-retryable error should be returned")
+                .to_string()
+                .contains("401")
+        );
     }
 }

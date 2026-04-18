@@ -251,9 +251,8 @@ pub fn resolve_runtime_mcp_server(
     let match_entry = discovery
         .servers
         .iter()
-        .filter(|entry| entry.server.name == server_name)
-        .cloned()
-        .next();
+        .find(|entry| entry.server.name == server_name)
+        .cloned();
 
     match match_entry {
         Some(entry) => Ok(RuntimeMcpResolution {

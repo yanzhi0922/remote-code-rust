@@ -28,14 +28,14 @@
 //! **Dynamic (per-session):**
 //! 8. Session-specific Guidance
 //! 9. Memory
-//! 10. Environment Info
-//! 11. Language
-//! 12. Output Style
-//! 13. MCP Instructions
-//! 14. Scratchpad
-//! 15. Function Result Clearing
-//! 16. Summarize Tool Results
-//! 17. Proactive (if enabled)
+//! 10. Ant model override
+//! 11. Environment Info
+//! 12. Language
+//! 13. Output Style
+//! 14. MCP Instructions
+//! 15. Scratchpad
+//! 16. Function Result Clearing
+//! 17. Summarize Tool Results
 
 pub mod cache;
 pub mod sections;
@@ -48,24 +48,20 @@ use anyhow::Result;
 use cache::{SYSTEM_PROMPT_DYNAMIC_BOUNDARY, SectionCache};
 use sections::SystemPromptSection;
 use sections::actions::ActionsSection;
-use sections::coordinator::CoordinatorSection;
+use sections::ant_model_override::AntModelOverrideSection;
 use sections::doing_tasks::DoingTasksSection;
 use sections::env_info::EnvInfoSection;
-use sections::hooks::HooksSection;
 use sections::intro::IntroSection;
 use sections::language::LanguageSection;
 use sections::mcp_instructions::McpInstructionsSection;
 use sections::memory::MemorySection;
 use sections::output_efficiency::OutputEfficiencySection;
 use sections::output_style::OutputStyleSection;
-use sections::proactive::ProactiveSection;
 use sections::scratchpad::ScratchpadSection;
 use sections::session_guidance::SessionGuidanceSection;
 use sections::system::SystemSection;
-use sections::system_reminders::SystemRemindersSection;
-use sections::token_budget::TokenBudgetSection;
 use sections::tone_style::ToneStyleSection;
-use sections::tool_result::ToolResultSection;
+use sections::tool_result::{FunctionResultClearingSection, ToolResultSection};
 use sections::using_tools::UsingToolsSection;
 
 /// Configuration for a custom output style.
@@ -115,6 +111,9 @@ pub struct PromptContext {
     pub output_style: Option<OutputStyleConfig>,
     /// Connected MCP server clients.
     pub mcp_clients: Vec<McpClientInfo>,
+    /// When true, MCP instructions are carried in runtime delta messages rather
+    /// than recomputed inside the system prompt each turn.
+    pub mcp_instructions_delta_enabled: bool,
     /// Whether this is a git worktree session.
     pub is_worktree: bool,
     /// Additional working directories beyond cwd.
@@ -125,6 +124,163 @@ pub struct PromptContext {
     pub is_fork_subagent_enabled: bool,
     /// ISO 8601 date string for when the session started.
     pub session_start_date: String,
+}
+
+/// Cache scope for a provider-facing system prompt block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheScope {
+    /// Cacheable across requests when global prompt caching is allowed.
+    Global,
+    /// Cacheable without a global scope marker.
+    Org,
+}
+
+/// Provider-facing system prompt block with resolved cache semantics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SystemPromptBlock {
+    /// Text content of the block.
+    pub text: String,
+    /// Optional cache scope for this block.
+    pub cache_scope: Option<CacheScope>,
+}
+
+/// Inputs for applying Claude Code's effective-system-prompt precedence.
+#[derive(Debug, Clone, Default)]
+pub struct EffectiveSystemPromptOptions {
+    /// Main-thread agent prompt. In normal mode this replaces the default
+    /// system prompt; in proactive mode it is appended as custom agent
+    /// instructions.
+    pub agent_system_prompt: Option<String>,
+    /// Coordinator-mode prompt. This takes precedence over agent/custom/default
+    /// when coordinator mode is active and there is no main-thread agent.
+    pub coordinator_system_prompt: Option<String>,
+    /// User-specified custom system prompt (`--system-prompt`).
+    pub custom_system_prompt: Option<String>,
+    /// User-specified append system prompt (`--append-system-prompt`).
+    pub append_system_prompt: Option<String>,
+    /// Override prompt used by loop/override modes. Replaces everything,
+    /// including append-system-prompt.
+    pub override_system_prompt: Option<String>,
+    /// Whether the proactive/Kairos prompt path is active.
+    pub proactive_active: bool,
+}
+
+/// Apply the same precedence as Claude Code's `buildEffectiveSystemPrompt()`.
+#[must_use]
+pub fn build_effective_system_prompt(
+    default_system_prompt: Vec<String>,
+    options: &EffectiveSystemPromptOptions,
+) -> Vec<String> {
+    if let Some(override_prompt) = non_empty(options.override_system_prompt.as_deref()) {
+        return vec![override_prompt.to_owned()];
+    }
+
+    if let Some(coordinator_prompt) = non_empty(options.coordinator_system_prompt.as_deref())
+        && options
+            .agent_system_prompt
+            .as_deref()
+            .is_none_or(str::is_empty)
+    {
+        return append_if_present(vec![coordinator_prompt.to_owned()], options);
+    }
+
+    if let Some(agent_prompt) = non_empty(options.agent_system_prompt.as_deref()) {
+        if options.proactive_active {
+            let mut prompt = default_system_prompt;
+            prompt.push(format!("\n# Custom Agent Instructions\n{agent_prompt}"));
+            return append_if_present(prompt, options);
+        }
+        return append_if_present(vec![agent_prompt.to_owned()], options);
+    }
+
+    if let Some(custom_prompt) = non_empty(options.custom_system_prompt.as_deref()) {
+        return append_if_present(vec![custom_prompt.to_owned()], options);
+    }
+
+    append_if_present(default_system_prompt, options)
+}
+
+fn append_if_present(
+    mut prompt: Vec<String>,
+    options: &EffectiveSystemPromptOptions,
+) -> Vec<String> {
+    if let Some(append_prompt) = non_empty(options.append_system_prompt.as_deref()) {
+        prompt.push(append_prompt.to_owned());
+    }
+    prompt
+}
+
+fn non_empty(value: Option<&str>) -> Option<&str> {
+    value.filter(|value| !value.is_empty())
+}
+
+/// Options controlling how the raw system prompt is split for API transport.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SystemPromptSplitOptions {
+    /// When true, collapse the prompt into org-scoped blocks instead of using
+    /// the static/dynamic boundary for global cache scope.
+    pub skip_global_cache_for_system_prompt: bool,
+}
+
+/// Split raw system prompt blocks into provider-facing blocks with cache scope.
+#[must_use]
+pub fn split_system_prompt_for_api(
+    raw_blocks: &[String],
+    options: &SystemPromptSplitOptions,
+) -> Vec<SystemPromptBlock> {
+    let join_blocks = |blocks: &[String]| {
+        blocks
+            .iter()
+            .map(String::as_str)
+            .filter(|block| {
+                let trimmed = block.trim();
+                !trimmed.is_empty() && trimmed != SYSTEM_PROMPT_DYNAMIC_BOUNDARY
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    };
+
+    if options.skip_global_cache_for_system_prompt {
+        let joined = join_blocks(raw_blocks);
+        return (!joined.is_empty())
+            .then_some(SystemPromptBlock {
+                text: joined,
+                cache_scope: Some(CacheScope::Org),
+            })
+            .into_iter()
+            .collect();
+    }
+
+    if let Some(boundary_index) = raw_blocks
+        .iter()
+        .position(|block| block == SYSTEM_PROMPT_DYNAMIC_BOUNDARY)
+    {
+        let static_joined = join_blocks(&raw_blocks[..boundary_index]);
+        let dynamic_joined = join_blocks(&raw_blocks[boundary_index + 1..]);
+        let mut result = Vec::new();
+        if !static_joined.is_empty() {
+            result.push(SystemPromptBlock {
+                text: static_joined,
+                cache_scope: Some(CacheScope::Global),
+            });
+        }
+        if !dynamic_joined.is_empty() {
+            result.push(SystemPromptBlock {
+                text: dynamic_joined,
+                cache_scope: None,
+            });
+        }
+        return result;
+    }
+
+    let joined = join_blocks(raw_blocks);
+    (!joined.is_empty())
+        .then_some(SystemPromptBlock {
+            text: joined,
+            cache_scope: Some(CacheScope::Org),
+        })
+        .into_iter()
+        .collect()
 }
 
 /// Main system prompt builder.
@@ -173,6 +329,9 @@ impl SystemPromptBuilder {
             .dynamic_sections
             .push(Box::new(SessionGuidanceSection));
         builder.dynamic_sections.push(Box::new(MemorySection));
+        builder
+            .dynamic_sections
+            .push(Box::new(AntModelOverrideSection));
         builder.dynamic_sections.push(Box::new(EnvInfoSection));
         builder.dynamic_sections.push(Box::new(LanguageSection));
         builder.dynamic_sections.push(Box::new(OutputStyleSection));
@@ -180,14 +339,10 @@ impl SystemPromptBuilder {
             .dynamic_sections
             .push(Box::new(McpInstructionsSection));
         builder.dynamic_sections.push(Box::new(ScratchpadSection));
-        builder.dynamic_sections.push(Box::new(ToolResultSection));
-        builder.dynamic_sections.push(Box::new(TokenBudgetSection));
-        builder.dynamic_sections.push(Box::new(HooksSection));
         builder
             .dynamic_sections
-            .push(Box::new(SystemRemindersSection));
-        builder.dynamic_sections.push(Box::new(CoordinatorSection));
-        builder.dynamic_sections.push(Box::new(ProactiveSection));
+            .push(Box::new(FunctionResultClearingSection));
+        builder.dynamic_sections.push(Box::new(ToolResultSection));
 
         builder
     }
@@ -299,11 +454,12 @@ pub fn test_prompt_context() -> PromptContext {
         os_version: "Linux 6.6.4".to_string(),
         enabled_tools: HashSet::new(),
         language: None,
-        output_style: None,
-        mcp_clients: vec![],
-        is_worktree: false,
-        additional_dirs: vec![],
-        is_non_interactive: false,
+            output_style: None,
+            mcp_clients: vec![],
+            mcp_instructions_delta_enabled: false,
+            is_worktree: false,
+            additional_dirs: vec![],
+            is_non_interactive: false,
         is_fork_subagent_enabled: false,
         session_start_date: "2025-01-01".to_string(),
     }
@@ -324,7 +480,7 @@ mod tests {
     fn builder_with_defaults_has_sections() {
         let builder = SystemPromptBuilder::with_default_sections();
         assert_eq!(builder.static_section_count(), 7);
-        assert_eq!(builder.dynamic_section_count(), 13);
+        assert_eq!(builder.dynamic_section_count(), 10);
     }
 
     #[test]
@@ -355,9 +511,9 @@ mod tests {
             .expect("boundary should exist");
 
         // Static content before boundary
-        for i in 0..boundary_idx {
+        for (i, section) in result.iter().enumerate().take(boundary_idx) {
             assert!(
-                !result[i].is_empty(),
+                !section.is_empty(),
                 "Static section {i} should not be empty"
             );
         }
@@ -418,17 +574,14 @@ mod tests {
             vec![
                 "session_guidance",
                 "memory",
-                "env_info",
+                "ant_model_override",
+                "env_info_simple",
                 "language",
                 "output_style",
                 "mcp_instructions",
                 "scratchpad",
-                "tool_result",
-                "token_budget",
-                "hooks",
-                "system_reminders",
-                "coordinator",
-                "proactive"
+                "frc",
+                "summarize_tool_results"
             ]
         );
     }
@@ -457,6 +610,66 @@ mod tests {
 
         // Dynamic sections (env_info always present)
         assert!(combined.contains("# Environment"), "env_info");
+    }
+
+    #[test]
+    fn effective_system_prompt_override_replaces_everything() {
+        let prompt = build_effective_system_prompt(
+            vec!["default".to_owned()],
+            &EffectiveSystemPromptOptions {
+                override_system_prompt: Some("override".to_owned()),
+                append_system_prompt: Some("append".to_owned()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(prompt, vec!["override".to_owned()]);
+    }
+
+    #[test]
+    fn effective_system_prompt_agent_replaces_default() {
+        let prompt = build_effective_system_prompt(
+            vec!["default".to_owned()],
+            &EffectiveSystemPromptOptions {
+                agent_system_prompt: Some("agent".to_owned()),
+                append_system_prompt: Some("append".to_owned()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(prompt, vec!["agent".to_owned(), "append".to_owned()]);
+    }
+
+    #[test]
+    fn effective_system_prompt_proactive_agent_appends_to_default() {
+        let prompt = build_effective_system_prompt(
+            vec!["default".to_owned()],
+            &EffectiveSystemPromptOptions {
+                agent_system_prompt: Some("agent".to_owned()),
+                append_system_prompt: Some("append".to_owned()),
+                proactive_active: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            prompt,
+            vec![
+                "default".to_owned(),
+                "\n# Custom Agent Instructions\nagent".to_owned(),
+                "append".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn effective_system_prompt_custom_replaces_default_before_append() {
+        let prompt = build_effective_system_prompt(
+            vec!["default".to_owned()],
+            &EffectiveSystemPromptOptions {
+                custom_system_prompt: Some("custom".to_owned()),
+                append_system_prompt: Some("append".to_owned()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(prompt, vec!["custom".to_owned(), "append".to_owned()]);
     }
 
     #[test]
@@ -526,5 +739,52 @@ mod tests {
         assert!(ctx.output_style.is_none());
         assert!(ctx.mcp_clients.is_empty());
         assert!(!ctx.is_non_interactive);
+    }
+
+    #[test]
+    fn split_system_prompt_for_api_uses_global_boundary_when_present() {
+        let raw = vec![
+            "static one".to_owned(),
+            "static two".to_owned(),
+            SYSTEM_PROMPT_DYNAMIC_BOUNDARY.to_owned(),
+            "dynamic one".to_owned(),
+            "dynamic two".to_owned(),
+        ];
+
+        let split = split_system_prompt_for_api(&raw, &SystemPromptSplitOptions::default());
+        assert_eq!(split.len(), 2);
+        assert_eq!(split[0].cache_scope, Some(CacheScope::Global));
+        assert_eq!(split[0].text, "static one\n\nstatic two");
+        assert_eq!(split[1].cache_scope, None);
+        assert_eq!(split[1].text, "dynamic one\n\ndynamic two");
+    }
+
+    #[test]
+    fn split_system_prompt_for_api_can_skip_global_cache_scope() {
+        let raw = vec![
+            "static one".to_owned(),
+            SYSTEM_PROMPT_DYNAMIC_BOUNDARY.to_owned(),
+            "dynamic one".to_owned(),
+        ];
+
+        let split = split_system_prompt_for_api(
+            &raw,
+            &SystemPromptSplitOptions {
+                skip_global_cache_for_system_prompt: true,
+            },
+        );
+        assert_eq!(split.len(), 1);
+        assert_eq!(split[0].cache_scope, Some(CacheScope::Org));
+        assert_eq!(split[0].text, "static one\n\ndynamic one");
+    }
+
+    #[test]
+    fn split_system_prompt_for_api_falls_back_to_org_without_boundary() {
+        let raw = vec!["one".to_owned(), "two".to_owned()];
+
+        let split = split_system_prompt_for_api(&raw, &SystemPromptSplitOptions::default());
+        assert_eq!(split.len(), 1);
+        assert_eq!(split[0].cache_scope, Some(CacheScope::Org));
+        assert_eq!(split[0].text, "one\n\ntwo");
     }
 }

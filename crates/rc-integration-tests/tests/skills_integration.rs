@@ -78,9 +78,9 @@ fn skill_with_front_matter_extracts_metadata() {
     let skill = ok(rc_skills::load_skill(root.join("SKILL.md")));
     assert_eq!(skill.metadata.title, "Custom Skill");
     assert_eq!(skill.metadata.summary.as_deref(), Some("A custom skill"));
-    assert_eq!(skill.metadata.tags, vec!["alpha"]);
-    assert_eq!(skill.metadata.tools, vec!["shell"]);
-    assert_eq!(skill.metadata.triggers, vec!["custom work"]);
+    assert_eq!(skill.metadata.tags, ["alpha"]);
+    assert_eq!(skill.metadata.tools, ["shell"]);
+    assert_eq!(skill.metadata.triggers, ["custom work"]);
 }
 
 // ─── BundledSkill registry ────────────────────────────────────────────────
@@ -204,7 +204,7 @@ fn search_engine_prefetch_tracking() {
 
 #[test]
 fn search_convenience_function() {
-    let docs = vec![rc_skills::search::SkillDocument {
+    let docs = [rc_skills::search::SkillDocument {
         slug: "deploy".to_owned(),
         title: "Deploy".to_owned(),
         summary: "Deploy to cloud".to_owned(),
@@ -274,7 +274,9 @@ fn executor_rejects_empty_slug() {
     };
 
     let executor = rc_skills::executor::SkillExecutor::new();
-    let err = executor.validate_skill(&skill).unwrap_err();
+    let err = executor
+        .validate_skill(&skill)
+        .expect_err("empty slug should fail validation");
     assert!(err.to_string().contains("slug"));
 }
 
@@ -407,7 +409,7 @@ fn skill_metadata_serialization_round_trip() {
     let json = serde_json::to_string(&meta).expect("serialize");
     let decoded: rc_skills::SkillMetadata = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(decoded.slug, "test-meta");
-    assert_eq!(decoded.tags, vec!["test"]);
+    assert_eq!(decoded.tags, ["test"]);
 }
 
 // ─── SkillLockFile parsing ───────────────────────────────────────────────
@@ -452,7 +454,7 @@ fn filter_skills_by_query() {
     ));
 
     let skill = ok(rc_skills::load_skill(root.join("SKILL.md")));
-    let skills = vec![skill];
+    let skills = [skill];
     let filtered = rc_skills::executor::filter_skills_by_query(&skills, "deploy");
     assert_eq!(filtered.len(), 1);
 

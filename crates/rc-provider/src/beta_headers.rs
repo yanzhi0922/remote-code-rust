@@ -30,6 +30,12 @@ pub const STRUCTURED_OUTPUTS_BETA: &str = "structured-outputs-2025-05-14";
 /// Token-efficient tool use beta.
 pub const TOKEN_EFFICIENT_TOOLS_BETA: &str = "token-efficient-tools-2025-02-19";
 
+/// Tool search beta for first-party Anthropic-style providers.
+pub const TOOL_SEARCH_BETA_1P: &str = "advanced-tool-use-2025-11-20";
+
+/// Tool search beta for Bedrock / Vertex Anthropic endpoints.
+pub const TOOL_SEARCH_BETA_3P: &str = "tool-search-tool-2025-10-19";
+
 /// Default beta headers for Anthropic first-party requests.
 pub const DEFAULT_BETA_HEADERS: &[&str] = &[PROMPT_CACHING_BETA, PDFS_BETA];
 

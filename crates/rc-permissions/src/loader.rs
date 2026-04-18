@@ -121,29 +121,32 @@ fn source_priority(source: PermissionRuleSource) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::anyhow;
 
     #[test]
-    fn parse_simple_tool() {
+    fn parse_simple_tool() -> anyhow::Result<()> {
         let rule = parse_rule_string(
             "Read",
             PermissionRuleSource::UserSettings,
             PermissionBehavior::Allow,
         )
-        .unwrap();
+        .ok_or_else(|| anyhow!("expected Read rule to parse"))?;
         assert_eq!(rule.value.tool_name, "Read");
         assert!(rule.value.rule_content.is_none());
+        Ok(())
     }
 
     #[test]
-    fn parse_tool_with_content() {
+    fn parse_tool_with_content() -> anyhow::Result<()> {
         let rule = parse_rule_string(
             "Bash(git *)",
             PermissionRuleSource::UserSettings,
             PermissionBehavior::Allow,
         )
-        .unwrap();
+        .ok_or_else(|| anyhow!("expected Bash rule with content to parse"))?;
         assert_eq!(rule.value.tool_name, "Bash");
         assert_eq!(rule.value.rule_content, Some("git *".to_string()));
+        Ok(())
     }
 
     #[test]
@@ -184,16 +187,15 @@ mod tests {
     }
 
     #[test]
-    fn load_from_json_file() {
-        let dir = tempfile::tempdir().unwrap();
+    fn load_from_json_file() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
         let path = dir.path().join("permissions.json");
         std::fs::write(
             &path,
             r#"{"allow": ["Read", "Bash(git *)"], "deny": ["Bash(rm *)"]}"#,
-        )
-        .unwrap();
+        )?;
 
-        let rules = load_rules_from_file(&path, PermissionRuleSource::UserSettings).unwrap();
+        let rules = load_rules_from_file(&path, PermissionRuleSource::UserSettings)?;
         assert_eq!(rules.len(), 3);
         assert!(
             rules
@@ -205,5 +207,6 @@ mod tests {
                 .iter()
                 .any(|r| r.value.tool_name == "Bash" && r.behavior == PermissionBehavior::Deny)
         );
+        Ok(())
     }
 }

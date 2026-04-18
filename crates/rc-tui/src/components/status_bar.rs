@@ -99,9 +99,8 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::app::App;
-    use crate::message::{McpServerStatus, StatusBarInfo};
+    use crate::message::McpServerStatus;
 
     #[test]
     fn status_bar_default_info() {

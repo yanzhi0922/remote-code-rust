@@ -248,7 +248,7 @@ fn resolve_openai_compatible_auth(
     let base_url = config
         .openai_compatible_base_url
         .clone()
-        .ok_or({ ProviderAuthError::NoAuth })?;
+        .ok_or(ProviderAuthError::NoAuth)?;
 
     Ok(AuthSource::OpenAiCompatible { key, base_url })
 }

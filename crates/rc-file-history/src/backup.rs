@@ -280,124 +280,132 @@ mod tests {
     }
 
     #[test]
-    fn create_backup_existing_file() {
-        let tmp = TempDir::new().unwrap();
+    fn create_backup_existing_file() -> anyhow::Result<()> {
+        let tmp = TempDir::new()?;
         let file_path = tmp.path().join("test.txt");
-        fs::write(&file_path, "hello world").unwrap();
+        fs::write(&file_path, "hello world")?;
 
         let backup_dir = tmp.path().join("backups");
-        let record = create_backup(&file_path, 1, &backup_dir).unwrap();
+        let record = create_backup(&file_path, 1, &backup_dir)?;
 
         assert!(!record.is_null());
         assert_eq!(record.version, 1);
         assert!(record.content_hash.is_some());
         assert!(backup_dir.exists());
+        Ok(())
     }
 
     #[test]
-    fn create_backup_missing_file() {
-        let tmp = TempDir::new().unwrap();
+    fn create_backup_missing_file() -> anyhow::Result<()> {
+        let tmp = TempDir::new()?;
         let file_path = tmp.path().join("nonexistent.txt");
 
         let backup_dir = tmp.path().join("backups");
-        let record = create_backup(&file_path, 1, &backup_dir).unwrap();
+        let record = create_backup(&file_path, 1, &backup_dir)?;
 
         assert!(record.is_null());
         assert!(record.content_hash.is_none());
+        Ok(())
     }
 
     #[test]
-    fn restore_backup_roundtrip() {
-        let tmp = TempDir::new().unwrap();
+    fn restore_backup_roundtrip() -> anyhow::Result<()> {
+        let tmp = TempDir::new()?;
         let file_path = tmp.path().join("test.txt");
-        fs::write(&file_path, "original content").unwrap();
+        fs::write(&file_path, "original content")?;
 
         let backup_dir = tmp.path().join("backups");
-        let record = create_backup(&file_path, 1, &backup_dir).unwrap();
+        let record = create_backup(&file_path, 1, &backup_dir)?;
 
         // Modify the original file
-        fs::write(&file_path, "modified content").unwrap();
+        fs::write(&file_path, "modified content")?;
 
         // Restore from backup
         let backup_name = get_backup_file_name(&record.file_path, 1);
-        restore_backup(&file_path, &backup_name, &backup_dir).unwrap();
+        restore_backup(&file_path, &backup_name, &backup_dir)?;
 
-        let restored = fs::read_to_string(&file_path).unwrap();
+        let restored = fs::read_to_string(&file_path)?;
         assert_eq!(restored, "original content");
+        Ok(())
     }
 
     #[test]
-    fn restore_backup_missing_backup_fails() {
-        let tmp = TempDir::new().unwrap();
+    fn restore_backup_missing_backup_fails() -> anyhow::Result<()> {
+        let tmp = TempDir::new()?;
         let file_path = tmp.path().join("test.txt");
         let backup_dir = tmp.path().join("backups");
 
         let result = restore_backup(&file_path, "nonexistent@v1", &backup_dir);
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn check_origin_file_changed_unchanged() {
-        let tmp = TempDir::new().unwrap();
+    fn check_origin_file_changed_unchanged() -> anyhow::Result<()> {
+        let tmp = TempDir::new()?;
         let file_path = tmp.path().join("test.txt");
-        fs::write(&file_path, "hello").unwrap();
+        fs::write(&file_path, "hello")?;
 
         let backup_dir = tmp.path().join("backups");
-        let record = create_backup(&file_path, 1, &backup_dir).unwrap();
+        let record = create_backup(&file_path, 1, &backup_dir)?;
 
         // File hasn't changed
         assert!(!check_origin_file_changed(&file_path, &record, &backup_dir));
+        Ok(())
     }
 
     #[test]
-    fn check_origin_file_changed_modified() {
-        let tmp = TempDir::new().unwrap();
+    fn check_origin_file_changed_modified() -> anyhow::Result<()> {
+        let tmp = TempDir::new()?;
         let file_path = tmp.path().join("test.txt");
-        fs::write(&file_path, "hello").unwrap();
+        fs::write(&file_path, "hello")?;
 
         let backup_dir = tmp.path().join("backups");
-        let record = create_backup(&file_path, 1, &backup_dir).unwrap();
+        let record = create_backup(&file_path, 1, &backup_dir)?;
 
         // Modify the file
-        fs::write(&file_path, "world").unwrap();
+        fs::write(&file_path, "world")?;
 
         assert!(check_origin_file_changed(&file_path, &record, &backup_dir));
+        Ok(())
     }
 
     #[test]
-    fn check_origin_file_changed_deleted() {
-        let tmp = TempDir::new().unwrap();
+    fn check_origin_file_changed_deleted() -> anyhow::Result<()> {
+        let tmp = TempDir::new()?;
         let file_path = tmp.path().join("test.txt");
-        fs::write(&file_path, "hello").unwrap();
+        fs::write(&file_path, "hello")?;
 
         let backup_dir = tmp.path().join("backups");
-        let record = create_backup(&file_path, 1, &backup_dir).unwrap();
+        let record = create_backup(&file_path, 1, &backup_dir)?;
 
         // Delete the file
-        fs::remove_file(&file_path).unwrap();
+        fs::remove_file(&file_path)?;
 
         assert!(check_origin_file_changed(&file_path, &record, &backup_dir));
+        Ok(())
     }
 
     #[test]
-    fn check_origin_file_changed_null_backup_now_exists() {
-        let tmp = TempDir::new().unwrap();
+    fn check_origin_file_changed_null_backup_now_exists() -> anyhow::Result<()> {
+        let tmp = TempDir::new()?;
         let file_path = tmp.path().join("new.txt");
 
         let record = BackupRecord::null("new.txt".to_string(), 1);
 
         // File didn't exist, now it does
-        fs::write(&file_path, "new content").unwrap();
+        fs::write(&file_path, "new content")?;
         assert!(check_origin_file_changed(
             &file_path,
             &record,
             &tmp.path().join("backups")
         ));
+        Ok(())
     }
 
     #[test]
-    fn check_origin_file_changed_null_backup_still_missing() {
-        let tmp = TempDir::new().unwrap();
+    fn check_origin_file_changed_null_backup_still_missing() -> anyhow::Result<()> {
+        let tmp = TempDir::new()?;
         let file_path = tmp.path().join("still_missing.txt");
 
         let record = BackupRecord::null("still_missing.txt".to_string(), 1);
@@ -408,6 +416,7 @@ mod tests {
             &record,
             &tmp.path().join("backups")
         ));
+        Ok(())
     }
 
     #[test]
@@ -418,26 +427,28 @@ mod tests {
     }
 
     #[test]
-    fn maybe_shorten_file_path_absolute_within_cwd() {
-        let cwd = std::env::current_dir().unwrap();
+    fn maybe_shorten_file_path_absolute_within_cwd() -> anyhow::Result<()> {
+        let cwd = std::env::current_dir()?;
         let abs_path = cwd.join("src/main.rs");
         let result = maybe_shorten_file_path(&abs_path.to_string_lossy(), &cwd);
         assert!(
             result == "src/main.rs" || result.contains("src"),
             "expected relative path, got: {result}"
         );
+        Ok(())
     }
 
     #[test]
-    fn maybe_shorten_file_path_absolute_outside_cwd() {
+    fn maybe_shorten_file_path_absolute_outside_cwd() -> anyhow::Result<()> {
         let abs_outside = if cfg!(windows) {
             "C:\\Windows\\System32\\config"
         } else {
             "/etc/config"
         };
-        let cwd = std::env::current_dir().unwrap();
+        let cwd = std::env::current_dir()?;
         let result = maybe_shorten_file_path(abs_outside, &cwd);
         assert_eq!(result, abs_outside);
+        Ok(())
     }
 
     #[test]
@@ -462,14 +473,15 @@ mod tests {
     }
 
     #[test]
-    fn backup_record_serializes() {
+    fn backup_record_serializes() -> anyhow::Result<()> {
         let rec = BackupRecord::with_hash("main.rs".to_string(), 1, "deadbeef".to_string());
-        let json = serde_json::to_string(&rec).unwrap();
+        let json = serde_json::to_string(&rec)?;
         assert!(json.contains("main.rs"));
         assert!(json.contains("deadbeef"));
 
-        let deserialized: BackupRecord = serde_json::from_str(&json).unwrap();
+        let deserialized: BackupRecord = serde_json::from_str(&json)?;
         assert_eq!(deserialized.file_path, "main.rs");
         assert_eq!(deserialized.version, 1);
+        Ok(())
     }
 }

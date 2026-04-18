@@ -706,11 +706,8 @@ mod tests {
         assert_eq!(tool_results.len(), 2);
         // Both should have the same placeholder
         for block in &tool_results {
-            match block {
-                ForkContentBlock::ToolResult { content, .. } => {
-                    assert_eq!(content, FORK_PLACEHOLDER_RESULT);
-                }
-                _ => {}
+            if let ForkContentBlock::ToolResult { content, .. } = block {
+                assert_eq!(content, FORK_PLACEHOLDER_RESULT);
             }
         }
     }

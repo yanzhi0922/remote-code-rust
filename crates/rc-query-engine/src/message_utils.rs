@@ -15,6 +15,7 @@ pub fn create_user_message(text: &str) -> Message {
         base: MessageBase::with_origin(MessageOrigin::UserInput),
         text: text.to_owned(),
         attachments: Vec::new(),
+        provider_content_blocks: Vec::new(),
     })
 }
 
@@ -59,6 +60,7 @@ pub fn create_tool_use_summary(tool_call: &ToolCall, result: &ToolResult) -> Mes
         tool_name: tool_call.name.clone(),
         summary: result.content.clone(),
         is_error: result.is_error,
+        content_blocks: result.content_blocks.clone(),
     })
 }
 
@@ -85,6 +87,7 @@ pub fn create_assistant_text_message(text: &str) -> Message {
             text: text.to_owned(),
         }],
         tool_calls: Vec::new(),
+        provider_content_blocks: Vec::new(),
     })
 }
 
@@ -108,6 +111,7 @@ pub fn create_assistant_tool_message(text: &str, tool_calls: Vec<ToolCall>) -> M
         text: text.to_owned(),
         blocks,
         tool_calls,
+        provider_content_blocks: Vec::new(),
     })
 }
 
@@ -248,6 +252,7 @@ mod tests {
         let result = ToolResult {
             content: "file1.txt".into(),
             is_error: false,
+            content_blocks: Vec::new(),
         };
         let msg = create_tool_use_summary(&tool_call, &result);
         assert!(matches!(
@@ -384,6 +389,7 @@ mod tests {
         let result = ToolResult {
             content: "ok".into(),
             is_error: false,
+            content_blocks: Vec::new(),
         };
         let summary = create_tool_use_summary(&tool_call, &result);
         assert!(is_tool_summary(&summary));

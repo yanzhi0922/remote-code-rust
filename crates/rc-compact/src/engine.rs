@@ -235,6 +235,7 @@ pub async fn compact_conversation(
         },
         text: summary_text,
         attachments: Vec::new(),
+        provider_content_blocks: Vec::new(),
     });
 
     // Estimate post-compact tokens
@@ -385,6 +386,7 @@ pub async fn partial_compact_conversation(
         },
         text: formatted_summary.clone(),
         attachments: Vec::new(),
+        provider_content_blocks: Vec::new(),
     });
 
     // Build boundary marker
@@ -565,6 +567,7 @@ fn truncate_head_for_ptl_retry(messages: &[Message]) -> Option<Vec<Message>> {
             },
             text: PTL_RETRY_MARKER.to_string(),
             attachments: Vec::new(),
+            provider_content_blocks: Vec::new(),
         })];
         result.extend(truncated);
         Some(result)
@@ -657,6 +660,7 @@ mod tests {
             base: MessageBase::default(),
             text: "hello".into(),
             attachments: Vec::new(),
+            provider_content_blocks: Vec::new(),
         })];
         assert!(truncate_head_for_ptl_retry(&msgs).is_none());
     }
@@ -665,13 +669,13 @@ mod tests {
     fn build_post_compact_messages_orders_correctly() {
         let boundary = create_compact_boundary_message("manual", 1000, None);
         let summary = Message::User(UserMessage {
-            base: {
-                let mut b = MessageBase::default();
-                b.is_compact_summary = true;
-                b
+            base: MessageBase {
+                is_compact_summary: true,
+                ..MessageBase::default()
             },
             text: "summary".into(),
             attachments: Vec::new(),
+            provider_content_blocks: Vec::new(),
         });
 
         let result = CompactionResult {
@@ -686,6 +690,7 @@ mod tests {
                 base: MessageBase::default(),
                 text: "kept".into(),
                 attachments: Vec::new(),
+                provider_content_blocks: Vec::new(),
             })],
             attachments: vec![boundary.clone(), summary.clone()],
             hook_results: Vec::new(),

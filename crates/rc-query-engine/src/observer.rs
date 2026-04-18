@@ -1,6 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use rc_core::{Message, SessionId, ToolCall, ToolResult};
+use rc_core::{ConversationEntry, Message, SessionId, ToolCall, ToolResult};
 use rc_engine_events::Usage;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -99,6 +99,7 @@ pub enum QueryObserverEvent {
         turn: u32,
         before_messages: usize,
         after_messages: usize,
+        compacted_conversation: Vec<ConversationEntry>,
         max_input_tokens: u64,
         threshold_tokens: u64,
         usage_ratio_before: f64,

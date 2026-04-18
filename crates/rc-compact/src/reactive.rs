@@ -184,6 +184,7 @@ mod tests {
             base: MessageBase::default(),
             text: text.to_owned(),
             attachments: Vec::new(),
+            provider_content_blocks: Vec::new(),
         })
     }
 

@@ -3,6 +3,7 @@
 //! Handles pulling settings from remote sources, applying them locally,
 //! and resolving conflicts based on source priority.
 
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -113,7 +114,7 @@ impl ManagedSettingsService {
     pub fn get_effective_settings(&self) -> Vec<ManagedSetting> {
         let guard = self.settings.lock().expect("lock");
         let mut settings: Vec<ManagedSetting> = guard.values().cloned().collect();
-        settings.sort_by(|a, b| b.effective_priority().cmp(&a.effective_priority()));
+        settings.sort_by_key(|setting| Reverse(setting.effective_priority()));
         settings
     }
 

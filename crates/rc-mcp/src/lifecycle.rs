@@ -800,7 +800,7 @@ mod tests {
 
     #[test]
     fn disconnect_reason_variants() {
-        let reasons = vec![
+        let reasons = [
             DisconnectReason::Closed,
             DisconnectReason::Error("connection reset".to_owned()),
             DisconnectReason::SessionExpired,

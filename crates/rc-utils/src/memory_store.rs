@@ -265,7 +265,9 @@ mod tests {
     fn load_nonexistent_fails() {
         let temp = ok(tempdir());
         let store = MemoryStore::new(temp.path());
-        let err = store.load_memory("nope", MemoryType::Project).unwrap_err();
+        let err = store
+            .load_memory("nope", MemoryType::Project)
+            .expect_err("missing memory should return an error");
         assert!(err.to_string().contains("nope"));
     }
 
@@ -287,7 +289,7 @@ mod tests {
         let store = MemoryStore::new(temp.path());
         let err = store
             .delete_memory("ghost", MemoryType::Project)
-            .unwrap_err();
+            .expect_err("deleting a missing memory should return an error");
         assert!(err.to_string().contains("ghost"));
     }
 
@@ -466,7 +468,7 @@ mod tests {
         let store = MemoryStore::new(temp.path());
         let err = store
             .update_memory("ghost", "content", MemoryType::Project, vec![])
-            .unwrap_err();
+            .expect_err("updating a missing memory should return an error");
         assert!(err.to_string().contains("ghost"));
     }
 

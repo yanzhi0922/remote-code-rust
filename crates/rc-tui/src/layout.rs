@@ -106,8 +106,6 @@ pub fn sidebar_tab_index(tab: SidebarTab) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::StyleConfig;
-    use crate::vim::VimStateMachine;
 
     fn make_app() -> App {
         App::new()

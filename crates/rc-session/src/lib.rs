@@ -6,8 +6,10 @@
 
 pub mod conversation;
 pub mod memory;
+pub mod plan_state;
 pub mod replay;
 pub mod resume_state;
+pub mod runtime_context;
 pub mod session_memory_service;
 pub mod transcript;
 
@@ -27,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::plan_state::PlanModeState;
 use crate::resume_state::ResumeState;
 use crate::transcript::SessionTranscript;
 
@@ -35,6 +38,8 @@ use crate::transcript::SessionTranscript;
 pub struct SessionSummary {
     /// Unique session identifier.
     pub session_id: Uuid,
+    /// Optional parent session for lineage tracking.
+    pub parent_session_id: Option<Uuid>,
     /// Human-readable session title.
     pub title: String,
     /// Working directory at session creation time.
@@ -147,6 +152,22 @@ impl SessionStore {
         model: Option<&str>,
         title_hint: Option<&str>,
     ) -> Result<PathBuf> {
+        self.ensure_session_with_parent(session_id, cwd, provider_name, model, title_hint, None)
+    }
+
+    /// Ensure a session exists with explicit parent lineage metadata.
+    ///
+    /// # Errors
+    /// Returns an error if the transcript file or database row cannot be created.
+    pub fn ensure_session_with_parent(
+        &self,
+        session_id: Uuid,
+        cwd: &Path,
+        provider_name: &str,
+        model: Option<&str>,
+        title_hint: Option<&str>,
+        parent_session_id: Option<Uuid>,
+    ) -> Result<PathBuf> {
         let transcript_path = self.session_transcript_path(session_id);
         if let Some(parent) = transcript_path.parent() {
             fs::create_dir_all(parent)?;
@@ -166,17 +187,25 @@ impl SessionStore {
             }
         };
         let created_at = existing.as_ref().map_or(now, |summary| summary.created_at);
+        let parent_session_id = parent_session_id
+            .or_else(|| {
+                existing
+                    .as_ref()
+                    .and_then(|summary| summary.parent_session_id)
+            })
+            .map(|value| value.to_string());
         self.conn()?.execute(
             "INSERT INTO sessions (
-                session_id, title, cwd, provider_name, model, created_at, updated_at, transcript_path, archived
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, COALESCE((SELECT archived FROM sessions WHERE session_id = ?1), 0))
+                session_id, title, cwd, provider_name, model, created_at, updated_at, transcript_path, archived, parent_session_id
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, COALESCE((SELECT archived FROM sessions WHERE session_id = ?1), 0), ?9)
             ON CONFLICT(session_id) DO UPDATE SET
                 title = excluded.title,
                 cwd = excluded.cwd,
                 provider_name = excluded.provider_name,
                 model = excluded.model,
                 updated_at = excluded.updated_at,
-                transcript_path = excluded.transcript_path",
+                transcript_path = excluded.transcript_path,
+                parent_session_id = COALESCE(excluded.parent_session_id, sessions.parent_session_id)",
             params![
                 session_id.to_string(),
                 title,
@@ -186,6 +215,7 @@ impl SessionStore {
                 created_at.to_rfc3339(),
                 now.to_rfc3339(),
                 transcript_path.display().to_string(),
+                parent_session_id,
             ],
         )?;
         Ok(transcript_path)
@@ -295,10 +325,10 @@ impl SessionStore {
     fn list_sessions_by_archived(&self, archived: Option<bool>) -> Result<Vec<SessionSummary>> {
         let conn = self.conn()?;
         let sql = if archived.is_some() {
-            "SELECT session_id, title, cwd, provider_name, model, created_at, updated_at, transcript_path, archived
+            "SELECT session_id, parent_session_id, title, cwd, provider_name, model, created_at, updated_at, transcript_path, archived
              FROM sessions WHERE archived = ?1 ORDER BY updated_at DESC"
         } else {
-            "SELECT session_id, title, cwd, provider_name, model, created_at, updated_at, transcript_path, archived
+            "SELECT session_id, parent_session_id, title, cwd, provider_name, model, created_at, updated_at, transcript_path, archived
              FROM sessions ORDER BY updated_at DESC"
         };
         let mut statement = conn.prepare(sql)?;
@@ -307,14 +337,15 @@ impl SessionStore {
                 .query_map([archived], |row| {
                     Ok((
                         row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(1)?,
                         row.get::<_, String>(2)?,
                         row.get::<_, String>(3)?,
-                        row.get::<_, Option<String>>(4)?,
-                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, Option<String>>(5)?,
                         row.get::<_, String>(6)?,
                         row.get::<_, String>(7)?,
-                        row.get::<_, bool>(8)?,
+                        row.get::<_, String>(8)?,
+                        row.get::<_, bool>(9)?,
                     ))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?
@@ -323,14 +354,15 @@ impl SessionStore {
                 .query_map([], |row| {
                     Ok((
                         row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(1)?,
                         row.get::<_, String>(2)?,
                         row.get::<_, String>(3)?,
-                        row.get::<_, Option<String>>(4)?,
-                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, Option<String>>(5)?,
                         row.get::<_, String>(6)?,
                         row.get::<_, String>(7)?,
-                        row.get::<_, bool>(8)?,
+                        row.get::<_, String>(8)?,
+                        row.get::<_, bool>(9)?,
                     ))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?
@@ -423,6 +455,55 @@ impl SessionStore {
         })
     }
 
+    /// Fork an existing session into a new target session, preserving transcript
+    /// ordering, timestamps, and summary lineage.
+    ///
+    /// # Errors
+    /// Returns an error if the source session does not exist, contains no
+    /// conversation entries, or the target session already has transcript data.
+    pub fn fork_session_from_source(
+        &self,
+        source_session_id: Uuid,
+        target_session_id: Uuid,
+        title_hint: Option<&str>,
+    ) -> Result<SessionSummary> {
+        if source_session_id == target_session_id {
+            return Err(anyhow!("cannot fork session into itself"));
+        }
+
+        let source_summary = self.get_session_summary(source_session_id)?;
+        let source_events = self.load_events(source_session_id)?;
+        if !source_events
+            .iter()
+            .any(|event| event.conversation.is_some())
+        {
+            return Err(anyhow!("no conversation to branch"));
+        }
+
+        let target_transcript_path = self.session_transcript_path(target_session_id);
+        if target_transcript_path.exists() && fs::metadata(&target_transcript_path)?.len() > 0 {
+            return Err(anyhow!(
+                "target session {target_session_id} already has transcript state"
+            ));
+        }
+
+        self.ensure_session_with_parent(
+            target_session_id,
+            &source_summary.cwd,
+            &source_summary.provider_name,
+            source_summary.model.as_deref(),
+            title_hint.or(Some(source_summary.title.as_str())),
+            Some(source_session_id),
+        )?;
+
+        for mut event in source_events {
+            event.session_id = target_session_id;
+            self.append_event(&event)?;
+        }
+        self.touch(target_session_id)?;
+        self.get_session_summary(target_session_id)
+    }
+
     /// Persist a resume-state snapshot for interrupted-session recovery.
     ///
     /// # Errors
@@ -444,7 +525,29 @@ impl SessionStore {
     /// # Errors
     /// Returns an error if the transcript cannot be read or the snapshot is invalid.
     pub fn load_resume_state(&self, session_id: Uuid) -> Result<Option<ResumeState>> {
+        if !self.session_transcript_path(session_id).exists() {
+            return Ok(None);
+        }
         self.load_transcript(session_id)?.latest_resume_state()
+    }
+
+    /// Persist a plan-mode state snapshot for resume / re-entry flows.
+    ///
+    /// # Errors
+    /// Returns an error if the state cannot be serialized or written.
+    pub fn save_plan_mode_state(&self, session_id: Uuid, state: &PlanModeState) -> Result<()> {
+        self.append_named_event(session_id, "plan_mode_state", serde_json::to_value(state)?)
+    }
+
+    /// Load the latest plan-mode state snapshot for a session.
+    ///
+    /// # Errors
+    /// Returns an error if the transcript cannot be read or the snapshot is invalid.
+    pub fn load_plan_mode_state(&self, session_id: Uuid) -> Result<Option<PlanModeState>> {
+        if !self.session_transcript_path(session_id).exists() {
+            return Ok(None);
+        }
+        self.load_transcript(session_id)?.latest_plan_mode_state()
     }
 
     /// Export the session transcript to an NDJSON file.
@@ -527,6 +630,7 @@ impl SessionStore {
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS sessions (
                 session_id TEXT PRIMARY KEY,
+                parent_session_id TEXT,
                 title TEXT NOT NULL,
                 cwd TEXT NOT NULL,
                 provider_name TEXT NOT NULL,
@@ -550,6 +654,16 @@ impl SessionStore {
                 [],
             )?;
         }
+        let has_parent_session_id = {
+            let mut statement = conn.prepare("PRAGMA table_info(sessions)")?;
+            let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+                .into_iter()
+                .any(|column| column == "parent_session_id")
+        };
+        if !has_parent_session_id {
+            conn.execute("ALTER TABLE sessions ADD COLUMN parent_session_id TEXT", [])?;
+        }
         Ok(())
     }
 
@@ -564,20 +678,21 @@ impl SessionStore {
     fn try_get_session_summary(&self, session_id: Uuid) -> Result<Option<SessionSummary>> {
         let conn = self.conn()?;
         let mut statement = conn.prepare(
-            "SELECT session_id, title, cwd, provider_name, model, created_at, updated_at, transcript_path, archived
+            "SELECT session_id, parent_session_id, title, cwd, provider_name, model, created_at, updated_at, transcript_path, archived
              FROM sessions WHERE session_id = ?1 LIMIT 1",
         )?;
         let row = statement.query_row([session_id.to_string()], |row| {
             Ok((
                 row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, String>(5)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(5)?,
                 row.get::<_, String>(6)?,
                 row.get::<_, String>(7)?,
-                row.get::<_, bool>(8)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, bool>(9)?,
             ))
         });
 
@@ -604,21 +719,23 @@ fn is_default_title(title: &str, session_id: Uuid) -> bool {
     title == format!("session-{session_id}")
 }
 
-fn raw_row_to_summary(
-    raw: (
-        String,
-        String,
-        String,
-        String,
-        Option<String>,
-        String,
-        String,
-        String,
-        bool,
-    ),
-) -> Result<SessionSummary> {
+type SessionSummaryRow = (
+    String,
+    Option<String>,
+    String,
+    String,
+    String,
+    Option<String>,
+    String,
+    String,
+    String,
+    bool,
+);
+
+fn raw_row_to_summary(raw: SessionSummaryRow) -> Result<SessionSummary> {
     let (
         session_id,
+        parent_session_id,
         title,
         cwd,
         provider_name,
@@ -630,6 +747,10 @@ fn raw_row_to_summary(
     ) = raw;
     Ok(SessionSummary {
         session_id: Uuid::parse_str(&session_id)?,
+        parent_session_id: parent_session_id
+            .as_deref()
+            .map(Uuid::parse_str)
+            .transpose()?,
         title,
         cwd: PathBuf::from(cwd),
         provider_name,
@@ -782,6 +903,150 @@ mod tests {
             .unwrap_or_else(|error| panic!("{error}"))
             .unwrap_or_else(|| panic!("missing cleared state"));
         assert!(cleared.pending_tool_calls.is_empty());
+    }
+
+    #[test]
+    fn child_session_preserves_parent_lineage() {
+        let tempdir = tempdir().unwrap_or_else(|error| panic!("failed to create tempdir: {error}"));
+        let paths = AppPaths::discover(Some(tempdir.path().join(".remote-code-rust")))
+            .unwrap_or_else(|error| panic!("{error}"));
+        let store = SessionStore::open(paths).unwrap_or_else(|error| panic!("{error}"));
+
+        let parent_session_id = Uuid::new_v4();
+        let child_session_id = Uuid::new_v4();
+        store
+            .ensure_session(
+                parent_session_id,
+                tempdir.path(),
+                "mock",
+                None,
+                Some("parent"),
+            )
+            .unwrap_or_else(|error| panic!("{error}"));
+        store
+            .ensure_session_with_parent(
+                child_session_id,
+                tempdir.path(),
+                "mock",
+                None,
+                Some("child"),
+                Some(parent_session_id),
+            )
+            .unwrap_or_else(|error| panic!("{error}"));
+
+        let summary = store
+            .get_session_summary(child_session_id)
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(summary.parent_session_id, Some(parent_session_id));
+
+        store
+            .ensure_session(
+                child_session_id,
+                tempdir.path(),
+                "mock",
+                None,
+                Some("child-again"),
+            )
+            .unwrap_or_else(|error| panic!("{error}"));
+        let summary = store
+            .get_session_summary(child_session_id)
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(summary.parent_session_id, Some(parent_session_id));
+    }
+
+    #[test]
+    fn fork_session_from_source_copies_transcript_and_preserves_lineage() {
+        let tempdir = tempdir().unwrap_or_else(|error| panic!("failed to create tempdir: {error}"));
+        let paths = AppPaths::discover(Some(tempdir.path().join(".remote-code-rust")))
+            .unwrap_or_else(|error| panic!("{error}"));
+        let store = SessionStore::open(paths).unwrap_or_else(|error| panic!("{error}"));
+
+        let source_session_id = Uuid::new_v4();
+        let target_session_id = Uuid::new_v4();
+        store
+            .ensure_session(
+                source_session_id,
+                tempdir.path(),
+                "mock",
+                Some("mock-model"),
+                Some("source"),
+            )
+            .unwrap_or_else(|error| panic!("{error}"));
+        store
+            .append_conversation_entry(source_session_id, &ConversationEntry::system("system"))
+            .unwrap_or_else(|error| panic!("{error}"));
+        store
+            .append_conversation_entry(source_session_id, &ConversationEntry::user("hello"))
+            .unwrap_or_else(|error| panic!("{error}"));
+        store
+            .append_named_event(source_session_id, "result", json!({"ok": true}))
+            .unwrap_or_else(|error| panic!("{error}"));
+
+        let target_summary = store
+            .fork_session_from_source(
+                source_session_id,
+                target_session_id,
+                Some("source (Branch)"),
+            )
+            .unwrap_or_else(|error| panic!("{error}"));
+
+        assert_eq!(target_summary.session_id, target_session_id);
+        assert_eq!(target_summary.parent_session_id, Some(source_session_id));
+        assert_eq!(target_summary.title, "source (Branch)");
+
+        let source_events = store
+            .load_events(source_session_id)
+            .unwrap_or_else(|error| panic!("{error}"));
+        let target_events = store
+            .load_events(target_session_id)
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(target_events.len(), source_events.len());
+        assert!(
+            target_events
+                .iter()
+                .all(|event| event.session_id == target_session_id)
+        );
+        let source_conversation = store
+            .load_conversation(source_session_id)
+            .unwrap_or_else(|error| panic!("{error}"));
+        let target_conversation = store
+            .load_conversation(target_session_id)
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(target_conversation.len(), source_conversation.len());
+        for (target, source) in target_conversation.iter().zip(source_conversation.iter()) {
+            assert_eq!(target.role, source.role);
+            assert_eq!(target.text, source.text);
+            assert_eq!(target.tool_call_id, source.tool_call_id);
+            assert_eq!(target.name, source.name);
+            assert_eq!(target.is_error, source.is_error);
+        }
+    }
+
+    #[test]
+    fn fork_session_from_source_rejects_transcripts_without_conversation_entries() {
+        let tempdir = tempdir().unwrap_or_else(|error| panic!("failed to create tempdir: {error}"));
+        let paths = AppPaths::discover(Some(tempdir.path().join(".remote-code-rust")))
+            .unwrap_or_else(|error| panic!("{error}"));
+        let store = SessionStore::open(paths).unwrap_or_else(|error| panic!("{error}"));
+
+        let source_session_id = Uuid::new_v4();
+        store
+            .ensure_session(
+                source_session_id,
+                tempdir.path(),
+                "mock",
+                None,
+                Some("source"),
+            )
+            .unwrap_or_else(|error| panic!("{error}"));
+        store
+            .append_named_event(source_session_id, "result", json!({"ok": true}))
+            .unwrap_or_else(|error| panic!("{error}"));
+
+        let error = store
+            .fork_session_from_source(source_session_id, Uuid::new_v4(), None)
+            .expect_err("fork should reject transcripts without conversation");
+        assert!(error.to_string().contains("no conversation to branch"));
     }
 
     #[test]

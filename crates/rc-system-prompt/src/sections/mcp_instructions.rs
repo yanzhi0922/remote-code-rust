@@ -21,6 +21,10 @@ impl SystemPromptSection for McpInstructionsSection {
     }
 
     fn compute(&self, ctx: &PromptContext) -> Result<Option<String>> {
+        if ctx.mcp_instructions_delta_enabled {
+            return Ok(None);
+        }
+
         if ctx.mcp_clients.is_empty() {
             return Ok(None);
         }
@@ -28,15 +32,23 @@ impl SystemPromptSection for McpInstructionsSection {
         let clients_with_instructions: Vec<&McpClientInfo> = ctx
             .mcp_clients
             .iter()
-            .filter(|c| c.instructions.is_some())
+            .filter(|client| {
+                client
+                    .instructions
+                    .as_deref()
+                    .is_some_and(|instructions| !instructions.is_empty())
+            })
             .collect();
 
         if clients_with_instructions.is_empty() {
             return Ok(None);
         }
 
+        let mut clients_with_instructions = clients_with_instructions;
+        clients_with_instructions.sort_by(|left, right| left.name.cmp(&right.name));
+
         let instruction_blocks: Vec<String> = clients_with_instructions
-            .iter()
+            .into_iter()
             .map(|client| {
                 let instructions = client.instructions.as_deref().unwrap_or("");
                 format!("## {}\n{}", client.name, instructions)
@@ -70,6 +82,7 @@ mod tests {
             language: None,
             output_style: None,
             mcp_clients: clients,
+            mcp_instructions_delta_enabled: false,
             is_worktree: false,
             additional_dirs: vec![],
             is_non_interactive: false,
@@ -117,8 +130,34 @@ mod tests {
     }
 
     #[test]
+    fn mcp_instructions_ignores_empty_instruction_block() {
+        let clients = vec![McpClientInfo {
+            name: "empty".to_string(),
+            instructions: Some(String::new()),
+        }];
+        let section = McpInstructionsSection;
+        let result = section
+            .compute(&test_ctx_with_mcp(clients))
+            .expect("compute ok");
+        assert!(result.is_none());
+    }
+
+    #[test]
     fn mcp_instructions_not_cacheable() {
         let section = McpInstructionsSection;
         assert!(!section.is_cacheable());
+    }
+
+    #[test]
+    fn mcp_instructions_suppressed_when_delta_mode_enabled() {
+        let mut ctx = test_ctx_with_mcp(vec![McpClientInfo {
+            name: "delta".to_string(),
+            instructions: Some("Use delta mode.".to_string()),
+        }]);
+        ctx.mcp_instructions_delta_enabled = true;
+
+        let section = McpInstructionsSection;
+        let result = section.compute(&ctx).expect("compute ok");
+        assert!(result.is_none());
     }
 }

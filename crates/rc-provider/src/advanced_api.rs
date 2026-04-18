@@ -594,11 +594,12 @@ impl AdvisorResult {
 // ===========================================================================
 
 /// Prompt cache scope configuration.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PromptCacheScope {
     /// No caching.
     None,
     /// 5-minute cache (default).
+    #[default]
     Short,
     /// 1-hour cache.
     Hour,
@@ -625,12 +626,6 @@ impl PromptCacheScope {
     }
 }
 
-impl Default for PromptCacheScope {
-    fn default() -> Self {
-        PromptCacheScope::Short
-    }
-}
-
 /// Apply cache control headers to messages.
 ///
 /// Adds `cache_control` breakpoints to strategic positions in the message list:
@@ -641,7 +636,7 @@ impl Default for PromptCacheScope {
 ///
 /// * `messages` — The mutable message list to annotate.
 /// * `scope` — The cache scope determining TTL.
-pub fn apply_cache_control(messages: &mut Vec<Value>, scope: PromptCacheScope) {
+pub fn apply_cache_control(messages: &mut [Value], scope: PromptCacheScope) {
     if scope == PromptCacheScope::None {
         return;
     }
@@ -1016,7 +1011,7 @@ mod tests {
         assert!(
             result[1]["description"]
                 .as_str()
-                .unwrap()
+                .expect("deferred tool should keep a description")
                 .contains("deferred")
         );
     }

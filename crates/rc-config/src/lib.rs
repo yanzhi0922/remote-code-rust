@@ -90,15 +90,19 @@ impl AppPaths {
     /// # Errors
     /// Returns an error if the user home directory cannot be located.
     pub fn discover(profile_override: Option<PathBuf>) -> Result<Self> {
-        let profile_dir = if let Some(path) = profile_override {
-            path
-        } else {
-            let base_dirs = BaseDirs::new()
-                .ok_or_else(|| anyhow!("failed to locate the user home directory"))?;
-            base_dirs.home_dir().join(DEFAULT_PROFILE_DIR_NAME)
-        };
+        let profile_dir = resolve_profile_dir(profile_override, None)?;
+        Ok(Self::from_profile_dir(profile_dir))
+    }
 
-        Ok(Self {
+    /// # Errors
+    /// Returns an error if the user home directory cannot be located.
+    pub fn discover_for_cwd(profile_override: Option<PathBuf>, cwd: &Path) -> Result<Self> {
+        let profile_dir = resolve_profile_dir(profile_override, Some(cwd))?;
+        Ok(Self::from_profile_dir(profile_dir))
+    }
+
+    fn from_profile_dir(profile_dir: PathBuf) -> Self {
+        Self {
             state_db_path: profile_dir.join("state.db"),
             sessions_dir: profile_dir.join("sessions"),
             artifacts_dir: profile_dir.join("artifacts"),
@@ -107,7 +111,7 @@ impl AppPaths {
             skills_dir: profile_dir.join("skills"),
             plugins_dir: profile_dir.join("plugins"),
             profile_dir,
-        })
+        }
     }
 
     /// # Errors
@@ -135,6 +139,39 @@ impl AppPaths {
             BaseDirs::new().ok_or_else(|| anyhow!("failed to locate the user home directory"))?;
         Ok(base_dirs.home_dir().join(LEGACY_PROFILE_DIR_NAME))
     }
+}
+
+fn resolve_profile_dir(
+    profile_override: Option<PathBuf>,
+    cwd_hint: Option<&Path>,
+) -> Result<PathBuf> {
+    if let Some(path) = profile_override {
+        return Ok(path);
+    }
+    if let Some(cwd) = cwd_hint
+        && let Some(project_profile_dir) = discover_project_profile_dir(cwd)
+    {
+        return Ok(project_profile_dir);
+    }
+    default_profile_dir()
+}
+
+fn default_profile_dir() -> Result<PathBuf> {
+    let base_dirs =
+        BaseDirs::new().ok_or_else(|| anyhow!("failed to locate the user home directory"))?;
+    Ok(base_dirs.home_dir().join(DEFAULT_PROFILE_DIR_NAME))
+}
+
+fn discover_project_profile_dir(cwd: &Path) -> Option<PathBuf> {
+    let mut current = Some(cwd);
+    while let Some(dir) = current {
+        let candidate = dir.join(DEFAULT_PROFILE_DIR_NAME);
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+        current = dir.parent();
+    }
+    None
 }
 
 /// CLI / env-var overrides for the active provider.
@@ -224,6 +261,8 @@ const fn default_true() -> bool {
 pub struct RuntimeConfig {
     /// Current working directory.
     pub cwd: PathBuf,
+    /// Original working directory before any runtime cwd/worktree switching.
+    pub original_cwd: PathBuf,
     /// Active session identifier.
     pub session_id: Uuid,
     /// Permission mode for tool execution.
@@ -300,7 +339,7 @@ pub fn load_runtime_config(
         Some(cwd) => cwd,
         None => env::current_dir().context("failed to discover the current working directory")?,
     };
-    let paths = AppPaths::discover(profile_dir_override)?;
+    let paths = AppPaths::discover_for_cwd(profile_dir_override, &cwd)?;
     paths.ensure_exists()?;
     let allowed_setting_sources = runtime_overrides
         .allowed_setting_sources
@@ -352,7 +391,8 @@ pub fn load_runtime_config(
         .clone()
         .or(settings.session_name.clone());
     Ok(RuntimeConfig {
-        cwd,
+        cwd: cwd.clone(),
+        original_cwd: cwd,
         session_id: session_id_override.unwrap_or_else(Uuid::new_v4),
         permission_mode,
         input_format,
@@ -375,6 +415,14 @@ pub fn load_runtime_config(
         provider,
         paths,
     })
+}
+
+/// Re-stamp a runtime config with a new session id and refresh provider-side
+/// session metadata derived from that id.
+pub fn restamp_runtime_session(config: &mut RuntimeConfig, session_id: Uuid) {
+    config.session_id = session_id;
+    config.provider.request_header_overrides = build_request_header_overrides(Some(session_id));
+    config.provider.request_metadata = build_request_metadata(Some(session_id));
 }
 
 /// # Errors
@@ -446,10 +494,7 @@ pub fn load_provider_config(
     let mut provider = ProviderConfig {
         name: provider_name,
         base_url: normalized_base_url,
-        api_key: overrides
-            .api_key
-            .or_else(|| read_env_first(&["REMOTE_CODE_API_KEY", "OPENAI_API_KEY"]))
-            .or_else(|| settings.api_key.clone()),
+        api_key: None,
         model: overrides
             .model
             .or_else(|| read_env_first(&["REMOTE_CODE_MODEL", "OPENAI_MODEL"]))
@@ -468,6 +513,14 @@ pub fn load_provider_config(
     let discovered = discover_env_providers();
     let keep_explicit_protocol = explicit_protocol.is_some() || provider.base_url.is_some();
     hydrate_provider_from_discovered(&mut provider, &discovered, keep_explicit_protocol);
+    if provider.api_key.is_none() {
+        let mut lookup = |keys: &[&str]| read_env_first(keys);
+        provider.api_key = provider_api_key_from_lookup(&provider, &mut lookup);
+    }
+    provider.api_key = overrides
+        .api_key
+        .or(provider.api_key)
+        .or_else(|| settings.api_key.clone());
     Ok(provider)
 }
 
@@ -479,6 +532,20 @@ fn hydrate_provider_from_discovered(
     let matching = discovered
         .iter()
         .find(|candidate| candidate.name == provider.name)
+        .or_else(|| {
+            if provider.name == "custom"
+                && provider.base_url.is_some()
+                && discovered
+                    .iter()
+                    .any(|candidate| provider_matches_discovered_endpoint(provider, candidate))
+            {
+                discovered
+                    .iter()
+                    .find(|candidate| provider_matches_discovered_endpoint(provider, candidate))
+            } else {
+                None
+            }
+        })
         .or_else(|| {
             if provider.name == "custom"
                 && provider.base_url.is_none()
@@ -511,6 +578,15 @@ fn hydrate_provider_from_discovered(
     }
 }
 
+fn provider_matches_discovered_endpoint(
+    provider: &ProviderConfig,
+    candidate: &ProviderConfig,
+) -> bool {
+    provider.protocol == candidate.protocol
+        && provider.base_url.is_some()
+        && provider.base_url == candidate.base_url
+}
+
 #[must_use]
 pub fn validate_provider_config(provider: &ProviderConfig) -> DoctorReport {
     let mut issues = Vec::new();
@@ -521,7 +597,10 @@ pub fn validate_provider_config(provider: &ProviderConfig) -> DoctorReport {
         issues.push("Missing REMOTE_CODE_MODEL.".to_owned());
     }
     if provider.api_key.is_none() && provider.name != "mock" {
-        issues.push("Missing REMOTE_CODE_API_KEY.".to_owned());
+        issues.push(format!(
+            "Missing API key. Set {}.",
+            expected_provider_auth_inputs(provider)
+        ));
     }
     DoctorReport {
         ok: issues.is_empty(),
@@ -731,6 +810,7 @@ fn env_setting_sources() -> Vec<String> {
         ("OPENAI_BASE_URL", "env:OPENAI_BASE_URL"),
         ("ANTHROPIC_BASE_URL", "env:ANTHROPIC_BASE_URL"),
         ("REMOTE_CODE_API_KEY", "env:REMOTE_CODE_API_KEY"),
+        ("ANTHROPIC_API_KEY", "env:ANTHROPIC_API_KEY"),
         ("OPENAI_API_KEY", "env:OPENAI_API_KEY"),
         ("REMOTE_CODE_MODEL", "env:REMOTE_CODE_MODEL"),
         ("OPENAI_MODEL", "env:OPENAI_MODEL"),
@@ -826,17 +906,6 @@ where
         return Some("cli:api-key".to_owned());
     }
 
-    if let Some(api_key) = lookup(&["REMOTE_CODE_API_KEY"])
-        && provider.api_key.as_deref() == Some(api_key.as_str())
-    {
-        return Some("env:REMOTE_CODE_API_KEY".to_owned());
-    }
-    if let Some(api_key) = lookup(&["OPENAI_API_KEY"])
-        && provider.api_key.as_deref() == Some(api_key.as_str())
-    {
-        return Some("env:OPENAI_API_KEY".to_owned());
-    }
-
     if let Some(settings_api_key) = settings.api_key.as_deref()
         && provider.api_key.as_deref() == Some(settings_api_key)
     {
@@ -846,11 +915,48 @@ where
     provider_auth_source_from_lookup(provider, lookup).or_else(|| settings.auth_source.clone())
 }
 
+fn provider_api_key_from_lookup<F>(provider: &ProviderConfig, lookup: &mut F) -> Option<String>
+where
+    F: FnMut(&[&str]) -> Option<String>,
+{
+    provider_auth_candidates(provider)
+        .iter()
+        .find_map(|(keys, _)| lookup(keys))
+}
+
 fn provider_auth_source_from_lookup<F>(provider: &ProviderConfig, lookup: &mut F) -> Option<String>
 where
     F: FnMut(&[&str]) -> Option<String>,
 {
-    let candidate_sources: &[(&[&str], &str)] = match provider.name.as_str() {
+    provider_auth_candidates(provider)
+        .iter()
+        .find_map(|(keys, source)| {
+            let value = lookup(keys)?;
+            if provider.api_key.is_none() || provider.api_key.as_deref() == Some(value.as_str()) {
+                Some((*source).to_owned())
+            } else {
+                None
+            }
+        })
+}
+
+fn provider_auth_candidates(
+    provider: &ProviderConfig,
+) -> Vec<(&'static [&'static str], &'static str)> {
+    let mut candidates = provider_specific_auth_candidates(provider.name.as_str()).to_vec();
+    candidates.extend(protocol_auth_candidates(provider.protocol));
+    candidates
+}
+
+fn provider_specific_auth_candidates(
+    provider_name: &str,
+) -> &'static [(&'static [&'static str], &'static str)] {
+    match provider_name {
+        "anthropic" => &[
+            (&["REMOTE_CODE_API_KEY"], "env:REMOTE_CODE_API_KEY"),
+            (&["ANTHROPIC_API_KEY"], "env:ANTHROPIC_API_KEY"),
+        ],
+        "openai" => &[(&["OPENAI_API_KEY"], "env:OPENAI_API_KEY")],
         "glm" => &[(&["GLM_API_KEY"], "env:GLM_API_KEY")],
         "glm-coding" => &[(&["GLM_CODING_PLAN_API_KEY"], "env:GLM_CODING_PLAN_API_KEY")],
         "minimax-token-plan" => &[(
@@ -890,16 +996,56 @@ where
             (&["VERTEX_PROJECT"], "env:VERTEX_PROJECT"),
         ],
         _ => &[],
-    };
+    }
+}
 
-    candidate_sources.iter().find_map(|(keys, source)| {
-        let value = lookup(keys)?;
-        if provider.api_key.is_none() || provider.api_key.as_deref() == Some(value.as_str()) {
-            Some((*source).to_owned())
-        } else {
-            None
+fn protocol_auth_candidates(
+    protocol: ProviderProtocol,
+) -> &'static [(&'static [&'static str], &'static str)] {
+    match protocol {
+        ProviderProtocol::Anthropic => &[
+            (&["REMOTE_CODE_API_KEY"], "env:REMOTE_CODE_API_KEY"),
+            (&["ANTHROPIC_API_KEY"], "env:ANTHROPIC_API_KEY"),
+        ],
+        ProviderProtocol::OpenAi => &[(&["OPENAI_API_KEY"], "env:OPENAI_API_KEY")],
+        _ => &[],
+    }
+}
+
+fn expected_provider_auth_inputs(provider: &ProviderConfig) -> String {
+    let inputs = provider_auth_candidates(provider)
+        .iter()
+        .filter_map(|(keys, _)| keys.first().copied())
+        .collect::<Vec<_>>();
+    if inputs.is_empty() {
+        return "`--api-key` or provider-specific credentials".to_owned();
+    }
+    format_auth_inputs(&inputs)
+}
+
+fn format_auth_inputs(inputs: &[&str]) -> String {
+    let mut unique = Vec::new();
+    for input in inputs {
+        if !unique.iter().any(|existing: &&str| existing == input) {
+            unique.push(*input);
         }
-    })
+    }
+    let rendered = unique
+        .iter()
+        .map(|value| format!("`{value}`"))
+        .collect::<Vec<_>>();
+    match rendered.as_slice() {
+        [] => "`--api-key`".to_owned(),
+        [only] => format!("{only} or `--api-key`"),
+        [first, second] => format!("{first}, {second}, or `--api-key`"),
+        _ => {
+            let tail = rendered
+                .last()
+                .cloned()
+                .unwrap_or_else(|| "`--api-key`".to_owned());
+            format!("{}, or {tail}", rendered[..rendered.len() - 1].join(", "))
+        }
+    }
 }
 
 fn effort_to_thinking_budget(effort: &str) -> Option<u32> {
@@ -1455,7 +1601,7 @@ mod tests {
         default_provider_retry_initial_backoff_ms, default_provider_retry_max_backoff_ms,
         discover_minimax_token_plan_provider, hydrate_provider_from_discovered, load_hooks_file,
         load_runtime_config, load_settings_hooks, normalize_base_url, normalize_protocol,
-        resolve_auth_source_with_lookup,
+        resolve_auth_source_with_lookup, validate_provider_config,
     };
     use crate::ProviderOverrides;
     use crate::settings_layers::{ResolvedRuntimeSettings, RuntimeOverrides, SettingSource};
@@ -1784,6 +1930,44 @@ mod tests {
     }
 
     #[test]
+    fn load_runtime_config_prefers_ancestor_project_profile_dir_when_present() {
+        let temp = tempdir().expect("tempdir should work");
+        let project_root = temp.path().join("workspace");
+        let cwd = project_root.join("tasks").join("nested");
+        let profile_dir = project_root.join(".remote-code-rust");
+        fs::create_dir_all(&cwd).expect("cwd");
+        fs::create_dir_all(&profile_dir).expect("profile");
+        fs::write(
+            profile_dir.join("settings.json"),
+            r#"{"session_name":"workspace-profile"}"#,
+        )
+        .expect("write profile settings");
+
+        let config = load_runtime_config(
+            Some(cwd),
+            None,
+            None,
+            PermissionMode::Default,
+            InputFormat::Text,
+            OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            8,
+            ProviderOverrides {
+                provider: Some("mock".to_owned()),
+                ..ProviderOverrides::default()
+            },
+            RuntimeOverrides::default(),
+        )
+        .expect("config should load");
+
+        assert_eq!(config.paths.profile_dir, profile_dir);
+        assert_eq!(config.session_name.as_deref(), Some("workspace-profile"));
+    }
+
+    #[test]
     fn resolve_auth_source_prefers_settings_when_provider_env_was_not_used() {
         let provider = ProviderConfig {
             name: "glm-coding".to_owned(),
@@ -1819,6 +2003,37 @@ mod tests {
             auth_source.as_deref(),
             Some("settings:/tmp/profile/settings.json")
         );
+    }
+
+    #[test]
+    fn resolve_auth_source_uses_anthropic_env_for_custom_anthropic_provider() {
+        let provider = ProviderConfig {
+            name: "custom".to_owned(),
+            base_url: Some("https://example.com/anthropic/v1/messages".to_owned()),
+            api_key: Some("env-secret".to_owned()),
+            model: Some("custom-model".to_owned()),
+            protocol: ProviderProtocol::Anthropic,
+            timeout_ms: 600_000,
+            max_output_tokens: 8_192,
+            max_retries: default_provider_max_retries(),
+            retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+            retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+            respect_retry_after: default_provider_respect_retry_after(),
+            request_header_overrides: BTreeMap::new(),
+            request_metadata: BTreeMap::new(),
+            thinking_budget: None,
+        };
+        let settings = ResolvedRuntimeSettings::default();
+        let env_values = HashMap::from([("ANTHROPIC_API_KEY", "env-secret".to_owned())]);
+
+        let auth_source = resolve_auth_source_with_lookup(
+            &ProviderOverrides::default(),
+            &settings,
+            &provider,
+            &mut |keys| keys.iter().find_map(|key| env_values.get(*key).cloned()),
+        );
+
+        assert_eq!(auth_source.as_deref(), Some("env:ANTHROPIC_API_KEY"));
     }
 
     #[test]
@@ -1935,5 +2150,75 @@ mod tests {
         assert_eq!(provider.api_key.as_deref(), Some("secret"));
         assert_eq!(provider.model.as_deref(), Some("minimax-m2.7"));
         assert_eq!(provider.protocol, ProviderProtocol::Anthropic);
+    }
+
+    #[test]
+    fn discovered_provider_can_hydrate_custom_provider_from_matching_endpoint() {
+        let mut provider = ProviderConfig {
+            name: "custom".to_owned(),
+            base_url: Some("https://api.minimaxi.com/anthropic/v1/messages".to_owned()),
+            api_key: None,
+            model: Some("minimax-m2.7".to_owned()),
+            protocol: ProviderProtocol::Anthropic,
+            timeout_ms: 600_000,
+            max_output_tokens: 4_096,
+            max_retries: default_provider_max_retries(),
+            retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+            retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+            respect_retry_after: default_provider_respect_retry_after(),
+            request_header_overrides: BTreeMap::new(),
+            request_metadata: BTreeMap::new(),
+            thinking_budget: None,
+        };
+        let discovered = vec![ProviderConfig {
+            name: "minimax-token-plan".to_owned(),
+            base_url: Some("https://api.minimaxi.com/anthropic/v1/messages".to_owned()),
+            api_key: Some("secret".to_owned()),
+            model: Some("minimax-m2.7".to_owned()),
+            protocol: ProviderProtocol::Anthropic,
+            timeout_ms: 600_000,
+            max_output_tokens: 8_192,
+            max_retries: default_provider_max_retries(),
+            retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+            retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+            respect_retry_after: default_provider_respect_retry_after(),
+            request_header_overrides: BTreeMap::new(),
+            request_metadata: BTreeMap::new(),
+            thinking_budget: None,
+        }];
+
+        hydrate_provider_from_discovered(&mut provider, &discovered, true);
+
+        assert_eq!(provider.name, "minimax-token-plan");
+        assert_eq!(provider.api_key.as_deref(), Some("secret"));
+        assert_eq!(provider.model.as_deref(), Some("minimax-m2.7"));
+        assert_eq!(provider.protocol, ProviderProtocol::Anthropic);
+    }
+
+    #[test]
+    fn validate_provider_config_reports_provider_aware_auth_hints() {
+        let report = validate_provider_config(&ProviderConfig {
+            name: "custom".to_owned(),
+            base_url: Some("https://example.com/anthropic/v1/messages".to_owned()),
+            api_key: None,
+            model: Some("custom-model".to_owned()),
+            protocol: ProviderProtocol::Anthropic,
+            timeout_ms: 600_000,
+            max_output_tokens: 4_096,
+            max_retries: default_provider_max_retries(),
+            retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+            retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+            respect_retry_after: default_provider_respect_retry_after(),
+            request_header_overrides: BTreeMap::new(),
+            request_metadata: BTreeMap::new(),
+            thinking_budget: None,
+        });
+
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|issue| issue.contains("ANTHROPIC_API_KEY") && issue.contains("--api-key"))
+        );
     }
 }
