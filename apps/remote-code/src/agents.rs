@@ -31,7 +31,7 @@ use tokio::task::JoinSet;
 use uuid::Uuid;
 
 use crate::cli::{AgentsCommand, AgentsPlanArgs};
-use crate::conversation::initialize_conversation;
+use crate::conversation::{initialize_conversation, restore_discovered_tool_scope};
 use crate::hooks::{HookRunState, discover_runtime_hooks, ensure_session_start_hooks};
 use crate::query_engine_compat::{
     CompatRunOverrides, run_prompt_with_query_engine_compat_overrides,
@@ -265,14 +265,14 @@ impl AgentExecutor for RemoteCodeAgentExecutor {
                 config.session_id,
             )?;
         }
-        let backend = Arc::new(ProviderCompatBackend::new(
-            Arc::new(ProviderClient::new()?),
-            &config.provider,
-        ));
+        let backend =
+            ProviderCompatBackend::new(Arc::new(ProviderClient::new()?), &config.provider);
+        let discovered_tool_scope = backend.discovered_tool_scope();
         let (plan_mode_controller, broker) = build_runtime_plan_mode(&config, &store)?;
         let _plan_mode_runtime = install_plan_mode_runtime(plan_mode_controller)?;
         let discovery = discover_runtime_hooks(&config, &[]);
         let mut conversation = initialize_conversation(&store, &config, Some(&request.task))?;
+        restore_discovered_tool_scope(&store, config.session_id, &discovered_tool_scope)?;
         append_conversation_context(&mut conversation, &request.context);
         let mut hook_state = HookRunState::load(&store, config.session_id)?;
         ensure_session_start_hooks(
@@ -287,7 +287,8 @@ impl AgentExecutor for RemoteCodeAgentExecutor {
         let outcome = run_prompt_with_query_engine_compat_overrides(
             &config,
             &store,
-            backend,
+            Arc::new(backend),
+            discovered_tool_scope,
             broker,
             None,
             &discovery,

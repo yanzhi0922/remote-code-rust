@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::collections::BTreeSet;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -6,6 +7,27 @@ use rc_config::ProviderConfig;
 use rc_core::{ConversationEntry, ProviderResponse, SubAgentCompletion};
 
 use crate::{ProviderClient, StreamingCallbacks};
+
+#[derive(Clone, Default)]
+pub struct DiscoveredToolScope {
+    inner: Arc<Mutex<BTreeSet<String>>>,
+}
+
+impl DiscoveredToolScope {
+    #[must_use]
+    pub fn snapshot(&self) -> BTreeSet<String> {
+        self.inner
+            .lock()
+            .map(|state| state.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn replace(&self, discovered_tools: BTreeSet<String>) {
+        if let Ok(mut state) = self.inner.lock() {
+            *state = discovered_tools;
+        }
+    }
+}
 
 #[async_trait]
 pub trait ConversationBackend: Send + Sync {
@@ -24,6 +46,7 @@ pub trait ConversationBackend: Send + Sync {
 pub struct ProviderCompatBackend {
     client: Arc<ProviderClient>,
     provider: ProviderConfig,
+    discovered_tool_scope: DiscoveredToolScope,
 }
 
 impl ProviderCompatBackend {
@@ -32,20 +55,32 @@ impl ProviderCompatBackend {
         Self {
             client,
             provider: provider.clone(),
+            discovered_tool_scope: DiscoveredToolScope::default(),
         }
+    }
+
+    #[must_use]
+    pub fn discovered_tool_scope(&self) -> DiscoveredToolScope {
+        self.discovered_tool_scope.clone()
     }
 }
 
 struct ProviderSubAgentCompletion {
     client: Arc<ProviderClient>,
     provider: ProviderConfig,
+    discovered_tool_scope: DiscoveredToolScope,
 }
 
 impl ProviderSubAgentCompletion {
-    fn new(client: Arc<ProviderClient>, provider: &ProviderConfig) -> Self {
+    fn new(
+        client: Arc<ProviderClient>,
+        provider: &ProviderConfig,
+        discovered_tool_scope: DiscoveredToolScope,
+    ) -> Self {
         Self {
             client,
             provider: provider.clone(),
+            discovered_tool_scope,
         }
     }
 }
@@ -56,14 +91,26 @@ impl SubAgentCompletion for ProviderSubAgentCompletion {
         &self,
         conversation: &[ConversationEntry],
     ) -> anyhow::Result<ProviderResponse> {
-        self.client.complete(&self.provider, conversation).await
+        self.client
+            .complete_with_discovered_tools(
+                &self.provider,
+                conversation,
+                &self.discovered_tool_scope.snapshot(),
+            )
+            .await
     }
 }
 
 #[async_trait]
 impl ConversationBackend for ProviderCompatBackend {
     async fn complete(&self, conversation: &[ConversationEntry]) -> Result<ProviderResponse> {
-        self.client.complete(&self.provider, conversation).await
+        self.client
+            .complete_with_discovered_tools(
+                &self.provider,
+                conversation,
+                &self.discovered_tool_scope.snapshot(),
+            )
+            .await
     }
 
     async fn complete_streaming(
@@ -72,7 +119,12 @@ impl ConversationBackend for ProviderCompatBackend {
         callbacks: Option<StreamingCallbacks>,
     ) -> Result<ProviderResponse> {
         self.client
-            .complete_streaming_with_callbacks(&self.provider, conversation, callbacks)
+            .complete_streaming_with_callbacks_and_discovered_tools(
+                &self.provider,
+                conversation,
+                callbacks,
+                &self.discovered_tool_scope.snapshot(),
+            )
             .await
     }
 
@@ -80,6 +132,7 @@ impl ConversationBackend for ProviderCompatBackend {
         Arc::new(ProviderSubAgentCompletion::new(
             Arc::clone(&self.client),
             &self.provider,
+            self.discovered_tool_scope(),
         ))
     }
 }

@@ -63,6 +63,31 @@ impl SessionTranscript {
             .collect()
     }
 
+    /// Collect tool names carried forward on compact-boundary metadata.
+    #[must_use]
+    pub fn carried_discovered_tool_names(&self) -> BTreeSet<String> {
+        let mut discovered = BTreeSet::new();
+
+        for event in &self.events {
+            if event.event_type != "compact_boundary" {
+                continue;
+            }
+
+            let Some(payload) = event.payload.clone() else {
+                continue;
+            };
+
+            let Ok(boundary) = serde_json::from_value::<rc_transcript::CompactBoundary>(payload)
+            else {
+                continue;
+            };
+
+            discovered.extend(boundary.pre_compact_discovered_tools);
+        }
+
+        discovered
+    }
+
     /// Return the latest payload stored for a named event type.
     #[must_use]
     pub fn latest_named_event_payload(&self, event_type: &str) -> Option<&Value> {
@@ -333,6 +358,43 @@ mod tests {
             .expect("resume state should exist");
         assert_eq!(state.pending_tool_calls.len(), 1);
         assert_eq!(state.pending_tool_calls[0].name, "bash");
+    }
+
+    #[test]
+    fn transcript_reads_carried_discovered_tool_names_from_boundaries() {
+        let session_id = Uuid::new_v4();
+        let transcript = SessionTranscript::new(
+            session_id,
+            vec![
+                rc_core::StoredEvent {
+                    timestamp: Utc::now(),
+                    session_id,
+                    event_type: "compact_boundary".to_owned(),
+                    conversation: None,
+                    payload: Some(serde_json::json!({
+                        "trigger": "auto",
+                        "pre_tokens": 100,
+                        "pre_compact_discovered_tools": ["web_fetch", "mcp__context7__query_docs"],
+                    })),
+                },
+                rc_core::StoredEvent {
+                    timestamp: Utc::now(),
+                    session_id,
+                    event_type: "compact_boundary".to_owned(),
+                    conversation: None,
+                    payload: Some(serde_json::json!({
+                        "trigger": "auto",
+                        "pre_tokens": 120,
+                        "pre_compact_discovered_tools": ["task_create"],
+                    })),
+                },
+            ],
+        );
+
+        let discovered = transcript.carried_discovered_tool_names();
+        assert!(discovered.contains("web_fetch"));
+        assert!(discovered.contains("mcp__context7__query_docs"));
+        assert!(discovered.contains("task_create"));
     }
 
     #[test]

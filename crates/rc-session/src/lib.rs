@@ -13,7 +13,7 @@ pub mod runtime_context;
 pub mod session_memory_service;
 pub mod transcript;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -435,6 +435,16 @@ impl SessionStore {
     /// Returns an error if the transcript file cannot be read or parsed.
     pub fn load_conversation(&self, session_id: Uuid) -> Result<Vec<ConversationEntry>> {
         Ok(self.load_transcript(session_id)?.conversation_entries())
+    }
+
+    /// Load tool names carried forward from compact-boundary metadata.
+    ///
+    /// # Errors
+    /// Returns an error if the transcript file cannot be read or parsed.
+    pub fn load_carried_discovered_tool_names(&self, session_id: Uuid) -> Result<BTreeSet<String>> {
+        Ok(self
+            .load_transcript(session_id)?
+            .carried_discovered_tool_names())
     }
 
     /// Load a complete session bundle (summary, stats, conversation, events).

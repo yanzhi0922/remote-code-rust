@@ -13,7 +13,7 @@ use rc_core::{ConversationEntry, ConversationRole};
 use rc_permissions::{PermissionBroker, load_layered_rules, rules::summarize_rule_sources};
 use rc_protocol::{MessageRole, RuntimeEventDetail, UsagePayload};
 use rc_provider::context::ContextWindowManager;
-use rc_provider::{ProviderCompatBackend, StreamingCallbacks};
+use rc_provider::{DiscoveredToolScope, ProviderCompatBackend, StreamingCallbacks};
 use rc_session::resume_state::{PendingToolCall, ResumeState};
 use rc_session::runtime_context::{
     persist_runtime_config_session_context, repair_interrupted_tool_batch,
@@ -231,6 +231,20 @@ fn session_task_dir(config: &RuntimeConfig) -> PathBuf {
         .artifacts_dir
         .join("tasks")
         .join(config.session_id.to_string())
+}
+
+pub(crate) fn restore_discovered_tool_scope(
+    store: &SessionStore,
+    session_id: uuid::Uuid,
+    scope: &DiscoveredToolScope,
+) -> Result<()> {
+    if !store.session_transcript_path(session_id).exists() {
+        scope.replace(std::collections::BTreeSet::new());
+        return Ok(());
+    }
+
+    scope.replace(store.load_carried_discovered_tool_names(session_id)?);
+    Ok(())
 }
 
 fn emit_task_snapshot_if_available(event_sink: &PromptEventSink, task_dir: &Path) {
@@ -522,6 +536,7 @@ pub(crate) async fn run_prompt(
     config: &RuntimeConfig,
     store: &SessionStore,
     backend: Arc<dyn ConversationBackend>,
+    discovered_tool_scope: DiscoveredToolScope,
     broker: Arc<dyn PermissionBroker>,
     event_sink: Option<PromptEventSink>,
     discovery: &RuntimeHookDiscovery,
@@ -547,6 +562,7 @@ pub(crate) async fn run_prompt(
         config,
         store,
         backend,
+        discovered_tool_scope,
         broker,
         event_sink,
         discovery,
@@ -943,10 +959,12 @@ pub(crate) async fn run_oneshot_text(
         Arc::new(rc_provider::ProviderClient::new()?),
         &config.provider,
     );
+    let discovered_tool_scope = backend.discovered_tool_scope();
     let (plan_mode_controller, broker) = build_runtime_plan_mode(config, store)?;
     let _plan_mode_runtime = install_plan_mode_runtime(plan_mode_controller)?;
     let discovery = discover_runtime_hooks(config, &[]);
     let mut conversation = initialize_conversation(store, config, Some(&prompt))?;
+    restore_discovered_tool_scope(store, config.session_id, &discovered_tool_scope)?;
     let mut hook_state = HookRunState::load(store, config.session_id)?;
     ensure_session_start_hooks(
         &discovery,
@@ -960,6 +978,7 @@ pub(crate) async fn run_oneshot_text(
         config,
         store,
         Arc::new(backend),
+        discovered_tool_scope,
         broker,
         None,
         &discovery,
