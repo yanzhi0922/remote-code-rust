@@ -160,7 +160,9 @@ mod tests {
     #[test]
     fn escalation_from_8k_to_16k() {
         let mut recovery = MaxTokensRecovery::new();
-        let action = recovery.handle_truncation(8192).unwrap();
+        let action = recovery
+            .handle_truncation(8192)
+            .expect("8192-token truncation should produce a recovery action");
 
         match action {
             MaxTokensRecoveryAction::Escalate { new_max_tokens } => {
@@ -176,7 +178,9 @@ mod tests {
     #[test]
     fn escalation_from_16k_to_64k() {
         let mut recovery = MaxTokensRecovery::new();
-        let action = recovery.handle_truncation(16384).unwrap();
+        let action = recovery
+            .handle_truncation(16384)
+            .expect("16384-token truncation should produce a recovery action");
 
         match action {
             MaxTokensRecoveryAction::Escalate { new_max_tokens } => {
@@ -191,7 +195,9 @@ mod tests {
     #[test]
     fn continuation_message_when_no_escalation() {
         let mut recovery = MaxTokensRecovery::new();
-        let action = recovery.handle_truncation(65536).unwrap();
+        let action = recovery
+            .handle_truncation(65536)
+            .expect("65536-token truncation should produce a recovery action");
 
         match action {
             MaxTokensRecoveryAction::ContinueWithMessage { max_tokens, .. } => {
@@ -207,7 +213,9 @@ mod tests {
     fn exhaustion_after_max_recoveries() {
         let mut recovery = MaxTokensRecovery::new().with_max_recoveries(1);
         let _ = recovery.handle_truncation(8192);
-        let action = recovery.handle_truncation(8192).unwrap();
+        let action = recovery
+            .handle_truncation(8192)
+            .expect("second recovery attempt should report exhaustion");
 
         assert!(matches!(action, MaxTokensRecoveryAction::Exhausted));
     }
@@ -244,7 +252,9 @@ mod tests {
     #[test]
     fn custom_escalation_tiers() {
         let mut recovery = MaxTokensRecovery::new().with_escalation_tokens([4096, 8192, 32768]);
-        let action = recovery.handle_truncation(4096).unwrap();
+        let action = recovery
+            .handle_truncation(4096)
+            .expect("custom escalation tier should produce a recovery action");
 
         match action {
             MaxTokensRecoveryAction::Escalate { new_max_tokens } => {
@@ -259,7 +269,9 @@ mod tests {
     #[test]
     fn zero_max_tokens_triggers_first_escalation() {
         let mut recovery = MaxTokensRecovery::new();
-        let action = recovery.handle_truncation(0).unwrap();
+        let action = recovery
+            .handle_truncation(0)
+            .expect("zero max_tokens should produce a recovery action");
 
         match action {
             MaxTokensRecoveryAction::Escalate { new_max_tokens } => {
@@ -276,7 +288,9 @@ mod tests {
         let mut recovery = MaxTokensRecovery::new().with_max_recoveries(5);
 
         // 0 → 8192
-        let a1 = recovery.handle_truncation(0).unwrap();
+        let a1 = recovery
+            .handle_truncation(0)
+            .expect("first escalation should produce a recovery action");
         match a1 {
             MaxTokensRecoveryAction::Escalate { new_max_tokens } => {
                 assert_eq!(new_max_tokens, 8192);
@@ -285,7 +299,9 @@ mod tests {
         }
 
         // 8192 → 16384
-        let a2 = recovery.handle_truncation(8192).unwrap();
+        let a2 = recovery
+            .handle_truncation(8192)
+            .expect("second escalation should produce a recovery action");
         match a2 {
             MaxTokensRecoveryAction::Escalate { new_max_tokens } => {
                 assert_eq!(new_max_tokens, 16384);
@@ -294,7 +310,9 @@ mod tests {
         }
 
         // 16384 → 65536
-        let a3 = recovery.handle_truncation(16384).unwrap();
+        let a3 = recovery
+            .handle_truncation(16384)
+            .expect("third escalation should produce a recovery action");
         match a3 {
             MaxTokensRecoveryAction::Escalate { new_max_tokens } => {
                 assert_eq!(new_max_tokens, 65536);
@@ -303,7 +321,9 @@ mod tests {
         }
 
         // 65536 → continuation
-        let a4 = recovery.handle_truncation(65536).unwrap();
+        let a4 = recovery
+            .handle_truncation(65536)
+            .expect("continuation recovery should produce a recovery action");
         assert!(matches!(
             a4,
             MaxTokensRecoveryAction::ContinueWithMessage { .. }

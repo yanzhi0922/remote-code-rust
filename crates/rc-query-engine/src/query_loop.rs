@@ -334,6 +334,7 @@ pub async fn run_query_loop(
                     ToolRunResult::from(ToolResult {
                         content: format!("Tool execution error: {error:#}"),
                         is_error: true,
+                        content_blocks: Vec::new(),
                     })
                 }
             };
@@ -430,9 +431,12 @@ async fn maybe_compact_conversation(
         strategy: "standard".to_owned(),
     });
     let before_messages = legacy_conversation.len();
-    let compacted = config.context_manager.compact(legacy_conversation);
+    let mut compacted = config.context_manager.compact(legacy_conversation);
     if compacted.len() == before_messages {
         return;
+    }
+    if let Some(transform) = config.post_compact_transform.as_ref() {
+        compacted = transform(compacted);
     }
     let after_snapshot = config.context_manager.budget_snapshot(&compacted);
     *legacy_conversation = compacted;
@@ -451,6 +455,7 @@ async fn maybe_compact_conversation(
             turn: state.turn + 1,
             before_messages,
             after_messages: legacy_conversation.len(),
+            compacted_conversation: legacy_conversation.clone(),
             max_input_tokens: before_snapshot.max_input_tokens,
             threshold_tokens: before_snapshot.threshold_tokens(),
             usage_ratio_before: before_snapshot.usage_ratio,

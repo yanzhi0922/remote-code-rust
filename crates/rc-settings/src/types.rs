@@ -349,11 +349,12 @@ mod tests {
         s.model = Some("claude-sonnet-4".to_string());
         s.fast_mode = Some(true);
 
-        let json = serde_json::to_string(&s).unwrap();
+        let json = serde_json::to_string(&s).expect("settings should serialize");
         assert!(json.contains("claude-sonnet-4"));
         assert!(json.contains("fastMode"));
 
-        let deserialized: Settings = serde_json::from_str(&json).unwrap();
+        let deserialized: Settings =
+            serde_json::from_str(&json).expect("settings should deserialize");
         assert_eq!(deserialized.model.as_deref(), Some("claude-sonnet-4"));
         assert_eq!(deserialized.fast_mode, Some(true));
     }
@@ -361,7 +362,7 @@ mod tests {
     #[test]
     fn settings_deserialize_partial() {
         let json = r#"{"model":"test-model","cleanupPeriodDays":14}"#;
-        let s: Settings = serde_json::from_str(json).unwrap();
+        let s: Settings = serde_json::from_str(json).expect("partial settings should deserialize");
         assert_eq!(s.model.as_deref(), Some("test-model"));
         assert_eq!(s.cleanup_period_days, Some(14));
         assert!(s.permissions.is_none());

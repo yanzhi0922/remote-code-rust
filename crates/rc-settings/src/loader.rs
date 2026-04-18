@@ -54,14 +54,14 @@ mod tests {
 
     #[test]
     fn load_from_str_empty() {
-        let settings = load_settings_from_str("{}").unwrap();
+        let settings = load_settings_from_str("{}").expect("empty settings JSON should load");
         assert!(settings.model.is_none());
     }
 
     #[test]
     fn load_from_str_with_model() {
         let json = r#"{"model":"claude-opus-4","fastMode":true}"#;
-        let settings = load_settings_from_str(json).unwrap();
+        let settings = load_settings_from_str(json).expect("settings with model should load");
         assert_eq!(settings.model.as_deref(), Some("claude-opus-4"));
         assert_eq!(settings.fast_mode, Some(true));
     }
@@ -74,10 +74,24 @@ mod tests {
                 "deny": ["Bash(rm -rf /)"]
             }
         }"#;
-        let settings = load_settings_from_str(json).unwrap();
-        let perms = settings.permissions.unwrap();
-        assert_eq!(perms.allow.unwrap().len(), 2);
-        assert_eq!(perms.deny.unwrap().len(), 1);
+        let settings = load_settings_from_str(json).expect("settings with permissions should load");
+        let perms = settings
+            .permissions
+            .expect("permissions should be present after deserialization");
+        assert_eq!(
+            perms
+                .allow
+                .expect("allow rules should be present after deserialization")
+                .len(),
+            2
+        );
+        assert_eq!(
+            perms
+                .deny
+                .expect("deny rules should be present after deserialization")
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -90,8 +104,10 @@ mod tests {
                 }
             }
         }"#;
-        let settings = load_settings_from_str(json).unwrap();
-        let providers = settings.providers.unwrap();
+        let settings = load_settings_from_str(json).expect("settings with providers should load");
+        let providers = settings
+            .providers
+            .expect("providers should be present after deserialization");
         assert!(providers.contains_key("custom"));
     }
 
@@ -103,11 +119,12 @@ mod tests {
 
     #[test]
     fn load_from_file() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("temp dir should be created");
         let path = tmp.path().join("settings.json");
-        std::fs::write(&path, r#"{"model":"test-model"}"#).unwrap();
+        std::fs::write(&path, r#"{"model":"test-model"}"#)
+            .expect("test settings file should be written");
 
-        let settings = load_settings_from_file(&path).unwrap();
+        let settings = load_settings_from_file(&path).expect("settings file should load");
         assert_eq!(settings.model.as_deref(), Some("test-model"));
     }
 
@@ -119,27 +136,28 @@ mod tests {
 
     #[test]
     fn save_and_reload() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("temp dir should be created");
         let path = tmp.path().join("settings.json");
 
         let mut settings = Settings::new();
         settings.model = Some("test-model".to_string());
         settings.fast_mode = Some(true);
 
-        save_settings_to_file(&settings, &path).unwrap();
+        save_settings_to_file(&settings, &path).expect("settings file should be saved");
 
-        let reloaded = load_settings_from_file(&path).unwrap();
+        let reloaded = load_settings_from_file(&path).expect("saved settings file should reload");
         assert_eq!(reloaded.model, settings.model);
         assert_eq!(reloaded.fast_mode, settings.fast_mode);
     }
 
     #[test]
     fn save_creates_parent_dirs() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("temp dir should be created");
         let path = tmp.path().join("nested").join("dir").join("settings.json");
 
         let settings = Settings::new();
-        save_settings_to_file(&settings, &path).unwrap();
+        save_settings_to_file(&settings, &path)
+            .expect("settings save should create parent directories");
         assert!(path.exists());
     }
 }

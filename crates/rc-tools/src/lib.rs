@@ -8,19 +8,18 @@ pub mod agent;
 pub mod command;
 pub mod delegate;
 pub mod discover_skills;
-pub mod enhanced_tool_system;
 pub mod file_ops;
 pub mod git;
 pub mod hooks;
 pub mod lsp;
 pub mod mcp_catalog;
-pub mod mcp_resource_tools;
 pub mod mcp_runtime;
 pub mod mcp_tools;
 pub mod memory_tools;
 pub mod misc;
 pub mod plan_mode;
 pub mod review_artifact;
+pub mod runtime_plan_mode;
 pub mod sandbox;
 pub mod search;
 pub mod send_message;
@@ -49,8 +48,13 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Result, anyhow};
 use once_cell::sync::Lazy;
 use rc_core::task_stack::TaskStack;
-use rc_core::{HookEvent, HookShell, SubAgentCompletion, ToolCall, ToolResult};
-use rc_permissions::{PermissionBroker, PermissionRequest, auto_allows, classify_tool};
+use rc_core::{
+    ConversationEntry, ConversationRole, HookEvent, HookShell, SubAgentCompletion, ToolCall,
+    ToolResult,
+};
+use rc_permissions::{
+    PermissionBroker, PermissionClass, PermissionRequest, auto_allows, classify_tool,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -126,28 +130,256 @@ pub fn runtime_builtin_tool_specs() -> Vec<ToolSpec> {
         .collect()
 }
 
+fn sort_tool_specs_by_name(specs: &mut [ToolSpec]) {
+    specs.sort_by(|left, right| left.name.cmp(&right.name));
+}
+
+fn merge_provider_tool_specs(
+    mut builtin_specs: Vec<ToolSpec>,
+    mut dynamic_specs: Vec<ToolSpec>,
+) -> Vec<ToolSpec> {
+    sort_tool_specs_by_name(&mut builtin_specs);
+    sort_tool_specs_by_name(&mut dynamic_specs);
+
+    let mut merged = Vec::with_capacity(builtin_specs.len() + dynamic_specs.len());
+    let mut seen = std::collections::BTreeSet::new();
+
+    for spec in builtin_specs.into_iter().chain(dynamic_specs) {
+        if seen.insert(spec.name.clone()) {
+            merged.push(spec);
+        }
+    }
+
+    merged
+}
+
+#[must_use]
+pub fn is_runtime_dynamic_mcp_tool_name(name: &str) -> bool {
+    name.starts_with("mcp__") || matches!(name, "list_mcp_resources" | "read_mcp_resource")
+}
+
+fn runtime_policy_supports_mcp_resources() -> bool {
+    current_tool_runtime_policy()
+        .mcp_servers
+        .iter()
+        .any(|entry| entry.server.enabled && entry.server.capabilities.supports_resources)
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolSourceKind {
+    Builtin,
+    Mcp,
+    McpResource,
+}
+
+const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
+const TOOL_SEARCH_COMPAT_NAME: &str = "toolsearch";
+
+fn builtin_tool_is_deferred(name: &str) -> bool {
+    matches!(
+        name,
+        "ask_user"
+            | "config_read"
+            | "enter_plan_mode"
+            | "exit_plan_mode"
+            | "enter_worktree"
+            | "exit_worktree"
+            | "lsp"
+            | "notebook_edit"
+            | "todo_write"
+            | "task_create"
+            | "task_get"
+            | "task_list"
+            | "task_stop"
+            | "task_update"
+            | "task_output"
+            | "send_message"
+            | "team_create"
+            | "team_delete"
+            | "web_fetch"
+            | "web_search"
+            | "remote_trigger"
+            | "schedule_cron"
+            | "list_mcp_resources"
+            | "read_mcp_resource"
+    )
+}
+
+fn builtin_tool_search_hints(name: &str) -> &'static [&'static str] {
+    match name {
+        "agent" => &["delegate work to a subagent"],
+        "ask_user" => &["prompt the user with a multiple-choice question"],
+        "config_read" => &["get or set remote-code settings"],
+        "enter_plan_mode" => &["switch to plan mode to design an approach before coding"],
+        "exit_plan_mode" => &["present plan for approval and start coding"],
+        "enter_worktree" => &["create an isolated git worktree and switch into it"],
+        "exit_worktree" => &["exit a worktree session and return to the original directory"],
+        "glob" => &["find files by name pattern or wildcard"],
+        "grep" => &["search file contents with regex ripgrep"],
+        "lsp" => &["code intelligence definitions references symbols hover"],
+        "notebook_edit" => &["edit jupyter notebook cells ipynb"],
+        "read_file" => &["read files images pdfs notebooks"],
+        "remote_trigger" => &["manage scheduled remote agent triggers"],
+        "send_message" => &["send messages to agent teammates swarm protocol"],
+        "task_create" => &["create a task in the task list"],
+        "task_get" => &["retrieve a task by id"],
+        "task_list" => &["list all tasks"],
+        "task_output" => &["read output logs from a background task"],
+        "task_stop" => &["kill a running background task"],
+        "task_update" => &["update a task"],
+        "team_create" => &["create a multi-agent swarm team"],
+        "team_delete" => &["disband a swarm team and clean up"],
+        "todo_write" => &["manage the session task checklist"],
+        "web_fetch" => &["fetch and extract content from a url"],
+        "web_search" => &["search the web for current information"],
+        "list_mcp_resources" => &["list resources from connected mcp servers"],
+        "read_mcp_resource" => &["read a specific mcp resource by uri"],
+        _ => &[],
+    }
+}
+
+fn collect_tool_search_terms(raw: &str, terms: &mut std::collections::BTreeSet<String>) {
+    if raw.trim().is_empty() {
+        return;
+    }
+    terms.insert(raw.to_owned());
+    for token in raw
+        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+        .filter(|token| !token.is_empty())
+    {
+        terms.insert(token.to_ascii_lowercase());
+    }
+}
+
+fn is_tool_search_tool_name(name: &str) -> bool {
+    matches!(name, TOOL_SEARCH_TOOL_NAME | TOOL_SEARCH_COMPAT_NAME)
+}
+
 pub async fn runtime_provider_tool_specs() -> Vec<ToolSpec> {
-    let mut specs = runtime_builtin_tool_specs();
-    specs.extend(mcp_catalog::runtime_mcp_tool_specs().await);
+    let builtin_specs = runtime_builtin_tool_specs();
+    let catalog = mcp_catalog::runtime_mcp_catalog().await;
+    let policy = current_tool_runtime_policy();
+    let mut dynamic_specs = Vec::new();
+
+    if catalog
+        .clients
+        .iter()
+        .any(|client| client.supports_resources)
+    {
+        dynamic_specs.extend(
+            specs::mcp_resource_tool_specs()
+                .into_iter()
+                .filter(|spec| tool_allowed_by_policy(&spec.name, &policy)),
+        );
+    }
+
+    dynamic_specs.extend(catalog.tools.into_iter().map(|tool| tool.tool_spec));
+
+    merge_provider_tool_specs(builtin_specs, dynamic_specs)
+}
+
+pub async fn runtime_tool_search_candidate_specs() -> Vec<ToolSpec> {
+    runtime_provider_tool_specs()
+        .await
+        .into_iter()
+        .filter(|spec| spec.is_deferred())
+        .collect()
+}
+
+pub fn extract_discovered_tool_names_from_conversation(
+    conversation: &[ConversationEntry],
+) -> std::collections::BTreeSet<String> {
+    let mut discovered = std::collections::BTreeSet::new();
+
+    for entry in conversation {
+        if entry.role != ConversationRole::Tool {
+            continue;
+        }
+        let Some(tool_name) = entry.name.as_deref() else {
+            continue;
+        };
+        if !is_tool_search_tool_name(tool_name) {
+            continue;
+        }
+
+        for block in &entry.content_blocks {
+            if block.get("type").and_then(Value::as_str) != Some("tool_reference") {
+                continue;
+            }
+            if let Some(name) = block.get("tool_name").and_then(Value::as_str) {
+                discovered.insert(name.to_owned());
+            }
+        }
+
+        let Ok(payload) = serde_json::from_str::<Value>(&entry.text) else {
+            continue;
+        };
+
+        if let Some(matches) = payload
+            .get("data")
+            .and_then(|value| value.get("matches"))
+            .and_then(Value::as_array)
+        {
+            for tool_name in matches.iter().filter_map(Value::as_str) {
+                discovered.insert(tool_name.to_owned());
+            }
+        }
+
+        for array_key in ["results", "found_tools"] {
+            let Some(results) = payload.get(array_key).and_then(Value::as_array) else {
+                continue;
+            };
+            for result in results {
+                if let Some(name) = result.get("name").and_then(Value::as_str) {
+                    discovered.insert(name.to_owned());
+                }
+            }
+        }
+    }
+
+    discovered
+}
+
+pub async fn runtime_visible_provider_tool_specs(
+    conversation: &[ConversationEntry],
+) -> Vec<ToolSpec> {
+    let specs = runtime_provider_tool_specs().await;
+    let has_tool_search = specs.iter().any(|spec| spec.is_tool_search());
+    if !has_tool_search {
+        return specs;
+    }
+
+    let has_deferred_tools = specs.iter().any(ToolSpec::is_deferred);
+    if !has_deferred_tools {
+        return specs
+            .into_iter()
+            .filter(|spec| !spec.is_tool_search())
+            .collect();
+    }
+
+    let discovered = extract_discovered_tool_names_from_conversation(conversation);
     specs
+        .into_iter()
+        .filter(|spec| {
+            spec.is_tool_search() || !spec.is_deferred() || discovered.contains(spec.name.as_str())
+        })
+        .collect()
 }
 
 pub async fn runtime_provider_tool_spec(name: &str) -> Option<ToolSpec> {
-    if let Some(spec) = runtime_builtin_tool_specs()
+    if matches!(name, "list_mcp_resources" | "read_mcp_resource")
+        && runtime_policy_supports_mcp_resources()
+    {
+        return specs::mcp_resource_tool_specs()
+            .into_iter()
+            .find(|spec| spec.name == name);
+    }
+
+    runtime_provider_tool_specs()
+        .await
         .into_iter()
         .find(|spec| spec.name == name)
-    {
-        return Some(spec);
-    }
-
-    if !name.starts_with("mcp__") {
-        return None;
-    }
-
-    mcp_catalog::resolve_runtime_mcp_tool(name)
-        .await
-        .ok()
-        .map(|tool| tool.tool_spec)
 }
 
 /// Specification for a single built-in tool.
@@ -168,6 +400,66 @@ pub struct ToolSpec {
 }
 
 impl ToolSpec {
+    #[must_use]
+    pub fn source_kind(&self) -> ToolSourceKind {
+        if matches!(
+            self.name.as_str(),
+            "list_mcp_resources" | "read_mcp_resource"
+        ) {
+            ToolSourceKind::McpResource
+        } else if self.name.starts_with("mcp__") {
+            ToolSourceKind::Mcp
+        } else {
+            ToolSourceKind::Builtin
+        }
+    }
+
+    #[must_use]
+    pub fn is_tool_search(&self) -> bool {
+        is_tool_search_tool_name(&self.name)
+    }
+
+    #[must_use]
+    pub fn is_always_loaded(&self) -> bool {
+        self.is_tool_search()
+    }
+
+    #[must_use]
+    pub fn is_deferred(&self) -> bool {
+        if self.is_always_loaded() {
+            return false;
+        }
+
+        match self.source_kind() {
+            ToolSourceKind::Builtin => builtin_tool_is_deferred(&self.name),
+            ToolSourceKind::Mcp | ToolSourceKind::McpResource => true,
+        }
+    }
+
+    #[must_use]
+    pub fn tool_search_terms(&self) -> Vec<String> {
+        let mut terms = std::collections::BTreeSet::new();
+        for raw in [
+            self.name.as_str(),
+            self.protocol_name.as_str(),
+            self.permission_tool_name.as_str(),
+        ] {
+            collect_tool_search_terms(raw, &mut terms);
+        }
+
+        if let Some(stripped) = self.name.strip_prefix("mcp__") {
+            for segment in stripped.split("__") {
+                collect_tool_search_terms(segment, &mut terms);
+            }
+        }
+
+        for hint in builtin_tool_search_hints(&self.name) {
+            collect_tool_search_terms(hint, &mut terms);
+        }
+
+        terms.into_iter().collect()
+    }
+
     /// Convert to an OpenAI-compatible function-calling schema.
     #[must_use]
     pub fn to_openai_schema(&self) -> Value {
@@ -184,11 +476,21 @@ impl ToolSpec {
     /// Convert to an Anthropic-compatible tool-use schema.
     #[must_use]
     pub fn to_anthropic_schema(&self) -> Value {
-        serde_json::json!({
+        self.to_anthropic_schema_with_options(false)
+    }
+
+    /// Convert to an Anthropic-compatible tool-use schema with per-request overlays.
+    #[must_use]
+    pub fn to_anthropic_schema_with_options(&self, defer_loading: bool) -> Value {
+        let mut schema = serde_json::json!({
             "name": self.name,
             "description": self.description,
             "input_schema": self.input_schema,
-        })
+        });
+        if defer_loading {
+            schema["defer_loading"] = Value::Bool(true);
+        }
+        schema
     }
 }
 
@@ -351,6 +653,47 @@ impl Default for ToolRegistry {
     }
 }
 
+#[derive(Debug, Clone)]
+struct EffectivePermission {
+    class: PermissionClass,
+    requires_permission: bool,
+    blocked_path: Option<String>,
+}
+
+fn effective_permission_for_call(call: &ToolCall, spec: &ToolSpec) -> EffectivePermission {
+    let default = EffectivePermission {
+        class: classify_tool(&spec.permission_tool_name),
+        requires_permission: spec.requires_permission,
+        blocked_path: call
+            .input
+            .get("path")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+    };
+
+    match spec.name.as_str() {
+        "workflow" => match call.input.get("action").and_then(Value::as_str) {
+            Some("run") => EffectivePermission {
+                class: PermissionClass::Bash,
+                requires_permission: true,
+                blocked_path: None,
+            },
+            Some("create") | Some("delete") => EffectivePermission {
+                class: PermissionClass::Edit,
+                requires_permission: true,
+                blocked_path: Some(".remote-code-rust/workflows.json".to_owned()),
+            },
+            Some("list") | Some("status") => EffectivePermission {
+                class: PermissionClass::Read,
+                requires_permission: false,
+                blocked_path: Some(".remote-code-rust/workflows.json".to_owned()),
+            },
+            _ => default,
+        },
+        _ => default,
+    }
+}
+
 /// Execute a tool call after checking permissions.
 ///
 /// Looks up the tool by name, checks permissions via the broker, and dispatches
@@ -385,28 +728,31 @@ pub async fn execute_tool_call(
                 spec.name
             ),
             is_error: true,
+            content_blocks: Vec::new(),
         });
     }
 
-    if spec.requires_permission {
+    if let Some(rejected) = plan_mode::plan_mode_guard(&spec, call, context, broker.mode()) {
+        return Ok(rejected);
+    }
+
+    let permission = effective_permission_for_call(call, &spec);
+
+    if permission.requires_permission {
         // Fast-path: if the broker exposes a mode and auto_allows covers this class, skip.
         let broker_mode = broker.mode();
-        let tool_class = classify_tool(&spec.permission_tool_name);
-        let skip_broker = broker_mode.is_some_and(|m| auto_allows(m, tool_class));
+        let skip_broker = broker_mode.is_some_and(|m| auto_allows(m, permission.class));
         if !skip_broker {
             let decision = broker
                 .decide(PermissionRequest {
                     tool_name: spec.name.clone(),
+                    permission_class: Some(permission.class),
                     tool_input: call.input.clone(),
                     working_directory: None,
                     tool_use_id: Some(call.id.clone()),
                     title: Some(format!("Allow {}", spec.protocol_name)),
                     description: Some(spec.description.clone()),
-                    blocked_path: call
-                        .input
-                        .get("path")
-                        .and_then(Value::as_str)
-                        .map(ToOwned::to_owned),
+                    blocked_path: permission.blocked_path.clone(),
                 })
                 .await;
             if !decision.allowed {
@@ -415,9 +761,21 @@ pub async fn execute_tool_call(
                         .message
                         .unwrap_or_else(|| format!("Permission denied for {}.", spec.name)),
                     is_error: true,
+                    content_blocks: Vec::new(),
                 });
             }
         }
+    }
+
+    if spec.name == "tool_search" {
+        return match system::tool_search_tool(&call.input).await {
+            Ok(result) => Ok(result),
+            Err(error) => Ok(ToolResult {
+                content: error.to_string(),
+                is_error: true,
+                content_blocks: Vec::new(),
+            }),
+        };
     }
 
     let result = match spec.name.as_str() {
@@ -446,8 +804,8 @@ pub async fn execute_tool_call(
         "notebook_edit" => misc::notebook_edit(&call.input, context),
         "skill_discover" => misc::skill_discover(&call.input, context),
         "send_message" => send_message::send_message(&call.input, context).await,
-        "enter_plan_mode" => agent::enter_plan_mode(&call.input),
-        "exit_plan_mode" => agent::exit_plan_mode(&call.input),
+        "enter_plan_mode" => plan_mode::enter_plan_mode(&call.input, context),
+        "exit_plan_mode" => plan_mode::exit_plan_mode(&call.input, context),
         "sleep" => system::sleep_tool(&call.input).await,
         "snip" => system::snip_tool(&call.input, context),
         // ── Phase 3 tools ──────────────────────────────────────────────
@@ -456,7 +814,6 @@ pub async fn execute_tool_call(
         "team_create" => misc::team_create_tool(&call.input, context).await,
         "team_status" => misc::team_status_tool(&call.input).await,
         "web_browser" => web::web_browser_tool(&call.input, context).await,
-        "tool_search" => system::tool_search_tool(&call.input),
         "verify_plan" => system::verify_plan_tool(&call.input),
         "terminal_capture" => system::terminal_capture_tool(&call.input, context).await,
         // ── Phase 4: Upstream gap-fill tools ────────────────────────────
@@ -471,7 +828,7 @@ pub async fn execute_tool_call(
         "exit_worktree" => git::exit_worktree_tool(&call.input, context),
         "list_worktrees" => git::list_worktrees_tool(context),
         "brief" => system::brief_tool(&call.input),
-        "ctx_inspect" => system::ctx_inspect_tool(&call.input),
+        "ctx_inspect" => system::ctx_inspect_tool(&call.input).await,
         "list_peers" => system::list_peers_tool(&call.input).await,
         "tungsten" => misc::tungsten_tool(&call.input, context).await,
         "overflow_test" => misc::overflow_test_tool(&call.input),
@@ -500,10 +857,12 @@ pub async fn execute_tool_call(
         Ok(content) => Ok(ToolResult {
             content,
             is_error: false,
+            content_blocks: Vec::new(),
         }),
         Err(error) => Ok(ToolResult {
             content: error.to_string(),
             is_error: true,
+            content_blocks: Vec::new(),
         }),
     }
 }
@@ -559,12 +918,13 @@ mod tests {
     use super::{
         CommandHookExecutionRequest, HookShell, RuntimeMcpServerPolicyEntry, ToolExecutionContext,
         ToolRuntimePolicy, builtin_tool_specs, configure_tool_runtime_policy, execute_command_hook,
-        execute_tool_call,
+        execute_tool_call, extract_discovered_tool_names_from_conversation,
+        runtime_tool_search_candidate_specs, runtime_visible_provider_tool_specs,
     };
     use once_cell::sync::Lazy;
     use rc_core::{
-        HookEvent, ProviderResponse, SubAgentCompletion, SubAgentExecutionRequest, ToolCall,
-        UsageSummary,
+        HookEvent, PermissionMode, ProviderResponse, SubAgentCompletion, SubAgentExecutionRequest,
+        ToolCall, UsageSummary,
     };
     use rc_mcp::{McpCapabilityMatrix, McpServerConfig, McpTransportConfig};
     use rc_permissions::StaticPermissionBroker;
@@ -573,8 +933,9 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
     use tempfile::tempdir;
+    use tokio::sync::Mutex as AsyncMutex;
 
-    static RUNTIME_POLICY_TEST_MUTEX: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+    static RUNTIME_POLICY_TEST_MUTEX: Lazy<AsyncMutex<()>> = Lazy::new(|| AsyncMutex::new(()));
 
     struct TeamDirGuard;
 
@@ -1901,7 +2262,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn plan_mode_tools_return_json() {
+    async fn plan_mode_tools_return_human_readable_messages() {
         let tempdir = match tempdir() {
             Ok(dir) => dir,
             Err(error) => panic!("failed to create tempdir: {error}"),
@@ -1932,10 +2293,8 @@ mod tests {
             "enter_plan_mode error: {}",
             enter_result.content
         );
-        let parsed: serde_json::Value =
-            serde_json::from_str(&enter_result.content).expect("should be valid JSON");
-        assert_eq!(parsed["type"], "enter_plan_mode");
-        assert_eq!(parsed["objective"], "Plan the architecture");
+        assert!(enter_result.content.contains("Entered plan mode"));
+        assert!(enter_result.content.contains("Plan the architecture"));
 
         let exit_result = execute_tool_call(
             &ToolCall {
@@ -1954,9 +2313,7 @@ mod tests {
             "exit_plan_mode error: {}",
             exit_result.content
         );
-        let parsed: serde_json::Value =
-            serde_json::from_str(&exit_result.content).expect("should be valid JSON");
-        assert_eq!(parsed["type"], "exit_plan_mode");
+        assert!(exit_result.content.contains("Exited plan mode"));
     }
 
     #[tokio::test]
@@ -2372,6 +2729,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn workflow_run_requires_bash_permission_even_in_accept_edits_mode() {
+        let tempdir = tempdir().expect("tempdir");
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+
+        let allow_broker = StaticPermissionBroker::new(true);
+        let create_result = execute_tool_call(
+            &ToolCall {
+                id: "wf-create".to_owned(),
+                name: "workflow".to_owned(),
+                input: json!({
+                    "action": "create",
+                    "name": "test-wf",
+                    "steps": ["echo hello"]
+                }),
+            },
+            &context,
+            &allow_broker,
+        )
+        .await
+        .expect("workflow create should work");
+        assert!(
+            !create_result.is_error,
+            "workflow create error: {}",
+            create_result.content
+        );
+
+        let accept_edits_broker = StaticPermissionBroker::from_mode(PermissionMode::AcceptEdits);
+        let run_result = execute_tool_call(
+            &ToolCall {
+                id: "wf-run".to_owned(),
+                name: "workflow".to_owned(),
+                input: json!({
+                    "action": "run",
+                    "name": "test-wf"
+                }),
+            },
+            &context,
+            &accept_edits_broker,
+        )
+        .await
+        .expect("workflow run should return a tool result");
+        assert!(run_result.is_error, "workflow run unexpectedly succeeded");
+        assert!(
+            run_result.content.contains("Permission denied"),
+            "unexpected workflow denial message: {}",
+            run_result.content
+        );
+
+        let status_result = execute_tool_call(
+            &ToolCall {
+                id: "wf-status".to_owned(),
+                name: "workflow".to_owned(),
+                input: json!({
+                    "action": "status",
+                    "name": "test-wf"
+                }),
+            },
+            &context,
+            &accept_edits_broker,
+        )
+        .await
+        .expect("workflow status should still work");
+        assert!(
+            !status_result.is_error,
+            "workflow status error: {}",
+            status_result.content
+        );
+    }
+
+    #[tokio::test]
     async fn suggest_pr_returns_json() {
         let tempdir = match tempdir() {
             Ok(dir) => dir,
@@ -2742,9 +3175,7 @@ mod tests {
 
     #[tokio::test]
     async fn mcp_call_uses_runtime_inventory_from_policy() {
-        let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX
-            .lock()
-            .expect("runtime policy test mutex");
+        let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX.lock().await;
         let tempdir = tempdir().expect("tempdir");
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
@@ -2812,9 +3243,7 @@ mod tests {
 
     #[tokio::test]
     async fn mcp_call_requires_runtime_inventory_in_policy() {
-        let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX
-            .lock()
-            .expect("runtime policy test mutex");
+        let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX.lock().await;
         let tempdir = tempdir().expect("tempdir");
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
@@ -2864,9 +3293,7 @@ mod tests {
 
     #[tokio::test]
     async fn mcp_call_rejects_ambiguous_runtime_inventory_entries() {
-        let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX
-            .lock()
-            .expect("runtime policy test mutex");
+        let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX.lock().await;
         let tempdir = tempdir().expect("tempdir");
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
@@ -2937,6 +3364,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_mcp_resources_returns_json() {
+        let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX.lock().await;
         let tempdir = match tempdir() {
             Ok(dir) => dir,
             Err(error) => panic!("failed to create tempdir: {error}"),
@@ -2949,6 +3377,36 @@ mod tests {
             task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(true);
+        let original_policy = super::current_tool_runtime_policy();
+        configure_tool_runtime_policy(ToolRuntimePolicy {
+            allowed_tools: Vec::new(),
+            disallowed_tools: Vec::new(),
+            task_output_dir: None,
+            mcp_servers: vec![RuntimeMcpServerPolicyEntry {
+                origin_kind: "profile".to_owned(),
+                origin_name: "profile".to_owned(),
+                config_path: tempdir.path().join("mcp.toml"),
+                server: McpServerConfig {
+                    name: "test".to_owned(),
+                    enabled: true,
+                    transport: McpTransportConfig::Stdio {
+                        command: "python".to_owned(),
+                        args: Vec::new(),
+                        cwd: None,
+                        env: Default::default(),
+                    },
+                    capabilities: McpCapabilityMatrix {
+                        supports_resources: true,
+                        ..Default::default()
+                    },
+                    startup_timeout_secs: None,
+                    request_timeout_secs: None,
+                    metadata: Default::default(),
+                },
+            }],
+            shell_policy: Default::default(),
+        })
+        .expect("set runtime policy");
 
         let result = execute_tool_call(
             &ToolCall {
@@ -2962,6 +3420,8 @@ mod tests {
         .await
         .expect("list_mcp_resources should work");
 
+        configure_tool_runtime_policy(original_policy).expect("restore runtime policy");
+
         assert!(
             !result.is_error,
             "list_mcp_resources error: {}",
@@ -2971,6 +3431,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_mcp_resource_returns_json() {
+        let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX.lock().await;
         let tempdir = match tempdir() {
             Ok(dir) => dir,
             Err(error) => panic!("failed to create tempdir: {error}"),
@@ -2983,6 +3444,36 @@ mod tests {
             task_stack: Default::default(),
         };
         let broker = StaticPermissionBroker::new(true);
+        let original_policy = super::current_tool_runtime_policy();
+        configure_tool_runtime_policy(ToolRuntimePolicy {
+            allowed_tools: Vec::new(),
+            disallowed_tools: Vec::new(),
+            task_output_dir: None,
+            mcp_servers: vec![RuntimeMcpServerPolicyEntry {
+                origin_kind: "profile".to_owned(),
+                origin_name: "profile".to_owned(),
+                config_path: tempdir.path().join("mcp.toml"),
+                server: McpServerConfig {
+                    name: "test".to_owned(),
+                    enabled: true,
+                    transport: McpTransportConfig::Stdio {
+                        command: "python".to_owned(),
+                        args: Vec::new(),
+                        cwd: None,
+                        env: Default::default(),
+                    },
+                    capabilities: McpCapabilityMatrix {
+                        supports_resources: true,
+                        ..Default::default()
+                    },
+                    startup_timeout_secs: None,
+                    request_timeout_secs: None,
+                    metadata: Default::default(),
+                },
+            }],
+            shell_policy: Default::default(),
+        })
+        .expect("set runtime policy");
 
         let result = execute_tool_call(
             &ToolCall {
@@ -2995,6 +3486,8 @@ mod tests {
         )
         .await
         .expect("read_mcp_resource should work");
+
+        configure_tool_runtime_policy(original_policy).expect("restore runtime policy");
 
         assert!(
             !result.is_error,
@@ -3163,17 +3656,109 @@ mod tests {
         );
         assert!(names.contains(&"mcp_auth"), "mcp_auth should be registered");
         assert!(
-            names.contains(&"list_mcp_resources"),
-            "list_mcp_resources should be registered"
+            !names.contains(&"list_mcp_resources"),
+            "list_mcp_resources should be injected only for resource-capable MCP servers"
         );
         assert!(
-            names.contains(&"read_mcp_resource"),
-            "read_mcp_resource should be registered"
+            !names.contains(&"read_mcp_resource"),
+            "read_mcp_resource should be injected only for resource-capable MCP servers"
         );
         assert!(
             names.contains(&"voice_input"),
             "voice_input should be registered"
         );
         assert!(names.contains(&"daemon"), "daemon should be registered");
+    }
+
+    #[test]
+    fn tool_search_result_history_discovers_tools() {
+        let discovered = extract_discovered_tool_names_from_conversation(&[
+            rc_core::ConversationEntry::tool(
+                "tool-1",
+                "tool_search",
+                r#"{"query":"web","results":[{"name":"web_fetch"},{"name":"web_search"}]}"#,
+                false,
+            ),
+            rc_core::ConversationEntry::tool(
+                "tool-2",
+                "toolsearch",
+                r#"{"query":"tasks","found_tools":[{"name":"task_create"}]}"#,
+                false,
+            ),
+        ]);
+
+        assert!(discovered.contains("web_fetch"));
+        assert!(discovered.contains("web_search"));
+        assert!(discovered.contains("task_create"));
+    }
+
+    #[tokio::test]
+    async fn tool_search_candidates_only_include_deferred_tools() {
+        let specs = runtime_tool_search_candidate_specs().await;
+        let names = specs
+            .iter()
+            .map(|spec| spec.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"web_fetch"));
+        assert!(!names.contains(&"tool_search"));
+        assert!(!names.contains(&"read_file"));
+        assert!(!names.contains(&"bash_command"));
+    }
+
+    #[tokio::test]
+    async fn visible_provider_pool_hides_deferred_tools_until_discovered() {
+        let specs = runtime_visible_provider_tool_specs(&[]).await;
+        let names = specs
+            .iter()
+            .map(|spec| spec.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"tool_search"));
+        assert!(names.contains(&"read_file"));
+        assert!(!names.contains(&"web_fetch"));
+        assert!(!names.contains(&"todo_write"));
+
+        let discovered_specs =
+            runtime_visible_provider_tool_specs(&[rc_core::ConversationEntry::tool(
+                "tool-1",
+                "tool_search",
+                r#"{"query":"web","results":[{"name":"web_fetch"}]}"#,
+                false,
+            )])
+            .await;
+        let discovered_names = discovered_specs
+            .iter()
+            .map(|spec| spec.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(discovered_names.contains(&"web_fetch"));
+        assert!(!discovered_names.contains(&"todo_write"));
+    }
+
+    #[tokio::test]
+    async fn visible_provider_pool_keeps_full_tools_when_tool_search_is_unavailable() {
+        let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX.lock().await;
+        let original_policy = super::current_tool_runtime_policy();
+        configure_tool_runtime_policy(ToolRuntimePolicy {
+            allowed_tools: Vec::new(),
+            disallowed_tools: vec!["tool_search".to_owned()],
+            task_output_dir: None,
+            mcp_servers: Vec::new(),
+            shell_policy: Default::default(),
+        })
+        .expect("set runtime policy");
+
+        let specs = runtime_visible_provider_tool_specs(&[]).await;
+        let names = specs
+            .iter()
+            .map(|spec| spec.name.as_str())
+            .collect::<Vec<_>>();
+
+        configure_tool_runtime_policy(original_policy).expect("restore runtime policy");
+
+        assert!(names.contains(&"web_fetch"));
+        assert!(names.contains(&"todo_write"));
+        assert!(!names.contains(&"tool_search"));
     }
 }

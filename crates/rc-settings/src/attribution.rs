@@ -106,8 +106,9 @@ mod tests {
             commit: Some("test".to_string()),
             pr: Some("pr-test".to_string()),
         };
-        let json = serde_json::to_string(&a).unwrap();
-        let deserialized: AttributionSettings = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&a).expect("settings should serialize");
+        let deserialized: AttributionSettings =
+            serde_json::from_str(&json).expect("settings should deserialize");
         assert_eq!(deserialized.commit, a.commit);
         assert_eq!(deserialized.pr, a.pr);
     }

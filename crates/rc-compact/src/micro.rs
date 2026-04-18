@@ -330,6 +330,7 @@ mod tests {
                 input: serde_json::Value::Null,
             }],
             tool_calls: vec![],
+            provider_content_blocks: vec![],
         })
     }
 
@@ -340,6 +341,7 @@ mod tests {
             tool_name: name.to_owned(),
             summary: summary.to_owned(),
             is_error: false,
+            content_blocks: Vec::new(),
         })
     }
 
@@ -348,6 +350,7 @@ mod tests {
             base: MessageBase::default(),
             text: text.to_owned(),
             attachments: Vec::new(),
+            provider_content_blocks: Vec::new(),
         })
     }
 
@@ -382,6 +385,7 @@ mod tests {
             base: MessageBase::default(),
             text: "short result".into(),
             attachments: Vec::new(),
+            provider_content_blocks: Vec::new(),
         })];
         let config = MicroCompactConfig {
             min_result_tokens: 5000,
@@ -452,10 +456,10 @@ mod tests {
         // The most recent tool summary ("tu-2") should NOT be cleared
         let kept = &result.messages_to_keep;
         let tu2 = kept.iter().find_map(|m| {
-            if let Message::ToolUseSummary(ts) = m {
-                if ts.tool_call_id == "tu-2" {
-                    return Some(ts.summary.clone());
-                }
+            if let Message::ToolUseSummary(ts) = m
+                && ts.tool_call_id == "tu-2"
+            {
+                return Some(ts.summary.clone());
             }
             None
         });

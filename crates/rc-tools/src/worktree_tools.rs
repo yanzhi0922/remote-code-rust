@@ -269,8 +269,8 @@ branch refs/heads/feature-xyz
         let input = json!({});
         let context = test_context();
         let result = enter_worktree(&input, &context);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("branch"));
+        let error = result.expect_err("missing branch should fail");
+        assert!(error.to_string().contains("branch"));
     }
 
     #[test]

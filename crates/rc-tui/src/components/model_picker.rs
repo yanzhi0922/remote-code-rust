@@ -208,7 +208,7 @@ mod tests {
     #[test]
     fn selected_default() {
         let picker = ModelPicker::new();
-        let sel = picker.selected().unwrap();
+        let sel = picker.selected().expect("default selection should exist");
         assert_eq!(sel.family, "sonnet");
     }
 
@@ -232,7 +232,7 @@ mod tests {
         picker.move_down();
         picker.confirm();
         assert_eq!(picker.selected_index, 2);
-        let sel = picker.selected().unwrap();
+        let sel = picker.selected().expect("confirmed selection should exist");
         assert_eq!(sel.family, "opus");
     }
 

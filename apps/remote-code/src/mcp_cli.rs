@@ -1142,7 +1142,8 @@ args = ["explicit.py"]"#,
             },
         )
         .expect("local config");
-        let discovery = discover_runtime_mcp_servers(&local_only, &[extra_root.clone()]);
+        let discovery =
+            discover_runtime_mcp_servers(&local_only, std::slice::from_ref(&extra_root));
         assert_eq!(
             discovery
                 .servers
@@ -1217,6 +1218,61 @@ args = ["profile.py"]"#,
         let resolution =
             resolve_runtime_mcp_server(&unfiltered, "shared", &[]).expect("unfiltered resolve");
         assert_eq!(resolution.entry.origin_kind, "cwd");
+    }
+
+    #[test]
+    fn runtime_mcp_discovery_uses_ancestor_project_profile_dir_without_override() {
+        let tempdir = tempdir().expect("tempdir");
+        let project_root = tempdir.path().join("workspace");
+        let cwd = project_root.join("tasks").join("nested");
+        let profile = project_root.join(".remote-code-rust");
+        fs::create_dir_all(&cwd).expect("cwd");
+        fs::create_dir_all(&profile).expect("profile");
+        fs::write(
+            project_root.join(rc_mcp::DEFAULT_PROJECT_MCP_CONFIG_FILE),
+            r#"{
+  "mcpServers": {
+    "project": {
+      "command": "python",
+      "args": ["project.py"]
+    }
+  }
+}"#,
+        )
+        .expect("write project mcp");
+        fs::write(
+            profile.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            r#"[servers.profile]
+command = "python"
+args = ["profile.py"]"#,
+        )
+        .expect("write profile mcp");
+
+        let config = load_runtime_config(
+            Some(cwd),
+            None,
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+            RuntimeOverrides::default(),
+        )
+        .expect("config");
+
+        assert_eq!(config.paths.profile_dir, profile);
+
+        let names = discover_runtime_mcp_servers(&config, &[])
+            .servers
+            .iter()
+            .map(|entry| entry.server.name.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["profile".to_owned(), "project".to_owned()]);
     }
 
     #[test]

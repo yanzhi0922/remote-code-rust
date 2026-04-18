@@ -7,6 +7,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::SessionUsageSummary;
+use crate::plan_state::PlanModeState;
 use crate::resume_state::ResumeState;
 
 /// Read-only semantic view over a session transcript.
@@ -41,7 +42,22 @@ impl SessionTranscript {
     /// Project the transcript into conversation entries only.
     #[must_use]
     pub fn conversation_entries(&self) -> Vec<ConversationEntry> {
-        self.events
+        let events = if let Some(boundary_index) = self
+            .events
+            .iter()
+            .rposition(|event| event.event_type == "compact_boundary")
+        {
+            let suffix = &self.events[boundary_index + 1..];
+            if suffix.iter().any(|event| event.conversation.is_some()) {
+                suffix
+            } else {
+                &self.events
+            }
+        } else {
+            &self.events
+        };
+
+        events
             .iter()
             .filter_map(|event| event.conversation.clone())
             .collect()
@@ -78,6 +94,14 @@ impl SessionTranscript {
     /// Returns an error if the persisted snapshot exists but cannot be decoded.
     pub fn latest_resume_state(&self) -> Result<Option<ResumeState>> {
         self.latest_named_event_as("resume_state")
+    }
+
+    /// Load the latest persisted plan-mode snapshot from the transcript.
+    ///
+    /// # Errors
+    /// Returns an error if the persisted snapshot exists but cannot be decoded.
+    pub fn latest_plan_mode_state(&self) -> Result<Option<PlanModeState>> {
+        self.latest_named_event_as("plan_mode_state")
     }
 
     /// Count named events whose payload is marked as an error.
@@ -192,6 +216,83 @@ mod tests {
         assert_eq!(conversation.len(), 1);
         assert_eq!(conversation[0].text, "hello");
         assert_eq!(transcript.session_id(), session_id);
+    }
+
+    #[test]
+    fn transcript_projects_latest_compacted_suffix() {
+        let session_id = Uuid::new_v4();
+        let transcript = SessionTranscript::new(
+            session_id,
+            vec![
+                rc_core::StoredEvent {
+                    timestamp: Utc::now(),
+                    session_id,
+                    event_type: "conversation".to_owned(),
+                    conversation: Some(rc_core::ConversationEntry::user("old")),
+                    payload: None,
+                },
+                rc_core::StoredEvent {
+                    timestamp: Utc::now(),
+                    session_id,
+                    event_type: "compact_boundary".to_owned(),
+                    conversation: None,
+                    payload: Some(serde_json::json!({
+                        "trigger": "auto",
+                        "pre_tokens": 100,
+                    })),
+                },
+                rc_core::StoredEvent {
+                    timestamp: Utc::now(),
+                    session_id,
+                    event_type: "conversation".to_owned(),
+                    conversation: Some(rc_core::ConversationEntry::system("summary")),
+                    payload: None,
+                },
+                rc_core::StoredEvent {
+                    timestamp: Utc::now(),
+                    session_id,
+                    event_type: "conversation".to_owned(),
+                    conversation: Some(rc_core::ConversationEntry::user("tail")),
+                    payload: None,
+                },
+            ],
+        );
+
+        let conversation = transcript.conversation_entries();
+        assert_eq!(conversation.len(), 2);
+        assert_eq!(conversation[0].text, "summary");
+        assert_eq!(conversation[1].text, "tail");
+    }
+
+    #[test]
+    fn transcript_keeps_full_conversation_when_boundary_has_no_suffix() {
+        let session_id = Uuid::new_v4();
+        let transcript = SessionTranscript::new(
+            session_id,
+            vec![
+                rc_core::StoredEvent {
+                    timestamp: Utc::now(),
+                    session_id,
+                    event_type: "conversation".to_owned(),
+                    conversation: Some(rc_core::ConversationEntry::user("old")),
+                    payload: None,
+                },
+                rc_core::StoredEvent {
+                    timestamp: Utc::now(),
+                    session_id,
+                    event_type: "compact_boundary".to_owned(),
+                    conversation: None,
+                    payload: Some(serde_json::json!({
+                        "trigger": "auto",
+                        "pre_tokens": 100,
+                    })),
+                },
+            ],
+        );
+
+        let conversation = transcript.conversation_entries();
+        assert_eq!(conversation.len(), 1);
+        assert_eq!(conversation[0].text, "old");
     }
 
     #[test]

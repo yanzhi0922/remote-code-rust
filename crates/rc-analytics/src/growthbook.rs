@@ -156,15 +156,13 @@ impl FeatureFlags {
         match resp {
             Ok(r) if r.status().is_success() => match r.json::<serde_json::Value>().await {
                 Ok(body) => {
-                    if let Some(flags_map) = body.get("features").and_then(|f| f.as_object()) {
-                        if let Ok(mut flags) = self.flags.lock() {
-                            flags.clear();
-                            for (key, value) in flags_map {
-                                if let Ok(flag) =
-                                    serde_json::from_value::<FeatureFlag>(value.clone())
-                                {
-                                    flags.insert(key.clone(), flag);
-                                }
+                    if let Some(flags_map) = body.get("features").and_then(|f| f.as_object())
+                        && let Ok(mut flags) = self.flags.lock()
+                    {
+                        flags.clear();
+                        for (key, value) in flags_map {
+                            if let Ok(flag) = serde_json::from_value::<FeatureFlag>(value.clone()) {
+                                flags.insert(key.clone(), flag);
                             }
                         }
                     }

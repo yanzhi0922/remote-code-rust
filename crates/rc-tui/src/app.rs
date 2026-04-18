@@ -203,11 +203,7 @@ impl App {
                         self.sidebar_visible = !self.sidebar_visible;
                         AppAction::None
                     }
-                    "clear" => {
-                        self.messages.clear();
-                        self.scroll.set_items(0);
-                        AppAction::SlashCommand("/clear".to_owned())
-                    }
+                    "clear" => AppAction::SlashCommand("/clear".to_owned()),
                     _ => AppAction::SlashCommand(format!("/{trimmed}")),
                 }
             }
@@ -423,6 +419,23 @@ impl App {
     pub fn update_scroll_viewport(&mut self, height: usize) {
         self.scroll.set_viewport_height(height);
     }
+
+    /// Reset transient UI state for a newly-created session after `/clear` or
+    /// other session-switching flows that should not leak the previous
+    /// session's visible state.
+    pub fn reset_for_new_session(&mut self) {
+        self.messages.clear();
+        self.scroll.set_items(0);
+        self.scroll.scroll_to_top();
+        self.pending_permission = None;
+        self.mcp_servers.clear();
+        self.clear_input();
+        self.history_index = self.input_history.len();
+        self.saved_buffer.clear();
+        self.is_streaming = false;
+        self.spinner_frame = 0;
+        self.active_panel = ActivePanel::Input;
+    }
 }
 
 impl Default for App {
@@ -580,5 +593,47 @@ mod tests {
         let mut app = App::new();
         let action = app.submit_input();
         assert_eq!(action, AppAction::None);
+    }
+
+    #[test]
+    fn command_submit_clear_does_not_eagerly_drop_messages() {
+        let mut app = App::new();
+        app.add_message(ChatMessage::system("keep until clear succeeds".to_owned()));
+
+        let action = app.handle_vim_action(VimAction::CommandSubmit("clear".to_owned()));
+
+        assert_eq!(action, AppAction::SlashCommand("/clear".to_owned()));
+        assert_eq!(app.messages.len(), 1);
+    }
+
+    #[test]
+    fn reset_for_new_session_clears_transient_state() {
+        let mut app = App::new();
+        app.add_message(ChatMessage::assistant("old".to_owned()));
+        app.pending_permission = Some(PermissionRequest {
+            tool_name: "bash".to_owned(),
+            description: "run shell".to_owned(),
+            allow_all_available: true,
+        });
+        app.mcp_servers.push(McpServerStatus {
+            name: "context7".to_owned(),
+            status: "connected".to_owned(),
+            tool_count: 3,
+        });
+        app.input = "stale input".to_owned();
+        app.cursor = app.input.len();
+        app.is_streaming = true;
+        app.spinner_frame = 3;
+
+        app.reset_for_new_session();
+
+        assert!(app.messages.is_empty());
+        assert!(app.pending_permission.is_none());
+        assert!(app.mcp_servers.is_empty());
+        assert!(app.input.is_empty());
+        assert_eq!(app.cursor, 0);
+        assert!(!app.is_streaming);
+        assert_eq!(app.spinner_frame, 0);
+        assert_eq!(app.active_panel, ActivePanel::Input);
     }
 }

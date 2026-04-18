@@ -124,6 +124,7 @@ impl StreamingToolExecutor {
                         ToolRunResult::from(rc_core::ToolResult {
                             content: format!("Tool execution error: {error:#}"),
                             is_error: true,
+                            content_blocks: Vec::new(),
                         }),
                     );
                 }
@@ -172,6 +173,7 @@ mod tests {
             Ok(ToolRunResult::from(ToolResult {
                 content: format!("result:{}", tool_call.name),
                 is_error: false,
+                content_blocks: Vec::new(),
             }))
         }
     }

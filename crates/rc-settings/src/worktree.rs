@@ -48,7 +48,7 @@ mod tests {
             symlink_directories: Some(vec!["node_modules".to_string(), ".cache".to_string()]),
             sparse_paths: None,
         };
-        let json = serde_json::to_string(&w).unwrap();
+        let json = serde_json::to_string(&w).expect("worktree settings should serialize");
         assert!(json.contains("node_modules"));
     }
 }

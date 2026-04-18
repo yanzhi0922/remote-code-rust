@@ -80,6 +80,7 @@ async fn static_broker_allow_all_permits_read() {
     let decision = broker
         .decide(PermissionRequest {
             tool_name: "Read".to_owned(),
+            permission_class: None,
             tool_input: serde_json::json!({"path": "/tmp/a"}),
             working_directory: None,
             tool_use_id: None,
@@ -97,6 +98,7 @@ async fn static_broker_deny_all_rejects_edit() {
     let decision = broker
         .decide(PermissionRequest {
             tool_name: "Edit".to_owned(),
+            permission_class: None,
             tool_input: serde_json::json!({"path": "/tmp/a"}),
             working_directory: None,
             tool_use_id: None,
@@ -114,6 +116,7 @@ async fn static_broker_allow_all_permits_bash() {
     let decision = broker
         .decide(PermissionRequest {
             tool_name: "Bash".to_owned(),
+            permission_class: None,
             tool_input: serde_json::json!({"command": "ls"}),
             working_directory: None,
             tool_use_id: None,
@@ -134,6 +137,7 @@ async fn layered_broker_falls_through_to_fallback() {
     let decision = layered
         .decide(PermissionRequest {
             tool_name: "Read".to_owned(),
+            permission_class: None,
             tool_input: serde_json::json!({"path": "/tmp/a"}),
             working_directory: None,
             tool_use_id: None,
@@ -157,6 +161,7 @@ async fn layered_broker_deny_rule_overrides_fallback() {
     let decision = layered
         .decide(PermissionRequest {
             tool_name: "Bash".to_owned(),
+            permission_class: None,
             tool_input: serde_json::json!({"command": "ls"}),
             working_directory: None,
             tool_use_id: None,
@@ -180,6 +185,7 @@ async fn layered_broker_allow_rule_overrides_deny_fallback() {
     let decision = layered
         .decide(PermissionRequest {
             tool_name: "Read".to_owned(),
+            permission_class: None,
             tool_input: serde_json::json!({"path": "/tmp/a"}),
             working_directory: None,
             tool_use_id: None,
@@ -192,7 +198,7 @@ async fn layered_broker_allow_rule_overrides_deny_fallback() {
 }
 
 #[tokio::test]
-async fn layered_broker_session_rule_highest_priority() {
+async fn layered_broker_session_rule_highest_priority() -> anyhow::Result<()> {
     let fallback = StaticPermissionBroker::new(false);
     // Persistent rule allows Bash
     let rules = vec![SourceAwarePermissionRule {
@@ -202,12 +208,11 @@ async fn layered_broker_session_rule_highest_priority() {
     }];
     let layered = LayeredPermissionBroker::new(fallback, rules);
     // Session rule denies Bash
-    layered
-        .add_session_rule(RuleAction::Deny, "Bash".to_owned())
-        .unwrap();
+    layered.add_session_rule(RuleAction::Deny, "Bash".to_owned())?;
     let decision = layered
         .decide(PermissionRequest {
             tool_name: "Bash".to_owned(),
+            permission_class: None,
             tool_input: serde_json::json!({"command": "ls"}),
             working_directory: None,
             tool_use_id: None,
@@ -217,20 +222,18 @@ async fn layered_broker_session_rule_highest_priority() {
         })
         .await;
     assert!(!decision.allowed);
+    Ok(())
 }
 
 #[test]
-fn layered_broker_clear_session_rules_returns_count() {
+fn layered_broker_clear_session_rules_returns_count() -> anyhow::Result<()> {
     let fallback = StaticPermissionBroker::new(true);
     let layered = LayeredPermissionBroker::new(fallback, vec![]);
-    layered
-        .add_session_rule(RuleAction::Allow, "Read".to_owned())
-        .unwrap();
-    layered
-        .add_session_rule(RuleAction::Deny, "Bash".to_owned())
-        .unwrap();
-    let count = layered.clear_session_rules().unwrap();
+    layered.add_session_rule(RuleAction::Allow, "Read".to_owned())?;
+    layered.add_session_rule(RuleAction::Deny, "Bash".to_owned())?;
+    let count = layered.clear_session_rules()?;
     assert_eq!(count, 2);
+    Ok(())
 }
 
 #[tokio::test]
@@ -245,6 +248,7 @@ async fn layered_broker_tracks_audit_records() {
     let _ = layered
         .decide(PermissionRequest {
             tool_name: "Read".to_owned(),
+            permission_class: None,
             tool_input: serde_json::json!({"path": "/tmp"}),
             working_directory: None,
             tool_use_id: None,

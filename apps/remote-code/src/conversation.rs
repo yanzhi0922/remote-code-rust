@@ -9,15 +9,16 @@ use rc_config::{
     RuntimeConfig, SettingSource, import_legacy_profile, normalize_base_url,
     validate_provider_config,
 };
-use rc_core::{ConversationEntry, ConversationRole, PermissionMode};
-use rc_permissions::{
-    LayeredPermissionBroker, PermissionBroker, StaticPermissionBroker, load_layered_rules,
-    rules::summarize_rule_sources,
-};
+use rc_core::{ConversationEntry, ConversationRole};
+use rc_permissions::{PermissionBroker, load_layered_rules, rules::summarize_rule_sources};
 use rc_protocol::{MessageRole, RuntimeEventDetail, UsagePayload};
 use rc_provider::context::ContextWindowManager;
 use rc_provider::{ProviderCompatBackend, StreamingCallbacks};
 use rc_session::resume_state::{PendingToolCall, ResumeState};
+use rc_session::runtime_context::{
+    persist_runtime_config_session_context, repair_interrupted_tool_batch,
+    restore_runtime_config_session_context,
+};
 use rc_session::{SessionStore, conversation::ensure_conversation_initialized};
 use rc_skills::SkillDocument;
 use rc_tools::{
@@ -25,6 +26,10 @@ use rc_tools::{
     agent::{DelegateProgressEvent, parse_delegate_progress_event},
     execute_tool_call,
     mcp_runtime::discover_runtime_mcp_servers,
+    plan_mode::normalize_exit_plan_mode_tool_calls,
+    runtime_plan_mode::{
+        build_runtime_plan_mode, inject_plan_mode_runtime_messages, install_plan_mode_runtime,
+    },
     runtime_provider_tool_spec,
     tasks::load_persisted_ui_task_snapshots,
 };
@@ -38,21 +43,6 @@ use crate::hooks::{
     discover_runtime_hooks, ensure_session_start_hooks,
 };
 use crate::query_engine_compat::run_prompt_with_query_engine_compat;
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub(crate) struct PersistedProviderContext {
-    pub(crate) name: String,
-    pub(crate) base_url: Option<String>,
-    pub(crate) model: Option<String>,
-    pub(crate) protocol: String,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub(crate) struct PersistedSessionContext {
-    pub(crate) cwd: PathBuf,
-    pub(crate) permission_mode: String,
-    pub(crate) provider: PersistedProviderContext,
-}
 
 #[derive(Debug, Default)]
 pub(crate) struct RuntimeExtensionDiscovery {
@@ -366,56 +356,24 @@ fn build_streaming_callbacks(
 }
 
 pub(crate) fn persist_session_context(store: &SessionStore, config: &RuntimeConfig) -> Result<()> {
-    store.append_named_event(
-        config.session_id,
-        "session_context",
-        serde_json::to_value(PersistedSessionContext {
-            cwd: config.cwd.clone(),
-            permission_mode: config.permission_mode.as_legacy_str().to_owned(),
-            provider: PersistedProviderContext {
-                name: config.provider.name.clone(),
-                base_url: config.provider.base_url.clone(),
-                model: config.provider.model.clone(),
-                protocol: config.provider.protocol.as_str().to_owned(),
-            },
-        })?,
-    )
+    persist_runtime_config_session_context(store, config)
 }
 
 pub(crate) fn restore_session_context(
     store: &SessionStore,
     config: &mut RuntimeConfig,
 ) -> Result<()> {
-    if let Ok(summary) = store.get_session_summary(config.session_id) {
-        config.cwd = summary.cwd;
-        config.provider.name = summary.provider_name;
-        if summary.model.is_some() {
-            config.provider.model = summary.model;
-        }
-    }
-
-    let Ok(transcript) = store.load_transcript(config.session_id) else {
-        return Ok(());
-    };
-    let Some(persisted) =
-        transcript.latest_named_event_as::<PersistedSessionContext>("session_context")?
-    else {
-        return Ok(());
-    };
-    config.cwd = persisted.cwd;
-    if let Some(permission_mode) = parse_permission_mode(&persisted.permission_mode) {
-        config.permission_mode = permission_mode;
-    }
-    config.provider.name = persisted.provider.name;
-    config.provider.base_url = persisted.provider.base_url;
-    config.provider.model = persisted.provider.model;
-    if let Some(protocol) = parse_provider_protocol(&persisted.provider.protocol) {
-        config.provider.protocol = protocol;
-    }
-    Ok(())
+    restore_runtime_config_session_context(store, config)
 }
 
-pub(crate) fn reapply_cli_overrides(cli: &Cli, config: &mut RuntimeConfig) {
+pub(crate) fn reapply_cli_overrides(
+    cli: &Cli,
+    config: &mut RuntimeConfig,
+    permission_mode_explicit: bool,
+) {
+    if permission_mode_explicit {
+        config.permission_mode = cli.permission_mode;
+    }
     if let Some(cwd) = &cli.cwd {
         cwd.clone_into(&mut config.cwd);
     }
@@ -427,9 +385,7 @@ pub(crate) fn reapply_cli_overrides(cli: &Cli, config: &mut RuntimeConfig) {
     }
     if let Some(api_key) = &cli.api_key {
         config.provider.api_key = Some(api_key.clone());
-    }
-    if cli.api_key.is_none() && env::var("REMOTE_CODE_API_KEY").is_ok() {
-        config.provider.api_key = env::var("REMOTE_CODE_API_KEY").ok();
+        config.auth_source = Some("cli:api-key".to_owned());
     }
     if let Some(protocol) = cli.protocol {
         config.provider.protocol = protocol;
@@ -440,25 +396,6 @@ pub(crate) fn reapply_cli_overrides(cli: &Cli, config: &mut RuntimeConfig) {
     } else if cli.protocol.is_some() {
         config.provider.base_url =
             normalize_base_url(config.provider.base_url.clone(), config.provider.protocol);
-    }
-}
-
-pub(crate) fn parse_permission_mode(value: &str) -> Option<PermissionMode> {
-    match value.trim() {
-        "default" => Some(PermissionMode::Default),
-        "acceptEdits" => Some(PermissionMode::AcceptEdits),
-        "bypassPermissions" => Some(PermissionMode::BypassPermissions),
-        "dontAsk" => Some(PermissionMode::DontAsk),
-        "plan" => Some(PermissionMode::Plan),
-        _ => None,
-    }
-}
-
-pub(crate) fn parse_provider_protocol(value: &str) -> Option<rc_core::ProviderProtocol> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "openai" => Some(rc_core::ProviderProtocol::OpenAi),
-        "anthropic" => Some(rc_core::ProviderProtocol::Anthropic),
-        _ => None,
     }
 }
 
@@ -555,6 +492,28 @@ pub(crate) fn initialize_conversation(
         config.provider.model.as_deref(),
         title_hint,
     )
+    .and_then(|mut conversation| {
+        repair_interrupted_tool_batch(store, config.session_id, &mut conversation)?;
+        inject_plan_mode_runtime_messages(store, config.session_id, &mut conversation)?;
+        Ok(conversation)
+    })
+}
+
+pub(crate) fn has_unanswered_user_prompt(conversation: &[ConversationEntry], prompt: &str) -> bool {
+    let normalized = prompt.trim();
+    if normalized.is_empty() {
+        return false;
+    }
+
+    conversation
+        .iter()
+        .rev()
+        .take_while(|entry| entry.role != ConversationRole::Assistant)
+        .any(|entry| {
+            entry.role == ConversationRole::User
+                && entry.attachments.is_empty()
+                && entry.history_text().trim() == normalized
+        })
 }
 
 #[allow(clippy::too_many_lines)]
@@ -634,9 +593,11 @@ async fn run_prompt_legacy(
             "protocol": config.provider.protocol.as_str(),
         }),
     )?;
-    let user_entry = ConversationEntry::user(prompt);
-    store.append_conversation_entry(config.session_id, &user_entry)?;
-    conversation.push(user_entry);
+    if !has_unanswered_user_prompt(conversation, prompt) {
+        let user_entry = ConversationEntry::user(prompt);
+        store.append_conversation_entry(config.session_id, &user_entry)?;
+        conversation.push(user_entry);
+    }
 
     let progress_cb = event_sink
         .as_ref()
@@ -728,7 +689,7 @@ async fn run_prompt_legacy(
             }
         }
 
-        let response = if let Some(event_sink) = event_sink.clone() {
+        let mut response = if let Some(event_sink) = event_sink.clone() {
             backend
                 .complete_streaming(
                     conversation,
@@ -741,6 +702,7 @@ async fn run_prompt_legacy(
         } else {
             backend.complete(conversation).await?
         };
+        normalize_exit_plan_mode_tool_calls(&mut response.tool_calls);
         usage.input_tokens += response.usage.input_tokens;
         usage.output_tokens += response.usage.output_tokens;
         total_tool_calls += response.tool_calls.len();
@@ -852,6 +814,7 @@ async fn run_prompt_legacy(
                 rc_core::ToolResult {
                     content: blocked_reason.clone(),
                     is_error: true,
+                    content_blocks: Vec::new(),
                 }
             } else {
                 // Capture tool execution errors as error tool results instead of
@@ -876,6 +839,7 @@ async fn run_prompt_legacy(
                         rc_core::ToolResult {
                             content: format!("Tool execution error: {error}"),
                             is_error: true,
+                            content_blocks: Vec::new(),
                         }
                     }
                 }
@@ -913,12 +877,13 @@ async fn run_prompt_legacy(
             }
             let truncated_content =
                 context_manager.truncate_tool_output_default(&tool_result.content);
-            let tool_entry = ConversationEntry::tool(
+            let mut tool_entry = ConversationEntry::tool(
                 effective_tool_call.id.clone(),
                 effective_tool_call.name.clone(),
                 truncated_content,
                 tool_result.is_error,
             );
+            tool_entry.content_blocks = tool_result.content_blocks.clone();
             store.append_conversation_entry(config.session_id, &tool_entry)?;
             store.append_named_event(
                 config.session_id,
@@ -978,15 +943,8 @@ pub(crate) async fn run_oneshot_text(
         Arc::new(rc_provider::ProviderClient::new()?),
         &config.provider,
     );
-    let broker: Arc<dyn PermissionBroker> = Arc::new(LayeredPermissionBroker::new(
-        StaticPermissionBroker::from_mode(config.permission_mode),
-        load_layered_rules(
-            &config.cwd,
-            &config.paths.profile_dir,
-            &config.settings_files,
-            &config.cli_settings_files,
-        ),
-    ));
+    let (plan_mode_controller, broker) = build_runtime_plan_mode(config, store)?;
+    let _plan_mode_runtime = install_plan_mode_runtime(plan_mode_controller)?;
     let discovery = discover_runtime_hooks(config, &[]);
     let mut conversation = initialize_conversation(store, config, Some(&prompt))?;
     let mut hook_state = HookRunState::load(store, config.session_id)?;
@@ -1198,7 +1156,7 @@ pub(crate) fn run_first_run_wizard(config: &mut RuntimeConfig) -> Result<()> {
     // In headless / CI environments, skip silently.
     if !atty_check() {
         eprintln!(
-            "⚠ No API key configured. Set REMOTE_CODE_API_KEY or run interactively to set up."
+            "⚠ No API key configured. Set --api-key or a compatible env var such as REMOTE_CODE_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, or a provider-specific key."
         );
         return Ok(());
     }
@@ -1295,7 +1253,9 @@ pub(crate) fn run_first_run_wizard(config: &mut RuntimeConfig) -> Result<()> {
     if api_key.is_none() {
         println!();
         println!("  ⚠ No API key entered. You can set it later via:");
-        println!("    export REMOTE_CODE_API_KEY=<your-key>");
+        println!(
+            "    --api-key, REMOTE_CODE_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, or a provider-specific env var"
+        );
         println!();
     }
 
@@ -1455,13 +1415,18 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
+    use clap::Parser;
     use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
+    use rc_core::{ConversationEntry, ConversationRole, ToolCall};
     use rc_protocol::{MessageRole, RuntimeEventDetail};
+    use rc_session::SessionStore;
+    use rc_session::resume_state::{PendingToolCall, ResumeState};
     use tempfile::tempdir;
 
     use super::{
         PromptStreamEvent, WizardProviderSelection, apply_wizard_settings,
-        discover_runtime_extensions, resolve_first_run_settings_path, should_run_first_run_wizard,
+        discover_runtime_extensions, has_unanswered_user_prompt, initialize_conversation,
+        reapply_cli_overrides, resolve_first_run_settings_path, should_run_first_run_wizard,
         write_wizard_settings_file,
     };
 
@@ -1578,6 +1543,102 @@ mod tests {
             config.auth_source.as_deref(),
             Some(format!("settings:{}", target.display()).as_str())
         );
+    }
+
+    #[test]
+    fn reapply_cli_overrides_restores_permission_mode() {
+        let (_tempdir, mut config) = test_config();
+        config.permission_mode = rc_core::PermissionMode::Default;
+
+        let cli = crate::cli::Cli::parse_from([
+            "remote-code",
+            "--permission-mode",
+            "accept-edits",
+            "resume prompt",
+        ]);
+        reapply_cli_overrides(&cli, &mut config, true);
+
+        assert_eq!(config.permission_mode, rc_core::PermissionMode::AcceptEdits);
+    }
+
+    #[test]
+    fn reapply_cli_overrides_preserves_restored_permission_mode_when_cli_is_default() {
+        let (_tempdir, mut config) = test_config();
+        config.permission_mode = rc_core::PermissionMode::Plan;
+
+        let cli = crate::cli::Cli::parse_from(["remote-code", "resume prompt"]);
+        reapply_cli_overrides(&cli, &mut config, false);
+
+        assert_eq!(config.permission_mode, rc_core::PermissionMode::Plan);
+    }
+
+    #[test]
+    fn initialize_conversation_repairs_interrupted_tool_batches() {
+        let (_tempdir, config) = test_config();
+        let store = SessionStore::open(config.paths.clone()).expect("store");
+
+        let _ = initialize_conversation(&store, &config, Some("repair test"))
+            .expect("initial conversation");
+
+        let mut assistant = ConversationEntry::assistant("");
+        assistant.tool_calls.push(ToolCall {
+            id: "call-1".to_owned(),
+            name: "replace_in_file".to_owned(),
+            input: serde_json::json!({"path": "src/lib.rs"}),
+        });
+        store
+            .append_conversation_entry(config.session_id, &assistant)
+            .expect("append assistant");
+        store
+            .save_resume_state(
+                config.session_id,
+                &ResumeState::from_pending_calls(vec![PendingToolCall {
+                    id: "call-1".to_owned(),
+                    name: "replace_in_file".to_owned(),
+                    input: serde_json::json!({"path": "src/lib.rs"}),
+                }]),
+            )
+            .expect("save resume state");
+
+        let repaired = initialize_conversation(&store, &config, Some("repair test"))
+            .expect("conversation should repair pending tools");
+        let repaired_tool = repaired
+            .iter()
+            .find(|entry| entry.role == ConversationRole::Tool)
+            .expect("synthetic tool result should exist");
+        assert_eq!(repaired_tool.tool_call_id.as_deref(), Some("call-1"));
+        assert_eq!(repaired_tool.name.as_deref(), Some("replace_in_file"));
+        assert!(repaired_tool.is_error);
+        assert!(repaired_tool.text.contains("interrupted"));
+
+        let resume_state = store
+            .load_resume_state(config.session_id)
+            .expect("load resume state")
+            .expect("resume state should exist");
+        assert!(resume_state.pending_tool_calls.is_empty());
+    }
+
+    #[test]
+    fn has_unanswered_user_prompt_detects_retry_after_interrupted_tool() {
+        let mut assistant = ConversationEntry::assistant("");
+        assistant.tool_calls.push(ToolCall {
+            id: "call-1".to_owned(),
+            name: "replace_in_file".to_owned(),
+            input: serde_json::json!({"path": "src/lib.rs"}),
+        });
+
+        let conversation = vec![
+            ConversationEntry::system("system"),
+            assistant,
+            ConversationEntry::user("retry prompt"),
+            ConversationEntry::tool("call-1", "replace_in_file", "interrupted", true),
+        ];
+
+        assert!(has_unanswered_user_prompt(&conversation, "retry prompt"));
+        assert!(!has_unanswered_user_prompt(
+            &conversation,
+            "different prompt"
+        ));
     }
 
     #[test]

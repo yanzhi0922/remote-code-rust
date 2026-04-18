@@ -47,6 +47,13 @@ pub(crate) fn resolve_workspace_path(cwd: &Path, maybe_relative: Option<&str>) -
         canonical_parent.join(file_name)
     };
     if !canonical_candidate.starts_with(&canonical_cwd) {
+        if current_plan_file_path()
+            .as_ref()
+            .map(|plan_path| canonical_plan_file_path(plan_path))
+            .is_some_and(|plan_path| canonical_candidate == plan_path)
+        {
+            return Ok(candidate);
+        }
         return Err(anyhow!(
             "path {} escapes the workspace {}",
             candidate.display(),
@@ -54,6 +61,36 @@ pub(crate) fn resolve_workspace_path(cwd: &Path, maybe_relative: Option<&str>) -
         ));
     }
     Ok(candidate)
+}
+
+fn canonical_plan_file_path(plan_file_path: &Path) -> PathBuf {
+    if plan_file_path.exists() {
+        normalize_for_comparison(
+            plan_file_path
+                .canonicalize()
+                .unwrap_or_else(|_| plan_file_path.to_path_buf()),
+        )
+    } else {
+        let parent = plan_file_path.parent().unwrap_or_else(|| Path::new("."));
+        let file_name = plan_file_path.file_name().unwrap_or_default();
+        let canonical_parent = normalize_for_comparison(
+            parent
+                .canonicalize()
+                .unwrap_or_else(|_| parent.to_path_buf()),
+        );
+        canonical_parent.join(file_name)
+    }
+}
+
+fn maybe_persist_plan_snapshot(target: &Path) {
+    let target_path = canonical_plan_file_path(target);
+    let is_active_plan_file = current_plan_file_path()
+        .as_ref()
+        .map(|plan_path| canonical_plan_file_path(plan_path))
+        .is_some_and(|plan_path| plan_path == target_path);
+    if is_active_plan_file {
+        let _ = crate::plan_mode::persist_plan_snapshot_if_active();
+    }
 }
 
 pub(crate) fn list_directory(input: &Value, context: &ToolExecutionContext) -> Result<String> {
@@ -210,6 +247,7 @@ pub(crate) fn write_file(input: &Value, context: &ToolExecutionContext) -> Resul
     } else {
         std::fs::write(&target, content)?;
     }
+    maybe_persist_plan_snapshot(&target);
     Ok(format!("Wrote {}", target.display()))
 }
 
@@ -235,6 +273,7 @@ pub(crate) fn replace_in_file(input: &Value, context: &ToolExecutionContext) -> 
         original.replacen(search, replace, 1)
     };
     std::fs::write(&target, updated)?;
+    maybe_persist_plan_snapshot(&target);
     Ok(format!("Updated {}", target.display()))
 }
 
@@ -283,6 +322,7 @@ pub(crate) fn edit_file(input: &Value, context: &ToolExecutionContext) -> Result
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&target, content)?;
+    maybe_persist_plan_snapshot(&target);
     Ok(format!(
         "Applied {} edits to {}",
         edits.len(),
@@ -399,5 +439,87 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
         Ok("No matches found.".to_owned())
     } else {
         Ok(matches.join("\n").trim_end().to_owned())
+    }
+}
+
+fn current_plan_file_path() -> Option<PathBuf> {
+    crate::plan_mode::current_plan_file_path()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use once_cell::sync::Lazy;
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::plan_mode::{self, PlanModeRuntime, PlanModeRuntimeSnapshot};
+
+    static FILE_OPS_TEST_MUTEX: Lazy<std::sync::Mutex<()>> =
+        Lazy::new(|| std::sync::Mutex::new(()));
+
+    #[derive(Debug)]
+    struct StubPlanRuntime {
+        plan_file_path: PathBuf,
+    }
+
+    impl PlanModeRuntime for StubPlanRuntime {
+        fn enter_plan_mode(&self, _objective: &str) -> Result<String> {
+            Ok(String::new())
+        }
+
+        fn exit_plan_mode(
+            &self,
+            _plan_summary: Option<&str>,
+            _steps_planned: &[String],
+        ) -> Result<String> {
+            Ok(String::new())
+        }
+
+        fn snapshot(&self) -> PlanModeRuntimeSnapshot {
+            PlanModeRuntimeSnapshot {
+                permission_mode: rc_core::PermissionMode::Plan,
+                plan_file_path: Some(self.plan_file_path.clone()),
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_workspace_path_allows_active_plan_file_outside_workspace() {
+        let _guard = FILE_OPS_TEST_MUTEX.lock().expect("test mutex");
+        let tempdir = tempdir().expect("tempdir");
+        let workspace = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        let plan_file = profile.join("plans").join("plan.md");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        std::fs::create_dir_all(plan_file.parent().expect("plan dir")).expect("plans");
+
+        plan_mode::configure_plan_mode_runtime(Some(Arc::new(StubPlanRuntime {
+            plan_file_path: plan_file.clone(),
+        })))
+        .expect("install plan runtime");
+
+        let context = ToolExecutionContext {
+            cwd: workspace.clone(),
+            ..ToolExecutionContext::default()
+        };
+        let result = write_file(
+            &json!({
+                "path": plan_file.to_string_lossy().to_string(),
+                "content": "# plan"
+            }),
+            &context,
+        )
+        .expect("plan file write");
+
+        assert!(result.contains("plan.md"));
+        assert_eq!(
+            std::fs::read_to_string(plan_file).expect("plan file"),
+            "# plan"
+        );
+
+        plan_mode::configure_plan_mode_runtime(None).expect("clear plan runtime");
     }
 }

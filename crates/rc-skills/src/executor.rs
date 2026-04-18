@@ -453,7 +453,9 @@ mod tests {
         let mut skill = make_skill(temp.path(), "x", "# X\n\nHello");
         skill.metadata.slug = String::new();
         let executor = SkillExecutor::new();
-        let err = executor.validate_skill(&skill).unwrap_err();
+        let err = executor
+            .validate_skill(&skill)
+            .expect_err("empty slug should fail validation");
         assert!(matches!(err, ExecutorError::EmptySlug));
     }
 
@@ -463,7 +465,9 @@ mod tests {
         let mut skill = make_skill(temp.path(), "empty", "");
         skill.metadata.slug = "empty".to_owned();
         let executor = SkillExecutor::new();
-        let err = executor.validate_skill(&skill).unwrap_err();
+        let err = executor
+            .validate_skill(&skill)
+            .expect_err("empty instructions should fail validation");
         assert!(matches!(err, ExecutorError::EmptyInstructions { .. }));
     }
 
@@ -477,7 +481,9 @@ mod tests {
         );
         skill.metadata.root = PathBuf::from("/nonexistent/path/ghost");
         let executor = SkillExecutor::new();
-        let err = executor.validate_skill(&skill).unwrap_err();
+        let err = executor
+            .validate_skill(&skill)
+            .expect_err("missing root should fail validation");
         assert!(matches!(err, ExecutorError::MissingRoot { .. }));
     }
 
@@ -497,7 +503,9 @@ mod tests {
         let mut skill = make_skill(temp.path(), "meta", "# Meta\n\nContent");
         skill.metadata.slug = String::new();
         let executor = SkillExecutor::new();
-        let err = executor.validate_metadata(&skill.metadata).unwrap_err();
+        let err = executor
+            .validate_metadata(&skill.metadata)
+            .expect_err("empty slug metadata should fail validation");
         assert!(matches!(err, ExecutorError::EmptySlug));
     }
 

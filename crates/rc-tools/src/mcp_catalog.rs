@@ -19,6 +19,7 @@ pub struct RuntimeMcpClientDescriptor {
     pub server_name: String,
     pub normalized_server_name: String,
     pub instructions: Option<String>,
+    pub supports_resources: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +65,14 @@ fn annotation_hint_is_true(annotations: &Value, key: &str) -> bool {
         .get(key)
         .and_then(Value::as_bool)
         .unwrap_or(false)
+}
+
+fn inspection_supports_resources(
+    entry: &RuntimeMcpServerPolicyEntry,
+    inspection: &McpServerInspection,
+) -> bool {
+    entry.server.capabilities.supports_resources
+        || inspection.capabilities.get("resources").is_some()
 }
 
 fn build_mcp_tool_spec(
@@ -138,6 +147,7 @@ pub async fn runtime_mcp_catalog() -> RuntimeMcpCatalog {
                     server_name: entry.server.name.clone(),
                     normalized_server_name: normalize_name_for_mcp(&entry.server.name),
                     instructions: inspection.instructions.clone(),
+                    supports_resources: inspection_supports_resources(entry, &inspection),
                 });
 
                 for tool in &inspection.tools {

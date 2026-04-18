@@ -217,7 +217,7 @@ mod tests {
     #[test]
     fn selected_default_is_first() {
         let picker = ProviderPicker::new();
-        let sel = picker.selected().unwrap();
+        let sel = picker.selected().expect("default provider should exist");
         assert_eq!(sel.id, "anthropic");
         assert_eq!(sel.status, ProviderStatus::Connected);
     }
@@ -237,7 +237,13 @@ mod tests {
         picker.move_down();
         picker.confirm();
         assert_eq!(picker.selected_index, 1);
-        assert_eq!(picker.selected().unwrap().id, "openai");
+        assert_eq!(
+            picker
+                .selected()
+                .expect("confirmed provider should exist")
+                .id,
+            "openai"
+        );
     }
 
     #[test]

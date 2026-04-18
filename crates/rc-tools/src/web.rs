@@ -199,7 +199,7 @@ async fn capture_visual_screenshot(url: &str, context: &ToolExecutionContext) ->
         .context("failed to create browser profile directory")?;
 
     let screenshot_path = screenshots_dir.join(format!("{}.png", Uuid::new_v4()));
-    let timeout_secs = ((context.timeout_ms / 1000).clamp(5, 60)) as u64;
+    let timeout_secs = (context.timeout_ms / 1000).clamp(5, 60);
 
     let mut last_error: Option<String> = None;
     for headless_flag in ["--headless=new", "--headless"] {

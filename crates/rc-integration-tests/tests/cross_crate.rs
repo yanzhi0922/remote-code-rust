@@ -3,8 +3,6 @@
 //! Validates that types from rc-core flow correctly through all other crates,
 //! and that type conversions between crates work as expected.
 
-use serde_json;
-
 // ─── rc-core types round-trip through all crates ────────────────────────────
 
 #[test]
@@ -85,12 +83,14 @@ fn tool_result_round_trips_via_json() {
     let result = rc_core::ToolResult {
         content: "file contents here".to_owned(),
         is_error: false,
+        content_blocks: Vec::new(),
     };
     let json = serde_json::to_string(&result).expect("serialize tool result");
     let decoded: rc_core::ToolResult =
         serde_json::from_str(&json).expect("deserialize tool result");
     assert_eq!(decoded.content, "file contents here");
     assert!(!decoded.is_error);
+    assert!(decoded.content_blocks.is_empty());
 }
 
 #[test]

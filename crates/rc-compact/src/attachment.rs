@@ -181,6 +181,7 @@ pub fn create_file_attachment_message(
             truncated.as_bytes(),
             Some(filename.to_string()),
         )],
+        provider_content_blocks: Vec::new(),
     })
 }
 
@@ -246,6 +247,7 @@ pub fn create_plan_attachment_if_needed(
             content.as_bytes(),
             Some(path.to_string()),
         )],
+        provider_content_blocks: Vec::new(),
     }))
 }
 
@@ -291,6 +293,7 @@ pub fn create_skill_attachment_if_needed(registry: &InvokedSkillRegistry) -> Opt
         base: MessageBase::with_origin(MessageOrigin::Compact),
         text,
         attachments: Vec::new(),
+        provider_content_blocks: Vec::new(),
     }))
 }
 

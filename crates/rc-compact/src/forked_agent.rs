@@ -149,6 +149,7 @@ mod tests {
             tool_name: "bash".to_owned(),
             summary: content.to_owned(),
             is_error: false,
+            content_blocks: Vec::new(),
         })
     }
 
@@ -158,6 +159,7 @@ mod tests {
             base: MessageBase::with_origin(MessageOrigin::UserInput),
             text: text.to_owned(),
             attachments: Vec::new(),
+            provider_content_blocks: Vec::new(),
         })
     }
 

@@ -312,63 +312,68 @@ mod tests {
     }
 
     #[test]
-    fn compute_diff_for_file_both_missing() {
-        let tmp = TempDir::new().unwrap();
+    fn compute_diff_for_file_both_missing() -> anyhow::Result<()> {
+        let tmp = TempDir::new()?;
         let file_path = tmp.path().join("nonexistent.txt");
         let stats = compute_diff_stats_for_file(&file_path, None);
         assert!(!stats.has_changes());
+        Ok(())
     }
 
     #[test]
-    fn compute_diff_for_file_new_file() {
-        let tmp = TempDir::new().unwrap();
+    fn compute_diff_for_file_new_file() -> anyhow::Result<()> {
+        let tmp = TempDir::new()?;
         let file_path = tmp.path().join("new.txt");
-        fs::write(&file_path, "line1\nline2\n").unwrap();
+        fs::write(&file_path, "line1\nline2\n")?;
 
         let stats = compute_diff_stats_for_file(&file_path, None);
         assert!(stats.has_changes());
         assert_eq!(stats.insertions, 2); // 2 lines (trailing newline doesn't add a line)
         assert_eq!(stats.deletions, 0);
+        Ok(())
     }
 
     #[test]
-    fn compute_diff_for_file_deleted() {
-        let tmp = TempDir::new().unwrap();
+    fn compute_diff_for_file_deleted() -> anyhow::Result<()> {
+        let tmp = TempDir::new()?;
         let file_path = tmp.path().join("deleted.txt");
 
         let stats = compute_diff_stats_for_file(&file_path, Some("line1\nline2"));
         assert!(stats.has_changes());
         assert_eq!(stats.insertions, 0);
         assert_eq!(stats.deletions, 2);
+        Ok(())
     }
 
     #[test]
-    fn compute_diff_for_file_unchanged() {
-        let tmp = TempDir::new().unwrap();
+    fn compute_diff_for_file_unchanged() -> anyhow::Result<()> {
+        let tmp = TempDir::new()?;
         let file_path = tmp.path().join("same.txt");
-        fs::write(&file_path, "hello\nworld\n").unwrap();
+        fs::write(&file_path, "hello\nworld\n")?;
 
         let stats = compute_diff_stats_for_file(&file_path, Some("hello\nworld\n"));
         assert!(!stats.has_changes());
+        Ok(())
     }
 
     #[test]
-    fn compute_diff_for_file_modified() {
-        let tmp = TempDir::new().unwrap();
+    fn compute_diff_for_file_modified() -> anyhow::Result<()> {
+        let tmp = TempDir::new()?;
         let file_path = tmp.path().join("mod.txt");
-        fs::write(&file_path, "hello\nchanged\nworld\n").unwrap();
+        fs::write(&file_path, "hello\nchanged\nworld\n")?;
 
         let stats = compute_diff_stats_for_file(&file_path, Some("hello\noriginal\nworld\n"));
         assert!(stats.has_changes());
         assert_eq!(stats.insertions, 1);
         assert_eq!(stats.deletions, 1);
+        Ok(())
     }
 
     #[test]
-    fn compute_diff_for_multiple_files() {
-        let tmp = TempDir::new().unwrap();
-        fs::write(tmp.path().join("a.txt"), "new\n").unwrap();
-        fs::write(tmp.path().join("b.txt"), "line1\nline2\n").unwrap();
+    fn compute_diff_for_multiple_files() -> anyhow::Result<()> {
+        let tmp = TempDir::new()?;
+        fs::write(tmp.path().join("a.txt"), "new\n")?;
+        fs::write(tmp.path().join("b.txt"), "line1\nline2\n")?;
 
         let files_with_paths = vec![
             (
@@ -381,22 +386,24 @@ mod tests {
         let stats = compute_diff_stats_for_files(&files_with_paths);
         assert!(stats.has_changes());
         assert_eq!(stats.files_changed.len(), 2);
+        Ok(())
     }
 
     #[test]
-    fn diff_stats_serializes() {
+    fn diff_stats_serializes() -> anyhow::Result<()> {
         let stats = DiffStats {
             files_changed: vec!["main.rs".to_string()],
             insertions: 10,
             deletions: 5,
         };
-        let json = serde_json::to_string(&stats).unwrap();
+        let json = serde_json::to_string(&stats)?;
         assert!(json.contains("main.rs"));
         assert!(json.contains("10"));
         assert!(json.contains("5"));
 
-        let deserialized: DiffStats = serde_json::from_str(&json).unwrap();
+        let deserialized: DiffStats = serde_json::from_str(&json)?;
         assert_eq!(deserialized.insertions, 10);
         assert_eq!(deserialized.deletions, 5);
+        Ok(())
     }
 }

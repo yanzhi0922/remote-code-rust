@@ -48,8 +48,8 @@ fn agent_definition_with_all_fields_serializes() {
 
     let json = serde_json::to_string(&def).expect("serialize");
     let decoded: rc_agents::AgentDefinition = serde_json::from_str(&json).expect("deserialize");
-    assert_eq!(decoded.tools, vec!["Read", "Write"]);
-    assert_eq!(decoded.disallowed_tools, vec!["Bash"]);
+    assert_eq!(decoded.tools, ["Read", "Write"]);
+    assert_eq!(decoded.disallowed_tools, ["Bash"]);
     assert_eq!(decoded.model.as_deref(), Some("haiku"));
     assert!(decoded.background);
     assert_eq!(
@@ -126,7 +126,7 @@ fn runner_resolves_wildcard_tools() {
         working_dir: PathBuf::from("."),
     };
     let runner = rc_agents::AgentRunner::new(def, config);
-    let available = vec!["Read".to_owned(), "Write".to_owned(), "Bash".to_owned()];
+    let available = ["Read".to_owned(), "Write".to_owned(), "Bash".to_owned()];
     let resolved = runner.resolve_tools(&available);
     assert_eq!(resolved.len(), 3);
 }
@@ -142,7 +142,7 @@ fn runner_filters_denylisted_tools() {
         working_dir: PathBuf::from("."),
     };
     let runner = rc_agents::AgentRunner::new(explore, config);
-    let available = vec![
+    let available = [
         "Read".to_owned(),
         "Write".to_owned(),
         "Edit".to_owned(),
@@ -297,7 +297,7 @@ fn fork_agent_definition_has_correct_type() {
 
 #[test]
 fn is_fork_child_detects_boilerplate_tag() {
-    let messages = vec![rc_agents::fork::ForkMessage {
+    let messages = [rc_agents::fork::ForkMessage {
         role: "user".to_owned(),
         content: vec![rc_agents::fork::ForkContentBlock::Text {
             text: "<fork_boilerplate>some content</fork_boilerplate>".to_string(),
@@ -308,7 +308,7 @@ fn is_fork_child_detects_boilerplate_tag() {
 
 #[test]
 fn is_fork_child_returns_false_for_normal_messages() {
-    let messages = vec![rc_agents::fork::ForkMessage {
+    let messages = [rc_agents::fork::ForkMessage {
         role: "user".to_owned(),
         content: vec![rc_agents::fork::ForkContentBlock::Text {
             text: "normal user message".to_owned(),
@@ -319,7 +319,7 @@ fn is_fork_child_returns_false_for_normal_messages() {
 
 #[test]
 fn build_fork_messages_with_tool_use_blocks() {
-    let parent = vec![rc_agents::fork::ForkMessage {
+    let parent = [rc_agents::fork::ForkMessage {
         role: "assistant".to_owned(),
         content: vec![
             rc_agents::fork::ForkContentBlock::ToolUse {
@@ -396,7 +396,9 @@ fn worker_cannot_start_from_running_state() {
     let config = rc_agents::WorkerConfig::default();
     let mut worker = rc_agents::WorkerAgent::new("w-2", config);
     ok(worker.start());
-    let err = worker.start().unwrap_err();
+    let err = worker
+        .start()
+        .expect_err("starting a running worker should fail");
     assert!(err.contains("running"));
 }
 

@@ -690,6 +690,10 @@ mod tests {
     use crate::hook_types::{HookCommand, HookHttp};
     use crate::hooks::HookEventKind;
 
+    fn test_cwd() -> String {
+        std::env::temp_dir().display().to_string()
+    }
+
     fn make_command_hook(cmd: &str) -> HookDefinition {
         HookDefinition::Command(HookCommand {
             command: cmd.to_string(),
@@ -726,6 +730,7 @@ mod tests {
             cwd: Some("/tmp".to_string()),
             user_prompt: None,
             tool_use_id: None,
+            tool_result: None,
         }
     }
 
@@ -819,20 +824,21 @@ mod tests {
 
     #[test]
     fn executor_new() {
-        let executor = HookExecutor::new("/tmp".to_string());
-        assert_eq!(executor.cwd, "/tmp");
+        let cwd = test_cwd();
+        let executor = HookExecutor::new(cwd.clone());
+        assert_eq!(executor.cwd, cwd);
         assert_eq!(executor.default_timeout_secs, 30);
     }
 
     #[test]
     fn executor_with_timeout() {
-        let executor = HookExecutor::new("/tmp".to_string()).with_timeout(60);
+        let executor = HookExecutor::new(test_cwd()).with_timeout(60);
         assert_eq!(executor.default_timeout_secs, 60);
     }
 
     #[tokio::test]
     async fn executor_execute_empty_hooks() {
-        let executor = HookExecutor::new("/tmp".to_string());
+        let executor = HookExecutor::new(test_cwd());
         let input = make_input();
         let result = executor.execute_hooks(&[], &input).await;
         assert!(!result.is_blocked());
@@ -841,7 +847,7 @@ mod tests {
 
     #[tokio::test]
     async fn executor_execute_command_hook_success() {
-        let executor = HookExecutor::new("/tmp".to_string());
+        let executor = HookExecutor::new(test_cwd());
         let hook = HookDefinition::Command(HookCommand {
             command: "echo hello".to_string(),
             shell: None,
@@ -860,7 +866,7 @@ mod tests {
 
     #[tokio::test]
     async fn executor_execute_command_hook_blocking() {
-        let executor = HookExecutor::new("/tmp".to_string());
+        let executor = HookExecutor::new(test_cwd());
         let hook = HookDefinition::Command(HookCommand {
             command: r#"echo '{"continue":false,"stopReason":"blocked"}'"#.to_string(),
             shell: None,
@@ -880,7 +886,7 @@ mod tests {
 
     #[tokio::test]
     async fn executor_stops_on_first_block() {
-        let executor = HookExecutor::new("/tmp".to_string());
+        let executor = HookExecutor::new(test_cwd());
         let hooks = vec![
             HookDefinition::Command(HookCommand {
                 command: r#"echo '{"continue":false}'"#.to_string(),

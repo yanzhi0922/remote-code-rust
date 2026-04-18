@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn rpc_id_matches_i64() {
-        assert!(rpc_id_matches(&Value::from(-1i64), 0) == false);
+        assert!(!rpc_id_matches(&Value::from(-1i64), 0));
         assert!(rpc_id_matches(&Value::from(2i64), 2));
     }
 

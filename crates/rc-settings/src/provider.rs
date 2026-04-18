@@ -109,10 +109,11 @@ mod tests {
     #[test]
     fn provider_type_serialization() {
         let pt = ProviderType::AnthropicCompatible;
-        let json = serde_json::to_string(&pt).unwrap();
+        let json = serde_json::to_string(&pt).expect("provider type should serialize");
         assert_eq!(json, "\"anthropic-compatible\"");
 
-        let deserialized: ProviderType = serde_json::from_str(&json).unwrap();
+        let deserialized: ProviderType =
+            serde_json::from_str(&json).expect("provider type should deserialize");
         assert_eq!(deserialized, ProviderType::AnthropicCompatible);
     }
 
@@ -151,12 +152,13 @@ mod tests {
             default_model: Some("gpt-4".to_string()),
             ..Default::default()
         };
-        let json = serde_json::to_string(&config).unwrap();
+        let json = serde_json::to_string(&config).expect("provider config should serialize");
         assert!(json.contains("openai-compatible"));
         assert!(json.contains("api.example.com"));
         assert!(json.contains("MY_API_KEY"));
 
-        let deserialized: ProviderConfig = serde_json::from_str(&json).unwrap();
+        let deserialized: ProviderConfig =
+            serde_json::from_str(&json).expect("provider config should deserialize");
         assert_eq!(deserialized.base_url, config.base_url);
     }
 

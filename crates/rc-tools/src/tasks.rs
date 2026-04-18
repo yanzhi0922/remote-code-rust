@@ -510,6 +510,49 @@ pub fn task_update(input: &Value) -> Result<String> {
     .to_string())
 }
 
+/// Stop any active tracked tasks and clear the in-memory task store.
+///
+/// This is used during session reset flows such as `/clear` so stale task
+/// state does not leak into the next session. Pending/running tasks are first
+/// marked `stopped` and re-persisted into the current task artifact directory.
+///
+/// # Errors
+/// Returns an error if the task store is poisoned or persisted task metadata
+/// cannot be updated.
+pub fn stop_and_clear_tracked_tasks(stop_reason: &str) -> Result<Vec<BackgroundTask>> {
+    let output_dir = TASK_OUTPUT_DIR
+        .lock()
+        .map_err(|_| anyhow!("task output dir lock poisoned"))?
+        .clone();
+
+    let mut store = TASK_STORE
+        .lock()
+        .map_err(|_| anyhow!("task store lock poisoned"))?;
+
+    let mut snapshots = Vec::with_capacity(store.len());
+    for task in store.values_mut() {
+        if matches!(task.status, TaskStatus::Pending | TaskStatus::Running) {
+            task.status = TaskStatus::Stopped;
+            task.updated_at = now_timestamp();
+            if task.summary.trim().is_empty() {
+                task.summary = stop_reason.to_owned();
+            } else if !task.summary.contains(stop_reason) {
+                task.summary = format!("{} ({stop_reason})", task.summary);
+            }
+
+            if let Some(output_dir) = output_dir.as_ref() {
+                let persisted_path = task_output::persist_task(output_dir, task)?;
+                task.output_path = persisted_path.map(|path| path.display().to_string());
+            }
+        }
+
+        snapshots.push(task.clone());
+    }
+
+    store.clear();
+    Ok(snapshots)
+}
+
 fn persist_task_if_configured(task_id: &str) -> Result<()> {
     let output_dir = TASK_OUTPUT_DIR
         .lock()
@@ -781,5 +824,56 @@ mod tests {
         assert_eq!(snapshot.depth, 2);
         assert_eq!(snapshot.summary, "done");
         assert_eq!(snapshot.turns_used, Some(4));
+    }
+
+    #[test]
+    fn stop_and_clear_tracked_tasks_stops_active_tasks_and_empties_store() {
+        let _guard = test_guard();
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        configure_task_output_dir(Some(tempdir.path().to_path_buf())).expect("configure output");
+
+        let pending = task_create(&json!({"title": "Pending task"})).expect("create task");
+        let pending_json: Value = serde_json::from_str(&pending).expect("valid JSON");
+        let pending_id = pending_json["id"].as_str().expect("pending id");
+
+        let completed_id = allocate_task_id();
+        start_tracked_task(
+            completed_id.clone(),
+            "Completed task",
+            None,
+            0,
+            TaskKind::Delegation,
+            Some("working"),
+        )
+        .expect("start tracked task");
+        finish_tracked_task(
+            &completed_id,
+            TaskStatus::Completed,
+            Some("done"),
+            "final output",
+            Some(1),
+        )
+        .expect("finish tracked task");
+
+        let drained =
+            stop_and_clear_tracked_tasks("stopped by session clear").expect("clear tracked tasks");
+        assert_eq!(drained.len(), 2);
+        assert!(task_snapshots().is_empty(), "task store should be empty");
+
+        let pending_persisted = load_persisted_task(tempdir.path(), pending_id)
+            .expect("load persisted pending task")
+            .expect("pending task should persist");
+        assert!(matches!(pending_persisted.status, TaskStatus::Stopped));
+        assert!(
+            pending_persisted
+                .summary
+                .contains("stopped by session clear")
+        );
+
+        let completed_persisted = load_persisted_task(tempdir.path(), &completed_id)
+            .expect("load persisted completed task")
+            .expect("completed task should persist");
+        assert!(matches!(completed_persisted.status, TaskStatus::Completed));
+        assert_eq!(completed_persisted.summary, "done");
     }
 }

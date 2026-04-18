@@ -113,6 +113,7 @@ pub enum PermissionClass {
 #[derive(Debug, Clone)]
 pub struct PermissionRequest {
     pub tool_name: String,
+    pub permission_class: Option<PermissionClass>,
     pub tool_input: serde_json::Value,
     pub working_directory: Option<String>,
     /// Optional tool use ID for tracking.
@@ -123,6 +124,14 @@ pub struct PermissionRequest {
     pub description: Option<String>,
     /// Optional blocked path (set when a path violation is detected).
     pub blocked_path: Option<String>,
+}
+
+impl PermissionRequest {
+    #[must_use]
+    pub fn resolved_permission_class(&self) -> PermissionClass {
+        self.permission_class
+            .unwrap_or_else(|| classify_tool(&self.tool_name))
+    }
 }
 
 /// A permission decision (allow or deny).
@@ -212,7 +221,7 @@ impl PermissionBroker for StaticPermissionBroker {
         }
         // If we have a mode, check auto_allows for the tool class.
         if let Some(mode) = self.mode {
-            let class = classify_tool(&request.tool_name);
+            let class = request.resolved_permission_class();
             if auto_allows(mode, class) {
                 return PermissionDecision::allow();
             }
@@ -336,6 +345,10 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
     fn layered_rules(&self) -> Vec<SourceAwarePermissionRule> {
         self.rules.clone()
     }
+
+    fn mode(&self) -> Option<rc_core::PermissionMode> {
+        self.fallback.mode()
+    }
 }
 
 /// Load layered permission rules from a set of settings files.
@@ -413,16 +426,19 @@ pub fn classify_tool(name: &str) -> PermissionClass {
         // PascalCase (permission_tool_name / rule patterns)
         "Read" | "Glob" | "LS" => PermissionClass::Read,
         "Edit" | "Write" | "MultiEdit" => PermissionClass::Edit,
-        "Bash" => PermissionClass::Bash,
-        "mcp" | "McpServerList" => PermissionClass::Mcp,
-        "Agent" | "Task" => PermissionClass::Agent,
+        "Bash" | "WebFetch" | "WebSearch" | "WebBrowser" | "TerminalCapture" | "RemoteTrigger"
+        | "Daemon" => PermissionClass::Bash,
+        "mcp" | "McpServerList" | "McpAuth" | "McpCall" => PermissionClass::Mcp,
+        "Agent" | "Task" | "ExecuteSkill" | "TeamDelete" => PermissionClass::Agent,
+        "Config" | "LSP" | "ToolSearch" | "VerifyPlan" | "Snip" => PermissionClass::Read,
         // snake_case (internal tool names) — Bash
-        "bash_command" | "powershell" | "repl" | "tungsten" => PermissionClass::Bash,
+        "bash_command" | "powershell" | "repl" | "tungsten" | "web_fetch" | "web_search"
+        | "web_browser" | "terminal_capture" | "remote_trigger" | "daemon" => PermissionClass::Bash,
         // snake_case — Edit
         "write_file" | "replace_in_file" | "edit_file" | "notebook_edit" | "memory_write"
         | "schedule_cron" | "enter_worktree" | "exit_worktree" => PermissionClass::Edit,
         // snake_case — Agent
-        "agent" => PermissionClass::Agent,
+        "agent" | "team_delete" => PermissionClass::Agent,
         // snake_case — Mcp
         "mcp_call" | "mcp_auth" => PermissionClass::Mcp,
         // Everything else defaults to Read (safe / least-privilege fallback)
@@ -461,11 +477,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn static_broker_allow_all() {
+    fn static_broker_allow_all() -> anyhow::Result<()> {
         let broker = StaticPermissionBroker::new(true);
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new()?;
         let decision = rt.block_on(broker.decide(PermissionRequest {
             tool_name: "Bash".to_owned(),
+            permission_class: None,
             tool_input: serde_json::json!({"command": "ls"}),
             working_directory: None,
             tool_use_id: None,
@@ -474,14 +491,16 @@ mod tests {
             blocked_path: None,
         }));
         assert!(decision.allowed);
+        Ok(())
     }
 
     #[test]
-    fn static_broker_deny_all() {
+    fn static_broker_deny_all() -> anyhow::Result<()> {
         let broker = StaticPermissionBroker::new(false);
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new()?;
         let decision = rt.block_on(broker.decide(PermissionRequest {
             tool_name: "Bash".to_owned(),
+            permission_class: None,
             tool_input: serde_json::json!({"command": "rm -rf /"}),
             working_directory: None,
             tool_use_id: None,
@@ -490,15 +509,17 @@ mod tests {
             blocked_path: None,
         }));
         assert!(!decision.allowed);
+        Ok(())
     }
 
     #[test]
-    fn layered_broker_falls_through() {
+    fn layered_broker_falls_through() -> anyhow::Result<()> {
         let fallback = StaticPermissionBroker::new(true);
         let layered = LayeredPermissionBroker::new(fallback, vec![]);
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new()?;
         let decision = rt.block_on(layered.decide(PermissionRequest {
             tool_name: "Read".to_owned(),
+            permission_class: None,
             tool_input: serde_json::json!({"path": "/tmp/a"}),
             working_directory: None,
             tool_use_id: None,
@@ -507,10 +528,11 @@ mod tests {
             blocked_path: None,
         }));
         assert!(decision.allowed);
+        Ok(())
     }
 
     #[test]
-    fn layered_broker_rule_deny() {
+    fn layered_broker_rule_deny() -> anyhow::Result<()> {
         let fallback = StaticPermissionBroker::new(true);
         let rules = vec![SourceAwarePermissionRule {
             tool_pattern: "Bash".to_owned(),
@@ -518,9 +540,10 @@ mod tests {
             source: RuleSource::Project,
         }];
         let layered = LayeredPermissionBroker::new(fallback, rules);
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new()?;
         let decision = rt.block_on(layered.decide(PermissionRequest {
             tool_name: "Bash".to_owned(),
+            permission_class: None,
             tool_input: serde_json::json!({"command": "ls"}),
             working_directory: None,
             tool_use_id: None,
@@ -529,10 +552,11 @@ mod tests {
             blocked_path: None,
         }));
         assert!(!decision.allowed);
+        Ok(())
     }
 
     #[test]
-    fn layered_broker_wildcard_pattern() {
+    fn layered_broker_wildcard_pattern() -> anyhow::Result<()> {
         let fallback = StaticPermissionBroker::new(false);
         let rules = vec![SourceAwarePermissionRule {
             tool_pattern: "Read*".to_owned(),
@@ -540,9 +564,10 @@ mod tests {
             source: RuleSource::User,
         }];
         let layered = LayeredPermissionBroker::new(fallback, rules);
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new()?;
         let decision = rt.block_on(layered.decide(PermissionRequest {
             tool_name: "ReadFile".to_owned(),
+            permission_class: None,
             tool_input: serde_json::json!({"path": "/tmp/a"}),
             working_directory: None,
             tool_use_id: None,
@@ -551,6 +576,7 @@ mod tests {
             blocked_path: None,
         }));
         assert!(decision.allowed);
+        Ok(())
     }
 
     #[test]
@@ -575,13 +601,31 @@ mod tests {
         assert_eq!(classify_tool("Edit"), PermissionClass::Edit);
         assert_eq!(classify_tool("Write"), PermissionClass::Edit);
         assert_eq!(classify_tool("Bash"), PermissionClass::Bash);
+        assert_eq!(classify_tool("WebFetch"), PermissionClass::Bash);
+        assert_eq!(classify_tool("McpCall"), PermissionClass::Mcp);
+        assert_eq!(classify_tool("Daemon"), PermissionClass::Bash);
         assert_eq!(classify_tool("mcp"), PermissionClass::Mcp);
         assert_eq!(classify_tool("Agent"), PermissionClass::Agent);
         assert_eq!(classify_tool("Unknown"), PermissionClass::Read);
     }
 
     #[test]
-    fn session_rules_highest_priority() {
+    fn permission_request_can_override_classification() {
+        let request = PermissionRequest {
+            tool_name: "workflow".to_owned(),
+            permission_class: Some(PermissionClass::Bash),
+            tool_input: serde_json::json!({"action": "run"}),
+            working_directory: None,
+            tool_use_id: None,
+            title: None,
+            description: None,
+            blocked_path: None,
+        };
+        assert_eq!(request.resolved_permission_class(), PermissionClass::Bash);
+    }
+
+    #[test]
+    fn session_rules_highest_priority() -> anyhow::Result<()> {
         let fallback = StaticPermissionBroker::new(false);
         // Persistent rule allows Bash
         let rules = vec![SourceAwarePermissionRule {
@@ -591,12 +635,11 @@ mod tests {
         }];
         let layered = LayeredPermissionBroker::new(fallback, rules);
         // Session rule denies Bash
-        layered
-            .add_session_rule(RuleAction::Deny, "Bash".to_owned())
-            .unwrap();
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        layered.add_session_rule(RuleAction::Deny, "Bash".to_owned())?;
+        let rt = tokio::runtime::Runtime::new()?;
         let decision = rt.block_on(layered.decide(PermissionRequest {
             tool_name: "Bash".to_owned(),
+            permission_class: None,
             tool_input: serde_json::json!({"command": "ls"}),
             working_directory: None,
             tool_use_id: None,
@@ -605,24 +648,22 @@ mod tests {
             blocked_path: None,
         }));
         assert!(!decision.allowed);
+        Ok(())
     }
 
     #[test]
-    fn clear_session_rules_returns_count() {
+    fn clear_session_rules_returns_count() -> anyhow::Result<()> {
         let fallback = StaticPermissionBroker::new(true);
         let layered = LayeredPermissionBroker::new(fallback, vec![]);
-        layered
-            .add_session_rule(RuleAction::Allow, "Read".to_owned())
-            .unwrap();
-        layered
-            .add_session_rule(RuleAction::Deny, "Bash".to_owned())
-            .unwrap();
-        let count = layered.clear_session_rules().unwrap();
+        layered.add_session_rule(RuleAction::Allow, "Read".to_owned())?;
+        layered.add_session_rule(RuleAction::Deny, "Bash".to_owned())?;
+        let count = layered.clear_session_rules()?;
         assert_eq!(count, 2);
+        Ok(())
     }
 
     #[test]
-    fn audit_records_tracked() {
+    fn audit_records_tracked() -> anyhow::Result<()> {
         let fallback = StaticPermissionBroker::new(true);
         let rules = vec![SourceAwarePermissionRule {
             tool_pattern: "Read".to_owned(),
@@ -630,9 +671,10 @@ mod tests {
             source: RuleSource::Project,
         }];
         let layered = LayeredPermissionBroker::new(fallback, rules);
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new()?;
         let _ = rt.block_on(layered.decide(PermissionRequest {
             tool_name: "Read".to_owned(),
+            permission_class: None,
             tool_input: serde_json::json!({"path": "/tmp"}),
             working_directory: None,
             tool_use_id: None,
@@ -644,5 +686,6 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].tool_name, "Read");
         assert!(records[0].final_allowed);
+        Ok(())
     }
 }

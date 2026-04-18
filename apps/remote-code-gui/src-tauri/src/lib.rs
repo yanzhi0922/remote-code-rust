@@ -733,6 +733,8 @@ struct PersistedProviderContext {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedSessionContext {
     cwd: PathBuf,
+    #[serde(default)]
+    original_cwd: Option<PathBuf>,
     permission_mode: String,
     provider: PersistedProviderContext,
 }
@@ -2288,6 +2290,7 @@ fn persist_session_context(store: &SessionStore, config: &RuntimeConfig) -> Resu
         "session_context",
         serde_json::to_value(PersistedSessionContext {
             cwd: config.cwd.clone(),
+            original_cwd: Some(config.original_cwd.clone()),
             permission_mode: config.permission_mode.as_legacy_str().to_owned(),
             provider: PersistedProviderContext {
                 name: config.provider.name.clone(),
@@ -2302,6 +2305,7 @@ fn persist_session_context(store: &SessionStore, config: &RuntimeConfig) -> Resu
 fn restore_session_context(store: &SessionStore, config: &mut RuntimeConfig) -> Result<()> {
     if let Ok(summary) = store.get_session_summary(config.session_id) {
         config.cwd = summary.cwd;
+        config.original_cwd = config.cwd.clone();
         config.provider.name = summary.provider_name;
         config.provider.model = summary.model;
     }
@@ -2312,6 +2316,7 @@ fn restore_session_context(store: &SessionStore, config: &mut RuntimeConfig) -> 
         return Ok(());
     };
     config.cwd = persisted.cwd;
+    config.original_cwd = persisted.original_cwd.unwrap_or_else(|| config.cwd.clone());
     config.provider.name = persisted.provider.name;
     config.provider.base_url = persisted.provider.base_url;
     config.provider.model = persisted.provider.model;
@@ -2827,17 +2832,19 @@ async fn run_gui_prompt(
                 Err(error) => rc_core::ToolResult {
                     content: format!("Tool execution error: {error}"),
                     is_error: true,
+                    content_blocks: Vec::new(),
                 },
             };
 
             let output_for_context =
                 context_manager.truncate_tool_output_default(&tool_result.content);
-            let tool_entry = ConversationEntry::tool(
+            let mut tool_entry = ConversationEntry::tool(
                 tool_call.id.clone(),
                 tool_call.name.clone(),
                 output_for_context,
                 tool_result.is_error,
             );
+            tool_entry.content_blocks = tool_result.content_blocks.clone();
             store.append_conversation_entry(config.session_id, &tool_entry)?;
             conversation.push(tool_entry.clone());
 
@@ -4352,6 +4359,7 @@ mod tests {
         let sessions = vec![
             SessionSummary {
                 session_id: Uuid::new_v4(),
+                parent_session_id: None,
                 title: "alpha-session".to_owned(),
                 cwd: PathBuf::from(r"C:\Work\Alpha"),
                 provider_name: "glm".to_owned(),
@@ -4363,6 +4371,7 @@ mod tests {
             },
             SessionSummary {
                 session_id: Uuid::new_v4(),
+                parent_session_id: None,
                 title: "orphan-session".to_owned(),
                 cwd: PathBuf::from(r"C:\Work\Beta"),
                 provider_name: "minimax".to_owned(),
@@ -4389,6 +4398,7 @@ mod tests {
         let sessions = vec![
             SessionSummary {
                 session_id: Uuid::new_v4(),
+                parent_session_id: None,
                 title: "alpha-session".to_owned(),
                 cwd: PathBuf::from(r"C:\Work\Alpha"),
                 provider_name: "glm".to_owned(),
@@ -4400,6 +4410,7 @@ mod tests {
             },
             SessionSummary {
                 session_id: Uuid::new_v4(),
+                parent_session_id: None,
                 title: "orphan-session".to_owned(),
                 cwd: PathBuf::from(r"C:\Work\Beta"),
                 provider_name: "minimax".to_owned(),

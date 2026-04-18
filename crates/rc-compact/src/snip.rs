@@ -371,6 +371,7 @@ mod tests {
             base: MessageBase::default(),
             text: text.to_owned(),
             attachments: Vec::new(),
+            provider_content_blocks: Vec::new(),
         })
     }
 
@@ -380,6 +381,7 @@ mod tests {
             text: text.to_owned(),
             blocks: vec![],
             tool_calls: vec![],
+            provider_content_blocks: vec![],
         })
     }
 
@@ -390,6 +392,7 @@ mod tests {
             tool_name: name.to_owned(),
             summary: summary.to_owned(),
             is_error: false,
+            content_blocks: Vec::new(),
         })
     }
 

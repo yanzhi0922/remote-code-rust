@@ -214,7 +214,7 @@ mod tests {
     #[test]
     fn swarm_result_ok() {
         let result: SwarmResult<i32> = Ok(42);
-        assert_eq!(result.expect("should be ok"), 42);
+        assert!(matches!(result, Ok(42)));
     }
 
     #[test]

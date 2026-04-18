@@ -130,8 +130,10 @@ mod tests {
 
     #[test]
     fn timeout_values_are_reasonable() {
-        assert!(PERMISSION_REQUEST_TIMEOUT_SECS > 0);
-        assert!(PERMISSION_POLL_INTERVAL_MS > 0);
-        assert!(MAILBOX_POLL_INTERVAL_MS > 0);
+        const _: () = {
+            assert!(PERMISSION_REQUEST_TIMEOUT_SECS > 0);
+            assert!(PERMISSION_POLL_INTERVAL_MS > 0);
+            assert!(MAILBOX_POLL_INTERVAL_MS > 0);
+        };
     }
 }

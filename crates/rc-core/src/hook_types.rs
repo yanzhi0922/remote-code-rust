@@ -351,6 +351,9 @@ pub struct HookInput {
     /// Tool use ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_use_id: Option<String>,
+    /// Tool result payload (for PostToolUse / PostToolUseFailure).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_result: Option<Value>,
 }
 
 /// Raw output from a hook process.
@@ -1058,7 +1061,8 @@ mod tests {
         };
         output.parse_stdout();
         assert!(output.parsed_json.is_some());
-        assert_eq!(output.parsed_json.as_ref().unwrap()["decision"], "approve");
+        let parsed_json = output.parsed_json.as_ref().expect("stdout should parse");
+        assert_eq!(parsed_json["decision"], "approve");
     }
 
     #[test]
@@ -1161,9 +1165,9 @@ mod tests {
                 ..
             } => {
                 assert_eq!(initial_user_message.as_deref(), Some("hello"));
-                assert!(watch_paths.is_some());
-                assert_eq!(watch_paths.as_ref().unwrap().len(), 1);
-                assert_eq!(watch_paths.as_ref().unwrap()[0], "/tmp");
+                let watch_paths = watch_paths.as_ref().expect("watch paths should exist");
+                assert_eq!(watch_paths.len(), 1);
+                assert_eq!(watch_paths[0], "/tmp");
             }
             _ => panic!("expected SessionStart variant"),
         }

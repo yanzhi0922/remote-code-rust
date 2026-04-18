@@ -97,6 +97,7 @@ mod tests {
     fn request(tool_name: &str, input: serde_json::Value) -> PermissionRequest {
         PermissionRequest {
             tool_name: tool_name.to_owned(),
+            permission_class: None,
             tool_input: input,
             working_directory: None,
             tool_use_id: None,

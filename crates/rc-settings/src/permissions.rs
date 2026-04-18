@@ -126,11 +126,12 @@ mod tests {
             default_mode: Some("default".to_string()),
             ..Default::default()
         };
-        let json = serde_json::to_string(&p).unwrap();
+        let json = serde_json::to_string(&p).expect("permission settings should serialize");
         assert!(json.contains("Bash(*)"));
         assert!(json.contains("defaultMode"));
 
-        let deserialized: PermissionSettings = serde_json::from_str(&json).unwrap();
+        let deserialized: PermissionSettings =
+            serde_json::from_str(&json).expect("permission settings should deserialize");
         assert!(deserialized.is_allowed("Bash(*)"));
     }
 }

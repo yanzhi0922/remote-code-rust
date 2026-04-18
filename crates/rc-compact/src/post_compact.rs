@@ -249,6 +249,7 @@ mod tests {
             base: MessageBase::default(),
             text: text.to_string(),
             attachments: Vec::new(),
+            provider_content_blocks: Vec::new(),
         })
     }
 

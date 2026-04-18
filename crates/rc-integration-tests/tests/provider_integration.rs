@@ -31,8 +31,8 @@ fn circuit_breaker_transitions_to_open_after_failures() {
 
     // Should now be open
     let result = cb.allow_request();
-    assert!(result.is_err());
-    assert_eq!(result.unwrap_err(), rc_provider::CircuitState::Open);
+    let error = result.expect_err("circuit breaker should be open");
+    assert_eq!(error, rc_provider::CircuitState::Open);
 }
 
 #[test]
@@ -253,7 +253,7 @@ fn streaming_callbacks_usage_callback() {
 
 #[test]
 fn anthropic_protocol_conversation_format() {
-    let entries = vec![
+    let entries = [
         rc_core::ConversationEntry::system("You are a helpful assistant."),
         rc_core::ConversationEntry::user("What is 2+2?"),
         rc_core::ConversationEntry::assistant("The answer is 4."),
@@ -271,7 +271,7 @@ fn anthropic_protocol_conversation_format() {
 
 #[test]
 fn openai_protocol_conversation_format() {
-    let entries = vec![
+    let entries = [
         rc_core::ConversationEntry::system("You are a coding assistant."),
         rc_core::ConversationEntry::user("Write a hello world in Rust."),
     ];

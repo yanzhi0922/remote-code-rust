@@ -2,8 +2,16 @@
 
 use rc_config::RuntimeConfig;
 use rc_session::SessionStore;
+use uuid::Uuid;
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ResumeCommandOutcome {
+    pub outputs: Vec<String>,
+    pub next_session_id: Option<Uuid>,
+}
 
 /// Dispatch `/resume` — list recent sessions for resumption.
+#[allow(dead_code)]
 pub fn render_resume(config: &RuntimeConfig, store: &SessionStore) {
     println!("Recent sessions:");
     match store.list_sessions() {
@@ -28,6 +36,87 @@ pub fn render_resume(config: &RuntimeConfig, store: &SessionStore) {
         Err(error) => eprintln!("Error listing sessions: {error}"),
     }
     println!("Current session: {}", config.session_id);
+}
+
+pub fn dispatch_resume(
+    input: &str,
+    config: &RuntimeConfig,
+    store: &SessionStore,
+) -> ResumeCommandOutcome {
+    let argument = input
+        .trim()
+        .strip_prefix("/resume")
+        .unwrap_or_default()
+        .trim();
+
+    let sessions = match store.list_sessions() {
+        Ok(sessions) => sessions,
+        Err(error) => {
+            return ResumeCommandOutcome {
+                outputs: vec![format!("Failed to list sessions: {error}")],
+                next_session_id: None,
+            };
+        }
+    };
+
+    if argument.is_empty() {
+        let mut outputs = vec!["Recent sessions:".to_owned()];
+        if sessions.is_empty() {
+            outputs.push("  (no sessions found)".to_owned());
+        } else {
+            for (idx, session) in sessions.iter().take(10).enumerate() {
+                outputs.push(format!(
+                    "  [{}] {}  {}  {}",
+                    idx + 1,
+                    session.session_id,
+                    session.updated_at,
+                    session.title
+                ));
+            }
+            if sessions.len() > 10 {
+                outputs.push(format!("  ... and {} more", sessions.len() - 10));
+            }
+        }
+        outputs.push(format!("Current session: {}", config.session_id));
+        outputs.push("Usage: /resume <session-id|index>".to_owned());
+        return ResumeCommandOutcome {
+            outputs,
+            next_session_id: None,
+        };
+    }
+
+    let target_session_id = if let Ok(index) = argument.parse::<usize>() {
+        sessions
+            .get(index.saturating_sub(1))
+            .map(|summary| summary.session_id)
+    } else {
+        Uuid::parse_str(argument).ok()
+    };
+
+    let Some(target_session_id) = target_session_id else {
+        return ResumeCommandOutcome {
+            outputs: vec![format!(
+                "Unknown session `{argument}`. Use `/resume` to list recent sessions."
+            )],
+            next_session_id: None,
+        };
+    };
+
+    match store.get_session_summary(target_session_id) {
+        Ok(summary) => ResumeCommandOutcome {
+            outputs: vec![format!(
+                "Resumed session {} ({})",
+                summary.session_id, summary.title
+            )],
+            next_session_id: Some(summary.session_id),
+        },
+        Err(error) => ResumeCommandOutcome {
+            outputs: vec![format!(
+                "Unable to resume session {target_session_id}: {error}"
+            )],
+            next_session_id: None,
+        },
+    }
 }
 
 /// Dispatch `/rename` — rename the current session.
@@ -241,6 +330,35 @@ mod tests {
     fn resume_lists_sessions() {
         let (config, store) = build_test_config();
         render_resume(&config, &store);
+    }
+
+    #[test]
+    fn resume_without_args_returns_listing() {
+        let (config, store) = build_test_config();
+        let outcome = dispatch_resume("/resume", &config, &store);
+        assert!(outcome.next_session_id.is_none());
+        assert!(
+            outcome
+                .outputs
+                .iter()
+                .any(|line| line.contains("Recent sessions:"))
+        );
+    }
+
+    #[test]
+    fn resume_by_session_id_returns_next_session() {
+        let (config, store) = build_test_config();
+        store
+            .ensure_session(
+                config.session_id,
+                &config.cwd,
+                &config.provider.name,
+                config.provider.model.as_deref(),
+                config.session_name.as_deref(),
+            )
+            .expect("session should exist");
+        let outcome = dispatch_resume(&format!("/resume {}", config.session_id), &config, &store);
+        assert_eq!(outcome.next_session_id, Some(config.session_id));
     }
 
     #[test]

@@ -265,23 +265,24 @@ mod tests {
     #[test]
     fn review_status_from_str_valid() {
         assert_eq!(
-            ReviewStatus::from_str_lossy("pending").unwrap(),
+            ReviewStatus::from_str_lossy("pending").expect("pending should parse"),
             ReviewStatus::Pending
         );
         assert_eq!(
-            ReviewStatus::from_str_lossy("approved").unwrap(),
+            ReviewStatus::from_str_lossy("approved").expect("approved should parse"),
             ReviewStatus::Approved
         );
         assert_eq!(
-            ReviewStatus::from_str_lossy("rejected").unwrap(),
+            ReviewStatus::from_str_lossy("rejected").expect("rejected should parse"),
             ReviewStatus::Rejected
         );
         assert_eq!(
-            ReviewStatus::from_str_lossy("in_progress").unwrap(),
+            ReviewStatus::from_str_lossy("in_progress").expect("in_progress should parse"),
             ReviewStatus::InProgress
         );
         assert_eq!(
-            ReviewStatus::from_str_lossy("changes_requested").unwrap(),
+            ReviewStatus::from_str_lossy("changes_requested")
+                .expect("changes_requested should parse"),
             ReviewStatus::ChangesRequested
         );
     }
@@ -294,11 +295,12 @@ mod tests {
     #[test]
     fn review_status_from_str_alternate_formats() {
         assert_eq!(
-            ReviewStatus::from_str_lossy("in-progress").unwrap(),
+            ReviewStatus::from_str_lossy("in-progress").expect("in-progress should parse"),
             ReviewStatus::InProgress
         );
         assert_eq!(
-            ReviewStatus::from_str_lossy("changes-requested").unwrap(),
+            ReviewStatus::from_str_lossy("changes-requested")
+                .expect("changes-requested should parse"),
             ReviewStatus::ChangesRequested
         );
     }
@@ -306,7 +308,7 @@ mod tests {
     #[test]
     fn review_status_serializes() {
         assert_eq!(
-            serde_json::to_string(&ReviewStatus::Approved).unwrap(),
+            serde_json::to_string(&ReviewStatus::Approved).expect("review status should serialize"),
             "\"approved\""
         );
     }
@@ -321,8 +323,8 @@ mod tests {
         let input = json!({"artifact_id": "test"});
         let context = test_context();
         let result = review_artifact(&input, &context);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("action"));
+        let error = result.expect_err("missing action should fail");
+        assert!(error.to_string().contains("action"));
     }
 
     #[test]
@@ -330,8 +332,8 @@ mod tests {
         let input = json!({"action": "summary"});
         let context = test_context();
         let result = review_artifact(&input, &context);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("artifact_id"));
+        let error = result.expect_err("missing artifact_id should fail");
+        assert!(error.to_string().contains("artifact_id"));
     }
 
     #[test]
@@ -347,15 +349,15 @@ mod tests {
         let input = json!({"action": "unknown_action", "artifact_id": "test"});
         let context = test_context();
         let result = review_artifact(&input, &context);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("unknown action"));
+        let error = result.expect_err("unknown action should fail");
+        assert!(error.to_string().contains("unknown action"));
     }
 
     #[test]
     fn review_summary_returns_pending() {
         let input = json!({"action": "summary", "artifact_id": "my-artifact"});
         let context = test_context();
-        let result = review_artifact(&input, &context).unwrap();
+        let result = review_artifact(&input, &context).expect("summary should succeed");
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(parsed["type"], "review_summary");
         assert_eq!(parsed["status"], "pending");
@@ -367,8 +369,8 @@ mod tests {
         let input = json!({"action": "add_comment", "artifact_id": "test"});
         let context = test_context();
         let result = review_artifact(&input, &context);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("comment"));
+        let error = result.expect_err("missing comment should fail");
+        assert!(error.to_string().contains("comment"));
     }
 
     #[test]
@@ -391,11 +393,16 @@ mod tests {
             "line": 42
         });
         let context = test_context();
-        let result = review_artifact(&input, &context).unwrap();
+        let result = review_artifact(&input, &context).expect("add_comment should succeed");
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(parsed["type"], "review_comment_added");
         let comment = &parsed["comment"];
-        assert!(comment["id"].as_str().unwrap().starts_with("comment-"));
+        assert!(
+            comment["id"]
+                .as_str()
+                .expect("comment id should be a string")
+                .starts_with("comment-")
+        );
         assert_eq!(comment["author"], "alice");
         assert_eq!(comment["text"], "This needs improvement");
         assert_eq!(comment["severity"], "warning");
@@ -420,7 +427,7 @@ mod tests {
             "reviewer": "bob"
         });
         let context = test_context();
-        let result = review_artifact(&input, &context).unwrap();
+        let result = review_artifact(&input, &context).expect("update_status should succeed");
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(parsed["type"], "review_status_updated");
         assert_eq!(parsed["status"], "approved");
@@ -431,7 +438,7 @@ mod tests {
     fn get_comments_returns_empty() {
         let input = json!({"action": "get_comments", "artifact_id": "test"});
         let context = test_context();
-        let result = review_artifact(&input, &context).unwrap();
+        let result = review_artifact(&input, &context).expect("get_comments should succeed");
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(parsed["type"], "review_comments");
         assert_eq!(parsed["total"], 0);
@@ -446,7 +453,7 @@ mod tests {
             "to_version": "HEAD"
         });
         let context = test_context();
-        let result = review_artifact(&input, &context).unwrap();
+        let result = review_artifact(&input, &context).expect("view_diff should succeed");
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(parsed["type"], "review_diff");
         assert_eq!(parsed["from_version"], "HEAD~3");
@@ -477,7 +484,7 @@ mod tests {
             "comment": "Looks good"
         });
         let context = test_context();
-        let result = review_artifact(&input, &context).unwrap();
+        let result = review_artifact(&input, &context).expect("add_comment should succeed");
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(parsed["comment"]["author"], "reviewer");
     }
@@ -490,7 +497,7 @@ mod tests {
             "comment": "Note"
         });
         let context = test_context();
-        let result = review_artifact(&input, &context).unwrap();
+        let result = review_artifact(&input, &context).expect("add_comment should succeed");
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(parsed["comment"]["severity"], "info");
     }

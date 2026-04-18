@@ -118,7 +118,9 @@ mod tests {
         snap.set_backup("test.txt".to_string(), make_backup(1));
         assert!(snap.has_file("test.txt"));
 
-        let backup = snap.get_backup("test.txt").unwrap();
+        let backup = snap
+            .get_backup("test.txt")
+            .expect("backup should be present");
         assert_eq!(backup.version, 1);
     }
 
@@ -143,11 +145,12 @@ mod tests {
         let mut snap = FileHistorySnapshot::new("msg-1".to_string());
         snap.set_backup("main.rs".to_string(), make_backup(1));
 
-        let json = serde_json::to_string(&snap).unwrap();
+        let json = serde_json::to_string(&snap).expect("snapshot should serialize");
         assert!(json.contains("msg-1"));
         assert!(json.contains("main.rs"));
 
-        let deserialized: FileHistorySnapshot = serde_json::from_str(&json).unwrap();
+        let deserialized: FileHistorySnapshot =
+            serde_json::from_str(&json).expect("snapshot should deserialize");
         assert_eq!(deserialized.message_id, "msg-1");
         assert_eq!(deserialized.file_count(), 1);
     }

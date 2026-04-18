@@ -239,7 +239,9 @@ mod tests {
             (SettingsLayer::Global, global),
             (SettingsLayer::Project, project),
         ]);
-        let perms = result.permissions.unwrap();
+        let perms = result
+            .permissions
+            .expect("merged permissions should be present");
         assert!(perms.is_allowed("Bash(*)"));
         assert!(perms.is_allowed("Edit(*)"));
         assert!(perms.is_denied("Bash(rm -rf /)"));
@@ -270,9 +272,16 @@ mod tests {
             (SettingsLayer::Global, global),
             (SettingsLayer::Project, project),
         ]);
-        let env = result.env.unwrap();
-        assert_eq!(env.get("KEY1").unwrap(), "global1");
-        assert_eq!(env.get("KEY2").unwrap(), "project2");
+        let env = result.env.expect("merged env should be present");
+        assert_eq!(
+            env.get("KEY1").expect("global env key should be preserved"),
+            "global1"
+        );
+        assert_eq!(
+            env.get("KEY2")
+                .expect("project env key should override global value"),
+            "project2"
+        );
     }
 
     #[test]
@@ -289,7 +298,9 @@ mod tests {
             (SettingsLayer::Global, global),
             (SettingsLayer::Project, project),
         ]);
-        let servers = result.enabled_mcpjson_servers.unwrap();
+        let servers = result
+            .enabled_mcpjson_servers
+            .expect("merged MCP server list should be present");
         assert_eq!(servers.len(), 2); // No duplicate "server-a"
     }
 }

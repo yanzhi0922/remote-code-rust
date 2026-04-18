@@ -489,7 +489,15 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "plan": {"type": "string"},
+                    "plan_file_path": {"type": "string"},
+                    "plan_summary": {"type": "string"},
+                    "steps_planned": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    }
+                },
                 "additionalProperties": false,
             }),
         },
@@ -966,35 +974,6 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
-            name: "list_mcp_resources".to_owned(),
-            protocol_name: "ListMcpResources".to_owned(),
-            permission_tool_name: "Read".to_owned(),
-            description: tool_prompts::LIST_MCP_RESOURCES.to_owned(),
-            requires_permission: false,
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "server": {"type": "string"}
-                },
-                "additionalProperties": false,
-            }),
-        },
-        ToolSpec {
-            name: "read_mcp_resource".to_owned(),
-            protocol_name: "ReadMcpResource".to_owned(),
-            permission_tool_name: "Read".to_owned(),
-            description: tool_prompts::READ_MCP_RESOURCE.to_owned(),
-            requires_permission: false,
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "uri": {"type": "string"}
-                },
-                "required": ["uri"],
-                "additionalProperties": false,
-            }),
-        },
-        ToolSpec {
             name: "voice_input".to_owned(),
             protocol_name: "VoiceInput".to_owned(),
             permission_tool_name: "Read".to_owned(),
@@ -1024,6 +1003,47 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                     "lines": {"type": "integer", "description": "Number of log lines to read (for logs, default 50)", "minimum": 1, "maximum": 500}
                 },
                 "required": ["action"],
+                "additionalProperties": false,
+            }),
+        },
+    ]
+}
+
+/// MCP resource tools are injected only when at least one connected MCP server
+/// advertises resources support. Keeping them out of the unconditional built-in
+/// prefix matches Claude Code's MCP resource surface and avoids exposing dead
+/// schemas to the model.
+#[must_use]
+pub fn mcp_resource_tool_specs() -> Vec<ToolSpec> {
+    vec![
+        ToolSpec {
+            name: "list_mcp_resources".to_owned(),
+            protocol_name: "ListMcpResources".to_owned(),
+            permission_tool_name: "Read".to_owned(),
+            description: tool_prompts::LIST_MCP_RESOURCES.to_owned(),
+            requires_permission: false,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "server": {"type": "string"}
+                },
+                "required": ["server"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "read_mcp_resource".to_owned(),
+            protocol_name: "ReadMcpResource".to_owned(),
+            permission_tool_name: "Read".to_owned(),
+            description: tool_prompts::READ_MCP_RESOURCE.to_owned(),
+            requires_permission: false,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "server": {"type": "string"},
+                    "uri": {"type": "string"}
+                },
+                "required": ["server", "uri"],
                 "additionalProperties": false,
             }),
         },
@@ -1155,7 +1175,7 @@ pub fn phase9_tool_specs() -> Vec<ToolSpec> {
 
 #[cfg(test)]
 mod tests {
-    use super::builtin_tool_specs;
+    use super::{builtin_tool_specs, mcp_resource_tool_specs};
 
     #[test]
     fn shell_tool_schemas_expose_cwd_controls() {
@@ -1265,5 +1285,37 @@ mod tests {
                 "broadcast_message should expose {field}"
             );
         }
+    }
+
+    #[test]
+    fn mcp_resource_schemas_match_runtime_contract() {
+        let specs = mcp_resource_tool_specs();
+        let read = specs
+            .iter()
+            .find(|spec| spec.name == "read_mcp_resource")
+            .expect("read_mcp_resource spec");
+        let required = read
+            .input_schema
+            .get("required")
+            .and_then(|value| value.as_array())
+            .expect("required array")
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(required, vec!["server", "uri"]);
+
+        let list = specs
+            .iter()
+            .find(|spec| spec.name == "list_mcp_resources")
+            .expect("list_mcp_resources spec");
+        let required = list
+            .input_schema
+            .get("required")
+            .and_then(|value| value.as_array())
+            .expect("required array")
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(required, vec!["server"]);
     }
 }

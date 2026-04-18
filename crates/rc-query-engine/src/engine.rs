@@ -6,7 +6,7 @@ use rc_core::{
     UsageAccumulator,
 };
 use rc_engine_events::{EngineEvent, Usage};
-use serde_json::Value;
+use serde_json::{Value, json};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -282,11 +282,51 @@ pub(crate) fn assistant_message_from_response(response: &rc_core::ProviderRespon
         });
     }
 
+    let has_non_tool_content_blocks = response.content_blocks.iter().any(|block| {
+        !matches!(
+            block.get("type").and_then(Value::as_str),
+            Some("tool_use" | "server_tool_use")
+        )
+    });
+    let provider_content_blocks = if has_non_tool_content_blocks {
+        response.content_blocks.clone()
+    } else {
+        let mut provider_content_blocks = Vec::new();
+        if let Some(thinking) = response.thinking.clone()
+            && !thinking.trim().is_empty()
+        {
+            provider_content_blocks.push(json!({
+                "type": "thinking",
+                "thinking": thinking,
+            }));
+        }
+        if !response.text.trim().is_empty() {
+            provider_content_blocks.push(json!({
+                "type": "text",
+                "text": response.text,
+            }));
+        }
+        if response.content_blocks.is_empty() {
+            provider_content_blocks.extend(response.tool_calls.iter().map(|tool_call| {
+                json!({
+                    "type": "tool_use",
+                    "id": tool_call.id,
+                    "name": tool_call.name,
+                    "input": tool_call.input,
+                })
+            }));
+        } else {
+            provider_content_blocks.extend(response.content_blocks.clone());
+        }
+        provider_content_blocks
+    };
+
     Message::Assistant(AssistantMessage {
         base: MessageBase::with_origin(MessageOrigin::Provider),
         text: response.text.clone(),
         blocks,
         tool_calls: response.tool_calls.clone(),
+        provider_content_blocks,
     })
 }
 
@@ -297,6 +337,7 @@ pub(crate) fn tool_result_message(tool_call: &ToolCall, result: &rc_core::ToolRe
         tool_name: tool_call.name.clone(),
         summary: result.content.clone(),
         is_error: result.is_error,
+        content_blocks: result.content_blocks.clone(),
     })
 }
 
@@ -324,9 +365,10 @@ mod tests {
     use rc_engine_events::EngineEvent;
     use rc_provider::context::ContextWindowManager;
     use rc_provider::{ConversationBackend, StreamingCallbacks};
+    use serde_json::json;
     use tokio::sync::broadcast::Receiver;
 
-    use super::QueryEngine;
+    use super::{QueryEngine, assistant_message_from_response};
     use crate::config::{
         ProcessUserInputContext, ProviderInvocationMode, QueryEngineConfig, ToolRunResult,
         ToolRunner,
@@ -381,6 +423,40 @@ mod tests {
                 complete_streaming_calls: AtomicUsize::new(0),
             }
         }
+    }
+
+    #[test]
+    fn assistant_message_from_response_preserves_provider_blocks_for_replay() {
+        let response = ProviderResponse {
+            text: String::new(),
+            history_text: None,
+            thinking: Some("reasoning".to_owned()),
+            content_blocks: vec![json!({
+                "type": "tool_use",
+                "id": "call-1",
+                "name": "read_file",
+                "input": {"path": "src/lib.rs"},
+            })],
+            tool_calls: vec![ToolCall {
+                id: "call-1".to_owned(),
+                name: "read_file".to_owned(),
+                input: json!({"path":"src/lib.rs"}),
+            }],
+            request_id: None,
+            usage: UsageSummary::default(),
+            stop_reason: "tool_use".to_owned(),
+        };
+
+        let message = assistant_message_from_response(&response);
+        let entry = message
+            .as_conversation_entry()
+            .expect("assistant should down-convert");
+
+        assert_eq!(entry.content_blocks.len(), 2);
+        assert_eq!(entry.content_blocks[0]["type"], "thinking");
+        assert_eq!(entry.content_blocks[0]["thinking"], "reasoning");
+        assert_eq!(entry.content_blocks[1]["type"], "tool_use");
+        assert_eq!(entry.content_blocks[1]["id"], "call-1");
     }
 
     #[async_trait]
@@ -456,6 +532,7 @@ mod tests {
             Ok(ToolRunResult::from(ToolResult {
                 content: format!("tool:{} ok", tool_call.name),
                 is_error: false,
+                content_blocks: Vec::new(),
             }))
         }
     }
@@ -878,5 +955,72 @@ mod tests {
             event,
             EngineEvent::CompactCompleted { result } if result.before_messages > result.after_messages
         )));
+    }
+
+    #[tokio::test]
+    async fn query_engine_applies_post_compact_transform() {
+        let session_id = SessionId::new();
+        let backend = Arc::new(MockBackend::new(vec![ProviderResponse {
+            text: "done".to_owned(),
+            history_text: None,
+            thinking: None,
+            content_blocks: Vec::new(),
+            tool_calls: Vec::new(),
+            request_id: None,
+            usage: UsageSummary {
+                input_tokens: 1,
+                output_tokens: 1,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 0,
+            },
+            stop_reason: "end_turn".to_owned(),
+        }]));
+        let mut config = QueryEngineConfig::new(
+            session_id.clone(),
+            "mock-model",
+            backend,
+            Arc::new(MockToolRunner),
+            rc_engine_events::EventStream::new(8),
+        );
+        config.context_manager = ContextWindowManager::new(100, 20);
+        config = config.with_post_compact_transform(Arc::new(|mut conversation| {
+            conversation.push(ConversationEntry::user("post-compact marker"));
+            conversation
+        }));
+
+        let mut existing_messages = vec![rc_core::Message::from(ConversationEntry::system("sys"))];
+        for index in 0..5 {
+            existing_messages.push(rc_core::Message::from(ConversationEntry::user(format!(
+                "user-{index}-{}",
+                "a".repeat(200)
+            ))));
+            existing_messages.push(rc_core::Message::from(ConversationEntry::assistant(
+                format!("assistant-{index}-{}", "b".repeat(200)),
+            )));
+        }
+
+        let mut engine = QueryEngine::new(config, existing_messages);
+        let context =
+            ProcessUserInputContext::new(session_id, PermissionMode::Default, "mock-model");
+        let result = engine
+            .submit_message(
+                vec![rc_core::Message::from(ConversationEntry::user(format!(
+                    "latest-{}",
+                    "c".repeat(200)
+                )))],
+                context,
+            )
+            .await
+            .expect("query engine should succeed after transformed compaction");
+
+        assert_eq!(result.final_text.as_deref(), Some("done"));
+        assert!(
+            result
+                .state
+                .legacy_conversation()
+                .iter()
+                .any(|entry| entry.role == rc_core::ConversationRole::User
+                    && entry.text == "post-compact marker")
+        );
     }
 }

@@ -387,7 +387,7 @@ base_url = "https://example.com/v1"
             &cwd,
             &profile,
             &profiles,
-            &[explicit.clone()],
+            std::slice::from_ref(&explicit),
             &SettingSource::all(),
         );
         assert_eq!(resolved, vec![explicit]);

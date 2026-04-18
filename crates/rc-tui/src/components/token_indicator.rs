@@ -193,14 +193,14 @@ mod tests {
         let data = TokenUsageData::new(90, 100);
         let result = TokenWarning::render(&data);
         assert!(result.is_some());
-        let lines = result.unwrap();
+        let lines = result.expect("warning should render above threshold");
         assert_eq!(lines.len(), 1);
     }
 
     #[test]
     fn test_warning_message_contains_percentage() {
         let data = TokenUsageData::new(85, 100);
-        let lines = TokenWarning::render(&data).unwrap();
+        let lines = TokenWarning::render(&data).expect("warning should render above threshold");
         let content: String = lines[0].spans.iter().map(|s| s.content.clone()).collect();
         assert!(content.contains("85.0%"));
     }

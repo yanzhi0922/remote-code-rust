@@ -532,8 +532,8 @@ mod tests {
         reset_state();
         let result = match_session_mode(Some(CoordinatorMode::Coordinator));
         // Will switch if not already in coordinator mode
-        if result.is_some() {
-            assert!(result.expect("some").contains("Entered coordinator mode"));
+        if let Some(message) = result {
+            assert!(message.contains("Entered coordinator mode"));
             assert!(is_coordinator_mode());
         }
         reset_state();

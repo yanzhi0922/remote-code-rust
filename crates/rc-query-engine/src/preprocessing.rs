@@ -15,6 +15,20 @@ use rc_core::{
     Message, MessageBase, MessageOrigin, SystemMessage, SystemMessageSubtype, UserMessage,
 };
 
+fn live_tail_tool_summary_range(messages: &[Message]) -> Option<(usize, usize)> {
+    let mut start = messages.len();
+    while start > 0 && matches!(messages[start - 1], Message::ToolUseSummary(_)) {
+        start -= 1;
+    }
+    if start == messages.len()
+        || start == 0
+        || !matches!(messages[start - 1], Message::Assistant(_))
+    {
+        return None;
+    }
+    Some((start, messages.len()))
+}
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -111,7 +125,12 @@ impl PreprocessingPipeline {
         let messages_micro_compacted = Self::micro_compact(messages, self.micro_keep_recent);
 
         // Stage 4: context collapse
-        let messages_collapsed = Self::context_collapse(messages);
+        //
+        // Disabled on the live query path for now. Collapsing tool-result
+        // messages without simultaneously rewriting the paired assistant
+        // tool_use blocks breaks Anthropic-compatible transcript continuity
+        // and causes provider-side `tool_use`/`tool_result` validation errors.
+        let messages_collapsed = 0;
 
         // Stage 5: autocompact check
         let estimated_tokens = estimate_tokens(messages);
@@ -193,8 +212,13 @@ impl PreprocessingPipeline {
             }
         }
 
-        // Always keep the last 2 messages (latest exchange)
-        let tail_start = messages.len().saturating_sub(2);
+        // Always keep the live tail tool-result batch plus its triggering
+        // assistant message. Collapsing or snipping this batch breaks the
+        // immediate Anthropic tool_use -> tool_result continuity needed for the
+        // next request.
+        let tail_start = live_tail_tool_summary_range(messages)
+            .map(|(start, _)| start.saturating_sub(1))
+            .unwrap_or_else(|| messages.len().saturating_sub(2));
         for i in tail_start..messages.len() {
             if !keep_indices.contains(&i) {
                 keep_indices.push(i);
@@ -251,12 +275,16 @@ impl PreprocessingPipeline {
     ///
     /// Returns the number of messages micro-compacted.
     pub fn micro_compact(messages: &mut [Message], keep_recent: usize) -> usize {
+        let live_tail_start = live_tail_tool_summary_range(messages).map(|(start, _)| start);
         // Collect indices of tool-result messages in reverse order
         let tool_indices: Vec<usize> = messages
             .iter()
             .enumerate()
             .rev()
-            .filter(|(_, m)| matches!(m, Message::ToolUseSummary(_)))
+            .filter(|(idx, m)| {
+                matches!(m, Message::ToolUseSummary(_))
+                    && live_tail_start.is_none_or(|tail_start| *idx < tail_start)
+            })
             .map(|(i, _)| i)
             .collect();
 
@@ -295,6 +323,7 @@ impl PreprocessingPipeline {
             return 0;
         }
 
+        let live_tail_start = live_tail_tool_summary_range(messages).map(|(start, _)| start);
         let mut collapsed = 0;
         let mut i = 0;
         while i < messages.len() {
@@ -307,6 +336,10 @@ impl PreprocessingPipeline {
                 run_end += 1;
             }
             let run_len = run_end - run_start;
+            if live_tail_start == Some(run_start) && run_end == messages.len() {
+                i = run_end;
+                continue;
+            }
             if run_len >= 3 {
                 // Collect tool names and summaries
                 let mut tool_names = Vec::new();
@@ -395,6 +428,7 @@ pub fn create_continuation_message() -> Message {
         },
         text: "Please continue from where you left off.".to_owned(),
         attachments: Vec::new(),
+        provider_content_blocks: Vec::new(),
     })
 }
 
@@ -405,7 +439,9 @@ pub fn create_continuation_message() -> Message {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rc_core::{MessageBase, MessageOrigin, ToolUseSummaryMessage, UserMessage};
+    use rc_core::{
+        AssistantMessage, MessageBase, MessageOrigin, ToolUseSummaryMessage, UserMessage,
+    };
 
     fn make_tool_summary(id: &str, content: &str, is_error: bool) -> Message {
         Message::ToolUseSummary(ToolUseSummaryMessage {
@@ -414,6 +450,7 @@ mod tests {
             tool_name: "test_tool".to_owned(),
             summary: content.to_owned(),
             is_error,
+            content_blocks: Vec::new(),
         })
     }
 
@@ -422,6 +459,17 @@ mod tests {
             base: MessageBase::with_origin(MessageOrigin::UserInput),
             text: text.to_owned(),
             attachments: Vec::new(),
+            provider_content_blocks: Vec::new(),
+        })
+    }
+
+    fn make_assistant_message(text: &str) -> Message {
+        Message::Assistant(AssistantMessage {
+            base: MessageBase::with_origin(MessageOrigin::Provider),
+            text: text.to_owned(),
+            blocks: Vec::new(),
+            tool_calls: Vec::new(),
+            provider_content_blocks: Vec::new(),
         })
     }
 
@@ -565,6 +613,49 @@ mod tests {
         let collapsed = PreprocessingPipeline::context_collapse(&mut messages);
         assert_eq!(collapsed, 0);
         assert_eq!(messages.len(), 3);
+    }
+
+    #[test]
+    fn micro_compact_preserves_live_tail_tool_batch() {
+        let long_summary = "a".repeat(500);
+        let mut messages = vec![
+            make_user_message("earlier"),
+            make_tool_summary("old0", &long_summary, false),
+            make_tool_summary("old1", &long_summary, false),
+            make_assistant_message("tool batch"),
+            make_tool_summary("tail1", &long_summary, false),
+            make_tool_summary("tail2", &long_summary, false),
+            make_tool_summary("tail3", &long_summary, false),
+        ];
+
+        let compacted = PreprocessingPipeline::micro_compact(&mut messages, 1);
+
+        assert_eq!(compacted, 1);
+        for message in messages.iter().take(7).skip(4) {
+            match message {
+                Message::ToolUseSummary(summary) => {
+                    assert_eq!(summary.summary.len(), long_summary.len());
+                }
+                other => panic!("expected tool summary, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn context_collapse_preserves_live_tail_tool_batch() {
+        let mut messages = vec![
+            make_user_message("earlier"),
+            make_assistant_message("tool batch"),
+            make_tool_summary("tail1", "result 1", false),
+            make_tool_summary("tail2", "result 2", false),
+            make_tool_summary("tail3", "result 3", false),
+        ];
+
+        let collapsed = PreprocessingPipeline::context_collapse(&mut messages);
+
+        assert_eq!(collapsed, 0);
+        assert_eq!(messages.len(), 5);
+        assert!(matches!(messages[2], Message::ToolUseSummary(_)));
     }
 
     // ---- Test 9: Full pipeline run ----

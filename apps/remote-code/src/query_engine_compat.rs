@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
@@ -7,7 +8,11 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use chrono::Local;
 use rc_config::{RuntimeConfig, validate_provider_config};
-use rc_core::{ConversationEntry, ConversationRole, Message, ToolCall, ToolResult};
+use rc_core::{
+    Attachment, AttachmentMediaType, ConversationEntry, ConversationRole, Message, PermissionMode,
+    ToolCall, ToolResult,
+};
+use rc_model::is_first_party_base_url;
 use rc_permissions::PermissionBroker;
 use rc_protocol::UsagePayload;
 use rc_provider::ConversationBackend;
@@ -18,13 +23,18 @@ use rc_query_engine::{
 use rc_session::SessionStore;
 use rc_session::resume_state::{PendingToolCall, ResumeState};
 use rc_system_prompt::{
+    CacheScope as PromptCacheScope, EffectiveSystemPromptOptions,
     McpClientInfo as PromptMcpClientInfo, PromptContext, SystemPromptBuilder,
-    cache::SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+    SystemPromptSplitOptions, build_effective_system_prompt, cache::SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+    split_system_prompt_for_api,
 };
 use rc_tools::{
-    ToolExecutionContext, ToolSpec, execute_tool_call, runtime_provider_tool_spec,
-    runtime_provider_tool_specs,
+    ToolExecutionContext, ToolSpec, execute_tool_call, is_runtime_dynamic_mcp_tool_name,
+    plan_mode::normalize_exit_plan_mode_tool_calls,
+    runtime_plan_mode::inject_plan_mode_runtime_messages, runtime_provider_tool_spec,
+    runtime_provider_tool_specs, runtime_visible_provider_tool_specs,
 };
+use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::agents::build_remote_code_sub_agent_runtime;
@@ -56,6 +66,407 @@ struct CompatObserver {
     shared: Arc<CompatSharedState>,
     event_sink: Option<PromptEventSink>,
     include_partial_messages: bool,
+}
+
+struct RuntimeSystemPrompt {
+    text: String,
+    content_blocks: Vec<serde_json::Value>,
+}
+
+const PLAN_MODE_MARKER: &str = "## Plan Mode Active";
+const PLAN_MODE_REENTRY_MARKER: &str = "## Re-entering Plan Mode";
+const PLAN_MODE_EXIT_MARKER: &str = "## Exited Plan Mode";
+const MEMORY_INSTRUCTION_PROMPT: &str = "Codebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.";
+const MAX_GIT_STATUS_CHARS: usize = 2000;
+const DEFERRED_TOOLS_DELTA_MARKER: &str = "__remote_code_meta__:deferred_tools_delta:";
+const MCP_INSTRUCTIONS_DELTA_MARKER: &str = "__remote_code_meta__:mcp_instructions_delta:";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RuntimeDeferredToolsDeltaMarker {
+    added_names: Vec<String>,
+    removed_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RuntimeMcpInstructionsDeltaMarker {
+    added_names: Vec<String>,
+    removed_names: Vec<String>,
+}
+
+fn runtime_env_truthy(name: &str) -> bool {
+    std::env::var(name).is_ok_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
+fn runtime_env_defined_falsy(name: &str) -> bool {
+    std::env::var(name).is_ok_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "" | "0" | "false" | "no" | "off"
+        )
+    })
+}
+
+fn runtime_deferred_tools_delta_enabled() -> bool {
+    if runtime_env_truthy("CLAUDE_CODE_DEFERRED_TOOLS_DELTA") {
+        return true;
+    }
+    if runtime_env_defined_falsy("CLAUDE_CODE_DEFERRED_TOOLS_DELTA") {
+        return false;
+    }
+    true
+}
+
+fn runtime_mcp_instructions_delta_enabled() -> bool {
+    if runtime_env_truthy("CLAUDE_CODE_MCP_INSTR_DELTA") {
+        return true;
+    }
+    if runtime_env_defined_falsy("CLAUDE_CODE_MCP_INSTR_DELTA") {
+        return false;
+    }
+    true
+}
+
+fn wrap_in_system_reminder(content: &str) -> String {
+    format!("<system-reminder>\n{content}\n</system-reminder>")
+}
+
+fn runtime_delta_entry<T>(marker_prefix: &str, payload: &T, text: String) -> Result<ConversationEntry>
+where
+    T: Serialize,
+{
+    let mut entry = ConversationEntry::user(String::new());
+    entry.history_text = Some(format!(
+        "{marker_prefix}{}",
+        serde_json::to_string(payload)?
+    ));
+    entry.content_blocks = vec![serde_json::json!({
+        "type": "text",
+        "text": wrap_in_system_reminder(&text),
+    })];
+    Ok(entry)
+}
+
+fn parse_runtime_marker<T>(entry: &ConversationEntry, marker_prefix: &str) -> Option<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let marker = entry
+        .history_text
+        .as_deref()
+        .or_else(|| (!entry.text.is_empty()).then_some(entry.text.as_str()))?;
+    let payload = marker.strip_prefix(marker_prefix)?;
+    serde_json::from_str(payload).ok()
+}
+
+fn announced_deferred_tool_names(
+    conversation: &[ConversationEntry],
+) -> std::collections::BTreeSet<String> {
+    let mut announced = std::collections::BTreeSet::new();
+    for entry in conversation {
+        let Some(delta) = parse_runtime_marker::<RuntimeDeferredToolsDeltaMarker>(
+            entry,
+            DEFERRED_TOOLS_DELTA_MARKER,
+        ) else {
+            continue;
+        };
+        for name in delta.added_names {
+            announced.insert(name);
+        }
+        for name in delta.removed_names {
+            announced.remove(name.as_str());
+        }
+    }
+    announced
+}
+
+fn announced_mcp_instruction_names(
+    conversation: &[ConversationEntry],
+) -> std::collections::BTreeSet<String> {
+    let mut announced = std::collections::BTreeSet::new();
+    for entry in conversation {
+        let Some(delta) = parse_runtime_marker::<RuntimeMcpInstructionsDeltaMarker>(
+            entry,
+            MCP_INSTRUCTIONS_DELTA_MARKER,
+        ) else {
+            continue;
+        };
+        for name in delta.added_names {
+            announced.insert(name);
+        }
+        for name in delta.removed_names {
+            announced.remove(name.as_str());
+        }
+    }
+    announced
+}
+
+async fn inject_runtime_delta_messages(
+    config: &RuntimeConfig,
+    store: &SessionStore,
+    conversation: &mut Vec<ConversationEntry>,
+) -> Result<()> {
+    inject_deferred_tools_delta_message(config.session_id, store, conversation).await?;
+    inject_mcp_instructions_delta_message(config.session_id, store, conversation).await?;
+    Ok(())
+}
+
+async fn inject_deferred_tools_delta_message(
+    session_id: uuid::Uuid,
+    store: &SessionStore,
+    conversation: &mut Vec<ConversationEntry>,
+) -> Result<()> {
+    if !runtime_deferred_tools_delta_enabled() {
+        return Ok(());
+    }
+
+    let specs = runtime_provider_tool_specs().await;
+    let has_tool_search = specs.iter().any(ToolSpec::is_tool_search);
+    if !has_tool_search {
+        return Ok(());
+    }
+
+    let mut deferred_specs = specs
+        .iter()
+        .filter(|spec| spec.is_deferred())
+        .cloned()
+        .collect::<Vec<_>>();
+    if deferred_specs.is_empty() {
+        return Ok(());
+    }
+
+    deferred_specs.sort_by(|left, right| left.name.cmp(&right.name));
+
+    let announced = announced_deferred_tool_names(conversation);
+    let deferred_names = deferred_specs
+        .iter()
+        .map(|spec| spec.name.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    let pool_names = specs
+        .iter()
+        .map(|spec| spec.name.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+
+    let added_names = deferred_specs
+        .iter()
+        .filter(|spec| !announced.contains(spec.name.as_str()))
+        .map(|spec| spec.name.clone())
+        .collect::<Vec<_>>();
+    let removed_names = announced
+        .into_iter()
+        .filter(|name| !deferred_names.contains(name) && !pool_names.contains(name))
+        .collect::<Vec<_>>();
+
+    if added_names.is_empty() && removed_names.is_empty() {
+        return Ok(());
+    }
+
+    let mut parts = Vec::new();
+    if !added_names.is_empty() {
+        parts.push(format!(
+            "The following deferred tools are now available via ToolSearch:\n{}",
+            added_names.join("\n")
+        ));
+    }
+    if !removed_names.is_empty() {
+        parts.push(format!(
+            "The following deferred tools are no longer available (their MCP server disconnected). Do not search for them — ToolSearch will return no match:\n{}",
+            removed_names.join("\n")
+        ));
+    }
+
+    let delta = RuntimeDeferredToolsDeltaMarker {
+        added_names,
+        removed_names,
+    };
+    let entry = runtime_delta_entry(DEFERRED_TOOLS_DELTA_MARKER, &delta, parts.join("\n\n"))?;
+    store.append_conversation_entry(session_id, &entry)?;
+    conversation.push(entry);
+    Ok(())
+}
+
+async fn inject_mcp_instructions_delta_message(
+    session_id: uuid::Uuid,
+    store: &SessionStore,
+    conversation: &mut Vec<ConversationEntry>,
+) -> Result<()> {
+    if !runtime_mcp_instructions_delta_enabled() {
+        return Ok(());
+    }
+
+    let catalog = rc_tools::mcp_catalog::runtime_mcp_catalog().await;
+    let mut blocks = catalog
+        .clients
+        .into_iter()
+        .filter_map(|client| {
+            let instructions = client.instructions?;
+            let trimmed = instructions.trim();
+            (!trimmed.is_empty()).then(|| {
+                let server_name = client.server_name;
+                let block = format!("## {}\n{}", server_name, trimmed);
+                (server_name, block)
+            })
+        })
+        .collect::<Vec<_>>();
+    if blocks.is_empty() {
+        return Ok(());
+    }
+
+    blocks.sort_by(|left, right| left.0.cmp(&right.0));
+    let announced = announced_mcp_instruction_names(conversation);
+    let current_names = blocks
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    let added = blocks
+        .iter()
+        .filter(|(name, _)| !announced.contains(name.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let removed_names = announced
+        .into_iter()
+        .filter(|name| !current_names.contains(name))
+        .collect::<Vec<_>>();
+
+    if added.is_empty() && removed_names.is_empty() {
+        return Ok(());
+    }
+
+    let mut parts = Vec::new();
+    if !added.is_empty() {
+        parts.push(format!(
+            "# MCP Server Instructions\n\nThe following MCP servers have provided instructions for how to use their tools and resources:\n\n{}",
+            added
+                .iter()
+                .map(|(_, block)| block.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        ));
+    }
+    if !removed_names.is_empty() {
+        parts.push(format!(
+            "The following MCP servers have disconnected. Their instructions above no longer apply:\n{}",
+            removed_names.join("\n")
+        ));
+    }
+
+    let delta = RuntimeMcpInstructionsDeltaMarker {
+        added_names: added.iter().map(|(name, _)| name.clone()).collect(),
+        removed_names,
+    };
+    let entry = runtime_delta_entry(MCP_INSTRUCTIONS_DELTA_MARKER, &delta, parts.join("\n\n"))?;
+    store.append_conversation_entry(session_id, &entry)?;
+    conversation.push(entry);
+    Ok(())
+}
+
+fn augment_post_compact_conversation_for_runtime(
+    store: &SessionStore,
+    session_id: uuid::Uuid,
+    mut conversation: Vec<ConversationEntry>,
+) -> Vec<ConversationEntry> {
+    append_post_compact_plan_attachment(store, session_id, &mut conversation);
+    append_post_compact_plan_mode_reminder(store, session_id, &mut conversation);
+    conversation
+}
+
+fn append_post_compact_plan_attachment(
+    store: &SessionStore,
+    session_id: uuid::Uuid,
+    conversation: &mut Vec<ConversationEntry>,
+) {
+    let Some(state) = store.load_plan_mode_state(session_id).ok().flatten() else {
+        return;
+    };
+    let Some(plan_file_path) = state.plan_file_path else {
+        return;
+    };
+    let plan_file_name = plan_file_path.display().to_string();
+    let already_attached = conversation.iter().any(|entry| {
+        entry.role == ConversationRole::User
+            && entry
+                .attachments
+                .iter()
+                .any(|attachment| attachment.filename.as_deref() == Some(plan_file_name.as_str()))
+    });
+    if already_attached {
+        return;
+    }
+
+    let Ok(plan_content) = fs::read_to_string(&plan_file_path) else {
+        return;
+    };
+    if plan_content.trim().is_empty() {
+        return;
+    }
+
+    conversation.push(ConversationEntry::user_with_attachments(
+        format!("Plan file reference: {plan_file_name}"),
+        vec![Attachment::from_bytes(
+            AttachmentMediaType::ApplicationPdf,
+            plan_content.as_bytes(),
+            Some(plan_file_name),
+        )],
+    ));
+}
+
+fn append_post_compact_plan_mode_reminder(
+    store: &SessionStore,
+    session_id: uuid::Uuid,
+    conversation: &mut Vec<ConversationEntry>,
+) {
+    let Some(state) = store.load_plan_mode_state(session_id).ok().flatten() else {
+        return;
+    };
+
+    let plan_file_path = state
+        .plan_file_path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "(missing)".to_owned());
+
+    let existing_plan_mode_marker = conversation.iter().any(|entry| {
+        entry.role == ConversationRole::User
+            && (entry.text.contains(PLAN_MODE_MARKER)
+                || entry.text.contains(PLAN_MODE_REENTRY_MARKER))
+    });
+    let existing_exit_marker = conversation.iter().any(|entry| {
+        entry.role == ConversationRole::User && entry.text.contains(PLAN_MODE_EXIT_MARKER)
+    });
+
+    if state.current_permission_mode == PermissionMode::Plan {
+        if existing_plan_mode_marker {
+            return;
+        }
+
+        let plan_file_exists = state
+            .plan_file_path
+            .as_ref()
+            .is_some_and(|path| path.exists());
+        let reminder = if state.has_exited_plan_mode && plan_file_exists {
+            format!(
+                "{PLAN_MODE_REENTRY_MARKER}\n\nYou are returning to plan mode after having previously exited it. A plan file exists at {plan_file_path}.\n\nRead the existing plan, decide whether this is the same task or a fresh plan, update the plan file accordingly, and only then continue planning."
+            )
+        } else {
+            format!(
+                "{PLAN_MODE_MARKER}\n\nPlan mode is active. You must remain read-only except for the current plan file: {plan_file_path}.\n\nUse read-only tools to inspect the project, update the plan file as you learn, ask clarifying questions when needed, and use `exit_plan_mode` when the plan is ready."
+            )
+        };
+        conversation.push(ConversationEntry::user(reminder));
+    } else if state.needs_plan_mode_exit_attachment && !existing_exit_marker {
+        let plan_reference = state
+            .plan_file_path
+            .as_ref()
+            .map(|path| format!("\n\nPlan file: {}", path.display()))
+            .unwrap_or_default();
+        conversation.push(ConversationEntry::user(format!(
+            "{PLAN_MODE_EXIT_MARKER}\n\nYou have exited plan mode. You can now make edits, run tools, and continue implementation.{plan_reference}"
+        )));
+    }
 }
 
 fn insert_prompt_tool_aliases(spec: &ToolSpec, enabled_tools: &mut HashSet<String>) {
@@ -129,8 +540,183 @@ fn detect_git_repository(cwd: &Path) -> bool {
         .is_some_and(|output| output.status.success())
 }
 
+fn git_output(cwd: &Path, args: &[&str]) -> Option<String> {
+    std::process::Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .filter(|output| !output.is_empty())
+}
+
+fn initial_git_status_context(cwd: &Path) -> Option<String> {
+    if !detect_git_repository(cwd) {
+        return None;
+    }
+
+    let branch = git_output(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .unwrap_or_else(|| "HEAD".to_owned());
+    let main_branch = git_output(
+        cwd,
+        &["symbolic-ref", "refs/remotes/origin/HEAD", "--short"],
+    )
+    .map(|value| {
+        value
+            .strip_prefix("origin/")
+            .map(str::to_owned)
+            .unwrap_or(value)
+    })
+    .unwrap_or_else(|| "main".to_owned());
+    let status = git_output(cwd, &["--no-optional-locks", "status", "--short"]).unwrap_or_default();
+    let log = git_output(cwd, &["--no-optional-locks", "log", "--oneline", "-n", "5"])
+        .unwrap_or_default();
+    let user_name = git_output(cwd, &["config", "user.name"]);
+    let truncated_status = if status.chars().count() > MAX_GIT_STATUS_CHARS {
+        let prefix = status
+            .chars()
+            .take(MAX_GIT_STATUS_CHARS)
+            .collect::<String>();
+        format!(
+            "{prefix}\n... (truncated because it exceeds 2k characters. If you need more information, run \"git status\" using BashTool)"
+        )
+    } else {
+        status
+    };
+
+    let mut parts = vec![
+        "This is the git status at the start of the conversation. Note that this status is a snapshot in time, and will not update during the conversation.".to_owned(),
+        format!("Current branch: {branch}"),
+        format!("Main branch (you will usually use this for PRs): {main_branch}"),
+    ];
+    if let Some(user_name) = user_name {
+        parts.push(format!("Git user: {user_name}"));
+    }
+    parts.push(format!(
+        "Status:\n{}",
+        if truncated_status.is_empty() {
+            "(clean)"
+        } else {
+            truncated_status.as_str()
+        }
+    ));
+    parts.push(format!("Recent commits:\n{log}"));
+
+    Some(parts.join("\n\n"))
+}
+
+fn runtime_system_context_block(config: &RuntimeConfig) -> Option<String> {
+    let mut entries = Vec::new();
+    if let Some(git_status) = initial_git_status_context(&config.cwd) {
+        entries.push(("gitStatus", git_status));
+    }
+    if entries.is_empty() {
+        return None;
+    }
+    Some(
+        entries
+            .into_iter()
+            .map(|(key, value)| format!("{key}: {value}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
+fn collect_claude_md_context(cwd: &Path) -> Option<String> {
+    let mut dirs = cwd.ancestors().collect::<Vec<_>>();
+    dirs.reverse();
+    let mut memories = Vec::new();
+
+    for dir in dirs {
+        for path in [dir.join("CLAUDE.md"), dir.join(".claude").join("CLAUDE.md")] {
+            let Ok(content) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let content = content.trim();
+            if content.is_empty() {
+                continue;
+            }
+            memories.push(format!(
+                "Contents of {} (project instructions, checked into the codebase):\n\n{}",
+                path.display(),
+                content
+            ));
+        }
+    }
+
+    if memories.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "{MEMORY_INSTRUCTION_PROMPT}\n\n{}",
+            memories.join("\n\n")
+        ))
+    }
+}
+
+fn runtime_user_context_entries(config: &RuntimeConfig) -> Vec<(&'static str, String)> {
+    let mut entries = Vec::new();
+    if let Some(claude_md) = collect_claude_md_context(&config.cwd) {
+        entries.push(("claudeMd", claude_md));
+    }
+    entries.push((
+        "currentDate",
+        format!("Today's date is {}.", Local::now().format("%Y-%m-%d")),
+    ));
+    entries
+}
+
+fn conversation_with_runtime_user_context(
+    config: &RuntimeConfig,
+    conversation: &[ConversationEntry],
+) -> Vec<ConversationEntry> {
+    let context_entries = runtime_user_context_entries(config);
+    if context_entries.is_empty()
+        || conversation.iter().any(|entry| {
+            entry.role == ConversationRole::User
+                && entry.text.contains(
+                    "As you answer the user's questions, you can use the following context:",
+                )
+        })
+    {
+        return conversation.to_vec();
+    }
+
+    let body = context_entries
+        .into_iter()
+        .map(|(key, value)| format!("# {key}\n{value}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let reminder = ConversationEntry::user(format!(
+        "<system-reminder>\nAs you answer the user's questions, you can use the following context:\n{body}\n\n      IMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</system-reminder>\n"
+    ));
+
+    let mut augmented = Vec::with_capacity(conversation.len() + 1);
+    if let Some((first, rest)) = conversation.split_first()
+        && first.role == ConversationRole::System
+    {
+        augmented.push(first.clone());
+        augmented.push(reminder);
+        augmented.extend(rest.iter().cloned());
+        return augmented;
+    }
+    augmented.push(reminder);
+    augmented.extend(conversation.iter().cloned());
+    augmented
+}
+
 fn detect_git_worktree(cwd: &Path) -> bool {
     cwd.join(".git").is_file()
+}
+
+fn env_truthy(name: &str) -> bool {
+    std::env::var(name).ok().is_some_and(|value| {
+        matches!(
+            value.as_str(),
+            "1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON"
+        )
+    })
 }
 
 fn expand_requested_tool_names(
@@ -165,12 +751,62 @@ fn expand_requested_tool_names(
 
 async fn build_runtime_system_prompt(
     config: &RuntimeConfig,
+    conversation: &[ConversationEntry],
     overrides: &CompatRunOverrides,
-) -> Result<String> {
+) -> Result<RuntimeSystemPrompt> {
+    let has_custom_system_prompt = overrides
+        .system_prompt
+        .as_deref()
+        .is_some_and(|prompt| !prompt.trim().is_empty());
+    if env_truthy("CLAUDE_CODE_SIMPLE") {
+        let mut prompt_blocks = if has_custom_system_prompt {
+            vec![
+                overrides
+                    .system_prompt
+                    .clone()
+                    .expect("non-empty custom system prompt"),
+            ]
+        } else {
+            vec![format!(
+                "You are Claude Code, Anthropic's official CLI for Claude.\n\nCWD: {}\nDate: {}",
+                config.cwd.display(),
+                Local::now().format("%Y-%m-%d")
+            )]
+        };
+        if !has_custom_system_prompt
+            && let Some(system_context) = runtime_system_context_block(config)
+        {
+            prompt_blocks.push(system_context);
+        }
+        let content_blocks = split_system_prompt_for_api(
+            &prompt_blocks,
+            &SystemPromptSplitOptions {
+                skip_global_cache_for_system_prompt: true,
+            },
+        )
+        .into_iter()
+        .map(|block| {
+            let mut content_block = serde_json::json!({
+                "type": "text",
+                "text": block.text,
+            });
+            if block.cache_scope.is_some() {
+                content_block["cache_control"] = serde_json::json!({"type": "ephemeral"});
+            }
+            content_block
+        })
+        .collect::<Vec<_>>();
+        return Ok(RuntimeSystemPrompt {
+            text: prompt_blocks.join("\n\n"),
+            content_blocks,
+        });
+    }
+
     let tool_specs = runtime_provider_tool_specs().await;
+    let visible_tool_specs = runtime_visible_provider_tool_specs(conversation).await;
     let mcp_catalog = rc_tools::mcp_catalog::runtime_mcp_catalog().await;
     let mut enabled_tools = HashSet::new();
-    for spec in &tool_specs {
+    for spec in &visible_tool_specs {
         insert_prompt_tool_aliases(spec, &mut enabled_tools);
     }
     if let Some(requested_tools) = overrides.allowed_tools.as_ref() {
@@ -179,6 +815,8 @@ async fn build_runtime_system_prompt(
             enabled_tools.retain(|tool| allowed.contains(tool.as_str()));
         }
     }
+    let enabled_tool_names = enabled_tools.clone();
+    let use_global_prompt_cache = should_use_global_prompt_cache_scope(config);
 
     let prompt_ctx = PromptContext {
         model: config
@@ -202,6 +840,7 @@ async fn build_runtime_system_prompt(
                 instructions: client.instructions,
             })
             .collect(),
+        mcp_instructions_delta_enabled: runtime_mcp_instructions_delta_enabled(),
         is_worktree: detect_git_worktree(&config.cwd),
         additional_dirs: Vec::new(),
         is_non_interactive: config.print_mode
@@ -211,21 +850,60 @@ async fn build_runtime_system_prompt(
     };
 
     let mut builder = SystemPromptBuilder::with_default_sections();
-    let prompt = builder
-        .build(&prompt_ctx)?
-        .into_iter()
-        .filter(|block| {
-            let trimmed = block.trim();
-            !trimmed.is_empty() && trimmed != SYSTEM_PROMPT_DYNAMIC_BOUNDARY
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n");
+    builder.set_global_cache_scope(use_global_prompt_cache);
+    let mut prompt_blocks = build_effective_system_prompt(
+        builder.build(&prompt_ctx)?,
+        &EffectiveSystemPromptOptions {
+            custom_system_prompt: overrides.system_prompt.clone(),
+            ..Default::default()
+        },
+    );
+    if !has_custom_system_prompt && let Some(system_context) = runtime_system_context_block(config)
+    {
+        prompt_blocks.push(system_context);
+    }
 
-    Ok(match overrides.system_prompt.as_deref() {
-        Some(agent_prompt) if !agent_prompt.trim().is_empty() => {
-            format!("{prompt}\n\n## Agent Instructions\n{agent_prompt}")
+    let skip_global_cache_for_system_prompt = use_global_prompt_cache
+        && visible_tool_specs
+            .iter()
+            .filter(|spec| enabled_tool_names.contains(spec.name.as_str()))
+            .any(|spec| is_runtime_dynamic_mcp_tool_name(&spec.name));
+    let content_blocks = split_system_prompt_for_api(
+        &prompt_blocks,
+        &SystemPromptSplitOptions {
+            skip_global_cache_for_system_prompt,
+        },
+    )
+    .into_iter()
+    .map(|block| {
+        let mut content_block = serde_json::json!({
+            "type": "text",
+            "text": block.text,
+        });
+        match block.cache_scope {
+            Some(PromptCacheScope::Global) => {
+                content_block["cache_control"] =
+                    serde_json::json!({"type": "ephemeral", "scope": "global"});
+            }
+            Some(PromptCacheScope::Org) => {
+                content_block["cache_control"] = serde_json::json!({"type": "ephemeral"});
+            }
+            None => {}
         }
-        _ => prompt,
+        content_block
+    })
+    .collect::<Vec<_>>();
+
+    Ok(RuntimeSystemPrompt {
+        text: prompt_blocks
+            .into_iter()
+            .filter(|block| {
+                let trimmed = block.trim();
+                !trimmed.is_empty() && trimmed != SYSTEM_PROMPT_DYNAMIC_BOUNDARY
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+        content_blocks,
     })
 }
 
@@ -234,18 +912,43 @@ async fn refresh_runtime_system_prompt(
     conversation: &mut Vec<ConversationEntry>,
     overrides: &CompatRunOverrides,
 ) -> Result<()> {
-    let prompt = build_runtime_system_prompt(config, overrides).await?;
+    let prompt = build_runtime_system_prompt(config, conversation, overrides).await?;
+
     if let Some(system_entry) = conversation
         .iter_mut()
         .find(|entry| matches!(entry.role, ConversationRole::System))
     {
-        system_entry.text = prompt;
+        system_entry.text = prompt.text;
         system_entry.history_text = None;
-        system_entry.content_blocks.clear();
+        system_entry.content_blocks = prompt.content_blocks;
         return Ok(());
     }
-    conversation.insert(0, ConversationEntry::system(prompt));
+    conversation.insert(
+        0,
+        ConversationEntry {
+            role: ConversationRole::System,
+            text: prompt.text,
+            history_text: None,
+            content_blocks: prompt.content_blocks,
+            tool_calls: Vec::new(),
+            attachments: Vec::new(),
+            tool_call_id: None,
+            name: None,
+            is_error: false,
+        },
+    );
     Ok(())
+}
+
+fn should_use_global_prompt_cache_scope(config: &RuntimeConfig) -> bool {
+    matches!(
+        config.provider.protocol,
+        rc_core::ProviderProtocol::Anthropic
+    ) && config
+        .provider
+        .base_url
+        .as_deref()
+        .is_some_and(is_first_party_base_url)
 }
 
 impl CompatObserver {
@@ -300,6 +1003,7 @@ impl QueryObserver for CompatObserver {
                 turn,
                 before_messages,
                 after_messages,
+                compacted_conversation,
                 max_input_tokens,
                 threshold_tokens,
                 usage_ratio_before,
@@ -322,6 +1026,20 @@ impl QueryObserver for CompatObserver {
                         "threshold_tokens": threshold_tokens,
                     }),
                 )?;
+                self.store.append_named_event(
+                    self.config.session_id,
+                    "compact_boundary",
+                    serde_json::json!({
+                        "trigger": "auto",
+                        "pre_tokens": estimated_tokens_before,
+                        "messages_summarized": entries_removed,
+                        "user_context": "query_engine_auto_compact",
+                    }),
+                )?;
+                for entry in &compacted_conversation {
+                    self.store
+                        .append_conversation_entry(self.config.session_id, entry)?;
+                }
                 if let Some(event_sink) = self.event_sink.as_ref() {
                     event_sink(PromptStreamEvent::ContextCompacted {
                         entries_removed,
@@ -544,6 +1262,7 @@ impl ToolRunner for CompatToolRunner {
             ToolResult {
                 content: blocked_reason.clone(),
                 is_error: true,
+                content_blocks: Vec::new(),
             }
         } else if self
             .allowed_tools
@@ -556,6 +1275,7 @@ impl ToolRunner for CompatToolRunner {
                     effective_tool_call.name
                 ),
                 is_error: true,
+                content_blocks: Vec::new(),
             }
         } else {
             match execute_tool_call(
@@ -583,6 +1303,7 @@ impl ToolRunner for CompatToolRunner {
                     ToolResult {
                         content: format!("Tool execution error: {error}"),
                         is_error: true,
+                        content_blocks: Vec::new(),
                     }
                 }
             }
@@ -620,16 +1341,18 @@ impl ToolRunner for CompatToolRunner {
         let result = ToolResult {
             content: truncated_content.clone(),
             is_error: raw_result.is_error,
+            content_blocks: raw_result.content_blocks.clone(),
         };
 
         {
             let mut conversation = self.shared.conversation.lock().await;
-            let tool_entry = ConversationEntry::tool(
+            let mut tool_entry = ConversationEntry::tool(
                 effective_tool_call.id.clone(),
                 effective_tool_call.name.clone(),
                 truncated_content,
                 raw_result.is_error,
             );
+            tool_entry.content_blocks = raw_result.content_blocks.clone();
             self.store
                 .append_conversation_entry(self.config.session_id, &tool_entry)?;
             self.store.append_named_event(
@@ -721,8 +1444,11 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
     }
 
     let started = Instant::now();
+    inject_plan_mode_runtime_messages(store, config.session_id, conversation)?;
+    inject_runtime_delta_messages(config, store, conversation).await?;
     refresh_runtime_system_prompt(config, conversation, &overrides).await?;
-    let existing_messages = conversation
+    let provider_conversation = conversation_with_runtime_user_context(config, conversation);
+    let existing_messages = provider_conversation
         .iter()
         .cloned()
         .map(Message::from)
@@ -744,9 +1470,13 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
             "protocol": config.provider.protocol.as_str(),
         }),
     )?;
-    let user_entry = ConversationEntry::user(prompt);
-    store.append_conversation_entry(config.session_id, &user_entry)?;
-    conversation.push(user_entry);
+    let reuse_pending_prompt =
+        crate::conversation::has_unanswered_user_prompt(conversation, prompt);
+    if !reuse_pending_prompt {
+        let user_entry = ConversationEntry::user(prompt);
+        store.append_conversation_entry(config.session_id, &user_entry)?;
+        conversation.push(user_entry);
+    }
 
     let compat_store = Arc::new(SessionStore::open(config.paths.clone())?);
     let shared = Arc::new(CompatSharedState {
@@ -818,6 +1548,15 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         rc_engine_events::EventStream::new(64),
     )
     .with_observer(observer);
+    let post_compact_store = compat_store.clone();
+    let post_compact_session_id = config.session_id;
+    query_config = query_config.with_post_compact_transform(Arc::new(move |conversation| {
+        augment_post_compact_conversation_for_runtime(
+            post_compact_store.as_ref(),
+            post_compact_session_id,
+            conversation,
+        )
+    }));
     if event_sink.is_some() {
         query_config =
             query_config.with_provider_invocation_mode(ProviderInvocationMode::Streaming);
@@ -827,7 +1566,11 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
     let mut engine = QueryEngine::new(query_config, existing_messages);
     let result = engine
         .submit_message(
-            vec![Message::from(ConversationEntry::user(prompt))],
+            if reuse_pending_prompt {
+                Vec::new()
+            } else {
+                vec![Message::from(ConversationEntry::user(prompt))]
+            },
             process_context,
         )
         .await;
@@ -977,28 +1720,17 @@ fn is_permission_denied_message(message: &str) -> bool {
 }
 
 fn assistant_entry_from_message(message: &Message) -> Result<ConversationEntry> {
-    let Message::Assistant(message) = message else {
+    let Message::Assistant(_) = message else {
         return Err(anyhow!(
             "expected assistant message, got {}",
             message_kind(message)
         ));
     };
-    let content_blocks = message
-        .blocks
-        .iter()
-        .map(serde_json::to_value)
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    Ok(ConversationEntry {
-        role: ConversationRole::Assistant,
-        text: message.text.clone(),
-        history_text: None,
-        content_blocks,
-        tool_calls: message.tool_calls.clone(),
-        attachments: Vec::new(),
-        tool_call_id: None,
-        name: None,
-        is_error: false,
-    })
+    let mut entry = message
+        .as_conversation_entry()
+        .ok_or_else(|| anyhow!("assistant message could not be converted to conversation entry"))?;
+    normalize_exit_plan_mode_tool_calls(&mut entry.tool_calls);
+    Ok(entry)
 }
 
 fn legacy_conversation_for_result(
@@ -1038,6 +1770,7 @@ mod tests {
     use std::sync::{Arc, Mutex as StdMutex};
 
     use anyhow::Result;
+    use base64::Engine;
     use rc_config::{ProviderOverrides, RuntimeConfig, RuntimeOverrides, load_runtime_config};
     use rc_core::{
         ConversationEntry, ConversationRole, InputFormat, OutputFormat, PermissionMode,
@@ -1050,7 +1783,7 @@ mod tests {
     };
     use rc_provider::{ConversationBackend, ProviderCompatBackend, StreamingCallbacks};
     use rc_query_engine::{QueryObserver, QueryObserverEvent};
-    use rc_session::SessionStore;
+    use rc_session::{SessionStore, plan_state::PlanModeState};
     use rc_tools::mcp_catalog::clear_runtime_mcp_catalog_cache;
     use rc_tools::{
         RuntimeMcpServerPolicyEntry, ToolRuntimePolicy, configure_tool_runtime_policy,
@@ -1061,12 +1794,21 @@ mod tests {
     use std::process::Command as ProcessCommand;
     use std::sync::OnceLock;
     use tempfile::{TempDir, tempdir};
+    use tokio::sync::Mutex as AsyncMutex;
 
-    use super::{CompatObserver, CompatSharedState, run_prompt_with_query_engine_compat};
+    use super::{
+        CompatObserver, CompatRunOverrides, CompatSharedState,
+        DEFERRED_TOOLS_DELTA_MARKER, MCP_INSTRUCTIONS_DELTA_MARKER,
+        RuntimeDeferredToolsDeltaMarker, RuntimeMcpInstructionsDeltaMarker,
+        announced_deferred_tool_names, announced_mcp_instruction_names, runtime_delta_entry,
+        augment_post_compact_conversation_for_runtime, refresh_runtime_system_prompt,
+        run_prompt_with_query_engine_compat,
+    };
     use crate::conversation::{PromptEventSink, PromptStreamEvent, initialize_conversation};
     use crate::hooks::{HookRunState, RuntimeHookDiscovery};
+    use rc_system_prompt::cache::SYSTEM_PROMPT_DYNAMIC_BOUNDARY;
 
-    static RUNTIME_POLICY_TEST_MUTEX: OnceLock<StdMutex<()>> = OnceLock::new();
+    static RUNTIME_POLICY_TEST_MUTEX: OnceLock<AsyncMutex<()>> = OnceLock::new();
 
     fn mock_config_and_store() -> (TempDir, RuntimeConfig, SessionStore) {
         let tempdir = tempdir().expect("tempdir");
@@ -1106,6 +1848,182 @@ mod tests {
             StaticPermissionBroker::from_mode(config.permission_mode),
             Vec::new(),
         ))
+    }
+
+    #[test]
+    fn post_compact_runtime_augmentation_restores_plan_attachment_and_marker() {
+        let (_tempdir, config, store) = mock_config_and_store();
+        store
+            .ensure_session(
+                config.session_id,
+                &config.cwd,
+                &config.provider.name,
+                config.provider.model.as_deref(),
+                Some("plan"),
+            )
+            .expect("session");
+        let plan_dir = config.paths.profile_dir.join("plans");
+        fs::create_dir_all(&plan_dir).expect("plan dir");
+        let plan_path = plan_dir.join("plan-test.md");
+        fs::write(&plan_path, "# Plan\n\n- keep this").expect("plan file");
+        store
+            .save_plan_mode_state(
+                config.session_id,
+                &PlanModeState {
+                    current_permission_mode: PermissionMode::Plan,
+                    plan_file_path: Some(plan_path.clone()),
+                    ..PlanModeState::default()
+                },
+            )
+            .expect("plan mode state");
+
+        let augmented = augment_post_compact_conversation_for_runtime(
+            &store,
+            config.session_id,
+            vec![
+                ConversationEntry::system("sys"),
+                ConversationEntry::user("tail"),
+            ],
+        );
+        let augmented =
+            augment_post_compact_conversation_for_runtime(&store, config.session_id, augmented);
+
+        let plan_filename = plan_path.display().to_string();
+        let plan_attachments = augmented
+            .iter()
+            .flat_map(|entry| entry.attachments.iter())
+            .filter(|attachment| attachment.filename.as_deref() == Some(plan_filename.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(plan_attachments.len(), 1);
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(&plan_attachments[0].data)
+            .expect("base64 plan attachment");
+        assert_eq!(
+            String::from_utf8(decoded).expect("utf8 plan attachment"),
+            "# Plan\n\n- keep this"
+        );
+        assert!(augmented.iter().any(|entry| {
+            entry.role == ConversationRole::User && entry.text.contains("## Plan Mode Active")
+        }));
+    }
+
+    #[test]
+    fn deferred_tool_markers_reconstruct_announced_pool() {
+        let add = runtime_delta_entry(
+            DEFERRED_TOOLS_DELTA_MARKER,
+            &RuntimeDeferredToolsDeltaMarker {
+                added_names: vec!["alpha".to_owned(), "beta".to_owned()],
+                removed_names: Vec::new(),
+            },
+            "added".to_owned(),
+        )
+        .expect("delta entry");
+        let remove = runtime_delta_entry(
+            DEFERRED_TOOLS_DELTA_MARKER,
+            &RuntimeDeferredToolsDeltaMarker {
+                added_names: Vec::new(),
+                removed_names: vec!["alpha".to_owned()],
+            },
+            "removed".to_owned(),
+        )
+        .expect("delta entry");
+
+        let announced = announced_deferred_tool_names(&[add, remove]);
+        assert_eq!(
+            announced.into_iter().collect::<Vec<_>>(),
+            vec!["beta".to_owned()]
+        );
+    }
+
+    #[test]
+    fn mcp_instruction_markers_reconstruct_announced_pool() {
+        let add = runtime_delta_entry(
+            MCP_INSTRUCTIONS_DELTA_MARKER,
+            &RuntimeMcpInstructionsDeltaMarker {
+                added_names: vec!["context7".to_owned(), "memory".to_owned()],
+                removed_names: Vec::new(),
+            },
+            "added".to_owned(),
+        )
+        .expect("delta entry");
+        let remove = runtime_delta_entry(
+            MCP_INSTRUCTIONS_DELTA_MARKER,
+            &RuntimeMcpInstructionsDeltaMarker {
+                added_names: Vec::new(),
+                removed_names: vec!["memory".to_owned()],
+            },
+            "removed".to_owned(),
+        )
+        .expect("delta entry");
+
+        let announced = announced_mcp_instruction_names(&[add, remove]);
+        assert_eq!(
+            announced.into_iter().collect::<Vec<_>>(),
+            vec!["context7".to_owned()]
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_observer_persists_compacted_suffix_after_boundary() {
+        let (_tempdir, config, store) = mock_config_and_store();
+        store
+            .ensure_session(
+                config.session_id,
+                &config.cwd,
+                &config.provider.name,
+                config.provider.model.as_deref(),
+                Some("compact"),
+            )
+            .expect("session");
+        store
+            .append_conversation_entry(config.session_id, &ConversationEntry::user("old"))
+            .expect("old entry");
+
+        let observer = CompatObserver {
+            config: config.clone(),
+            store: Arc::new(SessionStore::open(config.paths.clone()).expect("observer store")),
+            shared: Arc::new(CompatSharedState {
+                conversation: tokio::sync::Mutex::new(Vec::new()),
+                hook_state: tokio::sync::Mutex::new(HookRunState::default()),
+                streamed_tool_calls: tokio::sync::Mutex::new(std::collections::HashSet::new()),
+                latest_streaming_usage: tokio::sync::Mutex::new(None),
+                latest_request_id: tokio::sync::Mutex::new(None),
+            }),
+            event_sink: None,
+            include_partial_messages: false,
+        };
+
+        observer
+            .on_event(QueryObserverEvent::ContextCompactionApplied {
+                turn: 1,
+                before_messages: 5,
+                after_messages: 2,
+                compacted_conversation: vec![
+                    ConversationEntry::system("summary"),
+                    ConversationEntry::user("tail"),
+                ],
+                max_input_tokens: 100,
+                threshold_tokens: 80,
+                usage_ratio_before: 0.9,
+                usage_ratio_after: 0.2,
+                estimated_tokens_before: 90,
+                estimated_tokens_after: 20,
+            })
+            .await
+            .expect("compaction event");
+
+        let loaded = store
+            .load_conversation(config.session_id)
+            .expect("load compacted conversation");
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].text, "summary");
+        assert_eq!(loaded[1].text, "tail");
+        let events = store.load_events(config.session_id).expect("events");
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_type == "compact_boundary")
+        );
     }
 
     fn python_command() -> Option<(String, Vec<String>)> {
@@ -1532,11 +2450,88 @@ while True:
     }
 
     #[tokio::test]
+    async fn refresh_runtime_system_prompt_preserves_structured_blocks() {
+        let (_tempdir, mut config, store) = mock_config_and_store();
+        config.provider.protocol = ProviderProtocol::Anthropic;
+        config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
+        let mut conversation = initialize_conversation(&store, &config, Some("structured prompt"))
+            .expect("conversation");
+
+        refresh_runtime_system_prompt(
+            &config,
+            &mut conversation,
+            &CompatRunOverrides {
+                system_prompt: Some("Follow child instructions".to_owned()),
+                allowed_tools: None,
+            },
+        )
+        .await
+        .expect("refresh runtime system prompt");
+
+        let system_entry = conversation
+            .iter()
+            .find(|entry| entry.role == ConversationRole::System)
+            .expect("system entry");
+        assert!(!system_entry.text.contains(SYSTEM_PROMPT_DYNAMIC_BOUNDARY));
+        assert!(system_entry.text.contains("Follow child instructions"));
+        assert!(!system_entry.text.contains("You are an interactive agent"));
+        assert_eq!(system_entry.content_blocks.len(), 1);
+        assert!(
+            system_entry.content_blocks[0]
+                .get("cache_control")
+                .is_some_and(|cache| cache.get("scope").is_none())
+        );
+
+        let dynamic_text = system_entry.content_blocks[0]["text"]
+            .as_str()
+            .expect("prompt block text");
+        assert!(dynamic_text.contains("Follow child instructions"));
+        assert!(!dynamic_text.contains("# Custom Agent Instructions"));
+        assert!(!dynamic_text.contains(SYSTEM_PROMPT_DYNAMIC_BOUNDARY));
+    }
+
+    #[tokio::test]
+    async fn custom_system_prompt_skips_runtime_system_context() {
+        let (_tempdir, mut config, store) = mock_config_and_store();
+        config.provider.protocol = ProviderProtocol::Anthropic;
+        config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&config.cwd)
+            .output()
+            .expect("git init");
+        let mut conversation = initialize_conversation(&store, &config, Some("custom prompt test"))
+            .expect("conversation");
+
+        refresh_runtime_system_prompt(
+            &config,
+            &mut conversation,
+            &CompatRunOverrides {
+                system_prompt: Some("Custom headless prompt".to_owned()),
+                allowed_tools: None,
+            },
+        )
+        .await
+        .expect("refresh runtime system prompt");
+
+        let system_entry = conversation
+            .iter()
+            .find(|entry| entry.role == ConversationRole::System)
+            .expect("system entry");
+        assert!(system_entry.text.contains("Custom headless prompt"));
+        assert!(
+            !system_entry
+                .text
+                .contains("This is the git status at the start")
+        );
+    }
+
+    #[tokio::test]
     async fn compat_run_accepts_dynamic_mcp_tools() {
         let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX
-            .get_or_init(|| StdMutex::new(()))
+            .get_or_init(|| AsyncMutex::new(()))
             .lock()
-            .expect("runtime policy test mutex");
+            .await;
         let Some((python, mut prefix_args)) = python_command() else {
             eprintln!("Skipping dynamic MCP compat test because Python is unavailable.");
             return;

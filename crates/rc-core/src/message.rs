@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::{Attachment, ConversationEntry, ConversationRole, ToolCall};
@@ -94,6 +94,35 @@ pub struct UserMessage {
     pub text: String,
     #[serde(default)]
     pub attachments: Vec<Attachment>,
+    /// Provider-facing user content blocks preserved across compat/runtime
+    /// conversions. This is used for system-reminder style meta messages.
+    #[serde(default)]
+    pub provider_content_blocks: Vec<Value>,
+}
+
+impl UserMessage {
+    #[must_use]
+    pub fn provider_content_blocks(&self) -> Vec<Value> {
+        if !self.provider_content_blocks.is_empty() {
+            return self.provider_content_blocks.clone();
+        }
+
+        let mut blocks = vec![json!({
+            "type": "text",
+            "text": self.text,
+        })];
+        for attachment in &self.attachments {
+            blocks.push(json!({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": attachment.media_type.mime_type(),
+                    "data": attachment.data,
+                }
+            }));
+        }
+        blocks
+    }
 }
 
 /// Assistant-originated message.
@@ -106,6 +135,124 @@ pub struct AssistantMessage {
     pub blocks: Vec<AssistantContentBlock>,
     #[serde(default)]
     pub tool_calls: Vec<ToolCall>,
+    /// Provider-facing assistant content blocks preserved for Anthropic-style
+    /// replay across runtime bridges.
+    #[serde(default)]
+    pub provider_content_blocks: Vec<Value>,
+}
+
+impl AssistantMessage {
+    #[must_use]
+    pub fn provider_content_blocks(&self) -> Vec<Value> {
+        if !self.provider_content_blocks.is_empty() {
+            return self.provider_content_blocks.clone();
+        }
+
+        self.blocks
+            .iter()
+            .filter_map(assistant_block_to_provider_value)
+            .collect()
+    }
+}
+
+fn assistant_block_to_provider_value(block: &AssistantContentBlock) -> Option<Value> {
+    match block {
+        AssistantContentBlock::ToolUse { id, name, input } => Some(json!({
+            "type": "tool_use",
+            "id": id,
+            "name": name,
+            "input": input,
+        })),
+        AssistantContentBlock::Text { text } => Some(json!({
+            "type": "text",
+            "text": text,
+        })),
+        AssistantContentBlock::RedactedThinking { data } => Some(json!({
+            "type": "redacted_thinking",
+            "data": data,
+        })),
+        AssistantContentBlock::Thinking { text, signature } => {
+            let mut block = json!({
+                "type": "thinking",
+                "thinking": text,
+            });
+            if let Some(signature) = signature {
+                block["signature"] = Value::String(signature.clone());
+            }
+            Some(block)
+        }
+        AssistantContentBlock::AdvisorToolResult { content } => Some(json!({
+            "type": "advisor_tool_result",
+            "content": content,
+        })),
+    }
+}
+
+fn assistant_blocks_from_provider_content_blocks(
+    content_blocks: &[Value],
+) -> Vec<AssistantContentBlock> {
+    content_blocks
+        .iter()
+        .filter_map(|block| {
+            let block_type = block.get("type").and_then(Value::as_str)?;
+            match block_type {
+                "tool_use" => Some(AssistantContentBlock::ToolUse {
+                    id: block.get("id").and_then(Value::as_str)?.to_owned(),
+                    name: block.get("name").and_then(Value::as_str)?.to_owned(),
+                    input: block.get("input").cloned().unwrap_or_else(|| json!({})),
+                }),
+                "text" => Some(AssistantContentBlock::Text {
+                    text: block.get("text").and_then(Value::as_str)?.to_owned(),
+                }),
+                "redacted_thinking" => Some(AssistantContentBlock::RedactedThinking {
+                    data: block.get("data").and_then(Value::as_str)?.to_owned(),
+                }),
+                "thinking" => Some(AssistantContentBlock::Thinking {
+                    text: block
+                        .get("thinking")
+                        .or_else(|| block.get("text"))
+                        .and_then(Value::as_str)?
+                        .to_owned(),
+                    signature: block
+                        .get("signature")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                }),
+                "advisor_tool_result" => Some(AssistantContentBlock::AdvisorToolResult {
+                    content: block.get("content").and_then(Value::as_str)?.to_owned(),
+                }),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+fn assistant_blocks_from_legacy_parts(
+    text: &str,
+    tool_calls: &[ToolCall],
+    provider_content_blocks: &[Value],
+) -> Vec<AssistantContentBlock> {
+    let mut blocks = assistant_blocks_from_provider_content_blocks(provider_content_blocks);
+    if !blocks.is_empty() {
+        return blocks;
+    }
+
+    if !text.is_empty() {
+        blocks.push(AssistantContentBlock::Text {
+            text: text.to_owned(),
+        });
+    }
+    blocks.extend(
+        tool_calls
+            .iter()
+            .cloned()
+            .map(|call| AssistantContentBlock::ToolUse {
+                id: call.id,
+                name: call.name,
+                input: call.input,
+            }),
+    );
+    blocks
 }
 
 /// Progress message emitted while work is underway.
@@ -180,6 +327,9 @@ pub struct ToolUseSummaryMessage {
     pub summary: String,
     #[serde(default)]
     pub is_error: bool,
+    /// Provider-facing tool_result content preserved across runtime bridges.
+    #[serde(default)]
+    pub content_blocks: Vec<Value>,
 }
 
 /// Placeholder/tombstone marker used during streaming recovery or compaction.
@@ -258,7 +408,7 @@ impl Message {
                 role: ConversationRole::User,
                 text: message.text.clone(),
                 history_text: None,
-                content_blocks: Vec::new(),
+                content_blocks: message.provider_content_blocks(),
                 tool_calls: Vec::new(),
                 attachments: message.attachments.clone(),
                 tool_call_id: None,
@@ -269,7 +419,7 @@ impl Message {
                 role: ConversationRole::Assistant,
                 text: message.text.clone(),
                 history_text: None,
-                content_blocks: Vec::new(),
+                content_blocks: message.provider_content_blocks(),
                 tool_calls: message.tool_calls.clone(),
                 attachments: Vec::new(),
                 tool_call_id: None,
@@ -287,12 +437,17 @@ impl Message {
                 name: None,
                 is_error: matches!(message.subtype, SystemMessageSubtype::ApiError),
             }),
-            Self::ToolUseSummary(message) => Some(ConversationEntry::tool(
-                message.tool_call_id.clone(),
-                message.tool_name.clone(),
-                message.summary.clone(),
-                message.is_error,
-            )),
+            Self::ToolUseSummary(message) => Some(ConversationEntry {
+                role: ConversationRole::Tool,
+                text: message.summary.clone(),
+                history_text: None,
+                content_blocks: message.content_blocks.clone(),
+                tool_calls: Vec::new(),
+                attachments: Vec::new(),
+                tool_call_id: Some(message.tool_call_id.clone()),
+                name: Some(message.tool_name.clone()),
+                is_error: message.is_error,
+            }),
             Self::Attachment(message) => Some(ConversationEntry::user_with_attachments(
                 message.label.clone().unwrap_or_default(),
                 message.attachments.clone(),
@@ -319,12 +474,18 @@ impl From<ConversationEntry> for Message {
                 base: MessageBase::with_origin(MessageOrigin::UserInput),
                 text: value.text,
                 attachments: value.attachments,
+                provider_content_blocks: value.content_blocks,
             }),
             ConversationRole::Assistant => Self::Assistant(AssistantMessage {
                 base: MessageBase::with_origin(MessageOrigin::Provider),
-                text: value.text,
-                blocks: Vec::new(),
+                text: value.text.clone(),
+                blocks: assistant_blocks_from_legacy_parts(
+                    &value.text,
+                    &value.tool_calls,
+                    &value.content_blocks,
+                ),
                 tool_calls: value.tool_calls,
+                provider_content_blocks: value.content_blocks,
             }),
             ConversationRole::Tool => Self::ToolUseSummary(ToolUseSummaryMessage {
                 base: MessageBase::with_origin(MessageOrigin::Tool),
@@ -334,6 +495,7 @@ impl From<ConversationEntry> for Message {
                 tool_name: value.name.unwrap_or_else(|| "unknown".to_owned()),
                 summary: value.text,
                 is_error: value.is_error,
+                content_blocks: value.content_blocks,
             }),
         }
     }
@@ -342,7 +504,8 @@ impl From<ConversationEntry> for Message {
 #[cfg(test)]
 mod tests {
     use super::{Message, MessageOrigin, SystemMessageSubtype};
-    use crate::ConversationEntry;
+    use crate::{ConversationEntry, ConversationRole, ToolCall};
+    use serde_json::json;
 
     #[test]
     fn user_conversation_entry_round_trips_via_message() {
@@ -353,6 +516,9 @@ mod tests {
             .expect("user message should down-convert");
         assert_eq!(restored.text, entry.text);
         assert_eq!(restored.role, entry.role);
+        assert_eq!(restored.content_blocks.len(), 1);
+        assert_eq!(restored.content_blocks[0]["type"], "text");
+        assert_eq!(restored.content_blocks[0]["text"], "ship it");
     }
 
     #[test]
@@ -381,5 +547,85 @@ mod tests {
             .as_conversation_entry()
             .expect("system message should down-convert");
         assert!(entry.is_error);
+    }
+
+    #[test]
+    fn assistant_conversation_entry_round_trips_provider_content_blocks() {
+        let entry = ConversationEntry {
+            role: ConversationRole::Assistant,
+            text: String::new(),
+            history_text: None,
+            content_blocks: vec![
+                json!({"type": "thinking", "thinking": "reasoning", "signature": "sig"}),
+                json!({"type": "tool_use", "id": "call-1", "name": "read_file", "input": {"path": "src/lib.rs"}}),
+            ],
+            tool_calls: vec![ToolCall {
+                id: "call-1".to_owned(),
+                name: "read_file".to_owned(),
+                input: json!({"path": "src/lib.rs"}),
+            }],
+            attachments: Vec::new(),
+            tool_call_id: None,
+            name: None,
+            is_error: false,
+        };
+
+        let restored = Message::from(entry)
+            .as_conversation_entry()
+            .expect("assistant message should down-convert");
+
+        assert_eq!(restored.content_blocks.len(), 2);
+        assert_eq!(restored.content_blocks[0]["type"], "thinking");
+        assert_eq!(restored.content_blocks[0]["thinking"], "reasoning");
+        assert_eq!(restored.content_blocks[0]["signature"], "sig");
+        assert_eq!(restored.content_blocks[1]["type"], "tool_use");
+        assert_eq!(restored.content_blocks[1]["id"], "call-1");
+    }
+
+    #[test]
+    fn user_conversation_entry_round_trips_provider_content_blocks() {
+        let entry = ConversationEntry {
+            role: ConversationRole::User,
+            text: String::new(),
+            history_text: Some("meta".to_owned()),
+            content_blocks: vec![json!({"type": "text", "text": "<system-reminder>\nmeta\n</system-reminder>"})],
+            tool_calls: Vec::new(),
+            attachments: Vec::new(),
+            tool_call_id: None,
+            name: None,
+            is_error: false,
+        };
+
+        let restored = Message::from(entry)
+            .as_conversation_entry()
+            .expect("user message should down-convert");
+        assert_eq!(restored.content_blocks.len(), 1);
+        assert_eq!(restored.content_blocks[0]["type"], "text");
+        assert!(restored.content_blocks[0]["text"]
+            .as_str()
+            .expect("text block")
+            .contains("system-reminder"));
+    }
+
+    #[test]
+    fn tool_conversation_entry_round_trips_provider_content_blocks() {
+        let entry = ConversationEntry {
+            role: ConversationRole::Tool,
+            text: "tool-search".to_owned(),
+            history_text: None,
+            content_blocks: vec![json!({"type": "tool_reference", "tool_name": "read_mcp_resource"})],
+            tool_calls: Vec::new(),
+            attachments: Vec::new(),
+            tool_call_id: Some("call-1".to_owned()),
+            name: Some("tool_search".to_owned()),
+            is_error: false,
+        };
+
+        let restored = Message::from(entry)
+            .as_conversation_entry()
+            .expect("tool message should down-convert");
+        assert_eq!(restored.content_blocks.len(), 1);
+        assert_eq!(restored.content_blocks[0]["type"], "tool_reference");
+        assert_eq!(restored.content_blocks[0]["tool_name"], "read_mcp_resource");
     }
 }

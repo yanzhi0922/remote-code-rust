@@ -203,6 +203,7 @@ mod tests {
             base: MessageBase::with_origin(MessageOrigin::UserInput),
             text: text.to_owned(),
             attachments: Vec::new(),
+            provider_content_blocks: Vec::new(),
         })
     }
 
@@ -212,6 +213,7 @@ mod tests {
             text: text.to_owned(),
             blocks: Vec::new(),
             tool_calls: Vec::new(),
+            provider_content_blocks: Vec::new(),
         })
     }
 
@@ -245,11 +247,15 @@ mod tests {
         assert!(handler.can_attempt());
 
         let messages = vec![make_user_message("hello")];
-        let _ = handler.handle_prompt_too_long(messages.clone()).unwrap();
+        let _ = handler
+            .handle_prompt_too_long(messages.clone())
+            .expect("first prompt-too-long handling should succeed");
 
         assert!(!handler.can_attempt());
 
-        let result = handler.handle_prompt_too_long(messages).unwrap();
+        let result = handler
+            .handle_prompt_too_long(messages)
+            .expect("second prompt-too-long handling should succeed");
         assert!(!result.was_compacted);
     }
 
@@ -267,7 +273,9 @@ mod tests {
             make_user_message("msg 5"),
         ];
 
-        let result = handler.handle_prompt_too_long(messages).unwrap();
+        let result = handler
+            .handle_prompt_too_long(messages)
+            .expect("prompt-too-long handling should preserve system messages");
         assert!(result.was_compacted);
 
         let has_system = result
@@ -292,7 +300,9 @@ mod tests {
             make_assistant_message("recent resp 1"),
         ];
 
-        let result = handler.handle_prompt_too_long(messages).unwrap();
+        let result = handler
+            .handle_prompt_too_long(messages)
+            .expect("prompt-too-long handling should preserve recent turns");
         assert!(result.was_compacted);
 
         // Recent messages should be preserved
@@ -318,7 +328,9 @@ mod tests {
             make_user_message("recent 1"),
         ];
 
-        let result = handler.handle_prompt_too_long(messages).unwrap();
+        let result = handler
+            .handle_prompt_too_long(messages)
+            .expect("prompt-too-long handling should insert tombstone");
         assert!(result.was_compacted);
         assert!(result.messages_removed > 0);
 
@@ -336,7 +348,9 @@ mod tests {
         let mut handler = ReactiveCompactHandler::new();
         let messages = vec![make_system_message("system"), make_user_message("hello")];
 
-        let result = handler.handle_prompt_too_long(messages).unwrap();
+        let result = handler
+            .handle_prompt_too_long(messages)
+            .expect("short conversation handling should succeed");
         // With only 2 messages and preserve_recent=3, nothing gets removed
         assert!(!result.was_compacted);
         assert_eq!(result.messages_removed, 0);
@@ -349,13 +363,17 @@ mod tests {
         let mut handler = ReactiveCompactHandler::new();
         let messages = vec![make_user_message("hello")];
 
-        let _ = handler.handle_prompt_too_long(messages.clone()).unwrap();
+        let _ = handler
+            .handle_prompt_too_long(messages.clone())
+            .expect("first prompt-too-long handling should consume attempt");
         assert!(!handler.can_attempt());
 
         handler.reset();
         assert!(handler.can_attempt());
 
-        let result = handler.handle_prompt_too_long(messages).unwrap();
+        let result = handler
+            .handle_prompt_too_long(messages)
+            .expect("prompt-too-long handling after reset should succeed");
         // Short conversation, so was_compacted is false but attempt was allowed
         assert!(!result.was_compacted);
     }
@@ -373,7 +391,9 @@ mod tests {
             make_user_message("recent 1"),
         ];
 
-        let result = handler.handle_prompt_too_long(messages).unwrap();
+        let result = handler
+            .handle_prompt_too_long(messages)
+            .expect("prompt-too-long handling should preserve compact summaries");
 
         let has_summary = result
             .messages
@@ -389,7 +409,9 @@ mod tests {
         let mut handler = ReactiveCompactHandler::new();
         let messages: Vec<Message> = vec![];
 
-        let result = handler.handle_prompt_too_long(messages).unwrap();
+        let result = handler
+            .handle_prompt_too_long(messages)
+            .expect("empty message handling should succeed");
         // With 0 messages, attempt is consumed but nothing happens
         // Actually, can_attempt is true, so attempt happens
         assert!(!result.was_compacted);

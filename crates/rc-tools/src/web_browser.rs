@@ -191,8 +191,7 @@ async fn screenshot(url: &str) -> Result<String> {
                 .chars()
                 .take(500)
                 .collect::<String>()
-                .replace('<', " ")
-                .replace('>', " ");
+                .replace(['<', '>'], " ");
 
             Ok(json!({
                 "type": "web_browser_screenshot",
@@ -397,8 +396,8 @@ mod tests {
         let context = test_context();
         let rt = tokio::runtime::Runtime::new().expect("runtime");
         let result = rt.block_on(web_browser(&input, &context));
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("url"));
+        let error = result.expect_err("missing url should return an error");
+        assert!(error.to_string().contains("url"));
     }
 
     #[test]
@@ -416,8 +415,8 @@ mod tests {
         let context = test_context();
         let rt = tokio::runtime::Runtime::new().expect("runtime");
         let result = rt.block_on(web_browser(&input, &context));
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid URL"));
+        let error = result.expect_err("invalid URL format should return an error");
+        assert!(error.to_string().contains("Invalid URL"));
     }
 
     #[test]
@@ -426,8 +425,8 @@ mod tests {
         let context = test_context();
         let rt = tokio::runtime::Runtime::new().expect("runtime");
         let result = rt.block_on(web_browser(&input, &context));
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Unknown action"));
+        let error = result.expect_err("unknown action should return an error");
+        assert!(error.to_string().contains("Unknown action"));
     }
 
     #[test]

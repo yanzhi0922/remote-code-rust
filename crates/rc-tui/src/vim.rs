@@ -444,7 +444,7 @@ mod tests {
     }
 
     #[test]
-    fn normal_G_moves_bottom() {
+    fn normal_g_moves_bottom() {
         let mut vm = VimStateMachine::new();
         vm.handle_key(key(KeyCode::Esc));
         let action = vm.handle_key(key(KeyCode::Char('G')));
