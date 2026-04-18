@@ -13,7 +13,7 @@ use rc_core::{
     ConversationEntry, ConversationRole, ProviderProtocol, ProviderResponse, ToolCall, UsageSummary,
 };
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -21,8 +21,8 @@ use std::sync::{
 use std::time::Duration;
 
 use crate::{
-    ProviderClient, build_headers, current_openai_tool_schemas,
-    prepare_anthropic_request_surface, to_openai_messages,
+    ProviderClient, build_headers, current_openai_tool_schemas, prepare_anthropic_request_surface,
+    to_openai_messages,
 };
 
 // ---------------------------------------------------------------------------
@@ -67,8 +67,13 @@ impl ProviderClient {
         provider: &ProviderConfig,
         conversation: &[ConversationEntry],
     ) -> Result<ProviderResponse> {
-        self.complete_streaming_with_callbacks(provider, conversation, None)
-            .await
+        self.complete_streaming_with_callbacks_and_discovered_tools(
+            provider,
+            conversation,
+            None,
+            &BTreeSet::new(),
+        )
+        .await
     }
 
     /// Streaming completion with optional real-time callbacks.
@@ -84,6 +89,26 @@ impl ProviderClient {
         conversation: &[ConversationEntry],
         callbacks: Option<StreamingCallbacks>,
     ) -> Result<ProviderResponse> {
+        self.complete_streaming_with_callbacks_and_discovered_tools(
+            provider,
+            conversation,
+            callbacks,
+            &BTreeSet::new(),
+        )
+        .await
+    }
+
+    /// Streaming completion with carried deferred-tool discovery state.
+    ///
+    /// # Errors
+    /// Returns an error if both streaming and non-streaming attempts fail.
+    pub async fn complete_streaming_with_callbacks_and_discovered_tools(
+        &self,
+        provider: &ProviderConfig,
+        conversation: &[ConversationEntry],
+        callbacks: Option<StreamingCallbacks>,
+        carried_discovered_tools: &BTreeSet<String>,
+    ) -> Result<ProviderResponse> {
         if provider.name == "mock"
             || provider.api_key.as_deref() == Some("mock")
             || provider.base_url.as_deref() == Some("mock://provider")
@@ -97,23 +122,43 @@ impl ProviderClient {
 
         let result = match provider.protocol {
             ProviderProtocol::OpenAi => {
-                self.complete_streaming_openai(provider, conversation, Some(&tracked_callbacks))
-                    .await
+                self.complete_streaming_openai(
+                    provider,
+                    conversation,
+                    Some(&tracked_callbacks),
+                    carried_discovered_tools,
+                )
+                .await
             }
             ProviderProtocol::Anthropic => {
-                self.complete_streaming_anthropic(provider, conversation, Some(&tracked_callbacks))
-                    .await
+                self.complete_streaming_anthropic(
+                    provider,
+                    conversation,
+                    Some(&tracked_callbacks),
+                    carried_discovered_tools,
+                )
+                .await
             }
             // Native Bedrock/Vertex use non-streaming for now (SSE event-stream
             // parsing for Bedrock is not yet implemented).  If a base_url is set
             // (proxy mode) we fall back to OpenAI-compatible streaming.
             ProviderProtocol::Bedrock | ProviderProtocol::Vertex => {
                 if provider.base_url.is_some() {
-                    self.complete_streaming_openai(provider, conversation, Some(&tracked_callbacks))
-                        .await
+                    self.complete_streaming_openai(
+                        provider,
+                        conversation,
+                        Some(&tracked_callbacks),
+                        carried_discovered_tools,
+                    )
+                    .await
                 } else {
                     // Native mode — fall back to non-streaming completion.
-                    self.complete(provider, conversation).await
+                    self.complete_with_discovered_tools(
+                        provider,
+                        conversation,
+                        carried_discovered_tools,
+                    )
+                    .await
                 }
             }
         };
@@ -131,7 +176,12 @@ impl ProviderClient {
                     tracing::warn!(
                         "Streaming failed, falling back to non-streaming: {streaming_error:#}"
                     );
-                    self.complete(provider, conversation).await
+                    self.complete_with_discovered_tools(
+                        provider,
+                        conversation,
+                        carried_discovered_tools,
+                    )
+                    .await
                 } else {
                     if streamed_tool_activity.load(Ordering::Relaxed) {
                         tracing::warn!(
@@ -150,8 +200,10 @@ impl ProviderClient {
         provider: &ProviderConfig,
         conversation: &[ConversationEntry],
         callbacks: Option<&StreamingCallbacks>,
+        carried_discovered_tools: &BTreeSet<String>,
     ) -> Result<ProviderResponse> {
-        let tools = current_openai_tool_schemas(provider, conversation).await;
+        let tools =
+            current_openai_tool_schemas(provider, conversation, carried_discovered_tools).await;
         let body = json!({
             "model": provider.model,
             "messages": to_openai_messages(conversation),
@@ -323,9 +375,11 @@ impl ProviderClient {
         provider: &ProviderConfig,
         conversation: &[ConversationEntry],
         callbacks: Option<&StreamingCallbacks>,
+        carried_discovered_tools: &BTreeSet<String>,
     ) -> Result<ProviderResponse> {
         let (system, messages, tools) =
-            prepare_anthropic_request_surface(provider, conversation).await;
+            prepare_anthropic_request_surface(provider, conversation, carried_discovered_tools)
+                .await;
         let mut body = json!({
             "model": provider.model,
             "system": system,

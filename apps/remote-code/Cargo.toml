@@ -42,6 +42,7 @@ rc-skills = { path = "../../crates/rc-skills" }
 rc-system-prompt = { path = "../../crates/rc-system-prompt" }
 rc-telemetry = { path = "../../crates/rc-telemetry" }
 rc-tools = { path = "../../crates/rc-tools" }
+rc-transcript = { path = "../../crates/rc-transcript" }
 rc-tui = { path = "../../crates/rc-tui" }
 rc-ui-bridge = { path = "../../crates/rc-ui-bridge" }
 chrono.workspace = true

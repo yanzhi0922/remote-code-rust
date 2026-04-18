@@ -4690,6 +4690,7 @@ dependencies = [
  "rc-system-prompt",
  "rc-telemetry",
  "rc-tools",
+ "rc-transcript",
  "rc-tui",
  "rc-ui-bridge",
  "reqwest 0.12.28",

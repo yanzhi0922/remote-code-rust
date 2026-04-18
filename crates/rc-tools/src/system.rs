@@ -210,7 +210,10 @@ fn tool_search_result(
     if matches.is_empty() {
         let mut message = "No matching deferred tools found".to_owned();
         if !missing.is_empty() {
-            message.push_str(&format!(". Missing requested tools: {}", missing.join(", ")));
+            message.push_str(&format!(
+                ". Missing requested tools: {}",
+                missing.join(", ")
+            ));
         }
         return ToolResult {
             content: message,
@@ -259,7 +262,12 @@ pub(crate) async fn tool_search_tool(input: &Value) -> Result<ToolResult> {
     let results = engine.search(query, max_results);
 
     if results.is_empty() {
-        Ok(tool_search_result(query, specs.len(), Vec::new(), Vec::new()))
+        Ok(tool_search_result(
+            query,
+            specs.len(),
+            Vec::new(),
+            Vec::new(),
+        ))
     } else {
         let matches = results
             .iter()

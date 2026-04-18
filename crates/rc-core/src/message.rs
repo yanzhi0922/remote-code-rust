@@ -588,7 +588,9 @@ mod tests {
             role: ConversationRole::User,
             text: String::new(),
             history_text: Some("meta".to_owned()),
-            content_blocks: vec![json!({"type": "text", "text": "<system-reminder>\nmeta\n</system-reminder>"})],
+            content_blocks: vec![
+                json!({"type": "text", "text": "<system-reminder>\nmeta\n</system-reminder>"}),
+            ],
             tool_calls: Vec::new(),
             attachments: Vec::new(),
             tool_call_id: None,
@@ -601,10 +603,12 @@ mod tests {
             .expect("user message should down-convert");
         assert_eq!(restored.content_blocks.len(), 1);
         assert_eq!(restored.content_blocks[0]["type"], "text");
-        assert!(restored.content_blocks[0]["text"]
-            .as_str()
-            .expect("text block")
-            .contains("system-reminder"));
+        assert!(
+            restored.content_blocks[0]["text"]
+                .as_str()
+                .expect("text block")
+                .contains("system-reminder")
+        );
     }
 
     #[test]
@@ -613,7 +617,9 @@ mod tests {
             role: ConversationRole::Tool,
             text: "tool-search".to_owned(),
             history_text: None,
-            content_blocks: vec![json!({"type": "tool_reference", "tool_name": "read_mcp_resource"})],
+            content_blocks: vec![
+                json!({"type": "tool_reference", "tool_name": "read_mcp_resource"}),
+            ],
             tool_calls: Vec::new(),
             attachments: Vec::new(),
             tool_call_id: Some("call-1".to_owned()),

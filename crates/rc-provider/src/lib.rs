@@ -38,16 +38,20 @@ pub mod workload;
 
 pub use api_client::{ApiClient, ContentBlock, QueryOptions, QueryResult, UsageStats};
 pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
-pub use conversation_backend::{ConversationBackend, ProviderCompatBackend};
+pub use conversation_backend::{ConversationBackend, DiscoveredToolScope, ProviderCompatBackend};
 pub use retry::{RetryConfig, RetryContext};
 pub use streaming::StreamingCallbacks;
 
+use crate::model_info::get_model_info;
 use anyhow::{Context, Result, anyhow};
 use rc_config::ProviderConfig;
 use rc_core::{
     ConversationEntry, ConversationRole, ProviderProtocol, ProviderResponse, ToolCall, UsageSummary,
 };
-use rc_tools::{ToolSpec, runtime_provider_tool_specs, runtime_visible_provider_tool_specs};
+use rc_tools::{
+    ToolSpec, runtime_provider_tool_specs,
+    runtime_visible_provider_tool_specs_with_discovered_tools,
+};
 use reqwest::Client;
 use reqwest::header::{
     ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, RETRY_AFTER,
@@ -55,8 +59,20 @@ use reqwest::header::{
 };
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
+use std::env;
 use std::sync::Mutex;
 use std::time::Duration;
+
+const DEFAULT_AUTO_TOOL_SEARCH_PERCENTAGE: u64 = 10;
+const TOOL_SEARCH_CHARS_PER_TOKEN: f64 = 2.5;
+const TOOL_REFERENCE_TURN_BOUNDARY: &str = "Tool loaded.";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ToolSearchMode {
+    Tst,
+    TstAuto,
+    Standard,
+}
 
 /// HTTP client for communicating with LLM provider APIs.
 ///
@@ -176,6 +192,21 @@ impl ProviderClient {
         provider: &ProviderConfig,
         conversation: &[ConversationEntry],
     ) -> Result<ProviderResponse> {
+        self.complete_with_discovered_tools(provider, conversation, &BTreeSet::new())
+            .await
+    }
+
+    /// Send a completion request while preserving deferred-tool discovery state
+    /// carried forward from compact boundaries.
+    ///
+    /// # Errors
+    /// Returns an error if the API request fails after all retries are exhausted.
+    pub async fn complete_with_discovered_tools(
+        &self,
+        provider: &ProviderConfig,
+        conversation: &[ConversationEntry],
+        carried_discovered_tools: &BTreeSet<String>,
+    ) -> Result<ProviderResponse> {
         if provider.name == "mock"
             || provider.api_key.as_deref() == Some("mock")
             || provider.base_url.as_deref() == Some("mock://provider")
@@ -197,19 +228,19 @@ impl ProviderClient {
 
         let result = match effective_provider.protocol {
             ProviderProtocol::OpenAi => {
-                self.complete_openai(&effective_provider, conversation)
+                self.complete_openai(&effective_provider, conversation, carried_discovered_tools)
                     .await
             }
             ProviderProtocol::Anthropic => {
-                self.complete_anthropic(&effective_provider, conversation)
+                self.complete_anthropic(&effective_provider, conversation, carried_discovered_tools)
                     .await
             }
             ProviderProtocol::Bedrock => {
-                self.complete_bedrock(&effective_provider, conversation)
+                self.complete_bedrock(&effective_provider, conversation, carried_discovered_tools)
                     .await
             }
             ProviderProtocol::Vertex => {
-                self.complete_vertex(&effective_provider, conversation)
+                self.complete_vertex(&effective_provider, conversation, carried_discovered_tools)
                     .await
             }
         };
@@ -271,12 +302,14 @@ impl ProviderClient {
         &self,
         provider: &ProviderConfig,
         conversation: &[ConversationEntry],
+        carried_discovered_tools: &BTreeSet<String>,
     ) -> Result<ProviderResponse> {
         let model_name = provider.model.as_deref().unwrap_or("");
         let is_reasoning_model = model_name.starts_with("o1")
             || model_name.starts_with("o3")
             || model_name.starts_with("o4");
-        let tools = current_openai_tool_schemas(provider, conversation).await;
+        let tools =
+            current_openai_tool_schemas(provider, conversation, carried_discovered_tools).await;
 
         let mut body = if is_reasoning_model {
             // Reasoning models (o1/o3/o4-mini) do not support temperature
@@ -327,9 +360,11 @@ impl ProviderClient {
         &self,
         provider: &ProviderConfig,
         conversation: &[ConversationEntry],
+        carried_discovered_tools: &BTreeSet<String>,
     ) -> Result<ProviderResponse> {
         let (system, messages, tools) =
-            prepare_anthropic_request_surface(provider, conversation).await;
+            prepare_anthropic_request_surface(provider, conversation, carried_discovered_tools)
+                .await;
         let mut body = json!({
             "model": provider.model,
             "system": system,
@@ -378,12 +413,15 @@ impl ProviderClient {
         &self,
         provider: &ProviderConfig,
         conversation: &[ConversationEntry],
+        carried_discovered_tools: &BTreeSet<String>,
     ) -> Result<ProviderResponse> {
         let credentials = match sigv4::load_aws_credentials() {
             Some(creds) => creds,
             None => {
                 // No AWS credentials — fall back to OpenAI-compatible proxy mode.
-                return self.complete_openai(provider, conversation).await;
+                return self
+                    .complete_openai(provider, conversation, carried_discovered_tools)
+                    .await;
             }
         };
 
@@ -394,7 +432,8 @@ impl ProviderClient {
 
         // Build Anthropic-format body for Claude models on Bedrock.
         let (system, messages, tools) =
-            prepare_anthropic_request_surface(provider, conversation).await;
+            prepare_anthropic_request_surface(provider, conversation, carried_discovered_tools)
+                .await;
         let mut body = json!({
             "anthropic_version": "bedrock-2023-05-31",
             "system": system,
@@ -512,12 +551,15 @@ impl ProviderClient {
         &self,
         provider: &ProviderConfig,
         conversation: &[ConversationEntry],
+        carried_discovered_tools: &BTreeSet<String>,
     ) -> Result<ProviderResponse> {
         let access_token = match load_vertex_access_token() {
             Some(token) => token,
             None => {
                 // No Google credentials — fall back to OpenAI-compatible proxy mode.
-                return self.complete_openai(provider, conversation).await;
+                return self
+                    .complete_openai(provider, conversation, carried_discovered_tools)
+                    .await;
             }
         };
 
@@ -537,7 +579,8 @@ impl ProviderClient {
 
         // Build Anthropic-format body for Claude models on Vertex AI.
         let (system, messages, tools) =
-            prepare_anthropic_request_surface(provider, conversation).await;
+            prepare_anthropic_request_surface(provider, conversation, carried_discovered_tools)
+                .await;
         let mut body = json!({
             "anthropic_version": "vertex-2023-10-16",
             "system": system,
@@ -880,14 +923,11 @@ fn body_uses_tool_search_features(body: Option<&Value>) -> bool {
                     .is_some_and(|content| {
                         content.iter().any(|block| {
                             block.get("type").and_then(Value::as_str) == Some("tool_result")
-                                && block
-                                    .get("content")
-                                    .and_then(Value::as_array)
-                                    .is_some_and(|tool_result_content| {
-                                        tool_result_content
-                                            .iter()
-                                            .any(is_tool_reference_block)
-                                    })
+                                && block.get("content").and_then(Value::as_array).is_some_and(
+                                    |tool_result_content| {
+                                        tool_result_content.iter().any(is_tool_reference_block)
+                                    },
+                                )
                         })
                     })
             })
@@ -1136,22 +1176,197 @@ fn model_supports_tool_reference(model: Option<&str>) -> bool {
         .contains("haiku")
 }
 
-fn provider_uses_tool_search(provider: &ProviderConfig, specs: &[ToolSpec]) -> bool {
-    matches!(
-        provider.protocol,
-        ProviderProtocol::Anthropic | ProviderProtocol::Bedrock | ProviderProtocol::Vertex
-    ) && model_supports_tool_reference(provider.model.as_deref())
-        && specs.iter().any(ToolSpec::is_tool_search)
-        && specs.iter().any(ToolSpec::is_deferred)
+fn parse_auto_percentage(value: &str) -> Option<u64> {
+    let lower = value.trim().to_ascii_lowercase();
+    let percent = lower.strip_prefix("auto:")?.parse::<u64>().ok()?;
+    Some(percent.min(100))
 }
 
-async fn current_provider_tool_specs_for_request(
+fn normalize_tool_search_env_value(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
+}
+
+fn is_env_truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn is_env_defined_falsy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "0" | "false" | "no" | "off"
+    )
+}
+
+fn get_tool_search_mode_with_env(
+    enable_tool_search: Option<&str>,
+    disable_experimental_betas: Option<&str>,
+) -> ToolSearchMode {
+    if disable_experimental_betas.is_some_and(is_env_truthy) {
+        return ToolSearchMode::Standard;
+    }
+
+    let enable_tool_search = normalize_tool_search_env_value(enable_tool_search);
+    let auto_percent = enable_tool_search
+        .as_deref()
+        .and_then(parse_auto_percentage);
+    if auto_percent == Some(0) {
+        return ToolSearchMode::Tst;
+    }
+    if auto_percent == Some(100) {
+        return ToolSearchMode::Standard;
+    }
+    if enable_tool_search
+        .as_deref()
+        .is_some_and(|value| value == "auto" || value.starts_with("auto:"))
+    {
+        return ToolSearchMode::TstAuto;
+    }
+    if enable_tool_search.as_deref().is_some_and(is_env_truthy) {
+        return ToolSearchMode::Tst;
+    }
+    if enable_tool_search
+        .as_deref()
+        .is_some_and(is_env_defined_falsy)
+    {
+        return ToolSearchMode::Standard;
+    }
+    ToolSearchMode::Tst
+}
+
+fn is_first_party_anthropic_base_url(base_url: &str) -> bool {
+    reqwest::Url::parse(base_url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_ascii_lowercase))
+        .is_some_and(|host| host == "api.anthropic.com" || host == "api-staging.anthropic.com")
+}
+
+fn tool_search_enabled_optimistic_with_env(
+    provider: &ProviderConfig,
+    enable_tool_search: Option<&str>,
+    disable_experimental_betas: Option<&str>,
+) -> bool {
+    let mode = get_tool_search_mode_with_env(enable_tool_search, disable_experimental_betas);
+    if mode == ToolSearchMode::Standard {
+        return false;
+    }
+
+    let explicit_tool_search = normalize_tool_search_env_value(enable_tool_search).is_some();
+    if !explicit_tool_search
+        && provider.protocol == ProviderProtocol::Anthropic
+        && provider
+            .base_url
+            .as_deref()
+            .is_some_and(|base_url| !is_first_party_anthropic_base_url(base_url))
+    {
+        return false;
+    }
+
+    true
+}
+
+fn get_auto_tool_search_percentage(enable_tool_search: Option<&str>) -> u64 {
+    match normalize_tool_search_env_value(enable_tool_search) {
+        None => DEFAULT_AUTO_TOOL_SEARCH_PERCENTAGE,
+        Some(value) if value == "auto" => DEFAULT_AUTO_TOOL_SEARCH_PERCENTAGE,
+        Some(value) => parse_auto_percentage(&value).unwrap_or(DEFAULT_AUTO_TOOL_SEARCH_PERCENTAGE),
+    }
+}
+
+fn deferred_tool_description_chars(specs: &[ToolSpec]) -> usize {
+    specs
+        .iter()
+        .filter(|spec| spec.is_deferred())
+        .map(|spec| {
+            spec.name.len()
+                + spec.description.len()
+                + serde_json::to_string(&spec.input_schema)
+                    .map(|schema| schema.len())
+                    .unwrap_or_default()
+        })
+        .sum()
+}
+
+fn tool_search_auto_threshold_met(
+    provider: &ProviderConfig,
+    specs: &[ToolSpec],
+    enable_tool_search: Option<&str>,
+) -> bool {
+    let model = provider.model.as_deref().unwrap_or_default();
+    let context_window = get_model_info(model).max_context;
+    let threshold_tokens =
+        context_window.saturating_mul(get_auto_tool_search_percentage(enable_tool_search)) / 100;
+    let approx_tokens =
+        (deferred_tool_description_chars(specs) as f64 / TOOL_SEARCH_CHARS_PER_TOKEN).ceil() as u64;
+    approx_tokens >= threshold_tokens.max(1)
+}
+
+fn provider_uses_tool_search_with_env(
+    provider: &ProviderConfig,
+    specs: &[ToolSpec],
+    enable_tool_search: Option<&str>,
+    disable_experimental_betas: Option<&str>,
+) -> bool {
+    if !matches!(
+        provider.protocol,
+        ProviderProtocol::Anthropic | ProviderProtocol::Bedrock | ProviderProtocol::Vertex
+    ) {
+        return false;
+    }
+    if !tool_search_enabled_optimistic_with_env(
+        provider,
+        enable_tool_search,
+        disable_experimental_betas,
+    ) {
+        return false;
+    }
+    if !model_supports_tool_reference(provider.model.as_deref()) {
+        return false;
+    }
+    if !specs.iter().any(ToolSpec::is_tool_search) {
+        return false;
+    }
+    if !specs.iter().any(ToolSpec::is_deferred) {
+        return false;
+    }
+
+    match get_tool_search_mode_with_env(enable_tool_search, disable_experimental_betas) {
+        ToolSearchMode::Tst => true,
+        ToolSearchMode::TstAuto => {
+            tool_search_auto_threshold_met(provider, specs, enable_tool_search)
+        }
+        ToolSearchMode::Standard => false,
+    }
+}
+
+fn provider_uses_tool_search(provider: &ProviderConfig, specs: &[ToolSpec]) -> bool {
+    let enable_tool_search = env::var("ENABLE_TOOL_SEARCH").ok();
+    let disable_experimental_betas = env::var("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS").ok();
+    provider_uses_tool_search_with_env(
+        provider,
+        specs,
+        enable_tool_search.as_deref(),
+        disable_experimental_betas.as_deref(),
+    )
+}
+
+pub async fn provider_runtime_tool_specs_for_request(
     provider: &ProviderConfig,
     conversation: &[ConversationEntry],
+    carried_discovered_tools: &BTreeSet<String>,
 ) -> Vec<ToolSpec> {
     let specs = runtime_provider_tool_specs().await;
     if provider_uses_tool_search(provider, &specs) {
-        return runtime_visible_provider_tool_specs(conversation).await;
+        return runtime_visible_provider_tool_specs_with_discovered_tools(
+            conversation,
+            carried_discovered_tools,
+        )
+        .await;
     }
 
     specs
@@ -1163,8 +1378,9 @@ async fn current_provider_tool_specs_for_request(
 async fn current_openai_tool_schemas(
     provider: &ProviderConfig,
     conversation: &[ConversationEntry],
+    carried_discovered_tools: &BTreeSet<String>,
 ) -> Vec<Value> {
-    current_provider_tool_specs_for_request(provider, conversation)
+    provider_runtime_tool_specs_for_request(provider, conversation, carried_discovered_tools)
         .await
         .into_iter()
         .map(|tool| tool.to_openai_schema())
@@ -1174,8 +1390,11 @@ async fn current_openai_tool_schemas(
 async fn current_anthropic_tool_schemas(
     provider: &ProviderConfig,
     conversation: &[ConversationEntry],
+    carried_discovered_tools: &BTreeSet<String>,
 ) -> Vec<Value> {
-    let specs = current_provider_tool_specs_for_request(provider, conversation).await;
+    let specs =
+        provider_runtime_tool_specs_for_request(provider, conversation, carried_discovered_tools)
+            .await;
     let tool_search_enabled = provider_uses_tool_search(provider, &specs);
     specs
         .into_iter()
@@ -1192,7 +1411,8 @@ fn tool_search_enabled_from_tool_schemas(tools: &[Value]) -> bool {
 }
 
 fn available_tool_names_from_schemas(tools: &[Value]) -> BTreeSet<String> {
-    tools.iter()
+    tools
+        .iter()
         .filter_map(|tool| tool.get("name").and_then(Value::as_str))
         .map(ToOwned::to_owned)
         .collect()
@@ -1216,7 +1436,8 @@ fn normalize_anthropic_tool_result_content_blocks(
             if !tool_search_enabled {
                 return false;
             }
-            block.get("tool_name")
+            block
+                .get("tool_name")
                 .and_then(Value::as_str)
                 .is_none_or(|tool_name| available_tool_names.contains(tool_name))
         })
@@ -1263,11 +1484,132 @@ fn normalize_anthropic_conversation_for_tool_search(
         .collect()
 }
 
+fn user_message_content_has_tool_reference(content: &[Value]) -> bool {
+    content.iter().any(|block| {
+        block.get("type").and_then(Value::as_str) == Some("tool_result")
+            && block
+                .get("content")
+                .and_then(Value::as_array)
+                .is_some_and(|tool_result_content| {
+                    tool_result_content.iter().any(is_tool_reference_block)
+                })
+    })
+}
+
+fn user_message_has_tool_reference_turn_boundary(content: &[Value]) -> bool {
+    content.iter().any(|block| {
+        block.get("type").and_then(Value::as_str) == Some("text")
+            && block
+                .get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.starts_with(TOOL_REFERENCE_TURN_BOUNDARY))
+    })
+}
+
+fn inject_tool_reference_turn_boundary_siblings(messages: Vec<Value>) -> Vec<Value> {
+    messages
+        .into_iter()
+        .map(|mut message| {
+            if message.get("role").and_then(Value::as_str) != Some("user") {
+                return message;
+            }
+            let Some(content) = message.get("content").and_then(Value::as_array).cloned() else {
+                return message;
+            };
+            if !user_message_content_has_tool_reference(&content)
+                || user_message_has_tool_reference_turn_boundary(&content)
+            {
+                return message;
+            }
+
+            let mut updated = content;
+            updated.push(json!({
+                "type": "text",
+                "text": TOOL_REFERENCE_TURN_BOUNDARY,
+            }));
+            message["content"] = Value::Array(updated);
+            message
+        })
+        .collect()
+}
+
+fn tool_reference_relocation_enabled() -> bool {
+    env::var("REMOTE_CODE_TOOLREF_DEFER_J8M")
+        .ok()
+        .as_deref()
+        .map(is_env_truthy)
+        .unwrap_or(true)
+}
+
+fn relocate_tool_reference_siblings(messages: Vec<Value>) -> Vec<Value> {
+    let mut result = messages;
+
+    for index in 0..result.len() {
+        let Some(content) = result[index]
+            .get("content")
+            .and_then(Value::as_array)
+            .cloned()
+        else {
+            continue;
+        };
+        if result[index].get("role").and_then(Value::as_str) != Some("user")
+            || !user_message_content_has_tool_reference(&content)
+        {
+            continue;
+        }
+
+        let text_siblings = content
+            .iter()
+            .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+            .cloned()
+            .collect::<Vec<_>>();
+        if text_siblings.is_empty() {
+            continue;
+        }
+
+        let target_index = ((index + 1)..result.len()).find(|candidate_index| {
+            let Some(candidate_content) = result[*candidate_index]
+                .get("content")
+                .and_then(Value::as_array)
+            else {
+                return false;
+            };
+            result[*candidate_index].get("role").and_then(Value::as_str) == Some("user")
+                && candidate_content
+                    .iter()
+                    .any(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
+                && !user_message_content_has_tool_reference(candidate_content)
+        });
+
+        let Some(target_index) = target_index else {
+            continue;
+        };
+
+        result[index]["content"] = Value::Array(
+            content
+                .into_iter()
+                .filter(|block| block.get("type").and_then(Value::as_str) != Some("text"))
+                .collect(),
+        );
+        let mut target_content = result[target_index]
+            .get("content")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        target_content.extend(text_siblings);
+        result[target_index]["content"] = Value::Array(target_content);
+    }
+
+    result
+}
+
 async fn prepare_anthropic_request_surface(
     provider: &ProviderConfig,
     conversation: &[ConversationEntry],
+    carried_discovered_tools: &BTreeSet<String>,
 ) -> (Vec<Value>, Vec<Value>, Vec<Value>) {
-    let tools = current_anthropic_tool_schemas(provider, conversation).await;
+    let tools =
+        current_anthropic_tool_schemas(provider, conversation, carried_discovered_tools).await;
     let available_tool_names = available_tool_names_from_schemas(&tools);
     let normalized_conversation = normalize_anthropic_conversation_for_tool_search(
         conversation,
@@ -1275,6 +1617,11 @@ async fn prepare_anthropic_request_surface(
         tool_search_enabled_from_tool_schemas(&tools),
     );
     let (system, messages) = to_anthropic_messages(&normalized_conversation);
+    let messages = if tool_reference_relocation_enabled() {
+        relocate_tool_reference_siblings(messages)
+    } else {
+        inject_tool_reference_turn_boundary_siblings(messages)
+    };
     (system, messages, tools)
 }
 
@@ -1800,12 +2147,16 @@ pub fn is_prompt_too_long(error: &ProviderError) -> bool {
 mod tests {
     use super::{
         ProviderClient, add_stable_cache_control, apply_anthropic_request_metadata, build_headers,
-        current_anthropic_tool_schemas, mock_response, parse_anthropic_response,
-        parse_openai_response, strip_reasoning_tags, to_anthropic_messages, to_openai_messages,
+        current_anthropic_tool_schemas, get_tool_search_mode_with_env,
+        inject_tool_reference_turn_boundary_siblings, mock_response, parse_anthropic_response,
+        parse_openai_response, provider_runtime_tool_specs_for_request,
+        provider_uses_tool_search_with_env, relocate_tool_reference_siblings, strip_reasoning_tags,
+        to_anthropic_messages, to_openai_messages,
     };
     use axum::{Json, Router, extract::State, routing::post};
     use rc_core::{ConversationEntry, ToolCall};
     use serde_json::json;
+    use std::collections::BTreeSet;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -1866,12 +2217,68 @@ mod tests {
         );
     }
 
+    #[test]
+    fn tool_search_mode_honors_env_and_kill_switch() {
+        assert_eq!(
+            get_tool_search_mode_with_env(None, None),
+            super::ToolSearchMode::Tst
+        );
+        assert_eq!(
+            get_tool_search_mode_with_env(Some("auto"), None),
+            super::ToolSearchMode::TstAuto
+        );
+        assert_eq!(
+            get_tool_search_mode_with_env(Some("auto:0"), None),
+            super::ToolSearchMode::Tst
+        );
+        assert_eq!(
+            get_tool_search_mode_with_env(Some("auto:100"), None),
+            super::ToolSearchMode::Standard
+        );
+        assert_eq!(
+            get_tool_search_mode_with_env(Some("true"), Some("1")),
+            super::ToolSearchMode::Standard
+        );
+    }
+
+    #[tokio::test]
+    async fn proxy_anthropic_requests_fall_back_to_inline_tools_by_default() {
+        let mut provider = test_provider_config("https://proxy.example.com/v1/messages".to_owned());
+        provider.protocol = rc_core::ProviderProtocol::Anthropic;
+
+        let specs = provider_runtime_tool_specs_for_request(&provider, &[], &BTreeSet::new()).await;
+        let names = specs
+            .iter()
+            .map(|spec| spec.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"web_fetch"));
+        assert!(!names.contains(&"tool_search"));
+    }
+
+    #[tokio::test]
+    async fn proxy_anthropic_tool_search_can_be_forced_on_explicitly() {
+        let mut provider = test_provider_config("https://proxy.example.com/v1/messages".to_owned());
+        provider.protocol = rc_core::ProviderProtocol::Anthropic;
+
+        let specs = rc_tools::runtime_provider_tool_specs().await;
+        assert!(!provider_uses_tool_search_with_env(
+            &provider, &specs, None, None
+        ));
+        assert!(provider_uses_tool_search_with_env(
+            &provider,
+            &specs,
+            Some("true"),
+            None,
+        ));
+    }
+
     #[tokio::test]
     async fn anthropic_tool_schemas_only_include_discovered_deferred_tools() {
         let mut provider = test_provider_config("https://api.anthropic.com/v1/messages".to_owned());
         provider.protocol = rc_core::ProviderProtocol::Anthropic;
 
-        let initial = current_anthropic_tool_schemas(&provider, &[])
+        let initial = current_anthropic_tool_schemas(&provider, &[], &BTreeSet::new())
             .await
             .into_iter()
             .filter_map(|tool| {
@@ -1885,18 +2292,47 @@ mod tests {
         assert!(initial.iter().any(|name| name == "read_file"));
         assert!(!initial.iter().any(|name| name == "web_fetch"));
 
-        let discovered = current_anthropic_tool_schemas(&provider, &[ConversationEntry::tool(
-            "tool-1",
-            "tool_search",
-            r#"{"query":"web","results":[{"name":"web_fetch"}]}"#,
-            false,
-        )])
+        let discovered = current_anthropic_tool_schemas(
+            &provider,
+            &[ConversationEntry::tool(
+                "tool-1",
+                "tool_search",
+                r#"{"query":"web","results":[{"name":"web_fetch"}]}"#,
+                false,
+            )],
+            &BTreeSet::new(),
+        )
         .await;
 
-        assert!(discovered.iter().any(|tool| tool.get("name").and_then(serde_json::Value::as_str) == Some("web_fetch")));
+        assert!(
+            discovered
+                .iter()
+                .any(|tool| tool.get("name").and_then(serde_json::Value::as_str)
+                    == Some("web_fetch"))
+        );
         assert!(discovered.iter().any(|tool| {
             tool.get("name").and_then(serde_json::Value::as_str) == Some("web_fetch")
-                && tool.get("defer_loading").and_then(serde_json::Value::as_bool) == Some(true)
+                && tool
+                    .get("defer_loading")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
+        }));
+    }
+
+    #[tokio::test]
+    async fn anthropic_tool_schemas_include_carried_discovered_tools() {
+        let mut provider = test_provider_config("https://api.anthropic.com/v1/messages".to_owned());
+        provider.protocol = rc_core::ProviderProtocol::Anthropic;
+
+        let carried = BTreeSet::from(["web_fetch".to_owned()]);
+        let discovered = current_anthropic_tool_schemas(&provider, &[], &carried).await;
+
+        assert!(discovered.iter().any(|tool| {
+            tool.get("name").and_then(serde_json::Value::as_str) == Some("web_fetch")
+                && tool
+                    .get("defer_loading")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
         }));
     }
 
@@ -1992,10 +2428,12 @@ mod tests {
             .as_array()
             .expect("content blocks array");
         assert_eq!(content[0]["type"], "text");
-        assert!(content[0]["text"]
-            .as_str()
-            .expect("text")
-            .contains("system-reminder"));
+        assert!(
+            content[0]["text"]
+                .as_str()
+                .expect("text")
+                .contains("system-reminder")
+        );
     }
 
     #[test]
@@ -2154,7 +2592,74 @@ mod tests {
         assert_eq!(tool_results[0]["type"], "tool_result");
         assert!(tool_results[0]["content"].is_array());
         assert_eq!(tool_results[0]["content"][0]["type"], "tool_reference");
-        assert_eq!(tool_results[0]["content"][0]["tool_name"], "read_mcp_resource");
+        assert_eq!(
+            tool_results[0]["content"][0]["tool_name"],
+            "read_mcp_resource"
+        );
+    }
+
+    #[test]
+    fn anthropic_tool_reference_messages_relocate_text_siblings() {
+        let relocated = relocate_tool_reference_siblings(vec![
+            json!({
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call-1",
+                        "content": [
+                            {"type": "tool_reference", "tool_name": "web_fetch"}
+                        ]
+                    },
+                    {"type": "text", "text": "system reminder"},
+                ],
+            }),
+            json!({
+                "role": "assistant",
+                "content": [{"type": "text", "text": "continue"}],
+            }),
+            json!({
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call-2",
+                        "content": "ok"
+                    }
+                ],
+            }),
+        ]);
+
+        let source_content = relocated[0]["content"].as_array().expect("source content");
+        assert_eq!(source_content.len(), 1);
+        assert_eq!(source_content[0]["type"], "tool_result");
+
+        let target_content = relocated[2]["content"].as_array().expect("target content");
+        assert_eq!(target_content.len(), 2);
+        assert_eq!(target_content[0]["type"], "tool_result");
+        assert_eq!(target_content[1]["type"], "text");
+        assert_eq!(target_content[1]["text"], "system reminder");
+    }
+
+    #[test]
+    fn anthropic_tool_reference_messages_inject_turn_boundary_when_relocation_disabled() {
+        let injected = inject_tool_reference_turn_boundary_siblings(vec![json!({
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call-1",
+                    "content": [
+                        {"type": "tool_reference", "tool_name": "web_fetch"}
+                    ]
+                }
+            ],
+        })]);
+
+        let content = injected[0]["content"].as_array().expect("content array");
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[1]["type"], "text");
+        assert_eq!(content[1]["text"], "Tool loaded.");
     }
 
     #[test]

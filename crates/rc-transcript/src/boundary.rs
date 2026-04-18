@@ -13,6 +13,9 @@ pub struct CompactBoundary {
     /// Optional count of messages summarized by the compaction step.
     #[serde(default)]
     pub messages_summarized: Option<usize>,
+    /// Tool names discovered before compaction that must survive suffix-only resume.
+    #[serde(default)]
+    pub pre_compact_discovered_tools: Vec<String>,
     /// Optional relink information for suffix/prefix-preserving compactions.
     #[serde(default)]
     pub preserved_segment: Option<PreservedSegment>,
@@ -27,6 +30,7 @@ impl CompactBoundary {
             pre_tokens,
             user_context: None,
             messages_summarized: None,
+            pre_compact_discovered_tools: Vec::new(),
             preserved_segment: None,
         }
     }
@@ -59,6 +63,10 @@ mod tests {
             pre_tokens: 4096,
             user_context: Some("session summary".to_owned()),
             messages_summarized: Some(12),
+            pre_compact_discovered_tools: vec![
+                "mcp__context7__query_docs".to_owned(),
+                "web_fetch".to_owned(),
+            ],
             preserved_segment: Some(PreservedSegment {
                 head_uuid: "head".to_owned(),
                 anchor_uuid: "anchor".to_owned(),

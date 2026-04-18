@@ -28,7 +28,7 @@ use uuid::Uuid;
 
 use crate::conversation::{
     PromptEventSink, PromptStreamEvent, discover_runtime_extensions, initialize_conversation,
-    run_prompt,
+    restore_discovered_tool_scope, run_prompt,
 };
 use crate::hooks::{
     HookRunState, RuntimeHookDiscovery, discover_runtime_hooks, ensure_session_start_hooks,
@@ -100,13 +100,18 @@ pub(crate) async fn run_headless(
     let processor_emitter = emitter.clone();
     let processor_interrupted = interrupted.clone();
     let processor = tokio::spawn(async move {
-        let backend: Arc<dyn crate::conversation_backend::ConversationBackend> =
-            Arc::new(ProviderCompatBackend::new(
-                Arc::new(rc_provider::ProviderClient::new()?),
-                &processor_config.provider,
-            ));
+        let backend = ProviderCompatBackend::new(
+            Arc::new(rc_provider::ProviderClient::new()?),
+            &processor_config.provider,
+        );
+        let discovered_tool_scope = backend.discovered_tool_scope();
         let discovery = discover_runtime_hooks(&processor_config, &[]);
         let mut conversation = initialize_conversation(&processor_store, &processor_config, None)?;
+        restore_discovered_tool_scope(
+            &processor_store,
+            processor_config.session_id,
+            &discovered_tool_scope,
+        )?;
         let mut hook_state = HookRunState::load(&processor_store, processor_config.session_id)?;
         ensure_session_start_hooks(
             &discovery,
@@ -125,7 +130,8 @@ pub(crate) async fn run_headless(
                 Arc::clone(&processor_emitter),
                 &processor_config,
                 &processor_store,
-                backend.clone(),
+                Arc::new(backend.clone()),
+                discovered_tool_scope.clone(),
                 processor_broker.clone(),
                 &discovery,
                 &mut hook_state,
@@ -362,6 +368,7 @@ async fn run_headless_prompt_once<W: Write + Send + 'static>(
     config: &RuntimeConfig,
     store: &SessionStore,
     backend: Arc<dyn crate::conversation_backend::ConversationBackend>,
+    discovered_tool_scope: rc_provider::DiscoveredToolScope,
     broker: Arc<dyn PermissionBroker>,
     discovery: &RuntimeHookDiscovery,
     hook_state: &mut HookRunState,
@@ -385,6 +392,7 @@ async fn run_headless_prompt_once<W: Write + Send + 'static>(
         config,
         store,
         backend,
+        discovered_tool_scope,
         broker,
         Some(event_sink),
         discovery,
@@ -814,6 +822,7 @@ mod tests {
             &config,
             &store,
             backend.clone(),
+            rc_provider::DiscoveredToolScope::default(),
             mock_broker(&config),
             &RuntimeHookDiscovery::default(),
             &mut hook_state,
@@ -890,6 +899,7 @@ mod tests {
             &config,
             &store,
             Arc::new(FailingStreamingBackend),
+            rc_provider::DiscoveredToolScope::default(),
             mock_broker(&config),
             &RuntimeHookDiscovery::default(),
             &mut hook_state,

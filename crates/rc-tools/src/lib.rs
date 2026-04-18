@@ -290,7 +290,15 @@ pub async fn runtime_tool_search_candidate_specs() -> Vec<ToolSpec> {
 pub fn extract_discovered_tool_names_from_conversation(
     conversation: &[ConversationEntry],
 ) -> std::collections::BTreeSet<String> {
-    let mut discovered = std::collections::BTreeSet::new();
+    extract_discovered_tool_names(conversation, &std::collections::BTreeSet::new())
+}
+
+#[must_use]
+pub fn extract_discovered_tool_names(
+    conversation: &[ConversationEntry],
+    carried_discovered_tools: &std::collections::BTreeSet<String>,
+) -> std::collections::BTreeSet<String> {
+    let mut discovered = carried_discovered_tools.clone();
 
     for entry in conversation {
         if entry.role != ConversationRole::Tool {
@@ -344,6 +352,17 @@ pub fn extract_discovered_tool_names_from_conversation(
 pub async fn runtime_visible_provider_tool_specs(
     conversation: &[ConversationEntry],
 ) -> Vec<ToolSpec> {
+    runtime_visible_provider_tool_specs_with_discovered_tools(
+        conversation,
+        &std::collections::BTreeSet::new(),
+    )
+    .await
+}
+
+pub async fn runtime_visible_provider_tool_specs_with_discovered_tools(
+    conversation: &[ConversationEntry],
+    carried_discovered_tools: &std::collections::BTreeSet<String>,
+) -> Vec<ToolSpec> {
     let specs = runtime_provider_tool_specs().await;
     let has_tool_search = specs.iter().any(|spec| spec.is_tool_search());
     if !has_tool_search {
@@ -358,7 +377,7 @@ pub async fn runtime_visible_provider_tool_specs(
             .collect();
     }
 
-    let discovered = extract_discovered_tool_names_from_conversation(conversation);
+    let discovered = extract_discovered_tool_names(conversation, carried_discovered_tools);
     specs
         .into_iter()
         .filter(|spec| {
@@ -918,8 +937,10 @@ mod tests {
     use super::{
         CommandHookExecutionRequest, HookShell, RuntimeMcpServerPolicyEntry, ToolExecutionContext,
         ToolRuntimePolicy, builtin_tool_specs, configure_tool_runtime_policy, execute_command_hook,
-        execute_tool_call, extract_discovered_tool_names_from_conversation,
-        runtime_tool_search_candidate_specs, runtime_visible_provider_tool_specs,
+        execute_tool_call, extract_discovered_tool_names,
+        extract_discovered_tool_names_from_conversation, runtime_tool_search_candidate_specs,
+        runtime_visible_provider_tool_specs,
+        runtime_visible_provider_tool_specs_with_discovered_tools,
     };
     use once_cell::sync::Lazy;
     use rc_core::{
@@ -3692,6 +3713,23 @@ mod tests {
         assert!(discovered.contains("task_create"));
     }
 
+    #[test]
+    fn carried_discovered_tools_are_merged_with_conversation_history() {
+        let carried = std::collections::BTreeSet::from(["web_fetch".to_owned()]);
+        let discovered = extract_discovered_tool_names(
+            &[rc_core::ConversationEntry::tool(
+                "tool-2",
+                "toolsearch",
+                r#"{"query":"tasks","found_tools":[{"name":"task_create"}]}"#,
+                false,
+            )],
+            &carried,
+        );
+
+        assert!(discovered.contains("web_fetch"));
+        assert!(discovered.contains("task_create"));
+    }
+
     #[tokio::test]
     async fn tool_search_candidates_only_include_deferred_tools() {
         let specs = runtime_tool_search_candidate_specs().await;
@@ -3760,5 +3798,19 @@ mod tests {
         assert!(names.contains(&"web_fetch"));
         assert!(names.contains(&"todo_write"));
         assert!(!names.contains(&"tool_search"));
+    }
+
+    #[tokio::test]
+    async fn visible_provider_pool_keeps_carried_deferred_tools_after_compaction() {
+        let carried = std::collections::BTreeSet::from(["web_fetch".to_owned()]);
+        let specs = runtime_visible_provider_tool_specs_with_discovered_tools(&[], &carried).await;
+        let names = specs
+            .iter()
+            .map(|spec| spec.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"tool_search"));
+        assert!(names.contains(&"web_fetch"));
+        assert!(!names.contains(&"todo_write"));
     }
 }

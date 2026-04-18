@@ -398,6 +398,7 @@ mod tests {
             pre_tokens: 2048,
             user_context: Some("manual compact".to_owned()),
             messages_summarized: Some(4),
+            pre_compact_discovered_tools: vec!["web_fetch".to_owned()],
             preserved_segment: None,
         };
         let stored = StoredEvent {

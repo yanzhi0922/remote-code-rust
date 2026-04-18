@@ -15,7 +15,9 @@ use rc_core::{
 use rc_model::is_first_party_base_url;
 use rc_permissions::PermissionBroker;
 use rc_protocol::UsagePayload;
-use rc_provider::ConversationBackend;
+use rc_provider::{
+    ConversationBackend, DiscoveredToolScope, provider_runtime_tool_specs_for_request,
+};
 use rc_query_engine::{
     EffortLevel, ProcessUserInputContext, ProviderInvocationMode, QueryCheckpointKind, QueryEngine,
     QueryEngineConfig, QueryObserver, QueryObserverEvent, ToolRunResult, ToolRunner,
@@ -32,7 +34,7 @@ use rc_tools::{
     ToolExecutionContext, ToolSpec, execute_tool_call, is_runtime_dynamic_mcp_tool_name,
     plan_mode::normalize_exit_plan_mode_tool_calls,
     runtime_plan_mode::inject_plan_mode_runtime_messages, runtime_provider_tool_spec,
-    runtime_provider_tool_specs, runtime_visible_provider_tool_specs,
+    runtime_provider_tool_specs,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -48,6 +50,7 @@ use crate::hooks::{
 
 struct CompatSharedState {
     conversation: Mutex<Vec<ConversationEntry>>,
+    discovered_tool_scope: DiscoveredToolScope,
     hook_state: Mutex<HookRunState>,
     streamed_tool_calls: Mutex<HashSet<String>>,
     latest_streaming_usage: Mutex<Option<UsagePayload>>,
@@ -135,7 +138,11 @@ fn wrap_in_system_reminder(content: &str) -> String {
     format!("<system-reminder>\n{content}\n</system-reminder>")
 }
 
-fn runtime_delta_entry<T>(marker_prefix: &str, payload: &T, text: String) -> Result<ConversationEntry>
+fn runtime_delta_entry<T>(
+    marker_prefix: &str,
+    payload: &T,
+    text: String,
+) -> Result<ConversationEntry>
 where
     T: Serialize,
 {
@@ -753,6 +760,7 @@ async fn build_runtime_system_prompt(
     config: &RuntimeConfig,
     conversation: &[ConversationEntry],
     overrides: &CompatRunOverrides,
+    discovered_tool_scope: &DiscoveredToolScope,
 ) -> Result<RuntimeSystemPrompt> {
     let has_custom_system_prompt = overrides
         .system_prompt
@@ -803,7 +811,13 @@ async fn build_runtime_system_prompt(
     }
 
     let tool_specs = runtime_provider_tool_specs().await;
-    let visible_tool_specs = runtime_visible_provider_tool_specs(conversation).await;
+    let carried_discovered_tools = discovered_tool_scope.snapshot();
+    let visible_tool_specs = provider_runtime_tool_specs_for_request(
+        &config.provider,
+        conversation,
+        &carried_discovered_tools,
+    )
+    .await;
     let mcp_catalog = rc_tools::mcp_catalog::runtime_mcp_catalog().await;
     let mut enabled_tools = HashSet::new();
     for spec in &visible_tool_specs {
@@ -911,8 +925,10 @@ async fn refresh_runtime_system_prompt(
     config: &RuntimeConfig,
     conversation: &mut Vec<ConversationEntry>,
     overrides: &CompatRunOverrides,
+    discovered_tool_scope: &DiscoveredToolScope,
 ) -> Result<()> {
-    let prompt = build_runtime_system_prompt(config, conversation, overrides).await?;
+    let prompt =
+        build_runtime_system_prompt(config, conversation, overrides, discovered_tool_scope).await?;
 
     if let Some(system_entry) = conversation
         .iter_mut()
@@ -1012,6 +1028,15 @@ impl QueryObserver for CompatObserver {
                 estimated_tokens_after,
             } => {
                 let entries_removed = before_messages.saturating_sub(after_messages);
+                let mut discovered_before_compaction = self.shared.discovered_tool_scope.snapshot();
+                {
+                    let conversation = self.shared.conversation.lock().await;
+                    discovered_before_compaction.extend(rc_tools::extract_discovered_tool_names(
+                        &conversation,
+                        &std::collections::BTreeSet::new(),
+                    ));
+                }
+
                 self.store.append_named_event(
                     self.config.session_id,
                     "context_compacted",
@@ -1026,19 +1051,32 @@ impl QueryObserver for CompatObserver {
                         "threshold_tokens": threshold_tokens,
                     }),
                 )?;
-                self.store.append_named_event(
-                    self.config.session_id,
-                    "compact_boundary",
-                    serde_json::json!({
-                        "trigger": "auto",
-                        "pre_tokens": estimated_tokens_before,
-                        "messages_summarized": entries_removed,
-                        "user_context": "query_engine_auto_compact",
-                    }),
+                let mut boundary = rc_transcript::CompactBoundary::new(
+                    rc_transcript::CompactTrigger::Auto,
+                    estimated_tokens_before,
+                );
+                boundary.messages_summarized = Some(entries_removed);
+                boundary.user_context = Some("query_engine_auto_compact".to_owned());
+                if !discovered_before_compaction.is_empty() {
+                    boundary.pre_compact_discovered_tools =
+                        discovered_before_compaction.iter().cloned().collect();
+                }
+                self.store.append_transcript_entry(
+                    &rc_transcript::TranscriptEntry::compact_boundary_now(
+                        self.config.session_id,
+                        boundary,
+                    ),
                 )?;
                 for entry in &compacted_conversation {
                     self.store
                         .append_conversation_entry(self.config.session_id, entry)?;
+                }
+                self.shared
+                    .discovered_tool_scope
+                    .replace(discovered_before_compaction);
+                {
+                    let mut conversation = self.shared.conversation.lock().await;
+                    *conversation = compacted_conversation.clone();
                 }
                 if let Some(event_sink) = self.event_sink.as_ref() {
                     event_sink(PromptStreamEvent::ContextCompacted {
@@ -1403,6 +1441,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
     config: &RuntimeConfig,
     store: &SessionStore,
     backend: Arc<dyn ConversationBackend>,
+    discovered_tool_scope: DiscoveredToolScope,
     broker: Arc<dyn PermissionBroker>,
     event_sink: Option<PromptEventSink>,
     discovery: &RuntimeHookDiscovery,
@@ -1414,6 +1453,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
         config,
         store,
         backend,
+        discovered_tool_scope,
         broker,
         event_sink,
         discovery,
@@ -1430,6 +1470,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
     config: &RuntimeConfig,
     store: &SessionStore,
     backend: Arc<dyn ConversationBackend>,
+    discovered_tool_scope: DiscoveredToolScope,
     broker: Arc<dyn PermissionBroker>,
     event_sink: Option<PromptEventSink>,
     discovery: &RuntimeHookDiscovery,
@@ -1446,7 +1487,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
     let started = Instant::now();
     inject_plan_mode_runtime_messages(store, config.session_id, conversation)?;
     inject_runtime_delta_messages(config, store, conversation).await?;
-    refresh_runtime_system_prompt(config, conversation, &overrides).await?;
+    refresh_runtime_system_prompt(config, conversation, &overrides, &discovered_tool_scope).await?;
     let provider_conversation = conversation_with_runtime_user_context(config, conversation);
     let existing_messages = provider_conversation
         .iter()
@@ -1481,6 +1522,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
     let compat_store = Arc::new(SessionStore::open(config.paths.clone())?);
     let shared = Arc::new(CompatSharedState {
         conversation: Mutex::new(conversation.clone()),
+        discovered_tool_scope: discovered_tool_scope.clone(),
         hook_state: Mutex::new(std::mem::take(hook_state)),
         streamed_tool_calls: Mutex::new(HashSet::new()),
         latest_streaming_usage: Mutex::new(None),
@@ -1781,7 +1823,9 @@ mod tests {
         LayeredPermissionBroker, PermissionBroker, PermissionDecision, PermissionRequest,
         StaticPermissionBroker,
     };
-    use rc_provider::{ConversationBackend, ProviderCompatBackend, StreamingCallbacks};
+    use rc_provider::{
+        ConversationBackend, DiscoveredToolScope, ProviderCompatBackend, StreamingCallbacks,
+    };
     use rc_query_engine::{QueryObserver, QueryObserverEvent};
     use rc_session::{SessionStore, plan_state::PlanModeState};
     use rc_tools::mcp_catalog::clear_runtime_mcp_catalog_cache;
@@ -1797,12 +1841,11 @@ mod tests {
     use tokio::sync::Mutex as AsyncMutex;
 
     use super::{
-        CompatObserver, CompatRunOverrides, CompatSharedState,
-        DEFERRED_TOOLS_DELTA_MARKER, MCP_INSTRUCTIONS_DELTA_MARKER,
-        RuntimeDeferredToolsDeltaMarker, RuntimeMcpInstructionsDeltaMarker,
-        announced_deferred_tool_names, announced_mcp_instruction_names, runtime_delta_entry,
-        augment_post_compact_conversation_for_runtime, refresh_runtime_system_prompt,
-        run_prompt_with_query_engine_compat,
+        CompatObserver, CompatRunOverrides, CompatSharedState, DEFERRED_TOOLS_DELTA_MARKER,
+        MCP_INSTRUCTIONS_DELTA_MARKER, RuntimeDeferredToolsDeltaMarker,
+        RuntimeMcpInstructionsDeltaMarker, announced_deferred_tool_names,
+        announced_mcp_instruction_names, augment_post_compact_conversation_for_runtime,
+        refresh_runtime_system_prompt, run_prompt_with_query_engine_compat, runtime_delta_entry,
     };
     use crate::conversation::{PromptEventSink, PromptStreamEvent, initialize_conversation};
     use crate::hooks::{HookRunState, RuntimeHookDiscovery};
@@ -1983,7 +2026,13 @@ mod tests {
             config: config.clone(),
             store: Arc::new(SessionStore::open(config.paths.clone()).expect("observer store")),
             shared: Arc::new(CompatSharedState {
-                conversation: tokio::sync::Mutex::new(Vec::new()),
+                conversation: tokio::sync::Mutex::new(vec![ConversationEntry::tool(
+                    "tool-1",
+                    "tool_search",
+                    r#"{"query":"web","results":[{"name":"web_fetch"}]}"#,
+                    false,
+                )]),
+                discovered_tool_scope: DiscoveredToolScope::default(),
                 hook_state: tokio::sync::Mutex::new(HookRunState::default()),
                 streamed_tool_calls: tokio::sync::Mutex::new(std::collections::HashSet::new()),
                 latest_streaming_usage: tokio::sync::Mutex::new(None),
@@ -2018,12 +2067,21 @@ mod tests {
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].text, "summary");
         assert_eq!(loaded[1].text, "tail");
-        let events = store.load_events(config.session_id).expect("events");
-        assert!(
-            events
-                .iter()
-                .any(|event| event.event_type == "compact_boundary")
+        let transcript = store
+            .load_transcript_v2(config.session_id)
+            .expect("typed transcript");
+        let boundary = transcript
+            .iter()
+            .find_map(|entry| entry.as_compact_boundary())
+            .expect("compact boundary");
+        assert_eq!(
+            boundary.pre_compact_discovered_tools,
+            vec!["web_fetch".to_owned()]
         );
+        let carried = store
+            .load_carried_discovered_tool_names(config.session_id)
+            .expect("carried discovered tools");
+        assert!(carried.contains("web_fetch"));
     }
 
     fn python_command() -> Option<(String, Vec<String>)> {
@@ -2351,6 +2409,7 @@ while True:
             &config,
             &store,
             mock_provider_backend(&config),
+            DiscoveredToolScope::default(),
             mock_broker(&config),
             None,
             &discovery,
@@ -2424,6 +2483,7 @@ while True:
             &config,
             &store,
             mock_provider_backend(&config),
+            DiscoveredToolScope::default(),
             mock_broker(&config),
             None,
             &discovery,
@@ -2464,6 +2524,7 @@ while True:
                 system_prompt: Some("Follow child instructions".to_owned()),
                 allowed_tools: None,
             },
+            &DiscoveredToolScope::default(),
         )
         .await
         .expect("refresh runtime system prompt");
@@ -2510,6 +2571,7 @@ while True:
                 system_prompt: Some("Custom headless prompt".to_owned()),
                 allowed_tools: None,
             },
+            &DiscoveredToolScope::default(),
         )
         .await
         .expect("refresh runtime system prompt");
@@ -2581,6 +2643,7 @@ while True:
                 &config,
                 &store,
                 Arc::new(DynamicMcpRoundTripBackend),
+                DiscoveredToolScope::default(),
                 mock_broker(&config),
                 None,
                 &discovery,
@@ -2621,6 +2684,7 @@ while True:
             store: Arc::new(SessionStore::open(config.paths.clone()).expect("store")),
             shared: Arc::new(CompatSharedState {
                 conversation: tokio::sync::Mutex::new(Vec::new()),
+                discovered_tool_scope: DiscoveredToolScope::default(),
                 hook_state: tokio::sync::Mutex::new(HookRunState::default()),
                 streamed_tool_calls: tokio::sync::Mutex::new(std::collections::HashSet::new()),
                 latest_streaming_usage: tokio::sync::Mutex::new(None),
@@ -2719,6 +2783,7 @@ while True:
             &config,
             &store,
             backend.clone(),
+            DiscoveredToolScope::default(),
             mock_broker(&config),
             Some(event_sink),
             &discovery,
@@ -2760,6 +2825,7 @@ while True:
             &config,
             &store,
             Arc::new(FailingUsageStreamingBackend),
+            DiscoveredToolScope::default(),
             mock_broker(&config),
             Some(event_sink),
             &discovery,
@@ -2798,6 +2864,7 @@ while True:
             &config,
             &store,
             Arc::new(PermissionDeniedCommandBackend),
+            DiscoveredToolScope::default(),
             Arc::new(DenyCommandBroker),
             None,
             &discovery,
