@@ -1,8 +1,15 @@
 //! Web-related tools: web_fetch, web_search, web_browser.
 
+use std::env;
+use std::fs;
+use std::path::PathBuf;
+
 use anyhow::{Context, Result, anyhow};
 use regex::Regex;
 use serde_json::{Value, json};
+use tokio::process::Command;
+use tokio::time::{Duration, timeout};
+use uuid::Uuid;
 
 use super::ToolExecutionContext;
 
@@ -122,75 +129,7 @@ pub(crate) async fn web_browser_tool(
             let truncated: String = text.chars().take(50_000).collect();
             Ok(truncated)
         }
-        "screenshot" => {
-            // Structural page snapshot: fetch HTML and extract metadata.
-            let response = reqwest::get(url)
-                .await
-                .context("failed to fetch URL for screenshot")?;
-            let status = response.status();
-            if !status.is_success() {
-                return Err(anyhow!("HTTP {} for {}", status, url));
-            }
-            let text = response
-                .text()
-                .await
-                .context("failed to read response body")?;
-
-            // Extract <title>.
-            let title_re = Regex::new(r"(?i)<title[^>]*>(.*?)</title>").expect("valid title regex");
-            let title = title_re
-                .captures(&text)
-                .and_then(|c| c.get(1))
-                .map(|m| m.as_str().trim().to_owned())
-                .unwrap_or_default();
-
-            // Extract headings (h1–h6).
-            let heading_re =
-                Regex::new(r"(?i)<h[1-6][^>]*>(.*?)</h[1-6]>").expect("valid heading regex");
-            let headings: Vec<String> = heading_re
-                .captures_iter(&text)
-                .filter_map(|c| c.get(1).map(|m| m.as_str().trim().to_owned()))
-                .take(20)
-                .collect();
-
-            // Count images and links.
-            let img_count = Regex::new(r"(?i)<img")
-                .expect("valid img regex")
-                .find_iter(&text)
-                .count();
-            let link_count = Regex::new(r"(?i)<a ")
-                .expect("valid link regex")
-                .find_iter(&text)
-                .count();
-
-            // Extract meta description.
-            let meta_re = Regex::new(r#"(?i)<meta\s+name="description"\s+content="([^"]*)""#)
-                .expect("valid meta regex");
-            let description = meta_re
-                .captures(&text)
-                .and_then(|c| c.get(1))
-                .map(|m| m.as_str().to_owned())
-                .unwrap_or_default();
-
-            // Plain-text preview.
-            let strip_re = Regex::new(r"<[^>]+>").expect("valid html-stripping regex");
-            let plain = strip_re.replace_all(&text, " ");
-            let collapsed: String = plain.split_whitespace().collect::<Vec<_>>().join(" ");
-            let preview: String = collapsed.chars().take(3000).collect();
-
-            Ok(json!({
-                "type": "page_snapshot",
-                "url": url,
-                "title": title,
-                "description": description,
-                "headings": headings,
-                "image_count": img_count,
-                "link_count": link_count,
-                "text_preview": preview,
-                "note": "Structural snapshot extracted from HTML. For visual screenshots, use a headed browser."
-            })
-            .to_string())
-        }
+        "screenshot" => capture_visual_screenshot(url, _context).await,
         "extract_links" => {
             let response = reqwest::get(url)
                 .await
@@ -239,5 +178,254 @@ pub(crate) async fn web_browser_tool(
         _ => Err(anyhow!(
             "action must be 'fetch', 'extract_links', 'extract_text', or 'screenshot'"
         )),
+    }
+}
+
+async fn capture_visual_screenshot(url: &str, context: &ToolExecutionContext) -> Result<String> {
+    let browser = detect_headless_browser().await.ok_or_else(|| {
+        anyhow!("no compatible Chromium-based browser found for screenshot capture")
+    })?;
+
+    let screenshots_dir = env::temp_dir()
+        .join("remote-code-rust")
+        .join("web-screenshots");
+    fs::create_dir_all(&screenshots_dir).context("failed to create screenshot directory")?;
+
+    let browser_profile_dir = env::temp_dir()
+        .join("remote-code-rust")
+        .join("web-browser-profiles")
+        .join(Uuid::new_v4().to_string());
+    fs::create_dir_all(&browser_profile_dir)
+        .context("failed to create browser profile directory")?;
+
+    let screenshot_path = screenshots_dir.join(format!("{}.png", Uuid::new_v4()));
+    let timeout_secs = ((context.timeout_ms / 1000).clamp(5, 60)) as u64;
+
+    let mut last_error: Option<String> = None;
+    for headless_flag in ["--headless=new", "--headless"] {
+        let mut command = Command::new(&browser);
+        command.args([
+            headless_flag,
+            "--disable-gpu",
+            "--hide-scrollbars",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-background-networking",
+            "--window-size=1440,1024",
+        ]);
+        command.arg(format!(
+            "--user-data-dir={}",
+            browser_profile_dir.to_string_lossy()
+        ));
+        command.arg(format!(
+            "--screenshot={}",
+            screenshot_path.to_string_lossy()
+        ));
+        command.arg(url);
+
+        let output = timeout(Duration::from_secs(timeout_secs), command.output())
+            .await
+            .with_context(|| {
+                format!(
+                    "timed out after {timeout_secs}s while launching {}",
+                    browser.display()
+                )
+            })?
+            .with_context(|| format!("failed to launch browser at {}", browser.display()))?;
+
+        if output.status.success() && screenshot_path.exists() {
+            let size_bytes = fs::metadata(&screenshot_path)
+                .context("failed to read screenshot metadata")?
+                .len();
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            let _ = fs::remove_dir_all(&browser_profile_dir);
+            return Ok(json!({
+                "type": "web_browser_screenshot",
+                "url": url,
+                "path": screenshot_path.to_string_lossy(),
+                "mime_type": "image/png",
+                "size_bytes": size_bytes,
+                "browser": browser.to_string_lossy(),
+                "stderr": if stderr.is_empty() { Value::Null } else { Value::String(stderr) },
+            })
+            .to_string());
+        }
+
+        last_error = Some(build_browser_failure(&output, &browser, headless_flag));
+        let _ = fs::remove_file(&screenshot_path);
+    }
+
+    let _ = fs::remove_dir_all(&browser_profile_dir);
+    Err(anyhow!(last_error.unwrap_or_else(|| {
+        "browser exited without creating a screenshot".to_owned()
+    })))
+}
+
+fn build_browser_failure(
+    output: &std::process::Output,
+    browser: &std::path::Path,
+    headless_flag: &str,
+) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let detail = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        "no browser output captured".to_owned()
+    };
+    format!(
+        "failed to capture screenshot with {} {}: {}",
+        browser.display(),
+        headless_flag,
+        detail
+    )
+}
+
+async fn detect_headless_browser() -> Option<PathBuf> {
+    if let Some(path) = browser_from_env() {
+        return Some(path);
+    }
+    if let Some(path) = browser_from_path().await {
+        return Some(path);
+    }
+    browser_from_known_locations()
+}
+
+fn browser_from_env() -> Option<PathBuf> {
+    for key in ["REMOTE_CODE_BROWSER", "BROWSER"] {
+        let candidate = PathBuf::from(env::var_os(key)?);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+async fn browser_from_path() -> Option<PathBuf> {
+    #[cfg(windows)]
+    let resolver = "where";
+    #[cfg(not(windows))]
+    let resolver = "which";
+
+    for name in browser_binary_names() {
+        let output = Command::new(resolver).arg(name).output().await.ok()?;
+        if !output.status.success() {
+            continue;
+        }
+        let candidate = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from);
+        if let Some(path) = candidate
+            && path.exists()
+        {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn browser_from_known_locations() -> Option<PathBuf> {
+    browser_known_locations()
+        .into_iter()
+        .find(|candidate| candidate.exists())
+}
+
+fn browser_binary_names() -> &'static [&'static str] {
+    #[cfg(windows)]
+    {
+        &["msedge.exe", "chrome.exe"]
+    }
+    #[cfg(target_os = "macos")]
+    {
+        &[
+            "Google Chrome",
+            "Microsoft Edge",
+            "Chromium",
+            "google-chrome",
+            "microsoft-edge",
+            "chromium",
+        ]
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        &[
+            "google-chrome",
+            "google-chrome-stable",
+            "microsoft-edge",
+            "chromium",
+            "chromium-browser",
+        ]
+    }
+}
+
+fn browser_known_locations() -> Vec<PathBuf> {
+    #[cfg(windows)]
+    {
+        let mut candidates = Vec::new();
+        if let Some(program_files_x86) = env::var_os("ProgramFiles(x86)") {
+            candidates.push(
+                PathBuf::from(&program_files_x86)
+                    .join("Microsoft")
+                    .join("Edge")
+                    .join("Application")
+                    .join("msedge.exe"),
+            );
+            candidates.push(
+                PathBuf::from(&program_files_x86)
+                    .join("Google")
+                    .join("Chrome")
+                    .join("Application")
+                    .join("chrome.exe"),
+            );
+        }
+        if let Some(program_files) = env::var_os("ProgramFiles") {
+            candidates.push(
+                PathBuf::from(&program_files)
+                    .join("Microsoft")
+                    .join("Edge")
+                    .join("Application")
+                    .join("msedge.exe"),
+            );
+            candidates.push(
+                PathBuf::from(&program_files)
+                    .join("Google")
+                    .join("Chrome")
+                    .join("Application")
+                    .join("chrome.exe"),
+            );
+        }
+        if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
+            candidates.push(
+                PathBuf::from(local_app_data)
+                    .join("Google")
+                    .join("Chrome")
+                    .join("Application")
+                    .join("chrome.exe"),
+            );
+        }
+        candidates
+    }
+    #[cfg(target_os = "macos")]
+    {
+        vec![
+            PathBuf::from("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            PathBuf::from("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+            PathBuf::from("/Applications/Chromium.app/Contents/MacOS/Chromium"),
+        ]
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        vec![
+            PathBuf::from("/usr/bin/google-chrome"),
+            PathBuf::from("/usr/bin/google-chrome-stable"),
+            PathBuf::from("/usr/bin/microsoft-edge"),
+            PathBuf::from("/usr/bin/chromium"),
+            PathBuf::from("/usr/bin/chromium-browser"),
+        ]
     }
 }

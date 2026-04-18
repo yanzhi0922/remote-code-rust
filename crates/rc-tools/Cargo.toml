@@ -37,6 +37,7 @@ rc-permissions = { path = "../rc-permissions" }
 rc-plugins = { path = "../rc-plugins" }
 rc-session = { path = "../rc-session" }
 rc-skills = { path = "../rc-skills" }
+rc-swarm = { path = "../rc-swarm" }
 rc-ui-bridge = { path = "../rc-ui-bridge" }
 rc-utils = { path = "../rc-utils" }
 

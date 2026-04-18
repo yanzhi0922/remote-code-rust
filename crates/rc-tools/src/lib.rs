@@ -31,6 +31,7 @@ pub mod streaming_executor;
 pub mod system;
 pub mod task_output;
 pub mod tasks;
+pub mod team_runtime;
 pub mod team_tools;
 pub mod tool_hooks;
 pub mod tool_orchestration;
@@ -444,7 +445,7 @@ pub async fn execute_tool_call(
         "task_update" => tasks::task_update(&call.input),
         "notebook_edit" => misc::notebook_edit(&call.input, context),
         "skill_discover" => misc::skill_discover(&call.input, context),
-        "send_message" => agent::send_message(&call.input),
+        "send_message" => send_message::send_message(&call.input, context).await,
         "enter_plan_mode" => agent::enter_plan_mode(&call.input),
         "exit_plan_mode" => agent::exit_plan_mode(&call.input),
         "sleep" => system::sleep_tool(&call.input).await,
@@ -452,8 +453,8 @@ pub async fn execute_tool_call(
         // ── Phase 3 tools ──────────────────────────────────────────────
         "memory_read" => memory_tools::memory_read_tool(&call.input, context),
         "memory_write" => memory_tools::memory_write_tool(&call.input, context),
-        "team_create" => misc::team_create_tool(&call.input),
-        "team_status" => misc::team_status_tool(),
+        "team_create" => misc::team_create_tool(&call.input, context).await,
+        "team_status" => misc::team_status_tool(&call.input).await,
         "web_browser" => web::web_browser_tool(&call.input, context).await,
         "tool_search" => system::tool_search_tool(&call.input),
         "verify_plan" => system::verify_plan_tool(&call.input),
@@ -471,7 +472,7 @@ pub async fn execute_tool_call(
         "list_worktrees" => git::list_worktrees_tool(context),
         "brief" => system::brief_tool(&call.input),
         "ctx_inspect" => system::ctx_inspect_tool(&call.input),
-        "list_peers" => system::list_peers_tool(),
+        "list_peers" => system::list_peers_tool(&call.input).await,
         "tungsten" => misc::tungsten_tool(&call.input, context).await,
         "overflow_test" => misc::overflow_test_tool(&call.input),
         "synthetic_output" => misc::synthetic_output_tool(&call.input),
@@ -486,7 +487,7 @@ pub async fn execute_tool_call(
         "discover_skills" => discover_skills::discover_skills(&call.input, context),
         "team_delete" => team_tools::team_delete(&call.input, context),
         "team_list" => team_tools::team_list(&call.input, context),
-        "broadcast_message" => send_message::broadcast_message(&call.input, context),
+        "broadcast_message" => send_message::broadcast_message(&call.input, context).await,
         "review_artifact" => review_artifact::review_artifact(&call.input, context),
         "send_user_file" => send_user_file::send_user_file(&call.input, context),
         _ if call.name.starts_with("mcp__") => {
@@ -561,14 +562,94 @@ mod tests {
         execute_tool_call,
     };
     use once_cell::sync::Lazy;
-    use rc_core::{HookEvent, ToolCall};
+    use rc_core::{
+        HookEvent, ProviderResponse, SubAgentCompletion, SubAgentExecutionRequest, ToolCall,
+        UsageSummary,
+    };
     use rc_mcp::{McpCapabilityMatrix, McpServerConfig, McpTransportConfig};
     use rc_permissions::StaticPermissionBroker;
+    use rc_swarm::{TeamFile, TeamMember, mailbox, team_helpers};
     use serde_json::json;
-    use std::sync::Mutex;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
     use tempfile::tempdir;
 
     static RUNTIME_POLICY_TEST_MUTEX: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+    struct TeamDirGuard;
+
+    impl Drop for TeamDirGuard {
+        fn drop(&mut self) {
+            team_helpers::set_base_dir_override(None);
+            crate::team_tools::set_base_dir_override(None);
+        }
+    }
+
+    async fn seed_team(base: &std::path::Path, team_name: &str) -> TeamDirGuard {
+        team_helpers::set_base_dir_override(Some(base.to_path_buf()));
+        crate::team_tools::set_base_dir_override(Some(base.to_path_buf()));
+        let mut team = TeamFile::new(team_name, "lead");
+        team.description = Some("test objective".to_owned());
+        team.members
+            .push(TeamMember::new("worker-1", "agent-007", "pane-1", "."));
+        team_helpers::create_team(&team)
+            .await
+            .expect("team should be created");
+        TeamDirGuard
+    }
+
+    async fn create_team_via_tool(
+        context: &ToolExecutionContext,
+        broker: &StaticPermissionBroker,
+        team_name: &str,
+        agents: serde_json::Value,
+    ) {
+        let result = execute_tool_call(
+            &ToolCall {
+                id: format!("team-create-{team_name}"),
+                name: "team_create".to_owned(),
+                input: json!({
+                    "team_name": team_name,
+                    "objective": format!("Coordinate work for {team_name}"),
+                    "lead": "lead",
+                    "agents": agents,
+                }),
+            },
+            context,
+            broker,
+        )
+        .await
+        .expect("team_create should work");
+        assert!(!result.is_error, "team_create error: {}", result.content);
+    }
+
+    #[derive(Clone)]
+    struct RecordingAgentRuntime {
+        requests: Arc<Mutex<Vec<SubAgentExecutionRequest>>>,
+        result: rc_core::SubAgentExecutionResult,
+    }
+
+    #[async_trait::async_trait]
+    impl SubAgentCompletion for RecordingAgentRuntime {
+        async fn complete(
+            &self,
+            _conversation: &[rc_core::ConversationEntry],
+        ) -> anyhow::Result<ProviderResponse> {
+            panic!("complete() should not be used when execute_agent is supported")
+        }
+
+        fn supports_agent_execution(&self) -> bool {
+            true
+        }
+
+        async fn execute_agent(
+            &self,
+            request: SubAgentExecutionRequest,
+        ) -> anyhow::Result<rc_core::SubAgentExecutionResult> {
+            self.requests.lock().expect("requests lock").push(request);
+            Ok(self.result.clone())
+        }
+    }
 
     #[tokio::test]
     async fn read_and_search_tools_work() {
@@ -1294,12 +1375,13 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn send_message_returns_json_structure() {
         let tempdir = match tempdir() {
             Ok(dir) => dir,
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
+        let _guard = seed_team(tempdir.path(), "message-team").await;
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
@@ -1314,8 +1396,11 @@ mod tests {
                 id: "1".to_owned(),
                 name: "send_message".to_owned(),
                 input: json!({
+                    "team_name": "message-team",
                     "recipient": "agent-007",
-                    "message": "Hello from test"
+                    "message": "Hello from test",
+                    "priority": "high",
+                    "correlation_id": "corr-1"
                 }),
             },
             &context,
@@ -1328,7 +1413,491 @@ mod tests {
         let parsed: serde_json::Value =
             serde_json::from_str(&result.content).expect("should be valid JSON");
         assert_eq!(parsed["type"], "agent_message");
-        assert_eq!(parsed["recipient"], "agent-007");
+        assert_eq!(parsed["to"], "agent-007");
+        assert_eq!(parsed["team_name"], "message-team");
+        assert_eq!(parsed["priority"], "high");
+        assert_eq!(parsed["correlation_id"], "corr-1");
+        let stored = mailbox::read_messages("message-team", "agent-007")
+            .await
+            .expect("read mailbox");
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].priority.as_deref(), Some("high"));
+        assert_eq!(stored[0].correlation_id.as_deref(), Some("corr-1"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn team_create_status_and_broadcast_round_trip() {
+        let tempdir = tempdir().expect("tempdir should work");
+        let _guard = seed_team(tempdir.path(), "seed-team").await;
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let broker = StaticPermissionBroker::new(true);
+
+        create_team_via_tool(
+            &context,
+            &broker,
+            "review-team",
+            json!([
+                {"name": "agent-1", "role": "worker", "color": "blue"},
+                {"name": "agent-2", "role": "reviewer", "cwd": tempdir.path().to_string_lossy()}
+            ]),
+        )
+        .await;
+
+        let created_team = team_helpers::read_team("review-team")
+            .await
+            .expect("read created team");
+        assert_eq!(created_team.team_allowed_paths.len(), 1);
+        assert_eq!(
+            created_team.team_allowed_paths[0].path,
+            tempdir.path().to_string_lossy()
+        );
+
+        let status_result = execute_tool_call(
+            &ToolCall {
+                id: "team-status".to_owned(),
+                name: "team_status".to_owned(),
+                input: json!({"team_name": "review-team"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("team_status should work");
+        assert!(
+            !status_result.is_error,
+            "team_status error: {}",
+            status_result.content
+        );
+        let status: serde_json::Value =
+            serde_json::from_str(&status_result.content).expect("valid team_status json");
+        assert_eq!(status["count"], 1);
+        assert_eq!(
+            status["teams"][0]["members"].as_array().map(Vec::len),
+            Some(2)
+        );
+        assert_eq!(status["teams"][0]["lead"]["unread_messages"], 0);
+
+        let peers_result = execute_tool_call(
+            &ToolCall {
+                id: "list-peers".to_owned(),
+                name: "list_peers".to_owned(),
+                input: json!({"team_name": "review-team"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("list_peers should work");
+        assert!(
+            !peers_result.is_error,
+            "list_peers error: {}",
+            peers_result.content
+        );
+        let peers: serde_json::Value =
+            serde_json::from_str(&peers_result.content).expect("valid peers json");
+        assert_eq!(peers["count"], 3);
+
+        let broadcast_result = execute_tool_call(
+            &ToolCall {
+                id: "broadcast".to_owned(),
+                name: "broadcast_message".to_owned(),
+                input: json!({
+                    "team_name": "review-team",
+                    "sender": "lead",
+                    "message": "All hands check-in",
+                    "priority": "high"
+                }),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("broadcast_message should work");
+        assert!(
+            !broadcast_result.is_error,
+            "broadcast_message error: {}",
+            broadcast_result.content
+        );
+        let broadcast: serde_json::Value =
+            serde_json::from_str(&broadcast_result.content).expect("valid broadcast json");
+        assert_eq!(broadcast["recipients"].as_array().map(Vec::len), Some(2));
+        assert_eq!(broadcast["message_ids"].as_array().map(Vec::len), Some(2));
+
+        let agent_1 = mailbox::read_messages("review-team", "agent-1")
+            .await
+            .expect("agent-1 mailbox");
+        let agent_2 = mailbox::read_messages("review-team", "agent-2")
+            .await
+            .expect("agent-2 mailbox");
+        assert_eq!(agent_1.len(), 1);
+        assert_eq!(agent_2.len(), 1);
+        assert_eq!(agent_1[0].priority.as_deref(), Some("high"));
+
+        let follow_up = execute_tool_call(
+            &ToolCall {
+                id: "status-after-broadcast".to_owned(),
+                name: "team_status".to_owned(),
+                input: json!({"team_name": "review-team"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("team_status should work");
+        let follow_up_status: serde_json::Value =
+            serde_json::from_str(&follow_up.content).expect("valid team_status json");
+        let members = follow_up_status["teams"][0]["members"]
+            .as_array()
+            .expect("members array");
+        assert!(members.iter().all(|member| member["unread_messages"] == 1));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn team_list_and_delete_cover_cleanup_and_permissions() {
+        let tempdir = tempdir().expect("tempdir should work");
+        let _guard = seed_team(tempdir.path(), "seed-team").await;
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let allow_broker = StaticPermissionBroker::new(true);
+        create_team_via_tool(
+            &context,
+            &allow_broker,
+            "cleanup-team",
+            json!([{"name": "agent-1", "role": "worker"}]),
+        )
+        .await;
+
+        let list_result = execute_tool_call(
+            &ToolCall {
+                id: "team-list".to_owned(),
+                name: "team_list".to_owned(),
+                input: json!({}),
+            },
+            &context,
+            &allow_broker,
+        )
+        .await
+        .expect("team_list should work");
+        assert!(
+            !list_result.is_error,
+            "team_list error: {}",
+            list_result.content
+        );
+        let list: serde_json::Value =
+            serde_json::from_str(&list_result.content).expect("valid team_list json");
+        assert!(
+            list["teams"]
+                .as_array()
+                .expect("teams array")
+                .iter()
+                .any(|team| team["name"] == "cleanup-team")
+        );
+
+        let deny_broker = StaticPermissionBroker::new(false);
+        let denied = execute_tool_call(
+            &ToolCall {
+                id: "team-delete-denied".to_owned(),
+                name: "team_delete".to_owned(),
+                input: json!({"team_name": "cleanup-team"}),
+            },
+            &context,
+            &deny_broker,
+        )
+        .await
+        .expect("team_delete should return tool result");
+        assert!(denied.is_error);
+        assert!(team_helpers::read_team("cleanup-team").await.is_ok());
+
+        let deleted = execute_tool_call(
+            &ToolCall {
+                id: "team-delete".to_owned(),
+                name: "team_delete".to_owned(),
+                input: json!({"team_name": "cleanup-team"}),
+            },
+            &context,
+            &allow_broker,
+        )
+        .await
+        .expect("team_delete should work");
+        assert!(!deleted.is_error, "team_delete error: {}", deleted.content);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&deleted.content).expect("valid delete json");
+        assert_eq!(parsed["status"], "deleted");
+        assert_eq!(parsed["cleanup"]["team_dir"], "removed");
+        assert!(team_helpers::read_team("cleanup-team").await.is_err());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn execute_tool_call_routes_agent_tool_to_host_runtime() {
+        let tempdir = tempdir().expect("tempdir should work");
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let runtime: Arc<dyn SubAgentCompletion> = Arc::new(RecordingAgentRuntime {
+            requests: Arc::clone(&requests),
+            result: rc_core::SubAgentExecutionResult {
+                output: "verified".to_owned(),
+                success: true,
+                turns: 3,
+                usage: UsageSummary::default(),
+            },
+        });
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: Some(runtime),
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let broker = StaticPermissionBroker::new(true);
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "agent".to_owned(),
+                input: json!({
+                    "prompt": "Review the Rust changes for regressions.",
+                    "description": "Verify recent agent runtime wiring",
+                    "subagent_type": "verification"
+                }),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("agent tool should execute");
+
+        assert!(!result.is_error, "agent tool error: {}", result.content);
+        assert_eq!(result.content, "verified");
+
+        let requests = requests.lock().expect("requests lock");
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        assert_eq!(request.agent_type, "verification");
+        assert_eq!(request.max_turns, 200);
+        assert!(request.allowed_tools.contains(&"read_file".to_owned()));
+        assert!(!request.allowed_tools.contains(&"write_file".to_owned()));
+        assert!(!request.allowed_tools.contains(&"edit_file".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn execute_tool_call_returns_structured_agent_request_without_provider() {
+        let tempdir = tempdir().expect("tempdir should work");
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let broker = StaticPermissionBroker::new(true);
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "agent-no-provider".to_owned(),
+                name: "agent".to_owned(),
+                input: json!({
+                    "prompt": "Inspect the project and report one refactor target.",
+                    "description": "Plan inspection",
+                    "subagent_type": "Plan",
+                    "model": "minimax-m2.7",
+                    "tools": ["Read", "Grep"]
+                }),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("agent tool should succeed");
+
+        assert!(!result.is_error, "agent tool error: {}", result.content);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result.content).expect("valid sub_agent_request json");
+        assert_eq!(parsed["type"], "sub_agent_request");
+        assert_eq!(parsed["description"], "Plan inspection");
+        assert_eq!(parsed["subagent_type"], "Plan");
+        assert_eq!(parsed["model"], "minimax-m2.7");
+        assert_eq!(parsed["allowed_tools"].as_array().map(Vec::len), Some(2));
+    }
+
+    #[tokio::test]
+    async fn execute_tool_call_routes_plan_agent_and_emits_progress() {
+        let tempdir = tempdir().expect("tempdir should work");
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let runtime: Arc<dyn SubAgentCompletion> = Arc::new(RecordingAgentRuntime {
+            requests: Arc::clone(&requests),
+            result: rc_core::SubAgentExecutionResult {
+                output: "plan ready".to_owned(),
+                success: true,
+                turns: 3,
+                usage: UsageSummary::default(),
+            },
+        });
+        let progress = Arc::new(Mutex::new(Vec::<String>::new()));
+        let progress_sink = Arc::clone(&progress);
+        let progress_cb: Arc<super::ProgressCallback> = Arc::new(move |message| {
+            progress_sink
+                .lock()
+                .expect("progress lock")
+                .push(message.to_owned());
+        });
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: Some(runtime),
+            progress_cb: Some(progress_cb),
+            task_stack: Default::default(),
+        };
+        let broker = StaticPermissionBroker::new(true);
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "agent-plan".to_owned(),
+                name: "agent".to_owned(),
+                input: json!({
+                    "prompt": "Inspect the current Rust project and identify one concrete refactor target.",
+                    "description": "Plan refactor target",
+                    "subagent_type": "Plan",
+                    "model": "minimax-m2.7",
+                    "tools": ["Read", "Grep"]
+                }),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("agent tool should succeed");
+
+        assert!(!result.is_error, "agent tool error: {}", result.content);
+        assert_eq!(result.content, "plan ready");
+
+        let requests = requests.lock().expect("requests lock");
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        assert_eq!(request.agent_type, "Plan");
+        assert_eq!(request.description.as_deref(), Some("Plan refactor target"));
+        assert_eq!(request.model.as_deref(), Some("minimax-m2.7"));
+        assert_eq!(request.working_dir, PathBuf::from(tempdir.path()));
+        assert!(request.allowed_tools.contains(&"read_file".to_owned()));
+        assert!(request.allowed_tools.contains(&"grep".to_owned()));
+        assert!(!request.allowed_tools.contains(&"write_file".to_owned()));
+        assert!(!request.allowed_tools.contains(&"edit_file".to_owned()));
+        assert!(!request.allowed_tools.contains(&"agent".to_owned()));
+        drop(requests);
+
+        let progress = progress.lock().expect("progress lock");
+        assert_eq!(progress.len(), 2);
+        let started = crate::agent::parse_delegate_progress_event(&progress[0])
+            .expect("start progress event");
+        let completed = crate::agent::parse_delegate_progress_event(&progress[1])
+            .expect("completed progress event");
+        match started {
+            crate::agent::DelegateProgressEvent::SubtaskStarted { description, .. } => {
+                assert_eq!(description, "Plan refactor target");
+            }
+            other => panic!("expected started event, got {other:?}"),
+        }
+        match completed {
+            crate::agent::DelegateProgressEvent::SubtaskCompleted {
+                success,
+                turns_used,
+                ..
+            } => {
+                assert!(success);
+                assert_eq!(turns_used, 3);
+            }
+            other => panic!("expected completed event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_tool_call_rejects_unknown_subagent_type() {
+        let tempdir = tempdir().expect("tempdir should work");
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let runtime: Arc<dyn SubAgentCompletion> = Arc::new(RecordingAgentRuntime {
+            requests: Arc::clone(&requests),
+            result: rc_core::SubAgentExecutionResult {
+                output: String::new(),
+                success: true,
+                turns: 1,
+                usage: UsageSummary::default(),
+            },
+        });
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: Some(runtime),
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let broker = StaticPermissionBroker::new(true);
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "agent-unknown".to_owned(),
+                name: "agent".to_owned(),
+                input: json!({
+                    "prompt": "Do work.",
+                    "subagent_type": "does-not-exist"
+                }),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("agent tool should return tool result");
+
+        assert!(result.is_error);
+        assert!(result.content.contains("unknown subagent_type"));
+        assert!(requests.lock().expect("requests lock").is_empty());
+    }
+
+    #[tokio::test]
+    async fn execute_tool_call_blocks_agent_runtime_when_permission_denied() {
+        let tempdir = tempdir().expect("tempdir should work");
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let runtime: Arc<dyn SubAgentCompletion> = Arc::new(RecordingAgentRuntime {
+            requests: Arc::clone(&requests),
+            result: rc_core::SubAgentExecutionResult {
+                output: "should not run".to_owned(),
+                success: true,
+                turns: 1,
+                usage: UsageSummary::default(),
+            },
+        });
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: Some(runtime),
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let broker = StaticPermissionBroker::new(false);
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "agent-denied".to_owned(),
+                name: "agent".to_owned(),
+                input: json!({"prompt": "Inspect the project"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("agent tool should return tool result");
+
+        assert!(result.is_error);
+        assert!(result.content.contains("Permission denied"));
+        assert!(requests.lock().expect("requests lock").is_empty());
     }
 
     #[tokio::test]
@@ -1966,12 +2535,13 @@ mod tests {
         assert!(parsed["total_tools"].as_u64().unwrap_or(0) > 40);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn list_peers_returns_json() {
         let tempdir = match tempdir() {
             Ok(dir) => dir,
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
+        let _guard = seed_team(tempdir.path(), "peers-team").await;
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
@@ -1985,7 +2555,7 @@ mod tests {
             &ToolCall {
                 id: "1".to_owned(),
                 name: "list_peers".to_owned(),
-                input: json!({}),
+                input: json!({"team_name": "peers-team"}),
             },
             &context,
             &broker,
@@ -1997,6 +2567,13 @@ mod tests {
         let parsed: serde_json::Value =
             serde_json::from_str(&result.content).expect("should be valid JSON");
         assert!(parsed["peers"].is_array());
+        assert!(
+            parsed["peers"]
+                .as_array()
+                .expect("peer array")
+                .iter()
+                .any(|peer| peer["name"] == "agent-007")
+        );
     }
 
     #[tokio::test]

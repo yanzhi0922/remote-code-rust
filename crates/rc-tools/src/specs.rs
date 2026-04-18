@@ -265,10 +265,19 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                 "type": "object",
                 "properties": {
                     "prompt": {"type": "string", "description": "The task description for the sub-agent."},
+                    "description": {"type": "string", "description": "Optional short human summary of what the sub-agent should do."},
+                    "subagent_type": {"type": "string", "description": "Optional specialized agent type. Built-in values currently include general-purpose, Explore, Plan, and verification."},
+                    "model": {"type": "string", "description": "Optional model override for the sub-agent. Omit or use inherit to reuse the parent model."},
                     "tools": {
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Optional list of tool names the sub-agent is allowed to use."
+                    },
+                    "mode": {"type": "string", "enum": ["single", "batch"], "description": "Execution mode. Batch mode runs the legacy delegation batch path."},
+                    "tasks": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Required when mode=batch. Each string is a task prompt for one delegated worker."
                     }
                 },
                 "required": ["prompt"],
@@ -445,8 +454,12 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "recipient": {"type": "string"},
-                    "message": {"type": "string"}
+                    "team_name": {"type": "string", "description": "Optional team name when more than one team exists."},
+                    "recipient": {"type": "string", "description": "Target agent name within the selected team."},
+                    "message": {"type": "string", "description": "Message content to deliver."},
+                    "sender": {"type": "string", "description": "Optional sender agent name (default: coordinator)."},
+                    "priority": {"type": "string", "enum": ["low", "normal", "high"], "description": "Optional message priority."},
+                    "correlation_id": {"type": "string", "description": "Optional correlation identifier for request/response flows."}
                 },
                 "required": ["recipient", "message"],
                 "additionalProperties": false,
@@ -554,6 +567,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
+                    "team_name": {"type": "string", "description": "Optional persistent team name to create or update."},
                     "objective": {"type": "string"},
                     "lead": {"type": "string"},
                     "agents": {
@@ -562,7 +576,12 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                             "type": "object",
                             "properties": {
                                 "name": {"type": "string"},
-                                "role": {"type": "string"}
+                                "role": {"type": "string"},
+                                "cwd": {"type": "string"},
+                                "model": {"type": "string"},
+                                "color": {"type": "string"},
+                                "worktree_path": {"type": "string"},
+                                "session_id": {"type": "string"}
                             },
                             "required": ["name", "role"],
                             "additionalProperties": false
@@ -581,7 +600,9 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "team_name": {"type": "string", "description": "Optional team name. If omitted, returns the active team or summaries for all teams."}
+                },
                 "additionalProperties": false,
             }),
         },
@@ -858,7 +879,9 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "team_name": {"type": "string", "description": "Optional team name to scope the peer listing."}
+                },
                 "additionalProperties": false,
             }),
         },
@@ -1070,6 +1093,7 @@ pub fn phase9_tool_specs() -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
+                    "team_name": {"type": "string", "description": "Optional team name when more than one team exists."},
                     "message": {"type": "string", "description": "Message content to broadcast"},
                     "sender": {"type": "string", "description": "Sender agent name (default: coordinator)"},
                     "priority": {"type": "string", "enum": ["low", "normal", "high"], "description": "Message priority (default: normal)"},
@@ -1158,6 +1182,87 @@ mod tests {
             assert!(
                 properties.contains_key("background"),
                 "{tool_name} should expose background"
+            );
+        }
+    }
+
+    #[test]
+    fn team_and_message_schemas_match_runtime_contract() {
+        let specs = builtin_tool_specs();
+        let spec_by_name = |name: &str| {
+            specs
+                .iter()
+                .find(|spec| spec.name == name)
+                .unwrap_or_else(|| panic!("missing tool spec for {name}"))
+        };
+        let properties_for = |name: &str| {
+            spec_by_name(name)
+                .input_schema
+                .get("properties")
+                .and_then(|value| value.as_object())
+                .unwrap_or_else(|| panic!("missing properties object for {name}"))
+        };
+
+        let send_message = properties_for("send_message");
+        for field in [
+            "team_name",
+            "recipient",
+            "message",
+            "sender",
+            "priority",
+            "correlation_id",
+        ] {
+            assert!(
+                send_message.contains_key(field),
+                "send_message should expose {field}"
+            );
+        }
+
+        let team_create = properties_for("team_create");
+        for field in ["team_name", "objective", "lead", "agents"] {
+            assert!(
+                team_create.contains_key(field),
+                "team_create should expose {field}"
+            );
+        }
+        let agent_properties = team_create
+            .get("agents")
+            .and_then(|value| value.get("items"))
+            .and_then(|value| value.get("properties"))
+            .and_then(|value| value.as_object())
+            .expect("team_create agents items should expose properties");
+        for field in [
+            "name",
+            "role",
+            "cwd",
+            "model",
+            "color",
+            "worktree_path",
+            "session_id",
+        ] {
+            assert!(
+                agent_properties.contains_key(field),
+                "team_create agents should expose {field}"
+            );
+        }
+
+        let team_status = properties_for("team_status");
+        assert!(
+            team_status.contains_key("team_name"),
+            "team_status should expose team_name"
+        );
+
+        let list_peers = properties_for("list_peers");
+        assert!(
+            list_peers.contains_key("team_name"),
+            "list_peers should expose team_name"
+        );
+
+        let broadcast = properties_for("broadcast_message");
+        for field in ["team_name", "message", "sender", "priority", "recipients"] {
+            assert!(
+                broadcast.contains_key(field),
+                "broadcast_message should expose {field}"
             );
         }
     }

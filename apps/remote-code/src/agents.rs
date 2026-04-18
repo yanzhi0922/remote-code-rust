@@ -9,7 +9,14 @@ use rc_agents::{
     AgentRunResult, AgentRunner, AgentScheduler, AgentTask,
 };
 use rc_config::RuntimeConfig;
-use rc_core::{ConversationEntry as CoreConversationEntry, ConversationRole};
+use rc_core::{
+    ConversationEntry as CoreConversationEntry, ConversationRole, ProviderProtocol,
+    ProviderResponse, SubAgentCompletion, SubAgentExecutionRequest, SubAgentExecutionResult,
+};
+use rc_model::model::{ResolveContext, parse_user_specified_model_with_ctx};
+use rc_model::{
+    ModelProvider, detect_provider, is_first_party_base_url, is_model_alias, provider_model_id,
+};
 use rc_permissions::{
     LayeredPermissionBroker, PermissionBroker, StaticPermissionBroker, load_layered_rules,
 };
@@ -151,6 +158,75 @@ impl RemoteCodeAgentExecutor {
     }
 }
 
+#[derive(Clone)]
+struct RemoteCodeSubAgentRuntime {
+    completion: Arc<dyn SubAgentCompletion>,
+    executor: RemoteCodeAgentExecutor,
+}
+
+impl RemoteCodeSubAgentRuntime {
+    fn new(config: &RuntimeConfig, completion: Arc<dyn SubAgentCompletion>) -> Self {
+        Self {
+            completion,
+            executor: RemoteCodeAgentExecutor::new(config),
+        }
+    }
+}
+
+#[async_trait]
+impl SubAgentCompletion for RemoteCodeSubAgentRuntime {
+    async fn complete(&self, conversation: &[CoreConversationEntry]) -> Result<ProviderResponse> {
+        self.completion.complete(conversation).await
+    }
+
+    fn supports_agent_execution(&self) -> bool {
+        true
+    }
+
+    async fn execute_agent(
+        &self,
+        request: SubAgentExecutionRequest,
+    ) -> Result<SubAgentExecutionResult> {
+        let provider_model =
+            resolve_requested_agent_model(&self.executor.base_config, request.model.as_deref());
+        let result = self
+            .executor
+            .execute(AgentExecutionRequest {
+                agent_type: request.agent_type,
+                task: request.task,
+                context: request
+                    .context
+                    .iter()
+                    .map(core_entry_to_agent_context_entry)
+                    .collect(),
+                model: provider_model.unwrap_or_else(|| "default".to_owned()),
+                max_turns: request.max_turns,
+                system_prompt: request.system_prompt.unwrap_or_default(),
+                tools: request.allowed_tools,
+                working_dir: request.working_dir,
+            })
+            .await?;
+        Ok(SubAgentExecutionResult {
+            output: result.output,
+            success: result.success,
+            turns: result.turns,
+            usage: rc_core::UsageSummary {
+                input_tokens: result.usage.input_tokens,
+                output_tokens: result.usage.output_tokens,
+                cache_read_input_tokens: result.usage.cache_read_tokens,
+                cache_creation_input_tokens: result.usage.cache_creation_tokens,
+            },
+        })
+    }
+}
+
+pub(crate) fn build_remote_code_sub_agent_runtime(
+    config: &RuntimeConfig,
+    completion: Arc<dyn SubAgentCompletion>,
+) -> Arc<dyn SubAgentCompletion> {
+    Arc::new(RemoteCodeSubAgentRuntime::new(config, completion))
+}
+
 #[async_trait]
 impl AgentExecutor for RemoteCodeAgentExecutor {
     async fn execute(&self, request: AgentExecutionRequest) -> Result<AgentRunResult> {
@@ -222,6 +298,85 @@ impl AgentExecutor for RemoteCodeAgentExecutor {
                 cache_read_tokens: 0,
             },
         })
+    }
+}
+
+fn resolve_requested_agent_model(
+    config: &RuntimeConfig,
+    requested_model: Option<&str>,
+) -> Option<String> {
+    let requested_model = requested_model
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    if requested_model.eq_ignore_ascii_case("inherit") {
+        return None;
+    }
+    if !is_model_alias(requested_model) {
+        return Some(requested_model.to_owned());
+    }
+
+    let current_model = config.provider.model.as_deref().unwrap_or_default();
+    let current_model_is_claude = current_model.to_ascii_lowercase().contains("claude");
+    let base_url = config.provider.base_url.as_deref();
+    let can_resolve_alias = current_model_is_claude
+        || matches!(
+            config.provider.protocol,
+            ProviderProtocol::Bedrock | ProviderProtocol::Vertex
+        )
+        || base_url.is_some_and(is_first_party_base_url);
+
+    if !can_resolve_alias {
+        tracing::info!(
+            requested_model,
+            current_model,
+            "Ignoring agent model alias for a non-Claude-compatible runtime and inheriting the parent model"
+        );
+        return None;
+    }
+
+    let provider = detect_model_provider(config, base_url);
+    let ctx = ResolveContext {
+        provider: provider.clone(),
+        ..Default::default()
+    };
+    let resolved = parse_user_specified_model_with_ctx(requested_model, &ctx);
+    Some(provider_model_id(&resolved, &provider))
+}
+
+fn detect_model_provider(config: &RuntimeConfig, base_url: Option<&str>) -> ModelProvider {
+    match config.provider.protocol {
+        ProviderProtocol::Anthropic => {
+            if let Some(base_url) = base_url {
+                if !is_first_party_base_url(base_url) {
+                    return ModelProvider::OpenAiCompatible {
+                        base_url: base_url.to_owned(),
+                    };
+                }
+            }
+            ModelProvider::Anthropic
+        }
+        ProviderProtocol::Bedrock => ModelProvider::AwsBedrock { region: None },
+        ProviderProtocol::Vertex => ModelProvider::GcpVertex { project: None },
+        ProviderProtocol::OpenAi => detect_provider(&rc_model::ProviderConfig {
+            openai_base_url: config.provider.base_url.clone(),
+            provider: Some("openai_compatible".to_owned()),
+            ..Default::default()
+        }),
+    }
+}
+
+fn core_entry_to_agent_context_entry(
+    entry: &CoreConversationEntry,
+) -> rc_agents::ConversationEntry {
+    let role = match entry.role {
+        ConversationRole::System => "system",
+        ConversationRole::Assistant => "assistant",
+        ConversationRole::User => "user",
+        ConversationRole::Tool => "tool",
+    };
+    rc_agents::ConversationEntry {
+        role: role.to_owned(),
+        content: entry.text.clone(),
     }
 }
 
@@ -622,5 +777,85 @@ mod tests {
             .find(|agent| agent.agent_id == agent_id)
             .expect("assigned agent should exist");
         assert_eq!(assigned_agent.name, "workspace");
+    }
+
+    #[test]
+    fn parse_agent_spec_parses_paths_and_labels() {
+        let agent = parse_agent_spec("reviewer;review;src,tests;phase=review,lang=rust")
+            .expect("agent spec should parse");
+        assert_eq!(agent.name, "reviewer");
+        assert_eq!(agent.role, "review");
+        assert_eq!(agent.ownership_paths, vec!["src", "tests"]);
+        assert_eq!(
+            agent.labels.get("phase").map(String::as_str),
+            Some("review")
+        );
+        assert_eq!(agent.labels.get("lang").map(String::as_str), Some("rust"));
+    }
+
+    #[test]
+    fn parse_task_spec_sets_budget_paths_labels_and_description() {
+        let task = parse_task_spec("Refactor service;src/core;phase=backend;Tighten boundaries")
+            .expect("task spec should parse");
+        assert_eq!(task.title, "Refactor service");
+        assert_eq!(task.ownership_paths, vec!["src/core"]);
+        assert_eq!(
+            task.required_labels.get("phase").map(String::as_str),
+            Some("backend")
+        );
+        assert_eq!(task.description, "Tighten boundaries");
+        assert_eq!(task.budget.read_calls, 32);
+        assert_eq!(task.budget.edit_calls, 12);
+        assert_eq!(task.budget.command_calls, 8);
+    }
+
+    #[test]
+    fn parse_agent_spec_rejects_missing_role() {
+        let error = parse_agent_spec("reviewer;;;").expect_err("missing role should fail");
+        assert!(error.to_string().contains("role is missing"));
+    }
+
+    #[test]
+    fn agent_definition_for_identity_selects_specialized_roles() {
+        let mut planner = AgentIdentity::new("planner", "planner");
+        planner.labels.insert("phase".to_owned(), "plan".to_owned());
+        assert_eq!(
+            agent_definition_for_identity(&planner).agent_type,
+            plan_agent().agent_type
+        );
+
+        let reviewer = AgentIdentity::new("review", "reviewer");
+        assert_eq!(
+            agent_definition_for_identity(&reviewer).agent_type,
+            verification_agent().agent_type
+        );
+
+        let explore = AgentIdentity::new("explore", "researcher");
+        assert_eq!(
+            agent_definition_for_identity(&explore).agent_type,
+            explore_agent().agent_type
+        );
+
+        let implementer = AgentIdentity::new("workspace", "implementer");
+        assert_eq!(
+            agent_definition_for_identity(&implementer).agent_type,
+            general_purpose_agent().agent_type
+        );
+    }
+
+    #[test]
+    fn append_conversation_context_maps_tool_role_to_user_context_message() {
+        let mut conversation = Vec::new();
+        append_conversation_context(
+            &mut conversation,
+            &[rc_agents::ConversationEntry {
+                role: "tool".to_owned(),
+                content: "cargo check passed".to_owned(),
+            }],
+        );
+        assert_eq!(conversation.len(), 1);
+        assert!(matches!(conversation[0].role, ConversationRole::User));
+        assert!(conversation[0].text.contains("[tool context]"));
+        assert!(conversation[0].text.contains("cargo check passed"));
     }
 }
