@@ -30,6 +30,7 @@ use rc_tools::{
 };
 use rc_ui_bridge::UiTaskNode;
 
+use crate::agents::build_remote_code_sub_agent_runtime;
 use crate::cli::Cli;
 use crate::conversation_backend::ConversationBackend;
 use crate::hooks::{
@@ -644,7 +645,10 @@ async fn run_prompt_legacy(
     let tool_context = ToolExecutionContext {
         cwd: config.cwd.clone(),
         timeout_ms: config.provider.timeout_ms,
-        sub_agent: Some(backend.sub_agent_completion()),
+        sub_agent: Some(build_remote_code_sub_agent_runtime(
+            config,
+            backend.sub_agent_completion(),
+        )),
         progress_cb,
         task_stack: std::sync::Arc::new(std::sync::Mutex::new(
             rc_core::task_stack::TaskStack::default(),

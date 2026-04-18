@@ -121,17 +121,7 @@ fn resolve_teams_base_dir() -> PathBuf {
     {
         return dir.clone();
     }
-
-    // Check environment variable.
-    if let Ok(env_dir) = std::env::var("RC_SWARM_TEAM_DIR") {
-        return PathBuf::from(env_dir);
-    }
-
-    if let Some(base_dirs) = directories::BaseDirs::new() {
-        return base_dirs.home_dir().join(".remote-code").join("teams");
-    }
-
-    PathBuf::from(".remote-code").join("teams")
+    rc_swarm::team_helpers::teams_base_dir()
 }
 
 /// Resolve the directory for a specific team.
@@ -144,7 +134,7 @@ fn resolve_team_dir(team_name: &str) -> std::path::PathBuf {
 fn sanitize_team_name(name: &str) -> String {
     name.chars()
         .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
                 c
             } else {
                 '_'

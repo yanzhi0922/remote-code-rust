@@ -941,12 +941,15 @@ fn to_anthropic_messages(conversation: &[ConversationEntry]) -> (String, Vec<Val
                     && matches!(non_system[index].role, ConversationRole::Tool)
                 {
                     let tool_entry = non_system[index];
-                    blocks.push(json!({
+                    let mut tool_result = json!({
                         "type": "tool_result",
                         "tool_use_id": tool_entry.tool_call_id,
                         "content": tool_entry.text,
-                        "is_error": tool_entry.is_error,
-                    }));
+                    });
+                    if tool_entry.is_error {
+                        tool_result["is_error"] = Value::Bool(true);
+                    }
+                    blocks.push(tool_result);
                     index += 1;
                 }
                 messages.push(json!({
@@ -1533,7 +1536,7 @@ mod tests {
     }
 
     #[test]
-    fn anthropic_messages_group_consecutive_tool_results() {
+    fn anthropic_messages_emit_each_tool_result_as_separate_user_message() {
         let mut assistant = ConversationEntry::assistant("");
         assistant.tool_calls = vec![
             ToolCall {
@@ -1565,6 +1568,28 @@ mod tests {
         assert_eq!(tool_results[0]["type"], "tool_result");
         assert_eq!(tool_results[0]["tool_use_id"], "call-1");
         assert_eq!(tool_results[1]["tool_use_id"], "call-2");
+        assert!(tool_results[0].get("is_error").is_none());
+    }
+
+    #[test]
+    fn anthropic_messages_only_emit_is_error_for_failed_tool_results() {
+        let mut assistant = ConversationEntry::assistant("");
+        assistant.tool_calls = vec![ToolCall {
+            id: "call-1".to_owned(),
+            name: "read_file".to_owned(),
+            input: json!({"path":"src/main.rs"}),
+        }];
+
+        let (_system, messages) = to_anthropic_messages(&[
+            ConversationEntry::user("inspect"),
+            assistant,
+            ConversationEntry::tool("call-1", "read_file", "permission denied", true),
+        ]);
+
+        let tool_results = messages[2]["content"]
+            .as_array()
+            .expect("tool results should be a content array");
+        assert_eq!(tool_results[0]["is_error"], true);
     }
 
     #[test]

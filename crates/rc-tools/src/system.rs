@@ -420,45 +420,6 @@ pub(crate) fn ctx_inspect_tool(input: &Value) -> Result<String> {
     }
 }
 
-pub(crate) fn list_peers_tool() -> Result<String> {
-    // Check for active swarm/team peers in the state directory.
-    let state_dir = std::env::temp_dir().join("remote-code-rust").join("teams");
-    let mut peers = Vec::new();
-    if state_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(&state_dir) {
-            for entry in entries.flatten() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if name.ends_with(".json") {
-                        if let Ok(content) = std::fs::read_to_string(entry.path()) {
-                            if let Ok(team) = serde_json::from_str::<Value>(&content) {
-                                if let Some(members) = team.get("agents").and_then(Value::as_array)
-                                {
-                                    for member in members {
-                                        peers.push(json!({
-                                            "name": member.get("name").and_then(Value::as_str).unwrap_or("unknown"),
-                                            "role": member.get("role").and_then(Value::as_str).unwrap_or("worker"),
-                                            "team": team.get("objective").and_then(Value::as_str).unwrap_or("unknown"),
-                                        }));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    if peers.is_empty() {
-        Ok(json!({
-            "peers": [],
-            "message": "No peers registered in current context. Use team_create to create a team."
-        })
-        .to_string())
-    } else {
-        Ok(json!({
-            "peers": peers,
-            "count": peers.len(),
-        })
-        .to_string())
-    }
+pub(crate) async fn list_peers_tool(input: &Value) -> Result<String> {
+    super::team_runtime::list_peers(input).await
 }

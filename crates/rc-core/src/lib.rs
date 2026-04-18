@@ -24,6 +24,7 @@ use chrono::{DateTime, Utc};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::PathBuf;
 use uuid::Uuid;
 
 pub use app_state::{
@@ -568,6 +569,48 @@ pub struct ToolResult {
     pub is_error: bool,
 }
 
+/// Fully-resolved execution request for a concrete sub-agent runtime.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubAgentExecutionRequest {
+    /// Agent type identifier.
+    pub agent_type: String,
+    /// Primary task prompt.
+    pub task: String,
+    /// Optional short human description of the task.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Conversation context inherited from the caller.
+    #[serde(default)]
+    pub context: Vec<ConversationEntry>,
+    /// Optional system prompt override for the child agent.
+    #[serde(default)]
+    pub system_prompt: Option<String>,
+    /// Optional model override for the child agent.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Maximum number of turns for the child agent.
+    pub max_turns: u32,
+    /// Resolved internal tool names available to the child agent.
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
+    /// Working directory for the child agent.
+    pub working_dir: PathBuf,
+}
+
+/// Result returned by a concrete sub-agent runtime.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubAgentExecutionResult {
+    /// Final agent output.
+    pub output: String,
+    /// Whether the agent completed successfully.
+    pub success: bool,
+    /// Number of turns consumed.
+    pub turns: u32,
+    /// Usage summary for the run.
+    #[serde(default)]
+    pub usage: UsageSummary,
+}
+
 /// Trait for providing LLM completion capability to sub-agents.
 ///
 /// This trait breaks the circular dependency between `rc-tools` and
@@ -584,6 +627,24 @@ pub trait SubAgentCompletion: Send + Sync {
         &self,
         conversation: &[ConversationEntry],
     ) -> anyhow::Result<ProviderResponse>;
+
+    /// Returns `true` when this runtime can execute a fully-resolved agent request.
+    fn supports_agent_execution(&self) -> bool {
+        false
+    }
+
+    /// Execute a fully-resolved agent request using the host runtime.
+    ///
+    /// Implementations that do not support this richer execution seam can
+    /// leave the default behavior in place and only provide `complete(...)`.
+    async fn execute_agent(
+        &self,
+        _request: SubAgentExecutionRequest,
+    ) -> anyhow::Result<SubAgentExecutionResult> {
+        Err(anyhow::anyhow!(
+            "host runtime does not support concrete agent execution"
+        ))
+    }
 }
 
 /// A persisted event in the session transcript.

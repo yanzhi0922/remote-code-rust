@@ -318,6 +318,12 @@ pub struct MailboxMessage {
     pub message_type: MailboxMessageType,
     /// Message content.
     pub content: String,
+    /// Optional message priority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<String>,
+    /// Optional correlation identifier for request/response flows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation_id: Option<String>,
     /// Unix timestamp (seconds) when the message was created.
     pub timestamp: i64,
     /// Whether the message has been read.
@@ -340,6 +346,8 @@ impl MailboxMessage {
             to_agent: to_agent.into(),
             message_type,
             content: content.into(),
+            priority: None,
+            correlation_id: None,
             timestamp: Utc::now().timestamp(),
             read: false,
         }

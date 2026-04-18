@@ -206,65 +206,15 @@ pub(crate) fn skill_discover(input: &Value, context: &ToolExecutionContext) -> R
     }
 }
 
-pub(crate) fn team_create_tool(input: &Value) -> Result<String> {
-    let objective = input
-        .get("objective")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("objective is required"))?;
-    let lead = input.get("lead").and_then(Value::as_str).unwrap_or("lead");
-    let mut scheduler = rc_agents::AgentScheduler::new(lead, objective);
-    if let Some(agents) = input.get("agents").and_then(Value::as_array) {
-        for agent_def in agents {
-            let name = agent_def
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or("agent");
-            let role = agent_def
-                .get("role")
-                .and_then(Value::as_str)
-                .unwrap_or("worker");
-            let agent = rc_agents::AgentIdentity::new(name, role);
-            scheduler.register_agent(agent);
-        }
-    }
-    let report = scheduler.team_status();
-    Ok(serde_json::to_string_pretty(&report)?)
+pub(crate) async fn team_create_tool(
+    input: &Value,
+    context: &ToolExecutionContext,
+) -> Result<String> {
+    super::team_runtime::create_team(input, &context.cwd).await
 }
 
-pub(crate) fn team_status_tool() -> Result<String> {
-    // Check for active team state file.
-    let state_dir = std::env::temp_dir().join("remote-code-rust").join("teams");
-    if state_dir.exists() {
-        let mut teams = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(&state_dir) {
-            for entry in entries.flatten() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if name.ends_with(".json") {
-                        if let Ok(content) = std::fs::read_to_string(entry.path()) {
-                            if let Ok(team) = serde_json::from_str::<Value>(&content) {
-                                teams.push(team);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if !teams.is_empty() {
-            return Ok(json!({
-                "type": "team_status",
-                "teams": teams,
-                "count": teams.len(),
-            })
-            .to_string());
-        }
-    }
-    Ok(json!({
-        "type": "team_status",
-        "teams": [],
-        "message": "No active team in current context. Use team_create to create a team.",
-        "note": "Team management requires AgentScheduler context in the conversation loop."
-    })
-    .to_string())
+pub(crate) async fn team_status_tool(input: &Value) -> Result<String> {
+    super::team_runtime::team_status(input).await
 }
 
 pub(crate) async fn remote_trigger_tool(input: &Value) -> Result<String> {

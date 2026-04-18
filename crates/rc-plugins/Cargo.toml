@@ -15,16 +15,20 @@ workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 directories.workspace = true
+flate2 = "1"
 once_cell.workspace = true
 rc-mcp = { path = "../rc-mcp" }
 rc-skills = { path = "../rc-skills" }
 regex.workspace = true
+reqwest = { workspace = true, features = ["blocking"] }
 serde.workspace = true
 serde_json.workspace = true
+tar = "0.4"
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 walkdir.workspace = true
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile.workspace = true

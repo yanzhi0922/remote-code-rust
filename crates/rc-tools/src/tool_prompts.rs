@@ -200,6 +200,10 @@ Spawn a sub-agent to complete a task. The sub-agent runs in its own context and 
 
 Usage:
 - Write a detailed `prompt` describing what the sub-agent should accomplish and why.
+- Use `subagent_type` to choose a specialized built-in agent. Current built-ins are `general-purpose`, `Explore`, `Plan`, and `verification`.
+- If you omit `subagent_type`, the default `general-purpose` agent is used.
+- Optionally provide a short `description` to summarize the assignment.
+- Optionally override the sub-agent model with `model`. Omit it or use `inherit` to reuse the parent model.
 - Optionally restrict available tools via the `tools` array.
 - The sub-agent starts with zero context — brief it like a smart colleague who just walked in.
 - Explain what you're trying to accomplish, what you've already learned, and what the agent should do.
@@ -385,8 +389,12 @@ pub const SEND_MESSAGE: &str = "\
 Send a message to another agent in the multi-agent system.
 
 Usage:
+- `team_name` optionally selects the target team when multiple teams exist.
 - The `recipient` parameter specifies the target agent name.
 - The `message` parameter contains the message content.
+- `sender` optionally identifies the sender (default: coordinator).
+- `priority` optionally sets message priority: 'low', 'normal', or 'high'.
+- `correlation_id` optionally links request/response exchanges.
 - Messages are delivered asynchronously to the recipient's mailbox.
 
 Notes:
@@ -634,9 +642,10 @@ pub const TEAM_CREATE: &str = "\
 Create a multi-agent team with a lead and optional agent definitions.
 
 Usage:
+- `team_name` optionally requests a specific persistent team name.
 - `objective` describes the team's overall goal.
 - `lead` optionally names the lead agent.
-- `agents` is an array of agent definitions with `name` and `role`.
+- `agents` is an array of agent definitions with `name`, `role`, and optional routing fields such as `cwd`, `model`, `color`, `worktree_path`, and `session_id`.
 
 Notes:
 - Teams coordinate multiple agents to work on complex tasks.
@@ -660,8 +669,8 @@ pub const TEAM_STATUS: &str = "\
 Get the current status of the multi-agent team.
 
 Usage:
-- Returns the team's objective, member statuses, and overall progress.
-- No parameters required.
+- `team_name` optionally selects one specific team.
+- Returns the team's objective, member statuses, unread mailbox counts, and overall progress.
 
 Notes:
 - Use this to monitor team progress and identify blocked agents.
@@ -957,8 +966,8 @@ pub const LIST_PEERS: &str = "\
 List all registered agents in the multi-agent system.
 
 Usage:
-- Returns a list of all agents with their names, roles, and status.
-- No parameters required.
+- `team_name` optionally limits the listing to one team.
+- Returns the visible peers with their names, roles, activity, and team metadata.
 
 Notes:
 - Use this to discover available agents for communication via `send_message`.
@@ -983,6 +992,7 @@ pub const BROADCAST_MESSAGE: &str = "\
 Broadcast a message to all agents in the multi-agent system.
 
 Usage:
+- `team_name` optionally selects the target team when multiple teams exist.
 - `message` is the content to broadcast.
 - `sender` optionally identifies the sender (default: coordinator).
 - `priority` sets message priority: 'low', 'normal', or 'high' (default: normal).
@@ -1156,6 +1166,12 @@ pub fn agent_tool_prompt() -> String {
     result.\n\n\
     # Usage\n\
     - Write a detailed `prompt` describing what the sub-agent should accomplish and why.\n\
+    - Use `subagent_type` to choose a specialized built-in agent. Current built-ins are \
+    `general-purpose`, `Explore`, `Plan`, and `verification`.\n\
+    - If `subagent_type` is omitted, the default `general-purpose` agent is used.\n\
+    - Optionally provide a short `description` to summarize the assignment.\n\
+    - Optionally override the child model with `model`. Omit it or use `inherit` to reuse the \
+    parent model.\n\
     - Optionally restrict available tools via the `tools` array.\n\
     - The sub-agent starts with zero context — brief it like a smart colleague who just walked in.\n\
     - Explain what you're trying to accomplish, what you've already learned, and what the agent \

@@ -27,6 +27,7 @@ use rc_tools::{
 };
 use tokio::sync::Mutex;
 
+use crate::agents::build_remote_code_sub_agent_runtime;
 use crate::conversation::{
     PromptEventSink, PromptRunOutcome, PromptStreamEvent, build_prompt_progress_callback,
     discover_runtime_extensions, truncate_preview,
@@ -205,7 +206,7 @@ async fn build_runtime_system_prompt(
         additional_dirs: Vec::new(),
         is_non_interactive: config.print_mode
             || !matches!(config.output_format, rc_core::OutputFormat::Text),
-        is_fork_subagent_enabled: true,
+        is_fork_subagent_enabled: false,
         session_start_date: Local::now().format("%Y-%m-%d").to_string(),
     };
 
@@ -779,7 +780,10 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         tool_context: ToolExecutionContext {
             cwd: config.cwd.clone(),
             timeout_ms: config.provider.timeout_ms,
-            sub_agent: Some(backend.sub_agent_completion()),
+            sub_agent: Some(build_remote_code_sub_agent_runtime(
+                config,
+                backend.sub_agent_completion(),
+            )),
             progress_cb: event_sink
                 .as_ref()
                 .map(|event_sink| build_prompt_progress_callback(config, event_sink)),
