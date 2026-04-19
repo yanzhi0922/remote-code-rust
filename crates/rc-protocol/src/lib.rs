@@ -959,6 +959,10 @@ mod tests {
                     fallback_model: Some("glm-5-turbo".to_owned()),
                 },
                 permission_mode: "default".to_owned(),
+                output_style: Some("Explanatory".to_owned()),
+                language: Some("zh-CN".to_owned()),
+                brief_enabled: true,
+                proactive_active: true,
                 setting_sources: vec!["env:REMOTE_CODE_MODEL".to_owned()],
                 allowed_setting_sources: vec!["user".to_owned(), "project".to_owned()],
                 allowed_tools: vec!["read_file".to_owned()],
@@ -1059,6 +1063,12 @@ mod tests {
             ProtocolInput::User { content } => assert_eq!(content, "hello"),
             _ => panic!("expected User variant"),
         }
+    }
+
+    #[test]
+    fn parse_input_line_rejects_flat_user_content() {
+        let input = r#"{"type":"user","content":"hello"}"#;
+        assert!(parse_input_line(input).is_none());
     }
 
     #[test]

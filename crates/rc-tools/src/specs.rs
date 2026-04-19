@@ -259,28 +259,23 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "agent".to_owned(),
             protocol_name: "Agent".to_owned(),
             permission_tool_name: "Agent".to_owned(),
-            description: tool_prompts::AGENT.to_owned(),
+            description: tool_prompts::agent_tool_prompt(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "prompt": {"type": "string", "description": "The task description for the sub-agent."},
-                    "description": {"type": "string", "description": "Optional short human summary of what the sub-agent should do."},
-                    "subagent_type": {"type": "string", "description": "Optional specialized agent type. Built-in values currently include general-purpose, Explore, Plan, and verification."},
-                    "model": {"type": "string", "description": "Optional model override for the sub-agent. Omit or use inherit to reuse the parent model."},
-                    "tools": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional list of tool names the sub-agent is allowed to use."
-                    },
-                    "mode": {"type": "string", "enum": ["single", "batch"], "description": "Execution mode. Batch mode runs the legacy delegation batch path."},
-                    "tasks": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Required when mode=batch. Each string is a task prompt for one delegated worker."
-                    }
+                    "description": {"type": "string", "description": "A short (3-5 word) description of the task."},
+                    "prompt": {"type": "string", "description": "The task for the agent to perform."},
+                    "subagent_type": {"type": "string", "description": "The type of specialized agent to use for this task."},
+                    "model": {"type": "string", "description": "Optional model override for this agent. Omit it or use inherit to reuse the parent model."},
+                    "run_in_background": {"type": "boolean", "description": "Set to true to run this agent in the background."},
+                    "name": {"type": "string", "description": "Name for the spawned agent. Makes it addressable via SendMessage({to: name}) while running."},
+                    "team_name": {"type": "string", "description": "Team name for spawning. Uses the current team context if omitted."},
+                    "mode": {"type": "string", "enum": ["default", "plan"], "description": "Permission mode for the spawned teammate."},
+                    "isolation": {"type": "string", "enum": ["worktree"], "description": "Isolation mode. worktree creates a temporary git worktree so the agent works on an isolated copy of the repo."},
+                    "cwd": {"type": "string", "description": "Absolute path to run the agent in. Overrides the working directory for all filesystem and shell operations within this agent."}
                 },
-                "required": ["prompt"],
+                "required": ["description", "prompt"],
                 "additionalProperties": false,
             }),
         },
@@ -1204,6 +1199,59 @@ mod tests {
                 "{tool_name} should expose background"
             );
         }
+    }
+
+    #[test]
+    fn agent_schema_matches_research_surface() {
+        let specs = builtin_tool_specs();
+        let agent = specs
+            .iter()
+            .find(|spec| spec.name == "agent")
+            .expect("missing agent spec");
+        let properties = agent
+            .input_schema
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .expect("agent properties");
+
+        for field in [
+            "description",
+            "prompt",
+            "subagent_type",
+            "model",
+            "run_in_background",
+            "name",
+            "team_name",
+            "mode",
+            "isolation",
+            "cwd",
+        ] {
+            assert!(
+                properties.contains_key(field),
+                "agent schema should expose {field}"
+            );
+        }
+
+        assert!(
+            !properties.contains_key("tools"),
+            "agent schema should hide legacy tools overrides from the model"
+        );
+        assert!(
+            !properties.contains_key("tasks"),
+            "agent schema should hide legacy batch delegation fields from the model"
+        );
+
+        let required = agent
+            .input_schema
+            .get("required")
+            .and_then(|value| value.as_array())
+            .expect("agent required list");
+        let required_fields = required
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(required_fields.contains("description"));
+        assert!(required_fields.contains("prompt"));
     }
 
     #[test]

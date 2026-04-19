@@ -197,7 +197,7 @@ async fn inspect_stdio_server(
     result
 }
 
-fn resolve_stdio_command(command: &str) -> String {
+pub fn resolve_stdio_command(command: &str) -> String {
     #[cfg(windows)]
     {
         let path = Path::new(command);

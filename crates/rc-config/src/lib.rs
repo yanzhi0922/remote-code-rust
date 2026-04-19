@@ -378,13 +378,16 @@ pub fn load_runtime_config(
         .output_style
         .clone()
         .or(settings.output_style.clone());
-    let language = runtime_overrides.language.clone().or(settings.language.clone());
+    let language = runtime_overrides
+        .language
+        .clone()
+        .or(settings.language.clone());
     let brief_enabled = runtime_overrides
         .brief_enabled
         .unwrap_or_else(|| read_env_truthy(&["REMOTE_CODE_BRIEF", "CLAUDE_CODE_BRIEF"]));
-    let proactive_active = runtime_overrides.proactive_active.unwrap_or_else(|| {
-        read_env_truthy(&["REMOTE_CODE_PROACTIVE", "CLAUDE_CODE_PROACTIVE"])
-    });
+    let proactive_active = runtime_overrides
+        .proactive_active
+        .unwrap_or_else(|| read_env_truthy(&["REMOTE_CODE_PROACTIVE", "CLAUDE_CODE_PROACTIVE"]));
     if provider.model.is_none() {
         provider.model = fallback_model.clone();
     }
