@@ -18,15 +18,12 @@ impl SystemPromptSection for ScratchpadSection {
         "scratchpad"
     }
 
-    fn compute(&self, _ctx: &PromptContext) -> Result<Option<String>> {
-        // In the full implementation, this checks isScratchpadEnabled() and
-        // getScratchpadDir(). For now, return None since the scratchpad
-        // filesystem permissions module is not yet wired in.
-        //
-        // When integrated, the content would be:
-        // # Scratchpad Directory
-        // IMPORTANT: Always use this scratchpad directory for temporary files...
-        Ok(None)
+    fn compute(&self, ctx: &PromptContext) -> Result<Option<String>> {
+        Ok(ctx
+            .features
+            .scratchpad_dir
+            .as_deref()
+            .map(build_scratchpad_instructions))
     }
 }
 
@@ -72,6 +69,7 @@ mod tests {
             is_non_interactive: false,
             is_fork_subagent_enabled: false,
             session_start_date: "2025-01-01".to_string(),
+            features: crate::PromptFeatures::default(),
         }
     }
 

@@ -49,17 +49,22 @@ use cache::{SYSTEM_PROMPT_DYNAMIC_BOUNDARY, SectionCache};
 use sections::SystemPromptSection;
 use sections::actions::ActionsSection;
 use sections::ant_model_override::AntModelOverrideSection;
+use sections::brief::BriefSection;
 use sections::doing_tasks::DoingTasksSection;
 use sections::env_info::EnvInfoSection;
 use sections::intro::IntroSection;
 use sections::language::LanguageSection;
 use sections::mcp_instructions::McpInstructionsSection;
 use sections::memory::MemorySection;
+use sections::numeric_length_anchors::NumericLengthAnchorsSection;
 use sections::output_efficiency::OutputEfficiencySection;
 use sections::output_style::OutputStyleSection;
+use sections::proactive::ProactiveSection;
 use sections::scratchpad::ScratchpadSection;
 use sections::session_guidance::SessionGuidanceSection;
 use sections::system::SystemSection;
+use sections::system_reminders::SystemRemindersSection;
+use sections::token_budget::TokenBudgetSection;
 use sections::tone_style::ToneStyleSection;
 use sections::tool_result::{FunctionResultClearingSection, ToolResultSection};
 use sections::using_tools::UsingToolsSection;
@@ -82,6 +87,35 @@ pub struct McpClientInfo {
     pub name: String,
     /// Optional instructions provided by the server.
     pub instructions: Option<String>,
+}
+
+/// Feature flags and runtime prompt toggles that affect the final prompt text.
+#[derive(Debug, Clone, Default)]
+pub struct PromptFeatures {
+    /// Whether the runtime should match Anthropic's internal ant-only branches.
+    pub ant_user: bool,
+    /// Whether autonomous/proactive mode is active.
+    pub proactive_active: bool,
+    /// Whether brief mode is active.
+    pub brief_enabled: bool,
+    /// Whether the runtime is in REPL mode, which uses a narrower tool-guidance section.
+    pub repl_mode_active: bool,
+    /// Whether search is expected to happen through embedded shell aliases instead of Glob/Grep.
+    pub embedded_search_tools: bool,
+    /// Whether there are user-invocable skills available for `/skill-name` expansion.
+    pub user_invocable_skills_available: bool,
+    /// Whether built-in Explore/Plan search agents should be mentioned in prompt guidance.
+    pub explore_plan_agents_enabled: bool,
+    /// Whether verification-agent contract guidance is enabled for this runtime.
+    pub verification_agent_enabled: bool,
+    /// Exact memory prompt content, if the runtime resolved one.
+    pub memory_prompt: Option<String>,
+    /// Scratchpad directory path, when scratchpad guidance should be shown.
+    pub scratchpad_dir: Option<String>,
+    /// Keep-recent count for function-result clearing guidance.
+    pub function_result_keep_recent: Option<usize>,
+    /// Whether the token-budget guidance section is enabled.
+    pub include_token_budget_prompt: bool,
 }
 
 /// Runtime context for system prompt section computation.
@@ -124,6 +158,8 @@ pub struct PromptContext {
     pub is_fork_subagent_enabled: bool,
     /// ISO 8601 date string for when the session started.
     pub session_start_date: String,
+    /// Feature flags and mode toggles affecting prompt assembly.
+    pub features: PromptFeatures,
 }
 
 /// Cache scope for a provider-facing system prompt block.
@@ -343,6 +379,11 @@ impl SystemPromptBuilder {
             .dynamic_sections
             .push(Box::new(FunctionResultClearingSection));
         builder.dynamic_sections.push(Box::new(ToolResultSection));
+        builder
+            .dynamic_sections
+            .push(Box::new(NumericLengthAnchorsSection));
+        builder.dynamic_sections.push(Box::new(TokenBudgetSection));
+        builder.dynamic_sections.push(Box::new(BriefSection));
 
         builder
     }
@@ -368,6 +409,10 @@ impl SystemPromptBuilder {
     /// The boundary marker [`SYSTEM_PROMPT_DYNAMIC_BOUNDARY`] separates static
     /// from dynamic content (if global cache scope is enabled).
     pub fn build(&mut self, ctx: &PromptContext) -> Result<Vec<String>> {
+        if ctx.features.proactive_active {
+            return self.build_proactive(ctx);
+        }
+
         let mut result = Vec::new();
 
         // Compute static sections
@@ -411,6 +456,31 @@ impl SystemPromptBuilder {
             };
 
             if let Some(text) = content {
+                result.push(text);
+            }
+        }
+
+        Ok(result)
+    }
+
+    fn build_proactive(&mut self, ctx: &PromptContext) -> Result<Vec<String>> {
+        let mut result = vec![format!(
+            "\nYou are an autonomous agent. Use the available tools to do useful work.\n\n{}",
+            sections::intro::CYBER_RISK_INSTRUCTION
+        )];
+
+        for section in [
+            &SystemRemindersSection as &dyn SystemPromptSection,
+            &MemorySection,
+            &EnvInfoSection,
+            &LanguageSection,
+            &McpInstructionsSection,
+            &ScratchpadSection,
+            &FunctionResultClearingSection,
+            &ToolResultSection,
+            &ProactiveSection,
+        ] {
+            if let Some(text) = section.compute(ctx)? {
                 result.push(text);
             }
         }
@@ -462,6 +532,7 @@ pub fn test_prompt_context() -> PromptContext {
         is_non_interactive: false,
         is_fork_subagent_enabled: false,
         session_start_date: "2025-01-01".to_string(),
+        features: PromptFeatures::default(),
     }
 }
 
@@ -480,7 +551,7 @@ mod tests {
     fn builder_with_defaults_has_sections() {
         let builder = SystemPromptBuilder::with_default_sections();
         assert_eq!(builder.static_section_count(), 7);
-        assert_eq!(builder.dynamic_section_count(), 10);
+        assert_eq!(builder.dynamic_section_count(), 13);
     }
 
     #[test]
@@ -581,7 +652,10 @@ mod tests {
                 "mcp_instructions",
                 "scratchpad",
                 "frc",
-                "summarize_tool_results"
+                "summarize_tool_results",
+                "numeric_length_anchors",
+                "token_budget",
+                "brief"
             ]
         );
     }
@@ -610,6 +684,37 @@ mod tests {
 
         // Dynamic sections (env_info always present)
         assert!(combined.contains("# Environment"), "env_info");
+    }
+
+    #[test]
+    fn proactive_build_uses_autonomous_prompt_shape() {
+        let mut builder = SystemPromptBuilder::with_default_sections();
+        let mut ctx = test_prompt_context();
+        ctx.features.proactive_active = true;
+        let result = builder.build(&ctx).expect("build should succeed");
+        let combined = result.join("\n---\n");
+
+        assert!(combined.contains("You are an autonomous agent."));
+        assert!(
+            combined
+                .contains("- Tool results and user messages may include <system-reminder> tags.")
+        );
+        assert!(combined.contains("# Autonomous work"));
+        assert!(!combined.contains(SYSTEM_PROMPT_DYNAMIC_BOUNDARY));
+    }
+
+    #[test]
+    fn proactive_with_brief_contains_brief_guidance_no_boundary() {
+        let mut builder = SystemPromptBuilder::with_default_sections();
+        let mut ctx = test_prompt_context();
+        ctx.features.proactive_active = true;
+        ctx.features.brief_enabled = true;
+        let result = builder.build(&ctx).expect("build should succeed");
+        let combined = result.join("\n---\n");
+
+        assert!(combined.contains("## Talking to the user"));
+        assert!(combined.contains("SendUserMessage is where your replies go"));
+        assert!(!combined.contains(SYSTEM_PROMPT_DYNAMIC_BOUNDARY));
     }
 
     #[test]

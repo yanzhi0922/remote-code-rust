@@ -4,42 +4,42 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use rc_config::{
-    discover_env_providers, load_runtime_config, normalize_base_url, validate_provider_config,
     AppPaths, ProviderConfig as RuntimeProviderConfig, ProviderOverrides, RuntimeConfig,
-    RuntimeOverrides, SettingSource,
+    RuntimeOverrides, SettingSource, discover_env_providers, load_runtime_config,
+    normalize_base_url, validate_provider_config,
 };
 use rc_core::{
     ConversationEntry, ConversationRole, PermissionMode, ProviderProtocol, ToolCall, UsageSummary,
 };
 use rc_mcp::{
-    inspect_server, McpClientInfo, McpConfig, McpServerConfig, McpServerInspection, McpTransport,
-    McpTransportConfig, DEFAULT_MCP_CONFIG_FILE,
+    DEFAULT_MCP_CONFIG_FILE, McpClientInfo, McpConfig, McpServerConfig, McpServerInspection,
+    McpTransport, McpTransportConfig, inspect_server,
 };
 use rc_permissions::{
-    auto_allows, classify_tool, load_layered_rules, rules::summarize_rule_sources,
-    LayeredPermissionBroker, PermissionBroker, PermissionDecision, PermissionRequest,
+    LayeredPermissionBroker, PermissionBroker, PermissionDecision, PermissionRequest, auto_allows,
+    classify_tool, load_layered_rules, rules::summarize_rule_sources,
 };
-use rc_plugins::{discover_plugins_including_disabled, PluginBundle};
+use rc_plugins::{PluginBundle, discover_plugins_including_disabled};
 use rc_provider::context::ContextWindowManager;
-use rc_provider::model_info::{get_model_info, ModelCapability};
+use rc_provider::model_info::{ModelCapability, get_model_info};
 use rc_provider::streaming::StreamingCallbacks;
 use rc_provider::{ConversationBackend, ProviderClient, ProviderCompatBackend};
-use rc_session::{conversation::ensure_conversation_initialized, SessionStore, SessionSummary};
+use rc_session::{SessionStore, SessionSummary, conversation::ensure_conversation_initialized};
 use rc_skills::discover_skills;
 use rc_tools::shell::ShellExecutionPolicy;
 use rc_tools::{
-    agent::{parse_delegate_progress_event, DelegateProgressEvent},
+    ToolExecutionContext, ToolRuntimePolicy,
+    agent::{DelegateProgressEvent, parse_delegate_progress_event},
     configure_tool_runtime_policy, execute_tool_call,
     mcp_runtime::{
-        observe_runtime_mcp_servers, runtime_mcp_inventory_summary, runtime_mcp_policy_entries,
-        RuntimeMcpServerObservation,
+        RuntimeMcpServerObservation, observe_runtime_mcp_servers, runtime_mcp_inventory_summary,
+        runtime_mcp_policy_entries,
     },
     runtime_provider_tool_spec,
     tasks::load_persisted_ui_task_snapshots,
-    ToolExecutionContext, ToolRuntimePolicy,
 };
 use rc_ui_bridge::{
     UiProviderStatusSnapshot, UiRuntimeMcpInventorySummary, UiRuntimeMcpServerStatus,
@@ -48,8 +48,8 @@ use rc_ui_bridge::{
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_dialog::DialogExt;
-use tokio::sync::{oneshot, Mutex};
-use tokio::time::{timeout, Duration};
+use tokio::sync::{Mutex, oneshot};
+use tokio::time::{Duration, timeout};
 use uuid::Uuid;
 
 const APP_EVENT_PERMISSION_REQUEST: &str = "gui://permission-request";
@@ -1022,6 +1022,10 @@ fn runtime_status_snapshot_from_config(config: &RuntimeConfig) -> UiRuntimeStatu
             fallback_model: config.fallback_model.clone(),
         },
         permission_mode: config.permission_mode.as_legacy_str().to_owned(),
+        output_style: config.output_style.clone(),
+        language: config.language.clone(),
+        brief_enabled: config.brief_enabled,
+        proactive_active: config.proactive_active,
         setting_sources: config.setting_sources.clone(),
         allowed_setting_sources: config
             .allowed_setting_sources
@@ -1862,11 +1866,7 @@ fn toggle_managed_mcp_server_at_path(
     } else {
         server.enabled = enabled;
         mcp_config.save(config_path)?;
-        if enabled {
-            "enabled"
-        } else {
-            "disabled"
-        }
+        if enabled { "enabled" } else { "disabled" }
     };
 
     Ok(McpMutationResultDto {
@@ -3794,6 +3794,10 @@ mod tests {
                 disallowed_tools: vec!["bash_command".to_owned()],
                 effort: Some("medium".to_owned()),
                 fallback_model: Some("glm-5-turbo".to_owned()),
+                output_style: Some("Explanatory".to_owned()),
+                language: Some("Chinese".to_owned()),
+                brief_enabled: Some(true),
+                proactive_active: Some(true),
             },
         )
         .expect("config should load")
@@ -3885,6 +3889,10 @@ mod tests {
         assert_eq!(snapshot.provider.name, "glm-coding");
         assert_eq!(snapshot.provider.effort.as_deref(), Some("medium"));
         assert_eq!(snapshot.permission_mode, "acceptEdits");
+        assert_eq!(snapshot.output_style.as_deref(), Some("Explanatory"));
+        assert_eq!(snapshot.language.as_deref(), Some("Chinese"));
+        assert!(snapshot.brief_enabled);
+        assert!(snapshot.proactive_active);
         assert_eq!(
             snapshot.allowed_setting_sources,
             vec!["user", "project", "local"]
@@ -3958,28 +3966,36 @@ mod tests {
         assert_eq!(inventory.summary.status_counts.pending, 3);
         assert_eq!(inventory.summary.status_counts.disabled, 1);
         assert_eq!(inventory.servers.len(), 4);
-        assert!(inventory
-            .servers
-            .iter()
-            .any(|server| server.name == "project-demo"
-                && server.status == "pending"
-                && server.origin_kind == "cwd"));
-        assert!(inventory
-            .servers
-            .iter()
-            .any(|server| server.name == "disabled-demo"
-                && server.status == "disabled"
-                && server.origin_kind == "cwd"));
-        assert!(inventory
-            .servers
-            .iter()
-            .any(|server| server.name == "profile-demo" && server.origin_kind == "profile"));
-        assert!(inventory
-            .servers
-            .iter()
-            .any(|server| server.name == "plugin-demo"
-                && server.origin_kind == "plugin"
-                && server.origin_name == "sample"));
+        assert!(
+            inventory
+                .servers
+                .iter()
+                .any(|server| server.name == "project-demo"
+                    && server.status == "pending"
+                    && server.origin_kind == "cwd")
+        );
+        assert!(
+            inventory
+                .servers
+                .iter()
+                .any(|server| server.name == "disabled-demo"
+                    && server.status == "disabled"
+                    && server.origin_kind == "cwd")
+        );
+        assert!(
+            inventory
+                .servers
+                .iter()
+                .any(|server| server.name == "profile-demo" && server.origin_kind == "profile")
+        );
+        assert!(
+            inventory
+                .servers
+                .iter()
+                .any(|server| server.name == "plugin-demo"
+                    && server.origin_kind == "plugin"
+                    && server.origin_name == "sample")
+        );
 
         let snapshot = runtime_status_snapshot_from_config(&config);
         assert_eq!(snapshot.mcp.total_servers, 2);
@@ -4047,12 +4063,14 @@ mod tests {
             names,
             std::collections::BTreeSet::from(["plugin-demo", "profile-demo", "project-demo"])
         );
-        assert!(policy
-            .mcp_servers
-            .iter()
-            .any(|entry| entry.server.name == "plugin-demo"
-                && entry.origin_kind == "plugin"
-                && entry.origin_name == "sample"));
+        assert!(
+            policy
+                .mcp_servers
+                .iter()
+                .any(|entry| entry.server.name == "plugin-demo"
+                    && entry.origin_kind == "plugin"
+                    && entry.origin_name == "sample")
+        );
 
         rc_tools::configure_tool_runtime_policy(original_policy)
             .expect("runtime policy should restore");

@@ -299,6 +299,14 @@ pub struct RuntimeConfig {
     pub effort: Option<String>,
     /// Fallback model used when no explicit primary model is configured.
     pub fallback_model: Option<String>,
+    /// Preferred output style name for prompt construction.
+    pub output_style: Option<String>,
+    /// Preferred response language for prompt construction.
+    pub language: Option<String>,
+    /// Whether brief mode is active for the current session.
+    pub brief_enabled: bool,
+    /// Whether proactive/autonomous mode is active for the current session.
+    pub proactive_active: bool,
     /// Explanation of where the active auth token came from.
     pub auth_source: Option<String>,
     /// Active provider configuration.
@@ -366,6 +374,17 @@ pub fn load_runtime_config(
         .clone()
         .or_else(|| read_env_first(&["REMOTE_CODE_FALLBACK_MODEL"]))
         .or(settings.fallback_model.clone());
+    let output_style = runtime_overrides
+        .output_style
+        .clone()
+        .or(settings.output_style.clone());
+    let language = runtime_overrides.language.clone().or(settings.language.clone());
+    let brief_enabled = runtime_overrides
+        .brief_enabled
+        .unwrap_or_else(|| read_env_truthy(&["REMOTE_CODE_BRIEF", "CLAUDE_CODE_BRIEF"]));
+    let proactive_active = runtime_overrides.proactive_active.unwrap_or_else(|| {
+        read_env_truthy(&["REMOTE_CODE_PROACTIVE", "CLAUDE_CODE_PROACTIVE"])
+    });
     if provider.model.is_none() {
         provider.model = fallback_model.clone();
     }
@@ -411,6 +430,10 @@ pub fn load_runtime_config(
         disallowed_tools,
         effort,
         fallback_model,
+        output_style,
+        language,
+        brief_enabled,
+        proactive_active,
         auth_source: resolve_auth_source(&provider_overrides, &settings, &provider),
         provider,
         paths,
@@ -762,6 +785,17 @@ fn read_env_first(keys: &[&str]) -> Option<String> {
     })
 }
 
+fn read_env_truthy(keys: &[&str]) -> bool {
+    keys.iter().any(|key| {
+        env::var(key).ok().is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+    })
+}
+
 fn cli_setting_sources(
     runtime_overrides: &RuntimeOverrides,
     overrides: &ProviderOverrides,
@@ -797,6 +831,18 @@ fn cli_setting_sources(
     if runtime_overrides.fallback_model.is_some() {
         sources.push("cli:fallback-model".to_owned());
     }
+    if runtime_overrides.output_style.is_some() {
+        sources.push("cli:output-style".to_owned());
+    }
+    if runtime_overrides.language.is_some() {
+        sources.push("cli:language".to_owned());
+    }
+    if runtime_overrides.brief_enabled.is_some() {
+        sources.push("cli:brief".to_owned());
+    }
+    if runtime_overrides.proactive_active.is_some() {
+        sources.push("cli:proactive".to_owned());
+    }
     if runtime_overrides.allowed_setting_sources.is_some() {
         sources.push("cli:setting-sources".to_owned());
     }
@@ -824,6 +870,10 @@ fn env_setting_sources() -> Vec<String> {
             "REMOTE_CODE_FALLBACK_MODEL",
             "env:REMOTE_CODE_FALLBACK_MODEL",
         ),
+        ("REMOTE_CODE_BRIEF", "env:REMOTE_CODE_BRIEF"),
+        ("CLAUDE_CODE_BRIEF", "env:CLAUDE_CODE_BRIEF"),
+        ("REMOTE_CODE_PROACTIVE", "env:REMOTE_CODE_PROACTIVE"),
+        ("CLAUDE_CODE_PROACTIVE", "env:CLAUDE_CODE_PROACTIVE"),
         ("GLM_API_KEY", "env:GLM_API_KEY"),
         ("GLM_CODING_PLAN_API_KEY", "env:GLM_CODING_PLAN_API_KEY"),
         (

@@ -7,6 +7,8 @@ use std::time::Instant;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use chrono::Local;
+use rc_agents::coordinator::{get_coordinator_system_prompt, is_coordinator_mode};
+use rc_config::settings_layers::load_runtime_settings;
 use rc_config::{RuntimeConfig, validate_provider_config};
 use rc_core::{
     Attachment, AttachmentMediaType, ConversationEntry, ConversationRole, Message, PermissionMode,
@@ -26,8 +28,9 @@ use rc_session::SessionStore;
 use rc_session::resume_state::{PendingToolCall, ResumeState};
 use rc_system_prompt::{
     CacheScope as PromptCacheScope, EffectiveSystemPromptOptions,
-    McpClientInfo as PromptMcpClientInfo, PromptContext, SystemPromptBuilder,
-    SystemPromptSplitOptions, build_effective_system_prompt, cache::SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+    McpClientInfo as PromptMcpClientInfo, OutputStyleConfig as PromptOutputStyleConfig,
+    PromptContext, PromptFeatures, SystemPromptBuilder, SystemPromptSplitOptions,
+    build_effective_system_prompt, cache::SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
     split_system_prompt_for_api,
 };
 use rc_tools::{
@@ -726,6 +729,49 @@ fn env_truthy(name: &str) -> bool {
     })
 }
 
+fn runtime_is_ant_user() -> bool {
+    std::env::var("USER_TYPE")
+        .ok()
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("ant"))
+}
+
+fn discover_user_invocable_skills(config: &RuntimeConfig) -> bool {
+    rc_skills::discover_skills(&config.paths.skills_dir)
+        .map(|skills| !skills.is_empty())
+        .unwrap_or(false)
+}
+
+fn explanatory_feature_prompt() -> String {
+    "\n## Insights\nIn order to encourage learning, before and after writing code, always provide brief educational explanations about implementation choices using (with backticks):\n\"`★ Insight ─────────────────────────────────────`\n[2-3 key educational points]\n`─────────────────────────────────────────────────`\"\n\nThese insights should be included in the conversation, not in the codebase. You should generally focus on interesting insights that are specific to the codebase or the code you just wrote, rather than general programming concepts.".to_owned()
+}
+
+fn runtime_output_style_config(style_name: Option<&str>) -> Option<PromptOutputStyleConfig> {
+    match style_name?.trim() {
+        "" | "default" => None,
+        "Explanatory" => {
+            let feature_prompt = explanatory_feature_prompt();
+            Some(PromptOutputStyleConfig {
+                name: "Explanatory".to_owned(),
+                prompt: format!(
+                    "You are an interactive CLI tool that helps users with software engineering tasks. In addition to software engineering tasks, you should provide educational insights about the codebase along the way.\n\nYou should be clear and educational, providing helpful explanations while remaining focused on the task. Balance educational content with task completion. When providing insights, you may exceed typical length constraints, but remain focused and relevant.\n\n# Explanatory Style Active\n{feature_prompt}"
+                ),
+                keep_coding_instructions: true,
+            })
+        }
+        "Learning" => {
+            let feature_prompt = explanatory_feature_prompt();
+            Some(PromptOutputStyleConfig {
+                name: "Learning".to_owned(),
+                prompt: format!(
+                    "You are an interactive CLI tool that helps users with software engineering tasks. In addition to software engineering tasks, you should help users learn more about the codebase through hands-on practice and educational insights.\n\nYou should be collaborative and encouraging. Balance task completion with learning by requesting user input for meaningful design decisions while handling routine implementation yourself.   \n\n# Learning Style Active\n## Requesting Human Contributions\nIn order to encourage learning, ask the human to contribute 2-10 line code pieces when generating 20+ lines involving:\n- Design decisions (error handling, data structures)\n- Business logic with multiple valid approaches  \n- Key algorithms or interface definitions\n\n**TodoList Integration**: If using a TodoList for the overall task, include a specific todo item like \"Request human input on [specific decision]\" when planning to request human input. This ensures proper task tracking. Note: TodoList is not required for all tasks.\n\nExample TodoList flow:\n   ✓ \"Set up component structure with placeholder for logic\"\n   ✓ \"Request human collaboration on decision logic implementation\"\n   ✓ \"Integrate contribution and complete feature\"\n\n### Request Format\n```\n● **Learn by Doing**\n**Context:** [what's built and why this decision matters]\n**Your Task:** [specific function/section in file, mention file and TODO(human) but do not include line numbers]\n**Guidance:** [trade-offs and constraints to consider]\n```\n\n### Key Guidelines\n- Frame contributions as valuable design decisions, not busy work\n- You must first add a TODO(human) section into the codebase with your editing tools before making the Learn by Doing request      \n- Make sure there is one and only one TODO(human) section in the code\n- Don't take any action or output anything after the Learn by Doing request. Wait for human implementation before proceeding.\n\n### Example Requests\n\n**Whole Function Example:**\n```\n● **Learn by Doing**\n\n**Context:** I've set up the hint feature UI with a button that triggers the hint system. The infrastructure is ready: when clicked, it calls selectHintCell() to determine which cell to hint, then highlights that cell with a yellow background and shows possible values. The hint system needs to decide which empty cell would be most helpful to reveal to the user.\n\n**Your Task:** In sudoku.js, implement the selectHintCell(board) function. Look for TODO(human). This function should analyze the board and return {{row, col}} for the best cell to hint, or null if the puzzle is complete.\n\n**Guidance:** Consider multiple strategies: prioritize cells with only one possible value (naked singles), or cells that appear in rows/columns/boxes with many filled cells. You could also consider a balanced approach that helps without making it too easy. The board parameter is a 9x9 array where 0 represents empty cells.\n```\n\n**Partial Function Example:**\n```\n● **Learn by Doing**\n\n**Context:** I've built a file upload component that validates files before accepting them. The main validation logic is complete, but it needs specific handling for different file type categories in the switch statement.\n\n**Your Task:** In upload.js, inside the validateFile() function's switch statement, implement the 'case \"document\":' branch. Look for TODO(human). This should validate document files (pdf, doc, docx).\n\n**Guidance:** Consider checking file size limits (maybe 10MB for documents?), validating the file extension matches the MIME type, and returning {{valid: boolean, error?: string}}. The file object has properties: name, size, type.\n```\n\n**Debugging Example:**\n```\n● **Learn by Doing**\n\n**Context:** The user reported that number inputs aren't working correctly in the calculator. I've identified the handleInput() function as the likely source, but need to understand what values are being processed.\n\n**Your Task:** In calculator.js, inside the handleInput() function, add 2-3 console.log statements after the TODO(human) comment to help debug why number inputs fail.\n\n**Guidance:** Consider logging: the raw input value, the parsed result, and any validation state. This will help us understand where the conversion breaks.\n```\n\n### After Contributions\nShare one insight connecting their code to broader patterns or system effects. Avoid praise or repetition.\n{feature_prompt}"
+                ),
+                keep_coding_instructions: true,
+            })
+        }
+        _ => None,
+    }
+}
+
 fn expand_requested_tool_names(
     requested_tools: &[String],
     tool_specs: &[ToolSpec],
@@ -762,26 +808,29 @@ async fn build_runtime_system_prompt(
     overrides: &CompatRunOverrides,
     discovered_tool_scope: &DiscoveredToolScope,
 ) -> Result<RuntimeSystemPrompt> {
-    let has_custom_system_prompt = overrides
-        .system_prompt
-        .as_deref()
-        .is_some_and(|prompt| !prompt.trim().is_empty());
+    let prompt_settings = load_runtime_settings(&config.settings_files)?;
+    let custom_system_prompt_provided = overrides.system_prompt.is_some();
+    let session_start_date = Local::now().format("%Y-%m-%d").to_string();
     if env_truthy("CLAUDE_CODE_SIMPLE") {
-        let mut prompt_blocks = if has_custom_system_prompt {
-            vec![
-                overrides
-                    .system_prompt
-                    .clone()
-                    .expect("non-empty custom system prompt"),
-            ]
+        let default_prompt_blocks = if custom_system_prompt_provided {
+            Vec::new()
         } else {
             vec![format!(
                 "You are Claude Code, Anthropic's official CLI for Claude.\n\nCWD: {}\nDate: {}",
                 config.cwd.display(),
-                Local::now().format("%Y-%m-%d")
+                session_start_date
             )]
         };
-        if !has_custom_system_prompt
+        let mut prompt_blocks = build_effective_system_prompt(
+            default_prompt_blocks,
+            &EffectiveSystemPromptOptions {
+                coordinator_system_prompt: is_coordinator_mode()
+                    .then(|| get_coordinator_system_prompt(true)),
+                custom_system_prompt: overrides.system_prompt.clone(),
+                ..Default::default()
+            },
+        );
+        if !custom_system_prompt_provided
             && let Some(system_context) = runtime_system_context_block(config)
         {
             prompt_blocks.push(system_context);
@@ -831,6 +880,7 @@ async fn build_runtime_system_prompt(
     }
     let enabled_tool_names = enabled_tools.clone();
     let use_global_prompt_cache = should_use_global_prompt_cache_scope(config);
+    let user_invocable_skills_available = discover_user_invocable_skills(config);
 
     let prompt_ctx = PromptContext {
         model: config
@@ -844,8 +894,13 @@ async fn build_runtime_system_prompt(
         shell: detect_shell_name(),
         os_version: detect_os_version(),
         enabled_tools,
-        language: None,
-        output_style: None,
+        language: config.language.clone().or(prompt_settings.language.clone()),
+        output_style: runtime_output_style_config(
+            config
+                .output_style
+                .as_deref()
+                .or(prompt_settings.output_style.as_deref()),
+        ),
         mcp_clients: mcp_catalog
             .clients
             .into_iter()
@@ -860,19 +915,46 @@ async fn build_runtime_system_prompt(
         is_non_interactive: config.print_mode
             || !matches!(config.output_format, rc_core::OutputFormat::Text),
         is_fork_subagent_enabled: false,
-        session_start_date: Local::now().format("%Y-%m-%d").to_string(),
+        session_start_date,
+        features: PromptFeatures {
+            ant_user: runtime_is_ant_user(),
+            proactive_active: config.proactive_active
+                || runtime_env_truthy("REMOTE_CODE_PROACTIVE")
+                || runtime_env_truthy("CLAUDE_CODE_PROACTIVE"),
+            brief_enabled: config.brief_enabled
+                || runtime_env_truthy("REMOTE_CODE_BRIEF")
+                || runtime_env_truthy("CLAUDE_CODE_BRIEF"),
+            repl_mode_active: false,
+            embedded_search_tools: false,
+            user_invocable_skills_available,
+            explore_plan_agents_enabled: true,
+            verification_agent_enabled: false,
+            memory_prompt: None,
+            scratchpad_dir: None,
+            function_result_keep_recent: None,
+            include_token_budget_prompt: runtime_env_truthy("REMOTE_CODE_TOKEN_BUDGET_PROMPT"),
+        },
     };
 
     let mut builder = SystemPromptBuilder::with_default_sections();
     builder.set_global_cache_scope(use_global_prompt_cache);
+    let default_prompt_blocks = if custom_system_prompt_provided {
+        Vec::new()
+    } else {
+        builder.build(&prompt_ctx)?
+    };
     let mut prompt_blocks = build_effective_system_prompt(
-        builder.build(&prompt_ctx)?,
+        default_prompt_blocks,
         &EffectiveSystemPromptOptions {
+            coordinator_system_prompt: is_coordinator_mode()
+                .then(|| get_coordinator_system_prompt(false)),
             custom_system_prompt: overrides.system_prompt.clone(),
+            proactive_active: prompt_ctx.features.proactive_active,
             ..Default::default()
         },
     );
-    if !has_custom_system_prompt && let Some(system_context) = runtime_system_context_block(config)
+    if !custom_system_prompt_provided
+        && let Some(system_context) = runtime_system_context_block(config)
     {
         prompt_blocks.push(system_context);
     }
@@ -2581,6 +2663,86 @@ while True:
             .find(|entry| entry.role == ConversationRole::System)
             .expect("system entry");
         assert!(system_entry.text.contains("Custom headless prompt"));
+        assert!(
+            !system_entry
+                .text
+                .contains("This is the git status at the start")
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_custom_system_prompt_still_skips_default_prompt_and_system_context() {
+        let (_tempdir, mut config, store) = mock_config_and_store();
+        config.provider.protocol = ProviderProtocol::Anthropic;
+        config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&config.cwd)
+            .output()
+            .expect("git init");
+        let mut conversation =
+            initialize_conversation(&store, &config, Some("empty custom prompt"))
+                .expect("conversation");
+
+        refresh_runtime_system_prompt(
+            &config,
+            &mut conversation,
+            &CompatRunOverrides {
+                system_prompt: Some(String::new()),
+                allowed_tools: None,
+            },
+            &DiscoveredToolScope::default(),
+        )
+        .await
+        .expect("refresh runtime system prompt");
+
+        let system_entry = conversation
+            .iter()
+            .find(|entry| entry.role == ConversationRole::System)
+            .expect("system entry");
+        assert!(system_entry.text.is_empty());
+        assert!(system_entry.content_blocks.is_empty());
+        assert!(!system_entry.text.contains("You are an interactive agent"));
+        assert!(
+            !system_entry
+                .text
+                .contains("This is the git status at the start")
+        );
+    }
+
+    #[tokio::test]
+    async fn whitespace_custom_system_prompt_skips_default_prompt_and_system_context() {
+        let (_tempdir, mut config, store) = mock_config_and_store();
+        config.provider.protocol = ProviderProtocol::Anthropic;
+        config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&config.cwd)
+            .output()
+            .expect("git init");
+        let mut conversation =
+            initialize_conversation(&store, &config, Some("blank custom prompt"))
+                .expect("conversation");
+
+        refresh_runtime_system_prompt(
+            &config,
+            &mut conversation,
+            &CompatRunOverrides {
+                system_prompt: Some("   ".to_owned()),
+                allowed_tools: None,
+            },
+            &DiscoveredToolScope::default(),
+        )
+        .await
+        .expect("refresh runtime system prompt");
+
+        let system_entry = conversation
+            .iter()
+            .find(|entry| entry.role == ConversationRole::System)
+            .expect("system entry");
+        assert!(system_entry.text.is_empty());
+        assert!(system_entry.content_blocks.is_empty());
+        assert!(!system_entry.text.contains("You are an interactive agent"));
         assert!(
             !system_entry
                 .text

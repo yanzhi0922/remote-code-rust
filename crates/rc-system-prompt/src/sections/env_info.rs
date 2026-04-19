@@ -23,6 +23,63 @@ fn get_knowledge_cutoff(model_id: &str) -> Option<&'static str> {
     }
 }
 
+fn get_marketing_name_for_model(model_id: &str) -> Option<String> {
+    let lower = model_id.to_lowercase();
+    let has_1m = lower.contains("[1m]");
+
+    if lower.contains("claude-opus-4-6") {
+        return Some(if has_1m {
+            "Opus 4.6 (with 1M context)".to_string()
+        } else {
+            "Opus 4.6".to_string()
+        });
+    }
+    if lower.contains("claude-opus-4-5") {
+        return Some("Opus 4.5".to_string());
+    }
+    if lower.contains("claude-opus-4-1") {
+        return Some("Opus 4.1".to_string());
+    }
+    if lower.contains("claude-opus-4") {
+        return Some("Opus 4".to_string());
+    }
+    if lower.contains("claude-sonnet-4-6") {
+        return Some(if has_1m {
+            "Sonnet 4.6 (with 1M context)".to_string()
+        } else {
+            "Sonnet 4.6".to_string()
+        });
+    }
+    if lower.contains("claude-sonnet-4-5") {
+        return Some(if has_1m {
+            "Sonnet 4.5 (with 1M context)".to_string()
+        } else {
+            "Sonnet 4.5".to_string()
+        });
+    }
+    if lower.contains("claude-sonnet-4") {
+        return Some(if has_1m {
+            "Sonnet 4 (with 1M context)".to_string()
+        } else {
+            "Sonnet 4".to_string()
+        });
+    }
+    if lower.contains("claude-3-7-sonnet") {
+        return Some("Claude 3.7 Sonnet".to_string());
+    }
+    if lower.contains("claude-3-5-sonnet") {
+        return Some("Claude 3.5 Sonnet".to_string());
+    }
+    if lower.contains("claude-haiku-4-5") {
+        return Some("Haiku 4.5".to_string());
+    }
+    if lower.contains("claude-3-5-haiku") {
+        return Some("Claude 3.5 Haiku".to_string());
+    }
+
+    None
+}
+
 /// Get shell info line with platform-specific guidance.
 fn get_shell_info_line(shell: &str, platform: &str) -> String {
     let shell_name = if shell.contains("zsh") {
@@ -52,9 +109,17 @@ impl SystemPromptSection for EnvInfoSection {
 
     fn compute(&self, ctx: &PromptContext) -> Result<Option<String>> {
         let model_description = if ctx.model.is_empty() {
-            String::new()
+            None
+        } else if let Some(marketing_name) = get_marketing_name_for_model(&ctx.model) {
+            Some(format!(
+                "You are powered by the model named {marketing_name}. The exact model ID is {}.",
+                ctx.model
+            ))
         } else {
-            format!("You are powered by the model {model}.", model = ctx.model)
+            Some(format!(
+                "You are powered by the model {model}.",
+                model = ctx.model
+            ))
         };
 
         let cutoff = get_knowledge_cutoff(&ctx.model);
@@ -100,7 +165,7 @@ impl SystemPromptSection for EnvInfoSection {
             ctx.os_version
         )));
 
-        if !model_description.is_empty() {
+        if let Some(model_description) = model_description {
             env_items.push(BulletItem::Single(model_description));
         }
         if !cutoff_msg.is_empty() {
@@ -153,6 +218,7 @@ mod tests {
             is_non_interactive: false,
             is_fork_subagent_enabled: false,
             session_start_date: "2025-01-01".to_string(),
+            features: crate::PromptFeatures::default(),
         }
     }
 
@@ -185,6 +251,7 @@ mod tests {
         let section = EnvInfoSection;
         let result = section.compute(&test_ctx()).expect("compute ok");
         let content = result.expect("should be Some");
+        assert!(content.contains("Sonnet 4.6"));
         assert!(content.contains("claude-sonnet-4-6"));
     }
 

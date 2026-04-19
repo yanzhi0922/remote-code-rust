@@ -1,16 +1,10 @@
-//! Memory section — MEMORY.md auto-load content.
-//!
-//! Matches `loadMemoryPrompt()` integration in Claude Code's `prompts.ts`.
+//! Memory section — runtime-resolved memory prompt content.
 
 use anyhow::Result;
 
 use crate::PromptContext;
 use crate::sections::SystemPromptSection;
 
-/// The memory section.
-///
-/// In the full implementation, this would load content from MEMORY.md files.
-/// For now, it returns `None` unless memory content is provided in the context.
 pub struct MemorySection;
 
 impl SystemPromptSection for MemorySection {
@@ -18,16 +12,8 @@ impl SystemPromptSection for MemorySection {
         "memory"
     }
 
-    fn compute(&self, _ctx: &PromptContext) -> Result<Option<String>> {
-        // In the full implementation, this would:
-        // 1. Walk up from cwd looking for MEMORY.md / CLAUDE.md files
-        // 2. Load and concatenate their contents
-        // 3. Return the combined memory prompt
-        //
-        // For now, return None (no memory files loaded).
-        // The actual file loading will be wired in when rc-session integration
-        // provides the memory content via PromptContext.
-        Ok(None)
+    fn compute(&self, ctx: &PromptContext) -> Result<Option<String>> {
+        Ok(ctx.features.memory_prompt.clone())
     }
 }
 
@@ -55,6 +41,7 @@ mod tests {
             is_non_interactive: false,
             is_fork_subagent_enabled: false,
             session_start_date: "2025-01-01".to_string(),
+            features: crate::PromptFeatures::default(),
         }
     }
 

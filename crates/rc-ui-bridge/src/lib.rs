@@ -152,6 +152,14 @@ pub struct UiRuntimeStatusSnapshot {
     pub session_name: Option<String>,
     pub provider: UiProviderStatusSnapshot,
     pub permission_mode: String,
+    #[serde(default)]
+    pub output_style: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub brief_enabled: bool,
+    #[serde(default)]
+    pub proactive_active: bool,
     pub setting_sources: Vec<String>,
     pub allowed_setting_sources: Vec<String>,
     pub allowed_tools: Vec<String>,
@@ -679,6 +687,10 @@ mod tests {
                     fallback_model: Some("glm-5-turbo".to_owned()),
                 },
                 permission_mode: "default".to_owned(),
+                output_style: Some("Explanatory".to_owned()),
+                language: Some("Chinese".to_owned()),
+                brief_enabled: true,
+                proactive_active: true,
                 setting_sources: vec!["env:REMOTE_CODE_MODEL".to_owned()],
                 allowed_setting_sources: vec!["user".to_owned(), "project".to_owned()],
                 allowed_tools: vec!["read_file".to_owned()],
@@ -711,6 +723,10 @@ mod tests {
         match parsed {
             UiEvent::StatusSnapshot { snapshot } => {
                 assert_eq!(snapshot.provider.name, "glm-coding");
+                assert_eq!(snapshot.output_style.as_deref(), Some("Explanatory"));
+                assert_eq!(snapshot.language.as_deref(), Some("Chinese"));
+                assert!(snapshot.brief_enabled);
+                assert!(snapshot.proactive_active);
                 assert_eq!(snapshot.allowed_setting_sources, vec!["user", "project"]);
                 assert_eq!(snapshot.allowed_tools, vec!["read_file"]);
                 assert_eq!(snapshot.disallowed_tools, vec!["bash_command"]);

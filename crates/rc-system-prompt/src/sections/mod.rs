@@ -6,6 +6,7 @@
 pub mod actions;
 pub mod agent;
 pub mod ant_model_override;
+pub mod brief;
 pub mod coordinator;
 pub mod doing_tasks;
 pub mod env_info;
@@ -14,6 +15,7 @@ pub mod intro;
 pub mod language;
 pub mod mcp_instructions;
 pub mod memory;
+pub mod numeric_length_anchors;
 pub mod output_efficiency;
 pub mod output_style;
 pub mod proactive;

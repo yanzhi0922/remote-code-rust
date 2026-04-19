@@ -44,6 +44,10 @@ pub struct RuntimeOverrides {
     pub disallowed_tools: Vec<String>,
     pub effort: Option<String>,
     pub fallback_model: Option<String>,
+    pub output_style: Option<String>,
+    pub language: Option<String>,
+    pub brief_enabled: Option<bool>,
+    pub proactive_active: Option<bool>,
 }
 
 /// Settings materialized from one or more settings files.
@@ -62,6 +66,8 @@ pub struct ResolvedRuntimeSettings {
     pub disallowed_tools: Vec<String>,
     pub effort: Option<String>,
     pub fallback_model: Option<String>,
+    pub output_style: Option<String>,
+    pub language: Option<String>,
     pub setting_sources: Vec<String>,
     pub auth_source: Option<String>,
 }
@@ -87,6 +93,10 @@ struct SettingsDocument {
     effort: Option<String>,
     #[serde(default)]
     fallback_model: Option<String>,
+    #[serde(default)]
+    output_style: Option<String>,
+    #[serde(default)]
+    language: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -240,6 +250,12 @@ pub fn load_runtime_settings(paths: &[PathBuf]) -> Result<ResolvedRuntimeSetting
         }
         if let Some(fallback_model) = document.fallback_model {
             resolved.fallback_model = normalize_optional_string(Some(fallback_model));
+        }
+        if let Some(output_style) = document.output_style {
+            resolved.output_style = normalize_optional_string(Some(output_style));
+        }
+        if let Some(language) = document.language {
+            resolved.language = normalize_optional_string(Some(language));
         }
     }
     resolved.allowed_tools = normalize_tool_filters(&resolved.allowed_tools);

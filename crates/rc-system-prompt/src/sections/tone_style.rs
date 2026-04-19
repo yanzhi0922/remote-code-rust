@@ -15,14 +15,16 @@ impl SystemPromptSection for ToneStyleSection {
         "tone_style"
     }
 
-    fn compute(&self, _ctx: &PromptContext) -> Result<Option<String>> {
-        let items = vec![
-            BulletItem::Single(
-                "Only use emojis if the user explicitly requests it. Avoid using emojis in all communication unless asked.".to_string(),
-            ),
-            BulletItem::Single(
+    fn compute(&self, ctx: &PromptContext) -> Result<Option<String>> {
+        let mut items = vec![BulletItem::Single(
+            "Only use emojis if the user explicitly requests it. Avoid using emojis in all communication unless asked.".to_string(),
+        )];
+        if !ctx.features.ant_user {
+            items.push(BulletItem::Single(
                 "Your responses should be short and concise.".to_string(),
-            ),
+            ));
+        }
+        items.extend([
             BulletItem::Single(
                 "When referencing specific functions or pieces of code include the pattern file_path:line_number to allow the user to easily navigate to the source code location.".to_string(),
             ),
@@ -32,7 +34,7 @@ impl SystemPromptSection for ToneStyleSection {
             BulletItem::Single(
                 "Do not use a colon before tool calls. Your tool calls may not be shown directly in the output, so text like \"Let me read the file:\" followed by a read tool call should just be \"Let me read the file.\" with a period.".to_string(),
             ),
-        ];
+        ]);
 
         Ok(Some(section_with_bullets("Tone and style", &items)))
     }
@@ -62,6 +64,7 @@ mod tests {
             is_non_interactive: false,
             is_fork_subagent_enabled: false,
             session_start_date: "2025-01-01".to_string(),
+            features: crate::PromptFeatures::default(),
         }
     }
 

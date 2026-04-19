@@ -38,6 +38,7 @@ pub mod layout;
 pub mod message;
 pub mod notifications;
 pub mod output_styles;
+mod prompt_runtime;
 pub mod render;
 mod runtime_hooks;
 pub mod scroll;
@@ -89,6 +90,9 @@ use rc_tools::{
 
 use app::{App, AppAction};
 use event::{convert_event, handle_event};
+use prompt_runtime::{
+    PromptRuntimeOverrides, conversation_with_runtime_user_context, refresh_runtime_system_prompt,
+};
 use runtime_hooks::{
     PreparedToolCall, SessionHookRunOutcome, ToolHookRunOutcome, apply_post_tool_hooks,
     apply_pre_tool_use_hooks, discover_runtime_session_hooks, ensure_session_start_hooks,
@@ -181,6 +185,13 @@ pub async fn run_tui_app(mut config: RuntimeConfig, store: &SessionStore) -> Res
     let context_manager = ContextWindowManager::for_model(model_name);
     let cost_tracker = CostTracker::new();
     let mut conversation = load_or_create_conversation(store, &config)?;
+    refresh_runtime_system_prompt(
+        &config,
+        &mut conversation,
+        &PromptRuntimeOverrides::default(),
+        &backend.discovered_tool_scope(),
+    )
+    .await?;
     let startup_hook_outcome =
         ensure_session_start_hooks(&session_hooks, &config, store, &mut conversation).await?;
 
@@ -324,6 +335,8 @@ pub async fn run_tui_app(mut config: RuntimeConfig, store: &SessionStore) -> Res
                 let outputs = sc_action.outputs;
                 let queued_prompt = sc_action.queued_prompt;
                 let next_session_id = sc_action.next_session_id;
+                let config_patch = sc_action.config_patch;
+                let meta_messages = sc_action.meta_messages;
                 let mut post_switch_hook_outcome = SessionHookRunOutcome::default();
 
                 match action {
@@ -361,6 +374,19 @@ pub async fn run_tui_app(mut config: RuntimeConfig, store: &SessionStore) -> Res
                         install_plan_mode_runtime(plan_mode_controller.clone())?;
                     session_hooks = discover_runtime_session_hooks(&config);
                     conversation = load_or_create_conversation(store, &config)?;
+                    if let Err(error) = refresh_runtime_system_prompt(
+                        &config,
+                        &mut conversation,
+                        &PromptRuntimeOverrides::default(),
+                        &backend.discovered_tool_scope(),
+                    )
+                    .await
+                    {
+                        post_switch_hook_outcome.warnings.push(format!(
+                            "Failed to rebuild runtime system prompt for session {}: {error:#}",
+                            config.session_id
+                        ));
+                    }
                     match ensure_session_start_hooks(
                         &session_hooks,
                         &config,
@@ -380,6 +406,28 @@ pub async fn run_tui_app(mut config: RuntimeConfig, store: &SessionStore) -> Res
                     if is_clear_command {
                         seed_session_banner_messages(&mut app, &config);
                     }
+                }
+
+                if let Some(config_patch) = config_patch {
+                    if let Some(brief_enabled) = config_patch.brief_enabled {
+                        config.brief_enabled = brief_enabled;
+                    }
+                    if let Some(proactive_active) = config_patch.proactive_active {
+                        config.proactive_active = proactive_active;
+                    }
+                    if let Some(output_style) = config_patch.output_style {
+                        config.output_style = output_style;
+                    }
+                    if let Some(language) = config_patch.language {
+                        config.language = language;
+                    }
+                    persist_runtime_config_session_context(store, &config)?;
+                }
+
+                for meta_message in meta_messages {
+                    let meta_entry = ConversationEntry::user(meta_message);
+                    store.append_conversation_entry(config.session_id, &meta_entry)?;
+                    conversation.push(meta_entry);
                 }
 
                 if outputs.is_empty() && pre_outputs.is_empty() {
@@ -562,7 +610,7 @@ fn load_or_create_conversation(
 /// 4. If no tool calls → display response → done
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 async fn run_conversation_turn(
-    backend: &dyn ConversationBackend,
+    backend: &ProviderCompatBackend,
     config: &RuntimeConfig,
     store: &SessionStore,
     discovery: &runtime_hooks::RuntimeSessionHookDiscovery,
@@ -621,8 +669,17 @@ async fn run_conversation_turn(
             }
         }
 
+        refresh_runtime_system_prompt(
+            config,
+            conversation,
+            &PromptRuntimeOverrides::default(),
+            &backend.discovered_tool_scope(),
+        )
+        .await?;
+
         // Call provider
-        let mut response = backend.complete(conversation).await?;
+        let request_conversation = conversation_with_runtime_user_context(config, conversation);
+        let mut response = backend.complete(&request_conversation).await?;
         normalize_exit_plan_mode_tool_calls(&mut response.tool_calls);
         total_input_tokens += response.usage.input_tokens;
         total_output_tokens += response.usage.output_tokens;

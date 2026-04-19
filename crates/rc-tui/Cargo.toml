@@ -31,6 +31,10 @@ rc-permissions = { path = "../rc-permissions" }
 rc-mcp = { path = "../rc-mcp" }
 rc-plugins = { path = "../rc-plugins" }
 rc-skills = { path = "../rc-skills" }
+rc-agents = { path = "../rc-agents" }
+rc-model = { path = "../rc-model" }
+rc-system-prompt = { path = "../rc-system-prompt" }
+chrono.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
