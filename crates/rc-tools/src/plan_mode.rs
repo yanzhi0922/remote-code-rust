@@ -16,7 +16,9 @@ static PLAN_MODE_RUNTIME: Lazy<Mutex<Option<Arc<dyn PlanModeRuntime>>>> =
     Lazy::new(|| Mutex::new(None));
 
 const PLAN_MODE_SAFE_TOOLS: &[&str] = &[
+    "agent",
     "ask_user",
+    "broadcast_message",
     "brief",
     "config_read",
     "ctx_inspect",
@@ -30,12 +32,16 @@ const PLAN_MODE_SAFE_TOOLS: &[&str] = &[
     "mcp_server_list",
     "mcp_list_resources",
     "mcp_resource_read",
+    "list_peers",
     "read_file",
     "review_artifact",
     "search_text",
+    "send_message",
     "snip",
     "task_get",
     "task_list",
+    "team_create",
+    "team_status",
     "tool_search",
     "verify_plan",
     "web_browser",
@@ -48,7 +54,6 @@ const PLAN_MODE_DENIED_READ_CLASS_TOOLS: &[&str] = &[
     "mcp_auth",
     "mcp_call",
     "remote_trigger",
-    "send_message",
     "skill_discover",
     "skill_execute",
     "sleep",
@@ -56,9 +61,7 @@ const PLAN_MODE_DENIED_READ_CLASS_TOOLS: &[&str] = &[
     "task_create",
     "task_stop",
     "task_update",
-    "team_create",
     "team_delete",
-    "team_status",
     "terminal_capture",
     "todo_write",
     "tungsten",
@@ -443,6 +446,39 @@ mod tests {
         .expect("blocked");
         assert!(result.is_error);
         assert!(result.content.contains("Plan mode is active"));
+    }
+
+    #[test]
+    fn plan_mode_guard_allows_team_coordination_tools() {
+        for tool_name in [
+            "agent",
+            "team_create",
+            "team_status",
+            "send_message",
+            "list_peers",
+        ] {
+            let allowed = plan_mode_guard(
+                &ToolSpec {
+                    name: tool_name.to_owned(),
+                    protocol_name: tool_name.to_owned(),
+                    permission_tool_name: tool_name.to_owned(),
+                    description: "coordination".to_owned(),
+                    requires_permission: false,
+                    input_schema: Value::Null,
+                },
+                &ToolCall {
+                    id: format!("call-{tool_name}"),
+                    name: tool_name.to_owned(),
+                    input: json!({}),
+                },
+                &test_context(),
+                Some(PermissionMode::Plan),
+            );
+            assert!(
+                allowed.is_none(),
+                "{tool_name} should be allowed in plan mode for teammate coordination"
+            );
+        }
     }
 
     #[test]

@@ -759,8 +759,12 @@ fn normalize_path(path: impl Into<PathBuf>) -> PathBuf {
 mod tests {
     use std::fs;
 
+    use rc_permissions::{PermissionBroker, PermissionClass, PermissionRequest};
+    use serde_json::json;
+
     use super::{
-        PLAN_CONTENT_EVENT, copy_plan_mode_state_for_fork, restore_plan_mode_state_for_resume,
+        PLAN_CONTENT_EVENT, RuntimePermissionBroker, copy_plan_mode_state_for_fork,
+        restore_plan_mode_state_for_resume,
     };
     use crate::plan_mode::PlanModeRuntime;
     use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
@@ -800,6 +804,91 @@ mod tests {
         .expect("config");
         let store = SessionStore::open(config.paths.clone()).expect("store");
         (config, store)
+    }
+
+    fn permission_request(tool_name: &str, class: PermissionClass) -> PermissionRequest {
+        PermissionRequest {
+            tool_name: tool_name.to_owned(),
+            permission_class: Some(class),
+            tool_input: json!({}),
+            working_directory: None,
+            tool_use_id: Some(format!("tool-{tool_name}")),
+            title: None,
+            description: None,
+            blocked_path: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn runtime_permission_broker_dont_ask_denies_agent_and_edit() {
+        let (mut config, store) = test_config_and_store();
+        config.permission_mode = PermissionMode::DontAsk;
+        let controller = RuntimePlanModeController::load(&config, &store).expect("controller");
+        let broker = RuntimePermissionBroker::new(&config, controller);
+
+        let read = broker
+            .decide(permission_request("read_file", PermissionClass::Read))
+            .await;
+        assert!(read.allowed, "dont-ask should still allow reads");
+
+        let agent = broker
+            .decide(permission_request("agent", PermissionClass::Agent))
+            .await;
+        assert!(!agent.allowed, "dont-ask should deny agent execution");
+        assert_eq!(
+            agent.message.as_deref(),
+            Some("Permission denied by runtime broker")
+        );
+
+        let edit = broker
+            .decide(permission_request("edit_file", PermissionClass::Edit))
+            .await;
+        assert!(!edit.allowed, "dont-ask should deny edits");
+        assert_eq!(
+            edit.message.as_deref(),
+            Some("Permission denied by runtime broker")
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_permission_broker_accept_edits_and_bypass_match_mode_semantics() {
+        let (mut config, store) = test_config_and_store();
+        config.permission_mode = PermissionMode::AcceptEdits;
+        let controller = RuntimePlanModeController::load(&config, &store).expect("controller");
+        let accept_edits = RuntimePermissionBroker::new(&config, controller);
+
+        let edit = accept_edits
+            .decide(permission_request("edit_file", PermissionClass::Edit))
+            .await;
+        assert!(edit.allowed, "accept-edits should allow file edits");
+
+        let agent = accept_edits
+            .decide(permission_request("agent", PermissionClass::Agent))
+            .await;
+        assert!(
+            !agent.allowed,
+            "accept-edits should still deny agent execution"
+        );
+
+        config.permission_mode = PermissionMode::BypassPermissions;
+        let controller = RuntimePlanModeController::load(&config, &store).expect("controller");
+        let bypass = RuntimePermissionBroker::new(&config, controller);
+
+        let agent = bypass
+            .decide(permission_request("agent", PermissionClass::Agent))
+            .await;
+        assert!(
+            agent.allowed,
+            "bypass-permissions should allow agent execution"
+        );
+
+        let bash = bypass
+            .decide(permission_request("bash_command", PermissionClass::Bash))
+            .await;
+        assert!(
+            bash.allowed,
+            "bypass-permissions should allow bash execution"
+        );
     }
 
     #[test]

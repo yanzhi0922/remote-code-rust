@@ -167,7 +167,7 @@ fn runner_builds_system_prompt_from_definition() {
     };
     let runner = rc_agents::AgentRunner::new(def, config);
     let prompt = runner.build_system_prompt();
-    assert!(prompt.contains("Remote Code"));
+    assert!(prompt.contains("Claude Code"));
 }
 
 #[tokio::test]

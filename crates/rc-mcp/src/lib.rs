@@ -89,7 +89,7 @@ pub use error::{McpConfigError, McpRuntimeError};
 // Session functions
 pub use session::{
     call_tool, discover_mcp_configs, inspect_server, list_resources, load_discovered_mcp_configs,
-    read_resource,
+    read_resource, resolve_stdio_command,
 };
 
 // Resource types

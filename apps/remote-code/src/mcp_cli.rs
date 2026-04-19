@@ -101,6 +101,7 @@ struct McpMutationOutput {
     name: Option<String>,
     enabled: Option<bool>,
     config_path: PathBuf,
+    warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -292,11 +293,13 @@ fn run_mcp_add(config: &RuntimeConfig, args: McpAddArgs) -> Result<()> {
         },
     );
     mcp_config.save(&config_path)?;
+    let warnings = post_mutation_warnings(config, &config_path, std::slice::from_ref(&args.name));
 
     let output = serde_json::json!({
         "status": if existed { "updated" } else { "created" },
         "name": args.name,
         "config_path": config_path,
+        "warnings": warnings,
     });
     if args.json {
         println!("{}", serde_json::to_string_pretty(&output)?);
@@ -305,6 +308,16 @@ fn run_mcp_add(config: &RuntimeConfig, args: McpAddArgs) -> Result<()> {
             "MCP server {} at {}.",
             output["status"].as_str().unwrap_or("saved"),
             output["config_path"].as_str().unwrap_or_default()
+        );
+        print_mcp_warnings(
+            output["warnings"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+                .as_slice(),
         );
     }
     Ok(())
@@ -322,10 +335,16 @@ fn run_mcp_remove(config: &RuntimeConfig, args: McpRemoveArgs) -> Result<()> {
         ));
     }
     mcp_config.save(&config_path)?;
+    let warnings = if removed.is_some() {
+        post_mutation_warnings(config, &config_path, std::slice::from_ref(&args.name))
+    } else {
+        Vec::new()
+    };
     let output = serde_json::json!({
         "status": if removed.is_some() { "removed" } else { "noop" },
         "name": args.name,
         "config_path": config_path,
+        "warnings": warnings,
     });
     if args.json {
         println!("{}", serde_json::to_string_pretty(&output)?);
@@ -334,6 +353,16 @@ fn run_mcp_remove(config: &RuntimeConfig, args: McpRemoveArgs) -> Result<()> {
             "MCP server {} in {}.",
             output["status"].as_str().unwrap_or("saved"),
             output["config_path"].as_str().unwrap_or_default()
+        );
+        print_mcp_warnings(
+            output["warnings"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+                .as_slice(),
         );
     }
     Ok(())
@@ -349,6 +378,7 @@ fn run_mcp_toggle(config: &RuntimeConfig, args: McpToggleArgs, enabled: bool) ->
                 name: Some(args.name),
                 enabled: Some(enabled),
                 config_path,
+                warnings: Vec::new(),
             };
             if args.json {
                 println!("{}", serde_json::to_string_pretty(&output)?);
@@ -373,11 +403,17 @@ fn run_mcp_toggle(config: &RuntimeConfig, args: McpToggleArgs, enabled: bool) ->
         mcp_config.save(&config_path)?;
         if enabled { "enabled" } else { "disabled" }
     };
+    let warnings = if status == "noop" {
+        Vec::new()
+    } else {
+        post_mutation_warnings(config, &config_path, std::slice::from_ref(&args.name))
+    };
     let output = McpMutationOutput {
         status: status.to_owned(),
         name: Some(args.name),
         enabled: Some(enabled),
         config_path,
+        warnings,
     };
     if args.json {
         println!("{}", serde_json::to_string_pretty(&output)?);
@@ -396,11 +432,21 @@ fn run_mcp_toggle(config: &RuntimeConfig, args: McpToggleArgs, enabled: bool) ->
             output.config_path.display()
         );
     }
+    print_mcp_warnings(&output.warnings);
     Ok(())
 }
 
 fn run_mcp_reset(config: &RuntimeConfig, args: McpResetArgs) -> Result<()> {
     let config_path = managed_mcp_config_path(config, args.config_path.as_ref(), args.project);
+    let existing_names = if config_path.exists() {
+        load_managed_mcp_config(&config_path)?
+            .servers
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     let status = if config_path.exists() {
         std::fs::remove_file(&config_path)?;
         "reset"
@@ -413,11 +459,17 @@ fn run_mcp_reset(config: &RuntimeConfig, args: McpResetArgs) -> Result<()> {
         ));
     };
 
+    let warnings = if status == "reset" {
+        post_mutation_warnings(config, &config_path, &existing_names)
+    } else {
+        Vec::new()
+    };
     let output = McpMutationOutput {
         status: status.to_owned(),
         name: None,
         enabled: None,
         config_path,
+        warnings,
     };
     if args.json {
         println!("{}", serde_json::to_string_pretty(&output)?);
@@ -432,6 +484,7 @@ fn run_mcp_reset(config: &RuntimeConfig, args: McpResetArgs) -> Result<()> {
             output.config_path.display()
         );
     }
+    print_mcp_warnings(&output.warnings);
     Ok(())
 }
 
@@ -475,7 +528,8 @@ async fn run_mcp_serve(config: &RuntimeConfig, args: McpServeArgs) -> Result<()>
     if let Some(cwd) = cwd {
         println!("cwd: {}", cwd.display());
     }
-    let mut command_builder = tokio::process::Command::new(command);
+    let resolved_command = rc_mcp::resolve_stdio_command(command);
+    let mut command_builder = tokio::process::Command::new(&resolved_command);
     command_builder
         .args(args)
         .stdin(Stdio::inherit())
@@ -492,7 +546,7 @@ async fn run_mcp_serve(config: &RuntimeConfig, args: McpServeArgs) -> Result<()>
         anyhow!(
             "Failed to launch MCP server `{}` with `{}`: {error}",
             resolution.entry.server.name,
-            command
+            resolved_command
         )
     })?;
     let status = child.wait().await?;
@@ -722,6 +776,70 @@ fn parse_string_map(
     Ok(map)
 }
 
+fn shadowed_runtime_warning(
+    config: &RuntimeConfig,
+    config_path: &Path,
+    server_name: &str,
+) -> Option<String> {
+    let resolution = resolve_runtime_mcp_server(config, server_name, &[]).ok()?;
+    if resolution.entry.config_path == config_path {
+        return None;
+    }
+
+    let winning_source = format_mcp_resolution_source(&resolution);
+    let edited_path_known_but_shadowed = resolution
+        .shadowed_entries
+        .iter()
+        .any(|entry| entry.config_path == config_path && entry.server.name == server_name);
+
+    Some(if edited_path_known_but_shadowed {
+        format!(
+            "MCP server `{server_name}` was saved in {}, but runtime currently resolves the same server from {winning_source}. The edited config is shadowed by a higher-precedence source.",
+            config_path.display(),
+        )
+    } else {
+        format!(
+            "MCP server `{server_name}` was saved in {}, but runtime currently resolves it from {winning_source}. The edited config is not the active runtime source.",
+            config_path.display(),
+        )
+    })
+}
+
+fn post_mutation_warnings(
+    config: &RuntimeConfig,
+    config_path: &Path,
+    server_names: &[String],
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for server_name in server_names {
+        if let Some(warning) = shadowed_runtime_warning(config, config_path, server_name) {
+            warnings.push(warning);
+        }
+    }
+    warnings
+}
+
+fn format_mcp_resolution_source(resolution: &RuntimeMcpResolution) -> String {
+    match resolution.entry.origin_kind {
+        "plugin" => format!(
+            "plugin:{} ({})",
+            resolution.entry.origin_name,
+            resolution.entry.config_path.display()
+        ),
+        _ => format!(
+            "{} ({})",
+            resolution.entry.origin_kind,
+            resolution.entry.config_path.display()
+        ),
+    }
+}
+
+fn print_mcp_warnings(warnings: &[String]) {
+    for warning in warnings {
+        println!("warning: {warning}");
+    }
+}
+
 fn managed_mcp_config_path(
     config: &RuntimeConfig,
     override_path: Option<&PathBuf>,
@@ -814,7 +932,8 @@ mod tests {
 
     use super::{
         load_managed_mcp_config, managed_mcp_config_path, mcp_serve_output_from_resolution,
-        parse_string_map, run_mcp_add, run_mcp_remove, run_mcp_reset, run_mcp_toggle,
+        parse_string_map, post_mutation_warnings, run_mcp_add, run_mcp_remove, run_mcp_reset,
+        run_mcp_toggle,
     };
     use crate::cli::{McpAddArgs, McpRemoveArgs, McpResetArgs, McpToggleArgs};
     use rc_tools::mcp_runtime::{discover_runtime_mcp_servers, resolve_runtime_mcp_server};
@@ -1218,6 +1337,60 @@ args = ["profile.py"]"#,
         let resolution =
             resolve_runtime_mcp_server(&unfiltered, "shared", &[]).expect("unfiltered resolve");
         assert_eq!(resolution.entry.origin_kind, "cwd");
+    }
+
+    #[test]
+    fn post_mutation_warnings_reports_shadowed_project_managed_config() {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        fs::create_dir_all(&cwd).expect("cwd");
+        fs::create_dir_all(&profile).expect("profile");
+        fs::write(
+            cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            r#"[mcp_servers.shared]
+command = "python"
+args = ["managed.py"]"#,
+        )
+        .expect("write managed mcp");
+        fs::write(
+            cwd.join(rc_mcp::DEFAULT_PROJECT_MCP_CONFIG_FILE),
+            r#"{
+  "mcpServers": {
+    "shared": {
+      "command": "python",
+      "args": ["project.py"]
+    }
+  }
+}"#,
+        )
+        .expect("write project mcp");
+
+        let config = load_runtime_config(
+            Some(cwd.clone()),
+            Some(profile),
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+            RuntimeOverrides::default(),
+        )
+        .expect("config");
+
+        let warnings = post_mutation_warnings(
+            &config,
+            &cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            &["shared".to_owned()],
+        );
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("shadowed"));
+        assert!(warnings[0].contains(rc_mcp::DEFAULT_PROJECT_MCP_CONFIG_FILE));
     }
 
     #[test]

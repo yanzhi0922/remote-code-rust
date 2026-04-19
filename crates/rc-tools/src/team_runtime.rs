@@ -1,13 +1,23 @@
 //! Shared helpers for persistent team and mailbox-backed collaboration tools.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow};
+use once_cell::sync::Lazy;
+use rc_core::PermissionMode;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use rc_swarm::{SwarmError, TeamAllowedPath, TeamFile, TeamMember, mailbox, team_helpers};
+use rc_swarm::{
+    BackendType, SwarmError, TeamAllowedPath, TeamFile, TeamMember, mailbox, team_helpers,
+};
+use rc_swarm::{SpawnConfig, in_process_runner::InProcessRunner};
+
+static LIVE_TEAMMATE_RUNNERS: Lazy<Mutex<BTreeMap<String, Arc<InProcessRunner>>>> =
+    Lazy::new(|| Mutex::new(BTreeMap::new()));
 
 fn requested_team_name(input: &Value) -> Option<String> {
     input
@@ -48,6 +58,10 @@ fn sanitize_team_name(raw: &str) -> String {
         normalized.truncate(64);
     }
     normalized
+}
+
+fn live_runner_key(team_name: &str, agent_name: &str) -> String {
+    format!("{team_name}:{agent_name}")
 }
 
 async fn all_team_names() -> Result<Vec<String>> {
@@ -169,6 +183,140 @@ fn build_member(
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
     Ok(member)
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LiveTeammateRegistration {
+    pub team_name: String,
+    pub agent_name: String,
+    pub agent_type: String,
+    pub model: Option<String>,
+    pub cwd: PathBuf,
+    pub permission_mode: Option<PermissionMode>,
+    pub objective: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LiveTeammateHandle {
+    pub team_name: String,
+    pub agent_name: String,
+    pub agent_id: String,
+    pub pane_id: String,
+}
+
+pub(crate) async fn start_live_teammate(
+    registration: &LiveTeammateRegistration,
+) -> Result<LiveTeammateHandle> {
+    let team_name = sanitize_team_name(&registration.team_name);
+    team_helpers::validate_team_name(&team_name).map_err(anyhow::Error::from)?;
+    team_helpers::validate_agent_name(&registration.agent_name).map_err(anyhow::Error::from)?;
+
+    let mut team = match team_helpers::read_team(&team_name).await {
+        Ok(existing) => existing,
+        Err(SwarmError::TeamNotFound(_)) => TeamFile::new(&team_name, "lead"),
+        Err(other) => return Err(anyhow!(other)),
+    };
+    if team.name.is_empty() {
+        team.name = team_name.clone();
+    }
+    if team.description.is_none() {
+        team.description = registration.objective.clone();
+    }
+    if team.team_allowed_paths.is_empty() {
+        team.team_allowed_paths.push(TeamAllowedPath {
+            path: registration.cwd.to_string_lossy().to_string(),
+            read_only: false,
+        });
+    }
+    if registration.agent_name == team.lead_agent_id {
+        return Err(anyhow!(
+            "agent '{}' cannot reuse the team lead name",
+            registration.agent_name
+        ));
+    }
+
+    let agent_id = format!("agent-{}", Uuid::new_v4().simple());
+    let spawn_config = SpawnConfig {
+        agent_id: agent_id.clone(),
+        agent_name: registration.agent_name.clone(),
+        team_name: team_name.clone(),
+        model: registration.model.clone(),
+        cwd: registration.cwd.to_string_lossy().to_string(),
+        backend_type: BackendType::InProcess,
+        env_vars: Vec::new(),
+        permission_mode: registration.permission_mode,
+        worktree_path: None,
+    };
+    let runner = Arc::new(InProcessRunner::new());
+    let pane = runner
+        .start(&spawn_config)
+        .await
+        .map_err(|error| anyhow!(error))?;
+
+    let mut member = TeamMember::new(
+        agent_id.clone(),
+        registration.agent_name.clone(),
+        pane.pane_id.clone(),
+        registration.cwd.to_string_lossy().to_string(),
+    );
+    member.agent_type = Some(registration.agent_type.clone());
+    member.model = registration.model.clone();
+    member.backend_type = Some(BackendType::InProcess);
+    member.is_active = Some(true);
+    member.mode = registration.permission_mode;
+
+    team.members.retain(|existing| existing.name != member.name);
+    team.members.push(member);
+
+    match team_helpers::read_team(&team_name).await {
+        Ok(_) => team_helpers::update_team(&team)
+            .await
+            .with_context(|| format!("failed to update live teammate in team '{team_name}'"))?,
+        Err(SwarmError::TeamNotFound(_)) => team_helpers::create_team(&team)
+            .await
+            .with_context(|| format!("failed to create live teammate team '{team_name}'"))?,
+        Err(other) => return Err(anyhow!(other)),
+    }
+
+    LIVE_TEAMMATE_RUNNERS
+        .lock()
+        .expect("live teammate runner lock poisoned")
+        .insert(
+            live_runner_key(&team_name, &registration.agent_name),
+            runner,
+        );
+
+    Ok(LiveTeammateHandle {
+        team_name,
+        agent_name: registration.agent_name.clone(),
+        agent_id,
+        pane_id: pane.pane_id,
+    })
+}
+
+pub(crate) async fn finish_live_teammate(handle: &LiveTeammateHandle) -> Result<()> {
+    let runner = LIVE_TEAMMATE_RUNNERS
+        .lock()
+        .expect("live teammate runner lock poisoned")
+        .remove(&live_runner_key(&handle.team_name, &handle.agent_name));
+    if let Some(runner) = runner {
+        let _ = runner.stop().await;
+    }
+
+    let mut team = match team_helpers::read_team(&handle.team_name).await {
+        Ok(team) => team,
+        Err(SwarmError::TeamNotFound(_)) => return Ok(()),
+        Err(other) => return Err(anyhow!(other)),
+    };
+    if let Some(member) = team.find_member_mut(&handle.agent_name) {
+        member.is_active = Some(false);
+        member.session_id = Some(handle.agent_id.clone());
+        member.pane_id = handle.pane_id.clone();
+        team_helpers::update_team(&team)
+            .await
+            .with_context(|| format!("failed to update teammate '{}'", handle.agent_name))?;
+    }
+    Ok(())
 }
 
 pub(crate) async fn create_team(input: &Value, cwd: &Path) -> Result<String> {
