@@ -1,10 +1,26 @@
-import { lazy, Suspense, useEffect, useMemo, useRef } from 'react';
-import type { ConversationEntry, ToolCallInfo } from '../../lib/types';
+import {
+  lazy,
+  memo,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  type MutableRefObject,
+} from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
+import type {
+  ConversationEntry,
+  ToolCallInfo,
+  ToolProgressInfo,
+  ToolResultInfo,
+} from '../../lib/types';
 import { truncateMiddle } from '../../lib/utils';
 import { useAppStore } from '../../stores/useAppStore';
 import CollapsibleBlock from './CollapsibleBlock';
 
 const LazyMarkdownRenderer = lazy(() => import('./MarkdownRenderer'));
+const VIRTUALIZATION_THRESHOLD = 80;
+const VIRTUALIZATION_OVERSCAN = 10;
 
 function formatToolInput(input: unknown): string {
   try {
@@ -47,6 +63,23 @@ function extractThinkingBlocks(entry: ConversationEntry): string[] {
     .filter((block): block is Record<string, unknown> => !!block && typeof block === 'object')
     .filter((block) => block.type === 'thinking' && typeof block.thinking === 'string')
     .map((block) => block.thinking as string);
+}
+
+function estimateEntryHeight(entry: ConversationEntry): number {
+  switch (entry.role) {
+    case 'assistant':
+      return 320;
+    case 'tool':
+      return 180;
+    case 'user':
+      return 120;
+    default:
+      return 64;
+  }
+}
+
+function conversationRowKey(entry: ConversationEntry, index: number): string {
+  return `${entry.role}-${entry.tool_call_id ?? entry.name ?? 'entry'}-${index}`;
 }
 
 function EmptyState({
@@ -178,24 +211,157 @@ function AssistantMessage({ entry }: { entry: ConversationEntry }) {
   );
 }
 
-function MessageCard({ entry }: { entry: ConversationEntry }) {
-  if (entry.role === 'system') return null;
+const MessageCard = memo(
+  function MessageCard({ entry }: { entry: ConversationEntry }) {
+    if (entry.role === 'system') return null;
 
-  if (entry.role === 'tool') {
-    return <ToolMessage entry={entry} />;
-  }
+    if (entry.role === 'tool') {
+      return <ToolMessage entry={entry} />;
+    }
 
-  if (entry.role === 'user') {
-    return (
-      <div className="flex justify-end">
-        <div className="max-w-3xl rounded-[24px] bg-[#17181a] px-5 py-4 text-[15px] leading-7 text-white shadow-[0_14px_32px_rgba(23,24,26,0.16)]">
-          <div className="whitespace-pre-wrap break-words">{entry.text}</div>
+    if (entry.role === 'user') {
+      return (
+        <div className="flex justify-end">
+          <div className="max-w-3xl rounded-[24px] bg-[#17181a] px-5 py-4 text-[15px] leading-7 text-white shadow-[0_14px_32px_rgba(23,24,26,0.16)]">
+            <div className="whitespace-pre-wrap break-words">{entry.text}</div>
+          </div>
         </div>
-      </div>
-    );
-  }
+      );
+    }
 
-  return <AssistantMessage entry={entry} />;
+    return <AssistantMessage entry={entry} />;
+  },
+  (previous, next) => previous.entry === next.entry,
+);
+
+function StatusCards({
+  sending,
+  compactProgress,
+  compactResults,
+  sendError,
+  bottomRef,
+}: {
+  sending: boolean;
+  compactProgress: ToolProgressInfo[];
+  compactResults: ToolResultInfo[];
+  sendError: string | null;
+  bottomRef: MutableRefObject<HTMLDivElement | null>;
+}) {
+  return (
+    <>
+      {sending && (
+        <div className="rounded-2xl border border-[#e3ddd2] bg-white px-5 py-4 text-sm text-slate-600 shadow-[0_10px_24px_rgba(23,24,26,0.05)]">
+          <div className="flex items-center gap-3">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
+            <span>正在处理当前请求…</span>
+          </div>
+
+          {compactProgress.length > 0 && (
+            <div className="mt-4 space-y-2">
+              {compactProgress.map((progress, index) => (
+                <div
+                  key={`${progress.tool_name}-${progress.tool_call_id}-${index}`}
+                  className="rounded-xl bg-[#f7f5ef] px-3 py-2 text-xs text-slate-600"
+                >
+                  <span className="font-medium text-slate-800">{progress.tool_name || 'tool'}</span>
+                  <span className="mx-2 text-slate-400">·</span>
+                  <span>{truncateMiddle(progress.message, 120)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {compactResults.length > 0 && (
+            <div className="mt-4 space-y-2">
+              {compactResults.map((result, index) => (
+                <div
+                  key={`${result.tool_name}-${result.tool_call_id}-${index}`}
+                  className={`rounded-xl px-3 py-2 text-xs ${
+                    result.is_error ? 'bg-[#fff1f0] text-[#9c2f2f]' : 'bg-[#edf7ef] text-[#25653b]'
+                  }`}
+                >
+                  <span className="font-medium">{result.tool_name}</span>
+                  <span className="mx-2 opacity-60">·</span>
+                  <span>{truncateMiddle(result.output, 110)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {sendError && (
+        <div className="rounded-2xl border border-[#f3cbc6] bg-[#fff6f4] px-5 py-4 text-sm text-[#9c2f2f]">
+          {sendError}
+        </div>
+      )}
+
+      <div ref={bottomRef} />
+    </>
+  );
+}
+
+function ConversationTimeline({
+  conversation,
+  sending,
+  compactProgress,
+  compactResults,
+  sendError,
+  bottomRef,
+}: {
+  conversation: ConversationEntry[];
+  sending: boolean;
+  compactProgress: ToolProgressInfo[];
+  compactResults: ToolResultInfo[];
+  sendError: string | null;
+  bottomRef: MutableRefObject<HTMLDivElement | null>;
+}) {
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const shouldVirtualize = conversation.length >= VIRTUALIZATION_THRESHOLD;
+  const rowVirtualizer = useVirtualizer({
+    count: conversation.length,
+    getScrollElement: () => scrollContainerRef.current,
+    estimateSize: (index) => estimateEntryHeight(conversation[index] ?? conversation[0]),
+    overscan: VIRTUALIZATION_OVERSCAN,
+    getItemKey: (index) => conversationRowKey(conversation[index] ?? conversation[0], index),
+  });
+
+  return (
+    <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto bg-[#f7f4ed] px-4 py-5 sm:px-6">
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
+        {shouldVirtualize ? (
+          <div className="relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
+            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+              const entry = conversation[virtualRow.index];
+              return (
+                <div
+                  key={virtualRow.key}
+                  data-index={virtualRow.index}
+                  ref={rowVirtualizer.measureElement}
+                  className="absolute left-0 top-0 w-full pb-4"
+                  style={{ transform: `translateY(${virtualRow.start}px)` }}
+                >
+                  <MessageCard entry={entry} />
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          conversation.map((entry, index) => (
+            <MessageCard key={conversationRowKey(entry, index)} entry={entry} />
+          ))
+        )}
+
+        <StatusCards
+          sending={sending}
+          compactProgress={compactProgress}
+          compactResults={compactResults}
+          sendError={sendError}
+          bottomRef={bottomRef}
+        />
+      </div>
+    </div>
+  );
 }
 
 export function ChatArea() {
@@ -246,61 +412,15 @@ export function ChatArea() {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto bg-[#f7f4ed] px-4 py-5 sm:px-6">
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
-        {conversation.map((entry, index) => (
-          <MessageCard key={`${entry.role}-${entry.tool_call_id ?? entry.name ?? index}`} entry={entry} />
-        ))}
-
-        {sending && (
-          <div className="rounded-2xl border border-[#e3ddd2] bg-white px-5 py-4 text-sm text-slate-600 shadow-[0_10px_24px_rgba(23,24,26,0.05)]">
-            <div className="flex items-center gap-3">
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
-              <span>正在处理当前请求…</span>
-            </div>
-
-            {compactProgress.length > 0 && (
-              <div className="mt-4 space-y-2">
-                {compactProgress.map((progress, index) => (
-                  <div
-                    key={`${progress.tool_name}-${progress.tool_call_id}-${index}`}
-                    className="rounded-xl bg-[#f7f5ef] px-3 py-2 text-xs text-slate-600"
-                  >
-                    <span className="font-medium text-slate-800">{progress.tool_name || 'tool'}</span>
-                    <span className="mx-2 text-slate-400">·</span>
-                    <span>{truncateMiddle(progress.message, 120)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {compactResults.length > 0 && (
-              <div className="mt-4 space-y-2">
-                {compactResults.map((result, index) => (
-                  <div
-                    key={`${result.tool_name}-${result.tool_call_id}-${index}`}
-                    className={`rounded-xl px-3 py-2 text-xs ${
-                      result.is_error ? 'bg-[#fff1f0] text-[#9c2f2f]' : 'bg-[#edf7ef] text-[#25653b]'
-                    }`}
-                  >
-                    <span className="font-medium">{result.tool_name}</span>
-                    <span className="mx-2 opacity-60">·</span>
-                    <span>{truncateMiddle(result.output, 110)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {sendError && (
-          <div className="rounded-2xl border border-[#f3cbc6] bg-[#fff6f4] px-5 py-4 text-sm text-[#9c2f2f]">
-            {sendError}
-          </div>
-        )}
-
-        <div ref={bottomRef} />
-      </div>
+    <div className="flex h-full min-h-0 flex-1 flex-col bg-[#f7f4ed]">
+      <ConversationTimeline
+        conversation={conversation}
+        sending={sending}
+        compactProgress={compactProgress}
+        compactResults={compactResults}
+        sendError={sendError}
+        bottomRef={bottomRef}
+      />
     </div>
   );
 }
