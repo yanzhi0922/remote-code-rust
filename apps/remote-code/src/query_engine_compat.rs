@@ -9,7 +9,7 @@ use rc_config::settings_layers::load_runtime_settings;
 use rc_config::{RuntimeConfig, validate_provider_config};
 use rc_core::{
     Attachment, AttachmentMediaType, ConversationEntry, ConversationRole, Message, PermissionMode,
-    ToolCall, ToolResult,
+    ProviderResponse, ToolCall, ToolResult,
 };
 use rc_mcp::McpClientInfo;
 use rc_mcp::normalization::build_mcp_tool_name;
@@ -68,6 +68,11 @@ struct CompatObserver {
     include_partial_messages: bool,
 }
 
+struct CriticalReminderBackend {
+    inner: Arc<dyn ConversationBackend>,
+    reminder: String,
+}
+
 const PLAN_MODE_MARKER: &str = "## Plan Mode Active";
 const PLAN_MODE_REENTRY_MARKER: &str = "## Re-entering Plan Mode";
 const PLAN_MODE_EXIT_MARKER: &str = "## Exited Plan Mode";
@@ -88,6 +93,51 @@ struct RuntimeMcpInstructionsDeltaMarker {
 
 fn wrap_in_system_reminder(content: &str) -> String {
     format!("<system-reminder>\n{content}\n</system-reminder>")
+}
+
+fn augment_conversation_with_critical_reminder(
+    conversation: &[ConversationEntry],
+    reminder: &str,
+) -> Vec<ConversationEntry> {
+    let reminder = reminder.trim();
+    if reminder.is_empty() {
+        return conversation.to_vec();
+    }
+
+    let reminder_entry = ConversationEntry::user(wrap_in_system_reminder(reminder));
+    let mut augmented = Vec::with_capacity(conversation.len() + 1);
+    if let Some((first, rest)) = conversation.split_first()
+        && first.role == ConversationRole::System
+    {
+        augmented.push(first.clone());
+        augmented.push(reminder_entry);
+        augmented.extend(rest.iter().cloned());
+        return augmented;
+    }
+    augmented.push(reminder_entry);
+    augmented.extend(conversation.iter().cloned());
+    augmented
+}
+
+#[async_trait]
+impl ConversationBackend for CriticalReminderBackend {
+    async fn complete(&self, conversation: &[ConversationEntry]) -> Result<ProviderResponse> {
+        let augmented = augment_conversation_with_critical_reminder(conversation, &self.reminder);
+        self.inner.complete(&augmented).await
+    }
+
+    async fn complete_streaming(
+        &self,
+        conversation: &[ConversationEntry],
+        callbacks: Option<rc_provider::StreamingCallbacks>,
+    ) -> Result<ProviderResponse> {
+        let augmented = augment_conversation_with_critical_reminder(conversation, &self.reminder);
+        self.inner.complete_streaming(&augmented, callbacks).await
+    }
+
+    fn sub_agent_completion(&self) -> Arc<dyn rc_core::SubAgentCompletion> {
+        self.inner.sub_agent_completion()
+    }
 }
 
 fn runtime_mcp_state_from_discovery(config: &RuntimeConfig) -> McpCliState {
@@ -1141,6 +1191,18 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         .model
         .clone()
         .unwrap_or_else(|| "unknown".to_owned());
+    let backend: Arc<dyn ConversationBackend> = match overrides
+        .critical_system_reminder
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(reminder) => Arc::new(CriticalReminderBackend {
+            inner: backend,
+            reminder: reminder.to_owned(),
+        }),
+        None => backend,
+    };
     let runtime_extensions = discover_runtime_extensions(config);
     let mut process_context = ProcessUserInputContext::new(
         config.session_id.into(),
@@ -1177,25 +1239,11 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
     query_config.max_turns = u32::try_from(config.max_turns).unwrap_or(u32::MAX);
 
     let mut engine = QueryEngine::new(query_config, existing_messages);
-    let mut submitted_messages = if reuse_pending_prompt {
+    let submitted_messages = if reuse_pending_prompt {
         Vec::new()
     } else {
         vec![Message::from(ConversationEntry::user(prompt))]
     };
-    if !reuse_pending_prompt
-        && let Some(reminder) = overrides
-            .critical_system_reminder
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-    {
-        submitted_messages.insert(
-            0,
-            Message::from(ConversationEntry::user(format!(
-                "<system-reminder>\n{reminder}\n</system-reminder>"
-            ))),
-        );
-    }
     let runtime_mcp_state_provider = spawn_runtime_mcp_state_provider(config);
     let result = with_runtime_mcp_state_provider(runtime_mcp_state_provider, async {
         if let Some(allowed_tools) = expanded_allowed_tools.as_ref() {
@@ -1861,6 +1909,62 @@ while True:
     }
 
     #[derive(Default)]
+    struct ToolRoundTripRecordingBackend {
+        complete_calls: AtomicUsize,
+        conversations: Arc<StdMutex<Vec<Vec<ConversationEntry>>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ConversationBackend for ToolRoundTripRecordingBackend {
+        async fn complete(&self, conversation: &[ConversationEntry]) -> Result<ProviderResponse> {
+            self.conversations
+                .lock()
+                .expect("recording lock")
+                .push(conversation.to_vec());
+            let call_index = self.complete_calls.fetch_add(1, Ordering::SeqCst);
+            if call_index == 0 {
+                return Ok(ProviderResponse {
+                    text: String::new(),
+                    history_text: None,
+                    thinking: None,
+                    content_blocks: Vec::new(),
+                    tool_calls: vec![ToolCall {
+                        id: "tool-1".to_owned(),
+                        name: "glob".to_owned(),
+                        input: json!({"pattern": "*.rs"}),
+                    }],
+                    request_id: None,
+                    usage: UsageSummary::default(),
+                    stop_reason: "tool_use".to_owned(),
+                });
+            }
+
+            Ok(ProviderResponse {
+                text: "done after tool".to_owned(),
+                history_text: None,
+                thinking: None,
+                content_blocks: Vec::new(),
+                tool_calls: Vec::new(),
+                request_id: None,
+                usage: UsageSummary::default(),
+                stop_reason: "end_turn".to_owned(),
+            })
+        }
+
+        async fn complete_streaming(
+            &self,
+            conversation: &[ConversationEntry],
+            _callbacks: Option<StreamingCallbacks>,
+        ) -> Result<ProviderResponse> {
+            self.complete(conversation).await
+        }
+
+        fn sub_agent_completion(&self) -> Arc<dyn SubAgentCompletion> {
+            Arc::new(DummySubAgentCompletion)
+        }
+    }
+
+    #[derive(Default)]
     struct RecordingStreamingBackend {
         complete_calls: AtomicUsize,
         complete_streaming_calls: AtomicUsize,
@@ -2154,6 +2258,49 @@ while True:
             .position(|entry| entry.role == ConversationRole::User && entry.text == "verify this")
             .expect("user prompt");
         assert!(reminder_index < prompt_index);
+    }
+
+    #[tokio::test]
+    async fn compat_run_reinjects_critical_system_reminder_on_each_provider_turn() {
+        let (_tempdir, config, store) = mock_config_and_store();
+        let discovery = RuntimeHookDiscovery::default();
+        let mut conversation =
+            initialize_conversation(&store, &config, Some("use a tool")).expect("conversation");
+        let mut hook_state = HookRunState::load(&store, config.session_id).expect("hook state");
+        let backend = Arc::new(ToolRoundTripRecordingBackend::default());
+
+        run_prompt_with_query_engine_compat_overrides(
+            &config,
+            &store,
+            backend.clone(),
+            DiscoveredToolScope::default(),
+            mock_broker(&config),
+            None,
+            &discovery,
+            &mut hook_state,
+            &mut conversation,
+            "use a tool",
+            CompatRunOverrides {
+                agent_system_prompt: Some("Verifier".to_owned()),
+                critical_system_reminder: Some("CRITICAL CHECK".to_owned()),
+                ..CompatRunOverrides::default()
+            },
+        )
+        .await
+        .expect("compat run");
+
+        let calls = backend.conversations.lock().expect("recording lock");
+        assert!(calls.len() >= 2, "expected a tool round-trip");
+        for call in calls.iter().take(2) {
+            let reminder_count = call
+                .iter()
+                .filter(|entry| {
+                    entry.role == ConversationRole::User
+                        && entry.text == "<system-reminder>\nCRITICAL CHECK\n</system-reminder>"
+                })
+                .count();
+            assert_eq!(reminder_count, 1);
+        }
     }
 
     #[tokio::test]
