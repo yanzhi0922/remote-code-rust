@@ -333,23 +333,14 @@ Use the literal string `VERDICT: ` followed by exactly one of `PASS`, `FAIL`, `P
 pub fn claude_code_guide_agent() -> AgentDefinition {
     AgentDefinition {
         agent_type: "claude-code-guide".to_owned(),
-        when_to_use: "Use this agent when the user asks questions about: \
-            (1) Claude Code (the CLI tool) - features, hooks, slash commands, \
-            MCP servers, settings, IDE integrations; (2) Claude Agent SDK - \
-            building custom agents; (3) Claude API - API usage, tool use, SDK usage."
+        when_to_use: "Use this agent when the user asks questions (\"Can Claude...\", \"Does Claude...\", \"How do I...\") about: (1) Claude Code (the CLI tool) - features, hooks, slash commands, MCP servers, settings, IDE integrations, keyboard shortcuts; (2) Claude Agent SDK - building custom agents; (3) Claude API (formerly Anthropic API) - API usage, tool use, Anthropic SDK usage. **IMPORTANT:** Before spawning a new agent, check if there is already a running or recently completed claude-code-guide agent that you can continue via SendMessage."
             .to_owned(),
-        tools: vec![
-            "Read".to_owned(),
-            "Glob".to_owned(),
-            "Grep".to_owned(),
-            "WebFetch".to_owned(),
-            "WebSearch".to_owned(),
-        ],
+        tools: claude_code_guide_tools(),
         disallowed_tools: Vec::new(),
         max_turns: 200,
-        model: None,
+        model: Some("haiku".to_owned()),
         effort: None,
-        permission_mode: None,
+        permission_mode: Some("dontAsk".to_owned()),
         source: AgentSource::BuiltIn,
         base_dir: "built-in".to_owned(),
         system_prompt: Some(claude_code_guide_system_prompt()),
@@ -368,23 +359,111 @@ pub fn claude_code_guide_agent() -> AgentDefinition {
     }
 }
 
+fn claude_code_guide_tools() -> Vec<String> {
+    if has_embedded_search_tools() {
+        vec![
+            "Bash".to_owned(),
+            "Read".to_owned(),
+            "WebFetch".to_owned(),
+            "WebSearch".to_owned(),
+        ]
+    } else {
+        vec![
+            "Glob".to_owned(),
+            "Grep".to_owned(),
+            "Read".to_owned(),
+            "WebFetch".to_owned(),
+            "WebSearch".to_owned(),
+        ]
+    }
+}
+
+fn has_embedded_search_tools() -> bool {
+    let enabled = std::env::var("EMBEDDED_SEARCH_TOOLS")
+        .map(|value| {
+            matches!(
+                value.to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false);
+    if !enabled {
+        return false;
+    }
+
+    !matches!(
+        std::env::var("CLAUDE_CODE_ENTRYPOINT").as_deref(),
+        Ok("sdk-ts" | "sdk-py" | "sdk-cli" | "local-agent")
+    )
+}
+
 fn claude_code_guide_system_prompt() -> String {
-    "You are the Remote Code guide agent. Your primary responsibility is \
-    helping users understand and use Remote Code effectively.\n\n\
-    **Approach:**\n\
-    1. Determine what the user is asking about\n\
-    2. Use WebFetch to fetch relevant documentation\n\
-    3. Identify the most relevant documentation URLs\n\
-    4. Provide clear, actionable guidance based on official documentation\n\
-    5. Use WebSearch if docs don't cover the topic\n\
-    6. Reference local project files (CLAUDE.md, .claude/ directory) when relevant\n\n\
-    **Guidelines:**\n\
-    - Always prioritize official documentation over assumptions\n\
-    - Keep responses concise and actionable\n\
-    - Include specific examples or code snippets when helpful\n\
-    - Reference exact documentation URLs in your responses\n\
-    - Help users discover features by proactively suggesting related capabilities"
-        .to_owned()
+    let local_search_hint = if has_embedded_search_tools() {
+        "Read, `find`, and `grep`"
+    } else {
+        "Read, Glob, and Grep"
+    };
+
+    format!(
+        r#"You are the Claude guide agent. Your primary responsibility is helping users understand and use Claude Code, the Claude Agent SDK, and the Claude API (formerly the Anthropic API) effectively.
+
+**Your expertise spans three domains:**
+
+1. **Claude Code** (the CLI tool): Installation, configuration, hooks, skills, MCP servers, keyboard shortcuts, IDE integrations, settings, and workflows.
+
+2. **Claude Agent SDK**: A framework for building custom AI agents based on Claude Code technology. Available for Node.js/TypeScript and Python.
+
+3. **Claude API**: The Claude API (formerly known as the Anthropic API) for direct model interaction, tool use, and integrations.
+
+**Documentation sources:**
+
+- **Claude Code docs** (https://code.claude.com/docs/en/claude_code_docs_map.md): Fetch this for questions about the Claude Code CLI tool, including:
+  - Installation, setup, and getting started
+  - Hooks (pre/post command execution)
+  - Custom skills
+  - MCP server configuration
+  - IDE integrations (VS Code, JetBrains)
+  - Settings files and configuration
+  - Keyboard shortcuts and hotkeys
+  - Subagents and plugins
+  - Sandboxing and security
+
+- **Claude Agent SDK docs** (https://platform.claude.com/llms.txt): Fetch this for questions about building agents with the SDK, including:
+  - SDK overview and getting started (Python and TypeScript)
+  - Agent configuration + custom tools
+  - Session management and permissions
+  - MCP integration in agents
+  - Hosting and deployment
+  - Cost tracking and context management
+  Note: Agent SDK docs are part of the Claude API documentation at the same URL.
+
+- **Claude API docs** (https://platform.claude.com/llms.txt): Fetch this for questions about the Claude API (formerly the Anthropic API), including:
+  - Messages API and streaming
+  - Tool use (function calling) and Anthropic-defined tools (computer use, code execution, web search, text editor, bash, programmatic tool calling, tool search tool, context editing, Files API, structured outputs)
+  - Vision, PDF support, and citations
+  - Extended thinking and structured outputs
+  - MCP connector for remote MCP servers
+  - Cloud provider integrations (Bedrock, Vertex AI, Foundry)
+
+**Approach:**
+1. Determine which domain the user's question falls into
+2. Use WebFetch to fetch the appropriate docs map
+3. Identify the most relevant documentation URLs from the map
+4. Fetch the specific documentation pages
+5. Provide clear, actionable guidance based on official documentation
+6. Use WebSearch if docs don't cover the topic
+7. Reference local project files (CLAUDE.md, .claude/ directory) when relevant using {local_search_hint}
+
+**Guidelines:**
+- Always prioritize official documentation over assumptions
+- Keep responses concise and actionable
+- Include specific examples or code snippets when helpful
+- Reference exact documentation URLs in your responses
+- Help users discover features by proactively suggesting related commands, shortcuts, or capabilities
+
+Complete the user's request by providing accurate, documentation-based guidance.
+- When you cannot find an answer or the feature doesn't exist, direct the user to use /feedback to report a feature request or bug"#
+    )
 }
 
 /// Statusline configuration agent for setting up terminal status lines.
@@ -638,8 +717,26 @@ mod tests {
     #[test]
     fn guide_agent_has_search_tools() {
         let agent = claude_code_guide_agent();
+        assert_eq!(agent.model.as_deref(), Some("haiku"));
+        assert_eq!(agent.permission_mode.as_deref(), Some("dontAsk"));
         assert!(agent.tools.contains(&"WebFetch".to_owned()));
         assert!(agent.tools.contains(&"WebSearch".to_owned()));
+        assert!(agent.tools.contains(&"Glob".to_owned()));
+        assert!(agent.tools.contains(&"Grep".to_owned()));
+        assert!(
+            agent
+                .system_prompt
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Claude Agent SDK")
+        );
+        assert!(
+            agent
+                .system_prompt
+                .as_deref()
+                .unwrap_or_default()
+                .contains("https://code.claude.com/docs/en/claude_code_docs_map.md")
+        );
     }
 
     #[test]
