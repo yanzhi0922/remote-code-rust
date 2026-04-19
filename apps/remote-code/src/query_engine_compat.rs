@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::fs;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
 
 use anyhow::{Result, anyhow};
@@ -11,6 +11,9 @@ use rc_core::{
     Attachment, AttachmentMediaType, ConversationEntry, ConversationRole, Message, PermissionMode,
     ToolCall, ToolResult,
 };
+use rc_mcp::McpClientInfo;
+use rc_mcp::normalization::build_mcp_tool_name;
+use rc_mcp::serialization::{McpCliState, SerializedClient, SerializedTool};
 use rc_permissions::PermissionBroker;
 use rc_protocol::UsagePayload;
 use rc_provider::{ConversationBackend, DiscoveredToolScope};
@@ -27,10 +30,13 @@ use rc_session::SessionStore;
 use rc_session::resume_state::{PendingToolCall, ResumeState};
 use rc_tools::{
     ToolExecutionContext, ToolRuntimePolicyOverlay, ToolSpec, execute_tool_call,
+    mcp_runtime::{discover_runtime_mcp_servers, observe_runtime_mcp_servers},
     plan_mode::normalize_exit_plan_mode_tool_calls,
-    runtime_plan_mode::inject_plan_mode_runtime_messages, runtime_provider_tool_spec,
-    runtime_provider_tool_specs, with_tool_runtime_policy_overlay,
+    runtime_plan_mode::inject_plan_mode_runtime_messages,
+    runtime_provider_tool_spec, runtime_provider_tool_specs, with_runtime_mcp_state_provider,
+    with_tool_runtime_policy_overlay,
 };
+use rc_ui_bridge::UiRuntimeMcpServerStatus;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
@@ -82,6 +88,86 @@ struct RuntimeMcpInstructionsDeltaMarker {
 
 fn wrap_in_system_reminder(content: &str) -> String {
     format!("<system-reminder>\n{content}\n</system-reminder>")
+}
+
+fn runtime_mcp_state_from_discovery(config: &RuntimeConfig) -> McpCliState {
+    let discovery = discover_runtime_mcp_servers(config, &[]);
+    McpCliState {
+        clients: discovery
+            .servers
+            .into_iter()
+            .map(|entry| SerializedClient {
+                name: entry.server.name,
+                connection_type: if entry.server.enabled {
+                    UiRuntimeMcpServerStatus::Pending.as_str().to_owned()
+                } else {
+                    UiRuntimeMcpServerStatus::Disabled.as_str().to_owned()
+                },
+                capabilities: None,
+            })
+            .collect(),
+        ..McpCliState::default()
+    }
+}
+
+fn runtime_mcp_state_from_observation(
+    observation: &rc_tools::mcp_runtime::RuntimeMcpObservation,
+) -> McpCliState {
+    let clients = observation
+        .servers
+        .iter()
+        .map(|server| SerializedClient {
+            name: server.entry.server.name.clone(),
+            connection_type: server.status.as_str().to_owned(),
+            capabilities: None,
+        })
+        .collect::<Vec<_>>();
+    let tools = observation
+        .servers
+        .iter()
+        .flat_map(|server| {
+            server.inspection.iter().flat_map(|inspection| {
+                inspection.tools.iter().map(|tool| SerializedTool {
+                    name: build_mcp_tool_name(&server.entry.server.name, &tool.name),
+                    description: tool.description.clone().unwrap_or_default(),
+                    input_json_schema: Some(tool.input_schema.clone()),
+                    is_mcp: Some(true),
+                    original_tool_name: Some(tool.name.clone()),
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+
+    McpCliState {
+        clients,
+        tools,
+        ..McpCliState::default()
+    }
+}
+
+fn spawn_runtime_mcp_state_provider(
+    config: &RuntimeConfig,
+) -> Arc<rc_tools::RuntimeMcpStateProvider> {
+    let state = Arc::new(StdMutex::new(runtime_mcp_state_from_discovery(config)));
+    let state_for_provider = Arc::clone(&state);
+    let provider = Arc::new(move || {
+        state_for_provider
+            .lock()
+            .map(|snapshot| snapshot.clone())
+            .unwrap_or_default()
+    });
+
+    let state_for_refresh = Arc::clone(&state);
+    let config = config.clone();
+    tokio::spawn(async move {
+        let observation =
+            observe_runtime_mcp_servers(&config, &[], true, &McpClientInfo::default()).await;
+        if let Ok(mut snapshot) = state_for_refresh.lock() {
+            *snapshot = runtime_mcp_state_from_observation(&observation);
+        }
+    });
+
+    provider
 }
 
 fn runtime_delta_entry<T>(
@@ -977,7 +1063,8 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
     inject_plan_mode_runtime_messages(store, config.session_id, conversation)?;
     inject_runtime_delta_messages(config, store, conversation).await?;
     refresh_runtime_system_prompt(config, conversation, &overrides, &discovered_tool_scope).await?;
-    let provider_conversation = conversation_with_runtime_user_context(config, conversation);
+    let provider_conversation =
+        conversation_with_runtime_user_context(config, conversation, &overrides);
     let existing_messages = provider_conversation
         .iter()
         .cloned()
@@ -1109,24 +1196,28 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
             ))),
         );
     }
-    let result = if let Some(allowed_tools) = expanded_allowed_tools.as_ref() {
-        with_tool_runtime_policy_overlay(
-            ToolRuntimePolicyOverlay {
-                allowed_tools: Some(allowed_tools.iter().cloned().collect()),
-                disallowed_tools: Vec::new(),
-            },
-            async {
-                engine
-                    .submit_message(submitted_messages, process_context)
-                    .await
-            },
-        )
-        .await
-    } else {
-        engine
-            .submit_message(submitted_messages, process_context)
+    let runtime_mcp_state_provider = spawn_runtime_mcp_state_provider(config);
+    let result = with_runtime_mcp_state_provider(runtime_mcp_state_provider, async {
+        if let Some(allowed_tools) = expanded_allowed_tools.as_ref() {
+            with_tool_runtime_policy_overlay(
+                ToolRuntimePolicyOverlay {
+                    allowed_tools: Some(allowed_tools.iter().cloned().collect()),
+                    disallowed_tools: Vec::new(),
+                },
+                async {
+                    engine
+                        .submit_message(submitted_messages, process_context)
+                        .await
+                },
+            )
             .await
-    };
+        } else {
+            engine
+                .submit_message(submitted_messages, process_context)
+                .await
+        }
+    })
+    .await;
 
     *conversation = legacy_conversation_for_result(&engine, result.as_ref().err());
     {
@@ -2063,6 +2154,58 @@ while True:
             .position(|entry| entry.role == ConversationRole::User && entry.text == "verify this")
             .expect("user prompt");
         assert!(reminder_index < prompt_index);
+    }
+
+    #[tokio::test]
+    async fn compat_run_omits_claude_md_and_git_status_for_child_overrides() {
+        let (_tempdir, config, store) = mock_config_and_store();
+        fs::write(config.cwd.join("CLAUDE.md"), "Follow project rules.").expect("claude md");
+        fs::create_dir_all(config.cwd.join(".git")).expect("git marker");
+        let discovery = RuntimeHookDiscovery::default();
+        let mut conversation =
+            initialize_conversation(&store, &config, Some("explore this")).expect("conversation");
+        let mut hook_state = HookRunState::load(&store, config.session_id).expect("hook state");
+        let backend = Arc::new(RecordingBackend::default());
+
+        run_prompt_with_query_engine_compat_overrides(
+            &config,
+            &store,
+            backend.clone(),
+            DiscoveredToolScope::default(),
+            mock_broker(&config),
+            None,
+            &discovery,
+            &mut hook_state,
+            &mut conversation,
+            "explore this",
+            CompatRunOverrides {
+                agent_system_prompt: Some("Explore child".to_owned()),
+                omit_claude_md: true,
+                omit_git_status: true,
+                ..CompatRunOverrides::default()
+            },
+        )
+        .await
+        .expect("compat run");
+
+        let calls = backend.conversations.lock().expect("recording lock");
+        let first_call = calls.first().expect("provider call");
+        let user_context = first_call
+            .iter()
+            .find(|entry| {
+                entry.role == ConversationRole::User
+                    && entry.text.contains(
+                        "As you answer the user's questions, you can use the following context:",
+                    )
+            })
+            .expect("runtime user context");
+        assert!(user_context.text.contains("currentDate"));
+        assert!(!user_context.text.contains("claudeMd"));
+        let system_entry = first_call
+            .iter()
+            .find(|entry| entry.role == ConversationRole::System)
+            .expect("system entry");
+        assert!(!system_entry.text.contains("gitStatus:"));
     }
 
     #[tokio::test]
