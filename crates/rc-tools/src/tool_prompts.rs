@@ -1189,12 +1189,16 @@ fn runtime_agent_tool_prompt() -> String {
     let is_fork_enabled =
         is_fork_subagent_enabled(context.is_coordinator, context.is_non_interactive);
 
-    rc_agents::prompt::build_agent_prompt_with_mcp_servers(
+    rc_agents::prompt::build_agent_prompt_with_options(
         &definitions.active_agents,
-        is_fork_enabled,
-        context.is_coordinator,
-        context.allowed_agent_types.as_deref(),
-        available_mcp_servers.as_deref(),
+        rc_agents::prompt::AgentPromptOptions {
+            is_fork_enabled,
+            is_coordinator: context.is_coordinator,
+            allowed_agent_types: context.allowed_agent_types.as_deref(),
+            available_mcp_servers: available_mcp_servers.as_deref(),
+            denied_agent_types: Some(&context.denied_agent_types),
+            list_via_attachment: context.list_via_attachment,
+        },
     )
 }
 
@@ -1205,8 +1209,10 @@ fn default_runtime_agent_prompt_context() -> crate::RuntimeAgentPromptContext {
             .ok()
             .map(|cwd| cwd.join(".claude").join("agents")),
         allowed_agent_types: None,
+        denied_agent_types: Vec::new(),
         is_coordinator: is_coordinator_mode(),
         is_non_interactive: false,
+        list_via_attachment: false,
     }
 }
 
@@ -1731,8 +1737,10 @@ mod tests {
             user_agents_dir: Some(user_agents_dir),
             project_agents_dir: Some(project_agents_dir),
             allowed_agent_types: None,
+            denied_agent_types: Vec::new(),
             is_coordinator: false,
             is_non_interactive: false,
+            list_via_attachment: true,
         };
         let context_provider = Arc::new(move || context.clone());
 
@@ -1744,6 +1752,9 @@ mod tests {
                 .await
             })
             .await;
+        assert!(hidden_prompt.contains(
+            "Available agent types are listed in <system-reminder> messages in the conversation."
+        ));
         assert!(!hidden_prompt.contains("- docs-agent:"));
 
         let live_prompt =
@@ -1764,6 +1775,9 @@ mod tests {
                 .await
             })
             .await;
-        assert!(live_prompt.contains("- docs-agent:"));
+        assert!(live_prompt.contains(
+            "Available agent types are listed in <system-reminder> messages in the conversation."
+        ));
+        assert!(!live_prompt.contains("- docs-agent:"));
     }
 }

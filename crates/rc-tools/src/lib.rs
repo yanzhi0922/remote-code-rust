@@ -103,9 +103,13 @@ pub struct RuntimeAgentPromptContext {
     #[serde(default)]
     pub allowed_agent_types: Option<Vec<String>>,
     #[serde(default)]
+    pub denied_agent_types: Vec<String>,
+    #[serde(default)]
     pub is_coordinator: bool,
     #[serde(default)]
     pub is_non_interactive: bool,
+    #[serde(default)]
+    pub list_via_attachment: bool,
 }
 
 /// Process-scoped runtime policy for tool exposure and task artifacts.

@@ -4694,6 +4694,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clap",
+ "directories 6.0.0",
  "futures",
  "rc-agents",
  "rc-config",
