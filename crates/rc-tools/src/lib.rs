@@ -86,7 +86,27 @@ tokio::task_local! {
     static TOOL_RUNTIME_MCP_STATE_PROVIDER: Arc<RuntimeMcpStateProvider>;
 }
 
+tokio::task_local! {
+    static TOOL_RUNTIME_AGENT_PROMPT_CONTEXT_PROVIDER: Arc<RuntimeAgentPromptContextProvider>;
+}
+
 pub type RuntimeMcpStateProvider = dyn Fn() -> rc_mcp::McpCliState + Send + Sync;
+pub type RuntimeAgentPromptContextProvider = dyn Fn() -> RuntimeAgentPromptContext + Send + Sync;
+
+/// Task-local context used to build the dynamic Agent tool prompt.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RuntimeAgentPromptContext {
+    #[serde(default)]
+    pub user_agents_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub project_agents_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub allowed_agent_types: Option<Vec<String>>,
+    #[serde(default)]
+    pub is_coordinator: bool,
+    #[serde(default)]
+    pub is_non_interactive: bool,
+}
 
 /// Process-scoped runtime policy for tool exposure and task artifacts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -170,9 +190,28 @@ where
         .await
 }
 
+pub async fn with_runtime_agent_prompt_context_provider<F, T>(
+    provider: Arc<RuntimeAgentPromptContextProvider>,
+    future: F,
+) -> T
+where
+    F: Future<Output = T>,
+{
+    TOOL_RUNTIME_AGENT_PROMPT_CONTEXT_PROVIDER
+        .scope(provider, future)
+        .await
+}
+
 #[must_use]
 pub fn current_runtime_mcp_cli_state() -> Option<rc_mcp::McpCliState> {
     TOOL_RUNTIME_MCP_STATE_PROVIDER
+        .try_with(|provider| provider())
+        .ok()
+}
+
+#[must_use]
+pub fn current_runtime_agent_prompt_context() -> Option<RuntimeAgentPromptContext> {
+    TOOL_RUNTIME_AGENT_PROMPT_CONTEXT_PROVIDER
         .try_with(|provider| provider())
         .ok()
 }

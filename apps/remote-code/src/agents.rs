@@ -1,13 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use rc_agents::builtins::{explore_agent, general_purpose_agent, plan_agent, verification_agent};
 use rc_agents::constants::FORK_SUBAGENT_TYPE;
+use rc_agents::loader::load_all_agents;
 use rc_agents::{
     AgentDefinition, AgentExecutionRequest, AgentExecutor, AgentIdentity, AgentRunConfig,
-    AgentRunResult, AgentRunner, AgentScheduler, AgentTask,
+    AgentRunResult, AgentRunner, AgentScheduler, AgentSource, AgentTask,
 };
 use rc_config::{RuntimeConfig, restamp_runtime_session};
 use rc_core::{
@@ -31,7 +33,9 @@ use tokio::task::JoinSet;
 use uuid::Uuid;
 
 use crate::cli::{AgentsCommand, AgentsPlanArgs};
-use crate::conversation::{initialize_conversation, restore_discovered_tool_scope};
+use crate::conversation::{
+    discover_runtime_extensions, initialize_conversation, restore_discovered_tool_scope,
+};
 use crate::hooks::{HookRunState, discover_runtime_hooks, ensure_session_start_hooks};
 use crate::query_engine_compat::{
     CompatRunOverrides, run_prompt_with_query_engine_compat_overrides,
@@ -298,6 +302,7 @@ impl AgentExecutor for RemoteCodeAgentExecutor {
             &mut hook_state,
         )
         .await?;
+        let agent_system_prompt = resolve_runtime_agent_system_prompt(&config, &request);
 
         let outcome = run_prompt_with_query_engine_compat_overrides(
             &config,
@@ -311,7 +316,7 @@ impl AgentExecutor for RemoteCodeAgentExecutor {
             &mut conversation,
             &request.task,
             CompatRunOverrides {
-                agent_system_prompt: Some(request.system_prompt),
+                agent_system_prompt: Some(agent_system_prompt),
                 allowed_tools: (!request.tools.is_empty()).then_some(request.tools),
                 critical_system_reminder: request.critical_system_reminder,
                 omit_claude_md: request.omit_claude_md,
@@ -396,6 +401,239 @@ fn detect_model_provider(config: &RuntimeConfig, base_url: Option<&str>) -> Mode
             provider: Some("openai_compatible".to_owned()),
             ..Default::default()
         }),
+    }
+}
+
+const CLAUDE_CODE_GUIDE_AGENT_TYPE: &str = "claude-code-guide";
+
+fn resolve_runtime_agent_system_prompt(
+    config: &RuntimeConfig,
+    request: &AgentExecutionRequest,
+) -> String {
+    if request.agent_type != CLAUDE_CODE_GUIDE_AGENT_TYPE {
+        return request.system_prompt.clone();
+    }
+
+    build_claude_code_guide_runtime_prompt(config, &request.system_prompt)
+}
+
+fn build_claude_code_guide_runtime_prompt(config: &RuntimeConfig, base_prompt: &str) -> String {
+    let context_sections = build_claude_code_guide_context_sections(config);
+    if context_sections.is_empty() {
+        return base_prompt.to_owned();
+    }
+
+    format!(
+        "{base_prompt}\n\n---\n\n# User's Current Configuration\n\nThe user has the following custom setup in their environment:\n\n{}\n\nWhen answering questions, consider these configured features and proactively suggest them when relevant.",
+        context_sections.join("\n\n")
+    )
+}
+
+fn build_claude_code_guide_context_sections(config: &RuntimeConfig) -> Vec<String> {
+    let mut sections = Vec::new();
+
+    let custom_skills = discover_guide_custom_skills(config);
+    if !custom_skills.is_empty() {
+        sections.push(format!(
+            "**Available custom skills in this project:**\n{}",
+            render_bulleted_entries(
+                &custom_skills
+                    .into_iter()
+                    .map(|(name, description)| format!("/{name}: {description}"))
+                    .collect::<Vec<_>>()
+            )
+        ));
+    }
+
+    let custom_agents = discover_guide_custom_agents(config);
+    if !custom_agents.is_empty() {
+        sections.push(format!(
+            "**Available custom agents configured:**\n{}",
+            render_bulleted_entries(
+                &custom_agents
+                    .into_iter()
+                    .map(|(name, description)| format!("{name}: {description}"))
+                    .collect::<Vec<_>>()
+            )
+        ));
+    }
+
+    let mcp_servers = discover_runtime_extensions(config).mcp_servers;
+    if !mcp_servers.is_empty() {
+        sections.push(format!(
+            "**Configured MCP servers:**\n{}",
+            render_bulleted_entries(&mcp_servers)
+        ));
+    }
+
+    let plugin_skills = discover_guide_plugin_skills(config);
+    if !plugin_skills.is_empty() {
+        sections.push(format!(
+            "**Available plugin skills:**\n{}",
+            render_bulleted_entries(
+                &plugin_skills
+                    .into_iter()
+                    .map(|(name, description)| format!("/{name}: {description}"))
+                    .collect::<Vec<_>>()
+            )
+        ));
+    }
+
+    if let Some(settings_json) = merged_runtime_settings_json(config) {
+        sections.push(format!(
+            "**User's settings.json:**\n```json\n{settings_json}\n```"
+        ));
+    }
+
+    sections
+}
+
+fn render_bulleted_entries(entries: &[String]) -> String {
+    entries
+        .iter()
+        .map(|entry| format!("- {entry}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn discover_guide_custom_skills(config: &RuntimeConfig) -> Vec<(String, String)> {
+    let mut skills = BTreeMap::new();
+    for root in guide_skill_roots(config) {
+        collect_skill_entries(&root, &mut skills);
+    }
+    skills.into_iter().collect()
+}
+
+fn guide_skill_roots(config: &RuntimeConfig) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    roots.push(config.paths.skills_dir.clone());
+    roots.push(config.cwd.join(".claude").join("skills"));
+    roots.push(config.cwd.join(".remote-code").join("skills"));
+    roots
+}
+
+fn collect_skill_entries(root: &Path, skills: &mut BTreeMap<String, String>) {
+    if !root.exists() {
+        return;
+    }
+
+    match rc_skills::discover_skills(root) {
+        Ok(discovered) => {
+            for skill in discovered {
+                let description = skill
+                    .metadata
+                    .summary
+                    .clone()
+                    .unwrap_or_else(|| skill.metadata.title.clone());
+                skills.insert(skill.metadata.slug.clone(), description);
+            }
+        }
+        Err(error) => tracing::warn!(
+            path = %root.display(),
+            "failed to discover guide custom skills: {error}"
+        ),
+    }
+}
+
+fn discover_guide_custom_agents(config: &RuntimeConfig) -> Vec<(String, String)> {
+    let user_agents_dir = config.paths.profile_dir.join("agents");
+    let project_agents_dir = config.cwd.join(".claude").join("agents");
+    load_all_agents(
+        Some(user_agents_dir.as_path()),
+        Some(project_agents_dir.as_path()),
+    )
+    .active_agents
+    .into_iter()
+    .filter(|agent| agent.source != AgentSource::BuiltIn)
+    .map(|agent| (agent.agent_type, agent.when_to_use))
+    .collect()
+}
+
+fn discover_guide_plugin_skills(config: &RuntimeConfig) -> Vec<(String, String)> {
+    let mut skills = BTreeMap::new();
+    match rc_plugins::discover_plugins(&config.paths.plugins_dir) {
+        Ok(plugins) => {
+            for plugin in plugins {
+                match plugin.discover_bundled_skills() {
+                    Ok(discovered) => {
+                        for skill in discovered {
+                            let description = skill
+                                .metadata
+                                .summary
+                                .clone()
+                                .unwrap_or_else(|| skill.metadata.title.clone());
+                            skills.insert(skill.metadata.slug.clone(), description);
+                        }
+                    }
+                    Err(error) => tracing::warn!(
+                        plugin = %plugin.manifest.name,
+                        "failed to discover bundled plugin skills: {error}"
+                    ),
+                }
+            }
+        }
+        Err(error) => tracing::warn!("failed to discover plugins for guide agent prompt: {error}"),
+    }
+    skills.into_iter().collect()
+}
+
+fn merged_runtime_settings_json(config: &RuntimeConfig) -> Option<String> {
+    let mut merged = serde_json::Value::Object(serde_json::Map::new());
+    let mut saw_settings = false;
+
+    for path in &config.settings_files {
+        let Some(value) = parse_settings_document(path) else {
+            continue;
+        };
+        merge_json_value(&mut merged, value);
+        saw_settings = true;
+    }
+
+    if !saw_settings || merged.as_object().is_some_and(|object| object.is_empty()) {
+        return None;
+    }
+
+    serde_json::to_string_pretty(&merged).ok()
+}
+
+fn parse_settings_document(path: &Path) -> Option<serde_json::Value> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+
+    let parsed = match extension {
+        "json" => serde_json::from_str(&raw).ok(),
+        "toml" => toml::from_str::<toml::Value>(&raw)
+            .ok()
+            .and_then(|value| serde_json::to_value(value).ok()),
+        _ => serde_json::from_str(&raw).ok().or_else(|| {
+            toml::from_str::<toml::Value>(&raw)
+                .ok()
+                .and_then(|value| serde_json::to_value(value).ok())
+        }),
+    };
+
+    if parsed.is_none() {
+        tracing::warn!(path = %path.display(), "failed to parse settings document for guide agent prompt");
+    }
+
+    parsed
+}
+
+fn merge_json_value(target: &mut serde_json::Value, source: serde_json::Value) {
+    match (target, source) {
+        (serde_json::Value::Object(target), serde_json::Value::Object(source)) => {
+            for (key, value) in source {
+                if let Some(existing) = target.get_mut(&key) {
+                    merge_json_value(existing, value);
+                } else {
+                    target.insert(key, value);
+                }
+            }
+        }
+        (target, source) => *target = source,
     }
 }
 
@@ -776,6 +1014,10 @@ fn truncate_single_line(text: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
+    use tempfile::tempdir;
 
     #[test]
     fn default_agent_specs_include_workspace_owner() {
@@ -891,5 +1133,141 @@ mod tests {
         assert!(matches!(conversation[0].role, ConversationRole::User));
         assert!(conversation[0].text.contains("[tool context]"));
         assert!(conversation[0].text.contains("cargo check passed"));
+    }
+
+    #[test]
+    fn guide_agent_runtime_prompt_appends_research_ordered_configuration_sections() {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        let plugin_root = profile.join("plugins").join("sample");
+        fs::create_dir_all(cwd.join(".claude").join("agents")).expect("project agents dir");
+        fs::create_dir_all(profile.join("skills").join("profile-skill")).expect("profile skills");
+        fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("plugin manifest dir");
+        fs::create_dir_all(plugin_root.join("skills").join("bundled")).expect("plugin skills dir");
+        fs::create_dir_all(cwd.join(".remote-code")).expect("workspace settings dir");
+        fs::write(
+            profile
+                .join("skills")
+                .join("profile-skill")
+                .join("SKILL.md"),
+            "+++\nsummary = \"Profile skill summary\"\n+++\n# Profile Skill\n\nUse it.\n",
+        )
+        .expect("write profile skill");
+        fs::write(
+            cwd.join(".claude").join("agents").join("reviewer.md"),
+            "---\nname: reviewer\ndescription: Review custom changes\n---\nYou review.\n",
+        )
+        .expect("write custom agent");
+        fs::write(
+            plugin_root.join(".codex-plugin").join("plugin.json"),
+            r#"{
+                "name": "sample",
+                "version": "0.1.0",
+                "skills": "./skills"
+            }"#,
+        )
+        .expect("write plugin manifest");
+        fs::write(
+            plugin_root.join("skills").join("bundled").join("SKILL.md"),
+            "+++\nsummary = \"Plugin skill summary\"\n+++\n# Bundled\n\nUse it.\n",
+        )
+        .expect("write plugin skill");
+        fs::write(
+            profile.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            r#"[servers.context7]
+command = "python"
+args = ["server.py"]"#,
+        )
+        .expect("write profile mcp");
+        fs::write(
+            profile.join("settings.json"),
+            r#"{
+                "provider": {
+                    "name": "demo"
+                },
+                "language": "zh"
+            }"#,
+        )
+        .expect("write settings");
+
+        let config = load_runtime_config(
+            Some(cwd),
+            Some(profile),
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+            RuntimeOverrides::default(),
+        )
+        .expect("config");
+
+        let prompt = build_claude_code_guide_runtime_prompt(
+            &config,
+            "Base guide prompt.\n- When you cannot find an answer or the feature doesn't exist, direct the user to use /feedback to report a feature request or bug",
+        );
+
+        let custom_skills_idx = prompt
+            .find("**Available custom skills in this project:**")
+            .expect("custom skills section");
+        let custom_agents_idx = prompt
+            .find("**Available custom agents configured:**")
+            .expect("custom agents section");
+        let mcp_idx = prompt
+            .find("**Configured MCP servers:**")
+            .expect("mcp section");
+        let plugin_idx = prompt
+            .find("**Available plugin skills:**")
+            .expect("plugin section");
+        let settings_idx = prompt
+            .find("**User's settings.json:**")
+            .expect("settings section");
+        assert!(custom_skills_idx < custom_agents_idx);
+        assert!(custom_agents_idx < mcp_idx);
+        assert!(mcp_idx < plugin_idx);
+        assert!(plugin_idx < settings_idx);
+        assert!(prompt.contains("- /profile-skill: Profile skill summary"));
+        assert!(prompt.contains("- reviewer: Review custom changes"));
+        assert!(prompt.contains("- context7"));
+        assert!(prompt.contains("- /bundled: Plugin skill summary"));
+        assert!(prompt.contains("\"language\": \"zh\""));
+        assert!(prompt.contains("# User's Current Configuration"));
+    }
+
+    #[test]
+    fn guide_agent_runtime_prompt_leaves_base_prompt_unchanged_without_dynamic_context() {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        fs::create_dir_all(&cwd).expect("workspace");
+
+        let config = load_runtime_config(
+            Some(cwd),
+            Some(profile),
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+            RuntimeOverrides::default(),
+        )
+        .expect("config");
+
+        let base_prompt = "Base guide prompt.";
+        assert_eq!(
+            build_claude_code_guide_runtime_prompt(&config, base_prompt),
+            base_prompt
+        );
     }
 }

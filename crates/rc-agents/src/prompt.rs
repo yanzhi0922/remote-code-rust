@@ -22,7 +22,28 @@ pub fn build_agent_prompt(
     is_coordinator: bool,
     allowed_agent_types: Option<&[String]>,
 ) -> String {
-    let effective_agents = filter_agents(agents, allowed_agent_types);
+    build_agent_prompt_with_mcp_servers(
+        agents,
+        is_fork_enabled,
+        is_coordinator,
+        allowed_agent_types,
+        None,
+    )
+}
+
+/// Build the complete agent tool prompt with MCP requirement visibility filtering.
+///
+/// Claude Code keeps `requiredMcpServers` out of loader-time activation and
+/// applies it only when presenting available agents to the model. Each required
+/// pattern must match at least one MCP server that currently exposes tools.
+pub fn build_agent_prompt_with_mcp_servers(
+    agents: &[AgentDefinition],
+    is_fork_enabled: bool,
+    is_coordinator: bool,
+    allowed_agent_types: Option<&[String]>,
+    available_mcp_servers: Option<&[String]>,
+) -> String {
+    let effective_agents = filter_agents(agents, allowed_agent_types, available_mcp_servers);
 
     let shared = build_shared_prompt(&effective_agents, is_fork_enabled);
 
@@ -87,14 +108,42 @@ pub fn build_agent_prompt(
 fn filter_agents<'a>(
     agents: &'a [AgentDefinition],
     allowed: Option<&[String]>,
+    available_mcp_servers: Option<&[String]>,
 ) -> Vec<&'a AgentDefinition> {
-    match allowed {
-        Some(types) => agents
-            .iter()
-            .filter(|a| types.contains(&a.agent_type))
-            .collect(),
-        None => agents.iter().collect(),
+    agents
+        .iter()
+        .filter(|agent| {
+            available_mcp_servers
+                .map(|servers| has_required_mcp_servers(agent, servers))
+                .unwrap_or(true)
+        })
+        .filter(|agent| {
+            allowed
+                .map(|types| types.contains(&agent.agent_type))
+                .unwrap_or(true)
+        })
+        .collect()
+}
+
+/// Return true when all of an agent's `requiredMcpServers` patterns are met.
+///
+/// Matching mirrors Claude Code's `loadAgentsDir.ts`: an empty requirement list
+/// passes, and every pattern must case-insensitively match some available MCP
+/// server name as a substring.
+pub fn has_required_mcp_servers(agent: &AgentDefinition, available_mcp_servers: &[String]) -> bool {
+    if agent.required_mcp_servers.is_empty() {
+        return true;
     }
+
+    agent.required_mcp_servers.iter().all(|pattern| {
+        available_mcp_servers
+            .iter()
+            .any(|server| server_matches_required_pattern(server, pattern))
+    })
+}
+
+fn server_matches_required_pattern(server_name: &str, pattern: &str) -> bool {
+    server_name.to_lowercase().contains(&pattern.to_lowercase())
 }
 
 /// Build the shared core prompt used by both coordinator and non-coordinator modes.
@@ -379,6 +428,66 @@ mod tests {
         let prompt = build_agent_prompt(&agents, false, false, Some(&allowed));
         assert!(prompt.contains("- a:"));
         assert!(!prompt.contains("- b:"));
+    }
+
+    #[test]
+    fn build_prompt_hides_agents_when_required_mcp_servers_are_missing() {
+        let always = AgentDefinition::new("always", "always visible");
+        let mut mcp = AgentDefinition::new("mcp", "needs context7");
+        mcp.required_mcp_servers = vec!["context7".to_owned()];
+
+        let prompt =
+            build_agent_prompt_with_mcp_servers(&[always, mcp], false, false, None, Some(&[]));
+        assert!(prompt.contains("- always:"));
+        assert!(!prompt.contains("- mcp:"));
+    }
+
+    #[test]
+    fn build_prompt_matches_required_mcp_servers_case_insensitive_substrings() {
+        let mut agent = AgentDefinition::new("mcp", "needs servers");
+        agent.required_mcp_servers = vec!["context".to_owned(), "MINI".to_owned()];
+
+        let prompt = build_agent_prompt_with_mcp_servers(
+            &[agent],
+            false,
+            false,
+            None,
+            Some(&["context7".to_owned(), "MiniMax".to_owned()]),
+        );
+        assert!(prompt.contains("- mcp:"));
+    }
+
+    #[test]
+    fn build_prompt_requires_all_required_mcp_server_patterns() {
+        let mut agent = AgentDefinition::new("mcp", "needs servers");
+        agent.required_mcp_servers = vec!["context".to_owned(), "MiniMax".to_owned()];
+
+        let prompt = build_agent_prompt_with_mcp_servers(
+            &[agent],
+            false,
+            false,
+            None,
+            Some(&["context7".to_owned()]),
+        );
+        assert!(!prompt.contains("- mcp:"));
+    }
+
+    #[test]
+    fn build_prompt_combines_mcp_and_allowed_type_filters() {
+        let mut visible = AgentDefinition::new("visible", "visible");
+        visible.required_mcp_servers = vec!["context".to_owned()];
+        let hidden = AgentDefinition::new("hidden", "hidden");
+        let allowed = vec!["visible".to_owned()];
+
+        let prompt = build_agent_prompt_with_mcp_servers(
+            &[visible, hidden],
+            false,
+            false,
+            Some(&allowed),
+            Some(&["context7".to_owned()]),
+        );
+        assert!(prompt.contains("- visible:"));
+        assert!(!prompt.contains("- hidden:"));
     }
 
     #[test]
