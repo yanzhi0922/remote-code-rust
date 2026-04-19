@@ -1,4 +1,6 @@
 use std::collections::HashSet;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -14,8 +16,11 @@ use serde_json::Value;
 
 use crate::observer::{NoopQueryObserver, QueryObserver};
 
-pub type PostCompactTransform =
-    dyn Fn(Vec<rc_core::ConversationEntry>) -> Vec<rc_core::ConversationEntry> + Send + Sync;
+pub type PostCompactTransform = dyn Fn(
+        Vec<rc_core::ConversationEntry>,
+    ) -> Pin<Box<dyn Future<Output = Vec<rc_core::ConversationEntry>> + Send>>
+    + Send
+    + Sync;
 
 /// Query effort hint aligned with Claude Code's runtime knobs.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]

@@ -984,8 +984,10 @@ mod tests {
         );
         config.context_manager = ContextWindowManager::new(100, 20);
         config = config.with_post_compact_transform(Arc::new(|mut conversation| {
-            conversation.push(ConversationEntry::user("post-compact marker"));
-            conversation
+            Box::pin(async move {
+                conversation.push(ConversationEntry::user("post-compact marker"));
+                conversation
+            })
         }));
 
         let mut existing_messages = vec![rc_core::Message::from(ConversationEntry::system("sys"))];
