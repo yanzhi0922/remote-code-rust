@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use rc_core::PermissionMode;
 use serde::{Deserialize, Serialize};
 
 use crate::definition::AgentDefinition;
@@ -73,6 +74,10 @@ pub struct ConversationEntry {
 pub struct AgentExecutionRequest {
     /// Agent type identifier.
     pub agent_type: String,
+    /// Optional teammate name.
+    pub agent_name: Option<String>,
+    /// Optional team name.
+    pub team_name: Option<String>,
     /// Task prompt to execute.
     pub task: String,
     /// Conversation context inherited from the caller.
@@ -83,8 +88,13 @@ pub struct AgentExecutionRequest {
     pub max_turns: u32,
     /// Resolved system prompt.
     pub system_prompt: String,
+    /// Short critical reminder reinjected as a system-reminder user message.
+    #[serde(default)]
+    pub critical_system_reminder: Option<String>,
     /// Resolved tool set available to the agent.
     pub tools: Vec<String>,
+    /// Permission mode to use for the run.
+    pub permission_mode: Option<PermissionMode>,
     /// Working directory for the run.
     pub working_dir: PathBuf,
 }
@@ -221,12 +231,19 @@ impl AgentRunner {
     ) -> AgentExecutionRequest {
         AgentExecutionRequest {
             agent_type: self.definition.agent_type.clone(),
+            agent_name: None,
+            team_name: None,
             task: task.to_owned(),
             context: context.to_owned(),
             model: self.resolve_model("default"),
             max_turns: self.resolve_max_turns(),
             system_prompt: self.build_system_prompt(),
+            critical_system_reminder: self
+                .definition
+                .critical_system_reminder_experimental
+                .clone(),
             tools: self.resolve_tools(&self.config.tools),
+            permission_mode: None,
             working_dir: self.config.working_dir.clone(),
         }
     }
@@ -450,11 +467,17 @@ mod tests {
             disallowed_tools: vec!["Agent".to_owned()],
             max_turns: 100,
             model: Some("haiku".to_owned()),
+            effort: None,
             permission_mode: None,
             source: AgentSource::BuiltIn,
             base_dir: "built-in".to_owned(),
             system_prompt: Some("You are a test agent.".to_owned()),
             skills: Vec::new(),
+            mcp_servers: Vec::new(),
+            hooks: None,
+            color: None,
+            critical_system_reminder_experimental: None,
+            required_mcp_servers: Vec::new(),
             memory: None,
             background: false,
             isolation: crate::definition::AgentIsolation::None,

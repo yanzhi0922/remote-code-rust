@@ -3974,6 +3974,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "rc-core",
  "serde",
  "serde_json",
  "tempfile",
@@ -4344,6 +4345,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "rc-runtime-prompt"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "rc-agents",
+ "rc-config",
+ "rc-core",
+ "rc-model",
+ "rc-provider",
+ "rc-skills",
+ "rc-system-prompt",
+ "rc-tools",
+ "serde_json",
+]
+
+[[package]]
 name = "rc-session"
 version = "0.1.0"
 dependencies = [
@@ -4530,6 +4548,7 @@ dependencies = [
  "rc-permissions",
  "rc-plugins",
  "rc-provider",
+ "rc-runtime-prompt",
  "rc-session",
  "rc-skills",
  "rc-system-prompt",
@@ -4689,6 +4708,7 @@ dependencies = [
  "rc-provider",
  "rc-query-engine",
  "rc-runner",
+ "rc-runtime-prompt",
  "rc-session",
  "rc-skills",
  "rc-system-prompt",

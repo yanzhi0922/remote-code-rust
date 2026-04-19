@@ -44,6 +44,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::Result;
+use serde_json::json;
 
 use cache::{SYSTEM_PROMPT_DYNAMIC_BOUNDARY, SectionCache};
 use sections::SystemPromptSection;
@@ -178,6 +179,17 @@ pub struct SystemPromptBlock {
     pub text: String,
     /// Optional cache scope for this block.
     pub cache_scope: Option<CacheScope>,
+}
+
+/// Fully rendered provider-facing system prompt payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedSystemPrompt {
+    /// Raw prompt blocks before provider serialization.
+    pub raw_blocks: Vec<String>,
+    /// Joined text form with empty blocks and boundary markers removed.
+    pub text: String,
+    /// Provider-facing content blocks with cache-control metadata applied.
+    pub content_blocks: Vec<serde_json::Value>,
 }
 
 /// Inputs for applying Claude Code's effective-system-prompt precedence.
@@ -317,6 +329,50 @@ pub fn split_system_prompt_for_api(
         })
         .into_iter()
         .collect()
+}
+
+/// Render raw prompt blocks into provider-facing content blocks and text.
+#[must_use]
+pub fn render_system_prompt_for_api(
+    raw_blocks: &[String],
+    options: &SystemPromptSplitOptions,
+) -> RenderedSystemPrompt {
+    let content_blocks = split_system_prompt_for_api(raw_blocks, options)
+        .into_iter()
+        .map(|block| {
+            let mut content_block = json!({
+                "type": "text",
+                "text": block.text,
+            });
+            match block.cache_scope {
+                Some(CacheScope::Global) => {
+                    content_block["cache_control"] =
+                        json!({"type": "ephemeral", "scope": "global"});
+                }
+                Some(CacheScope::Org) => {
+                    content_block["cache_control"] = json!({"type": "ephemeral"});
+                }
+                None => {}
+            }
+            content_block
+        })
+        .collect::<Vec<_>>();
+
+    let text = raw_blocks
+        .iter()
+        .filter_map(|block| {
+            let trimmed = block.trim();
+            (!trimmed.is_empty() && trimmed != SYSTEM_PROMPT_DYNAMIC_BOUNDARY)
+                .then_some(block.clone())
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    RenderedSystemPrompt {
+        raw_blocks: raw_blocks.to_vec(),
+        text,
+        content_blocks,
+    }
 }
 
 /// Main system prompt builder.
@@ -891,5 +947,58 @@ mod tests {
         assert_eq!(split.len(), 1);
         assert_eq!(split[0].cache_scope, Some(CacheScope::Org));
         assert_eq!(split[0].text, "one\n\ntwo");
+    }
+
+    #[test]
+    fn render_system_prompt_for_api_applies_cache_control_metadata() {
+        let raw = vec![
+            "static one".to_owned(),
+            SYSTEM_PROMPT_DYNAMIC_BOUNDARY.to_owned(),
+            "dynamic one".to_owned(),
+        ];
+
+        let rendered = render_system_prompt_for_api(&raw, &SystemPromptSplitOptions::default());
+        assert_eq!(rendered.text, "static one\n\ndynamic one");
+        assert_eq!(rendered.content_blocks.len(), 2);
+        assert_eq!(
+            rendered.content_blocks[0]["cache_control"],
+            serde_json::json!({"type": "ephemeral", "scope": "global"})
+        );
+        assert!(rendered.content_blocks[1].get("cache_control").is_none());
+    }
+
+    #[test]
+    fn render_system_prompt_for_api_uses_org_cache_when_global_skipped() {
+        let raw = vec![
+            "static one".to_owned(),
+            SYSTEM_PROMPT_DYNAMIC_BOUNDARY.to_owned(),
+            "dynamic one".to_owned(),
+        ];
+
+        let rendered = render_system_prompt_for_api(
+            &raw,
+            &SystemPromptSplitOptions {
+                skip_global_cache_for_system_prompt: true,
+            },
+        );
+        assert_eq!(rendered.content_blocks.len(), 1);
+        assert_eq!(
+            rendered.content_blocks[0]["cache_control"],
+            serde_json::json!({"type": "ephemeral"})
+        );
+    }
+
+    #[test]
+    fn render_system_prompt_for_api_omits_empty_blocks_from_joined_text() {
+        let raw = vec![
+            String::new(),
+            "   ".to_owned(),
+            "one".to_owned(),
+            SYSTEM_PROMPT_DYNAMIC_BOUNDARY.to_owned(),
+            "two".to_owned(),
+        ];
+
+        let rendered = render_system_prompt_for_api(&raw, &SystemPromptSplitOptions::default());
+        assert_eq!(rendered.text, "one\n\ntwo");
     }
 }

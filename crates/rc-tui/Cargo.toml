@@ -26,6 +26,7 @@ rc-core = { path = "../rc-core" }
 rc-config = { path = "../rc-config" }
 rc-session = { path = "../rc-session" }
 rc-provider = { path = "../rc-provider" }
+rc-runtime-prompt = { path = "../rc-runtime-prompt" }
 rc-tools = { path = "../rc-tools" }
 rc-permissions = { path = "../rc-permissions" }
 rc-mcp = { path = "../rc-mcp" }
