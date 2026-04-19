@@ -678,7 +678,11 @@ async fn run_conversation_turn(
         .await?;
 
         // Call provider
-        let request_conversation = conversation_with_runtime_user_context(config, conversation);
+        let request_conversation = conversation_with_runtime_user_context(
+            config,
+            conversation,
+            &PromptRuntimeOverrides::default(),
+        );
         let mut response = backend.complete(&request_conversation).await?;
         normalize_exit_plan_mode_tool_calls(&mut response.tool_calls);
         total_input_tokens += response.usage.input_tokens;

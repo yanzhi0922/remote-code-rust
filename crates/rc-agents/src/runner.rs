@@ -91,6 +91,12 @@ pub struct AgentExecutionRequest {
     /// Short critical reminder reinjected as a system-reminder user message.
     #[serde(default)]
     pub critical_system_reminder: Option<String>,
+    /// Omit CLAUDE.md-derived user context for this child run.
+    #[serde(default)]
+    pub omit_claude_md: bool,
+    /// Omit gitStatus from the child system context.
+    #[serde(default)]
+    pub omit_git_status: bool,
     /// Resolved tool set available to the agent.
     pub tools: Vec<String>,
     /// Permission mode to use for the run.
@@ -242,6 +248,8 @@ impl AgentRunner {
                 .definition
                 .critical_system_reminder_experimental
                 .clone(),
+            omit_claude_md: self.definition.omit_claude_md,
+            omit_git_status: matches!(self.definition.agent_type.as_str(), "Explore" | "Plan"),
             tools: self.resolve_tools(&self.config.tools),
             permission_mode: None,
             working_dir: self.config.working_dir.clone(),

@@ -82,6 +82,12 @@ tokio::task_local! {
     static TOOL_RUNTIME_POLICY_OVERLAY: ToolRuntimePolicyOverlay;
 }
 
+tokio::task_local! {
+    static TOOL_RUNTIME_MCP_STATE_PROVIDER: Arc<RuntimeMcpStateProvider>;
+}
+
+pub type RuntimeMcpStateProvider = dyn Fn() -> rc_mcp::McpCliState + Send + Sync;
+
 /// Process-scoped runtime policy for tool exposure and task artifacts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeMcpServerPolicyEntry {
@@ -150,6 +156,25 @@ where
     TOOL_RUNTIME_POLICY_OVERLAY
         .scope(normalize_tool_runtime_policy_overlay(overlay), future)
         .await
+}
+
+pub async fn with_runtime_mcp_state_provider<F, T>(
+    provider: Arc<RuntimeMcpStateProvider>,
+    future: F,
+) -> T
+where
+    F: Future<Output = T>,
+{
+    TOOL_RUNTIME_MCP_STATE_PROVIDER
+        .scope(provider, future)
+        .await
+}
+
+#[must_use]
+pub fn current_runtime_mcp_cli_state() -> Option<rc_mcp::McpCliState> {
+    TOOL_RUNTIME_MCP_STATE_PROVIDER
+        .try_with(|provider| provider())
+        .ok()
 }
 
 fn apply_tool_runtime_policy_overlay(

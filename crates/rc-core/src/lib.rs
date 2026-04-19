@@ -597,6 +597,12 @@ pub struct SubAgentExecutionRequest {
     /// Short critical reminder reinjected as a system-reminder user message.
     #[serde(default)]
     pub critical_system_reminder: Option<String>,
+    /// Omit CLAUDE.md-derived user context for this child run.
+    #[serde(default)]
+    pub omit_claude_md: bool,
+    /// Omit gitStatus from the child system context.
+    #[serde(default)]
+    pub omit_git_status: bool,
     /// Optional model override for the child agent.
     #[serde(default)]
     pub model: Option<String>,

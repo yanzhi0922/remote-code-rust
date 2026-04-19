@@ -5,6 +5,7 @@ use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use directories::BaseDirs;
@@ -26,7 +27,7 @@ use crate::tasks::{
     mark_task_running, start_tracked_task,
 };
 use crate::team_runtime::{LiveTeammateRegistration, finish_live_teammate, start_live_teammate};
-use crate::{ToolSpec, runtime_provider_tool_specs};
+use crate::{ToolSpec, current_runtime_mcp_cli_state, runtime_provider_tool_specs};
 
 const ALL_AGENT_DISALLOWED_TOOLS: &[&str] = &[
     "task_output",
@@ -56,6 +57,9 @@ const ASYNC_AGENT_ALLOWED_TOOLS: &[&str] = &[
     "enter_worktree",
     "exit_worktree",
 ];
+
+const REQUIRED_MCP_MAX_WAIT_MS: Duration = Duration::from_millis(30_000);
+const REQUIRED_MCP_POLL_INTERVAL_MS: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -280,6 +284,8 @@ async fn run_resolved_agent_execution(
             context: Vec::new(),
             system_prompt: definition.system_prompt.clone(),
             critical_system_reminder: definition.critical_system_reminder_experimental.clone(),
+            omit_claude_md: definition.omit_claude_md,
+            omit_git_status: matches!(definition.agent_type.as_str(), "Explore" | "Plan"),
             model: input.model.clone().or_else(|| definition.model.clone()),
             max_turns: definition.max_turns,
             allowed_tools,
@@ -390,6 +396,8 @@ async fn run_background_agent_execution(
                 context: Vec::new(),
                 system_prompt,
                 critical_system_reminder,
+                omit_claude_md: definition.omit_claude_md,
+                omit_git_status: matches!(definition.agent_type.as_str(), "Explore" | "Plan"),
                 model,
                 max_turns,
                 allowed_tools,
@@ -850,8 +858,38 @@ async fn ensure_agent_required_mcp_servers(definition: &AgentDefinition) -> Resu
         return Ok(());
     }
 
+    if current_runtime_mcp_cli_state().is_some() {
+        return ensure_agent_required_mcp_servers_with_live_state(definition).await;
+    }
+
     let specs = runtime_provider_tool_specs().await;
     ensure_agent_required_mcp_servers_with_specs(definition, &specs)
+}
+
+async fn ensure_agent_required_mcp_servers_with_live_state(
+    definition: &AgentDefinition,
+) -> Result<()> {
+    let mut state = current_runtime_mcp_cli_state().unwrap_or_default();
+    if has_pending_required_mcp_servers(&state, &definition.required_mcp_servers) {
+        let deadline = tokio::time::Instant::now() + REQUIRED_MCP_MAX_WAIT_MS;
+        while tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(REQUIRED_MCP_POLL_INTERVAL_MS).await;
+            let Some(current) = current_runtime_mcp_cli_state() else {
+                break;
+            };
+            state = current;
+            if has_failed_required_mcp_servers(&state, &definition.required_mcp_servers)
+                || !has_pending_required_mcp_servers(&state, &definition.required_mcp_servers)
+            {
+                break;
+            }
+        }
+    }
+
+    ensure_agent_required_mcp_servers_with_server_names(
+        definition,
+        &mcp_servers_with_tools_from_cli_state(&state),
+    )
 }
 
 fn ensure_agent_required_mcp_servers_with_specs(
@@ -862,9 +900,15 @@ fn ensure_agent_required_mcp_servers_with_specs(
         return Ok(());
     }
 
-    let servers_with_tools = mcp_servers_with_tools(specs);
+    ensure_agent_required_mcp_servers_with_server_names(definition, &mcp_servers_with_tools(specs))
+}
+
+fn ensure_agent_required_mcp_servers_with_server_names(
+    definition: &AgentDefinition,
+    servers_with_tools: &[String],
+) -> Result<()> {
     let missing =
-        missing_required_mcp_servers(&definition.required_mcp_servers, &servers_with_tools);
+        missing_required_mcp_servers(&definition.required_mcp_servers, servers_with_tools);
     if missing.is_empty() {
         return Ok(());
     }
@@ -895,17 +939,60 @@ fn mcp_servers_with_tools(specs: &[ToolSpec]) -> Vec<String> {
     servers
 }
 
+fn mcp_servers_with_tools_from_cli_state(state: &rc_mcp::McpCliState) -> Vec<String> {
+    let mut servers = Vec::new();
+    for tool in &state.tools {
+        let Some(info) = mcp_info_from_string(&tool.name) else {
+            continue;
+        };
+        if servers.iter().any(|server| server == &info.server_name) {
+            continue;
+        }
+        servers.push(info.server_name);
+    }
+    servers
+}
+
+fn has_pending_required_mcp_servers(
+    state: &rc_mcp::McpCliState,
+    required_patterns: &[String],
+) -> bool {
+    state.clients.iter().any(|client| {
+        client.connection_type == "pending"
+            && required_patterns
+                .iter()
+                .any(|pattern| server_matches_required_pattern(&client.name, pattern))
+    })
+}
+
+fn has_failed_required_mcp_servers(
+    state: &rc_mcp::McpCliState,
+    required_patterns: &[String],
+) -> bool {
+    state.clients.iter().any(|client| {
+        client.connection_type == "failed"
+            && required_patterns
+                .iter()
+                .any(|pattern| server_matches_required_pattern(&client.name, pattern))
+    })
+}
+
 fn missing_required_mcp_servers(required: &[String], servers_with_tools: &[String]) -> Vec<String> {
     required
         .iter()
         .filter(|pattern| {
-            let pattern = pattern.to_ascii_lowercase();
             !servers_with_tools
                 .iter()
-                .any(|server| server.to_ascii_lowercase().contains(&pattern))
+                .any(|server| server_matches_required_pattern(server, pattern))
         })
         .cloned()
         .collect()
+}
+
+fn server_matches_required_pattern(server_name: &str, pattern: &str) -> bool {
+    server_name
+        .to_ascii_lowercase()
+        .contains(&pattern.to_ascii_lowercase())
 }
 
 fn filter_tools_for_agent_runtime(
@@ -1110,6 +1197,7 @@ mod tests {
     use std::sync::{Arc, Mutex as StdMutex};
 
     use rc_core::{ProviderResponse, UsageSummary};
+    use rc_mcp::serialization::{McpCliState, SerializedClient, SerializedTool};
     use rc_swarm::team_helpers;
     use tempfile::tempdir;
 
@@ -1430,6 +1518,87 @@ mod tests {
         assert!(error.contains("MCP servers with tools: none"));
     }
 
+    #[tokio::test]
+    async fn required_mcp_servers_wait_for_pending_live_state_then_pass() {
+        let mut definition = AgentDefinition::new("docs-agent", "Use docs");
+        definition.required_mcp_servers = vec!["context7".to_owned()];
+        let state = Arc::new(StdMutex::new(McpCliState {
+            clients: vec![serialized_client("context7", "pending")],
+            ..McpCliState::default()
+        }));
+        let state_for_update = Arc::clone(&state);
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            if let Ok(mut snapshot) = state_for_update.lock() {
+                snapshot.clients = vec![serialized_client("context7", "connected")];
+                snapshot.tools = vec![serialized_tool("mcp__context7__query_docs")];
+            }
+        });
+
+        crate::with_runtime_mcp_state_provider(live_mcp_provider(state), async {
+            ensure_agent_required_mcp_servers(&definition).await
+        })
+        .await
+        .expect("pending required MCP should succeed after tools appear");
+    }
+
+    #[tokio::test]
+    async fn required_mcp_servers_stop_waiting_when_live_state_fails() {
+        let mut definition = AgentDefinition::new("docs-agent", "Use docs");
+        definition.required_mcp_servers = vec!["context7".to_owned()];
+        let state = Arc::new(StdMutex::new(McpCliState {
+            clients: vec![serialized_client("context7", "pending")],
+            ..McpCliState::default()
+        }));
+        let state_for_update = Arc::clone(&state);
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            if let Ok(mut snapshot) = state_for_update.lock() {
+                snapshot.clients = vec![serialized_client("context7", "failed")];
+            }
+        });
+
+        let error = tokio::time::timeout(
+            Duration::from_secs(1),
+            crate::with_runtime_mcp_state_provider(live_mcp_provider(state), async {
+                ensure_agent_required_mcp_servers(&definition).await
+            }),
+        )
+        .await
+        .expect("failed required MCP should stop waiting early")
+        .expect_err("failed live MCP should still use missing-tools error")
+        .to_string();
+
+        assert_eq!(
+            error,
+            "Agent 'docs-agent' requires MCP servers matching: context7. MCP servers with tools: none. Use /mcp to configure and authenticate the required MCP servers."
+        );
+    }
+
+    #[tokio::test]
+    async fn required_mcp_servers_needs_auth_live_state_uses_standard_missing_error() {
+        let mut definition = AgentDefinition::new("docs-agent", "Use docs");
+        definition.required_mcp_servers = vec!["context7".to_owned()];
+        let state = Arc::new(StdMutex::new(McpCliState {
+            clients: vec![serialized_client("context7", "needs-auth")],
+            ..McpCliState::default()
+        }));
+
+        let error = crate::with_runtime_mcp_state_provider(live_mcp_provider(state), async {
+            ensure_agent_required_mcp_servers(&definition).await
+        })
+        .await
+        .expect_err("needs-auth without tools should fail")
+        .to_string();
+
+        assert_eq!(
+            error,
+            "Agent 'docs-agent' requires MCP servers matching: context7. MCP servers with tools: none. Use /mcp to configure and authenticate the required MCP servers."
+        );
+    }
+
     #[test]
     fn resolve_agent_definition_prefers_project_override_over_user() {
         let temp = tempdir().expect("tempdir");
@@ -1473,6 +1642,28 @@ mod tests {
             description: String::new(),
             requires_permission: false,
             input_schema: json!({"type": "object"}),
+        }
+    }
+
+    fn live_mcp_provider(state: Arc<StdMutex<McpCliState>>) -> Arc<crate::RuntimeMcpStateProvider> {
+        Arc::new(move || state.lock().expect("mcp state lock").clone())
+    }
+
+    fn serialized_client(name: &str, connection_type: &str) -> SerializedClient {
+        SerializedClient {
+            name: name.to_owned(),
+            connection_type: connection_type.to_owned(),
+            capabilities: None,
+        }
+    }
+
+    fn serialized_tool(name: &str) -> SerializedTool {
+        SerializedTool {
+            name: name.to_owned(),
+            description: String::new(),
+            input_json_schema: Some(json!({"type": "object"})),
+            is_mcp: Some(true),
+            original_tool_name: None,
         }
     }
 

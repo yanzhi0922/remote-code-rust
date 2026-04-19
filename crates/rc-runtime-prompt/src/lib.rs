@@ -28,6 +28,8 @@ pub struct PromptRuntimeOverrides {
     pub agent_system_prompt: Option<String>,
     pub allowed_tools: Option<Vec<String>>,
     pub critical_system_reminder: Option<String>,
+    pub omit_claude_md: bool,
+    pub omit_git_status: bool,
 }
 
 #[must_use]
@@ -233,8 +235,9 @@ pub fn expand_requested_tool_names(
 pub fn conversation_with_runtime_user_context(
     config: &RuntimeConfig,
     conversation: &[ConversationEntry],
+    overrides: &PromptRuntimeOverrides,
 ) -> Vec<ConversationEntry> {
-    let context_entries = runtime_user_context_entries(config);
+    let context_entries = runtime_user_context_entries(config, overrides);
     if context_entries.is_empty()
         || conversation.iter().any(|entry| {
             entry.role == ConversationRole::User
@@ -303,7 +306,7 @@ pub async fn build_runtime_system_prompt(
             },
         );
         if !custom_system_prompt_provided
-            && let Some(system_context) = runtime_system_context_block(config)
+            && let Some(system_context) = runtime_system_context_block(config, overrides)
         {
             prompt_blocks.push(system_context);
         }
@@ -403,7 +406,7 @@ pub async fn build_runtime_system_prompt(
         },
     );
     if !custom_system_prompt_provided
-        && let Some(system_context) = runtime_system_context_block(config)
+        && let Some(system_context) = runtime_system_context_block(config, overrides)
     {
         prompt_blocks.push(system_context);
     }
@@ -563,7 +566,13 @@ fn initial_git_status_context(cwd: &Path) -> Option<String> {
     Some(parts.join("\n\n"))
 }
 
-fn runtime_system_context_block(config: &RuntimeConfig) -> Option<String> {
+fn runtime_system_context_block(
+    config: &RuntimeConfig,
+    overrides: &PromptRuntimeOverrides,
+) -> Option<String> {
+    if overrides.omit_git_status {
+        return None;
+    }
     initial_git_status_context(&config.cwd).map(|git_status| format!("gitStatus: {git_status}"))
 }
 
@@ -599,9 +608,14 @@ fn collect_claude_md_context(cwd: &Path) -> Option<String> {
     }
 }
 
-fn runtime_user_context_entries(config: &RuntimeConfig) -> Vec<(&'static str, String)> {
+fn runtime_user_context_entries(
+    config: &RuntimeConfig,
+    overrides: &PromptRuntimeOverrides,
+) -> Vec<(&'static str, String)> {
     let mut entries = Vec::new();
-    if let Some(claude_md) = collect_claude_md_context(&config.cwd) {
+    if !overrides.omit_claude_md
+        && let Some(claude_md) = collect_claude_md_context(&config.cwd)
+    {
         entries.push(("claudeMd", claude_md));
     }
     entries.push((

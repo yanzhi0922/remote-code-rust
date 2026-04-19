@@ -209,6 +209,8 @@ impl SubAgentCompletion for RemoteCodeSubAgentRuntime {
                 max_turns: request.max_turns,
                 system_prompt: request.system_prompt.unwrap_or_default(),
                 critical_system_reminder: request.critical_system_reminder,
+                omit_claude_md: request.omit_claude_md,
+                omit_git_status: request.omit_git_status,
                 tools: request.allowed_tools,
                 permission_mode: request.permission_mode,
                 working_dir: request.working_dir,
@@ -312,6 +314,8 @@ impl AgentExecutor for RemoteCodeAgentExecutor {
                 agent_system_prompt: Some(request.system_prompt),
                 allowed_tools: (!request.tools.is_empty()).then_some(request.tools),
                 critical_system_reminder: request.critical_system_reminder,
+                omit_claude_md: request.omit_claude_md,
+                omit_git_status: request.omit_git_status,
                 ..CompatRunOverrides::default()
             },
         )
