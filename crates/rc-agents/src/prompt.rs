@@ -22,12 +22,16 @@ pub fn build_agent_prompt(
     is_coordinator: bool,
     allowed_agent_types: Option<&[String]>,
 ) -> String {
-    build_agent_prompt_with_mcp_servers(
+    build_agent_prompt_with_options(
         agents,
-        is_fork_enabled,
-        is_coordinator,
-        allowed_agent_types,
-        None,
+        AgentPromptOptions {
+            is_fork_enabled,
+            is_coordinator,
+            allowed_agent_types,
+            available_mcp_servers: None,
+            denied_agent_types: None,
+            list_via_attachment: false,
+        },
     )
 }
 
@@ -43,29 +47,66 @@ pub fn build_agent_prompt_with_mcp_servers(
     allowed_agent_types: Option<&[String]>,
     available_mcp_servers: Option<&[String]>,
 ) -> String {
-    let effective_agents = filter_agents(agents, allowed_agent_types, available_mcp_servers);
+    build_agent_prompt_with_options(
+        agents,
+        AgentPromptOptions {
+            is_fork_enabled,
+            is_coordinator,
+            allowed_agent_types,
+            available_mcp_servers,
+            denied_agent_types: None,
+            list_via_attachment: false,
+        },
+    )
+}
 
-    let shared = build_shared_prompt(&effective_agents, is_fork_enabled);
+/// Options controlling how the Agent tool prompt is rendered.
+pub struct AgentPromptOptions<'a> {
+    pub is_fork_enabled: bool,
+    pub is_coordinator: bool,
+    pub allowed_agent_types: Option<&'a [String]>,
+    pub available_mcp_servers: Option<&'a [String]>,
+    pub denied_agent_types: Option<&'a [String]>,
+    pub list_via_attachment: bool,
+}
 
-    if is_coordinator {
+/// Build the complete agent tool prompt with full runtime filtering options.
+pub fn build_agent_prompt_with_options(
+    agents: &[AgentDefinition],
+    options: AgentPromptOptions<'_>,
+) -> String {
+    let effective_agents = visible_agents(
+        agents,
+        options.allowed_agent_types,
+        options.available_mcp_servers,
+        options.denied_agent_types,
+    );
+
+    let shared = build_shared_prompt(
+        &effective_agents,
+        options.is_fork_enabled,
+        options.list_via_attachment,
+    );
+
+    if options.is_coordinator {
         return shared;
     }
 
-    let when_not_to_use = if is_fork_enabled {
+    let when_not_to_use = if options.is_fork_enabled {
         String::new()
     } else {
         build_when_not_to_use_section()
     };
 
-    let when_to_fork = if is_fork_enabled {
+    let when_to_fork = if options.is_fork_enabled {
         build_when_to_fork_section()
     } else {
         String::new()
     };
 
-    let writing_the_prompt = build_writing_the_prompt_section(is_fork_enabled);
+    let writing_the_prompt = build_writing_the_prompt_section(options.is_fork_enabled);
 
-    let examples = if is_fork_enabled {
+    let examples = if options.is_fork_enabled {
         build_fork_examples()
     } else {
         build_current_examples()
@@ -96,7 +137,7 @@ pub fn build_agent_prompt_with_mcp_servers(
         {when_to_fork}\n\
         {writing_the_prompt}\n\n\
         {examples}",
-        continuation_note = if is_fork_enabled {
+        continuation_note = if options.is_fork_enabled {
             "Each fresh Agent invocation with a subagent_type starts without context — provide a complete task description."
         } else {
             "Each Agent invocation starts fresh — provide a complete task description."
@@ -104,17 +145,23 @@ pub fn build_agent_prompt_with_mcp_servers(
     )
 }
 
-/// Filter agents by allowed types.
-fn filter_agents<'a>(
+/// Filter agents by MCP requirements, deny rules, then allowed types.
+pub fn visible_agents<'a>(
     agents: &'a [AgentDefinition],
     allowed: Option<&[String]>,
     available_mcp_servers: Option<&[String]>,
+    denied_agent_types: Option<&[String]>,
 ) -> Vec<&'a AgentDefinition> {
     agents
         .iter()
         .filter(|agent| {
             available_mcp_servers
                 .map(|servers| has_required_mcp_servers(agent, servers))
+                .unwrap_or(true)
+        })
+        .filter(|agent| {
+            denied_agent_types
+                .map(|types| !types.contains(&agent.agent_type))
                 .unwrap_or(true)
         })
         .filter(|agent| {
@@ -147,8 +194,15 @@ fn server_matches_required_pattern(server_name: &str, pattern: &str) -> bool {
 }
 
 /// Build the shared core prompt used by both coordinator and non-coordinator modes.
-fn build_shared_prompt(agents: &[&AgentDefinition], is_fork_enabled: bool) -> String {
-    let agent_list = if agents.is_empty() {
+fn build_shared_prompt(
+    agents: &[&AgentDefinition],
+    is_fork_enabled: bool,
+    list_via_attachment: bool,
+) -> String {
+    let agent_list = if list_via_attachment {
+        "Available agent types are listed in <system-reminder> messages in the conversation."
+            .to_owned()
+    } else if agents.is_empty() {
         "No agents available.".to_owned()
     } else {
         agents
@@ -174,9 +228,14 @@ fn build_shared_prompt(agents: &[&AgentDefinition], is_fork_enabled: bool) -> St
         "Launch a new agent to handle complex, multi-step tasks autonomously.\n\n\
         The {AGENT_TOOL_NAME} tool launches specialized agents (subprocesses) that autonomously \
         handle complex tasks. Each agent type has specific capabilities and tools available to it.\n\n\
-        Available agent types and the tools they have access to:\n\
+        {agent_list_label}\n\
         {agent_list}\n\n\
-        {fork_or_type}"
+        {fork_or_type}",
+        agent_list_label = if list_via_attachment {
+            String::new()
+        } else {
+            "Available agent types and the tools they have access to:\n".to_owned()
+        }
     )
 }
 
@@ -488,6 +547,47 @@ mod tests {
         );
         assert!(prompt.contains("- visible:"));
         assert!(!prompt.contains("- hidden:"));
+    }
+
+    #[test]
+    fn build_prompt_filters_denied_agent_types() {
+        let visible = AgentDefinition::new("visible", "visible");
+        let hidden = AgentDefinition::new("hidden", "hidden");
+        let denied = vec!["hidden".to_owned()];
+
+        let prompt = build_agent_prompt_with_options(
+            &[visible, hidden],
+            AgentPromptOptions {
+                is_fork_enabled: false,
+                is_coordinator: false,
+                allowed_agent_types: None,
+                available_mcp_servers: None,
+                denied_agent_types: Some(&denied),
+                list_via_attachment: false,
+            },
+        );
+        assert!(prompt.contains("- visible:"));
+        assert!(!prompt.contains("- hidden:"));
+    }
+
+    #[test]
+    fn build_prompt_uses_attachment_placeholder_when_requested() {
+        let agent = AgentDefinition::new("visible", "visible");
+        let prompt = build_agent_prompt_with_options(
+            &[agent],
+            AgentPromptOptions {
+                is_fork_enabled: false,
+                is_coordinator: false,
+                allowed_agent_types: None,
+                available_mcp_servers: None,
+                denied_agent_types: None,
+                list_via_attachment: true,
+            },
+        );
+        assert!(prompt.contains(
+            "Available agent types are listed in <system-reminder> messages in the conversation."
+        ));
+        assert!(!prompt.contains("- visible:"));
     }
 
     #[test]

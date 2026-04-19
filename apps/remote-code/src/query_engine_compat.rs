@@ -5,6 +5,10 @@ use std::time::Instant;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use directories::BaseDirs;
+use rc_agents::definition::AgentDefinition;
+use rc_agents::loader::load_all_agents;
+use rc_agents::prompt::{format_agent_line, visible_agents};
 use rc_config::settings_layers::load_runtime_settings;
 use rc_config::{RuntimeConfig, validate_provider_config};
 use rc_core::{
@@ -12,7 +16,7 @@ use rc_core::{
     ProviderResponse, ToolCall, ToolResult,
 };
 use rc_mcp::McpClientInfo;
-use rc_mcp::normalization::build_mcp_tool_name;
+use rc_mcp::normalization::{build_mcp_tool_name, mcp_info_from_string};
 use rc_mcp::serialization::{McpCliState, SerializedClient, SerializedTool};
 use rc_permissions::PermissionBroker;
 use rc_protocol::UsagePayload;
@@ -30,7 +34,8 @@ use rc_session::SessionStore;
 use rc_session::resume_state::{PendingToolCall, ResumeState};
 use rc_tools::{
     RuntimeAgentPromptContext, ToolExecutionContext, ToolRuntimePolicyOverlay, ToolSpec,
-    execute_tool_call,
+    current_runtime_agent_prompt_context, current_runtime_mcp_cli_state,
+    current_tool_runtime_policy, execute_tool_call,
     mcp_runtime::{discover_runtime_mcp_servers, observe_runtime_mcp_servers},
     plan_mode::normalize_exit_plan_mode_tool_calls,
     runtime_plan_mode::inject_plan_mode_runtime_messages,
@@ -79,12 +84,19 @@ const PLAN_MODE_MARKER: &str = "## Plan Mode Active";
 const PLAN_MODE_REENTRY_MARKER: &str = "## Re-entering Plan Mode";
 const PLAN_MODE_EXIT_MARKER: &str = "## Exited Plan Mode";
 const DEFERRED_TOOLS_DELTA_MARKER: &str = "__remote_code_meta__:deferred_tools_delta:";
+const AGENT_LISTING_DELTA_MARKER: &str = "__remote_code_meta__:agent_listing_delta:";
 const MCP_INSTRUCTIONS_DELTA_MARKER: &str = "__remote_code_meta__:mcp_instructions_delta:";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RuntimeDeferredToolsDeltaMarker {
     added_names: Vec<String>,
     removed_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RuntimeAgentListingDeltaMarker {
+    added_types: Vec<String>,
+    removed_types: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -224,13 +236,16 @@ fn spawn_runtime_mcp_state_provider(
 
 fn spawn_runtime_agent_prompt_context_provider(
     config: &RuntimeConfig,
+    broker: &dyn PermissionBroker,
 ) -> Arc<rc_tools::RuntimeAgentPromptContextProvider> {
     let context = RuntimeAgentPromptContext {
-        user_agents_dir: None,
-        project_agents_dir: Some(config.cwd.join(".claude").join("agents")),
+        user_agents_dir: user_agents_dir(),
+        project_agents_dir: Some(project_agents_dir(config)),
         allowed_agent_types: None,
+        denied_agent_types: extract_denied_agent_types(&broker.layered_rules()),
         is_coordinator: rc_agents::coordinator::is_coordinator_mode(),
         is_non_interactive: config.print_mode,
+        list_via_attachment: true,
     };
     Arc::new(move || context.clone())
 }
@@ -309,13 +324,225 @@ fn announced_mcp_instruction_names(
     announced
 }
 
+fn announced_agent_types(conversation: &[ConversationEntry]) -> std::collections::BTreeSet<String> {
+    let mut announced = std::collections::BTreeSet::new();
+    for entry in conversation {
+        let Some(delta) = parse_runtime_marker::<RuntimeAgentListingDeltaMarker>(
+            entry,
+            AGENT_LISTING_DELTA_MARKER,
+        ) else {
+            continue;
+        };
+        for agent_type in delta.added_types {
+            announced.insert(agent_type);
+        }
+        for agent_type in delta.removed_types {
+            announced.remove(agent_type.as_str());
+        }
+    }
+    announced
+}
+
+fn extract_denied_agent_types(rules: &[rc_permissions::SourceAwarePermissionRule]) -> Vec<String> {
+    let mut denied = std::collections::BTreeSet::new();
+    for rule in rules {
+        if rule.action != rc_permissions::RuleAction::Deny {
+            continue;
+        }
+        let pattern = rule.tool_pattern.trim();
+        let Some(open) = pattern.find('(') else {
+            continue;
+        };
+        let Some(close) = pattern.rfind(')') else {
+            continue;
+        };
+        let tool_name = pattern[..open].trim();
+        if !tool_name.eq_ignore_ascii_case("Agent") {
+            continue;
+        }
+        let content = pattern[open + 1..close].trim();
+        if !content.is_empty() {
+            denied.insert(content.to_owned());
+        }
+    }
+    denied.into_iter().collect()
+}
+
+fn project_agents_dir(config: &RuntimeConfig) -> std::path::PathBuf {
+    config.cwd.join(".claude").join("agents")
+}
+
+fn user_agents_dir() -> Option<std::path::PathBuf> {
+    BaseDirs::new().map(|base| base.home_dir().join(".claude").join("agents"))
+}
+
+fn visible_mcp_server_names_from_specs(specs: &[ToolSpec]) -> Vec<String> {
+    let mut servers = Vec::new();
+    for spec in specs {
+        let Some(info) = mcp_info_from_string(&spec.name) else {
+            continue;
+        };
+        if servers.iter().any(|server| server == &info.server_name) {
+            continue;
+        }
+        servers.push(info.server_name);
+    }
+    servers
+}
+
+fn visible_mcp_server_names_from_serialized_tools(tools: &[SerializedTool]) -> Vec<String> {
+    let mut servers = Vec::new();
+    for tool in tools {
+        let Some(info) = mcp_info_from_string(&tool.name) else {
+            continue;
+        };
+        if servers.iter().any(|server| server == &info.server_name) {
+            continue;
+        }
+        servers.push(info.server_name);
+    }
+    servers
+}
+
+fn agent_tool_allowed_by_runtime_policy() -> bool {
+    let policy = current_tool_runtime_policy();
+    if !policy.allowed_tools.is_empty()
+        && !policy
+            .allowed_tools
+            .iter()
+            .any(|tool| tool.eq_ignore_ascii_case("agent"))
+    {
+        return false;
+    }
+    !policy
+        .disallowed_tools
+        .iter()
+        .any(|tool| tool.eq_ignore_ascii_case("agent"))
+}
+
+fn build_agent_listing_delta_for_visible_agents(
+    active_agents: &[AgentDefinition],
+    available_mcp_servers: &[String],
+    denied_agent_types: &[String],
+    conversation: &[ConversationEntry],
+) -> Result<Option<ConversationEntry>> {
+    let mut filtered = visible_agents(
+        active_agents,
+        None,
+        Some(available_mcp_servers),
+        Some(denied_agent_types),
+    );
+
+    let announced = announced_agent_types(conversation);
+    let is_initial = announced.is_empty();
+    let current_types = filtered
+        .iter()
+        .map(|agent| agent.agent_type.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    filtered.sort_by(|left, right| left.agent_type.cmp(&right.agent_type));
+
+    let added = filtered
+        .into_iter()
+        .filter(|agent| !announced.contains(agent.agent_type.as_str()))
+        .collect::<Vec<_>>();
+    let removed_types = announced
+        .into_iter()
+        .filter(|agent_type| !current_types.contains(agent_type))
+        .collect::<Vec<_>>();
+
+    if added.is_empty() && removed_types.is_empty() {
+        return Ok(None);
+    }
+
+    let mut parts = Vec::new();
+    if !added.is_empty() {
+        let header = if is_initial {
+            "Available agent types for the Agent tool:"
+        } else {
+            "New agent types are now available for the Agent tool:"
+        };
+        parts.push(format!(
+            "{header}\n{}",
+            added
+                .iter()
+                .map(|agent| format_agent_line(agent))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    if !removed_types.is_empty() {
+        parts.push(format!(
+            "The following agent types are no longer available:\n{}",
+            removed_types
+                .iter()
+                .map(|agent_type| format!("- {agent_type}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    if is_initial {
+        parts.push(
+            "Launch multiple agents concurrently whenever possible, to maximize performance; to do that, use a single message with multiple tool uses."
+                .to_owned(),
+        );
+    }
+
+    Ok(Some(runtime_delta_entry(
+        AGENT_LISTING_DELTA_MARKER,
+        &RuntimeAgentListingDeltaMarker {
+            added_types: added.iter().map(|agent| agent.agent_type.clone()).collect(),
+            removed_types,
+        },
+        parts.join("\n\n"),
+    )?))
+}
+
+async fn build_agent_listing_delta_entry(
+    config: &RuntimeConfig,
+    broker: &dyn PermissionBroker,
+    conversation: &[ConversationEntry],
+) -> Result<Option<ConversationEntry>> {
+    let specs = runtime_provider_tool_specs().await;
+    if !specs.iter().any(|spec| spec.name == "agent") {
+        return Ok(None);
+    }
+
+    let user_dir = user_agents_dir();
+    let project_dir = project_agents_dir(config);
+    let definitions = load_all_agents(user_dir.as_deref(), Some(project_dir.as_path()));
+    let available_mcp_servers = visible_mcp_server_names_from_specs(&specs);
+    let denied_agent_types = extract_denied_agent_types(&broker.layered_rules());
+    build_agent_listing_delta_for_visible_agents(
+        &definitions.active_agents,
+        &available_mcp_servers,
+        &denied_agent_types,
+        conversation,
+    )
+}
+
 async fn inject_runtime_delta_messages(
     config: &RuntimeConfig,
     store: &SessionStore,
+    broker: &dyn PermissionBroker,
     conversation: &mut Vec<ConversationEntry>,
 ) -> Result<()> {
     inject_deferred_tools_delta_message(config.session_id, store, conversation).await?;
+    inject_agent_listing_delta_message(config, store, broker, conversation).await?;
     inject_mcp_instructions_delta_message(config.session_id, store, conversation).await?;
+    Ok(())
+}
+
+async fn inject_agent_listing_delta_message(
+    config: &RuntimeConfig,
+    store: &SessionStore,
+    broker: &dyn PermissionBroker,
+    conversation: &mut Vec<ConversationEntry>,
+) -> Result<()> {
+    let Some(entry) = build_agent_listing_delta_entry(config, broker, conversation).await? else {
+        return Ok(());
+    };
+    store.append_conversation_entry(config.session_id, &entry)?;
+    conversation.push(entry);
     Ok(())
 }
 
@@ -469,13 +696,50 @@ async fn inject_mcp_instructions_delta_message(
 }
 
 fn augment_post_compact_conversation_for_runtime(
+    config: &RuntimeConfig,
+    broker: &dyn PermissionBroker,
     store: &SessionStore,
     session_id: uuid::Uuid,
     mut conversation: Vec<ConversationEntry>,
 ) -> Vec<ConversationEntry> {
     append_post_compact_plan_attachment(store, session_id, &mut conversation);
     append_post_compact_plan_mode_reminder(store, session_id, &mut conversation);
+    append_post_compact_agent_listing_delta(config, broker, &mut conversation);
     conversation
+}
+
+fn append_post_compact_agent_listing_delta(
+    config: &RuntimeConfig,
+    _broker: &dyn PermissionBroker,
+    conversation: &mut Vec<ConversationEntry>,
+) {
+    let Some(context) = current_runtime_agent_prompt_context() else {
+        return;
+    };
+    if !context.list_via_attachment || !agent_tool_allowed_by_runtime_policy() {
+        return;
+    }
+
+    let user_dir = context.user_agents_dir.or_else(user_agents_dir);
+    let project_dir = context
+        .project_agents_dir
+        .unwrap_or_else(|| project_agents_dir(config));
+    let definitions = load_all_agents(user_dir.as_deref(), Some(project_dir.as_path()));
+    let available_mcp_servers = current_runtime_mcp_cli_state()
+        .map(|state| visible_mcp_server_names_from_serialized_tools(&state.tools))
+        .unwrap_or_default();
+
+    let Ok(entry) = build_agent_listing_delta_for_visible_agents(
+        &definitions.active_agents,
+        &available_mcp_servers,
+        &context.denied_agent_types,
+        conversation,
+    ) else {
+        return;
+    };
+    if let Some(entry) = entry {
+        conversation.push(entry);
+    }
 }
 
 fn append_post_compact_plan_attachment(
@@ -1126,7 +1390,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
 
     let started = Instant::now();
     inject_plan_mode_runtime_messages(store, config.session_id, conversation)?;
-    inject_runtime_delta_messages(config, store, conversation).await?;
+    inject_runtime_delta_messages(config, store, broker.as_ref(), conversation).await?;
     refresh_runtime_system_prompt(config, conversation, &overrides, &discovered_tool_scope).await?;
     let provider_conversation =
         conversation_with_runtime_user_context(config, conversation, &overrides);
@@ -1183,7 +1447,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         store: compat_store.clone(),
         discovery: discovery.clone(),
         shared: shared.clone(),
-        broker,
+        broker: broker.clone(),
         allowed_tools: expanded_allowed_tools.clone(),
         tool_context: ToolExecutionContext {
             cwd: config.cwd.clone(),
@@ -1239,9 +1503,13 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
     )
     .with_observer(observer);
     let post_compact_store = compat_store.clone();
+    let post_compact_config = config.clone();
+    let post_compact_broker = broker.clone();
     let post_compact_session_id = config.session_id;
     query_config = query_config.with_post_compact_transform(Arc::new(move |conversation| {
         augment_post_compact_conversation_for_runtime(
+            &post_compact_config,
+            post_compact_broker.as_ref(),
             post_compact_store.as_ref(),
             post_compact_session_id,
             conversation,
@@ -1260,7 +1528,8 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         vec![Message::from(ConversationEntry::user(prompt))]
     };
     let runtime_mcp_state_provider = spawn_runtime_mcp_state_provider(config);
-    let runtime_agent_prompt_context_provider = spawn_runtime_agent_prompt_context_provider(config);
+    let runtime_agent_prompt_context_provider =
+        spawn_runtime_agent_prompt_context_provider(config, broker.as_ref());
     let result =
         with_runtime_agent_prompt_context_provider(runtime_agent_prompt_context_provider, async {
             with_runtime_mcp_state_provider(runtime_mcp_state_provider, async {
@@ -1511,10 +1780,11 @@ mod tests {
     use tokio::sync::Mutex as AsyncMutex;
 
     use super::{
-        CompatObserver, CompatRunOverrides, CompatSharedState, DEFERRED_TOOLS_DELTA_MARKER,
-        MCP_INSTRUCTIONS_DELTA_MARKER, RuntimeDeferredToolsDeltaMarker,
-        RuntimeMcpInstructionsDeltaMarker, announced_deferred_tool_names,
-        announced_mcp_instruction_names, augment_post_compact_conversation_for_runtime,
+        AGENT_LISTING_DELTA_MARKER, CompatObserver, CompatRunOverrides, CompatSharedState,
+        DEFERRED_TOOLS_DELTA_MARKER, MCP_INSTRUCTIONS_DELTA_MARKER, RuntimeAgentListingDeltaMarker,
+        RuntimeDeferredToolsDeltaMarker, RuntimeMcpInstructionsDeltaMarker, announced_agent_types,
+        announced_deferred_tool_names, announced_mcp_instruction_names,
+        augment_post_compact_conversation_for_runtime, build_agent_listing_delta_entry,
         refresh_runtime_system_prompt, run_prompt_with_query_engine_compat,
         run_prompt_with_query_engine_compat_overrides, runtime_delta_entry,
     };
@@ -1567,6 +1837,7 @@ mod tests {
     #[test]
     fn post_compact_runtime_augmentation_restores_plan_attachment_and_marker() {
         let (_tempdir, config, store) = mock_config_and_store();
+        let broker = mock_broker(&config);
         store
             .ensure_session(
                 config.session_id,
@@ -1592,6 +1863,8 @@ mod tests {
             .expect("plan mode state");
 
         let augmented = augment_post_compact_conversation_for_runtime(
+            &config,
+            broker.as_ref(),
             &store,
             config.session_id,
             vec![
@@ -1599,8 +1872,13 @@ mod tests {
                 ConversationEntry::user("tail"),
             ],
         );
-        let augmented =
-            augment_post_compact_conversation_for_runtime(&store, config.session_id, augmented);
+        let augmented = augment_post_compact_conversation_for_runtime(
+            &config,
+            broker.as_ref(),
+            &store,
+            config.session_id,
+            augmented,
+        );
 
         let plan_filename = plan_path.display().to_string();
         let plan_attachments = augmented
@@ -1675,6 +1953,61 @@ mod tests {
             announced.into_iter().collect::<Vec<_>>(),
             vec!["context7".to_owned()]
         );
+    }
+
+    #[test]
+    fn agent_listing_markers_reconstruct_announced_pool() {
+        let add = runtime_delta_entry(
+            AGENT_LISTING_DELTA_MARKER,
+            &RuntimeAgentListingDeltaMarker {
+                added_types: vec!["alpha".to_owned(), "beta".to_owned()],
+                removed_types: Vec::new(),
+            },
+            "added".to_owned(),
+        )
+        .expect("delta entry");
+        let remove = runtime_delta_entry(
+            AGENT_LISTING_DELTA_MARKER,
+            &RuntimeAgentListingDeltaMarker {
+                added_types: Vec::new(),
+                removed_types: vec!["alpha".to_owned()],
+            },
+            "removed".to_owned(),
+        )
+        .expect("delta entry");
+
+        let announced = announced_agent_types(&[add, remove]);
+        assert_eq!(
+            announced.into_iter().collect::<Vec<_>>(),
+            vec!["beta".to_owned()]
+        );
+    }
+
+    #[tokio::test]
+    async fn build_agent_listing_delta_entry_announces_initial_visible_agents() {
+        let (_tempdir, mut config, _store) = mock_config_and_store();
+        fs::create_dir_all(config.cwd.join(".claude").join("agents")).expect("agents dir");
+        fs::write(
+            config.cwd.join(".claude").join("agents").join("docs-agent.md"),
+            "---\nname: docs-agent\ndescription: Use docs\nrequiredMcpServers: [context7]\n---\nYou answer docs questions.\n",
+        )
+        .expect("write docs agent");
+        config.disallowed_tools.clear();
+
+        let broker = mock_broker(&config);
+        let entry = build_agent_listing_delta_entry(&config, broker.as_ref(), &[])
+            .await
+            .expect("delta")
+            .expect("should create initial agent listing");
+
+        assert_eq!(entry.role, ConversationRole::User);
+        let text = entry.content_blocks[0]
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .expect("system reminder text");
+        assert!(text.contains("Available agent types for the Agent tool:"));
+        assert!(text.contains("- general-purpose:"));
+        assert!(!text.contains("- docs-agent:"));
     }
 
     #[tokio::test]
