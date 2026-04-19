@@ -8,8 +8,9 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use directories::BaseDirs;
-use rc_agents::AgentDefinition;
 use rc_agents::loader::load_all_agents;
+use rc_agents::{AgentDefinition, AgentIsolation, AgentSource};
+use rc_core::PermissionMode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -18,10 +19,42 @@ use rc_permissions::{PermissionBroker, StaticPermissionBroker};
 
 use super::ToolExecutionContext;
 use crate::delegate::{DelegationConfig, DelegationContext, DelegationEngine};
+use crate::shell::path_validation::resolve_working_dir;
 use crate::tasks::{
-    TaskKind, TaskStatus, allocate_task_id, finish_tracked_task, start_tracked_task,
+    TaskKind, TaskStatus, allocate_task_id, create_background_task, finish_tracked_task,
+    mark_task_running, start_tracked_task,
 };
+use crate::team_runtime::{LiveTeammateRegistration, finish_live_teammate, start_live_teammate};
 use crate::{ToolSpec, runtime_provider_tool_specs};
+
+const ALL_AGENT_DISALLOWED_TOOLS: &[&str] = &[
+    "task_output",
+    "exit_plan_mode",
+    "enter_plan_mode",
+    "agent",
+    "ask_user",
+    "task_stop",
+];
+
+const ASYNC_AGENT_ALLOWED_TOOLS: &[&str] = &[
+    "read_file",
+    "web_search",
+    "todo_write",
+    "grep",
+    "web_fetch",
+    "glob",
+    "bash_command",
+    "edit_file",
+    "replace_in_file",
+    "write_file",
+    "notebook_edit",
+    "skill_execute",
+    "discover_skills",
+    "synthetic_output",
+    "tool_search",
+    "enter_worktree",
+    "exit_worktree",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -101,8 +134,11 @@ pub(crate) fn agent_tool<'a>(
 #[derive(Debug, Clone, Deserialize)]
 struct AgentToolInput {
     prompt: String,
+    description: String,
     #[serde(default)]
-    description: Option<String>,
+    name: Option<String>,
+    #[serde(default)]
+    team_name: Option<String>,
     #[serde(default)]
     subagent_type: Option<String>,
     #[serde(default)]
@@ -111,6 +147,12 @@ struct AgentToolInput {
     tools: Vec<String>,
     #[serde(default)]
     mode: Option<String>,
+    #[serde(default)]
+    run_in_background: Option<bool>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    isolation: Option<String>,
     #[allow(dead_code)]
     #[serde(default)]
     tasks: Vec<String>,
@@ -143,10 +185,39 @@ async fn agent_tool_inner(input: &Value, context: &ToolExecutionContext) -> Resu
         }
     };
 
+    let resolved_definition = if mode == "batch" || !sub_agent.supports_agent_execution() {
+        None
+    } else {
+        Some(resolve_agent_definition(
+            parsed.subagent_type.as_deref(),
+            &context.cwd,
+        )?)
+    };
+
     match mode {
         "batch" => run_batch_delegation(input, context, sub_agent, &parsed.tools).await,
+        _ if sub_agent.supports_agent_execution()
+            && (parsed.run_in_background == Some(true)
+                || resolved_definition
+                    .as_ref()
+                    .is_some_and(|definition| definition.background)) =>
+        {
+            run_background_agent_execution(
+                &parsed,
+                context,
+                sub_agent,
+                resolved_definition.expect("resolved definition"),
+            )
+            .await
+        }
         _ if sub_agent.supports_agent_execution() => {
-            run_resolved_agent_execution(&parsed, context, sub_agent).await
+            run_resolved_agent_execution(
+                &parsed,
+                context,
+                sub_agent,
+                resolved_definition.expect("resolved definition"),
+            )
+            .await
         }
         _ => run_single_delegation(&parsed.prompt, context, sub_agent, &parsed.tools).await,
     }
@@ -156,13 +227,16 @@ async fn run_resolved_agent_execution(
     input: &AgentToolInput,
     context: &ToolExecutionContext,
     sub_agent: Arc<dyn SubAgentCompletion>,
+    definition: AgentDefinition,
 ) -> Result<String> {
-    let definition = resolve_agent_definition(input.subagent_type.as_deref(), &context.cwd)?;
-    let allowed_tools = resolve_agent_allowed_tools(&definition, &input.tools).await?;
-    let title = input
-        .description
-        .clone()
-        .unwrap_or_else(|| truncate_str(&input.prompt, 80));
+    let working_dir = resolve_agent_working_dir(input, context, &definition)?;
+    let allowed_tools = resolve_agent_allowed_tools(&definition, &input.tools, false).await?;
+    let permission_mode = requested_agent_permission_mode(input.mode.as_deref())?;
+    let title = if input.description.trim().is_empty() {
+        truncate_str(&input.prompt, 80)
+    } else {
+        input.description.trim().to_owned()
+    };
     let (task_id, parent_task_id, depth) = start_agent_tracking(context, &title)?;
     emit_delegate_event(
         context,
@@ -174,19 +248,47 @@ async fn run_resolved_agent_execution(
         },
     );
 
+    let live_teammate = match requested_teammate(input) {
+        Some((agent_name, team_name)) => Some(
+            start_live_teammate(&LiveTeammateRegistration {
+                team_name,
+                agent_name,
+                agent_type: definition.agent_type.clone(),
+                model: input.model.clone().or_else(|| definition.model.clone()),
+                cwd: working_dir.clone(),
+                permission_mode,
+                objective: Some(input.description.clone()),
+            })
+            .await?,
+        ),
+        None => None,
+    };
+
     let result = sub_agent
         .execute_agent(SubAgentExecutionRequest {
             agent_type: definition.agent_type.clone(),
+            agent_name: live_teammate
+                .as_ref()
+                .map(|teammate| teammate.agent_name.clone()),
+            team_name: live_teammate
+                .as_ref()
+                .map(|teammate| teammate.team_name.clone()),
             task: input.prompt.clone(),
-            description: input.description.clone(),
+            description: Some(input.description.clone()),
             context: Vec::new(),
             system_prompt: definition.system_prompt.clone(),
+            critical_system_reminder: definition.critical_system_reminder_experimental.clone(),
             model: input.model.clone().or_else(|| definition.model.clone()),
             max_turns: definition.max_turns,
             allowed_tools,
-            working_dir: context.cwd.clone(),
+            permission_mode,
+            working_dir,
         })
         .await;
+
+    if let Some(handle) = live_teammate.as_ref() {
+        finish_live_teammate(handle).await?;
+    }
 
     match result {
         Ok(result) => {
@@ -240,6 +342,158 @@ async fn run_resolved_agent_execution(
             );
             Err(error)
         }
+    }
+}
+
+async fn run_background_agent_execution(
+    input: &AgentToolInput,
+    context: &ToolExecutionContext,
+    sub_agent: Arc<dyn SubAgentCompletion>,
+    definition: AgentDefinition,
+) -> Result<String> {
+    if requested_teammate(input).is_some() {
+        return Err(anyhow!(
+            "run_in_background is not supported together with name/team_name in this runtime"
+        ));
+    }
+    let working_dir = resolve_agent_working_dir(input, context, &definition)?;
+    let allowed_tools = resolve_agent_allowed_tools(&definition, &input.tools, true).await?;
+    let permission_mode = requested_agent_permission_mode(input.mode.as_deref())?;
+    let title = if input.description.trim().is_empty() {
+        truncate_str(&input.prompt, 80)
+    } else {
+        input.description.trim().to_owned()
+    };
+    let task = create_background_task(&title)?;
+    mark_task_running(&task.id, Some("Launching background agent"))?;
+
+    let task_id = task.id.clone();
+    let task_id_for_spawn = task_id.clone();
+    let prompt = input.prompt.clone();
+    let description = input.description.clone();
+    let model = input.model.clone().or_else(|| definition.model.clone());
+    let agent_type = definition.agent_type.clone();
+    let system_prompt = definition.system_prompt.clone();
+    let critical_system_reminder = definition.critical_system_reminder_experimental.clone();
+    let max_turns = definition.max_turns;
+    tokio::spawn(async move {
+        let result = sub_agent
+            .execute_agent(SubAgentExecutionRequest {
+                agent_type,
+                agent_name: None,
+                team_name: None,
+                task: prompt,
+                description: Some(description),
+                context: Vec::new(),
+                system_prompt,
+                critical_system_reminder,
+                model,
+                max_turns,
+                allowed_tools,
+                permission_mode,
+                working_dir,
+            })
+            .await;
+
+        match result {
+            Ok(result) => {
+                let output = if result.success {
+                    result.output
+                } else {
+                    format!(
+                        "Sub-agent failed after {} turns: {}",
+                        result.turns, result.output
+                    )
+                };
+                let status = if result.success {
+                    TaskStatus::Completed
+                } else {
+                    TaskStatus::Failed
+                };
+                let _ = finish_tracked_task(
+                    &task_id_for_spawn,
+                    status,
+                    Some(&truncate_str(&output, 200)),
+                    &output,
+                    Some(result.turns),
+                );
+            }
+            Err(error) => {
+                let output = error.to_string();
+                let _ = finish_tracked_task(
+                    &task_id_for_spawn,
+                    TaskStatus::Failed,
+                    Some(&truncate_str(&output, 200)),
+                    &output,
+                    None,
+                );
+            }
+        }
+    });
+
+    Ok(json!({
+        "status": "async_launched",
+        "task_id": task_id,
+        "description": title,
+        "prompt": input.prompt.clone(),
+        "message": "Background agent launched. Continue with other work and only check task output if the user explicitly asks for progress."
+    })
+    .to_string())
+}
+
+fn requested_teammate(input: &AgentToolInput) -> Option<(String, String)> {
+    let agent_name = input
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let team_name = input
+        .team_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("default-team");
+    Some((agent_name.to_owned(), team_name.to_owned()))
+}
+
+fn resolve_agent_working_dir(
+    input: &AgentToolInput,
+    context: &ToolExecutionContext,
+    definition: &AgentDefinition,
+) -> Result<std::path::PathBuf> {
+    let requested_isolation = input.isolation.as_deref().map(str::trim);
+    let effective_isolation = match requested_isolation {
+        Some("") | None => definition.isolation,
+        Some("worktree") => AgentIsolation::Worktree,
+        Some(other) => {
+            return Err(anyhow!(
+                "unsupported agent isolation `{other}`; expected worktree"
+            ));
+        }
+    };
+
+    if matches!(effective_isolation, AgentIsolation::Worktree) {
+        if input.cwd.as_deref().is_some() {
+            return Err(anyhow!(
+                "`cwd` cannot be combined with isolation `worktree`"
+            ));
+        }
+        return Err(anyhow!(
+            "agent isolation `worktree` is not yet supported by this runtime; create or choose a dedicated working directory first"
+        ));
+    }
+
+    resolve_working_dir(&context.cwd, input.cwd.as_deref())
+}
+
+fn requested_agent_permission_mode(mode: Option<&str>) -> Result<Option<PermissionMode>> {
+    match mode.unwrap_or("single") {
+        "single" | "batch" => Ok(None),
+        "default" => Ok(Some(PermissionMode::Default)),
+        "plan" => Ok(Some(PermissionMode::Plan)),
+        other => Err(anyhow!(
+            "unsupported agent mode `{other}`; expected single, batch, default, or plan"
+        )),
     }
 }
 
@@ -456,11 +710,7 @@ fn resolve_agent_definition_from_dirs(
 ) -> Result<AgentDefinition> {
     let requested_type = subagent_type.unwrap_or("general-purpose");
     let definitions = load_all_agents(user_dir, project_dir);
-    if let Some(definition) = definitions
-        .active_agents
-        .into_iter()
-        .find(|definition| definition.agent_type == requested_type)
-    {
+    if let Some(definition) = find_agent_definition(&definitions.active_agents, requested_type) {
         return Ok(definition);
     }
 
@@ -489,12 +739,65 @@ fn resolve_agent_definition_from_dirs(
     Err(anyhow!(error))
 }
 
+fn find_agent_definition(
+    definitions: &[AgentDefinition],
+    requested_type: &str,
+) -> Option<AgentDefinition> {
+    definitions
+        .iter()
+        .find(|definition| definition.agent_type == requested_type)
+        .cloned()
+        .or_else(|| {
+            let requested_key = normalize_agent_type_key(requested_type);
+            definitions
+                .iter()
+                .find(|definition| {
+                    normalize_agent_type_key(&definition.agent_type) == requested_key
+                })
+                .cloned()
+        })
+        .or_else(|| {
+            agent_type_aliases(requested_type).iter().find_map(|alias| {
+                definitions
+                    .iter()
+                    .find(|definition| {
+                        normalize_agent_type_key(&definition.agent_type)
+                            == normalize_agent_type_key(alias)
+                    })
+                    .cloned()
+            })
+        })
+}
+
+fn normalize_agent_type_key(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect()
+}
+
+fn agent_type_aliases(requested_type: &str) -> &'static [&'static str] {
+    match normalize_agent_type_key(requested_type).as_str() {
+        "explore" | "explorer" => &["Explore"],
+        "plan" | "planner" => &["Plan"],
+        "verify" | "verifier" => &["verification"],
+        "worker" => &["worker", "general-purpose"],
+        "review" | "reviewer" => &["code-reviewer", "project-reviewer", "verification"],
+        "general" | "generalpurpose" | "default" => &["general-purpose"],
+        _ => &[],
+    }
+}
+
 async fn resolve_agent_allowed_tools(
     definition: &AgentDefinition,
     requested_tools: &[String],
+    is_async: bool,
 ) -> Result<Vec<String>> {
     let specs = runtime_provider_tool_specs().await;
-    let filtered_by_definition = apply_agent_tool_allowlist(&specs, &definition.tools, true)?;
+    let filtered_by_definition = filter_tools_for_agent_runtime(&specs, definition, is_async)?;
+    let filtered_by_definition =
+        apply_agent_tool_allowlist(&filtered_by_definition, &definition.tools, true)?;
     let filtered_by_request = if requested_tools.is_empty() {
         filtered_by_definition
     } else {
@@ -510,6 +813,50 @@ async fn resolve_agent_allowed_tools(
     selected.sort();
     selected.dedup();
     Ok(selected)
+}
+
+fn filter_tools_for_agent_runtime(
+    specs: &[ToolSpec],
+    definition: &AgentDefinition,
+    is_async: bool,
+) -> Result<Vec<ToolSpec>> {
+    let globally_denied = collect_matching_tool_names(
+        specs,
+        &ALL_AGENT_DISALLOWED_TOOLS
+            .iter()
+            .map(|tool| (*tool).to_owned())
+            .collect::<Vec<_>>(),
+    );
+    let mut filtered = specs
+        .iter()
+        .filter(|spec| !globally_denied.contains(&spec.name))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if definition.source != AgentSource::BuiltIn {
+        let custom_denied = collect_matching_tool_names(
+            &filtered,
+            &ALL_AGENT_DISALLOWED_TOOLS
+                .iter()
+                .map(|tool| (*tool).to_owned())
+                .collect::<Vec<_>>(),
+        );
+        filtered.retain(|spec| !custom_denied.contains(&spec.name));
+    }
+
+    if is_async {
+        let async_allowed = collect_matching_tool_names(
+            &filtered,
+            &ASYNC_AGENT_ALLOWED_TOOLS
+                .iter()
+                .map(|tool| (*tool).to_owned())
+                .collect::<Vec<_>>(),
+        );
+        filtered
+            .retain(|spec| spec.name.starts_with("mcp__") || async_allowed.contains(&spec.name));
+    }
+
+    Ok(filtered)
 }
 
 fn apply_agent_tool_allowlist(
@@ -600,6 +947,21 @@ fn tool_aliases(spec: &ToolSpec) -> BTreeSet<String> {
         "send_message" => {
             aliases.insert("SendMessage".to_owned());
         }
+        "task_stop" => {
+            aliases.insert("TaskStop".to_owned());
+        }
+        "synthetic_output" => {
+            aliases.insert("SyntheticOutput".to_owned());
+        }
+        "ask_user" => {
+            aliases.insert("AskUserQuestion".to_owned());
+        }
+        "enter_plan_mode" => {
+            aliases.insert("EnterPlanMode".to_owned());
+        }
+        "exit_plan_mode" => {
+            aliases.insert("ExitPlanMode".to_owned());
+        }
         _ => {}
     }
     aliases
@@ -655,6 +1017,7 @@ mod tests {
     use std::sync::{Arc, Mutex as StdMutex};
 
     use rc_core::{ProviderResponse, UsageSummary};
+    use rc_swarm::team_helpers;
     use tempfile::tempdir;
 
     #[derive(Clone)]
@@ -700,7 +1063,9 @@ mod tests {
 
     fn test_context(sub_agent: Option<Arc<dyn SubAgentCompletion>>) -> ToolExecutionContext {
         let tempdir = tempdir().expect("tempdir");
-        test_context_with_cwd(PathBuf::from(tempdir.path()), sub_agent)
+        let cwd = tempdir.path().to_path_buf();
+        std::mem::forget(tempdir);
+        test_context_with_cwd(cwd, sub_agent)
     }
 
     #[test]
@@ -757,7 +1122,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolved_agent_execution_routes_verification_agent() {
+    async fn verification_agent_runs_in_background_by_default() {
         let requests = Arc::new(StdMutex::new(Vec::new()));
         let runtime: Arc<dyn SubAgentCompletion> = Arc::new(RecordingAgentRuntime {
             requests: Arc::clone(&requests),
@@ -781,7 +1146,14 @@ mod tests {
         .await
         .expect("agent tool should succeed");
 
-        assert_eq!(result, "verified");
+        let payload: Value = serde_json::from_str(&result).expect("background payload");
+        assert_eq!(payload["status"], "async_launched");
+        for _ in 0..20 {
+            if requests.lock().expect("requests lock").len() == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
         let requests = requests.lock().expect("requests lock");
         assert_eq!(requests.len(), 1);
         let request = &requests[0];
@@ -821,7 +1193,8 @@ mod tests {
 
         let result = agent_tool_inner(
             &json!({
-                "prompt": "Investigate the code path and make the required change."
+                "prompt": "Investigate the code path and make the required change.",
+                "description": "Implement fix"
             }),
             &context,
         )
@@ -840,7 +1213,7 @@ mod tests {
                 .unwrap_or_default()
                 .contains("Complete the task fully")
         );
-        assert!(request.allowed_tools.contains(&"agent".to_owned()));
+        assert!(!request.allowed_tools.contains(&"agent".to_owned()));
         assert!(request.allowed_tools.contains(&"write_file".to_owned()));
     }
 
@@ -861,6 +1234,7 @@ mod tests {
         let error = agent_tool_inner(
             &json!({
                 "prompt": "Do work.",
+                "description": "Unknown agent",
                 "subagent_type": "unknown-agent"
             }),
             &context,
@@ -880,12 +1254,12 @@ mod tests {
         std::fs::create_dir_all(&project_dir).expect("project agents dir");
         std::fs::write(
             user_dir.join("reviewer.md"),
-            "---\ndescription: User reviewer\ntools: [Read]\n---\nUse the user reviewer prompt.\n",
+            "---\nname: reviewer\ndescription: User reviewer\ntools: [Read]\n---\nUse the user reviewer prompt.\n",
         )
         .expect("write user reviewer");
         std::fs::write(
             project_dir.join("reviewer.md"),
-            "---\ndescription: Project reviewer\ntools: [Read, Grep]\n---\nUse the project reviewer prompt.\n",
+            "---\nname: reviewer\ndescription: Project reviewer\ntools: [Read, Grep]\n---\nUse the project reviewer prompt.\n",
         )
         .expect("write project reviewer");
 
@@ -906,6 +1280,36 @@ mod tests {
         assert_eq!(definition.source, rc_agents::AgentSource::Project);
     }
 
+    #[test]
+    fn resolve_agent_definition_matches_builtin_aliases_case_insensitively() {
+        let definition = resolve_agent_definition_from_dirs(Some("planner"), None, None)
+            .expect("planner alias should resolve");
+        assert_eq!(definition.agent_type, "Plan");
+
+        let definition = resolve_agent_definition_from_dirs(Some("worker"), None, None)
+            .expect("worker alias should resolve");
+        assert_eq!(definition.agent_type, "general-purpose");
+    }
+
+    #[test]
+    fn resolve_agent_definition_uses_reviewer_alias_when_review_agent_exists() {
+        let temp = tempdir().expect("tempdir");
+        let project_dir = temp.path().join("project-agents");
+        std::fs::create_dir_all(&project_dir).expect("project agents dir");
+        std::fs::write(
+            project_dir.join("code-reviewer.md"),
+            "---\nname: code-reviewer\ndescription: Code reviewer\ntools: [Read]\n---\nUse the code reviewer prompt.\n",
+        )
+        .expect("write code reviewer");
+
+        let definition =
+            resolve_agent_definition_from_dirs(Some("reviewer"), None, Some(&project_dir))
+                .expect("reviewer alias should resolve");
+
+        assert_eq!(definition.agent_type, "code-reviewer");
+        assert_eq!(definition.when_to_use, "Code reviewer");
+    }
+
     #[tokio::test]
     async fn resolved_agent_execution_loads_project_agent_definition() {
         let temp = tempdir().expect("tempdir");
@@ -913,7 +1317,7 @@ mod tests {
         std::fs::create_dir_all(&project_agents_dir).expect("project agents dir");
         std::fs::write(
             project_agents_dir.join("reviewer.md"),
-            "---\ndescription: Project reviewer\ntools: [Read]\nmodel: inherit\n---\nUse the project reviewer prompt.\n",
+            "---\nname: reviewer\ndescription: Project reviewer\ntools: [Read]\nmodel: inherit\n---\nUse the project reviewer prompt.\n",
         )
         .expect("write project reviewer");
 
@@ -955,5 +1359,165 @@ mod tests {
         );
         assert!(request.allowed_tools.contains(&"read_file".to_owned()));
         assert!(!request.allowed_tools.contains(&"write_file".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn resolved_agent_execution_registers_named_plan_teammate() {
+        let temp = tempdir().expect("tempdir");
+        let teams_dir = temp.path().join("teams");
+        team_helpers::set_base_dir_override(Some(teams_dir.clone()));
+
+        let requests = Arc::new(StdMutex::new(Vec::new()));
+        let runtime: Arc<dyn SubAgentCompletion> = Arc::new(RecordingAgentRuntime {
+            requests: Arc::clone(&requests),
+            result: rc_core::SubAgentExecutionResult {
+                output: "planned".to_owned(),
+                success: true,
+                turns: 3,
+                usage: UsageSummary::default(),
+            },
+        });
+        let context = test_context_with_cwd(temp.path().to_path_buf(), Some(runtime));
+
+        let result = agent_tool_inner(
+            &json!({
+                "prompt": "Audit the project and draft the plan.",
+                "description": "Plan teammate",
+                "name": "planner",
+                "team_name": "alpha-team",
+                "mode": "plan"
+            }),
+            &context,
+        )
+        .await
+        .expect("named teammate should succeed");
+
+        assert_eq!(result, "planned");
+        let requests = requests.lock().expect("requests lock");
+        let request = &requests[0];
+        assert_eq!(request.agent_name.as_deref(), Some("planner"));
+        assert_eq!(request.team_name.as_deref(), Some("alpha-team"));
+        assert_eq!(request.permission_mode, Some(PermissionMode::Plan));
+
+        let team = team_helpers::read_team("alpha-team")
+            .await
+            .expect("team should exist");
+        let member = team
+            .find_member("planner")
+            .expect("planner member should exist");
+        assert_eq!(member.mode, Some(PermissionMode::Plan));
+        assert_eq!(member.backend_type, Some(rc_swarm::BackendType::InProcess));
+        assert_eq!(member.is_active, Some(false));
+
+        team_helpers::set_base_dir_override(None);
+    }
+
+    #[tokio::test]
+    async fn resolved_agent_execution_honors_cwd_override() {
+        let temp = tempdir().expect("tempdir");
+        let nested = temp.path().join("nested");
+        std::fs::create_dir_all(&nested).expect("create nested dir");
+
+        let requests = Arc::new(StdMutex::new(Vec::new()));
+        let runtime: Arc<dyn SubAgentCompletion> = Arc::new(RecordingAgentRuntime {
+            requests: Arc::clone(&requests),
+            result: rc_core::SubAgentExecutionResult {
+                output: "done".to_owned(),
+                success: true,
+                turns: 1,
+                usage: UsageSummary::default(),
+            },
+        });
+        let context = test_context_with_cwd(temp.path().to_path_buf(), Some(runtime));
+
+        let result = agent_tool_inner(
+            &json!({
+                "prompt": "Inspect the nested workspace.",
+                "description": "Nested audit",
+                "cwd": "nested"
+            }),
+            &context,
+        )
+        .await
+        .expect("agent run should succeed");
+
+        assert_eq!(result, "done");
+        let requests = requests.lock().expect("requests lock");
+        let request = &requests[0];
+        assert_eq!(request.working_dir, nested);
+    }
+
+    #[tokio::test]
+    async fn background_agent_execution_creates_runtime_task() {
+        let temp = tempdir().expect("tempdir");
+        let runtime: Arc<dyn SubAgentCompletion> = Arc::new(RecordingAgentRuntime {
+            requests: Arc::new(StdMutex::new(Vec::new())),
+            result: rc_core::SubAgentExecutionResult {
+                output: "background-complete".to_owned(),
+                success: true,
+                turns: 2,
+                usage: UsageSummary::default(),
+            },
+        });
+        let context = test_context_with_cwd(temp.path().to_path_buf(), Some(runtime));
+
+        let result = agent_tool_inner(
+            &json!({
+                "prompt": "Review the repository in the background.",
+                "description": "Background review",
+                "run_in_background": true
+            }),
+            &context,
+        )
+        .await
+        .expect("background agent should launch");
+
+        let payload: Value = serde_json::from_str(&result).expect("background payload");
+        assert_eq!(payload["status"], "async_launched");
+        let task_id = payload["task_id"]
+            .as_str()
+            .expect("task id should be present")
+            .to_owned();
+
+        for _ in 0..20 {
+            if crate::tasks::task_snapshots().iter().any(|task| {
+                task.id == task_id
+                    && matches!(task.status, crate::tasks::TaskStatus::Completed)
+                    && task.output.contains("background-complete")
+            }) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        panic!("background task did not finish in time");
+    }
+
+    #[tokio::test]
+    async fn worktree_isolation_requires_explicit_runtime_support() {
+        let requests = Arc::new(StdMutex::new(Vec::new()));
+        let runtime: Arc<dyn SubAgentCompletion> = Arc::new(RecordingAgentRuntime {
+            requests,
+            result: rc_core::SubAgentExecutionResult {
+                output: "noop".to_owned(),
+                success: true,
+                turns: 1,
+                usage: UsageSummary::default(),
+            },
+        });
+        let context = test_context(Some(runtime));
+
+        let error = agent_tool_inner(
+            &json!({
+                "prompt": "Inspect the worktree copy.",
+                "description": "Worktree review",
+                "isolation": "worktree"
+            }),
+            &context,
+        )
+        .await
+        .expect_err("worktree isolation should be rejected for now");
+
+        assert!(error.to_string().contains("not yet supported"));
     }
 }

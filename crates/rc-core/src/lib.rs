@@ -90,7 +90,7 @@ pub enum PermissionMode {
     AcceptEdits,
     /// Skip all permission prompts (dangerous).
     BypassPermissions,
-    /// Auto-allow based on tool class; never prompt.
+    /// Never prompt; only pre-approved or read-only operations proceed.
     DontAsk,
     /// Plan-only mode — no tool execution at all.
     Plan,
@@ -577,6 +577,12 @@ pub struct ToolResult {
 pub struct SubAgentExecutionRequest {
     /// Agent type identifier.
     pub agent_type: String,
+    /// Optional teammate name when this agent is part of a named team.
+    #[serde(default)]
+    pub agent_name: Option<String>,
+    /// Optional team name for teammate-scoped execution.
+    #[serde(default)]
+    pub team_name: Option<String>,
     /// Primary task prompt.
     pub task: String,
     /// Optional short human description of the task.
@@ -588,6 +594,9 @@ pub struct SubAgentExecutionRequest {
     /// Optional system prompt override for the child agent.
     #[serde(default)]
     pub system_prompt: Option<String>,
+    /// Short critical reminder reinjected as a system-reminder user message.
+    #[serde(default)]
+    pub critical_system_reminder: Option<String>,
     /// Optional model override for the child agent.
     #[serde(default)]
     pub model: Option<String>,
@@ -596,6 +605,9 @@ pub struct SubAgentExecutionRequest {
     /// Resolved internal tool names available to the child agent.
     #[serde(default)]
     pub allowed_tools: Vec<String>,
+    /// Permission mode requested for the child runtime.
+    #[serde(default)]
+    pub permission_mode: Option<PermissionMode>,
     /// Working directory for the child agent.
     pub working_dir: PathBuf,
 }

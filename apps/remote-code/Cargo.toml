@@ -36,6 +36,7 @@ rc-plugins = { path = "../../crates/rc-plugins" }
 rc-protocol = { path = "../../crates/rc-protocol" }
 rc-provider = { path = "../../crates/rc-provider" }
 rc-query-engine = { path = "../../crates/rc-query-engine" }
+rc-runtime-prompt = { path = "../../crates/rc-runtime-prompt" }
 rc-runner = { path = "../../crates/rc-runner" }
 rc-session = { path = "../../crates/rc-session" }
 rc-skills = { path = "../../crates/rc-skills" }

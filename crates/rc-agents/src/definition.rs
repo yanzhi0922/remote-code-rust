@@ -85,9 +85,11 @@ pub enum AgentIsolation {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentDefinition {
     /// Unique agent type identifier (e.g. `"general-purpose"`, `"Explore"`).
+    #[serde(alias = "agentType")]
     pub agent_type: String,
 
     /// Human-readable description of when to use this agent.
+    #[serde(alias = "whenToUse")]
     pub when_to_use: String,
 
     /// Optional allowlist of tool names. `["*"]` means all tools.
@@ -95,19 +97,24 @@ pub struct AgentDefinition {
     pub tools: Vec<String>,
 
     /// Optional denylist of tool names the agent cannot use.
-    #[serde(default)]
+    #[serde(default, alias = "disallowedTools")]
     pub disallowed_tools: Vec<String>,
 
     /// Maximum number of agentic turns before stopping.
-    #[serde(default = "default_max_turns")]
+    #[serde(default = "default_max_turns", alias = "maxTurns")]
     pub max_turns: u32,
 
     /// Optional model override (e.g. `"haiku"`, `"inherit"`).
     #[serde(default)]
     pub model: Option<String>,
 
-    /// Optional permission mode override.
+    /// Optional reasoning effort override. Research accepts string levels or a
+    /// numeric budget, so preserve the raw value until provider selection.
     #[serde(default)]
+    pub effort: Option<serde_json::Value>,
+
+    /// Optional permission mode override.
+    #[serde(default, alias = "permissionMode")]
     pub permission_mode: Option<String>,
 
     /// Where this agent definition originated.
@@ -119,12 +126,32 @@ pub struct AgentDefinition {
     pub base_dir: String,
 
     /// Optional system prompt override.
-    #[serde(default)]
+    #[serde(default, alias = "systemPrompt")]
     pub system_prompt: Option<String>,
 
     /// Optional skill names to preload.
     #[serde(default)]
     pub skills: Vec<String>,
+
+    /// Agent-specific MCP server references or inline server definitions.
+    #[serde(default, alias = "mcpServers")]
+    pub mcp_servers: Vec<serde_json::Value>,
+
+    /// Session-scoped hook settings registered when the agent starts.
+    #[serde(default)]
+    pub hooks: Option<serde_json::Value>,
+
+    /// Optional display color name from the agent definition.
+    #[serde(default)]
+    pub color: Option<String>,
+
+    /// Short critical reminder reinjected for each user turn.
+    #[serde(default, rename = "criticalSystemReminder_EXPERIMENTAL")]
+    pub critical_system_reminder_experimental: Option<String>,
+
+    /// MCP server name patterns required for this agent to be available.
+    #[serde(default, rename = "requiredMcpServers")]
+    pub required_mcp_servers: Vec<String>,
 
     /// Optional persistent memory scope.
     #[serde(default)]
@@ -139,11 +166,11 @@ pub struct AgentDefinition {
     pub isolation: AgentIsolation,
 
     /// Optional initial prompt prepended to the first user turn.
-    #[serde(default)]
+    #[serde(default, alias = "initialPrompt")]
     pub initial_prompt: Option<String>,
 
     /// Whether to omit CLAUDE.md hierarchy from the agent's user context.
-    #[serde(default)]
+    #[serde(default, alias = "omitClaudeMd")]
     pub omit_claude_md: bool,
 
     /// Original filename (for user/project/managed agents).
@@ -170,11 +197,17 @@ impl AgentDefinition {
             disallowed_tools: Vec::new(),
             max_turns: default_max_turns(),
             model: None,
+            effort: None,
             permission_mode: None,
             source: AgentSource::BuiltIn,
             base_dir: default_base_dir(),
             system_prompt: None,
             skills: Vec::new(),
+            mcp_servers: Vec::new(),
+            hooks: None,
+            color: None,
+            critical_system_reminder_experimental: None,
+            required_mcp_servers: Vec::new(),
             memory: None,
             background: false,
             isolation: AgentIsolation::None,

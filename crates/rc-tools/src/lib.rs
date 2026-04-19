@@ -42,6 +42,7 @@ pub mod web_browser;
 pub mod workflow;
 pub mod worktree_tools;
 
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -77,6 +78,10 @@ const IGNORED_DIRS: &[&str] = &[
 static TOOL_RUNTIME_POLICY: Lazy<Mutex<ToolRuntimePolicy>> =
     Lazy::new(|| Mutex::new(ToolRuntimePolicy::default()));
 
+tokio::task_local! {
+    static TOOL_RUNTIME_POLICY_OVERLAY: ToolRuntimePolicyOverlay;
+}
+
 /// Process-scoped runtime policy for tool exposure and task artifacts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeMcpServerPolicyEntry {
@@ -98,6 +103,18 @@ pub struct ToolRuntimePolicy {
     pub shell_policy: shell::ShellExecutionPolicy,
 }
 
+/// Task-local overlay for a single query/agent run.
+///
+/// This mirrors Claude Code's per-run tool-pool filtering without mutating the
+/// process-wide policy, so concurrent background agents keep independent tool
+/// surfaces.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ToolRuntimePolicyOverlay {
+    pub allowed_tools: Option<Vec<String>>,
+    #[serde(default)]
+    pub disallowed_tools: Vec<String>,
+}
+
 /// Configure the current process-wide tool policy.
 ///
 /// # Errors
@@ -114,10 +131,68 @@ pub fn configure_tool_runtime_policy(policy: ToolRuntimePolicy) -> Result<()> {
 /// Return the active process-wide tool policy.
 #[must_use]
 pub fn current_tool_runtime_policy() -> ToolRuntimePolicy {
-    TOOL_RUNTIME_POLICY
+    let base = TOOL_RUNTIME_POLICY
         .lock()
         .map(|policy| policy.clone())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    TOOL_RUNTIME_POLICY_OVERLAY
+        .try_with(|overlay| apply_tool_runtime_policy_overlay(base.clone(), overlay.clone()))
+        .unwrap_or(base)
+}
+
+pub async fn with_tool_runtime_policy_overlay<F, T>(
+    overlay: ToolRuntimePolicyOverlay,
+    future: F,
+) -> T
+where
+    F: Future<Output = T>,
+{
+    TOOL_RUNTIME_POLICY_OVERLAY
+        .scope(normalize_tool_runtime_policy_overlay(overlay), future)
+        .await
+}
+
+fn apply_tool_runtime_policy_overlay(
+    mut base: ToolRuntimePolicy,
+    overlay: ToolRuntimePolicyOverlay,
+) -> ToolRuntimePolicy {
+    let overlay = normalize_tool_runtime_policy_overlay(overlay);
+    if let Some(overlay_allowed) = overlay.allowed_tools {
+        base.allowed_tools = if base.allowed_tools.is_empty() {
+            overlay_allowed
+        } else {
+            base.allowed_tools
+                .into_iter()
+                .filter(|tool| overlay_allowed.contains(tool))
+                .collect()
+        };
+    }
+    base.disallowed_tools.extend(overlay.disallowed_tools);
+    normalize_tool_runtime_policy(base)
+}
+
+fn normalize_tool_runtime_policy_overlay(
+    mut overlay: ToolRuntimePolicyOverlay,
+) -> ToolRuntimePolicyOverlay {
+    overlay.allowed_tools = overlay.allowed_tools.map(|tools| {
+        let mut normalized = tools
+            .into_iter()
+            .map(|tool| tool.trim().to_ascii_lowercase())
+            .filter(|tool| !tool.is_empty())
+            .collect::<Vec<_>>();
+        normalized.sort();
+        normalized.dedup();
+        normalized
+    });
+    overlay.disallowed_tools = overlay
+        .disallowed_tools
+        .into_iter()
+        .map(|tool| tool.trim().to_ascii_lowercase())
+        .filter(|tool| !tool.is_empty())
+        .collect::<Vec<_>>();
+    overlay.disallowed_tools.sort();
+    overlay.disallowed_tools.dedup();
+    overlay
 }
 
 /// Return the built-in tool specs visible under the active runtime policy.
@@ -936,11 +1011,13 @@ pub(crate) fn tool_allowed_by_policy(tool_name: &str, policy: &ToolRuntimePolicy
 mod tests {
     use super::{
         CommandHookExecutionRequest, HookShell, RuntimeMcpServerPolicyEntry, ToolExecutionContext,
-        ToolRuntimePolicy, builtin_tool_specs, configure_tool_runtime_policy, execute_command_hook,
-        execute_tool_call, extract_discovered_tool_names,
-        extract_discovered_tool_names_from_conversation, runtime_tool_search_candidate_specs,
+        ToolRuntimePolicy, ToolRuntimePolicyOverlay, builtin_tool_specs,
+        configure_tool_runtime_policy, execute_command_hook, execute_tool_call,
+        extract_discovered_tool_names, extract_discovered_tool_names_from_conversation,
+        runtime_provider_tool_specs, runtime_tool_search_candidate_specs,
         runtime_visible_provider_tool_specs,
         runtime_visible_provider_tool_specs_with_discovered_tools,
+        with_tool_runtime_policy_overlay,
     };
     use once_cell::sync::Lazy;
     use rc_core::{
@@ -2047,9 +2124,8 @@ mod tests {
                 id: "1".to_owned(),
                 name: "agent".to_owned(),
                 input: json!({
-                    "prompt": "Review the Rust changes for regressions.",
-                    "description": "Verify recent agent runtime wiring",
-                    "subagent_type": "verification"
+                    "prompt": "Review the Rust changes and report the wiring path.",
+                    "description": "Inspect agent runtime wiring"
                 }),
             },
             &context,
@@ -2064,11 +2140,12 @@ mod tests {
         let requests = requests.lock().expect("requests lock");
         assert_eq!(requests.len(), 1);
         let request = &requests[0];
-        assert_eq!(request.agent_type, "verification");
+        assert_eq!(request.agent_type, "general-purpose");
         assert_eq!(request.max_turns, 200);
         assert!(request.allowed_tools.contains(&"read_file".to_owned()));
-        assert!(!request.allowed_tools.contains(&"write_file".to_owned()));
-        assert!(!request.allowed_tools.contains(&"edit_file".to_owned()));
+        assert!(request.allowed_tools.contains(&"write_file".to_owned()));
+        assert!(request.allowed_tools.contains(&"edit_file".to_owned()));
+        assert!(!request.allowed_tools.contains(&"agent".to_owned()));
     }
 
     #[tokio::test]
@@ -2229,6 +2306,7 @@ mod tests {
                 name: "agent".to_owned(),
                 input: json!({
                     "prompt": "Do work.",
+                    "description": "Unknown agent",
                     "subagent_type": "does-not-exist"
                 }),
             },
@@ -3772,6 +3850,41 @@ mod tests {
 
         assert!(discovered_names.contains(&"web_fetch"));
         assert!(!discovered_names.contains(&"todo_write"));
+    }
+
+    #[tokio::test]
+    async fn task_local_runtime_policy_overlay_filters_provider_surface() {
+        let outside = runtime_provider_tool_specs()
+            .await
+            .into_iter()
+            .map(|spec| spec.name)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(outside.contains("read_file"));
+        assert!(outside.contains("write_file"));
+
+        let inside = with_tool_runtime_policy_overlay(
+            ToolRuntimePolicyOverlay {
+                allowed_tools: Some(vec!["read_file".to_owned()]),
+                disallowed_tools: Vec::new(),
+            },
+            async {
+                runtime_provider_tool_specs()
+                    .await
+                    .into_iter()
+                    .map(|spec| spec.name)
+                    .collect::<std::collections::BTreeSet<_>>()
+            },
+        )
+        .await;
+        assert!(inside.contains("read_file"));
+        assert!(!inside.contains("write_file"));
+
+        let after = runtime_provider_tool_specs()
+            .await
+            .into_iter()
+            .map(|spec| spec.name)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(after.contains("write_file"));
     }
 
     #[tokio::test]

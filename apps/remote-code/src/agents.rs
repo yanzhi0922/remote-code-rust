@@ -197,6 +197,8 @@ impl SubAgentCompletion for RemoteCodeSubAgentRuntime {
             .executor
             .execute(AgentExecutionRequest {
                 agent_type: request.agent_type,
+                agent_name: request.agent_name,
+                team_name: request.team_name,
                 task: request.task,
                 context: request
                     .context
@@ -206,7 +208,9 @@ impl SubAgentCompletion for RemoteCodeSubAgentRuntime {
                 model: provider_model.unwrap_or_else(|| "default".to_owned()),
                 max_turns: request.max_turns,
                 system_prompt: request.system_prompt.unwrap_or_default(),
+                critical_system_reminder: request.critical_system_reminder,
                 tools: request.allowed_tools,
+                permission_mode: request.permission_mode,
                 working_dir: request.working_dir,
             })
             .await?;
@@ -239,9 +243,15 @@ impl AgentExecutor for RemoteCodeAgentExecutor {
         let parent_session_id = self.base_config.session_id;
         restamp_runtime_session(&mut config, Uuid::new_v4());
         config.max_turns = usize::try_from(request.max_turns).unwrap_or(usize::MAX);
+        if let Some(mode) = request.permission_mode {
+            config.permission_mode = mode;
+        }
         config.session_name = Some(format!(
             "agent:{}:{}",
-            request.agent_type,
+            request
+                .agent_name
+                .as_deref()
+                .unwrap_or(request.agent_type.as_str()),
             truncate_single_line(&request.task, 48)
         ));
         if !request.model.is_empty() && request.model != "default" {
@@ -257,7 +267,10 @@ impl AgentExecutor for RemoteCodeAgentExecutor {
             config.session_name.as_deref(),
             Some(parent_session_id),
         )?;
-        if request.agent_type.eq_ignore_ascii_case(FORK_SUBAGENT_TYPE) {
+        let should_copy_plan_state = request.agent_type.eq_ignore_ascii_case(FORK_SUBAGENT_TYPE)
+            || request.permission_mode == Some(rc_core::PermissionMode::Plan)
+            || self.base_config.permission_mode == rc_core::PermissionMode::Plan;
+        if should_copy_plan_state {
             let _copied = copy_plan_mode_state_for_fork(
                 &store,
                 &config.paths,
@@ -296,8 +309,10 @@ impl AgentExecutor for RemoteCodeAgentExecutor {
             &mut conversation,
             &request.task,
             CompatRunOverrides {
-                system_prompt: Some(request.system_prompt),
+                agent_system_prompt: Some(request.system_prompt),
                 allowed_tools: (!request.tools.is_empty()).then_some(request.tools),
+                critical_system_reminder: request.critical_system_reminder,
+                ..CompatRunOverrides::default()
             },
         )
         .await?;

@@ -19,17 +19,33 @@ struct AgentFileEntry {
     description: String,
     #[serde(default)]
     tools: Vec<String>,
-    #[serde(default)]
+    #[serde(default, alias = "disallowedTools")]
     disallowed_tools: Vec<String>,
     prompt: String,
     #[serde(default)]
     model: Option<String>,
     #[serde(default)]
+    effort: Option<serde_json::Value>,
+    #[serde(default, alias = "permissionMode")]
     permission_mode: Option<String>,
+    #[serde(default, alias = "mcpServers")]
+    mcp_servers: Vec<serde_json::Value>,
     #[serde(default)]
+    hooks: Option<serde_json::Value>,
+    #[serde(default, alias = "maxTurns")]
     max_turns: Option<u32>,
     #[serde(default)]
     skills: Vec<String>,
+    #[serde(default, alias = "initialPrompt")]
+    initial_prompt: Option<String>,
+    #[serde(default, alias = "omitClaudeMd")]
+    omit_claude_md: bool,
+    #[serde(default)]
+    color: Option<String>,
+    #[serde(default, rename = "criticalSystemReminder_EXPERIMENTAL")]
+    critical_system_reminder_experimental: Option<String>,
+    #[serde(default, rename = "requiredMcpServers")]
+    required_mcp_servers: Vec<String>,
     #[serde(default)]
     memory: Option<crate::definition::AgentMemoryScope>,
     #[serde(default)]
@@ -109,10 +125,16 @@ pub fn load_agent_from_markdown(path: &Path, source: AgentSource) -> Result<Agen
 
     let (frontmatter, body) = parse_frontmatter(&content);
 
-    let mut agent = AgentDefinition::new(
-        &filename,
-        frontmatter.description.as_deref().unwrap_or(&filename),
-    );
+    let name = frontmatter
+        .name
+        .as_deref()
+        .context("Missing required \"name\" field in agent frontmatter")?;
+    let description = frontmatter
+        .description
+        .as_deref()
+        .context("Missing required \"description\" field in agent frontmatter")?;
+
+    let mut agent = AgentDefinition::new(name, description.replace("\\n", "\n"));
     agent.source = source;
     agent.base_dir = path
         .parent()
@@ -122,9 +144,6 @@ pub fn load_agent_from_markdown(path: &Path, source: AgentSource) -> Result<Agen
     agent.filename = Some(filename.clone());
     agent.system_prompt = Some(body.trim().to_owned());
 
-    if let Some(desc) = frontmatter.description {
-        agent.when_to_use = desc;
-    }
     if !frontmatter.tools.is_empty() {
         agent.tools = frontmatter.tools;
     }
@@ -132,13 +151,38 @@ pub fn load_agent_from_markdown(path: &Path, source: AgentSource) -> Result<Agen
         agent.disallowed_tools = frontmatter.disallowed_tools;
     }
     if let Some(model) = frontmatter.model {
-        agent.model = Some(model);
+        agent.model = Some(normalize_model(model));
+    }
+    if let Some(effort) = frontmatter.effort {
+        agent.effort = Some(effort);
+    }
+    if let Some(permission_mode) = frontmatter.permission_mode {
+        agent.permission_mode = Some(permission_mode);
     }
     if let Some(max_turns) = frontmatter.max_turns {
         agent.max_turns = max_turns;
     }
     if !frontmatter.skills.is_empty() {
         agent.skills = frontmatter.skills;
+    }
+    if !frontmatter.mcp_servers.is_empty() {
+        agent.mcp_servers = frontmatter.mcp_servers;
+    }
+    if let Some(hooks) = frontmatter.hooks {
+        agent.hooks = Some(hooks);
+    }
+    if let Some(initial_prompt) = frontmatter.initial_prompt {
+        agent.initial_prompt = Some(initial_prompt);
+    }
+    agent.omit_claude_md = frontmatter.omit_claude_md;
+    if let Some(color) = frontmatter.color {
+        agent.color = Some(color);
+    }
+    if let Some(reminder) = frontmatter.critical_system_reminder_experimental {
+        agent.critical_system_reminder_experimental = Some(reminder);
+    }
+    if !frontmatter.required_mcp_servers.is_empty() {
+        agent.required_mcp_servers = frontmatter.required_mcp_servers;
     }
     if let Some(memory) = frontmatter.memory {
         agent.memory = Some(memory);
@@ -185,10 +229,19 @@ pub fn load_agents_from_json(path: &Path, source: AgentSource) -> Result<Vec<Age
             agent.system_prompt = Some(entry.prompt);
             agent.tools = entry.tools;
             agent.disallowed_tools = entry.disallowed_tools;
-            agent.model = entry.model;
+            agent.model = entry.model.map(normalize_model);
+            agent.effort = entry.effort;
             agent.permission_mode = entry.permission_mode;
+            agent.mcp_servers = entry.mcp_servers;
+            agent.hooks = entry.hooks;
             agent.max_turns = entry.max_turns.unwrap_or(200);
             agent.skills = entry.skills;
+            agent.initial_prompt = entry.initial_prompt;
+            agent.omit_claude_md = entry.omit_claude_md;
+            agent.color = entry.color;
+            agent.critical_system_reminder_experimental =
+                entry.critical_system_reminder_experimental;
+            agent.required_mcp_servers = entry.required_mcp_servers;
             agent.memory = entry.memory;
             agent.background = entry.background;
             agent
@@ -217,12 +270,22 @@ pub fn load_agent_from_file(path: &Path, source: AgentSource) -> Result<AgentDef
 /// Parsed frontmatter from a markdown agent file.
 #[derive(Debug, Default)]
 struct Frontmatter {
+    name: Option<String>,
     description: Option<String>,
     tools: Vec<String>,
     disallowed_tools: Vec<String>,
     model: Option<String>,
+    effort: Option<serde_json::Value>,
+    permission_mode: Option<String>,
+    mcp_servers: Vec<serde_json::Value>,
+    hooks: Option<serde_json::Value>,
     max_turns: Option<u32>,
     skills: Vec<String>,
+    initial_prompt: Option<String>,
+    omit_claude_md: bool,
+    color: Option<String>,
+    critical_system_reminder_experimental: Option<String>,
+    required_mcp_servers: Vec<String>,
     memory: Option<crate::definition::AgentMemoryScope>,
     background: bool,
 }
@@ -264,6 +327,9 @@ fn parse_yaml_frontmatter(yaml: &str) -> Frontmatter {
             let value = value.trim();
 
             match key {
+                "name" => {
+                    fm.name = Some(unquote(value).to_owned());
+                }
                 "description" => {
                     fm.description = Some(unquote(value).to_owned());
                 }
@@ -276,14 +342,41 @@ fn parse_yaml_frontmatter(yaml: &str) -> Frontmatter {
                 "model" => {
                     fm.model = Some(unquote(value).to_owned());
                 }
+                "effort" => {
+                    fm.effort = Some(parse_yaml_value(value));
+                }
+                "permissionMode" | "permission_mode" => {
+                    fm.permission_mode = Some(unquote(value).to_owned());
+                }
+                "mcpServers" | "mcp_servers" => {
+                    fm.mcp_servers = parse_yaml_value_list(value);
+                }
+                "hooks" => {
+                    fm.hooks = Some(parse_yaml_value(value));
+                }
                 "maxTurns" | "max_turns" => {
                     fm.max_turns = value.parse().ok();
                 }
                 "skills" => {
                     fm.skills = parse_yaml_list(value);
                 }
+                "initialPrompt" | "initial_prompt" => {
+                    fm.initial_prompt = Some(unquote(value).to_owned());
+                }
+                "omitClaudeMd" | "omit_claude_md" => {
+                    fm.omit_claude_md = parse_yaml_bool(value);
+                }
+                "color" => {
+                    fm.color = Some(unquote(value).to_owned());
+                }
+                "criticalSystemReminder_EXPERIMENTAL" => {
+                    fm.critical_system_reminder_experimental = Some(unquote(value).to_owned());
+                }
+                "requiredMcpServers" | "required_mcp_servers" => {
+                    fm.required_mcp_servers = parse_yaml_list(value);
+                }
                 "background" => {
-                    fm.background = value == "true";
+                    fm.background = parse_yaml_bool(value);
                 }
                 "memory" => {
                     fm.memory = match value {
@@ -301,6 +394,19 @@ fn parse_yaml_frontmatter(yaml: &str) -> Frontmatter {
     fm
 }
 
+fn normalize_model(model: String) -> String {
+    let trimmed = model.trim();
+    if trimmed.eq_ignore_ascii_case("inherit") {
+        "inherit".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+fn parse_yaml_bool(value: &str) -> bool {
+    matches!(unquote(value), "true" | "True" | "TRUE")
+}
+
 /// Parse a YAML list value like `[a, b, c]`.
 fn parse_yaml_list(value: &str) -> Vec<String> {
     let value = value.trim();
@@ -312,6 +418,28 @@ fn parse_yaml_list(value: &str) -> Vec<String> {
             .collect()
     } else {
         Vec::new()
+    }
+}
+
+fn parse_yaml_value_list(value: &str) -> Vec<serde_json::Value> {
+    parse_yaml_list(value)
+        .into_iter()
+        .map(serde_json::Value::String)
+        .collect()
+}
+
+fn parse_yaml_value(value: &str) -> serde_json::Value {
+    let unquoted = unquote(value);
+    if let Ok(parsed) = unquoted.parse::<i64>() {
+        return serde_json::json!(parsed);
+    }
+    if let Ok(parsed) = unquoted.parse::<f64>() {
+        return serde_json::json!(parsed);
+    }
+    match unquoted {
+        "true" => serde_json::Value::Bool(true),
+        "false" => serde_json::Value::Bool(false),
+        _ => serde_json::Value::String(unquoted.to_owned()),
     }
 }
 
@@ -410,7 +538,7 @@ mod tests {
     #[test]
     fn load_agent_from_markdown_file() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let md = "---\ndescription: Test agent\ntools: [Bash]\n---\nYou are a test agent.\n";
+        let md = "---\nname: test-agent\ndescription: Test agent\ntools: [Bash]\n---\nYou are a test agent.\n";
         let path = dir.path().join("test-agent.md");
         fs::write(&path, md).expect("write");
 
@@ -437,11 +565,89 @@ mod tests {
         assert_eq!(agent.agent_type, "a");
 
         // Markdown
-        let md = "---\n---\nBody text\n";
+        let md = "---\nname: my-agent\ndescription: Test\n---\nBody text\n";
         let md_path = dir.path().join("my-agent.md");
         fs::write(&md_path, md).expect("write");
         let agent = load_agent_from_file(&md_path, AgentSource::User).expect("load md");
         assert_eq!(agent.agent_type, "my-agent");
+    }
+
+    #[test]
+    fn load_agents_from_dir_skips_markdown_without_agent_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let md = "---\ndescription: Reference doc, not an agent\n---\nBody text\n";
+        fs::write(dir.path().join("reference.md"), md).expect("write");
+
+        let agents = load_agents_from_dir(dir.path(), AgentSource::Project).expect("load dir");
+        assert!(agents.is_empty());
+    }
+
+    #[test]
+    fn load_agent_metadata_fields_from_json() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let json = r#"{
+            "verify": {
+                "description": "Verify",
+                "prompt": "You verify",
+                "disallowedTools": ["Edit"],
+                "permissionMode": "dontAsk",
+                "mcpServers": ["context7"],
+                "hooks": {"PreToolUse": []},
+                "maxTurns": 42,
+                "initialPrompt": "Start here",
+                "omitClaudeMd": true,
+                "color": "red",
+                "criticalSystemReminder_EXPERIMENTAL": "remember",
+                "requiredMcpServers": ["MiniMax"],
+                "effort": 80,
+                "background": true
+            }
+        }"#;
+        let path = dir.path().join("agents.json");
+        fs::write(&path, json).expect("write");
+
+        let agents = load_agents_from_json(&path, AgentSource::User).expect("load");
+        let agent = &agents[0];
+        assert_eq!(agent.disallowed_tools, vec!["Edit"]);
+        assert_eq!(agent.permission_mode.as_deref(), Some("dontAsk"));
+        assert_eq!(agent.mcp_servers, vec![serde_json::json!("context7")]);
+        assert!(agent.hooks.is_some());
+        assert_eq!(agent.max_turns, 42);
+        assert_eq!(agent.initial_prompt.as_deref(), Some("Start here"));
+        assert!(agent.omit_claude_md);
+        assert_eq!(agent.color.as_deref(), Some("red"));
+        assert_eq!(
+            agent.critical_system_reminder_experimental.as_deref(),
+            Some("remember")
+        );
+        assert_eq!(agent.required_mcp_servers, vec!["MiniMax"]);
+        assert_eq!(agent.effort, Some(serde_json::json!(80)));
+        assert!(agent.background);
+    }
+
+    #[test]
+    fn load_agent_metadata_fields_from_markdown() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let md = "---\nname: verify\ndescription: Verify\ndisallowedTools: [Edit]\npermissionMode: dontAsk\nmcpServers: [context7]\nmaxTurns: 42\ninitialPrompt: Start here\nomitClaudeMd: true\ncolor: red\ncriticalSystemReminder_EXPERIMENTAL: remember\nrequiredMcpServers: [MiniMax]\neffort: 80\nbackground: true\n---\nYou verify.\n";
+        let path = dir.path().join("verify.md");
+        fs::write(&path, md).expect("write");
+
+        let agent = load_agent_from_markdown(&path, AgentSource::Project).expect("load");
+        assert_eq!(agent.agent_type, "verify");
+        assert_eq!(agent.disallowed_tools, vec!["Edit"]);
+        assert_eq!(agent.permission_mode.as_deref(), Some("dontAsk"));
+        assert_eq!(agent.mcp_servers, vec![serde_json::json!("context7")]);
+        assert_eq!(agent.max_turns, 42);
+        assert_eq!(agent.initial_prompt.as_deref(), Some("Start here"));
+        assert!(agent.omit_claude_md);
+        assert_eq!(agent.color.as_deref(), Some("red"));
+        assert_eq!(
+            agent.critical_system_reminder_experimental.as_deref(),
+            Some("remember")
+        );
+        assert_eq!(agent.required_mcp_servers, vec!["MiniMax"]);
+        assert_eq!(agent.effort, Some(serde_json::json!(80)));
+        assert!(agent.background);
     }
 
     #[test]
