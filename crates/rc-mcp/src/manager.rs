@@ -393,6 +393,7 @@ impl McpConnectionManager {
     /// Get a CLI state snapshot for serialization.
     #[must_use]
     pub fn cli_state(&self) -> McpCliState {
+        use crate::normalization::build_mcp_tool_name;
         use crate::serialization::{SerializedClient, SerializedTool};
 
         let clients: Vec<SerializedClient> = self
@@ -411,7 +412,7 @@ impl McpConnectionManager {
             .iter()
             .flat_map(|(server, tool_list)| {
                 tool_list.iter().map(move |t| SerializedTool {
-                    name: format!("{server}__{}", t.name),
+                    name: build_mcp_tool_name(server, &t.name),
                     description: t.description.clone().unwrap_or_default(),
                     input_json_schema: Some(t.input_schema.clone()),
                     is_mcp: Some(true),
@@ -597,6 +598,29 @@ mod tests {
         let state = mgr.cli_state();
         assert_eq!(state.clients.len(), 2);
         assert_eq!(state.configs.len(), 2);
+    }
+
+    #[test]
+    fn cli_state_uses_normalized_mcp_tool_names() {
+        let mut mgr = McpConnectionManager::new();
+        mgr.register_server("srv-a".to_owned(), test_scoped_config("srv-a"));
+        mgr.discovery.store(
+            "srv-a",
+            vec![crate::types::McpToolDescriptor {
+                name: "fetch".to_owned(),
+                title: None,
+                description: Some("Fetch docs".to_owned()),
+                input_schema: serde_json::json!({"type": "object"}),
+                annotations: serde_json::json!({}),
+            }],
+            vec![],
+            None,
+        );
+
+        let state = mgr.cli_state();
+        assert_eq!(state.tools.len(), 1);
+        assert_eq!(state.tools[0].name, "mcp__srv-a__fetch");
+        assert_eq!(state.tools[0].original_tool_name.as_deref(), Some("fetch"));
     }
 
     #[test]

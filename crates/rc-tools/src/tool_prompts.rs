@@ -4,6 +4,14 @@
 //! about when and how to use the tool. Prompts are modelled after Claude Code's
 //! prompt.ts files but adapted for the Rust codebase.
 
+use std::path::PathBuf;
+
+use directories::BaseDirs;
+use rc_agents::coordinator::is_coordinator_mode;
+use rc_agents::fork::is_fork_subagent_enabled;
+use rc_agents::loader::load_all_agents;
+use rc_mcp::normalization::mcp_info_from_string;
+
 // ── Core tools (P0) ──────────────────────────────────────────────────────────
 
 /// Prompt for `list_directory`.
@@ -1166,6 +1174,70 @@ pub fn file_write_tool_prompt() -> String {
 /// Returns the agent tool prompt with detailed sub-agent delegation instructions.
 #[must_use]
 pub fn agent_tool_prompt() -> String {
+    runtime_agent_tool_prompt()
+}
+
+fn runtime_agent_tool_prompt() -> String {
+    let context = crate::current_runtime_agent_prompt_context()
+        .unwrap_or_else(default_runtime_agent_prompt_context);
+    let user_agents_dir = context.user_agents_dir.or_else(default_user_agents_dir);
+    let project_agents_dir = context
+        .project_agents_dir
+        .or_else(default_project_agents_dir);
+    let definitions = load_all_agents(user_agents_dir.as_deref(), project_agents_dir.as_deref());
+    let available_mcp_servers = runtime_mcp_servers_with_tools();
+    let is_fork_enabled =
+        is_fork_subagent_enabled(context.is_coordinator, context.is_non_interactive);
+
+    rc_agents::prompt::build_agent_prompt_with_mcp_servers(
+        &definitions.active_agents,
+        is_fork_enabled,
+        context.is_coordinator,
+        context.allowed_agent_types.as_deref(),
+        available_mcp_servers.as_deref(),
+    )
+}
+
+fn default_runtime_agent_prompt_context() -> crate::RuntimeAgentPromptContext {
+    crate::RuntimeAgentPromptContext {
+        user_agents_dir: None,
+        project_agents_dir: std::env::current_dir()
+            .ok()
+            .map(|cwd| cwd.join(".claude").join("agents")),
+        allowed_agent_types: None,
+        is_coordinator: is_coordinator_mode(),
+        is_non_interactive: false,
+    }
+}
+
+fn default_user_agents_dir() -> Option<PathBuf> {
+    BaseDirs::new().map(|base| base.home_dir().join(".claude").join("agents"))
+}
+
+fn default_project_agents_dir() -> Option<PathBuf> {
+    std::env::current_dir()
+        .ok()
+        .map(|cwd| cwd.join(".claude").join("agents"))
+}
+
+fn runtime_mcp_servers_with_tools() -> Option<Vec<String>> {
+    crate::current_runtime_mcp_cli_state().map(|state| {
+        let mut servers = Vec::new();
+        for tool in state.tools {
+            let Some(info) = mcp_info_from_string(&tool.name) else {
+                continue;
+            };
+            if servers.iter().any(|server| server == &info.server_name) {
+                continue;
+            }
+            servers.push(info.server_name);
+        }
+        servers
+    })
+}
+
+#[allow(dead_code)]
+fn legacy_agent_tool_prompt() -> String {
     "Launch a new agent to handle complex, multi-step tasks autonomously.\n\n\
     The Agent tool launches specialized agents (subprocesses) that autonomously handle complex \
     tasks. Each agent type has specific capabilities and tools available to it.\n\n\
@@ -1294,6 +1366,11 @@ pub fn get_prompt(tool_name: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::sync::Arc;
+
+    use rc_mcp::serialization::{McpCliState, SerializedTool};
+    use tempfile::tempdir;
 
     #[test]
     fn all_prompts_are_non_empty() {
@@ -1635,5 +1712,58 @@ mod tests {
             "should mention background execution"
         );
         assert!(prompt.contains("SendMessage"), "should mention SendMessage");
+    }
+
+    #[tokio::test]
+    async fn agent_tool_prompt_filters_required_mcp_servers_from_live_runtime_state() {
+        let temp = tempdir().expect("tempdir");
+        let user_agents_dir = temp.path().join("user-agents");
+        let project_agents_dir = temp.path().join("workspace").join(".claude").join("agents");
+        fs::create_dir_all(&user_agents_dir).expect("user agents dir");
+        fs::create_dir_all(&project_agents_dir).expect("project agents dir");
+        fs::write(
+            project_agents_dir.join("docs-agent.md"),
+            "---\nname: docs-agent\ndescription: Use project docs MCP\nrequiredMcpServers: [context7]\n---\nYou answer questions with docs.\n",
+        )
+        .expect("write agent");
+
+        let context = crate::RuntimeAgentPromptContext {
+            user_agents_dir: Some(user_agents_dir),
+            project_agents_dir: Some(project_agents_dir),
+            allowed_agent_types: None,
+            is_coordinator: false,
+            is_non_interactive: false,
+        };
+        let context_provider = Arc::new(move || context.clone());
+
+        let hidden_prompt =
+            crate::with_runtime_agent_prompt_context_provider(context_provider.clone(), async {
+                crate::with_runtime_mcp_state_provider(Arc::new(McpCliState::default), async {
+                    agent_tool_prompt()
+                })
+                .await
+            })
+            .await;
+        assert!(!hidden_prompt.contains("- docs-agent:"));
+
+        let live_prompt =
+            crate::with_runtime_agent_prompt_context_provider(context_provider, async {
+                crate::with_runtime_mcp_state_provider(
+                    Arc::new(|| McpCliState {
+                        tools: vec![SerializedTool {
+                            name: "mcp__context7__query_docs".to_owned(),
+                            description: "Query docs".to_owned(),
+                            input_json_schema: None,
+                            is_mcp: Some(true),
+                            original_tool_name: Some("query_docs".to_owned()),
+                        }],
+                        ..McpCliState::default()
+                    }),
+                    async { agent_tool_prompt() },
+                )
+                .await
+            })
+            .await;
+        assert!(live_prompt.contains("- docs-agent:"));
     }
 }

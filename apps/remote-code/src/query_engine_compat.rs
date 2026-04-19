@@ -29,11 +29,13 @@ use rc_runtime_prompt::{
 use rc_session::SessionStore;
 use rc_session::resume_state::{PendingToolCall, ResumeState};
 use rc_tools::{
-    ToolExecutionContext, ToolRuntimePolicyOverlay, ToolSpec, execute_tool_call,
+    RuntimeAgentPromptContext, ToolExecutionContext, ToolRuntimePolicyOverlay, ToolSpec,
+    execute_tool_call,
     mcp_runtime::{discover_runtime_mcp_servers, observe_runtime_mcp_servers},
     plan_mode::normalize_exit_plan_mode_tool_calls,
     runtime_plan_mode::inject_plan_mode_runtime_messages,
-    runtime_provider_tool_spec, runtime_provider_tool_specs, with_runtime_mcp_state_provider,
+    runtime_provider_tool_spec, runtime_provider_tool_specs,
+    with_runtime_agent_prompt_context_provider, with_runtime_mcp_state_provider,
     with_tool_runtime_policy_overlay,
 };
 use rc_ui_bridge::UiRuntimeMcpServerStatus;
@@ -218,6 +220,19 @@ fn spawn_runtime_mcp_state_provider(
     });
 
     provider
+}
+
+fn spawn_runtime_agent_prompt_context_provider(
+    config: &RuntimeConfig,
+) -> Arc<rc_tools::RuntimeAgentPromptContextProvider> {
+    let context = RuntimeAgentPromptContext {
+        user_agents_dir: None,
+        project_agents_dir: Some(config.cwd.join(".claude").join("agents")),
+        allowed_agent_types: None,
+        is_coordinator: rc_agents::coordinator::is_coordinator_mode(),
+        is_non_interactive: config.print_mode,
+    };
+    Arc::new(move || context.clone())
 }
 
 fn runtime_delta_entry<T>(
@@ -1245,27 +1260,32 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         vec![Message::from(ConversationEntry::user(prompt))]
     };
     let runtime_mcp_state_provider = spawn_runtime_mcp_state_provider(config);
-    let result = with_runtime_mcp_state_provider(runtime_mcp_state_provider, async {
-        if let Some(allowed_tools) = expanded_allowed_tools.as_ref() {
-            with_tool_runtime_policy_overlay(
-                ToolRuntimePolicyOverlay {
-                    allowed_tools: Some(allowed_tools.iter().cloned().collect()),
-                    disallowed_tools: Vec::new(),
-                },
-                async {
+    let runtime_agent_prompt_context_provider = spawn_runtime_agent_prompt_context_provider(config);
+    let result =
+        with_runtime_agent_prompt_context_provider(runtime_agent_prompt_context_provider, async {
+            with_runtime_mcp_state_provider(runtime_mcp_state_provider, async {
+                if let Some(allowed_tools) = expanded_allowed_tools.as_ref() {
+                    with_tool_runtime_policy_overlay(
+                        ToolRuntimePolicyOverlay {
+                            allowed_tools: Some(allowed_tools.iter().cloned().collect()),
+                            disallowed_tools: Vec::new(),
+                        },
+                        async {
+                            engine
+                                .submit_message(submitted_messages, process_context)
+                                .await
+                        },
+                    )
+                    .await
+                } else {
                     engine
                         .submit_message(submitted_messages, process_context)
                         .await
-                },
-            )
+                }
+            })
             .await
-        } else {
-            engine
-                .submit_message(submitted_messages, process_context)
-                .await
-        }
-    })
-    .await;
+        })
+        .await;
 
     *conversation = legacy_conversation_for_result(&engine, result.as_ref().err());
     {
