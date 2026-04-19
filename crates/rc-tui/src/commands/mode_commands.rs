@@ -10,6 +10,8 @@ use rc_core::{ConversationEntry, PermissionMode};
 use rc_session::SessionStore;
 use rc_tools::runtime_plan_mode::{RuntimePlanModeController, inject_plan_mode_runtime_messages};
 
+use super::RuntimeConfigPatch;
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct PlanCommandOutcome {
     pub outputs: Vec<String>,
@@ -21,6 +23,23 @@ impl PlanCommandOutcome {
         Self {
             outputs: vec![message.into()],
             queued_prompt: None,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ModeCommandOutcome {
+    pub outputs: Vec<String>,
+    pub config_patch: Option<RuntimeConfigPatch>,
+    pub meta_messages: Vec<String>,
+}
+
+impl ModeCommandOutcome {
+    fn message(message: impl Into<String>) -> Self {
+        Self {
+            outputs: vec![message.into()],
+            config_patch: None,
+            meta_messages: Vec::new(),
         }
     }
 }
@@ -225,31 +244,16 @@ pub fn dispatch_fast(input: &str, config: &RuntimeConfig) {
 }
 
 /// Dispatch `/outputStyle` — switch output style.
-pub fn dispatch_output_style(input: &str, config: &RuntimeConfig) {
-    let style = input
+pub fn dispatch_output_style(input: &str, _config: &RuntimeConfig) -> ModeCommandOutcome {
+    let _style = input
         .trim()
         .strip_prefix("/outputStyle")
         .unwrap_or_default()
         .trim();
 
-    let available_styles = ["default", "concise", "verbose", "technical"];
-
-    match style {
-        "" => {
-            println!("Output style: default");
-            println!("Available styles: {}", available_styles.join(", "));
-            println!("Usage: /outputStyle <style>");
-        }
-        s if available_styles.contains(&s) => {
-            println!("Output style: default -> {s}");
-            println!("  (takes effect on next turn)");
-        }
-        other => {
-            println!("Unknown output style '{other}'.");
-            println!("Available styles: {}", available_styles.join(", "));
-        }
-    }
-    let _ = config;
+    ModeCommandOutcome::message(
+        "/output-style has been deprecated. Use /config to change your output style, or set it in your settings file. Changes take effect on the next session.",
+    )
 }
 
 /// Dispatch `/color` — switch color scheme.
@@ -279,8 +283,42 @@ pub fn dispatch_color(input: &str, config: &RuntimeConfig) {
     let _ = config;
 }
 
+fn proactive_status_message(enabled: bool) -> String {
+    if enabled {
+        "Proactive mode is enabled.".to_owned()
+    } else {
+        "Proactive mode is disabled.".to_owned()
+    }
+}
+
+fn proactive_meta_message(enabled: bool) -> String {
+    let body = if enabled {
+        "Proactive mode is now enabled. Take initiative, explore adjacent work, and make progress without waiting for explicit instructions."
+    } else {
+        "Proactive mode is now disabled. Stop acting autonomously and wait for explicit user instructions before taking on related work."
+    };
+    format!("<system-reminder>\n{body}\n</system-reminder>")
+}
+
+fn brief_status_message(enabled: bool) -> String {
+    if enabled {
+        "Brief-only mode enabled".to_owned()
+    } else {
+        "Brief-only mode disabled".to_owned()
+    }
+}
+
+fn brief_meta_message(enabled: bool) -> String {
+    let body = if enabled {
+        "Brief mode is now enabled. Use the BriefTool tool for all user-facing output — plain text outside it is hidden from the user's view."
+    } else {
+        "Brief mode is now disabled. The BriefTool tool is no longer available — reply with plain text."
+    };
+    format!("<system-reminder>\n{body}\n</system-reminder>")
+}
+
 /// Dispatch `/proactive` — toggle proactive mode.
-pub fn dispatch_proactive(input: &str, config: &RuntimeConfig) {
+pub fn dispatch_proactive(input: &str, config: &RuntimeConfig) -> ModeCommandOutcome {
     let subcmd = input
         .trim()
         .strip_prefix("/proactive")
@@ -288,29 +326,31 @@ pub fn dispatch_proactive(input: &str, config: &RuntimeConfig) {
         .trim();
 
     match subcmd {
-        "" => {
-            println!("Proactive mode: off");
-            println!("  Usage: /proactive [on|off]");
-            println!("  When enabled, the agent takes initiative on related tasks.");
-        }
-        "on" => {
-            println!("Proactive mode: on");
-            println!("  Agent will take initiative on related tasks.");
-        }
-        "off" => {
-            println!("Proactive mode: off");
-            println!("  Agent will only respond to explicit requests.");
-        }
-        other => {
-            println!("Unknown /proactive subcommand '{other}'.");
-            println!("Usage: /proactive [on|off]");
-        }
+        "" => ModeCommandOutcome::message(proactive_status_message(config.proactive_active)),
+        "on" => ModeCommandOutcome {
+            outputs: vec![proactive_status_message(true)],
+            config_patch: Some(RuntimeConfigPatch {
+                proactive_active: Some(true),
+                ..RuntimeConfigPatch::default()
+            }),
+            meta_messages: vec![proactive_meta_message(true)],
+        },
+        "off" => ModeCommandOutcome {
+            outputs: vec![proactive_status_message(false)],
+            config_patch: Some(RuntimeConfigPatch {
+                proactive_active: Some(false),
+                ..RuntimeConfigPatch::default()
+            }),
+            meta_messages: vec![proactive_meta_message(false)],
+        },
+        other => ModeCommandOutcome::message(format!(
+            "Unknown /proactive subcommand '{other}'. Usage: /proactive [on|off]"
+        )),
     }
-    let _ = config;
 }
 
 /// Dispatch `/brief` — toggle brief mode.
-pub fn dispatch_brief(input: &str, config: &RuntimeConfig) {
+pub fn dispatch_brief(input: &str, config: &RuntimeConfig) -> ModeCommandOutcome {
     let subcmd = input
         .trim()
         .strip_prefix("/brief")
@@ -318,25 +358,27 @@ pub fn dispatch_brief(input: &str, config: &RuntimeConfig) {
         .trim();
 
     match subcmd {
-        "" => {
-            println!("Brief mode: off");
-            println!("  Usage: /brief [on|off]");
-            println!("  When enabled, responses are shortened to essential information.");
-        }
-        "on" => {
-            println!("Brief mode: on");
-            println!("  Responses will be concise.");
-        }
-        "off" => {
-            println!("Brief mode: off");
-            println!("  Full responses enabled.");
-        }
-        other => {
-            println!("Unknown /brief subcommand '{other}'.");
-            println!("Usage: /brief [on|off]");
-        }
+        "" => ModeCommandOutcome::message(brief_status_message(config.brief_enabled)),
+        "on" => ModeCommandOutcome {
+            outputs: vec![brief_status_message(true)],
+            config_patch: Some(RuntimeConfigPatch {
+                brief_enabled: Some(true),
+                ..RuntimeConfigPatch::default()
+            }),
+            meta_messages: vec![brief_meta_message(true)],
+        },
+        "off" => ModeCommandOutcome {
+            outputs: vec![brief_status_message(false)],
+            config_patch: Some(RuntimeConfigPatch {
+                brief_enabled: Some(false),
+                ..RuntimeConfigPatch::default()
+            }),
+            meta_messages: vec![brief_meta_message(false)],
+        },
+        other => ModeCommandOutcome::message(format!(
+            "Unknown /brief subcommand '{other}'. Usage: /brief [on|off]"
+        )),
     }
-    let _ = config;
 }
 
 #[cfg(test)]
@@ -546,33 +588,33 @@ mod tests {
 
     // /outputStyle tests
     #[test]
-    fn output_style_default_shows_current() {
+    fn output_style_default_shows_deprecation_notice() {
         let (config, _store, _controller) = build_test_config();
-        dispatch_output_style("/outputStyle", &config);
+        let outcome = dispatch_output_style("/outputStyle", &config);
+        assert_eq!(
+            outcome.outputs,
+            vec![
+                "/output-style has been deprecated. Use /config to change your output style, or set it in your settings file. Changes take effect on the next session.".to_owned()
+            ]
+        );
+        assert!(outcome.config_patch.is_none());
+        assert!(outcome.meta_messages.is_empty());
     }
 
     #[test]
-    fn output_style_concise() {
+    fn output_style_concise_still_shows_deprecation_notice() {
         let (config, _store, _controller) = build_test_config();
-        dispatch_output_style("/outputStyle concise", &config);
+        let outcome = dispatch_output_style("/outputStyle concise", &config);
+        assert_eq!(outcome.outputs.len(), 1);
+        assert!(outcome.outputs[0].contains("/output-style has been deprecated"));
     }
 
     #[test]
-    fn output_style_verbose() {
+    fn output_style_unknown_still_shows_deprecation_notice() {
         let (config, _store, _controller) = build_test_config();
-        dispatch_output_style("/outputStyle verbose", &config);
-    }
-
-    #[test]
-    fn output_style_technical() {
-        let (config, _store, _controller) = build_test_config();
-        dispatch_output_style("/outputStyle technical", &config);
-    }
-
-    #[test]
-    fn output_style_unknown() {
-        let (config, _store, _controller) = build_test_config();
-        dispatch_output_style("/outputStyle fancy", &config);
+        let outcome = dispatch_output_style("/outputStyle fancy", &config);
+        assert_eq!(outcome.outputs.len(), 1);
+        assert!(outcome.outputs[0].contains("/output-style has been deprecated"));
     }
 
     // /color tests
@@ -610,49 +652,116 @@ mod tests {
     #[test]
     fn proactive_default_shows_status() {
         let (config, _store, _controller) = build_test_config();
-        dispatch_proactive("/proactive", &config);
+        let outcome = dispatch_proactive("/proactive", &config);
+        assert_eq!(
+            outcome.outputs,
+            vec!["Proactive mode is disabled.".to_owned()]
+        );
+        assert!(outcome.config_patch.is_none());
+        assert!(outcome.meta_messages.is_empty());
     }
 
     #[test]
     fn proactive_on() {
         let (config, _store, _controller) = build_test_config();
-        dispatch_proactive("/proactive on", &config);
+        let outcome = dispatch_proactive("/proactive on", &config);
+        assert_eq!(
+            outcome.outputs,
+            vec!["Proactive mode is enabled.".to_owned()]
+        );
+        assert_eq!(
+            outcome.config_patch,
+            Some(RuntimeConfigPatch {
+                proactive_active: Some(true),
+                ..RuntimeConfigPatch::default()
+            })
+        );
+        assert_eq!(outcome.meta_messages.len(), 1);
+        assert!(outcome.meta_messages[0].contains("Proactive mode is now enabled."));
     }
 
     #[test]
     fn proactive_off() {
         let (config, _store, _controller) = build_test_config();
-        dispatch_proactive("/proactive off", &config);
+        let outcome = dispatch_proactive("/proactive off", &config);
+        assert_eq!(
+            outcome.outputs,
+            vec!["Proactive mode is disabled.".to_owned()]
+        );
+        assert_eq!(
+            outcome.config_patch,
+            Some(RuntimeConfigPatch {
+                proactive_active: Some(false),
+                ..RuntimeConfigPatch::default()
+            })
+        );
+        assert_eq!(outcome.meta_messages.len(), 1);
+        assert!(outcome.meta_messages[0].contains("Proactive mode is now disabled."));
     }
 
     #[test]
     fn proactive_unknown() {
         let (config, _store, _controller) = build_test_config();
-        dispatch_proactive("/proactive maybe", &config);
+        let outcome = dispatch_proactive("/proactive maybe", &config);
+        assert_eq!(
+            outcome.outputs,
+            vec!["Unknown /proactive subcommand 'maybe'. Usage: /proactive [on|off]".to_owned()]
+        );
+        assert!(outcome.config_patch.is_none());
+        assert!(outcome.meta_messages.is_empty());
     }
 
     // /brief tests
     #[test]
     fn brief_default_shows_status() {
         let (config, _store, _controller) = build_test_config();
-        dispatch_brief("/brief", &config);
+        let outcome = dispatch_brief("/brief", &config);
+        assert_eq!(outcome.outputs, vec!["Brief-only mode disabled".to_owned()]);
+        assert!(outcome.config_patch.is_none());
+        assert!(outcome.meta_messages.is_empty());
     }
 
     #[test]
     fn brief_on() {
         let (config, _store, _controller) = build_test_config();
-        dispatch_brief("/brief on", &config);
+        let outcome = dispatch_brief("/brief on", &config);
+        assert_eq!(outcome.outputs, vec!["Brief-only mode enabled".to_owned()]);
+        assert_eq!(
+            outcome.config_patch,
+            Some(RuntimeConfigPatch {
+                brief_enabled: Some(true),
+                ..RuntimeConfigPatch::default()
+            })
+        );
+        assert_eq!(outcome.meta_messages.len(), 1);
+        assert!(outcome.meta_messages[0].contains("Brief mode is now enabled."));
     }
 
     #[test]
     fn brief_off() {
         let (config, _store, _controller) = build_test_config();
-        dispatch_brief("/brief off", &config);
+        let outcome = dispatch_brief("/brief off", &config);
+        assert_eq!(outcome.outputs, vec!["Brief-only mode disabled".to_owned()]);
+        assert_eq!(
+            outcome.config_patch,
+            Some(RuntimeConfigPatch {
+                brief_enabled: Some(false),
+                ..RuntimeConfigPatch::default()
+            })
+        );
+        assert_eq!(outcome.meta_messages.len(), 1);
+        assert!(outcome.meta_messages[0].contains("Brief mode is now disabled."));
     }
 
     #[test]
     fn brief_unknown() {
         let (config, _store, _controller) = build_test_config();
-        dispatch_brief("/brief maybe", &config);
+        let outcome = dispatch_brief("/brief maybe", &config);
+        assert_eq!(
+            outcome.outputs,
+            vec!["Unknown /brief subcommand 'maybe'. Usage: /brief [on|off]".to_owned()]
+        );
+        assert!(outcome.config_patch.is_none());
+        assert!(outcome.meta_messages.is_empty());
     }
 }

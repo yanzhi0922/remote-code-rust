@@ -17,6 +17,10 @@ struct RuntimeStatusReport {
     session: RuntimeSessionStatus,
     provider: UiProviderStatusSnapshot,
     permission_mode: String,
+    output_style: Option<String>,
+    language: Option<String>,
+    brief_enabled: bool,
+    proactive_active: bool,
     setting_sources: Vec<String>,
     allowed_setting_sources: Vec<String>,
     settings_files: Vec<String>,
@@ -72,6 +76,10 @@ pub(crate) fn build_runtime_status_snapshot(config: &RuntimeConfig) -> UiRuntime
             fallback_model: config.fallback_model.clone(),
         },
         permission_mode: config.permission_mode.as_legacy_str().to_owned(),
+        output_style: config.output_style.clone(),
+        language: config.language.clone(),
+        brief_enabled: config.brief_enabled,
+        proactive_active: config.proactive_active,
         setting_sources: config.setting_sources.clone(),
         allowed_setting_sources: config
             .allowed_setting_sources
@@ -104,6 +112,10 @@ fn collect_runtime_status(
         ),
         provider: snapshot.provider,
         permission_mode: snapshot.permission_mode,
+        output_style: snapshot.output_style,
+        language: snapshot.language,
+        brief_enabled: snapshot.brief_enabled,
+        proactive_active: snapshot.proactive_active,
         setting_sources: snapshot.setting_sources,
         allowed_setting_sources: snapshot.allowed_setting_sources,
         settings_files: config
@@ -182,6 +194,22 @@ fn print_runtime_status(report: &RuntimeStatusReport) {
             .unwrap_or("(missing)")
     );
     println!("  permission:      {}", report.permission_mode);
+    println!(
+        "  output style:    {}",
+        report.output_style.as_deref().unwrap_or("(default)")
+    );
+    println!(
+        "  language:        {}",
+        report.language.as_deref().unwrap_or("(default)")
+    );
+    println!(
+        "  brief mode:      {}",
+        if report.brief_enabled { "on" } else { "off" }
+    );
+    println!(
+        "  proactive mode:  {}",
+        if report.proactive_active { "on" } else { "off" }
+    );
     println!(
         "  settings files:  {}",
         if report.settings_files.is_empty() {
@@ -321,6 +349,10 @@ mod tests {
                 disallowed_tools: vec!["bash_command".to_owned()],
                 effort: Some("medium".to_owned()),
                 fallback_model: Some("glm-5-turbo".to_owned()),
+                output_style: Some("Explanatory".to_owned()),
+                language: Some("Chinese".to_owned()),
+                brief_enabled: Some(true),
+                proactive_active: Some(true),
             },
         )
         .expect("config should load");
@@ -329,6 +361,10 @@ mod tests {
         assert_eq!(snapshot.provider.name, "glm-coding");
         assert_eq!(snapshot.provider.effort.as_deref(), Some("medium"));
         assert_eq!(snapshot.permission_mode, "acceptEdits");
+        assert_eq!(snapshot.output_style.as_deref(), Some("Explanatory"));
+        assert_eq!(snapshot.language.as_deref(), Some("Chinese"));
+        assert!(snapshot.brief_enabled);
+        assert!(snapshot.proactive_active);
         assert_eq!(
             snapshot.allowed_setting_sources,
             vec!["user", "project", "local"]

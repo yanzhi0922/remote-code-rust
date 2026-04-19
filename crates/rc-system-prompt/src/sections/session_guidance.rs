@@ -11,6 +11,13 @@ use crate::sections::{BulletItem, SystemPromptSection, section_with_bullets};
 const ASK_USER_QUESTION_TOOL_NAME: &str = "AskUserQuestion";
 const AGENT_TOOL_NAME: &str = "Agent";
 const SKILL_TOOL_NAME: &str = "Skill";
+const DISCOVER_SKILLS_TOOL_NAME: &str = "DiscoverSkills";
+const BASH_TOOL_NAME: &str = "Bash";
+const GLOB_TOOL_NAME: &str = "Glob";
+const GREP_TOOL_NAME: &str = "Grep";
+const EXPLORE_AGENT_TYPE: &str = "Explore";
+const EXPLORE_AGENT_MIN_QUERIES: usize = 3;
+const VERIFICATION_AGENT_TYPE: &str = "verification";
 
 /// The session-specific guidance section.
 pub struct SessionGuidanceSection;
@@ -28,7 +35,16 @@ impl SystemPromptSection for SessionGuidanceSection {
     fn compute(&self, ctx: &PromptContext) -> Result<Option<String>> {
         let has_ask = ctx.enabled_tools.contains(ASK_USER_QUESTION_TOOL_NAME);
         let has_agent = ctx.enabled_tools.contains(AGENT_TOOL_NAME);
-        let has_skills = ctx.enabled_tools.contains(SKILL_TOOL_NAME);
+        let has_skills = ctx.features.user_invocable_skills_available
+            && ctx.enabled_tools.contains(SKILL_TOOL_NAME);
+        let has_discover_skills = has_skills
+            && (ctx.enabled_tools.contains(DISCOVER_SKILLS_TOOL_NAME)
+                || ctx.enabled_tools.contains("discover_skills"));
+        let search_tools = if ctx.features.embedded_search_tools {
+            format!("`find` or `grep` via the {BASH_TOOL_NAME} tool")
+        } else {
+            format!("the {GLOB_TOOL_NAME} or {GREP_TOOL_NAME}")
+        };
 
         let mut items: Vec<BulletItem> = Vec::new();
 
@@ -56,9 +72,31 @@ impl SystemPromptSection for SessionGuidanceSection {
             }
         }
 
+        if has_agent && ctx.features.explore_plan_agents_enabled && !ctx.is_fork_subagent_enabled {
+            items.push(BulletItem::Single(format!(
+                "For simple, directed codebase searches (e.g. for a specific file/class/function) use {search_tools} directly."
+            )));
+            items.push(BulletItem::Single(format!(
+                "For broader codebase exploration and deep research, use the {AGENT_TOOL_NAME} tool with subagent_type={EXPLORE_AGENT_TYPE}. This is slower than using {search_tools} directly, so use this only when a simple, directed search proves to be insufficient or when your task will clearly require more than {EXPLORE_AGENT_MIN_QUERIES} queries."
+            )));
+        }
+
         if has_skills {
             items.push(BulletItem::Single(format!(
                 "/<skill-name> (e.g., /commit) is shorthand for users to invoke a user-invocable skill. When executed, the skill gets expanded to a full prompt. Use the {SKILL_TOOL_NAME} tool to execute them. IMPORTANT: Only use {SKILL_TOOL_NAME} for skills listed in its user-invocable skills section - do not guess or use built-in CLI commands."
+            )));
+        }
+
+        if has_discover_skills {
+            items.push(BulletItem::Single(
+                "Relevant skills are automatically surfaced each turn as \"Skills relevant to your task:\" reminders. If you're about to do something those don't cover — a mid-task pivot, an unusual workflow, a multi-step plan — call DiscoverSkills with a specific description of what you're doing. Skills already visible or loaded are filtered automatically. Skip this if the surfaced skills already cover your next action."
+                    .to_string(),
+            ));
+        }
+
+        if has_agent && ctx.features.verification_agent_enabled {
+            items.push(BulletItem::Single(format!(
+                "The contract: when non-trivial implementation happens on your turn, independent adversarial verification must happen before you report completion \u{2014} regardless of who did the implementing (you directly, a fork you spawned, or a subagent). You are the one reporting to the user; you own the gate. Non-trivial means: 3+ file edits, backend/API changes, or infrastructure changes. Spawn the {AGENT_TOOL_NAME} tool with subagent_type=\"{VERIFICATION_AGENT_TYPE}\". Your own checks, caveats, and a fork's self-checks do NOT substitute \u{2014} only the verifier assigns a verdict; you cannot self-assign PARTIAL. Pass the original user request, all files changed (by anyone), the approach, and the plan file path if applicable. Flag concerns if you have them but do NOT share test results or claim things work. On FAIL: fix, resume the verifier with its findings plus your fix, repeat until PASS. On PASS: spot-check it \u{2014} re-run 2-3 commands from its report, confirm every PASS has a Command run block with output that matches your re-run. If any PASS lacks a command block or diverges, resume the verifier with the specifics. On PARTIAL (from the verifier): report what passed and what could not be verified."
             )));
         }
 
@@ -96,6 +134,7 @@ mod tests {
             is_non_interactive: false,
             is_fork_subagent_enabled: false,
             session_start_date: "2025-01-01".to_string(),
+            features: crate::PromptFeatures::default(),
         }
     }
 
@@ -129,6 +168,15 @@ mod tests {
     }
 
     #[test]
+    fn session_guidance_skill_bullet_requires_available_skills() {
+        let mut ctx = test_ctx_with_tools(&[SKILL_TOOL_NAME]);
+        ctx.is_non_interactive = true;
+        let section = SessionGuidanceSection;
+        let result = section.compute(&ctx).expect("compute ok");
+        assert!(result.is_none());
+    }
+
+    #[test]
     fn session_guidance_fork_mode() {
         let mut ctx = test_ctx_with_tools(&[AGENT_TOOL_NAME]);
         ctx.is_fork_subagent_enabled = true;
@@ -142,5 +190,16 @@ mod tests {
     fn session_guidance_not_cacheable() {
         let section = SessionGuidanceSection;
         assert!(!section.is_cacheable());
+    }
+
+    #[test]
+    fn session_guidance_discover_skills_guidance_requires_skill_inventory() {
+        let mut ctx = test_ctx_with_tools(&[SKILL_TOOL_NAME, DISCOVER_SKILLS_TOOL_NAME]);
+        ctx.features.user_invocable_skills_available = true;
+        ctx.is_non_interactive = true;
+        let section = SessionGuidanceSection;
+        let result = section.compute(&ctx).expect("compute ok");
+        let content = result.expect("should be Some");
+        assert!(content.contains("Relevant skills are automatically surfaced"));
     }
 }

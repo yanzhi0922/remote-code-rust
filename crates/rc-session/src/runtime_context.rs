@@ -23,6 +23,14 @@ struct PersistedSessionContext {
     #[serde(default)]
     original_cwd: Option<PathBuf>,
     permission_mode: String,
+    #[serde(default)]
+    output_style: Option<String>,
+    #[serde(default)]
+    language: Option<String>,
+    #[serde(default)]
+    brief_enabled: bool,
+    #[serde(default)]
+    proactive_active: bool,
     provider: PersistedProviderContext,
 }
 
@@ -49,6 +57,10 @@ pub fn persist_runtime_config_session_context(
             cwd: config.cwd.clone(),
             original_cwd: Some(config.original_cwd.clone()),
             permission_mode: config.permission_mode.as_legacy_str().to_owned(),
+            output_style: config.output_style.clone(),
+            language: config.language.clone(),
+            brief_enabled: config.brief_enabled,
+            proactive_active: config.proactive_active,
             provider: PersistedProviderContext {
                 name: config.provider.name.clone(),
                 base_url: config.provider.base_url.clone(),
@@ -91,6 +103,10 @@ pub fn restore_runtime_config_session_context(
         if let Some(permission_mode) = parse_permission_mode(&persisted.permission_mode) {
             config.permission_mode = permission_mode;
         }
+        config.output_style = persisted.output_style;
+        config.language = persisted.language;
+        config.brief_enabled = persisted.brief_enabled;
+        config.proactive_active = persisted.proactive_active;
         config.provider.name = persisted.provider.name;
         config.provider.base_url = persisted.provider.base_url;
         config.provider.model = persisted.provider.model;
@@ -279,10 +295,39 @@ mod tests {
         assert_eq!(config.cwd, expected_cwd);
         assert_eq!(config.original_cwd, expected_cwd);
         assert_eq!(config.permission_mode, PermissionMode::Default);
+        assert_eq!(config.output_style, None);
+        assert_eq!(config.language, None);
+        assert!(!config.brief_enabled);
+        assert!(!config.proactive_active);
         assert_eq!(config.provider.name, "mock-provider");
         assert_eq!(config.provider.base_url, expected_base_url);
         assert_eq!(config.provider.model.as_deref(), Some("mock-model"));
         assert_eq!(config.provider.protocol, ProviderProtocol::Anthropic);
+    }
+
+    #[test]
+    fn persisted_runtime_context_restores_prompt_and_mode_state() {
+        let (_tempdir, mut config) = test_config();
+        config.output_style = Some("Explanatory".to_owned());
+        config.language = Some("Japanese".to_owned());
+        config.brief_enabled = true;
+        config.proactive_active = true;
+        let store = SessionStore::open(config.paths.clone()).expect("store should open");
+
+        persist_runtime_config_session_context(&store, &config).expect("context should persist");
+
+        config.output_style = None;
+        config.language = None;
+        config.brief_enabled = false;
+        config.proactive_active = false;
+
+        restore_runtime_config_session_context(&store, &mut config)
+            .expect("context should restore");
+
+        assert_eq!(config.output_style.as_deref(), Some("Explanatory"));
+        assert_eq!(config.language.as_deref(), Some("Japanese"));
+        assert!(config.brief_enabled);
+        assert!(config.proactive_active);
     }
 
     #[test]

@@ -23,8 +23,11 @@ impl SystemPromptSection for FunctionResultClearingSection {
         "frc"
     }
 
-    fn compute(&self, _ctx: &PromptContext) -> Result<Option<String>> {
-        Ok(None)
+    fn compute(&self, ctx: &PromptContext) -> Result<Option<String>> {
+        Ok(ctx
+            .features
+            .function_result_keep_recent
+            .map(build_function_result_clearing_section))
     }
 }
 
@@ -75,6 +78,7 @@ mod tests {
             is_non_interactive: false,
             is_fork_subagent_enabled: false,
             session_start_date: "2025-01-01".to_string(),
+            features: crate::PromptFeatures::default(),
         }
     }
 

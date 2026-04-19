@@ -6,6 +6,7 @@ use anyhow::Result;
 
 use crate::PromptContext;
 use crate::sections::SystemPromptSection;
+use crate::sections::brief::BRIEF_PROACTIVE_SECTION;
 
 /// Tick tag used in proactive mode prompts.
 const TICK_TAG: &str = "tick";
@@ -21,17 +22,21 @@ impl SystemPromptSection for ProactiveSection {
     }
 
     fn compute(&self, ctx: &PromptContext) -> Result<Option<String>> {
-        // Only include when proactive mode is enabled.
-        // In the full implementation, this would check proactiveModule.isProactiveActive().
-        // For now, we gate on a context flag or return None.
-        let _ = ctx;
-        Ok(None)
+        Ok(ctx
+            .features
+            .proactive_active
+            .then(|| build_proactive_section(ctx.features.brief_enabled)))
     }
 }
 
 /// Build the proactive section content.
 /// Public so it can be used when proactive mode is confirmed active.
-pub fn build_proactive_section() -> String {
+pub fn build_proactive_section(brief_enabled: bool) -> String {
+    let brief_suffix = if brief_enabled {
+        format!("\n\n{BRIEF_PROACTIVE_SECTION}")
+    } else {
+        String::new()
+    };
     format!(
         "# Autonomous work\n\n\
         You are running autonomously. You will receive `<{TICK_TAG}>` prompts that keep you alive between turns \u{2014} \
@@ -79,7 +84,7 @@ pub fn build_proactive_section() -> String {
         - **Unfocused**: The user is away. Lean heavily into autonomous action \u{2014} make decisions, explore, commit, push. \
         Only pause for genuinely irreversible or high-risk actions.\n\
         - **Focused**: The user is watching. Be more collaborative \u{2014} surface choices, ask before committing to large changes, \
-        and keep your output concise so it's easy to follow in real time."
+        and keep your output concise so it's easy to follow in real time.{brief_suffix}"
     )
 }
 
@@ -107,6 +112,7 @@ mod tests {
             is_non_interactive: false,
             is_fork_subagent_enabled: false,
             session_start_date: "2025-01-01".to_string(),
+            features: crate::PromptFeatures::default(),
         }
     }
 
@@ -119,25 +125,25 @@ mod tests {
 
     #[test]
     fn build_proactive_starts_with_header() {
-        let content = build_proactive_section();
+        let content = build_proactive_section(false);
         assert!(content.starts_with("# Autonomous work"));
     }
 
     #[test]
     fn build_proactive_mentions_tick_tag() {
-        let content = build_proactive_section();
+        let content = build_proactive_section(false);
         assert!(content.contains(&format!("<{TICK_TAG}>")));
     }
 
     #[test]
     fn build_proactive_mentions_sleep() {
-        let content = build_proactive_section();
+        let content = build_proactive_section(false);
         assert!(content.contains("Sleep"));
     }
 
     #[test]
     fn build_proactive_mentions_bias_toward_action() {
-        let content = build_proactive_section();
+        let content = build_proactive_section(false);
         assert!(content.contains("Bias toward action"));
     }
 }

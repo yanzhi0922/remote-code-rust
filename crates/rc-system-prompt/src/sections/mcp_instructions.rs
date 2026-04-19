@@ -44,9 +44,6 @@ impl SystemPromptSection for McpInstructionsSection {
             return Ok(None);
         }
 
-        let mut clients_with_instructions = clients_with_instructions;
-        clients_with_instructions.sort_by(|left, right| left.name.cmp(&right.name));
-
         let instruction_blocks: Vec<String> = clients_with_instructions
             .into_iter()
             .map(|client| {
@@ -88,6 +85,7 @@ mod tests {
             is_non_interactive: false,
             is_fork_subagent_enabled: false,
             session_start_date: "2025-01-01".to_string(),
+            features: crate::PromptFeatures::default(),
         }
     }
 

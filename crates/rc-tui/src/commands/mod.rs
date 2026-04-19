@@ -58,6 +58,8 @@ pub struct SlashCommandResult {
     pub outputs: Vec<String>,
     pub queued_prompt: Option<String>,
     pub next_session_id: Option<Uuid>,
+    pub config_patch: Option<RuntimeConfigPatch>,
+    pub meta_messages: Vec<String>,
 }
 
 impl SlashCommandResult {
@@ -67,6 +69,8 @@ impl SlashCommandResult {
             outputs: Vec::new(),
             queued_prompt: None,
             next_session_id: None,
+            config_patch: None,
+            meta_messages: Vec::new(),
         }
     }
 
@@ -76,6 +80,14 @@ impl SlashCommandResult {
             ..Self::continue_empty()
         }
     }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RuntimeConfigPatch {
+    pub brief_enabled: Option<bool>,
+    pub proactive_active: Option<bool>,
+    pub output_style: Option<Option<String>>,
+    pub language: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -641,6 +653,8 @@ pub fn dispatch_with_result(input: &str, context: SlashCommandContext<'_>) -> Sl
                 )],
                 queued_prompt: None,
                 next_session_id: Some(next_session_id),
+                config_patch: None,
+                meta_messages: Vec::new(),
             };
         }
         "/theme" => {
@@ -672,6 +686,8 @@ pub fn dispatch_with_result(input: &str, context: SlashCommandContext<'_>) -> Sl
                 outputs: outcome.outputs,
                 queued_prompt: None,
                 next_session_id: outcome.next_session_id,
+                config_patch: None,
+                meta_messages: Vec::new(),
             };
         }
         "/rename" => session_mgmt::dispatch_rename(trimmed, context.config),
@@ -696,6 +712,8 @@ pub fn dispatch_with_result(input: &str, context: SlashCommandContext<'_>) -> Sl
                 outputs: outcome.outputs,
                 queued_prompt: None,
                 next_session_id: outcome.next_session_id,
+                config_patch: None,
+                meta_messages: Vec::new(),
             };
         }
         "/peers" => agent_commands::render_peers(context.config),
@@ -712,14 +730,46 @@ pub fn dispatch_with_result(input: &str, context: SlashCommandContext<'_>) -> Sl
                 outputs: outcome.outputs,
                 queued_prompt: outcome.queued_prompt,
                 next_session_id: None,
+                config_patch: None,
+                meta_messages: Vec::new(),
             };
         }
         "/effort" => mode_commands::dispatch_effort(trimmed, context.config),
         "/fast" => mode_commands::dispatch_fast(trimmed, context.config),
-        "/outputStyle" => mode_commands::dispatch_output_style(trimmed, context.config),
+        "/outputStyle" => {
+            let outcome = mode_commands::dispatch_output_style(trimmed, context.config);
+            return SlashCommandResult {
+                action: SlashCommandAction::Continue,
+                outputs: outcome.outputs,
+                queued_prompt: None,
+                next_session_id: None,
+                config_patch: outcome.config_patch,
+                meta_messages: outcome.meta_messages,
+            };
+        }
         "/color" => mode_commands::dispatch_color(trimmed, context.config),
-        "/proactive" => mode_commands::dispatch_proactive(trimmed, context.config),
-        "/brief" => mode_commands::dispatch_brief(trimmed, context.config),
+        "/proactive" => {
+            let outcome = mode_commands::dispatch_proactive(trimmed, context.config);
+            return SlashCommandResult {
+                action: SlashCommandAction::Continue,
+                outputs: outcome.outputs,
+                queued_prompt: None,
+                next_session_id: None,
+                config_patch: outcome.config_patch,
+                meta_messages: outcome.meta_messages,
+            };
+        }
+        "/brief" => {
+            let outcome = mode_commands::dispatch_brief(trimmed, context.config);
+            return SlashCommandResult {
+                action: SlashCommandAction::Continue,
+                outputs: outcome.outputs,
+                queued_prompt: None,
+                next_session_id: None,
+                config_patch: outcome.config_patch,
+                meta_messages: outcome.meta_messages,
+            };
+        }
         "/files" => utility::dispatch_files(trimmed, context.config),
         "/env" => utility::render_env(),
         "/remoteEnv" => utility::render_remote_env(context.config),
@@ -761,6 +811,8 @@ pub fn dispatch_with_result(input: &str, context: SlashCommandContext<'_>) -> Sl
                 outputs: Vec::new(),
                 queued_prompt: None,
                 next_session_id: None,
+                config_patch: None,
+                meta_messages: Vec::new(),
             };
         }
         _ => {

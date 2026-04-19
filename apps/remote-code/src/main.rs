@@ -88,6 +88,10 @@ async fn main() -> Result<()> {
             disallowed_tools: cli.disallowed_tools.clone(),
             effort: None,
             fallback_model: None,
+            output_style: None,
+            language: None,
+            brief_enabled: None,
+            proactive_active: None,
         },
     )?;
     let store = SessionStore::open(config.paths.clone())?;
@@ -201,6 +205,10 @@ fn resolve_resume_session(cli: &Cli) -> Result<Option<Uuid>> {
                     disallowed_tools: Vec::new(),
                     effort: None,
                     fallback_model: None,
+                    output_style: None,
+                    language: None,
+                    brief_enabled: None,
+                    proactive_active: None,
                 },
             )?;
             let store = SessionStore::open(config.paths.clone())?;

@@ -1,20 +1,10 @@
-//! System Reminders section — explains `<system-reminder>` tags and auto-summarization.
-//!
-//! Matches `getSystemRemindersSection()` in Claude Code's `prompts.ts`.
-//! Always included (non-conditional).
+//! System reminders used by the proactive prompt path.
 
 use anyhow::Result;
 
 use crate::PromptContext;
-use crate::sections::{BulletItem, SystemPromptSection, section_with_bullets};
+use crate::sections::SystemPromptSection;
 
-/// The system reminders section.
-///
-/// Explains to the model that:
-/// - `<system-reminder>` tags may appear in the conversation
-/// - These are automatically inserted to provide context
-/// - The system automatically summarizes old messages to maintain
-///   unlimited context length
 pub struct SystemRemindersSection;
 
 impl SystemPromptSection for SystemRemindersSection {
@@ -23,22 +13,9 @@ impl SystemPromptSection for SystemRemindersSection {
     }
 
     fn compute(&self, _ctx: &PromptContext) -> Result<Option<String>> {
-        let items = vec![
-            BulletItem::Single(
-                "You may see <system-reminder> tags in your conversation. These are automatically inserted by the system to provide additional context and instructions."
-                    .to_string(),
-            ),
-            BulletItem::Single(
-                "Treat the content within <system-reminder> tags as important system-level guidance that should be followed."
-                    .to_string(),
-            ),
-            BulletItem::Single(
-                "The system automatically summarizes old messages to maintain unlimited context length. Summarized messages preserve key information while reducing token usage."
-                    .to_string(),
-            ),
-        ];
-
-        Ok(Some(section_with_bullets("System Reminders", &items)))
+        Ok(Some(
+            "- Tool results and user messages may include <system-reminder> tags. <system-reminder> tags contain useful information and reminders. They are automatically added by the system, and bear no direct relation to the specific tool results or user messages in which they appear.\n- The conversation has unlimited context through automatic summarization.".to_string(),
+        ))
     }
 }
 
@@ -66,6 +43,7 @@ mod tests {
             is_non_interactive: false,
             is_fork_subagent_enabled: false,
             session_start_date: "2025-01-01".to_string(),
+            features: crate::PromptFeatures::default(),
         }
     }
 
@@ -84,10 +62,9 @@ mod tests {
         let section = SystemRemindersSection;
         let result = section.compute(&test_ctx()).expect("compute ok");
         let content = result.expect("should be Some");
-        assert!(content.starts_with("# System Reminders"));
         assert!(content.contains("<system-reminder>"));
-        assert!(content.contains("automatically inserted"));
-        assert!(content.contains("automatically summarizes"));
+        assert!(content.contains("automatically added"));
+        assert!(content.contains("automatic summarization"));
     }
 
     #[test]
