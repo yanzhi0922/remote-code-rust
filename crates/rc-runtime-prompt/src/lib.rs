@@ -152,6 +152,17 @@ pub fn runtime_mcp_instructions_delta_enabled() -> bool {
     true
 }
 
+#[must_use]
+pub fn runtime_agent_listing_delta_enabled() -> bool {
+    if runtime_env_truthy("CLAUDE_CODE_AGENT_LIST_IN_MESSAGES") {
+        return true;
+    }
+    if runtime_env_defined_falsy("CLAUDE_CODE_AGENT_LIST_IN_MESSAGES") {
+        return false;
+    }
+    false
+}
+
 pub fn insert_prompt_tool_aliases(spec: &ToolSpec, enabled_tools: &mut HashSet<String>) {
     enabled_tools.insert(spec.name.clone());
     enabled_tools.insert(spec.protocol_name.clone());

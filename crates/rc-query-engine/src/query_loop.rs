@@ -436,7 +436,7 @@ async fn maybe_compact_conversation(
         return;
     }
     if let Some(transform) = config.post_compact_transform.as_ref() {
-        compacted = transform(compacted);
+        compacted = transform(compacted).await;
     }
     let after_snapshot = config.context_manager.budget_snapshot(&compacted);
     *legacy_conversation = compacted;
