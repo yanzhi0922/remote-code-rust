@@ -11,6 +11,7 @@ use directories::BaseDirs;
 use rc_agents::loader::load_all_agents;
 use rc_agents::{AgentDefinition, AgentIsolation, AgentSource};
 use rc_core::PermissionMode;
+use rc_mcp::normalization::mcp_info_from_string;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -229,9 +230,10 @@ async fn run_resolved_agent_execution(
     sub_agent: Arc<dyn SubAgentCompletion>,
     definition: AgentDefinition,
 ) -> Result<String> {
+    ensure_agent_required_mcp_servers(&definition).await?;
     let working_dir = resolve_agent_working_dir(input, context, &definition)?;
     let allowed_tools = resolve_agent_allowed_tools(&definition, &input.tools, false).await?;
-    let permission_mode = requested_agent_permission_mode(input.mode.as_deref())?;
+    let permission_mode = resolve_agent_permission_mode(input.mode.as_deref(), &definition)?;
     let title = if input.description.trim().is_empty() {
         truncate_str(&input.prompt, 80)
     } else {
@@ -356,9 +358,10 @@ async fn run_background_agent_execution(
             "run_in_background is not supported together with name/team_name in this runtime"
         ));
     }
+    ensure_agent_required_mcp_servers(&definition).await?;
     let working_dir = resolve_agent_working_dir(input, context, &definition)?;
     let allowed_tools = resolve_agent_allowed_tools(&definition, &input.tools, true).await?;
-    let permission_mode = requested_agent_permission_mode(input.mode.as_deref())?;
+    let permission_mode = resolve_agent_permission_mode(input.mode.as_deref(), &definition)?;
     let title = if input.description.trim().is_empty() {
         truncate_str(&input.prompt, 80)
     } else {
@@ -486,14 +489,41 @@ fn resolve_agent_working_dir(
     resolve_working_dir(&context.cwd, input.cwd.as_deref())
 }
 
-fn requested_agent_permission_mode(mode: Option<&str>) -> Result<Option<PermissionMode>> {
+fn resolve_agent_permission_mode(
+    mode: Option<&str>,
+    definition: &AgentDefinition,
+) -> Result<Option<PermissionMode>> {
     match mode.unwrap_or("single") {
-        "single" | "batch" => Ok(None),
+        "single" | "batch" => Ok(Some(agent_definition_permission_mode(definition)?)),
         "default" => Ok(Some(PermissionMode::Default)),
         "plan" => Ok(Some(PermissionMode::Plan)),
         other => Err(anyhow!(
             "unsupported agent mode `{other}`; expected single, batch, default, or plan"
         )),
+    }
+}
+
+fn agent_definition_permission_mode(definition: &AgentDefinition) -> Result<PermissionMode> {
+    let Some(raw_mode) = definition.permission_mode.as_deref() else {
+        return Ok(PermissionMode::AcceptEdits);
+    };
+    parse_agent_permission_mode(raw_mode).ok_or_else(|| {
+        anyhow!(
+            "unsupported permissionMode `{}` for agent `{}`; expected default, acceptEdits, bypassPermissions, dontAsk, or plan",
+            raw_mode,
+            definition.agent_type
+        )
+    })
+}
+
+fn parse_agent_permission_mode(value: &str) -> Option<PermissionMode> {
+    match value.trim() {
+        "default" => Some(PermissionMode::Default),
+        "acceptEdits" | "accept-edits" => Some(PermissionMode::AcceptEdits),
+        "bypassPermissions" | "bypass-permissions" => Some(PermissionMode::BypassPermissions),
+        "dontAsk" | "dont-ask" => Some(PermissionMode::DontAsk),
+        "plan" => Some(PermissionMode::Plan),
+        _ => None,
     }
 }
 
@@ -813,6 +843,69 @@ async fn resolve_agent_allowed_tools(
     selected.sort();
     selected.dedup();
     Ok(selected)
+}
+
+async fn ensure_agent_required_mcp_servers(definition: &AgentDefinition) -> Result<()> {
+    if definition.required_mcp_servers.is_empty() {
+        return Ok(());
+    }
+
+    let specs = runtime_provider_tool_specs().await;
+    ensure_agent_required_mcp_servers_with_specs(definition, &specs)
+}
+
+fn ensure_agent_required_mcp_servers_with_specs(
+    definition: &AgentDefinition,
+    specs: &[ToolSpec],
+) -> Result<()> {
+    if definition.required_mcp_servers.is_empty() {
+        return Ok(());
+    }
+
+    let servers_with_tools = mcp_servers_with_tools(specs);
+    let missing =
+        missing_required_mcp_servers(&definition.required_mcp_servers, &servers_with_tools);
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "Agent '{}' requires MCP servers matching: {}. MCP servers with tools: {}. Use /mcp to configure and authenticate the required MCP servers.",
+        definition.agent_type,
+        missing.join(", "),
+        if servers_with_tools.is_empty() {
+            "none".to_owned()
+        } else {
+            servers_with_tools.join(", ")
+        }
+    ))
+}
+
+fn mcp_servers_with_tools(specs: &[ToolSpec]) -> Vec<String> {
+    let mut servers = Vec::new();
+    for spec in specs {
+        let Some(info) = mcp_info_from_string(&spec.name) else {
+            continue;
+        };
+        if servers.iter().any(|server| server == &info.server_name) {
+            continue;
+        }
+        servers.push(info.server_name);
+    }
+    servers
+}
+
+fn missing_required_mcp_servers(required: &[String], servers_with_tools: &[String]) -> Vec<String> {
+    required
+        .iter()
+        .filter(|pattern| {
+            let pattern = pattern.to_ascii_lowercase();
+            !servers_with_tools
+                .iter()
+                .any(|server| server.to_ascii_lowercase().contains(&pattern))
+        })
+        .cloned()
+        .collect()
 }
 
 fn filter_tools_for_agent_runtime(
@@ -1206,6 +1299,7 @@ mod tests {
         let request = &requests[0];
         assert_eq!(request.agent_type, "general-purpose");
         assert_eq!(request.max_turns, 200);
+        assert_eq!(request.permission_mode, Some(PermissionMode::AcceptEdits));
         assert!(
             request
                 .system_prompt
@@ -1246,6 +1340,97 @@ mod tests {
     }
 
     #[test]
+    fn agent_definition_permission_mode_defaults_to_accept_edits_like_research() {
+        let definition = AgentDefinition::new("worker", "Do work");
+
+        assert_eq!(
+            resolve_agent_permission_mode(Some("single"), &definition)
+                .expect("default agent permission mode"),
+            Some(PermissionMode::AcceptEdits)
+        );
+    }
+
+    #[test]
+    fn agent_definition_permission_mode_uses_agent_frontmatter() {
+        let mut definition = AgentDefinition::new("guide", "Guide");
+        definition.permission_mode = Some("dontAsk".to_owned());
+
+        assert_eq!(
+            resolve_agent_permission_mode(Some("single"), &definition)
+                .expect("definition permission mode"),
+            Some(PermissionMode::DontAsk)
+        );
+        assert_eq!(
+            resolve_agent_permission_mode(Some("plan"), &definition)
+                .expect("explicit spawn mode should still override"),
+            Some(PermissionMode::Plan)
+        );
+    }
+
+    #[test]
+    fn required_mcp_servers_match_mcp_tool_server_names_like_research() {
+        let mut definition = AgentDefinition::new("docs-agent", "Use docs");
+        definition.required_mcp_servers = vec!["context".to_owned(), "MINI".to_owned()];
+        let specs = vec![
+            fake_tool_spec("mcp__context7__query_docs"),
+            fake_tool_spec("mcp__MiniMax__plan"),
+            fake_tool_spec("read_file"),
+        ];
+
+        ensure_agent_required_mcp_servers_with_specs(&definition, &specs)
+            .expect("case-insensitive substring MCP requirements should pass");
+    }
+
+    #[test]
+    fn required_mcp_servers_error_matches_research_wording() {
+        let mut definition = AgentDefinition::new("docs-agent", "Use docs");
+        definition.required_mcp_servers = vec!["MiniMax".to_owned(), "context".to_owned()];
+        let specs = vec![fake_tool_spec("mcp__context7__query_docs")];
+
+        let error = ensure_agent_required_mcp_servers_with_specs(&definition, &specs)
+            .expect_err("missing required MCP server should fail before agent launch")
+            .to_string();
+
+        assert_eq!(
+            error,
+            "Agent 'docs-agent' requires MCP servers matching: MiniMax. MCP servers with tools: context7. Use /mcp to configure and authenticate the required MCP servers."
+        );
+    }
+
+    #[test]
+    fn required_mcp_servers_report_none_when_no_mcp_tools_are_visible() {
+        let mut definition = AgentDefinition::new("docs-agent", "Use docs");
+        definition.required_mcp_servers = vec!["context7".to_owned()];
+        let specs = vec![fake_tool_spec("read_file"), fake_tool_spec("bash_command")];
+
+        let error = ensure_agent_required_mcp_servers_with_specs(&definition, &specs)
+            .expect_err("missing required MCP server should fail before agent launch")
+            .to_string();
+
+        assert_eq!(
+            error,
+            "Agent 'docs-agent' requires MCP servers matching: context7. MCP servers with tools: none. Use /mcp to configure and authenticate the required MCP servers."
+        );
+    }
+
+    #[test]
+    fn required_mcp_servers_ignore_malformed_mcp_tool_names() {
+        let mut definition = AgentDefinition::new("docs-agent", "Use docs");
+        definition.required_mcp_servers = vec!["srv".to_owned()];
+        let specs = vec![
+            fake_tool_spec("mcp__srv"),
+            fake_tool_spec("mcp____lookup"),
+            fake_tool_spec("mcp__srv__"),
+        ];
+
+        let error = ensure_agent_required_mcp_servers_with_specs(&definition, &specs)
+            .expect_err("malformed MCP tool names must not satisfy server requirements")
+            .to_string();
+
+        assert!(error.contains("MCP servers with tools: none"));
+    }
+
+    #[test]
     fn resolve_agent_definition_prefers_project_override_over_user() {
         let temp = tempdir().expect("tempdir");
         let user_dir = temp.path().join("user-agents");
@@ -1278,6 +1463,17 @@ mod tests {
             Some("Use the project reviewer prompt.")
         );
         assert_eq!(definition.source, rc_agents::AgentSource::Project);
+    }
+
+    fn fake_tool_spec(name: &str) -> ToolSpec {
+        ToolSpec {
+            name: name.to_owned(),
+            protocol_name: name.to_owned(),
+            permission_tool_name: name.to_owned(),
+            description: String::new(),
+            requires_permission: false,
+            input_schema: json!({"type": "object"}),
+        }
     }
 
     #[test]
