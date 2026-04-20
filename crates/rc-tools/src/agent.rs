@@ -40,7 +40,10 @@ const ALL_AGENT_DISALLOWED_TOOLS: &[&str] = &[
     "agent",
     "ask_user",
     "task_stop",
+    "workflow",
 ];
+
+const CUSTOM_AGENT_DISALLOWED_TOOLS: &[&str] = ALL_AGENT_DISALLOWED_TOOLS;
 
 const ASYNC_AGENT_ALLOWED_TOOLS: &[&str] = &[
     "read_file",
@@ -55,7 +58,6 @@ const ASYNC_AGENT_ALLOWED_TOOLS: &[&str] = &[
     "write_file",
     "notebook_edit",
     "skill_execute",
-    "discover_skills",
     "synthetic_output",
     "tool_search",
     "enter_worktree",
@@ -240,8 +242,9 @@ async fn run_resolved_agent_execution(
 ) -> Result<String> {
     ensure_agent_required_mcp_servers(&definition).await?;
     let working_dir = resolve_agent_working_dir(input, context, &definition)?;
-    let allowed_tools = resolve_agent_allowed_tools(&definition, &input.tools, false).await?;
     let permission_mode = resolve_agent_permission_mode(input.mode.as_deref(), &definition)?;
+    let allowed_tools =
+        resolve_agent_allowed_tools(&definition, &input.tools, false, permission_mode).await?;
     let title = if input.description.trim().is_empty() {
         truncate_str(&input.prompt, 80)
     } else {
@@ -370,8 +373,9 @@ async fn run_background_agent_execution(
     }
     ensure_agent_required_mcp_servers(&definition).await?;
     let working_dir = resolve_agent_working_dir(input, context, &definition)?;
-    let allowed_tools = resolve_agent_allowed_tools(&definition, &input.tools, true).await?;
     let permission_mode = resolve_agent_permission_mode(input.mode.as_deref(), &definition)?;
+    let allowed_tools =
+        resolve_agent_allowed_tools(&definition, &input.tools, true, permission_mode).await?;
     let title = if input.description.trim().is_empty() {
         truncate_str(&input.prompt, 80)
     } else {
@@ -838,9 +842,11 @@ async fn resolve_agent_allowed_tools(
     definition: &AgentDefinition,
     requested_tools: &[String],
     is_async: bool,
+    permission_mode: Option<PermissionMode>,
 ) -> Result<Vec<String>> {
     let specs = runtime_provider_tool_specs().await;
-    let filtered_by_definition = filter_tools_for_agent_runtime(&specs, definition, is_async)?;
+    let filtered_by_definition =
+        filter_tools_for_agent_runtime(&specs, definition, is_async, permission_mode)?;
     let filtered_by_definition =
         apply_agent_tool_allowlist(&filtered_by_definition, &definition.tools, true)?;
     let filtered_by_request = if requested_tools.is_empty() {
@@ -850,14 +856,7 @@ async fn resolve_agent_allowed_tools(
     };
 
     let denied = collect_matching_tool_names(&filtered_by_request, &definition.disallowed_tools);
-    let mut selected = filtered_by_request
-        .into_iter()
-        .filter(|spec| !denied.contains(&spec.name))
-        .map(|spec| spec.name)
-        .collect::<Vec<_>>();
-    selected.sort();
-    selected.dedup();
-    Ok(selected)
+    Ok(collect_selected_tool_names(filtered_by_request, &denied))
 }
 
 async fn ensure_agent_required_mcp_servers(definition: &AgentDefinition) -> Result<()> {
@@ -1006,13 +1005,12 @@ fn filter_tools_for_agent_runtime(
     specs: &[ToolSpec],
     definition: &AgentDefinition,
     is_async: bool,
+    permission_mode: Option<PermissionMode>,
 ) -> Result<Vec<ToolSpec>> {
+    let exit_plan_mode_allowed = permission_mode == Some(PermissionMode::Plan);
     let globally_denied = collect_matching_tool_names(
         specs,
-        &ALL_AGENT_DISALLOWED_TOOLS
-            .iter()
-            .map(|tool| (*tool).to_owned())
-            .collect::<Vec<_>>(),
+        &disallowed_agent_tool_patterns(ALL_AGENT_DISALLOWED_TOOLS, exit_plan_mode_allowed),
     );
     let mut filtered = specs
         .iter()
@@ -1023,10 +1021,7 @@ fn filter_tools_for_agent_runtime(
     if definition.source != AgentSource::BuiltIn {
         let custom_denied = collect_matching_tool_names(
             &filtered,
-            &ALL_AGENT_DISALLOWED_TOOLS
-                .iter()
-                .map(|tool| (*tool).to_owned())
-                .collect::<Vec<_>>(),
+            &disallowed_agent_tool_patterns(CUSTOM_AGENT_DISALLOWED_TOOLS, exit_plan_mode_allowed),
         );
         filtered.retain(|spec| !custom_denied.contains(&spec.name));
     }
@@ -1039,11 +1034,44 @@ fn filter_tools_for_agent_runtime(
                 .map(|tool| (*tool).to_owned())
                 .collect::<Vec<_>>(),
         );
-        filtered
-            .retain(|spec| spec.name.starts_with("mcp__") || async_allowed.contains(&spec.name));
+        filtered.retain(|spec| {
+            spec.name.starts_with("mcp__")
+                || async_allowed.contains(&spec.name)
+                || (exit_plan_mode_allowed && spec.name == "exit_plan_mode")
+        });
     }
 
     Ok(filtered)
+}
+
+fn disallowed_agent_tool_patterns(
+    patterns: &[&str],
+    exit_plan_mode_allowed: bool,
+) -> Vec<String> {
+    patterns
+        .iter()
+        .filter(|tool| !(exit_plan_mode_allowed && **tool == "exit_plan_mode"))
+        .map(|tool| (*tool).to_owned())
+        .collect()
+}
+
+fn collect_selected_tool_names(
+    specs: Vec<ToolSpec>,
+    denied: &BTreeSet<String>,
+) -> Vec<String> {
+    let mut selected = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    for spec in specs {
+        if denied.contains(&spec.name) {
+            continue;
+        }
+        if seen.insert(spec.name.clone()) {
+            selected.push(spec.name);
+        }
+    }
+
+    selected
 }
 
 fn apply_agent_tool_allowlist(
@@ -1476,6 +1504,63 @@ mod tests {
                 .expect("explicit spawn mode should still override"),
             Some(PermissionMode::Plan)
         );
+    }
+
+    #[test]
+    fn filter_tools_for_agent_runtime_keeps_exit_plan_mode_for_plan_agents() {
+        let definition = AgentDefinition::new("planner", "Plan work");
+        let specs = vec![
+            fake_tool_spec("exit_plan_mode"),
+            fake_tool_spec("read_file"),
+            fake_tool_spec("agent"),
+        ];
+
+        let filtered = filter_tools_for_agent_runtime(
+            &specs,
+            &definition,
+            false,
+            Some(PermissionMode::Plan),
+        )
+        .expect("filter tools");
+
+        let names = filtered.into_iter().map(|spec| spec.name).collect::<Vec<_>>();
+        assert!(names.contains(&"exit_plan_mode".to_owned()));
+        assert!(!names.contains(&"agent".to_owned()));
+    }
+
+    #[test]
+    fn filter_tools_for_agent_runtime_removes_discover_skills_for_async_agents() {
+        let definition = AgentDefinition::new("worker", "Do work");
+        let specs = vec![
+            fake_tool_spec("discover_skills"),
+            fake_tool_spec("skill_execute"),
+            fake_tool_spec("mcp__context7__query_docs"),
+        ];
+
+        let filtered = filter_tools_for_agent_runtime(
+            &specs,
+            &definition,
+            true,
+            Some(PermissionMode::AcceptEdits),
+        )
+        .expect("filter tools");
+
+        let names = filtered.into_iter().map(|spec| spec.name).collect::<Vec<_>>();
+        assert!(!names.contains(&"discover_skills".to_owned()));
+        assert!(names.contains(&"skill_execute".to_owned()));
+        assert!(names.contains(&"mcp__context7__query_docs".to_owned()));
+    }
+
+    #[test]
+    fn collect_selected_tool_names_preserves_first_seen_order() {
+        let specs = vec![
+            fake_tool_spec("write_file"),
+            fake_tool_spec("read_file"),
+            fake_tool_spec("write_file"),
+        ];
+
+        let selected = collect_selected_tool_names(specs, &BTreeSet::new());
+        assert_eq!(selected, vec!["write_file", "read_file"]);
     }
 
     #[test]
