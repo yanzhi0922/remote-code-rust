@@ -11,6 +11,11 @@ use rc_agents::loader::load_all_agents_with_context;
 use rc_agents::prompt::{format_agent_line, visible_agents};
 use rc_config::settings_layers::load_runtime_settings;
 use rc_config::{RuntimeConfig, validate_provider_config};
+use rc_context::runtime_identity::{
+    agent_swarms_enabled, code_guide_enabled, default_entrypoint, embedded_search_tools_enabled,
+    entrypoint_is_non_interactive, explore_plan_agents_enabled, fork_subagent_enabled,
+    runtime_user_type_from_env, show_agent_concurrency_note, verification_agent_enabled,
+};
 use rc_context::{
     RuntimeFeatureGates, RuntimeIdentityContext, RuntimeSubscriptionContext, RuntimeUserType,
 };
@@ -494,31 +499,46 @@ fn user_agents_dir() -> Option<std::path::PathBuf> {
     BaseDirs::new().map(|base| base.home_dir().join(".claude").join("agents"))
 }
 
+fn resolved_runtime_entrypoint(_config: &RuntimeConfig, is_non_interactive: bool) -> String {
+    std::env::var("CLAUDE_CODE_ENTRYPOINT")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            let args = std::env::args().skip(1).collect::<Vec<_>>();
+            if matches!(args.as_slice(), [cmd, subcmd, ..] if cmd == "mcp" && subcmd == "serve") {
+                return Some("mcp".to_owned());
+            }
+            Some(
+                default_entrypoint(is_non_interactive, runtime_env_truthy("CLAUDE_CODE_ACTION"))
+                    .to_owned(),
+            )
+        })
+        .expect("runtime entrypoint fallback should always resolve")
+}
+
 fn build_runtime_identity_context(config: &RuntimeConfig) -> RuntimeIdentityContext {
     let resolved_settings = load_runtime_settings(&config.settings_files).unwrap_or_default();
-    let entrypoint = std::env::var("CLAUDE_CODE_ENTRYPOINT").ok();
-    let user_type = match std::env::var("USER_TYPE")
-        .ok()
-        .as_deref()
-        .map(|value| value.trim().to_ascii_lowercase())
-    {
-        Some(value) if value == "ant" => RuntimeUserType::Ant,
-        Some(value) if !value.is_empty() => RuntimeUserType::External,
-        _ => RuntimeUserType::Unknown,
-    };
-    let embedded_search_tools = runtime_env_truthy("EMBEDDED_SEARCH_TOOLS")
-        && !matches!(
-            entrypoint.as_deref(),
-            Some("sdk-ts" | "sdk-py" | "sdk-cli" | "local-agent")
-        );
-    let code_guide_enabled =
-        !matches!(entrypoint.as_deref(), Some("sdk-ts" | "sdk-py" | "sdk-cli"));
+    let is_non_interactive = config.print_mode
+        || !matches!(config.output_format, rc_core::OutputFormat::Text)
+        || entrypoint_is_non_interactive(std::env::var("CLAUDE_CODE_ENTRYPOINT").ok().as_deref());
+    let entrypoint = Some(resolved_runtime_entrypoint(config, is_non_interactive));
+    let user_type = runtime_user_type_from_env(std::env::var("USER_TYPE").ok().as_deref());
+    let explicit_agent_team_opt_in = runtime_env_truthy("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
+        || std::env::args().any(|arg| arg == "--agent-teams");
     let subscription_type = std::env::var("CLAUDE_CODE_SUBSCRIPTION_TYPE")
         .ok()
         .or_else(|| match user_type {
             RuntimeUserType::Ant => Some("max".to_owned()),
             _ => None,
         });
+    let coordinator_mode = rc_agents::coordinator::is_coordinator_mode();
+    let embedded_search_tools = embedded_search_tools_enabled(
+        entrypoint.as_deref(),
+        runtime_env_truthy("EMBEDDED_SEARCH_TOOLS"),
+    );
+    let code_guide = code_guide_enabled(entrypoint.as_deref());
+    let show_concurrency_note = show_agent_concurrency_note(subscription_type.as_deref());
 
     RuntimeIdentityContext {
         user_type,
@@ -534,8 +554,7 @@ fn build_runtime_identity_context(config: &RuntimeConfig) -> RuntimeIdentityCont
                 config.provider.protocol,
                 ProviderProtocol::Anthropic
             )),
-        is_non_interactive: config.print_mode
-            || !matches!(config.output_format, rc_core::OutputFormat::Text),
+        is_non_interactive,
         kairos_active: runtime_env_truthy("KAIROS_ACTIVE"),
         fast_mode_flag_opt_in: resolved_settings.fast_mode == Some(true),
         fast_mode_per_session_opt_in: resolved_settings.fast_mode_per_session_opt_in == Some(true),
@@ -547,18 +566,23 @@ fn build_runtime_identity_context(config: &RuntimeConfig) -> RuntimeIdentityCont
         },
         features: RuntimeFeatureGates {
             embedded_search_tools,
-            explore_plan_agents_enabled: true,
-            verification_agent_enabled: false,
-            code_guide_enabled,
-            agent_swarms_enabled: matches!(user_type, RuntimeUserType::Ant)
-                || runtime_env_truthy("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
-                || std::env::args().any(|arg| arg == "--agent-teams"),
-            show_agent_concurrency_note: subscription_type.as_deref() != Some("pro"),
+            explore_plan_agents_enabled: explore_plan_agents_enabled(true, true),
+            verification_agent_enabled: verification_agent_enabled(true, false),
+            code_guide_enabled: code_guide,
+            agent_swarms_enabled: agent_swarms_enabled(user_type, explicit_agent_team_opt_in, true),
+            show_agent_concurrency_note: show_concurrency_note,
             mcp_instructions_delta_enabled: runtime_mcp_instructions_delta_enabled(),
             deferred_tools_delta_enabled: runtime_deferred_tools_delta_enabled(),
             agent_listing_delta_enabled: runtime_agent_listing_delta_enabled(),
             include_token_budget_prompt: runtime_env_truthy("REMOTE_CODE_TOKEN_BUDGET_PROMPT"),
-            is_fork_subagent_enabled: false,
+            sdk_disable_builtin_agents: runtime_env_truthy(
+                "CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS",
+            ),
+            is_fork_subagent_enabled: fork_subagent_enabled(
+                true,
+                coordinator_mode,
+                is_non_interactive,
+            ),
         },
         ..RuntimeIdentityContext::default()
     }
@@ -2048,9 +2072,9 @@ mod tests {
         RuntimeDeferredToolsDeltaMarker, RuntimeMcpInstructionsDeltaMarker, announced_agent_types,
         announced_deferred_tool_names, announced_mcp_instruction_names,
         augment_post_compact_conversation_for_runtime, build_agent_listing_delta_entry,
-        build_mcp_instructions_delta_entry, refresh_runtime_system_prompt,
-        run_prompt_with_query_engine_compat, run_prompt_with_query_engine_compat_overrides,
-        runtime_delta_entry,
+        build_mcp_instructions_delta_entry, build_runtime_identity_context,
+        refresh_runtime_system_prompt, run_prompt_with_query_engine_compat,
+        run_prompt_with_query_engine_compat_overrides, runtime_delta_entry,
     };
     use crate::conversation::{PromptEventSink, PromptStreamEvent, initialize_conversation};
     use crate::hooks::{HookRunState, RuntimeHookDiscovery};
@@ -2323,6 +2347,31 @@ mod tests {
         assert!(marker.contains("\"addedLines\""));
         assert!(marker.contains("\"isInitial\":true"));
         assert!(marker.contains("\"showConcurrencyNote\":true"));
+    }
+
+    #[test]
+    fn build_runtime_identity_context_defaults_to_cli_and_enables_fork_for_interactive_runs() {
+        let (_tempdir, config, _store) = mock_config_and_store();
+        let identity = build_runtime_identity_context(&config);
+
+        assert_eq!(identity.entrypoint.as_deref(), Some("cli"));
+        assert!(!identity.is_non_interactive);
+        assert!(identity.features.explore_plan_agents_enabled);
+        assert!(!identity.features.verification_agent_enabled);
+        assert!(identity.features.code_guide_enabled);
+        assert!(identity.features.is_fork_subagent_enabled);
+    }
+
+    #[test]
+    fn build_runtime_identity_context_defaults_to_sdk_cli_for_noninteractive_runs() {
+        let (_tempdir, mut config, _store) = mock_config_and_store();
+        config.print_mode = true;
+
+        let identity = build_runtime_identity_context(&config);
+
+        assert_eq!(identity.entrypoint.as_deref(), Some("sdk-cli"));
+        assert!(identity.is_non_interactive);
+        assert!(!identity.features.is_fork_subagent_enabled);
     }
 
     #[tokio::test]

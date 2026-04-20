@@ -52,6 +52,8 @@ pub struct RuntimeFeatureGates {
     #[serde(default)]
     pub include_token_budget_prompt: bool,
     #[serde(default)]
+    pub sdk_disable_builtin_agents: bool,
+    #[serde(default)]
     pub is_fork_subagent_enabled: bool,
 }
 
@@ -100,24 +102,22 @@ impl RuntimeIdentityContext {
     #[must_use]
     pub fn from_legacy_env() -> Self {
         let entrypoint = env_var("CLAUDE_CODE_ENTRYPOINT");
-        let user_type = match env_var("USER_TYPE")
-            .as_deref()
-            .map(|value| value.trim().to_ascii_lowercase())
-        {
-            Some(value) if value == "ant" => RuntimeUserType::Ant,
-            Some(value) if !value.is_empty() => RuntimeUserType::External,
-            _ => RuntimeUserType::Unknown,
-        };
-
-        let embedded_search_tools = embedded_search_tools_enabled(entrypoint.as_deref());
-        let code_guide_enabled =
-            !matches!(entrypoint.as_deref(), Some("sdk-ts" | "sdk-py" | "sdk-cli"));
-        let subscription_type = env_var("CLAUDE_CODE_SUBSCRIPTION_TYPE");
-        let show_agent_concurrency_note = subscription_type.as_deref() != Some("pro");
+        let user_type = runtime_user_type_from_env(env_var("USER_TYPE").as_deref());
+        let is_non_interactive = entrypoint_is_non_interactive(entrypoint.as_deref());
+        let subscription_type = env_var("CLAUDE_CODE_SUBSCRIPTION_TYPE")
+            .or_else(|| matches!(user_type, RuntimeUserType::Ant).then_some("max".to_owned()));
+        let explicit_agent_team_opt_in = env_truthy("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS");
+        let embedded_search_tools = embedded_search_tools_enabled(
+            entrypoint.as_deref(),
+            env_truthy("EMBEDDED_SEARCH_TOOLS"),
+        );
+        let code_guide_enabled = code_guide_enabled(entrypoint.as_deref());
+        let show_agent_concurrency_note = show_agent_concurrency_note(subscription_type.as_deref());
 
         Self {
             user_type,
             entrypoint,
+            is_non_interactive,
             is_first_party: true,
             subscription: RuntimeSubscriptionContext {
                 subscription_type,
@@ -126,11 +126,14 @@ impl RuntimeIdentityContext {
             },
             features: RuntimeFeatureGates {
                 embedded_search_tools,
-                explore_plan_agents_enabled: true,
-                verification_agent_enabled: false,
+                explore_plan_agents_enabled: explore_plan_agents_enabled(true, true),
+                verification_agent_enabled: verification_agent_enabled(true, false),
                 code_guide_enabled,
-                agent_swarms_enabled: matches!(user_type, RuntimeUserType::Ant)
-                    || env_truthy("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"),
+                agent_swarms_enabled: agent_swarms_enabled(
+                    user_type,
+                    explicit_agent_team_opt_in,
+                    true,
+                ),
                 show_agent_concurrency_note,
                 mcp_instructions_delta_enabled: env_truthy_or_default(
                     "CLAUDE_CODE_MCP_INSTR_DELTA",
@@ -145,7 +148,12 @@ impl RuntimeIdentityContext {
                     false,
                 ),
                 include_token_budget_prompt: env_truthy("REMOTE_CODE_TOKEN_BUDGET_PROMPT"),
-                is_fork_subagent_enabled: false,
+                sdk_disable_builtin_agents: env_truthy("CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS"),
+                is_fork_subagent_enabled: fork_subagent_enabled(
+                    true,
+                    env_truthy("CLAUDE_CODE_COORDINATOR_MODE"),
+                    is_non_interactive,
+                ),
             },
             ..Self::default()
         }
@@ -220,6 +228,81 @@ impl RuntimeIdentityContext {
     }
 }
 
+#[must_use]
+pub fn runtime_user_type_from_env(value: Option<&str>) -> RuntimeUserType {
+    match value.map(|value| value.trim().to_ascii_lowercase()) {
+        Some(value) if value == "ant" => RuntimeUserType::Ant,
+        Some(value) if !value.is_empty() => RuntimeUserType::External,
+        _ => RuntimeUserType::Unknown,
+    }
+}
+
+#[must_use]
+pub fn entrypoint_is_non_interactive(entrypoint: Option<&str>) -> bool {
+    matches!(entrypoint, Some("sdk-ts" | "sdk-py" | "sdk-cli"))
+}
+
+#[must_use]
+pub fn default_entrypoint(is_non_interactive: bool, github_action: bool) -> &'static str {
+    if github_action {
+        "claude-code-github-action"
+    } else if is_non_interactive {
+        "sdk-cli"
+    } else {
+        "cli"
+    }
+}
+
+#[must_use]
+pub fn embedded_search_tools_enabled(entrypoint: Option<&str>, search_tools_enabled: bool) -> bool {
+    if !search_tools_enabled {
+        return false;
+    }
+
+    !matches!(
+        entrypoint,
+        Some("sdk-ts" | "sdk-py" | "sdk-cli" | "local-agent")
+    )
+}
+
+#[must_use]
+pub fn code_guide_enabled(entrypoint: Option<&str>) -> bool {
+    !matches!(entrypoint, Some("sdk-ts" | "sdk-py" | "sdk-cli"))
+}
+
+#[must_use]
+pub fn explore_plan_agents_enabled(feature_enabled: bool, rollout_enabled: bool) -> bool {
+    feature_enabled && rollout_enabled
+}
+
+#[must_use]
+pub fn verification_agent_enabled(feature_enabled: bool, rollout_enabled: bool) -> bool {
+    feature_enabled && rollout_enabled
+}
+
+#[must_use]
+pub fn agent_swarms_enabled(
+    user_type: RuntimeUserType,
+    explicit_opt_in: bool,
+    rollout_enabled: bool,
+) -> bool {
+    matches!(user_type, RuntimeUserType::Ant) || (explicit_opt_in && rollout_enabled)
+}
+
+#[must_use]
+pub fn show_agent_concurrency_note(subscription_type: Option<&str>) -> bool {
+    subscription_type != Some("pro")
+}
+
+#[must_use]
+pub fn fork_subagent_enabled(
+    feature_enabled: bool,
+    coordinator_mode: bool,
+    is_non_interactive: bool,
+) -> bool {
+    feature_enabled && !coordinator_mode && !is_non_interactive
+}
+
 fn env_var(name: &str) -> Option<String> {
     std::env::var(name)
         .ok()
@@ -244,17 +327,6 @@ fn env_truthy_or_default(name: &str, default: bool) -> bool {
         ),
         Err(_) => default,
     }
-}
-
-fn embedded_search_tools_enabled(entrypoint: Option<&str>) -> bool {
-    if !env_truthy("EMBEDDED_SEARCH_TOOLS") {
-        return false;
-    }
-
-    !matches!(
-        entrypoint,
-        Some("sdk-ts" | "sdk-py" | "sdk-cli" | "local-agent")
-    )
 }
 
 #[cfg(test)]
@@ -313,5 +385,36 @@ mod tests {
         assert!(config.flag_fast_mode);
         assert!(config.per_session_opt_in);
         assert_eq!(config.user_fast_mode_setting, Some(true));
+    }
+
+    #[test]
+    fn entrypoint_defaults_match_interactive_and_noninteractive_surfaces() {
+        assert_eq!(default_entrypoint(false, false), "cli");
+        assert_eq!(default_entrypoint(true, false), "sdk-cli");
+        assert_eq!(default_entrypoint(false, true), "claude-code-github-action");
+    }
+
+    #[test]
+    fn fork_subagent_gate_matches_research_rules() {
+        assert!(fork_subagent_enabled(true, false, false));
+        assert!(!fork_subagent_enabled(true, true, false));
+        assert!(!fork_subagent_enabled(true, false, true));
+        assert!(!fork_subagent_enabled(false, false, false));
+    }
+
+    #[test]
+    fn external_agent_swarms_require_opt_in_but_ant_users_bypass_it() {
+        assert!(agent_swarms_enabled(RuntimeUserType::Ant, false, false));
+        assert!(!agent_swarms_enabled(
+            RuntimeUserType::External,
+            false,
+            true
+        ));
+        assert!(agent_swarms_enabled(RuntimeUserType::External, true, true));
+        assert!(!agent_swarms_enabled(
+            RuntimeUserType::External,
+            true,
+            false
+        ));
     }
 }

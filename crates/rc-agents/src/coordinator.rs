@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::constants::AGENT_TOOL_NAME;
 
 /// Environment variable name for coordinator mode.
-const COORDINATOR_MODE_ENV: &str = "REMOTE_CODE_COORDINATOR_MODE";
+const COORDINATOR_MODE_ENV: &str = "CLAUDE_CODE_COORDINATOR_MODE";
 
 /// Tool name for sending messages to workers.
 const SEND_MESSAGE_TOOL_NAME: &str = "SendMessage";
@@ -105,7 +105,7 @@ impl std::fmt::Display for CoordinatorMode {
 /// Check whether coordinator mode is enabled.
 ///
 /// First checks the in-process override (set by [`match_session_mode`]),
-/// then falls back to the `REMOTE_CODE_COORDINATOR_MODE` environment variable.
+/// then falls back to the `CLAUDE_CODE_COORDINATOR_MODE` environment variable.
 pub fn is_coordinator_mode() -> bool {
     // Check in-process override first
     if COORDINATOR_OVERRIDE_SET.load(Ordering::SeqCst) {

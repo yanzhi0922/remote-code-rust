@@ -3,7 +3,9 @@
 //! Provides the six built-in agents: GeneralPurpose, Explore, Plan,
 //! Verification, ClaudeCodeGuide, and StatuslineSetup.
 
+use crate::coordinator::is_coordinator_mode;
 use crate::definition::{AgentDefinition, AgentSource};
+use crate::worker::worker_agent_definition;
 use rc_context::{RuntimeIdentityContext, RuntimeUserType};
 
 /// Returns all built-in agent definitions.
@@ -20,6 +22,14 @@ pub fn get_built_in_agents() -> Vec<AgentDefinition> {
 }
 
 pub fn get_built_in_agents_with_context(ctx: &RuntimeIdentityContext) -> Vec<AgentDefinition> {
+    if ctx.features.sdk_disable_builtin_agents && ctx.is_non_interactive {
+        return Vec::new();
+    }
+
+    if is_coordinator_mode() {
+        return vec![worker_agent_definition()];
+    }
+
     let mut agents = vec![general_purpose_agent(), statusline_setup_agent()];
 
     if ctx.features.explore_plan_agents_enabled {
@@ -787,5 +797,19 @@ mod tests {
                 agent.agent_type
             );
         }
+    }
+
+    #[test]
+    fn noninteractive_sdk_can_disable_builtin_agents() {
+        let ctx = RuntimeIdentityContext {
+            is_non_interactive: true,
+            features: rc_context::RuntimeFeatureGates {
+                sdk_disable_builtin_agents: true,
+                ..rc_context::RuntimeFeatureGates::default()
+            },
+            ..RuntimeIdentityContext::default()
+        };
+
+        assert!(get_built_in_agents_with_context(&ctx).is_empty());
     }
 }
