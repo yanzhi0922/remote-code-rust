@@ -87,10 +87,16 @@ tokio::task_local! {
 }
 
 tokio::task_local! {
+    static TOOL_RUNTIME_MCP_OBSERVATION_PROVIDER: Arc<RuntimeMcpObservationProvider>;
+}
+
+tokio::task_local! {
     static TOOL_RUNTIME_AGENT_PROMPT_CONTEXT_PROVIDER: Arc<RuntimeAgentPromptContextProvider>;
 }
 
 pub type RuntimeMcpStateProvider = dyn Fn() -> rc_mcp::McpCliState + Send + Sync;
+pub type RuntimeMcpObservationProvider =
+    dyn Fn() -> mcp_runtime::RuntimeMcpObservation + Send + Sync;
 pub type RuntimeAgentPromptContextProvider = dyn Fn() -> RuntimeAgentPromptContext + Send + Sync;
 
 /// Task-local context used to build the dynamic Agent tool prompt.
@@ -194,6 +200,18 @@ where
         .await
 }
 
+pub async fn with_runtime_mcp_observation_provider<F, T>(
+    provider: Arc<RuntimeMcpObservationProvider>,
+    future: F,
+) -> T
+where
+    F: Future<Output = T>,
+{
+    TOOL_RUNTIME_MCP_OBSERVATION_PROVIDER
+        .scope(provider, future)
+        .await
+}
+
 pub async fn with_runtime_agent_prompt_context_provider<F, T>(
     provider: Arc<RuntimeAgentPromptContextProvider>,
     future: F,
@@ -209,6 +227,13 @@ where
 #[must_use]
 pub fn current_runtime_mcp_cli_state() -> Option<rc_mcp::McpCliState> {
     TOOL_RUNTIME_MCP_STATE_PROVIDER
+        .try_with(|provider| provider())
+        .ok()
+}
+
+#[must_use]
+pub fn current_runtime_mcp_observation() -> Option<mcp_runtime::RuntimeMcpObservation> {
+    TOOL_RUNTIME_MCP_OBSERVATION_PROVIDER
         .try_with(|provider| provider())
         .ok()
 }
@@ -302,6 +327,15 @@ pub fn is_runtime_dynamic_mcp_tool_name(name: &str) -> bool {
 }
 
 fn runtime_policy_supports_mcp_resources() -> bool {
+    if let Some(observation) = current_runtime_mcp_observation() {
+        return observation.servers.iter().any(|server| {
+            server.entry.server.enabled
+                && (server.entry.server.capabilities.supports_resources
+                    || server.inspection.as_ref().is_some_and(|inspection| {
+                        inspection.capabilities.get("resources").is_some()
+                    }))
+        });
+    }
     current_tool_runtime_policy()
         .mcp_servers
         .iter()
@@ -1092,10 +1126,14 @@ mod tests {
         HookEvent, PermissionMode, ProviderResponse, SubAgentCompletion, SubAgentExecutionRequest,
         ToolCall, UsageSummary,
     };
-    use rc_mcp::{McpCapabilityMatrix, McpServerConfig, McpTransportConfig};
+    use rc_mcp::{
+        McpCapabilityMatrix, McpServerConfig, McpServerInspection, McpToolDescriptor,
+        McpTransportConfig,
+    };
     use rc_permissions::StaticPermissionBroker;
     use rc_swarm::{TeamFile, TeamMember, mailbox, team_helpers};
     use serde_json::json;
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
     use tempfile::tempdir;
@@ -1148,6 +1186,34 @@ mod tests {
         .await
         .expect("team_create should work");
         assert!(!result.is_error, "team_create error: {}", result.content);
+    }
+
+    fn fake_runtime_mcp_policy_entry(name: &str) -> RuntimeMcpServerPolicyEntry {
+        RuntimeMcpServerPolicyEntry {
+            origin_kind: "cwd".to_owned(),
+            origin_name: "workspace".to_owned(),
+            config_path: PathBuf::from(".mcp.json"),
+            server: McpServerConfig {
+                name: name.to_owned(),
+                enabled: true,
+                transport: McpTransportConfig::Stdio {
+                    command: "definitely-missing-mcp-command".to_owned(),
+                    args: Vec::new(),
+                    cwd: None,
+                    env: BTreeMap::new(),
+                },
+                capabilities: McpCapabilityMatrix::default(),
+                startup_timeout_secs: Some(1),
+                request_timeout_secs: Some(1),
+                metadata: BTreeMap::new(),
+            },
+        }
+    }
+
+    fn live_mcp_observation_provider(
+        observation: crate::mcp_runtime::RuntimeMcpObservation,
+    ) -> Arc<crate::RuntimeMcpObservationProvider> {
+        Arc::new(move || observation.clone())
     }
 
     #[derive(Clone)]
@@ -3953,6 +4019,120 @@ mod tests {
             .map(|spec| spec.name)
             .collect::<std::collections::BTreeSet<_>>();
         assert!(after.contains("write_file"));
+    }
+
+    #[tokio::test]
+    async fn runtime_provider_tool_specs_prefers_task_local_mcp_observation_snapshot() {
+        let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX.lock().await;
+        let original_policy = super::current_tool_runtime_policy();
+        configure_tool_runtime_policy(ToolRuntimePolicy {
+            allowed_tools: Vec::new(),
+            disallowed_tools: Vec::new(),
+            task_output_dir: None,
+            mcp_servers: vec![fake_runtime_mcp_policy_entry("context7")],
+            shell_policy: Default::default(),
+        })
+        .expect("set runtime policy");
+        crate::mcp_catalog::clear_runtime_mcp_catalog_cache().await;
+
+        let outside = runtime_provider_tool_specs()
+            .await
+            .into_iter()
+            .map(|spec| spec.name)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(!outside.contains("mcp__context7__query_docs"));
+
+        let observation = crate::mcp_runtime::RuntimeMcpObservation {
+            servers: vec![crate::mcp_runtime::RuntimeMcpServerObservation {
+                entry: crate::mcp_runtime::RuntimeMcpServerEntry {
+                    origin_kind: "cwd",
+                    origin_name: "workspace".to_owned(),
+                    config_path: PathBuf::from(".mcp.json"),
+                    server: fake_runtime_mcp_policy_entry("context7").server,
+                },
+                status: rc_ui_bridge::UiRuntimeMcpServerStatus::Connected,
+                inspection: Some(McpServerInspection {
+                    server_name: "context7".to_owned(),
+                    protocol_version: "2025-03-26".to_owned(),
+                    server_info: None,
+                    capabilities: json!({}),
+                    instructions: Some("Use the docs tools.".to_owned()),
+                    tools: vec![McpToolDescriptor {
+                        name: "query_docs".to_owned(),
+                        title: None,
+                        description: Some("Query docs".to_owned()),
+                        input_schema: json!({"type": "object"}),
+                        annotations: json!({}),
+                    }],
+                }),
+                error: None,
+            }],
+            warnings: Vec::new(),
+        };
+
+        let inside = crate::with_runtime_mcp_observation_provider(
+            live_mcp_observation_provider(observation),
+            async {
+                runtime_provider_tool_specs()
+                    .await
+                    .into_iter()
+                    .map(|spec| spec.name)
+                    .collect::<std::collections::BTreeSet<_>>()
+            },
+        )
+        .await;
+
+        crate::mcp_catalog::clear_runtime_mcp_catalog_cache().await;
+        configure_tool_runtime_policy(original_policy).expect("restore runtime policy");
+
+        assert!(inside.contains("mcp__context7__query_docs"));
+    }
+
+    #[tokio::test]
+    async fn runtime_mcp_catalog_uses_failed_task_local_snapshot_without_retry() {
+        let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX.lock().await;
+        let original_policy = super::current_tool_runtime_policy();
+        configure_tool_runtime_policy(ToolRuntimePolicy {
+            allowed_tools: Vec::new(),
+            disallowed_tools: Vec::new(),
+            task_output_dir: None,
+            mcp_servers: vec![fake_runtime_mcp_policy_entry("context7")],
+            shell_policy: Default::default(),
+        })
+        .expect("set runtime policy");
+        crate::mcp_catalog::clear_runtime_mcp_catalog_cache().await;
+
+        let observation = crate::mcp_runtime::RuntimeMcpObservation {
+            servers: vec![crate::mcp_runtime::RuntimeMcpServerObservation {
+                entry: crate::mcp_runtime::RuntimeMcpServerEntry {
+                    origin_kind: "cwd",
+                    origin_name: "workspace".to_owned(),
+                    config_path: PathBuf::from(".mcp.json"),
+                    server: fake_runtime_mcp_policy_entry("context7").server,
+                },
+                status: rc_ui_bridge::UiRuntimeMcpServerStatus::Failed,
+                inspection: None,
+                error: Some("snapshot boom".to_owned()),
+            }],
+            warnings: Vec::new(),
+        };
+
+        let catalog = crate::with_runtime_mcp_observation_provider(
+            live_mcp_observation_provider(observation),
+            async { crate::mcp_catalog::runtime_mcp_catalog().await },
+        )
+        .await;
+
+        crate::mcp_catalog::clear_runtime_mcp_catalog_cache().await;
+        configure_tool_runtime_policy(original_policy).expect("restore runtime policy");
+
+        assert!(catalog.tools.is_empty());
+        assert!(
+            catalog
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("snapshot boom"))
+        );
     }
 
     #[tokio::test]

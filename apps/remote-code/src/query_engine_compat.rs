@@ -1,6 +1,6 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Instant;
 
 use anyhow::{Result, anyhow};
@@ -36,16 +36,20 @@ use rc_session::resume_state::{PendingToolCall, ResumeState};
 use rc_tools::{
     RuntimeAgentPromptContext, ToolExecutionContext, ToolRuntimePolicyOverlay, ToolSpec,
     current_runtime_agent_prompt_context, current_tool_runtime_policy, execute_tool_call,
-    mcp_runtime::{discover_runtime_mcp_servers, observe_runtime_mcp_servers},
+    mcp_runtime::{
+        RuntimeMcpObservation, RuntimeMcpServerObservation, discover_runtime_mcp_servers,
+        observe_runtime_mcp_servers,
+    },
     plan_mode::normalize_exit_plan_mode_tool_calls,
     runtime_plan_mode::inject_plan_mode_runtime_messages,
     runtime_provider_tool_spec, runtime_provider_tool_specs,
-    with_runtime_agent_prompt_context_provider, with_runtime_mcp_state_provider,
-    with_tool_runtime_policy_overlay,
+    with_runtime_agent_prompt_context_provider, with_runtime_mcp_observation_provider,
+    with_runtime_mcp_state_provider, with_tool_runtime_policy_overlay,
 };
 use rc_ui_bridge::UiRuntimeMcpServerStatus;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
+use uuid::Uuid;
 
 use crate::agents::build_remote_code_sub_agent_runtime;
 use crate::conversation::{
@@ -86,6 +90,10 @@ const PLAN_MODE_EXIT_MARKER: &str = "## Exited Plan Mode";
 const DEFERRED_TOOLS_DELTA_MARKER: &str = "__remote_code_meta__:deferred_tools_delta:";
 const AGENT_LISTING_DELTA_MARKER: &str = "__remote_code_meta__:agent_listing_delta:";
 const MCP_INSTRUCTIONS_DELTA_MARKER: &str = "__remote_code_meta__:mcp_instructions_delta:";
+
+static RUNTIME_MCP_SESSION_OBSERVATIONS: OnceLock<
+    StdMutex<HashMap<Uuid, Arc<StdMutex<RuntimeMcpObservation>>>>,
+> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -173,29 +181,33 @@ impl ConversationBackend for CriticalReminderBackend {
     }
 }
 
-fn runtime_mcp_state_from_discovery(config: &RuntimeConfig) -> McpCliState {
+fn runtime_mcp_session_observations()
+-> &'static StdMutex<HashMap<Uuid, Arc<StdMutex<RuntimeMcpObservation>>>> {
+    RUNTIME_MCP_SESSION_OBSERVATIONS.get_or_init(|| StdMutex::new(HashMap::new()))
+}
+
+fn runtime_mcp_observation_from_discovery(config: &RuntimeConfig) -> RuntimeMcpObservation {
     let discovery = discover_runtime_mcp_servers(config, &[]);
-    McpCliState {
-        clients: discovery
+    RuntimeMcpObservation {
+        servers: discovery
             .servers
             .into_iter()
-            .map(|entry| SerializedClient {
-                name: entry.server.name,
-                connection_type: if entry.server.enabled {
-                    UiRuntimeMcpServerStatus::Pending.as_str().to_owned()
+            .map(|entry| RuntimeMcpServerObservation {
+                status: if entry.server.enabled {
+                    UiRuntimeMcpServerStatus::Pending
                 } else {
-                    UiRuntimeMcpServerStatus::Disabled.as_str().to_owned()
+                    UiRuntimeMcpServerStatus::Disabled
                 },
-                capabilities: None,
+                entry,
+                inspection: None,
+                error: None,
             })
             .collect(),
-        ..McpCliState::default()
+        warnings: discovery.warnings,
     }
 }
 
-fn runtime_mcp_state_from_observation(
-    observation: &rc_tools::mcp_runtime::RuntimeMcpObservation,
-) -> McpCliState {
+fn runtime_mcp_state_from_observation(observation: &RuntimeMcpObservation) -> McpCliState {
     let clients = observation
         .servers
         .iter()
@@ -228,29 +240,105 @@ fn runtime_mcp_state_from_observation(
     }
 }
 
-fn spawn_runtime_mcp_state_provider(
+fn runtime_mcp_observation_key_matches(
+    left: &rc_tools::mcp_runtime::RuntimeMcpServerEntry,
+    right: &rc_tools::mcp_runtime::RuntimeMcpServerEntry,
+) -> bool {
+    left.origin_kind == right.origin_kind
+        && left.origin_name == right.origin_name
+        && left.config_path == right.config_path
+        && left.server == right.server
+}
+
+fn merge_runtime_mcp_observation_with_discovery(
+    current: &RuntimeMcpObservation,
+    discovery: RuntimeMcpObservation,
+) -> RuntimeMcpObservation {
+    let mut servers = Vec::with_capacity(discovery.servers.len());
+    for discovered in discovery.servers {
+        let preserved = current
+            .servers
+            .iter()
+            .find(|existing| {
+                runtime_mcp_observation_key_matches(&existing.entry, &discovered.entry)
+            })
+            .filter(|_| discovered.entry.server.enabled)
+            .cloned();
+        servers.push(preserved.unwrap_or(discovered));
+    }
+
+    RuntimeMcpObservation {
+        servers,
+        warnings: discovery.warnings,
+    }
+}
+
+fn runtime_mcp_session_observation(config: &RuntimeConfig) -> Arc<StdMutex<RuntimeMcpObservation>> {
+    let discovery = runtime_mcp_observation_from_discovery(config);
+    let session_id = config.session_id;
+    let sessions = runtime_mcp_session_observations();
+    let mut sessions = sessions
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(existing) = sessions.get(&session_id) {
+        if let Ok(mut snapshot) = existing.lock() {
+            *snapshot = merge_runtime_mcp_observation_with_discovery(&snapshot, discovery);
+        }
+        return Arc::clone(existing);
+    }
+
+    let snapshot = Arc::new(StdMutex::new(discovery));
+    sessions.insert(session_id, Arc::clone(&snapshot));
+    snapshot
+}
+
+fn refresh_runtime_mcp_session_observation(
+    config: RuntimeConfig,
+    observation: Arc<StdMutex<RuntimeMcpObservation>>,
+) {
+    tokio::spawn(async move {
+        let refreshed =
+            observe_runtime_mcp_servers(&config, &[], true, &McpClientInfo::default()).await;
+        if let Ok(mut snapshot) = observation.lock() {
+            *snapshot = refreshed;
+        }
+    });
+}
+
+fn spawn_runtime_mcp_providers(
     config: &RuntimeConfig,
-) -> Arc<rc_tools::RuntimeMcpStateProvider> {
-    let state = Arc::new(StdMutex::new(runtime_mcp_state_from_discovery(config)));
-    let state_for_provider = Arc::clone(&state);
-    let provider = Arc::new(move || {
-        state_for_provider
+) -> (
+    Arc<rc_tools::RuntimeMcpStateProvider>,
+    Arc<rc_tools::RuntimeMcpObservationProvider>,
+) {
+    let observation = runtime_mcp_session_observation(config);
+    refresh_runtime_mcp_session_observation(config.clone(), Arc::clone(&observation));
+
+    let observation_for_state = Arc::clone(&observation);
+    let state_provider = Arc::new(move || {
+        observation_for_state
+            .lock()
+            .map(|snapshot| runtime_mcp_state_from_observation(&snapshot))
+            .unwrap_or_default()
+    });
+
+    let observation_provider = Arc::new(move || {
+        observation
             .lock()
             .map(|snapshot| snapshot.clone())
             .unwrap_or_default()
     });
 
-    let state_for_refresh = Arc::clone(&state);
-    let config = config.clone();
-    tokio::spawn(async move {
-        let observation =
-            observe_runtime_mcp_servers(&config, &[], true, &McpClientInfo::default()).await;
-        if let Ok(mut snapshot) = state_for_refresh.lock() {
-            *snapshot = runtime_mcp_state_from_observation(&observation);
-        }
-    });
+    (state_provider, observation_provider)
+}
 
-    provider
+#[cfg(test)]
+fn clear_runtime_mcp_session_observation(session_id: Uuid) {
+    if let Some(sessions) = RUNTIME_MCP_SESSION_OBSERVATIONS.get()
+        && let Ok(mut sessions) = sessions.lock()
+    {
+        sessions.remove(&session_id);
+    }
 }
 
 fn spawn_runtime_agent_prompt_context_provider(
@@ -565,10 +653,6 @@ fn build_deferred_tools_delta_from_specs(
         .filter(|spec| spec.is_deferred())
         .cloned()
         .collect::<Vec<_>>();
-    if deferred_specs.is_empty() {
-        return Ok(None);
-    }
-
     deferred_specs.sort_by(|left, right| left.name.cmp(&right.name));
 
     let announced = announced_deferred_tool_names(conversation);
@@ -653,9 +737,6 @@ fn build_mcp_instructions_delta_from_blocks(
     conversation: &[ConversationEntry],
 ) -> Result<Option<ConversationEntry>> {
     if !runtime_mcp_instructions_delta_enabled() {
-        return Ok(None);
-    }
-    if blocks.is_empty() {
         return Ok(None);
     }
 
@@ -1610,30 +1691,34 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
     } else {
         vec![Message::from(ConversationEntry::user(prompt))]
     };
-    let runtime_mcp_state_provider = spawn_runtime_mcp_state_provider(config);
+    let (runtime_mcp_state_provider, runtime_mcp_observation_provider) =
+        spawn_runtime_mcp_providers(config);
     let runtime_agent_prompt_context_provider =
         spawn_runtime_agent_prompt_context_provider(config, broker.as_ref());
     let result =
         with_runtime_agent_prompt_context_provider(runtime_agent_prompt_context_provider, async {
-            with_runtime_mcp_state_provider(runtime_mcp_state_provider, async {
-                if let Some(allowed_tools) = expanded_allowed_tools.as_ref() {
-                    with_tool_runtime_policy_overlay(
-                        ToolRuntimePolicyOverlay {
-                            allowed_tools: Some(allowed_tools.iter().cloned().collect()),
-                            disallowed_tools: Vec::new(),
-                        },
-                        async {
-                            engine
-                                .submit_message(submitted_messages, process_context)
-                                .await
-                        },
-                    )
-                    .await
-                } else {
-                    engine
-                        .submit_message(submitted_messages, process_context)
+            with_runtime_mcp_observation_provider(runtime_mcp_observation_provider, async {
+                with_runtime_mcp_state_provider(runtime_mcp_state_provider, async {
+                    if let Some(allowed_tools) = expanded_allowed_tools.as_ref() {
+                        with_tool_runtime_policy_overlay(
+                            ToolRuntimePolicyOverlay {
+                                allowed_tools: Some(allowed_tools.iter().cloned().collect()),
+                                disallowed_tools: Vec::new(),
+                            },
+                            async {
+                                engine
+                                    .submit_message(submitted_messages, process_context)
+                                    .await
+                            },
+                        )
                         .await
-                }
+                    } else {
+                        engine
+                            .submit_message(submitted_messages, process_context)
+                            .await
+                    }
+                })
+                .await
             })
             .await
         })
@@ -1840,7 +1925,7 @@ mod tests {
         ConversationEntry, ConversationRole, InputFormat, OutputFormat, PermissionMode,
         ProviderProtocol, ProviderResponse, SubAgentCompletion, ToolCall, UsageSummary,
     };
-    use rc_mcp::{McpCapabilityMatrix, McpServerConfig, McpTransportConfig};
+    use rc_mcp::{McpCapabilityMatrix, McpServerConfig, McpServerInspection, McpTransportConfig};
     use rc_permissions::{
         LayeredPermissionBroker, PermissionBroker, PermissionDecision, PermissionRequest,
         StaticPermissionBroker,
@@ -1854,7 +1939,7 @@ mod tests {
     use rc_tools::{
         RuntimeAgentPromptContext, RuntimeMcpServerPolicyEntry, ToolRuntimePolicy,
         configure_tool_runtime_policy, current_tool_runtime_policy,
-        with_runtime_agent_prompt_context_provider,
+        with_runtime_agent_prompt_context_provider, with_runtime_mcp_observation_provider,
     };
     use serde_json::json;
     use std::collections::BTreeMap;
@@ -1910,6 +1995,37 @@ mod tests {
         .expect("config");
         let store = SessionStore::open(config.paths.clone()).expect("store");
         (tempdir, config, store)
+    }
+
+    fn fake_runtime_mcp_policy_entry(
+        name: &str,
+        config_path: std::path::PathBuf,
+    ) -> RuntimeMcpServerPolicyEntry {
+        RuntimeMcpServerPolicyEntry {
+            origin_kind: "cwd".to_owned(),
+            origin_name: "workspace".to_owned(),
+            config_path,
+            server: McpServerConfig {
+                name: name.to_owned(),
+                enabled: true,
+                transport: McpTransportConfig::Stdio {
+                    command: "definitely-missing-mcp-command".to_owned(),
+                    args: Vec::new(),
+                    cwd: None,
+                    env: BTreeMap::new(),
+                },
+                capabilities: McpCapabilityMatrix::default(),
+                startup_timeout_secs: Some(1),
+                request_timeout_secs: Some(1),
+                metadata: BTreeMap::new(),
+            },
+        }
+    }
+
+    fn live_mcp_observation_provider(
+        observation: rc_tools::mcp_runtime::RuntimeMcpObservation,
+    ) -> Arc<rc_tools::RuntimeMcpObservationProvider> {
+        Arc::new(move || observation.clone())
     }
 
     fn mock_broker(config: &RuntimeConfig) -> Arc<dyn PermissionBroker> {
@@ -2255,6 +2371,119 @@ mod tests {
         let marker = entry.history_text.as_deref().expect("history text");
         assert!(marker.contains("\"addedNames\":[\"mock\"]"));
         assert!(marker.contains("\"addedBlocks\""));
+    }
+
+    #[test]
+    fn runtime_mcp_session_observation_reuses_existing_session_snapshot() {
+        let (_tempdir, config, _store) = mock_config_and_store();
+        let config_path = config.cwd.join(".mcp.json");
+        fs::write(
+            &config_path,
+            r#"{"mcpServers":{"context7":{"command":"definitely-missing-mcp-command"}}}"#,
+        )
+        .expect("write mcp config");
+
+        super::clear_runtime_mcp_session_observation(config.session_id);
+
+        let first = super::runtime_mcp_session_observation(&config);
+        {
+            let mut snapshot = first.lock().expect("snapshot lock");
+            let server = snapshot
+                .servers
+                .first_mut()
+                .expect("discovered server should exist");
+            server.status = rc_ui_bridge::UiRuntimeMcpServerStatus::Connected;
+            server.inspection = Some(McpServerInspection {
+                server_name: "context7".to_owned(),
+                protocol_version: "2025-03-26".to_owned(),
+                server_info: None,
+                capabilities: json!({}),
+                instructions: Some("Use Context7 for docs.".to_owned()),
+                tools: Vec::new(),
+            });
+        }
+
+        let second = super::runtime_mcp_session_observation(&config);
+        assert!(Arc::ptr_eq(&first, &second));
+        let second_snapshot = second.lock().expect("snapshot lock").clone();
+        assert_eq!(
+            second_snapshot.servers[0].status,
+            rc_ui_bridge::UiRuntimeMcpServerStatus::Connected
+        );
+        assert_eq!(
+            second_snapshot.servers[0]
+                .inspection
+                .as_ref()
+                .and_then(|inspection| inspection.instructions.as_deref()),
+            Some("Use Context7 for docs.")
+        );
+
+        super::clear_runtime_mcp_session_observation(config.session_id);
+    }
+
+    #[tokio::test]
+    async fn build_mcp_instructions_delta_entry_uses_task_local_mcp_snapshot() {
+        let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX
+            .get_or_init(|| AsyncMutex::new(()))
+            .lock()
+            .await;
+        let (_tempdir, config, _store) = mock_config_and_store();
+        let config_path = config.cwd.join(".mcp.json");
+        let original_policy = current_tool_runtime_policy();
+        configure_tool_runtime_policy(ToolRuntimePolicy {
+            allowed_tools: Vec::new(),
+            disallowed_tools: Vec::new(),
+            task_output_dir: None,
+            mcp_servers: vec![fake_runtime_mcp_policy_entry(
+                "context7",
+                config_path.clone(),
+            )],
+            shell_policy: Default::default(),
+        })
+        .expect("set runtime policy");
+        clear_runtime_mcp_catalog_cache().await;
+
+        let observation = rc_tools::mcp_runtime::RuntimeMcpObservation {
+            servers: vec![rc_tools::mcp_runtime::RuntimeMcpServerObservation {
+                entry: rc_tools::mcp_runtime::RuntimeMcpServerEntry {
+                    origin_kind: "cwd",
+                    origin_name: "workspace".to_owned(),
+                    config_path,
+                    server: fake_runtime_mcp_policy_entry("context7", config.cwd.join(".mcp.json"))
+                        .server,
+                },
+                status: rc_ui_bridge::UiRuntimeMcpServerStatus::Connected,
+                inspection: Some(McpServerInspection {
+                    server_name: "context7".to_owned(),
+                    protocol_version: "2025-03-26".to_owned(),
+                    server_info: None,
+                    capabilities: json!({}),
+                    instructions: Some("Use Context7 for API and library docs.".to_owned()),
+                    tools: Vec::new(),
+                }),
+                error: None,
+            }],
+            warnings: Vec::new(),
+        };
+
+        let run_result = with_runtime_mcp_observation_provider(
+            live_mcp_observation_provider(observation),
+            async { build_mcp_instructions_delta_entry(&[]).await },
+        )
+        .await;
+
+        clear_runtime_mcp_catalog_cache().await;
+        configure_tool_runtime_policy(original_policy).expect("restore runtime policy");
+
+        let entry = run_result
+            .expect("delta")
+            .expect("should create MCP instructions delta");
+        let text = entry.content_blocks[0]
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .expect("system reminder text");
+        assert!(text.contains("## context7"));
+        assert!(text.contains("Use Context7 for API and library docs."));
     }
 
     #[tokio::test]

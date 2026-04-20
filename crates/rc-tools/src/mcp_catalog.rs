@@ -6,12 +6,14 @@ use rc_mcp::normalization::{build_mcp_tool_name, normalize_name_for_mcp};
 use rc_mcp::{
     McpClientInfo, McpServerConfig, McpServerInspection, McpToolCallResult, inspect_server,
 };
+use rc_ui_bridge::UiRuntimeMcpServerStatus;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Mutex;
 
 use crate::{
-    RuntimeMcpServerPolicyEntry, ToolSpec, current_tool_runtime_policy, tool_allowed_by_policy,
+    RuntimeMcpServerPolicyEntry, ToolSpec, current_runtime_mcp_observation,
+    current_tool_runtime_policy, mcp_runtime::RuntimeMcpServerObservation, tool_allowed_by_policy,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +60,37 @@ static RUNTIME_MCP_INSPECTION_CACHE: Lazy<Mutex<BTreeMap<String, CachedInspectio
 
 fn inspection_cache_key(entry: &RuntimeMcpServerPolicyEntry) -> String {
     format!("{}::{}", entry.config_path.display(), entry.server.name)
+}
+
+fn observation_entry_matches_policy_entry(
+    observation: &RuntimeMcpServerObservation,
+    entry: &RuntimeMcpServerPolicyEntry,
+) -> bool {
+    observation.entry.origin_kind == entry.origin_kind
+        && observation.entry.origin_name == entry.origin_name
+        && observation.entry.config_path == entry.config_path
+        && observation.entry.server == entry.server
+}
+
+fn snapshot_inspection_for_entry(
+    entry: &RuntimeMcpServerPolicyEntry,
+) -> Option<Result<McpServerInspection>> {
+    let observation = current_runtime_mcp_observation()?;
+    let server = observation
+        .servers
+        .iter()
+        .find(|server| observation_entry_matches_policy_entry(server, entry))?;
+    if let Some(inspection) = &server.inspection {
+        return Some(Ok(inspection.clone()));
+    }
+    if server.status == UiRuntimeMcpServerStatus::Failed {
+        let message = server
+            .error
+            .clone()
+            .unwrap_or_else(|| "runtime MCP observation recorded a failed connection".to_owned());
+        return Some(Err(anyhow!(message)));
+    }
+    None
 }
 
 fn annotation_hint_is_true(annotations: &Value, key: &str) -> bool {
@@ -109,6 +142,10 @@ fn build_mcp_tool_spec(
 async fn inspect_runtime_mcp_server(
     entry: &RuntimeMcpServerPolicyEntry,
 ) -> Result<McpServerInspection> {
+    if let Some(snapshot_result) = snapshot_inspection_for_entry(entry) {
+        return snapshot_result;
+    }
+
     let cache_key = inspection_cache_key(entry);
     {
         let cache = RUNTIME_MCP_INSPECTION_CACHE.lock().await;
