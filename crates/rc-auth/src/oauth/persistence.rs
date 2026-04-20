@@ -85,7 +85,9 @@ impl PersistedOAuthState {
     }
 }
 
-pub fn load_persisted_oauth_state(profile_dir: &Path) -> Result<PersistedOAuthState, OAuthPersistenceError> {
+pub fn load_persisted_oauth_state(
+    profile_dir: &Path,
+) -> Result<PersistedOAuthState, OAuthPersistenceError> {
     PersistedOAuthState::from_profile_dir(profile_dir)
 }
 
@@ -249,18 +251,30 @@ mod tests {
         let identity = state.runtime_identity_fragment();
 
         assert!(state.has_tokens());
-        assert_eq!(state.tokens.as_ref().map(|value| value.scope.as_deref()), Some(Some("user:profile user:inference")));
+        assert_eq!(
+            state.tokens.as_ref().map(|value| value.scope.as_deref()),
+            Some(Some("user:profile user:inference"))
+        );
         assert_eq!(identity.account_uuid.as_deref(), Some("acct-1"));
         assert_eq!(identity.organization_uuid.as_deref(), Some("org-1"));
         assert_eq!(identity.email.as_deref(), Some("dev@example.com"));
-        assert_eq!(identity.subscription.subscription_type.as_deref(), Some("team"));
-        assert_eq!(identity.subscription.rate_limit_tier.as_deref(), Some("high"));
+        assert_eq!(
+            identity.subscription.subscription_type.as_deref(),
+            Some("team")
+        );
+        assert_eq!(
+            identity.subscription.rate_limit_tier.as_deref(),
+            Some("high")
+        );
         assert_eq!(
             identity.subscription.billing_type.as_deref(),
             Some("stripe_subscription_contracted")
         );
         assert_eq!(identity.subscription.has_extra_usage_enabled, Some(false));
-        assert_eq!(identity.subscription.display_name.as_deref(), Some("Dev User"));
+        assert_eq!(
+            identity.subscription.display_name.as_deref(),
+            Some("Dev User")
+        );
     }
 
     #[test]

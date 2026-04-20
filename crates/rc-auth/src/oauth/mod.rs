@@ -20,8 +20,8 @@ pub use client::{
     refresh_oauth_token_with_existing, run_oauth_flow, subscription_type_from_org_type,
 };
 pub use persistence::{
-    OAuthPersistenceError, PersistedOAuthAccount, PersistedOAuthState, PROFILE_CONFIG_FILE,
-    PROFILE_CREDENTIALS_FILE, load_persisted_oauth_state,
+    OAuthPersistenceError, PROFILE_CONFIG_FILE, PROFILE_CREDENTIALS_FILE, PersistedOAuthAccount,
+    PersistedOAuthState, load_persisted_oauth_state,
 };
 pub use pkce::{generate_code_challenge, generate_code_verifier, generate_state};
 pub use types::{

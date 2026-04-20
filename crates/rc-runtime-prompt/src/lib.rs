@@ -26,6 +26,8 @@ const MAX_GIT_STATUS_CHARS: usize = 2000;
 #[derive(Debug, Clone, Default)]
 pub struct PromptRuntimeOverrides {
     pub system_prompt: Option<String>,
+    pub append_system_prompt: Option<String>,
+    pub override_system_prompt: Option<String>,
     pub agent_system_prompt: Option<String>,
     pub allowed_tools: Option<Vec<String>>,
     pub critical_system_reminder: Option<String>,
@@ -294,10 +296,12 @@ pub async fn build_runtime_system_prompt(
     discovered_tool_scope: &DiscoveredToolScope,
 ) -> Result<RuntimeSystemPrompt> {
     let custom_system_prompt_provided = overrides.system_prompt.is_some();
+    let override_system_prompt_provided = overrides.override_system_prompt.is_some();
     let agent_system_prompt_provided = overrides.agent_system_prompt.is_some();
     let session_start_date = Local::now().format("%Y-%m-%d").to_string();
     if runtime_env_truthy("CLAUDE_CODE_SIMPLE") {
         let default_prompt_blocks = if custom_system_prompt_provided
+            || override_system_prompt_provided
             || (agent_system_prompt_provided && !settings.proactive_active)
         {
             Vec::new()
@@ -315,11 +319,14 @@ pub async fn build_runtime_system_prompt(
                 coordinator_system_prompt: is_coordinator_mode()
                     .then(|| get_coordinator_system_prompt(true)),
                 custom_system_prompt: overrides.system_prompt.clone(),
+                append_system_prompt: overrides.append_system_prompt.clone(),
+                override_system_prompt: overrides.override_system_prompt.clone(),
                 proactive_active: settings.proactive_active,
                 ..Default::default()
             },
         );
         if !custom_system_prompt_provided
+            && !override_system_prompt_provided
             && let Some(system_context) = runtime_system_context_block(config, overrides)
         {
             prompt_blocks.push(system_context);
@@ -408,6 +415,7 @@ pub async fn build_runtime_system_prompt(
     let mut builder = SystemPromptBuilder::with_default_sections();
     builder.set_global_cache_scope(use_global_prompt_cache);
     let default_prompt_blocks = if custom_system_prompt_provided
+        || override_system_prompt_provided
         || (agent_system_prompt_provided && !prompt_ctx.features.proactive_active)
     {
         Vec::new()
@@ -421,11 +429,14 @@ pub async fn build_runtime_system_prompt(
             coordinator_system_prompt: is_coordinator_mode()
                 .then(|| get_coordinator_system_prompt(false)),
             custom_system_prompt: overrides.system_prompt.clone(),
+            append_system_prompt: overrides.append_system_prompt.clone(),
+            override_system_prompt: overrides.override_system_prompt.clone(),
             proactive_active: prompt_ctx.features.proactive_active,
             ..Default::default()
         },
     );
     if !custom_system_prompt_provided
+        && !override_system_prompt_provided
         && let Some(system_context) = runtime_system_context_block(config, overrides)
     {
         prompt_blocks.push(system_context);
