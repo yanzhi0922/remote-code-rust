@@ -342,6 +342,8 @@ mod tests {
             },
             RuntimeOverrides {
                 session_name: Some("Parity".to_owned()),
+                system_prompt: None,
+                append_system_prompt: None,
                 settings_files: Vec::new(),
                 show_setting_sources: true,
                 allowed_setting_sources: None,

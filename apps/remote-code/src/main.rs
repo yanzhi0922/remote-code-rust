@@ -20,7 +20,11 @@ mod tasks_cli;
 mod updater;
 mod worktree_cli;
 
-use std::io::{self, IsTerminal, Read};
+use std::{
+    fs,
+    io::{self, IsTerminal, Read},
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Result, anyhow};
 use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
@@ -52,13 +56,20 @@ use status::run_status;
 use tasks_cli::run_tasks;
 use worktree_cli::run_worktree;
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ResolvedPromptOverrides {
+    pub(crate) system_prompt: Option<String>,
+    pub(crate) append_system_prompt: Option<String>,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     install_tracing("remote_code_rust", false)?;
     let permission_mode_explicit = permission_mode_override_was_explicit();
     let cli = Cli::parse();
+    let prompt_overrides = resolve_cli_prompt_overrides(&cli)?;
 
-    let resume_session = resolve_resume_session(&cli)?;
+    let resume_session = resolve_resume_session(&cli, &prompt_overrides)?;
     let overrides = ProviderOverrides {
         provider: cli.provider.clone(),
         base_url: cli.base_url.clone(),
@@ -81,6 +92,8 @@ async fn main() -> Result<()> {
         overrides,
         RuntimeOverrides {
             session_name: cli.name.clone(),
+            system_prompt: prompt_overrides.system_prompt.clone(),
+            append_system_prompt: prompt_overrides.append_system_prompt.clone(),
             settings_files: cli.settings_files.clone(),
             show_setting_sources: cli.show_setting_sources,
             allowed_setting_sources: setting_sources_from_cli(&cli.setting_sources),
@@ -97,7 +110,12 @@ async fn main() -> Result<()> {
     let store = SessionStore::open(config.paths.clone())?;
     if resume_session.is_some() {
         restore_session_context(&store, &mut config)?;
-        reapply_cli_overrides(&cli, &mut config, permission_mode_explicit);
+        reapply_cli_overrides(
+            &cli,
+            &prompt_overrides,
+            &mut config,
+            permission_mode_explicit,
+        );
     }
     configure_runtime_policy(&config)?;
     if cli.show_setting_sources && !should_run_headless(&config) {
@@ -173,7 +191,10 @@ async fn main() -> Result<()> {
     }
 }
 
-fn resolve_resume_session(cli: &Cli) -> Result<Option<Uuid>> {
+fn resolve_resume_session(
+    cli: &Cli,
+    prompt_overrides: &ResolvedPromptOverrides,
+) -> Result<Option<Uuid>> {
     match &cli.command {
         Some(Commands::Resume(args)) => Ok(Some(args.session_id)),
         _ => {
@@ -198,6 +219,8 @@ fn resolve_resume_session(cli: &Cli) -> Result<Option<Uuid>> {
                 ProviderOverrides::default(),
                 RuntimeOverrides {
                     session_name: None,
+                    system_prompt: prompt_overrides.system_prompt.clone(),
+                    append_system_prompt: prompt_overrides.append_system_prompt.clone(),
                     settings_files: cli.settings_files.clone(),
                     show_setting_sources: false,
                     allowed_setting_sources: setting_sources_from_cli(&cli.setting_sources),
@@ -422,6 +445,63 @@ fn permission_mode_override_was_explicit() -> bool {
         })
 }
 
+fn resolve_cli_prompt_overrides(cli: &Cli) -> Result<ResolvedPromptOverrides> {
+    Ok(ResolvedPromptOverrides {
+        system_prompt: resolve_cli_prompt_override(
+            cli.system_prompt.clone(),
+            cli.system_prompt_file.as_deref(),
+            "--system-prompt",
+            "--system-prompt-file",
+            "System prompt file not found",
+            "Error reading system prompt file",
+        )?,
+        append_system_prompt: resolve_cli_prompt_override(
+            cli.append_system_prompt.clone(),
+            cli.append_system_prompt_file.as_deref(),
+            "--append-system-prompt",
+            "--append-system-prompt-file",
+            "Append system prompt file not found",
+            "Error reading append system prompt file",
+        )?,
+    })
+}
+
+fn resolve_cli_prompt_override(
+    inline_value: Option<String>,
+    file_path: Option<&Path>,
+    inline_flag: &str,
+    file_flag: &str,
+    missing_prefix: &str,
+    read_prefix: &str,
+) -> Result<Option<String>> {
+    if inline_value.is_some() && file_path.is_some() {
+        return Err(anyhow!(
+            "Cannot use both {inline_flag} and {file_flag}. Please use only one."
+        ));
+    }
+
+    let Some(file_path) = file_path else {
+        return Ok(inline_value);
+    };
+
+    let resolved_path = resolve_cli_file_path(file_path)?;
+    match fs::read_to_string(&resolved_path) {
+        Ok(content) => Ok(Some(content)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Err(anyhow!("{missing_prefix}: {}", resolved_path.display()))
+        }
+        Err(error) => Err(anyhow!("{read_prefix}: {error}")),
+    }
+}
+
+fn resolve_cli_file_path(path: &Path) -> Result<PathBuf> {
+    if path.is_absolute() {
+        Ok(path.to_path_buf())
+    } else {
+        Ok(std::env::current_dir()?.join(path))
+    }
+}
+
 fn resolve_prompt_input(
     config: &rc_config::RuntimeConfig,
     parts: Vec<String>,
@@ -450,6 +530,7 @@ fn normalize_prompt(prompt: String) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+    use clap::Parser;
     use rc_control_plane::{
         ArtifactCreateRequest, ArtifactRecord, ControlPlaneMeta as RemoteControlPlaneMeta,
         SessionRecord as RemoteSessionRecord, SessionState as RemoteSessionState,
@@ -476,6 +557,7 @@ mod tests {
         remote_get_bytes, remote_get_json, remote_post_json, remote_runner_path,
         remote_session_commands_path, remote_session_state_path, remote_sessions_path,
     };
+    use crate::{Cli, resolve_cli_prompt_overrides};
 
     use axum::{
         Router,
@@ -1210,6 +1292,88 @@ mod tests {
         let resolution = resolve_runtime_mcp_server(&config, "shared", &[])
             .expect("higher-precedence shared server should resolve");
         assert_eq!(resolution.entry.origin_kind, "cwd");
+    }
+
+    #[test]
+    fn resolve_cli_prompt_overrides_reads_prompt_files() {
+        let tempdir = tempdir().unwrap_or_else(|error| panic!("tempdir failed: {error}"));
+        let system_path = tempdir.path().join("system.txt");
+        let append_path = tempdir.path().join("append.txt");
+        fs::write(&system_path, "system from file")
+            .unwrap_or_else(|error| panic!("system write failed: {error}"));
+        fs::write(&append_path, "append from file")
+            .unwrap_or_else(|error| panic!("append write failed: {error}"));
+
+        let cli = Cli::parse_from([
+            "remote-code",
+            "--system-prompt-file",
+            system_path.to_string_lossy().as_ref(),
+            "--append-system-prompt-file",
+            append_path.to_string_lossy().as_ref(),
+            "status",
+        ]);
+
+        let overrides = resolve_cli_prompt_overrides(&cli)
+            .unwrap_or_else(|error| panic!("prompt override resolution failed: {error}"));
+        assert_eq!(overrides.system_prompt.as_deref(), Some("system from file"));
+        assert_eq!(
+            overrides.append_system_prompt.as_deref(),
+            Some("append from file")
+        );
+    }
+
+    #[test]
+    fn resolve_cli_prompt_overrides_rejects_mixed_inline_and_file_sources() {
+        let tempdir = tempdir().unwrap_or_else(|error| panic!("tempdir failed: {error}"));
+        let system_path = tempdir.path().join("system.txt");
+        fs::write(&system_path, "system from file")
+            .unwrap_or_else(|error| panic!("system write failed: {error}"));
+
+        let cli = Cli::parse_from([
+            "remote-code",
+            "--system-prompt",
+            "inline",
+            "--system-prompt-file",
+            system_path.to_string_lossy().as_ref(),
+            "status",
+        ]);
+
+        let error = resolve_cli_prompt_overrides(&cli)
+            .expect_err("mixed inline and file prompt sources should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("Cannot use both --system-prompt and --system-prompt-file"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn resolve_cli_prompt_overrides_reports_missing_prompt_file() {
+        let tempdir = tempdir().unwrap_or_else(|error| panic!("tempdir failed: {error}"));
+        let missing = tempdir.path().join("missing.txt");
+
+        let cli = Cli::parse_from([
+            "remote-code",
+            "--append-system-prompt-file",
+            missing.to_string_lossy().as_ref(),
+            "status",
+        ]);
+
+        let error =
+            resolve_cli_prompt_overrides(&cli).expect_err("missing append prompt file should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("Append system prompt file not found"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains(missing.to_string_lossy().as_ref()),
+            "unexpected error: {error}"
+        );
     }
 
     #[tokio::test]

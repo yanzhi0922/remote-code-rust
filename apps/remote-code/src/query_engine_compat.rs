@@ -1192,6 +1192,27 @@ async fn refresh_runtime_system_prompt(
     .await
 }
 
+fn config_prompt_runtime_overrides(config: &RuntimeConfig) -> CompatRunOverrides {
+    CompatRunOverrides {
+        system_prompt: config.system_prompt.clone(),
+        append_system_prompt: config.append_system_prompt.clone(),
+        ..CompatRunOverrides::default()
+    }
+}
+
+fn merge_prompt_runtime_overrides(
+    config: &RuntimeConfig,
+    mut overrides: CompatRunOverrides,
+) -> CompatRunOverrides {
+    if overrides.system_prompt.is_none() {
+        overrides.system_prompt = config.system_prompt.clone();
+    }
+    if overrides.append_system_prompt.is_none() {
+        overrides.append_system_prompt = config.append_system_prompt.clone();
+    }
+    overrides
+}
+
 impl CompatObserver {
     async fn mark_tool_started_if_new(&self, tool_call_id: &str) -> bool {
         if tool_call_id.is_empty() {
@@ -1685,7 +1706,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
         hook_state,
         conversation,
         prompt,
-        CompatRunOverrides::default(),
+        config_prompt_runtime_overrides(config),
     )
     .await
 }
@@ -1708,6 +1729,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
     if !readiness.ok {
         return Err(anyhow!(readiness.issues.join(" ")));
     }
+    let overrides = merge_prompt_runtime_overrides(config, overrides);
 
     let started = Instant::now();
     inject_plan_mode_runtime_messages(store, config.session_id, conversation)?;
