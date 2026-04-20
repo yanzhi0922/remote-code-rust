@@ -5,7 +5,10 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::Result;
-use auto_memory::{has_valid_cowork_memory_path_override, load_cowork_memory_mechanics_prompt};
+use auto_memory::{
+    has_valid_cowork_memory_path_override, load_cowork_memory_mechanics_prompt,
+    load_default_memory_prompt,
+};
 use chrono::Local;
 use rc_agents::coordinator::{
     COORDINATOR_MODE_ALLOWED_TOOLS, get_coordinator_system_prompt, is_coordinator_mode,
@@ -334,6 +337,9 @@ pub async fn build_runtime_system_prompt(
     let custom_system_prompt_provided = overrides.system_prompt.is_some();
     let override_system_prompt_provided = overrides.override_system_prompt.is_some();
     let agent_system_prompt_provided = overrides.agent_system_prompt.is_some();
+    let use_default_system_prompt = !custom_system_prompt_provided
+        && !override_system_prompt_provided
+        && !(agent_system_prompt_provided && !settings.proactive_active);
     let memory_mechanics_prompt = if custom_prompt_uses_main_thread_precedence(
         custom_system_prompt_provided,
         override_system_prompt_provided,
@@ -346,17 +352,14 @@ pub async fn build_runtime_system_prompt(
     };
     let session_start_date = Local::now().format("%Y-%m-%d").to_string();
     if runtime_env_truthy("CLAUDE_CODE_SIMPLE") {
-        let default_prompt_blocks = if custom_system_prompt_provided
-            || override_system_prompt_provided
-            || (agent_system_prompt_provided && !settings.proactive_active)
-        {
-            Vec::new()
-        } else {
+        let default_prompt_blocks = if use_default_system_prompt {
             vec![format!(
                 "You are Claude Code, Anthropic's official CLI for Claude.\n\nCWD: {}\nDate: {}",
                 config.cwd.display(),
                 session_start_date
             )]
+        } else {
+            Vec::new()
         };
         let mut prompt_blocks = build_effective_system_prompt(
             default_prompt_blocks,
@@ -456,7 +459,11 @@ pub async fn build_runtime_system_prompt(
                 .runtime_identity
                 .features
                 .verification_agent_enabled,
-            memory_prompt: None,
+            memory_prompt: if use_default_system_prompt {
+                load_default_memory_prompt(config)?
+            } else {
+                None
+            },
             scratchpad_enabled: false,
             scratchpad_dir: None,
             function_result_keep_recent: None,
@@ -466,13 +473,10 @@ pub async fn build_runtime_system_prompt(
 
     let mut builder = SystemPromptBuilder::with_default_sections();
     builder.set_global_cache_scope(use_global_prompt_cache);
-    let default_prompt_blocks = if custom_system_prompt_provided
-        || override_system_prompt_provided
-        || (agent_system_prompt_provided && !prompt_ctx.features.proactive_active)
-    {
-        Vec::new()
-    } else {
+    let default_prompt_blocks = if use_default_system_prompt {
         builder.build(&prompt_ctx)?
+    } else {
+        Vec::new()
     };
     let mut prompt_blocks = build_effective_system_prompt(
         default_prompt_blocks,
@@ -762,4 +766,103 @@ fn should_use_global_prompt_cache_scope(config: &RuntimeConfig) -> bool {
             .base_url
             .as_deref()
             .is_some_and(is_first_party_base_url)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PromptRuntimeOverrides, RuntimePromptSettings, build_runtime_system_prompt};
+    use rc_config::settings_layers::RuntimeOverrides;
+    use rc_config::{ProviderOverrides, load_runtime_config};
+    use rc_context::RuntimeIdentityContext;
+    use rc_core::{ConversationEntry, InputFormat, OutputFormat, PermissionMode, ProviderProtocol};
+    use rc_provider::DiscoveredToolScope;
+    use std::fs;
+    use tempfile::tempdir;
+
+    fn test_config(explicit_settings: Option<std::path::PathBuf>) -> rc_config::RuntimeConfig {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        fs::create_dir_all(&cwd).expect("cwd");
+        fs::create_dir_all(&profile).expect("profile");
+        std::mem::forget(tempdir);
+
+        let mut config = load_runtime_config(
+            Some(cwd),
+            Some(profile),
+            None,
+            PermissionMode::BypassPermissions,
+            InputFormat::Text,
+            OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            8,
+            ProviderOverrides::default(),
+            RuntimeOverrides {
+                settings_files: explicit_settings.into_iter().collect(),
+                ..RuntimeOverrides::default()
+            },
+        )
+        .expect("runtime config");
+        config.provider.protocol = ProviderProtocol::Anthropic;
+        config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
+        config
+    }
+
+    fn test_settings(config: &rc_config::RuntimeConfig) -> RuntimePromptSettings {
+        RuntimePromptSettings {
+            language: config.language.clone(),
+            output_style: config.output_style.clone(),
+            proactive_active: config.proactive_active,
+            brief_enabled: config.brief_enabled,
+            mcp_instructions_delta_enabled: true,
+            is_non_interactive: false,
+            user_invocable_skills_available: false,
+            include_token_budget_prompt: false,
+            runtime_identity: RuntimeIdentityContext::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn default_prompt_populates_memory_section() {
+        let config = test_config(None);
+        let settings = test_settings(&config);
+
+        let prompt = build_runtime_system_prompt(
+            &config,
+            &[ConversationEntry::user("test")],
+            &PromptRuntimeOverrides::default(),
+            &settings,
+            &DiscoveredToolScope::default(),
+        )
+        .await
+        .expect("prompt");
+
+        assert!(prompt.text.contains("# auto memory"));
+        assert!(prompt.text.contains("## How to save memories"));
+    }
+
+    #[tokio::test]
+    async fn custom_prompt_still_skips_default_memory_section() {
+        let config = test_config(None);
+        let settings = test_settings(&config);
+
+        let prompt = build_runtime_system_prompt(
+            &config,
+            &[ConversationEntry::user("test")],
+            &PromptRuntimeOverrides {
+                system_prompt: Some("Custom prompt".to_owned()),
+                ..PromptRuntimeOverrides::default()
+            },
+            &settings,
+            &DiscoveredToolScope::default(),
+        )
+        .await
+        .expect("prompt");
+
+        assert!(prompt.text.contains("Custom prompt"));
+        assert!(!prompt.text.contains("# auto memory"));
+    }
 }
