@@ -26,6 +26,13 @@ describe('PermissionModal', () => {
         description: '需要执行命令来继续修复。',
         input: { command: 'git status --short' },
         blocked_path: 'C:\\repo',
+        permission_suggestions: [
+          {
+            action: 'allow',
+            toolPattern: 'shell_command',
+            pathPattern: 'C:\\repo',
+          },
+        ],
       },
       resolvePermission,
     });
@@ -36,6 +43,9 @@ describe('PermissionModal', () => {
     expect(screen.getByText('shell_command')).toBeInTheDocument();
     expect(screen.getByText('需要执行命令来继续修复。')).toBeInTheDocument();
     expect(screen.getByText('C:\\repo')).toBeInTheDocument();
+    expect(screen.getByText('权限建议')).toBeInTheDocument();
+    expect(screen.getByText(/"action": "allow"/)).toBeInTheDocument();
+    expect(screen.getByText(/"toolPattern": "shell_command"/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '允许执行' }));
     await waitFor(() => {

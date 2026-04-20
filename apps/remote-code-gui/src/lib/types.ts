@@ -351,6 +351,7 @@ export interface PermissionRequestInfo {
   description: string;
   input: unknown;
   blocked_path: string | null;
+  permission_suggestions: unknown[];
 }
 
 export interface PermissionDecisionInfo {

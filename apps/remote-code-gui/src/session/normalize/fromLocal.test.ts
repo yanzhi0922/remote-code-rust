@@ -112,6 +112,7 @@ describe('fromLocal', () => {
         description: 'Run git status',
         input: {},
         blocked_path: 'C:\\repo',
+        permission_suggestions: [{ action: 'allow', toolPattern: 'shell' }],
       },
       tasks,
     });
@@ -119,6 +120,7 @@ describe('fromLocal', () => {
     expect(bundle.session?.title).toBe('Workspace Chat');
     expect(bundle.timeline.some((item) => item.kind === 'tool')).toBe(true);
     expect(bundle.approvals[0].title).toBe('Approve shell command');
+    expect(bundle.approvals[0].metadata.permission_suggestions_count).toBe('1');
     expect(bundle.taskTree[0].description).toBe('Investigate issue');
     expect(bundle.connection.state).toBe('local');
   });
