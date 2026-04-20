@@ -1,81 +1,196 @@
-//! Path validation for permission checks.
+//! Path input validation and normalization for filesystem permission checks.
 //!
-//! Corresponds to `src/utils/permissions/pathValidation.ts`.
-//! Validates that paths are safe and within expected boundaries.
+//! This module mirrors the "raw path" stage of Claude Code's path validation:
+//! strip superficial quoting, expand plain `~`, reject impossible inputs, and
+//! flag path forms that require an explicit permission prompt instead of silent
+//! auto-approval.
 
-use std::path::Path;
+use std::path::{Component, Path};
 
-/// Result of path validation.
+/// Result of coarse path validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PathValidation {
-    /// Path is valid and safe.
+    /// Path is structurally valid.
     Valid,
-    /// Path is invalid or potentially dangerous.
+    /// Path is invalid and should be rejected before any permission prompt.
     Invalid(String),
 }
 
-/// Validate a file path for safety.
+const MAX_PATH_LEN: usize = 4096;
+
+/// Remove surrounding quotes and expand a plain leading `~`.
+#[must_use]
+pub fn clean_path_input(path: &str) -> String {
+    expand_tilde(strip_surrounding_quotes(path.trim()))
+}
+
+/// Validate a path for impossible inputs.
 ///
-/// Checks for:
-/// - Path traversal attacks (../)
-/// - Null bytes
-/// - Overly long paths
-/// - Symlink escape (basic check)
+/// This intentionally stays conservative: it rejects inputs that cannot be
+/// safely interpreted (`NUL`, overlong paths, traversal above the lexical
+/// root), while leaving "prompt-worthy" cases like UNC paths to
+/// [`path_requires_manual_approval`].
 #[must_use]
 pub fn validate_path(path: &str) -> PathValidation {
-    // Check for null bytes
-    if path.contains('\0') {
-        return PathValidation::Invalid("Path contains null byte".into());
+    let cleaned = clean_path_input(path);
+
+    if cleaned.contains('\0') {
+        return PathValidation::Invalid("Path contains a null byte.".to_owned());
     }
 
-    // Check for path traversal
-    if path.contains("..") {
-        // Allow if it's just a parent reference that resolves within cwd
-        let normalized = Path::new(path);
-        let mut depth: i32 = 0;
-        for component in normalized.components() {
-            match component {
-                std::path::Component::ParentDir => depth -= 1,
-                std::path::Component::Normal(_) => depth += 1,
-                std::path::Component::RootDir | std::path::Component::Prefix(_) => {}
-                std::path::Component::CurDir => {}
-            }
-        }
-        if depth < 0 {
-            return PathValidation::Invalid("Path traversal goes above root".into());
-        }
+    if cleaned.len() > MAX_PATH_LEN {
+        return PathValidation::Invalid("Path exceeds the maximum supported length.".to_owned());
     }
 
-    // Check for overly long paths (OS-dependent, use 4096 as safe limit)
-    if path.len() > 4096 {
-        return PathValidation::Invalid("Path exceeds maximum length".into());
+    if traversal_escapes_lexical_root(&cleaned) {
+        return PathValidation::Invalid("Path traversal escapes the lexical root.".to_owned());
     }
 
     PathValidation::Valid
 }
 
-/// Check if a path is within a given root directory.
+/// Return a prompt-worthy reason for paths that should require manual approval.
 #[must_use]
-pub fn is_within_root(path: &str, root: &str) -> bool {
-    let path_abs = Path::new(path);
-    let root_abs = Path::new(root);
+pub fn path_requires_manual_approval(path: &str, write_semantics: bool) -> Option<String> {
+    let cleaned = clean_path_input(path);
 
-    if path_abs.is_absolute() && root_abs.is_absolute() {
-        path_abs.starts_with(root_abs)
-    } else {
-        // For relative paths, just check prefix
-        path.starts_with(root) || !path.starts_with("..")
+    if contains_vulnerable_unc_path(&cleaned) {
+        return Some("UNC or network paths require manual approval.".to_owned());
     }
+
+    if cleaned.starts_with('~') {
+        return Some(
+            "Tilde expansion variants (~user, ~+, ~-) require manual approval.".to_owned(),
+        );
+    }
+
+    if contains_shell_expansion(&cleaned) {
+        return Some("Shell expansion syntax in paths requires manual approval.".to_owned());
+    }
+
+    if write_semantics && has_glob_pattern(&cleaned) {
+        return Some(
+            "Glob patterns are not allowed for write operations; use an exact path.".to_owned(),
+        );
+    }
+
+    if has_suspicious_windows_path_pattern(&cleaned) {
+        return Some("Suspicious Windows path syntax requires manual approval.".to_owned());
+    }
+
+    None
 }
 
-/// Sanitize a path by removing dangerous components.
+/// Detect glob metacharacters in a path.
 #[must_use]
-pub fn sanitize_path(path: &str) -> String {
-    path.replace('\0', "")
-        .split('/')
-        .filter(|c| *c != ".." && *c != ".")
-        .collect::<Vec<_>>()
-        .join("/")
+pub fn has_glob_pattern(path: &str) -> bool {
+    path.chars()
+        .any(|ch| matches!(ch, '*' | '?' | '[' | ']' | '{' | '}'))
+}
+
+/// Detect Windows path forms that are easy to mis-handle securely.
+#[must_use]
+pub fn has_suspicious_windows_path_pattern(path: &str) -> bool {
+    let normalized = path.replace('/', "\\");
+
+    if normalized.starts_with(r"\\?\") || normalized.starts_with(r"\\.\") {
+        return true;
+    }
+
+    if has_alternate_data_stream(&normalized) {
+        return true;
+    }
+
+    let lowered = normalized.to_ascii_lowercase();
+    for segment in lowered.split('\\') {
+        if segment.is_empty() {
+            continue;
+        }
+
+        if segment.ends_with('.') || segment.ends_with(' ') {
+            return true;
+        }
+
+        if contains_short_name_component(segment) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn strip_surrounding_quotes(path: &str) -> &str {
+    if path.len() >= 2 {
+        let bytes = path.as_bytes();
+        let first = bytes[0];
+        let last = bytes[path.len() - 1];
+        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+            return &path[1..path.len() - 1];
+        }
+    }
+    path
+}
+
+fn expand_tilde(path: &str) -> String {
+    if (path == "~" || path.starts_with("~/") || path.starts_with("~\\"))
+        && let Some(home) = home_dir()
+    {
+        return format!("{home}{}", &path[1..]);
+    }
+    path.to_owned()
+}
+
+fn home_dir() -> Option<String> {
+    std::env::var("HOME")
+        .ok()
+        .or_else(|| std::env::var("USERPROFILE").ok())
+}
+
+fn traversal_escapes_lexical_root(path: &str) -> bool {
+    let mut depth = 0i32;
+    for component in Path::new(path).components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => depth = 0,
+            Component::CurDir => {}
+            Component::ParentDir => {
+                depth -= 1;
+                if depth < 0 {
+                    return true;
+                }
+            }
+            Component::Normal(_) => depth += 1,
+        }
+    }
+    false
+}
+
+fn contains_vulnerable_unc_path(path: &str) -> bool {
+    path.starts_with(r"\\") || path.starts_with("//")
+}
+
+fn contains_shell_expansion(path: &str) -> bool {
+    path.contains('$') || path.contains('%') || path.starts_with('=')
+}
+
+fn has_alternate_data_stream(path: &str) -> bool {
+    let rest = if path.len() >= 2 && path.as_bytes()[1] == b':' {
+        &path[2..]
+    } else {
+        path
+    };
+
+    rest.contains(':')
+}
+
+fn contains_short_name_component(segment: &str) -> bool {
+    let Some(tilde_index) = segment.find('~') else {
+        return false;
+    };
+
+    let suffix = &segment[tilde_index + 1..];
+    let digits = suffix.chars().take_while(|ch| ch.is_ascii_digit()).count();
+
+    digits > 0
 }
 
 #[cfg(test)]
@@ -92,10 +207,13 @@ mod tests {
             validate_path("/home/user/file.txt"),
             PathValidation::Valid
         ));
-        assert!(matches!(
-            validate_path("relative/path"),
-            PathValidation::Valid
-        ));
+        assert!(matches!(validate_path("a/../b"), PathValidation::Valid));
+    }
+
+    #[test]
+    fn clean_path_input_strips_quotes() {
+        assert_eq!(clean_path_input("\"src/main.rs\""), "src/main.rs");
+        assert_eq!(clean_path_input("'src/main.rs'"), "src/main.rs");
     }
 
     #[test]
@@ -108,16 +226,10 @@ mod tests {
 
     #[test]
     fn traversal_above_root_rejected() {
-        // "../../../etc/passwd" has 3 ParentDir and 2 Normal, net depth = -1
         assert!(matches!(
             validate_path("../../../etc/passwd"),
             PathValidation::Invalid(_)
         ));
-    }
-
-    #[test]
-    fn traversal_within_bounds_ok() {
-        assert!(matches!(validate_path("a/../b"), PathValidation::Valid));
     }
 
     #[test]
@@ -130,17 +242,27 @@ mod tests {
     }
 
     #[test]
-    fn is_within_root_checks() {
-        // Use platform-independent relative paths for testing
-        assert!(is_within_root("src/main.rs", "src"));
-        assert!(is_within_root("src", "src"));
-        // Absolute paths that don't share prefix
-        assert!(!is_within_root("../other/file.txt", "src"));
+    fn manual_approval_detects_unc_and_shell_expansion() {
+        assert!(path_requires_manual_approval(r"\\server\share\file.txt", false).is_some());
+        assert!(path_requires_manual_approval("$HOME/file.txt", false).is_some());
+        assert!(path_requires_manual_approval("%TEMP%\\file.txt", false).is_some());
     }
 
     #[test]
-    fn sanitize_removes_dangerous_components() {
-        assert_eq!(sanitize_path("a/../b/./c"), "a/b/c");
-        assert_eq!(sanitize_path("file\0.txt"), "file.txt");
+    fn write_globs_require_manual_approval() {
+        assert!(path_requires_manual_approval("src/*.rs", true).is_some());
+        assert!(path_requires_manual_approval("src/*.rs", false).is_none());
+    }
+
+    #[test]
+    fn suspicious_windows_paths_require_manual_approval() {
+        assert!(has_suspicious_windows_path_pattern(r"\\?\C:\repo\file.txt"));
+        assert!(has_suspicious_windows_path_pattern(
+            r"C:\repo\file.txt:stream"
+        ));
+        assert!(has_suspicious_windows_path_pattern(r"C:\repo\GIT~1\config"));
+        assert!(has_suspicious_windows_path_pattern(
+            r"C:\repo\dir. \file.txt"
+        ));
     }
 }

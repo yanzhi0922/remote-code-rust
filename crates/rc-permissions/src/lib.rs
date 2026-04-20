@@ -79,14 +79,19 @@ pub use decision::{
 };
 pub use denial_tracking::{DenialTracker, SharedDenialTracker};
 pub use explainer::explain_permission;
-pub use filesystem::check_filesystem_permission;
+pub use filesystem::{
+    FilesystemCheckResult, FilesystemOperation, assess_filesystem_access,
+    check_filesystem_permission, get_paths_for_permission_check,
+};
 pub use handler::{
     CoordinatorHandler, InteractiveHandler, PermissionCheckContext, PermissionHandler,
     SwarmWorkerHandler,
 };
 pub use loader::{load_rules_from_file, merge_rules, parse_rule_string};
 pub use mode::{ExtendedPermissionMode, ModeColorKey, PermissionModeConfig};
-pub use path_validation::validate_path;
+pub use path_validation::{
+    PathValidation, clean_path_input, path_requires_manual_approval, validate_path,
+};
 pub use rule::PermissionRuleV2;
 pub use setup::{PermissionSetup, PermissionSetupConfig, get_next_permission_mode};
 pub use shadowed_detection::{ShadowReason, ShadowedRule, detect_shadowed_rules};
@@ -219,6 +224,12 @@ impl PermissionBroker for StaticPermissionBroker {
         if self.allow_all {
             return PermissionDecision::allow();
         }
+        let requires_explicit_confirmation = request.working_directory.is_some()
+            && request.blocked_path.is_some()
+            && !matches!(self.mode, Some(rc_core::PermissionMode::BypassPermissions));
+        if requires_explicit_confirmation {
+            return PermissionDecision::deny("Permission denied by static broker");
+        }
         // If we have a mode, check auto_allows for the tool class.
         if let Some(mode) = self.mode {
             let class = request.resolved_permission_class();
@@ -275,7 +286,7 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
         {
             let session = self.session_rules.read().unwrap_or_else(|e| e.into_inner());
             for rule in session.iter() {
-                if rule_matches_pattern(&rule.tool_pattern, &request.tool_name) {
+                if shell_rules::rule_matches_request(&rule.tool_pattern, &request) {
                     return match rule.action {
                         RuleAction::Allow => PermissionDecision::allow(),
                         RuleAction::Deny => PermissionDecision::deny(format!(
@@ -290,7 +301,7 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
 
         // Check persistent rules
         for rule in &self.rules {
-            if rule_matches_pattern(&rule.tool_pattern, &request.tool_name) {
+            if shell_rules::rule_matches_request(&rule.tool_pattern, &request) {
                 self.push_audit(PermissionAuditRecord {
                     tool_name: request.tool_name.clone(),
                     tool_use_id: String::new(),
@@ -576,6 +587,42 @@ mod tests {
             blocked_path: None,
         }));
         assert!(decision.allowed);
+        Ok(())
+    }
+
+    #[test]
+    fn layered_broker_rule_matches_tool_input_path() -> anyhow::Result<()> {
+        let fallback = StaticPermissionBroker::new(false);
+        let rules = vec![SourceAwarePermissionRule {
+            tool_pattern: "Read(src/**)".to_owned(),
+            action: RuleAction::Allow,
+            source: RuleSource::User,
+        }];
+        let layered = LayeredPermissionBroker::new(fallback, rules);
+        let rt = tokio::runtime::Runtime::new()?;
+        let allowed = rt.block_on(layered.decide(PermissionRequest {
+            tool_name: "read_file".to_owned(),
+            permission_class: None,
+            tool_input: serde_json::json!({"path": "src/main.rs"}),
+            working_directory: None,
+            tool_use_id: None,
+            title: None,
+            description: None,
+            blocked_path: None,
+        }));
+        let denied = rt.block_on(layered.decide(PermissionRequest {
+            tool_name: "read_file".to_owned(),
+            permission_class: None,
+            tool_input: serde_json::json!({"path": "tests/main.rs"}),
+            working_directory: None,
+            tool_use_id: None,
+            title: None,
+            description: None,
+            blocked_path: None,
+        }));
+
+        assert!(allowed.allowed);
+        assert!(!denied.allowed);
         Ok(())
     }
 

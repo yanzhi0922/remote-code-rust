@@ -861,6 +861,13 @@ struct EffectivePermission {
     blocked_path: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct FilesystemPermissionPrecheck {
+    blocked_path: String,
+    message: String,
+    requires_confirmation: bool,
+}
+
 fn effective_permission_for_call(call: &ToolCall, spec: &ToolSpec) -> EffectivePermission {
     let default = EffectivePermission {
         class: classify_tool(&spec.permission_tool_name),
@@ -893,6 +900,64 @@ fn effective_permission_for_call(call: &ToolCall, spec: &ToolSpec) -> EffectiveP
         },
         _ => default,
     }
+}
+
+fn filesystem_operation_for_tool(tool_name: &str) -> Option<rc_permissions::FilesystemOperation> {
+    match tool_name {
+        "list_directory" | "read_file" | "search_text" | "glob" | "grep" => {
+            Some(rc_permissions::FilesystemOperation::Read)
+        }
+        "write_file" => Some(rc_permissions::FilesystemOperation::Create),
+        "replace_in_file" | "edit_file" | "notebook_edit" => {
+            Some(rc_permissions::FilesystemOperation::Write)
+        }
+        _ => None,
+    }
+}
+
+fn path_input_for_filesystem_tool<'a>(tool_name: &str, input: &'a Value) -> Option<&'a str> {
+    match tool_name {
+        "list_directory" | "search_text" | "glob" | "grep" => input
+            .get("path")
+            .and_then(Value::as_str)
+            .filter(|path| !path.trim().is_empty())
+            .or(Some(".")),
+        "read_file" | "write_file" | "replace_in_file" | "edit_file" | "notebook_edit" => {
+            input.get("path").and_then(Value::as_str)
+        }
+        _ => None,
+    }
+}
+
+fn precheck_filesystem_permission(
+    spec: &ToolSpec,
+    call: &ToolCall,
+    context: &ToolExecutionContext,
+) -> Option<FilesystemPermissionPrecheck> {
+    let operation = filesystem_operation_for_tool(&spec.name)?;
+    let raw_path = path_input_for_filesystem_tool(&spec.name, &call.input)?;
+    let check = rc_permissions::assess_filesystem_access(
+        raw_path,
+        &context.cwd,
+        &current_runtime_agent_prompt_context()
+            .map(|context| context.additional_working_directories)
+            .unwrap_or_default(),
+        operation,
+        plan_mode::current_plan_file_path().as_deref(),
+    );
+    if check.allowed {
+        return None;
+    }
+
+    let message = check
+        .reason
+        .clone()
+        .unwrap_or_else(|| "Path is not allowed.".to_owned());
+    Some(FilesystemPermissionPrecheck {
+        blocked_path: check.normalized_path.to_string_lossy().into_owned(),
+        message,
+        requires_confirmation: check.requires_confirmation,
+    })
 }
 
 /// Execute a tool call after checking permissions.
@@ -938,22 +1003,40 @@ pub async fn execute_tool_call(
     }
 
     let permission = effective_permission_for_call(call, &spec);
+    let filesystem_precheck = precheck_filesystem_permission(&spec, call, context);
 
-    if permission.requires_permission {
+    if filesystem_precheck
+        .as_ref()
+        .is_some_and(|precheck| !precheck.requires_confirmation)
+    {
+        let precheck = filesystem_precheck.expect("precheck checked");
+        return Ok(ToolResult {
+            content: precheck.message,
+            is_error: true,
+            content_blocks: Vec::new(),
+        });
+    }
+
+    if permission.requires_permission || filesystem_precheck.is_some() {
         // Fast-path: if the broker exposes a mode and auto_allows covers this class, skip.
         let broker_mode = broker.mode();
-        let skip_broker = broker_mode.is_some_and(|m| auto_allows(m, permission.class));
+        let skip_broker = filesystem_precheck.is_none()
+            && broker_mode.is_some_and(|m| auto_allows(m, permission.class));
         if !skip_broker {
+            let blocked_path = filesystem_precheck
+                .as_ref()
+                .map(|precheck| precheck.blocked_path.clone())
+                .or(permission.blocked_path.clone());
             let decision = broker
                 .decide(PermissionRequest {
                     tool_name: spec.name.clone(),
                     permission_class: Some(permission.class),
                     tool_input: call.input.clone(),
-                    working_directory: None,
+                    working_directory: Some(context.cwd.to_string_lossy().into_owned()),
                     tool_use_id: Some(call.id.clone()),
                     title: Some(format!("Allow {}", spec.protocol_name)),
                     description: Some(spec.description.clone()),
-                    blocked_path: permission.blocked_path.clone(),
+                    blocked_path,
                 })
                 .await;
             if !decision.allowed {
@@ -968,104 +1051,107 @@ pub async fn execute_tool_call(
         }
     }
 
-    if spec.name == "tool_search" {
-        return match system::tool_search_tool(&call.input).await {
-            Ok(result) => Ok(result),
+    file_ops::with_filesystem_permission_confirmed(filesystem_precheck.is_some(), async {
+        if spec.name == "tool_search" {
+            return match system::tool_search_tool(&call.input).await {
+                Ok(result) => Ok(result),
+                Err(error) => Ok(ToolResult {
+                    content: error.to_string(),
+                    is_error: true,
+                    content_blocks: Vec::new(),
+                }),
+            };
+        }
+
+        let result = match spec.name.as_str() {
+            "list_directory" => file_ops::list_directory(&call.input, context),
+            "read_file" => file_ops::read_file(&call.input, context),
+            "search_text" => file_ops::search_text(&call.input, context),
+            "write_file" => file_ops::write_file(&call.input, context),
+            "replace_in_file" => file_ops::replace_in_file(&call.input, context),
+            "edit_file" => file_ops::edit_file(&call.input, context),
+            "bash_command" => command::bash_command(&call.input, context).await,
+            "glob" => file_ops::glob_files(&call.input, context),
+            "grep" => file_ops::grep_files(&call.input, context),
+            "web_fetch" => web::web_fetch(&call.input, context).await,
+            "ask_user" => misc::ask_user(&call.input, context),
+            "todo_write" => system::todo_write(&call.input, context),
+            "config_read" => system::config_read(&call.input, context),
+            "agent" => agent::agent_tool(&call.input, context).await,
+            "web_search" => web::web_search(&call.input, context).await,
+            // ── Phase 2 tools ──────────────────────────────────────────────
+            "lsp" => misc::lsp_tool(&call.input, context).await,
+            "task_create" => tasks::task_create(&call.input),
+            "task_get" => tasks::task_get(&call.input),
+            "task_list" => tasks::task_list(&call.input),
+            "task_stop" => tasks::task_stop(&call.input),
+            "task_update" => tasks::task_update(&call.input),
+            "notebook_edit" => misc::notebook_edit(&call.input, context),
+            "skill_discover" => misc::skill_discover(&call.input, context),
+            "send_message" => send_message::send_message(&call.input, context).await,
+            "enter_plan_mode" => plan_mode::enter_plan_mode(&call.input, context),
+            "exit_plan_mode" => plan_mode::exit_plan_mode(&call.input, context),
+            "sleep" => system::sleep_tool(&call.input).await,
+            "snip" => system::snip_tool(&call.input, context),
+            // ── Phase 3 tools ──────────────────────────────────────────────
+            "memory_read" => memory_tools::memory_read_tool(&call.input, context),
+            "memory_write" => memory_tools::memory_write_tool(&call.input, context),
+            "team_create" => misc::team_create_tool(&call.input, context).await,
+            "team_status" => misc::team_status_tool(&call.input).await,
+            "web_browser" => web::web_browser_tool(&call.input, context).await,
+            "verify_plan" => system::verify_plan_tool(&call.input),
+            "terminal_capture" => system::terminal_capture_tool(&call.input, context).await,
+            // ── Phase 4: Upstream gap-fill tools ────────────────────────────
+            "powershell" => command::powershell_tool(&call.input, context).await,
+            "repl" => command::repl_tool(&call.input, context).await,
+            "monitor" => system::monitor_tool(&call.input),
+            "schedule_cron" => workflow::schedule_cron_tool(&call.input, context),
+            "remote_trigger" => misc::remote_trigger_tool(&call.input).await,
+            "workflow" => workflow::workflow_tool(&call.input, context),
+            "suggest_pr" => git::suggest_pr_tool(context),
+            "enter_worktree" => git::enter_worktree_tool(&call.input, context),
+            "exit_worktree" => git::exit_worktree_tool(&call.input, context),
+            "list_worktrees" => git::list_worktrees_tool(context),
+            "brief" => system::brief_tool(&call.input),
+            "ctx_inspect" => system::ctx_inspect_tool(&call.input).await,
+            "list_peers" => system::list_peers_tool(&call.input).await,
+            "tungsten" => misc::tungsten_tool(&call.input, context).await,
+            "overflow_test" => misc::overflow_test_tool(&call.input),
+            "synthetic_output" => misc::synthetic_output_tool(&call.input),
+            "mcp_auth" => mcp_tools::mcp_auth_tool(&call.input, context),
+            "mcp_call" => mcp_tools::mcp_call_tool(&call.input, context).await,
+            "list_mcp_resources" => mcp_tools::list_mcp_resources_tool(&call.input, context).await,
+            "read_mcp_resource" => mcp_tools::read_mcp_resource_tool(&call.input, context).await,
+            "skill_execute" => misc::skill_execute_tool(&call.input, context),
+            "voice_input" => misc::voice_input_tool(&call.input),
+            "daemon" => workflow::daemon_tool(&call.input, context),
+            // ── Phase 9: New dedicated tool modules ────────────────────────────
+            "discover_skills" => discover_skills::discover_skills(&call.input, context),
+            "team_delete" => team_tools::team_delete(&call.input, context),
+            "team_list" => team_tools::team_list(&call.input, context),
+            "broadcast_message" => send_message::broadcast_message(&call.input, context).await,
+            "review_artifact" => review_artifact::review_artifact(&call.input, context),
+            "send_user_file" => send_user_file::send_user_file(&call.input, context),
+            _ if call.name.starts_with("mcp__") => {
+                mcp_catalog::execute_runtime_mcp_tool(&call.name, &call.input).await
+            }
+            _ => Err(anyhow!("unsupported tool {}", spec.name)),
+        };
+
+        match result {
+            Ok(content) => Ok(ToolResult {
+                content,
+                is_error: false,
+                content_blocks: Vec::new(),
+            }),
             Err(error) => Ok(ToolResult {
                 content: error.to_string(),
                 is_error: true,
                 content_blocks: Vec::new(),
             }),
-        };
-    }
-
-    let result = match spec.name.as_str() {
-        "list_directory" => file_ops::list_directory(&call.input, context),
-        "read_file" => file_ops::read_file(&call.input, context),
-        "search_text" => file_ops::search_text(&call.input, context),
-        "write_file" => file_ops::write_file(&call.input, context),
-        "replace_in_file" => file_ops::replace_in_file(&call.input, context),
-        "edit_file" => file_ops::edit_file(&call.input, context),
-        "bash_command" => command::bash_command(&call.input, context).await,
-        "glob" => file_ops::glob_files(&call.input, context),
-        "grep" => file_ops::grep_files(&call.input, context),
-        "web_fetch" => web::web_fetch(&call.input, context).await,
-        "ask_user" => misc::ask_user(&call.input, context),
-        "todo_write" => system::todo_write(&call.input, context),
-        "config_read" => system::config_read(&call.input, context),
-        "agent" => agent::agent_tool(&call.input, context).await,
-        "web_search" => web::web_search(&call.input, context).await,
-        // ── Phase 2 tools ──────────────────────────────────────────────
-        "lsp" => misc::lsp_tool(&call.input, context).await,
-        "task_create" => tasks::task_create(&call.input),
-        "task_get" => tasks::task_get(&call.input),
-        "task_list" => tasks::task_list(&call.input),
-        "task_stop" => tasks::task_stop(&call.input),
-        "task_update" => tasks::task_update(&call.input),
-        "notebook_edit" => misc::notebook_edit(&call.input, context),
-        "skill_discover" => misc::skill_discover(&call.input, context),
-        "send_message" => send_message::send_message(&call.input, context).await,
-        "enter_plan_mode" => plan_mode::enter_plan_mode(&call.input, context),
-        "exit_plan_mode" => plan_mode::exit_plan_mode(&call.input, context),
-        "sleep" => system::sleep_tool(&call.input).await,
-        "snip" => system::snip_tool(&call.input, context),
-        // ── Phase 3 tools ──────────────────────────────────────────────
-        "memory_read" => memory_tools::memory_read_tool(&call.input, context),
-        "memory_write" => memory_tools::memory_write_tool(&call.input, context),
-        "team_create" => misc::team_create_tool(&call.input, context).await,
-        "team_status" => misc::team_status_tool(&call.input).await,
-        "web_browser" => web::web_browser_tool(&call.input, context).await,
-        "verify_plan" => system::verify_plan_tool(&call.input),
-        "terminal_capture" => system::terminal_capture_tool(&call.input, context).await,
-        // ── Phase 4: Upstream gap-fill tools ────────────────────────────
-        "powershell" => command::powershell_tool(&call.input, context).await,
-        "repl" => command::repl_tool(&call.input, context).await,
-        "monitor" => system::monitor_tool(&call.input),
-        "schedule_cron" => workflow::schedule_cron_tool(&call.input, context),
-        "remote_trigger" => misc::remote_trigger_tool(&call.input).await,
-        "workflow" => workflow::workflow_tool(&call.input, context),
-        "suggest_pr" => git::suggest_pr_tool(context),
-        "enter_worktree" => git::enter_worktree_tool(&call.input, context),
-        "exit_worktree" => git::exit_worktree_tool(&call.input, context),
-        "list_worktrees" => git::list_worktrees_tool(context),
-        "brief" => system::brief_tool(&call.input),
-        "ctx_inspect" => system::ctx_inspect_tool(&call.input).await,
-        "list_peers" => system::list_peers_tool(&call.input).await,
-        "tungsten" => misc::tungsten_tool(&call.input, context).await,
-        "overflow_test" => misc::overflow_test_tool(&call.input),
-        "synthetic_output" => misc::synthetic_output_tool(&call.input),
-        "mcp_auth" => mcp_tools::mcp_auth_tool(&call.input, context),
-        "mcp_call" => mcp_tools::mcp_call_tool(&call.input, context).await,
-        "list_mcp_resources" => mcp_tools::list_mcp_resources_tool(&call.input, context).await,
-        "read_mcp_resource" => mcp_tools::read_mcp_resource_tool(&call.input, context).await,
-        "skill_execute" => misc::skill_execute_tool(&call.input, context),
-        "voice_input" => misc::voice_input_tool(&call.input),
-        "daemon" => workflow::daemon_tool(&call.input, context),
-        // ── Phase 9: New dedicated tool modules ────────────────────────────
-        "discover_skills" => discover_skills::discover_skills(&call.input, context),
-        "team_delete" => team_tools::team_delete(&call.input, context),
-        "team_list" => team_tools::team_list(&call.input, context),
-        "broadcast_message" => send_message::broadcast_message(&call.input, context).await,
-        "review_artifact" => review_artifact::review_artifact(&call.input, context),
-        "send_user_file" => send_user_file::send_user_file(&call.input, context),
-        _ if call.name.starts_with("mcp__") => {
-            mcp_catalog::execute_runtime_mcp_tool(&call.name, &call.input).await
         }
-        _ => Err(anyhow!("unsupported tool {}", spec.name)),
-    };
-
-    match result {
-        Ok(content) => Ok(ToolResult {
-            content,
-            is_error: false,
-            content_blocks: Vec::new(),
-        }),
-        Err(error) => Ok(ToolResult {
-            content: error.to_string(),
-            is_error: true,
-            content_blocks: Vec::new(),
-        }),
-    }
+    })
+    .await
 }
 
 fn normalize_tool_runtime_policy(mut policy: ToolRuntimePolicy) -> ToolRuntimePolicy {
@@ -1124,7 +1210,7 @@ mod tests {
         runtime_provider_tool_specs, runtime_tool_search_candidate_specs,
         runtime_visible_provider_tool_specs,
         runtime_visible_provider_tool_specs_with_discovered_tools,
-        with_tool_runtime_policy_overlay,
+        with_runtime_agent_prompt_context_provider, with_tool_runtime_policy_overlay,
     };
     use once_cell::sync::Lazy;
     use rc_core::{
@@ -1135,7 +1221,9 @@ mod tests {
         McpCapabilityMatrix, McpServerConfig, McpServerInspection, McpToolDescriptor,
         McpTransportConfig,
     };
-    use rc_permissions::StaticPermissionBroker;
+    use rc_permissions::{
+        PermissionBroker, PermissionDecision, PermissionRequest, StaticPermissionBroker,
+    };
     use rc_swarm::{TeamFile, TeamMember, mailbox, team_helpers};
     use serde_json::json;
     use std::collections::BTreeMap;
@@ -1145,6 +1233,37 @@ mod tests {
     use tokio::sync::Mutex as AsyncMutex;
 
     static RUNTIME_POLICY_TEST_MUTEX: Lazy<AsyncMutex<()>> = Lazy::new(|| AsyncMutex::new(()));
+
+    #[derive(Debug)]
+    struct RecordingPermissionBroker {
+        allow: bool,
+        requests: Arc<Mutex<Vec<PermissionRequest>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl PermissionBroker for RecordingPermissionBroker {
+        async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
+            self.requests
+                .lock()
+                .expect("permission requests")
+                .push(request);
+            if self.allow {
+                PermissionDecision::allow()
+            } else {
+                PermissionDecision::deny("recorded denial")
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn create_dir_symlink(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
+    }
+
+    #[cfg(windows)]
+    fn create_dir_symlink(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+        std::os::windows::fs::symlink_dir(target, link)
+    }
 
     struct TeamDirGuard;
 
@@ -1301,6 +1420,148 @@ mod tests {
                 .iter()
                 .any(|spec| spec.protocol_name == "Bash")
         );
+    }
+
+    #[tokio::test]
+    async fn read_file_outside_workspace_routes_through_permission_broker() {
+        let tempdir = tempdir().expect("tempdir");
+        let workspace = tempdir.path().join("workspace");
+        let outside = tempdir.path().join("outside.txt");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        std::fs::write(&outside, "secret").expect("outside file");
+        let context = ToolExecutionContext {
+            cwd: workspace,
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let broker = RecordingPermissionBroker {
+            allow: false,
+            requests: requests.clone(),
+        };
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "read-outside".to_owned(),
+                name: "read_file".to_owned(),
+                input: json!({"path": outside.to_string_lossy().to_string()}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("tool call should return result");
+
+        assert!(result.is_error);
+        let requests = requests.lock().expect("requests");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].tool_name, "read_file");
+        assert_eq!(
+            requests[0].blocked_path.as_deref(),
+            Some(outside.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            requests[0].working_directory.as_deref(),
+            Some(context.cwd.to_string_lossy().as_ref())
+        );
+    }
+
+    #[tokio::test]
+    async fn write_file_symlink_parent_escape_requires_explicit_permission() {
+        let tempdir = tempdir().expect("tempdir");
+        let workspace = tempdir.path().join("workspace");
+        let outside = tempdir.path().join("outside");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        std::fs::create_dir_all(&outside).expect("outside");
+        let link = workspace.join("linked");
+        if create_dir_symlink(&outside, &link).is_err() {
+            return;
+        }
+        let target = link.join("new.txt");
+        let context = ToolExecutionContext {
+            cwd: workspace,
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let broker = RecordingPermissionBroker {
+            allow: false,
+            requests: requests.clone(),
+        };
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "write-symlink".to_owned(),
+                name: "write_file".to_owned(),
+                input: json!({
+                    "path": target.to_string_lossy().to_string(),
+                    "content": "escaped",
+                }),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("tool call should return result");
+
+        assert!(result.is_error);
+        assert!(!outside.join("new.txt").exists());
+        let requests = requests.lock().expect("requests");
+        assert_eq!(requests.len(), 1);
+        assert!(
+            requests[0]
+                .blocked_path
+                .as_deref()
+                .is_some_and(|path| path.ends_with("new.txt"))
+        );
+    }
+
+    #[tokio::test]
+    async fn read_file_allows_runtime_additional_working_directory() {
+        let tempdir = tempdir().expect("tempdir");
+        let workspace = tempdir.path().join("workspace");
+        let extra = tempdir.path().join("extra");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        std::fs::create_dir_all(&extra).expect("extra");
+        let target = extra.join("allowed.txt");
+        std::fs::write(&target, "allowed").expect("extra file");
+        let context = ToolExecutionContext {
+            cwd: workspace,
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let broker = StaticPermissionBroker::new(false);
+        let runtime_context = crate::RuntimeAgentPromptContext {
+            additional_working_directories: vec![extra],
+            ..crate::RuntimeAgentPromptContext::default()
+        };
+
+        let result = with_runtime_agent_prompt_context_provider(
+            Arc::new(move || runtime_context.clone()),
+            async {
+                execute_tool_call(
+                    &ToolCall {
+                        id: "read-extra".to_owned(),
+                        name: "read_file".to_owned(),
+                        input: json!({"path": target.to_string_lossy().to_string()}),
+                    },
+                    &context,
+                    &broker,
+                )
+                .await
+            },
+        )
+        .await
+        .expect("tool call should return result");
+
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("allowed"));
     }
 
     #[tokio::test]

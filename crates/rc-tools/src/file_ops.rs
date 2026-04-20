@@ -6,61 +6,74 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow};
 use globset::GlobBuilder;
 use ignore::WalkBuilder;
+use rc_permissions::{FilesystemOperation, assess_filesystem_access};
 use regex::Regex;
 use serde_json::Value;
 use walkdir::WalkDir;
 
 use super::{IGNORED_DIRS, ToolExecutionContext};
 
-/// Normalize a path for comparison by stripping the Windows `\\?\` UNC prefix
-/// that `canonicalize()` adds on Windows.
+tokio::task_local! {
+    static TOOL_FILESYSTEM_PERMISSION_CONFIRMED: bool;
+}
+
+pub(crate) async fn with_filesystem_permission_confirmed<F, T>(confirmed: bool, future: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    TOOL_FILESYSTEM_PERMISSION_CONFIRMED
+        .scope(confirmed, future)
+        .await
+}
+
+fn filesystem_permission_confirmed_for_dispatch() -> bool {
+    TOOL_FILESYSTEM_PERMISSION_CONFIRMED
+        .try_with(|confirmed| *confirmed)
+        .unwrap_or(false)
+}
+
+fn additional_working_directories() -> Vec<PathBuf> {
+    crate::current_runtime_agent_prompt_context()
+        .map(|context| context.additional_working_directories)
+        .unwrap_or_default()
+}
+
 fn normalize_for_comparison(path: PathBuf) -> PathBuf {
-    let s = path.to_string_lossy();
-    if let Some(stripped) = s.strip_prefix(r"\\?\") {
+    let rendered = path.to_string_lossy();
+    if let Some(stripped) = rendered.strip_prefix(r"\\?\") {
         PathBuf::from(stripped)
     } else {
         path
     }
 }
 
-pub(crate) fn resolve_workspace_path(cwd: &Path, maybe_relative: Option<&str>) -> Result<PathBuf> {
-    let candidate = match maybe_relative {
-        Some(path) if !path.trim().is_empty() => cwd.join(path),
-        _ => cwd.to_path_buf(),
-    };
-    // Canonicalize the cwd (always exists).
-    let canonical_cwd =
-        normalize_for_comparison(cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf()));
-    // For the candidate, try to canonicalize the parent dir (which likely exists)
-    // and append the file name. This handles the case where the target file
-    // doesn't exist yet (e.g., write_file creating a new file).
-    let canonical_candidate = if candidate.exists() {
-        normalize_for_comparison(candidate.canonicalize().unwrap_or(candidate.clone()))
-    } else {
-        let parent = candidate.parent().unwrap_or(cwd);
-        let file_name = candidate.file_name().unwrap_or_default();
-        let canonical_parent = normalize_for_comparison(
-            parent
-                .canonicalize()
-                .unwrap_or_else(|_| parent.to_path_buf()),
-        );
-        canonical_parent.join(file_name)
-    };
-    if !canonical_candidate.starts_with(&canonical_cwd) {
-        if current_plan_file_path()
-            .as_ref()
-            .map(|plan_path| canonical_plan_file_path(plan_path))
-            .is_some_and(|plan_path| canonical_candidate == plan_path)
-        {
-            return Ok(candidate);
-        }
-        return Err(anyhow!(
-            "path {} escapes the workspace {}",
-            candidate.display(),
-            cwd.display()
-        ));
+pub(crate) fn resolve_workspace_path_for_operation(
+    context: &ToolExecutionContext,
+    maybe_relative: Option<&str>,
+    operation: FilesystemOperation,
+) -> Result<PathBuf> {
+    let raw_path = maybe_relative.unwrap_or(".");
+    let check = assess_filesystem_access(
+        raw_path,
+        &context.cwd,
+        &additional_working_directories(),
+        operation,
+        current_plan_file_path().as_deref(),
+    );
+
+    if check.allowed
+        || (check.requires_confirmation && filesystem_permission_confirmed_for_dispatch())
+    {
+        return Ok(check.normalized_path);
     }
-    Ok(candidate)
+
+    Err(anyhow!(
+        "{}: {}",
+        check
+            .reason
+            .unwrap_or_else(|| "Path is not allowed".to_owned()),
+        check.normalized_path.display()
+    ))
 }
 
 fn canonical_plan_file_path(plan_file_path: &Path) -> PathBuf {
@@ -94,7 +107,11 @@ fn maybe_persist_plan_snapshot(target: &Path) {
 }
 
 pub(crate) fn list_directory(input: &Value, context: &ToolExecutionContext) -> Result<String> {
-    let target = resolve_workspace_path(&context.cwd, input.get("path").and_then(Value::as_str))?;
+    let target = resolve_workspace_path_for_operation(
+        context,
+        input.get("path").and_then(Value::as_str),
+        FilesystemOperation::Read,
+    )?;
     let recursive = input
         .get("recursive")
         .and_then(Value::as_bool)
@@ -143,7 +160,8 @@ pub(crate) fn read_file(input: &Value, context: &ToolExecutionContext) -> Result
         .get("path")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("read_file requires a path"))?;
-    let target = resolve_workspace_path(&context.cwd, Some(path))?;
+    let target =
+        resolve_workspace_path_for_operation(context, Some(path), FilesystemOperation::Read)?;
     let contents = std::fs::read_to_string(&target)
         .with_context(|| format!("failed to read {}", target.display()))?;
     let start_line = input.get("start_line").and_then(Value::as_u64).unwrap_or(1) as usize;
@@ -176,7 +194,11 @@ pub(crate) fn search_text(input: &Value, context: &ToolExecutionContext) -> Resu
         .get("pattern")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("search_text requires a pattern"))?;
-    let target = resolve_workspace_path(&context.cwd, input.get("path").and_then(Value::as_str))?;
+    let target = resolve_workspace_path_for_operation(
+        context,
+        input.get("path").and_then(Value::as_str),
+        FilesystemOperation::Read,
+    )?;
     let regex = Regex::new(pattern).or_else(|_| Regex::new(&regex::escape(pattern)))?;
     let max_matches = input
         .get("max_matches")
@@ -233,7 +255,8 @@ pub(crate) fn write_file(input: &Value, context: &ToolExecutionContext) -> Resul
         .get("append")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let target = resolve_workspace_path(&context.cwd, Some(path))?;
+    let target =
+        resolve_workspace_path_for_operation(context, Some(path), FilesystemOperation::Create)?;
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -265,7 +288,8 @@ pub(crate) fn replace_in_file(input: &Value, context: &ToolExecutionContext) -> 
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("replace_in_file requires replacement text"))?;
     let replace_all = input.get("all").and_then(Value::as_bool).unwrap_or(false);
-    let target = resolve_workspace_path(&context.cwd, Some(path))?;
+    let target =
+        resolve_workspace_path_for_operation(context, Some(path), FilesystemOperation::Write)?;
     let original = std::fs::read_to_string(&target)?;
     let updated = if replace_all {
         original.replace(search, replace)
@@ -282,7 +306,8 @@ pub(crate) fn edit_file(input: &Value, context: &ToolExecutionContext) -> Result
         .get("path")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("edit_file requires a path"))?;
-    let target = resolve_workspace_path(&context.cwd, Some(path))?;
+    let target =
+        resolve_workspace_path_for_operation(context, Some(path), FilesystemOperation::Write)?;
     let edits = input
         .get("edits")
         .and_then(Value::as_array)
@@ -335,7 +360,11 @@ pub(crate) fn glob_files(input: &Value, context: &ToolExecutionContext) -> Resul
         .get("pattern")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("glob requires a pattern"))?;
-    let base = resolve_workspace_path(&context.cwd, input.get("path").and_then(Value::as_str))?;
+    let base = resolve_workspace_path_for_operation(
+        context,
+        input.get("path").and_then(Value::as_str),
+        FilesystemOperation::Read,
+    )?;
     let full_pattern = format!("{}/{}", base.display(), pattern).replace('\\', "/");
     let mut results = Vec::new();
     let entries = glob::glob(&full_pattern).context("invalid glob pattern")?;
@@ -370,7 +399,11 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
         .get("pattern")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("grep requires a pattern"))?;
-    let target = resolve_workspace_path(&context.cwd, input.get("path").and_then(Value::as_str))?;
+    let target = resolve_workspace_path_for_operation(
+        context,
+        input.get("path").and_then(Value::as_str),
+        FilesystemOperation::Read,
+    )?;
     let file_pattern = input.get("file_pattern").and_then(Value::as_str);
     let max_matches = input
         .get("max_matches")
