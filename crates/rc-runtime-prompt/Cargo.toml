@@ -26,3 +26,4 @@ rc-tools = { path = "../rc-tools" }
 
 [dev-dependencies]
 tempfile.workspace = true
+tokio.workspace = true

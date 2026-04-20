@@ -5,8 +5,11 @@ use anyhow::Result;
 use rc_config::RuntimeConfig;
 use rc_config::settings_layers::load_runtime_settings;
 
+const AUTO_MEMORY_DIRNAME: &str = "memory";
+const AUTO_MEMORY_PROJECTS_DIRNAME: &str = "projects";
 const ENTRYPOINT_NAME: &str = "MEMORY.md";
 const MAX_ENTRYPOINT_LINES: usize = 200;
+const MAX_SANITIZED_LENGTH: usize = 200;
 const DIR_EXISTS_GUIDANCE: &str = "This directory already exists — write to it directly with the Write tool (do not run mkdir or check for its existence).";
 const MEMORY_DRIFT_CAVEAT: &str = "- Memory records can become stale over time. Use memory as context for what was true at a given point in time. Before answering the user or building assumptions based solely on information in memory records, verify that the memory is still correct and up-to-date by reading the current state of the files or resources. If a recalled memory conflicts with current information, trust what you observe now — and update or remove the stale memory rather than acting on it.";
 
@@ -135,6 +138,10 @@ pub fn load_cowork_memory_mechanics_prompt(config: &RuntimeConfig) -> Result<Opt
     load_cowork_memory_mechanics_prompt_with(config, &AutoMemoryInputs::from_process_env(config)?)
 }
 
+pub fn load_default_memory_prompt(config: &RuntimeConfig) -> Result<Option<String>> {
+    load_default_memory_prompt_with(config, &AutoMemoryInputs::from_process_env(config)?)
+}
+
 fn load_cowork_memory_mechanics_prompt_with(
     _config: &RuntimeConfig,
     inputs: &AutoMemoryInputs,
@@ -147,7 +154,28 @@ fn load_cowork_memory_mechanics_prompt_with(
     else {
         return Ok(None);
     };
-    fs::create_dir_all(Path::new(&memory_dir))?;
+    let _ = fs::create_dir_all(Path::new(&memory_dir));
+
+    Ok(Some(
+        build_memory_lines(
+            "auto memory",
+            &memory_dir,
+            inputs.cowork_memory_extra_guidelines.clone(),
+        )
+        .join("\n"),
+    ))
+}
+
+fn load_default_memory_prompt_with(
+    config: &RuntimeConfig,
+    inputs: &AutoMemoryInputs,
+) -> Result<Option<String>> {
+    if !inputs.auto_memory_enabled {
+        return Ok(None);
+    }
+
+    let memory_dir = resolve_default_memory_dir(config, inputs)?;
+    let _ = fs::create_dir_all(Path::new(&memory_dir));
 
     Ok(Some(
         build_memory_lines(
@@ -164,22 +192,25 @@ struct AutoMemoryInputs {
     auto_memory_enabled: bool,
     cowork_memory_path_override: Option<String>,
     cowork_memory_extra_guidelines: Option<String>,
+    remote_memory_dir: Option<std::ffi::OsString>,
 }
 
 impl AutoMemoryInputs {
     fn from_process_env(config: &RuntimeConfig) -> Result<Self> {
+        let remote_memory_dir = std::env::var_os("CLAUDE_CODE_REMOTE_MEMORY_DIR");
         Ok(Self {
             auto_memory_enabled: resolve_auto_memory_enabled(
                 config,
                 std::env::var("CLAUDE_CODE_DISABLE_AUTO_MEMORY").ok(),
                 std::env::var("CLAUDE_CODE_SIMPLE").ok(),
                 std::env::var("CLAUDE_CODE_REMOTE").ok(),
-                std::env::var_os("CLAUDE_CODE_REMOTE_MEMORY_DIR"),
+                remote_memory_dir.clone(),
             )?,
             cowork_memory_path_override: std::env::var("CLAUDE_COWORK_MEMORY_PATH_OVERRIDE").ok(),
             cowork_memory_extra_guidelines: std::env::var("CLAUDE_COWORK_MEMORY_EXTRA_GUIDELINES")
                 .ok()
                 .filter(|value| !value.trim().is_empty()),
+            remote_memory_dir,
         })
     }
 }
@@ -229,16 +260,26 @@ fn env_defined_falsy(value: Option<&str>) -> bool {
 }
 
 fn validated_cowork_memory_path_override_from(raw: Option<String>) -> Option<String> {
-    validate_memory_path(raw.as_deref())
+    validate_memory_path(raw.as_deref(), false)
 }
 
-fn validate_memory_path(raw: Option<&str>) -> Option<String> {
+fn validated_auto_memory_directory_setting_from(raw: Option<String>) -> Option<String> {
+    validate_memory_path(raw.as_deref(), true)
+}
+
+fn validate_memory_path(raw: Option<&str>, expand_tilde: bool) -> Option<String> {
     let raw = raw?;
     if raw.is_empty() || raw.contains('\0') || raw.starts_with("\\\\") || raw.starts_with("//") {
         return None;
     }
 
-    let normalized = normalize_memory_path(raw);
+    let candidate = if expand_tilde {
+        expand_home_tilde(raw)?
+    } else {
+        raw.to_owned()
+    };
+
+    let normalized = normalize_memory_path(&candidate);
     let stripped = normalized.trim_end_matches(['/', '\\']);
     if stripped.is_empty()
         || !Path::new(stripped).is_absolute()
@@ -268,6 +309,194 @@ fn normalize_memory_path(raw: &str) -> String {
 fn is_windows_drive_root(path: &str) -> bool {
     let bytes = path.as_bytes();
     bytes.len() == 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic()
+}
+
+fn expand_home_tilde(raw: &str) -> Option<String> {
+    if !(raw.starts_with("~/") || raw.starts_with("~\\")) {
+        return Some(raw.to_owned());
+    }
+
+    let rest = &raw[2..];
+    let normalized_rest = normalize_memory_path(if rest.is_empty() { "." } else { rest });
+    if normalized_rest.is_empty() || normalized_rest == "." || normalized_rest == ".." {
+        return None;
+    }
+
+    let home = home_dir_from_env()?;
+    Some(home.join(rest).to_string_lossy().into_owned())
+}
+
+fn home_dir_from_env() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        std::env::var_os("USERPROFILE").map(PathBuf::from)
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var_os("HOME").map(PathBuf::from)
+    }
+}
+
+fn resolve_default_memory_dir(config: &RuntimeConfig, inputs: &AutoMemoryInputs) -> Result<String> {
+    if let Some(memory_dir) =
+        validated_cowork_memory_path_override_from(inputs.cowork_memory_path_override.clone())
+    {
+        return Ok(memory_dir);
+    }
+
+    if let Some(memory_dir) = trusted_auto_memory_directory_from_config(config)?
+        .and_then(|value| validated_auto_memory_directory_setting_from(Some(value)))
+    {
+        return Ok(memory_dir);
+    }
+
+    Ok(default_auto_memory_dir(
+        config,
+        inputs.remote_memory_dir.as_deref(),
+    ))
+}
+
+fn trusted_auto_memory_directory_from_config(config: &RuntimeConfig) -> Result<Option<String>> {
+    let trusted_files = trusted_auto_memory_setting_files(config);
+    if trusted_files.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(load_runtime_settings(&trusted_files)?.auto_memory_directory)
+}
+
+fn trusted_auto_memory_setting_files(config: &RuntimeConfig) -> Vec<PathBuf> {
+    if !config.cli_settings_files.is_empty() {
+        return dedup_paths(&config.cli_settings_files);
+    }
+
+    let legacy_import = config
+        .paths
+        .profiles_dir
+        .join("legacy-import")
+        .join("settings.json");
+    let profile = config.paths.profile_dir.join("settings.json");
+
+    dedup_paths(
+        &config
+            .settings_files
+            .iter()
+            .filter(|path| {
+                path.as_path() == legacy_import.as_path()
+                    || path.as_path() == profile.as_path()
+                    || path
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .is_some_and(|value| value.eq_ignore_ascii_case("settings.local.json"))
+            })
+            .cloned()
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn dedup_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
+    let mut unique = Vec::new();
+    for path in paths {
+        if unique.iter().any(|existing| existing == path) {
+            continue;
+        }
+        unique.push(path.clone());
+    }
+    unique
+}
+
+fn default_auto_memory_dir(
+    config: &RuntimeConfig,
+    remote_memory_dir: Option<&std::ffi::OsStr>,
+) -> String {
+    let memory_base = remote_memory_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(|| config.paths.profile_dir.clone());
+    let project_root = canonical_project_root(&config.original_cwd);
+    let sanitized = sanitize_path_component(&project_root.to_string_lossy());
+    with_trailing_separator(
+        memory_base
+            .join(AUTO_MEMORY_PROJECTS_DIRNAME)
+            .join(sanitized)
+            .join(AUTO_MEMORY_DIRNAME),
+    )
+}
+
+fn canonical_project_root(cwd: &Path) -> PathBuf {
+    find_canonical_git_root(cwd)
+        .or_else(|| fs::canonicalize(cwd).ok())
+        .unwrap_or_else(|| cwd.to_path_buf())
+}
+
+fn find_canonical_git_root(cwd: &Path) -> Option<PathBuf> {
+    let _git_root = git_absolute_path(
+        cwd,
+        &["rev-parse", "--path-format=absolute", "--show-toplevel"],
+    )?;
+    let common_dir = git_absolute_path(
+        cwd,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )
+    .or_else(|| git_absolute_path(cwd, &["rev-parse", "--git-common-dir"]))?;
+    let common_dir = fs::canonicalize(&common_dir).unwrap_or(common_dir);
+    if common_dir
+        .file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value == ".git")
+    {
+        return common_dir.parent().map(Path::to_path_buf);
+    }
+    Some(common_dir)
+}
+
+fn git_absolute_path(cwd: &Path, args: &[&str]) -> Option<PathBuf> {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if value.is_empty() {
+        return None;
+    }
+
+    Some(PathBuf::from(value))
+}
+
+fn sanitize_path_component(raw: &str) -> String {
+    let sanitized = raw
+        .chars()
+        .map(|ch| ch.is_ascii_alphanumeric().then_some(ch).unwrap_or('-'))
+        .collect::<String>();
+    if sanitized.len() <= MAX_SANITIZED_LENGTH {
+        return sanitized;
+    }
+
+    format!(
+        "{}-{}",
+        &sanitized[..MAX_SANITIZED_LENGTH],
+        simple_hash(raw)
+    )
+}
+
+fn simple_hash(raw: &str) -> String {
+    let mut hash: u32 = 5381;
+    for byte in raw.bytes() {
+        hash = hash.wrapping_mul(33).wrapping_add(u32::from(byte));
+    }
+    hash.to_string()
+}
+
+fn with_trailing_separator(path: PathBuf) -> String {
+    let mut rendered = path.to_string_lossy().into_owned();
+    if !rendered.ends_with(MAIN_SEPARATOR) {
+        rendered.push(MAIN_SEPARATOR);
+    }
+    rendered
 }
 
 fn build_memory_lines(
@@ -356,7 +585,7 @@ fn build_memory_lines(
 mod tests {
     use super::{
         AutoMemoryInputs, build_memory_lines, load_cowork_memory_mechanics_prompt_with,
-        resolve_auto_memory_enabled, validate_memory_path,
+        load_default_memory_prompt_with, resolve_auto_memory_enabled, validate_memory_path,
     };
     use rc_config::settings_layers::RuntimeOverrides;
     use rc_config::{ProviderOverrides, RuntimeConfig, load_runtime_config};
@@ -374,17 +603,17 @@ mod tests {
             "/tmp/memory/"
         };
 
-        let normalized = validate_memory_path(Some(raw)).expect("normalized path");
+        let normalized = validate_memory_path(Some(raw), false).expect("normalized path");
         assert!(normalized.ends_with(MAIN_SEPARATOR));
         assert!(!normalized.ends_with(&format!("{MAIN_SEPARATOR}{MAIN_SEPARATOR}")));
     }
 
     #[test]
     fn validate_memory_path_rejects_relative_unc_and_drive_roots() {
-        assert!(validate_memory_path(Some("../memory")).is_none());
-        assert!(validate_memory_path(Some("//server/share")).is_none());
+        assert!(validate_memory_path(Some("../memory"), false).is_none());
+        assert!(validate_memory_path(Some("//server/share"), false).is_none());
         if cfg!(windows) {
-            assert!(validate_memory_path(Some(r"C:\")).is_none());
+            assert!(validate_memory_path(Some(r"C:\"), false).is_none());
         }
     }
 
@@ -415,6 +644,7 @@ mod tests {
                 auto_memory_enabled: true,
                 cowork_memory_path_override: Some(memory_dir.display().to_string()),
                 cowork_memory_extra_guidelines: Some("Cowork extra guideline".to_owned()),
+                remote_memory_dir: None,
             },
         )
         .expect("prompt")
@@ -440,6 +670,7 @@ mod tests {
                     tempdir.path().join("cowork-memory").display().to_string(),
                 ),
                 cowork_memory_extra_guidelines: None,
+                remote_memory_dir: None,
             },
         )
         .expect("prompt");
@@ -496,6 +727,101 @@ mod tests {
         )
         .expect("remote disabled");
         assert!(!remote_disabled);
+    }
+
+    #[test]
+    fn load_default_memory_prompt_uses_default_projects_directory_shape() {
+        let tempdir = tempdir().expect("tempdir");
+        let config = test_runtime_config(tempdir.path(), None);
+
+        let prompt = load_default_memory_prompt_with(
+            &config,
+            &AutoMemoryInputs {
+                auto_memory_enabled: true,
+                cowork_memory_path_override: None,
+                cowork_memory_extra_guidelines: Some("Cowork extra guideline".to_owned()),
+                remote_memory_dir: None,
+            },
+        )
+        .expect("prompt")
+        .expect("default memory prompt");
+
+        assert!(prompt.contains("# auto memory"));
+        assert!(prompt.contains("Cowork extra guideline"));
+        assert!(prompt.contains("projects"));
+        assert!(prompt.contains("memory"));
+    }
+
+    #[test]
+    fn load_default_memory_prompt_uses_trusted_auto_memory_directory_setting() {
+        let tempdir = tempdir().expect("tempdir");
+        let trusted_dir = tempdir.path().join("trusted-auto-memory");
+        let settings_path = tempdir.path().join("trusted-settings.json");
+        fs::write(
+            &settings_path,
+            format!(
+                r#"{{"autoMemoryDirectory":"{}"}}"#,
+                trusted_dir.display().to_string().replace('\\', "\\\\")
+            ),
+        )
+        .expect("settings");
+        let config = test_runtime_config(tempdir.path(), Some(settings_path));
+
+        let prompt = load_default_memory_prompt_with(
+            &config,
+            &AutoMemoryInputs {
+                auto_memory_enabled: true,
+                cowork_memory_path_override: None,
+                cowork_memory_extra_guidelines: None,
+                remote_memory_dir: None,
+            },
+        )
+        .expect("prompt")
+        .expect("default memory prompt");
+
+        assert!(prompt.contains(&format!("{}{}", trusted_dir.display(), MAIN_SEPARATOR)));
+        assert!(trusted_dir.is_dir());
+    }
+
+    #[test]
+    fn load_default_memory_prompt_ignores_project_auto_memory_directory_override() {
+        let tempdir = tempdir().expect("tempdir");
+        let workspace_settings = tempdir
+            .path()
+            .join("workspace")
+            .join(".remote-code")
+            .join("settings.json");
+        let project_override = tempdir.path().join("project-override-memory");
+        fs::create_dir_all(
+            workspace_settings
+                .parent()
+                .expect("workspace settings parent should exist"),
+        )
+        .expect("workspace settings dir");
+        fs::write(
+            &workspace_settings,
+            format!(
+                r#"{{"autoMemoryDirectory":"{}"}}"#,
+                project_override.display().to_string().replace('\\', "\\\\")
+            ),
+        )
+        .expect("settings");
+        let config = test_runtime_config(tempdir.path(), None);
+
+        let prompt = load_default_memory_prompt_with(
+            &config,
+            &AutoMemoryInputs {
+                auto_memory_enabled: true,
+                cowork_memory_path_override: None,
+                cowork_memory_extra_guidelines: None,
+                remote_memory_dir: None,
+            },
+        )
+        .expect("prompt")
+        .expect("default memory prompt");
+
+        assert!(!prompt.contains(&project_override.display().to_string()));
+        assert!(prompt.contains("projects"));
     }
 
     fn test_runtime_config(
