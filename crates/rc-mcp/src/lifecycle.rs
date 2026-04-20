@@ -11,6 +11,40 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+/// MCP server surface whose advertised list can change at runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpListChangedSurface {
+    /// `notifications/tools/list_changed`
+    Tools,
+    /// `notifications/prompts/list_changed`
+    Prompts,
+    /// `notifications/resources/list_changed`
+    Resources,
+}
+
+impl McpListChangedSurface {
+    /// Return the JSON-RPC notification method for this surface.
+    #[must_use]
+    pub const fn notification_method(self) -> &'static str {
+        match self {
+            Self::Tools => "notifications/tools/list_changed",
+            Self::Prompts => "notifications/prompts/list_changed",
+            Self::Resources => "notifications/resources/list_changed",
+        }
+    }
+}
+
+impl fmt::Display for McpListChangedSurface {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Tools => write!(f, "tools"),
+            Self::Prompts => write!(f, "prompts"),
+            Self::Resources => write!(f, "resources"),
+        }
+    }
+}
+
 // ── Lifecycle event ──────────────────────────────────────────────────────────
 
 /// MCP lifecycle event.
@@ -83,6 +117,22 @@ pub enum McpLifecycleEvent {
         /// Number of resources discovered.
         count: usize,
     },
+    /// A connected server reported `notifications/*/list_changed`.
+    ListChanged {
+        /// Server name.
+        name: String,
+        /// Changed MCP surface.
+        surface: McpListChangedSurface,
+    },
+    /// A changed MCP surface was refreshed successfully.
+    ListRefreshed {
+        /// Server name.
+        name: String,
+        /// Changed MCP surface.
+        surface: McpListChangedSurface,
+        /// Number of entries now visible for the changed surface.
+        count: usize,
+    },
 }
 
 impl McpLifecycleEvent {
@@ -100,7 +150,9 @@ impl McpLifecycleEvent {
             | Self::Disabled { name }
             | Self::Enabled { name }
             | Self::ToolsDiscovered { name, .. }
-            | Self::ResourcesDiscovered { name, .. } => name,
+            | Self::ResourcesDiscovered { name, .. }
+            | Self::ListChanged { name, .. }
+            | Self::ListRefreshed { name, .. } => name,
         }
     }
 }

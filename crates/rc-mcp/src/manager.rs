@@ -16,7 +16,9 @@ use crate::connection::{
 };
 use crate::discovery::McpDiscovery;
 use crate::error::McpRuntimeError;
-use crate::lifecycle::{DisconnectReason, McpLifecycleEvent, McpLifecycleHook};
+use crate::lifecycle::{
+    DisconnectReason, McpLifecycleEvent, McpLifecycleHook, McpListChangedSurface,
+};
 use crate::reconnect::ReconnectScheduler;
 use crate::resources::ServerResource;
 use crate::scope::ScopedMcpServerConfig;
@@ -340,6 +342,59 @@ impl McpConnectionManager {
         self.connect_server(name).await
     }
 
+    /// Handle a `notifications/*/list_changed` notification for a server.
+    ///
+    /// The current stdio client opens short-lived sessions for calls, so a real
+    /// long-lived notification loop is wired by higher-level runtimes. This
+    /// method owns the same semantics as Claude Code's handler: invalidate only
+    /// the changed surface, refresh the server when it is connected, and emit
+    /// lifecycle events that UI/CLI layers can observe.
+    pub async fn handle_list_changed(
+        &mut self,
+        name: &str,
+        surface: McpListChangedSurface,
+    ) -> Result<usize, McpRuntimeError> {
+        self.emit_event(McpLifecycleEvent::ListChanged {
+            name: name.to_owned(),
+            surface,
+        });
+        self.discovery.clear_server_surface(name, surface);
+
+        let Some(connection) = self.connections.get(name) else {
+            return Err(McpRuntimeError::Protocol {
+                server: name.to_owned(),
+                phase: "list_changed",
+                message: "server not registered".to_owned(),
+            });
+        };
+        if !connection.is_connected() {
+            return Ok(0);
+        }
+
+        let Some(config) = self.configs.get(name) else {
+            return Err(McpRuntimeError::Protocol {
+                server: name.to_owned(),
+                phase: "list_changed",
+                message: "server config missing".to_owned(),
+            });
+        };
+        let result = self
+            .discovery
+            .discover_for_server(name, &config.inner, &self.client_info)
+            .await?;
+        let count = match surface {
+            McpListChangedSurface::Tools => result.tools.len(),
+            McpListChangedSurface::Prompts => usize::from(result.instructions.is_some()),
+            McpListChangedSurface::Resources => result.resources.len(),
+        };
+        self.emit_event(McpLifecycleEvent::ListRefreshed {
+            name: name.to_owned(),
+            surface,
+            count,
+        });
+        Ok(count)
+    }
+
     /// Get all connection states.
     #[must_use]
     pub fn connections(&self) -> &HashMap<String, McpServerConnection> {
@@ -621,6 +676,43 @@ mod tests {
         assert_eq!(state.tools.len(), 1);
         assert_eq!(state.tools[0].name, "mcp__srv-a__fetch");
         assert_eq!(state.tools[0].original_tool_name.as_deref(), Some("fetch"));
+    }
+
+    #[tokio::test]
+    async fn handle_list_changed_clears_surface_and_emits_events_for_unconnected_server() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut mgr = McpConnectionManager::new();
+        mgr.register_hook(Box::new(RecordingHook {
+            events: events.clone(),
+        }));
+        mgr.register_server("srv-a".to_owned(), test_scoped_config("srv-a"));
+        mgr.discovery.store(
+            "srv-a",
+            vec![crate::types::McpToolDescriptor {
+                name: "fetch".to_owned(),
+                title: None,
+                description: None,
+                input_schema: serde_json::json!({}),
+                annotations: serde_json::json!({}),
+            }],
+            vec![crate::resources::ServerResource::new(
+                "file:///data",
+                "srv-a",
+            )],
+            Some("instructions".to_owned()),
+        );
+
+        let refreshed = mgr
+            .handle_list_changed("srv-a", McpListChangedSurface::Resources)
+            .await
+            .expect("list changed");
+        assert_eq!(refreshed, 0);
+        assert!(mgr.resources_for_server("srv-a").is_none());
+        let recorded = events.lock().expect("events");
+        assert!(
+            recorded.iter().any(|event| event.contains("ListChanged")),
+            "should record ListChanged event: {recorded:?}"
+        );
     }
 
     #[test]

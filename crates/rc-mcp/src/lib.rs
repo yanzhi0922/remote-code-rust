@@ -104,7 +104,7 @@ pub use manager::McpConnectionManager;
 // Lifecycle
 pub use lifecycle::{
     DisconnectReason, McpConnectionLifecycle, McpConnectionState, McpLifecycleEvent,
-    McpLifecycleHook, StateTransitionError,
+    McpLifecycleHook, McpListChangedSurface, StateTransitionError,
 };
 
 // Connection pool

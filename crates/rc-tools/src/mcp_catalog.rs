@@ -2,9 +2,10 @@ use std::collections::BTreeMap;
 
 use anyhow::{Result, anyhow};
 use once_cell::sync::Lazy;
-use rc_mcp::normalization::{build_mcp_tool_name, normalize_name_for_mcp};
 use rc_mcp::{
-    McpClientInfo, McpServerConfig, McpServerInspection, McpToolCallResult, inspect_server,
+    McpClientInfo, McpListChangedSurface, McpServerConfig, McpServerInspection, McpToolCallResult,
+    inspect_server,
+    normalization::{build_mcp_tool_name, normalize_name_for_mcp},
 };
 use rc_ui_bridge::UiRuntimeMcpServerStatus;
 use serde::{Deserialize, Serialize};
@@ -287,4 +288,130 @@ pub async fn execute_runtime_mcp_tool(name: &str, input: &Value) -> Result<Strin
 
 pub async fn clear_runtime_mcp_catalog_cache() {
     RUNTIME_MCP_INSPECTION_CACHE.lock().await.clear();
+}
+
+pub async fn invalidate_runtime_mcp_catalog_server(server_name: &str) {
+    let mut cache = RUNTIME_MCP_INSPECTION_CACHE.lock().await;
+    cache.retain(|_, cached| cached.inspection.server_name != server_name);
+}
+
+pub async fn handle_runtime_mcp_list_changed(server_name: &str, surface: McpListChangedSurface) {
+    match surface {
+        McpListChangedSurface::Tools | McpListChangedSurface::Prompts => {
+            invalidate_runtime_mcp_catalog_server(server_name).await;
+        }
+        McpListChangedSurface::Resources => {
+            // Resource listing is fetched by rc_mcp::list_resources on demand.
+            // Keep tool/prompt cache intact, matching Claude Code's split
+            // invalidation where resources/list_changed does not evict tools.
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    use rc_mcp::{
+        McpCapabilityMatrix, McpListChangedSurface, McpPeerInfo, McpServerConfig,
+        McpServerInspection, McpToolDescriptor, McpTransportConfig,
+    };
+    use serde_json::json;
+
+    use super::{
+        CachedInspection, RUNTIME_MCP_INSPECTION_CACHE, handle_runtime_mcp_list_changed,
+        inspection_cache_key, invalidate_runtime_mcp_catalog_server,
+    };
+    use crate::RuntimeMcpServerPolicyEntry;
+
+    fn policy_entry(server_name: &str, config_path: &str) -> RuntimeMcpServerPolicyEntry {
+        RuntimeMcpServerPolicyEntry {
+            origin_kind: "cwd".to_owned(),
+            origin_name: "workspace".to_owned(),
+            config_path: PathBuf::from(config_path),
+            server: McpServerConfig {
+                name: server_name.to_owned(),
+                enabled: true,
+                transport: McpTransportConfig::Stdio {
+                    command: "python".to_owned(),
+                    args: Vec::new(),
+                    cwd: None,
+                    env: BTreeMap::new(),
+                },
+                capabilities: McpCapabilityMatrix::default(),
+                startup_timeout_secs: None,
+                request_timeout_secs: None,
+                metadata: BTreeMap::new(),
+            },
+        }
+    }
+
+    fn cached_inspection(server_name: &str) -> CachedInspection {
+        CachedInspection {
+            server_config: policy_entry(server_name, "ignored").server,
+            inspection: McpServerInspection {
+                server_name: server_name.to_owned(),
+                protocol_version: "2025-03-26".to_owned(),
+                server_info: Some(McpPeerInfo {
+                    name: server_name.to_owned(),
+                    title: None,
+                    version: None,
+                }),
+                capabilities: json!({"tools": {"listChanged": true}}),
+                instructions: Some("instructions".to_owned()),
+                tools: vec![McpToolDescriptor {
+                    name: "search".to_owned(),
+                    title: None,
+                    description: None,
+                    input_schema: json!({}),
+                    annotations: json!({}),
+                }],
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn invalidate_runtime_mcp_catalog_server_removes_only_matching_server() {
+        let first = policy_entry("alpha", "alpha.toml");
+        let second = policy_entry("beta", "beta.toml");
+        {
+            let mut cache = RUNTIME_MCP_INSPECTION_CACHE.lock().await;
+            cache.clear();
+            cache.insert(inspection_cache_key(&first), cached_inspection("alpha"));
+            cache.insert(inspection_cache_key(&second), cached_inspection("beta"));
+        }
+
+        invalidate_runtime_mcp_catalog_server("alpha").await;
+
+        let cache = RUNTIME_MCP_INSPECTION_CACHE.lock().await;
+        assert!(!cache.contains_key(&inspection_cache_key(&first)));
+        assert!(cache.contains_key(&inspection_cache_key(&second)));
+    }
+
+    #[tokio::test]
+    async fn list_changed_invalidates_tools_and_prompts_but_not_resources() {
+        let entry = policy_entry("alpha", "alpha.toml");
+        {
+            let mut cache = RUNTIME_MCP_INSPECTION_CACHE.lock().await;
+            cache.clear();
+            cache.insert(inspection_cache_key(&entry), cached_inspection("alpha"));
+        }
+
+        handle_runtime_mcp_list_changed("alpha", McpListChangedSurface::Resources).await;
+        assert!(
+            RUNTIME_MCP_INSPECTION_CACHE
+                .lock()
+                .await
+                .contains_key(&inspection_cache_key(&entry))
+        );
+
+        handle_runtime_mcp_list_changed("alpha", McpListChangedSurface::Prompts).await;
+        assert!(
+            !RUNTIME_MCP_INSPECTION_CACHE
+                .lock()
+                .await
+                .contains_key(&inspection_cache_key(&entry))
+        );
+    }
 }
