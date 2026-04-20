@@ -25,9 +25,9 @@ use rc_core::{
     Attachment, AttachmentMediaType, ConversationEntry, ConversationRole, Message, PermissionMode,
     ProviderProtocol, ProviderResponse, ToolCall, ToolResult,
 };
-use rc_mcp::McpClientInfo;
 use rc_mcp::normalization::{build_mcp_tool_name, mcp_info_from_string};
 use rc_mcp::serialization::{McpCliState, SerializedClient, SerializedTool};
+use rc_mcp::{McpClientInfo, McpListChangedSurface};
 use rc_permissions::PermissionBroker;
 use rc_protocol::UsagePayload;
 use rc_provider::{
@@ -311,10 +311,77 @@ fn refresh_runtime_mcp_session_observation(
     tokio::spawn(async move {
         let refreshed =
             observe_runtime_mcp_servers(&config, &[], true, &McpClientInfo::default()).await;
+        let changed = observation.lock().ok().map(|snapshot| {
+            refreshed
+                .servers
+                .iter()
+                .filter(|server| server.inspection.is_some())
+                .filter_map(|server| {
+                    let previous = snapshot.servers.iter().find(|existing| {
+                        runtime_mcp_observation_key_matches(&existing.entry, &server.entry)
+                    });
+                    let changed = previous.and_then(|previous| previous.inspection.as_ref())
+                        != server.inspection.as_ref();
+                    changed.then(|| server.entry.server.name.clone())
+                })
+                .collect::<Vec<_>>()
+        });
+        if let Some(changed) = changed {
+            for server_name in changed {
+                handle_runtime_mcp_session_list_changed(
+                    &config,
+                    &observation,
+                    &server_name,
+                    McpListChangedSurface::Tools,
+                )
+                .await;
+            }
+        }
         if let Ok(mut snapshot) = observation.lock() {
             *snapshot = refreshed;
         }
     });
+}
+
+async fn refresh_runtime_mcp_session_observation_for_server(
+    config: &RuntimeConfig,
+    observation: &Arc<StdMutex<RuntimeMcpObservation>>,
+    server_name: &str,
+    connect: bool,
+) {
+    let refreshed =
+        observe_runtime_mcp_servers(config, &[], connect, &McpClientInfo::default()).await;
+    if let Ok(mut snapshot) = observation.lock() {
+        let mut merged = snapshot.clone();
+        merged.warnings = refreshed.warnings;
+        for refreshed_server in refreshed.servers {
+            if refreshed_server.entry.server.name != server_name {
+                continue;
+            }
+            if let Some(existing) = merged.servers.iter_mut().find(|server| {
+                runtime_mcp_observation_key_matches(&server.entry, &refreshed_server.entry)
+            }) {
+                *existing = refreshed_server;
+            } else {
+                merged.servers.push(refreshed_server);
+            }
+        }
+        *snapshot = merged;
+    }
+}
+
+async fn handle_runtime_mcp_session_list_changed(
+    config: &RuntimeConfig,
+    observation: &Arc<StdMutex<RuntimeMcpObservation>>,
+    server_name: &str,
+    surface: McpListChangedSurface,
+) {
+    rc_tools::mcp_catalog::handle_runtime_mcp_list_changed(server_name, surface).await;
+    if matches!(surface, McpListChangedSurface::Resources) {
+        return;
+    }
+    refresh_runtime_mcp_session_observation_for_server(config, observation, server_name, true)
+        .await;
 }
 
 fn spawn_runtime_mcp_providers(
@@ -2868,6 +2935,119 @@ mod tests {
             .expect("system reminder text");
         assert!(text.contains("## context7"));
         assert!(text.contains("Use Context7 for API and library docs."));
+    }
+
+    #[tokio::test]
+    async fn runtime_mcp_list_changed_updates_session_snapshot_and_catalog_invalidation() {
+        let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX
+            .get_or_init(|| AsyncMutex::new(()))
+            .lock()
+            .await;
+        let (_tempdir, config, _store) = mock_config_and_store();
+        let config_path = config.cwd.join(".mcp.json");
+        fs::write(
+            &config_path,
+            r#"{"mcpServers":{"context7":{"command":"definitely-missing-mcp-command","startup_timeout_secs":1,"request_timeout_secs":1}}}"#,
+        )
+        .expect("write mcp config");
+        let original_policy = current_tool_runtime_policy();
+        super::clear_runtime_mcp_session_observation(config.session_id);
+        let observation = super::runtime_mcp_session_observation(&config);
+        let discovered_entry = observation
+            .lock()
+            .expect("snapshot")
+            .servers
+            .first()
+            .expect("server")
+            .entry
+            .clone();
+        configure_tool_runtime_policy(ToolRuntimePolicy {
+            allowed_tools: Vec::new(),
+            disallowed_tools: Vec::new(),
+            task_output_dir: None,
+            mcp_servers: vec![RuntimeMcpServerPolicyEntry {
+                origin_kind: discovered_entry.origin_kind.to_owned(),
+                origin_name: discovered_entry.origin_name.clone(),
+                config_path: discovered_entry.config_path.clone(),
+                server: discovered_entry.server.clone(),
+            }],
+            shell_policy: Default::default(),
+        })
+        .expect("set runtime policy");
+        clear_runtime_mcp_catalog_cache().await;
+
+        {
+            let mut snapshot = observation.lock().expect("snapshot");
+            let server = snapshot.servers.first_mut().expect("server");
+            server.status = rc_ui_bridge::UiRuntimeMcpServerStatus::Connected;
+            server.inspection = Some(McpServerInspection {
+                server_name: "context7".to_owned(),
+                protocol_version: "2025-03-26".to_owned(),
+                server_info: None,
+                capabilities: json!({"tools": {"listChanged": true}}),
+                instructions: Some("stale instructions".to_owned()),
+                tools: Vec::new(),
+            });
+        }
+
+        let initial_observation = observation.lock().expect("snapshot").clone();
+        let initial_entry = with_runtime_mcp_observation_provider(
+            live_mcp_observation_provider(initial_observation),
+            async { build_mcp_instructions_delta_entry(&[]).await },
+        )
+        .await
+        .expect("initial delta")
+        .expect("initial entry");
+        assert!(
+            initial_entry
+                .content_blocks
+                .iter()
+                .any(|block| block.to_string().contains("stale instructions"))
+        );
+
+        super::handle_runtime_mcp_session_list_changed(
+            &config,
+            &observation,
+            "context7",
+            rc_mcp::McpListChangedSurface::Resources,
+        )
+        .await;
+        {
+            let snapshot = observation.lock().expect("snapshot");
+            assert_eq!(
+                snapshot.servers[0].status,
+                rc_ui_bridge::UiRuntimeMcpServerStatus::Connected,
+                "resources/list_changed should not invalidate the prompt/tool snapshot"
+            );
+            assert_eq!(
+                snapshot.servers[0]
+                    .inspection
+                    .as_ref()
+                    .and_then(|inspection| inspection.instructions.as_deref()),
+                Some("stale instructions")
+            );
+        }
+
+        super::handle_runtime_mcp_session_list_changed(
+            &config,
+            &observation,
+            "context7",
+            rc_mcp::McpListChangedSurface::Prompts,
+        )
+        .await;
+        {
+            let snapshot = observation.lock().expect("snapshot");
+            assert_eq!(
+                snapshot.servers[0].status,
+                rc_ui_bridge::UiRuntimeMcpServerStatus::Failed
+            );
+            assert!(snapshot.servers[0].inspection.is_none());
+            assert!(snapshot.servers[0].error.is_some());
+        }
+
+        clear_runtime_mcp_catalog_cache().await;
+        configure_tool_runtime_policy(original_policy).expect("restore runtime policy");
+        super::clear_runtime_mcp_session_observation(config.session_id);
     }
 
     #[tokio::test]

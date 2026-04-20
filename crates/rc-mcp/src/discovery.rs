@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use crate::config::McpServerConfig;
 use crate::error::McpRuntimeError;
+use crate::lifecycle::McpListChangedSurface;
 use crate::resources::ServerResource;
 use crate::types::{McpClientInfo, McpServerInspection, McpToolDescriptor};
 
@@ -117,6 +118,25 @@ impl McpDiscovery {
         self.tools.remove(server_name);
         self.resources.remove(server_name);
         self.instructions.remove(server_name);
+    }
+
+    /// Clear cached discovery data for one surface of a specific server.
+    pub fn clear_server_surface(&mut self, server_name: &str, surface: McpListChangedSurface) {
+        match surface {
+            McpListChangedSurface::Tools => {
+                self.tools.remove(server_name);
+                self.instructions.remove(server_name);
+            }
+            McpListChangedSurface::Prompts => {
+                // Prompts are not represented yet, but server instructions are
+                // part of the provider-visible prompt surface and must be
+                // recomputed with the next inspection.
+                self.instructions.remove(server_name);
+            }
+            McpListChangedSurface::Resources => {
+                self.resources.remove(server_name);
+            }
+        }
     }
 
     /// Clear all cached discovery data.
@@ -241,6 +261,37 @@ mod tests {
         discovery.clear_server("srv");
         assert_eq!(discovery.server_count(), 0);
         assert!(discovery.tools("srv").is_none());
+    }
+
+    #[test]
+    fn clear_server_surface_invalidates_only_requested_surface() {
+        let mut discovery = McpDiscovery::new();
+        let tools = vec![McpToolDescriptor {
+            name: "search".to_owned(),
+            title: None,
+            description: None,
+            input_schema: serde_json::json!({}),
+            annotations: serde_json::json!({}),
+        }];
+        let resources = vec![ServerResource::new("file:///data", "srv")];
+        discovery.store(
+            "srv",
+            tools.clone(),
+            resources.clone(),
+            Some("instructions".to_owned()),
+        );
+
+        discovery.clear_server_surface("srv", McpListChangedSurface::Resources);
+        assert_eq!(discovery.tools("srv"), Some(tools.as_slice()));
+        assert!(discovery.resources("srv").is_none());
+        assert_eq!(
+            discovery.instructions("srv"),
+            Some(&Some("instructions".to_owned()))
+        );
+
+        discovery.clear_server_surface("srv", McpListChangedSurface::Tools);
+        assert!(discovery.tools("srv").is_none());
+        assert!(discovery.instructions("srv").is_none());
     }
 
     #[test]
