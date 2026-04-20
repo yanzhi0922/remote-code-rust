@@ -6,10 +6,10 @@ use std::time::Instant;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use directories::BaseDirs;
-use rc_auth::load_persisted_oauth_state;
 use rc_agents::definition::AgentDefinition;
 use rc_agents::loader::load_all_agents_with_context;
 use rc_agents::prompt::{format_agent_line, visible_agents};
+use rc_auth::load_persisted_oauth_state;
 use rc_config::settings_layers::load_runtime_settings;
 use rc_config::{RuntimeConfig, validate_provider_config};
 use rc_context::runtime_identity::{
@@ -29,7 +29,9 @@ use rc_mcp::normalization::{build_mcp_tool_name, mcp_info_from_string};
 use rc_mcp::serialization::{McpCliState, SerializedClient, SerializedTool};
 use rc_permissions::PermissionBroker;
 use rc_protocol::UsagePayload;
-use rc_provider::{ConversationBackend, DiscoveredToolScope, provider_runtime_tool_specs_for_request};
+use rc_provider::{
+    ConversationBackend, DiscoveredToolScope, provider_runtime_tool_specs_for_request,
+};
 use rc_query_engine::{
     EffortLevel, ProcessUserInputContext, ProviderInvocationMode, QueryCheckpointKind, QueryEngine,
     QueryEngineConfig, QueryObserver, QueryObserverEvent, ToolRunResult, ToolRunner,
@@ -548,8 +550,7 @@ fn build_runtime_identity_context(config: &RuntimeConfig) -> RuntimeIdentityCont
             .unwrap_or(matches!(
                 config.provider.protocol,
                 ProviderProtocol::Anthropic
-            ))
-    {
+            )) {
         load_persisted_oauth_state(&config.paths.profile_dir).ok()
     } else {
         None
@@ -565,7 +566,9 @@ fn build_runtime_identity_context(config: &RuntimeConfig) -> RuntimeIdentityCont
 
     RuntimeIdentityContext {
         user_type: if matches!(user_type, RuntimeUserType::Unknown)
-            && persisted_oauth.as_ref().is_some_and(|state| state.has_tokens())
+            && persisted_oauth
+                .as_ref()
+                .is_some_and(|state| state.has_tokens())
         {
             RuntimeUserType::External
         } else {
@@ -573,10 +576,12 @@ fn build_runtime_identity_context(config: &RuntimeConfig) -> RuntimeIdentityCont
         },
         entrypoint,
         provider_name: Some(config.provider.name.clone()),
-        auth_source: config
-            .auth_source
-            .clone()
-            .or_else(|| persisted_oauth.as_ref().is_some_and(|state| state.has_tokens()).then_some("claude.ai".to_owned())),
+        auth_source: config.auth_source.clone().or_else(|| {
+            persisted_oauth
+                .as_ref()
+                .is_some_and(|state| state.has_tokens())
+                .then_some("claude.ai".to_owned())
+        }),
         is_first_party: config
             .provider
             .base_url
@@ -2465,14 +2470,23 @@ mod tests {
         assert_eq!(identity.account_uuid.as_deref(), Some("acct-1"));
         assert_eq!(identity.organization_uuid.as_deref(), Some("org-1"));
         assert_eq!(identity.email.as_deref(), Some("dev@example.com"));
-        assert_eq!(identity.subscription.subscription_type.as_deref(), Some("team"));
-        assert_eq!(identity.subscription.rate_limit_tier.as_deref(), Some("high"));
+        assert_eq!(
+            identity.subscription.subscription_type.as_deref(),
+            Some("team")
+        );
+        assert_eq!(
+            identity.subscription.rate_limit_tier.as_deref(),
+            Some("high")
+        );
         assert_eq!(
             identity.subscription.billing_type.as_deref(),
             Some("stripe_subscription_contracted")
         );
         assert_eq!(identity.subscription.has_extra_usage_enabled, Some(false));
-        assert_eq!(identity.subscription.display_name.as_deref(), Some("Dev User"));
+        assert_eq!(
+            identity.subscription.display_name.as_deref(),
+            Some("Dev User")
+        );
     }
 
     #[test]
@@ -2509,7 +2523,10 @@ mod tests {
 
         let identity = build_runtime_identity_context(&config);
 
-        assert_eq!(identity.auth_source.as_deref(), Some("env:ANTHROPIC_API_KEY"));
+        assert_eq!(
+            identity.auth_source.as_deref(),
+            Some("env:ANTHROPIC_API_KEY")
+        );
         assert_eq!(identity.account_uuid, None);
         assert_eq!(identity.organization_uuid, None);
         assert_eq!(identity.subscription.subscription_type, None);
@@ -3619,6 +3636,89 @@ while True:
             .find(|entry| entry.role == ConversationRole::System)
             .expect("system entry");
         assert!(system_entry.text.contains("Custom headless prompt"));
+        assert!(
+            !system_entry
+                .text
+                .contains("This is the git status at the start")
+        );
+    }
+
+    #[tokio::test]
+    async fn append_system_prompt_keeps_runtime_system_context() {
+        let (_tempdir, mut config, store) = mock_config_and_store();
+        config.provider.protocol = ProviderProtocol::Anthropic;
+        config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&config.cwd)
+            .output()
+            .expect("git init");
+        let mut conversation = initialize_conversation(&store, &config, Some("append prompt test"))
+            .expect("conversation");
+
+        refresh_runtime_system_prompt(
+            &config,
+            &mut conversation,
+            &CompatRunOverrides {
+                append_system_prompt: Some("Append runtime prompt".to_owned()),
+                ..CompatRunOverrides::default()
+            },
+            &DiscoveredToolScope::default(),
+        )
+        .await
+        .expect("refresh runtime system prompt");
+
+        let system_entry = conversation
+            .iter()
+            .find(|entry| entry.role == ConversationRole::System)
+            .expect("system entry");
+        assert!(system_entry.text.contains("Append runtime prompt"));
+        assert!(system_entry.text.contains("You are an interactive agent"));
+        assert!(
+            system_entry
+                .text
+                .contains("This is the git status at the start")
+        );
+    }
+
+    #[tokio::test]
+    async fn override_system_prompt_replaces_runtime_prompt_and_system_context() {
+        let (_tempdir, mut config, store) = mock_config_and_store();
+        config.provider.protocol = ProviderProtocol::Anthropic;
+        config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&config.cwd)
+            .output()
+            .expect("git init");
+        let mut conversation =
+            initialize_conversation(&store, &config, Some("override prompt test"))
+                .expect("conversation");
+
+        refresh_runtime_system_prompt(
+            &config,
+            &mut conversation,
+            &CompatRunOverrides {
+                system_prompt: Some("Custom prompt should lose".to_owned()),
+                append_system_prompt: Some("Append prompt should lose".to_owned()),
+                override_system_prompt: Some("Override runtime prompt".to_owned()),
+                agent_system_prompt: Some("Agent prompt should lose".to_owned()),
+                ..CompatRunOverrides::default()
+            },
+            &DiscoveredToolScope::default(),
+        )
+        .await
+        .expect("refresh runtime system prompt");
+
+        let system_entry = conversation
+            .iter()
+            .find(|entry| entry.role == ConversationRole::System)
+            .expect("system entry");
+        assert!(system_entry.text.contains("Override runtime prompt"));
+        assert!(!system_entry.text.contains("Custom prompt should lose"));
+        assert!(!system_entry.text.contains("Append prompt should lose"));
+        assert!(!system_entry.text.contains("Agent prompt should lose"));
+        assert!(!system_entry.text.contains("You are an interactive agent"));
         assert!(
             !system_entry
                 .text

@@ -795,8 +795,18 @@ mod tests {
             true,
         );
 
-        assert!(!result.active_agents.iter().any(|agent| agent.agent_type == "custom"));
-        assert!(!result.all_agents.iter().any(|agent| agent.agent_type == "custom"));
+        assert!(
+            !result
+                .active_agents
+                .iter()
+                .any(|agent| agent.agent_type == "custom")
+        );
+        assert!(
+            !result
+                .all_agents
+                .iter()
+                .any(|agent| agent.agent_type == "custom")
+        );
     }
 
     #[test]

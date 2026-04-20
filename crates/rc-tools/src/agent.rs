@@ -1044,10 +1044,7 @@ fn filter_tools_for_agent_runtime(
     Ok(filtered)
 }
 
-fn disallowed_agent_tool_patterns(
-    patterns: &[&str],
-    exit_plan_mode_allowed: bool,
-) -> Vec<String> {
+fn disallowed_agent_tool_patterns(patterns: &[&str], exit_plan_mode_allowed: bool) -> Vec<String> {
     patterns
         .iter()
         .filter(|tool| !(exit_plan_mode_allowed && **tool == "exit_plan_mode"))
@@ -1055,10 +1052,7 @@ fn disallowed_agent_tool_patterns(
         .collect()
 }
 
-fn collect_selected_tool_names(
-    specs: Vec<ToolSpec>,
-    denied: &BTreeSet<String>,
-) -> Vec<String> {
+fn collect_selected_tool_names(specs: Vec<ToolSpec>, denied: &BTreeSet<String>) -> Vec<String> {
     let mut selected = Vec::new();
     let mut seen = BTreeSet::new();
 
@@ -1515,15 +1509,14 @@ mod tests {
             fake_tool_spec("agent"),
         ];
 
-        let filtered = filter_tools_for_agent_runtime(
-            &specs,
-            &definition,
-            false,
-            Some(PermissionMode::Plan),
-        )
-        .expect("filter tools");
+        let filtered =
+            filter_tools_for_agent_runtime(&specs, &definition, false, Some(PermissionMode::Plan))
+                .expect("filter tools");
 
-        let names = filtered.into_iter().map(|spec| spec.name).collect::<Vec<_>>();
+        let names = filtered
+            .into_iter()
+            .map(|spec| spec.name)
+            .collect::<Vec<_>>();
         assert!(names.contains(&"exit_plan_mode".to_owned()));
         assert!(!names.contains(&"agent".to_owned()));
     }
@@ -1545,7 +1538,10 @@ mod tests {
         )
         .expect("filter tools");
 
-        let names = filtered.into_iter().map(|spec| spec.name).collect::<Vec<_>>();
+        let names = filtered
+            .into_iter()
+            .map(|spec| spec.name)
+            .collect::<Vec<_>>();
         assert!(!names.contains(&"discover_skills".to_owned()));
         assert!(names.contains(&"skill_execute".to_owned()));
         assert!(names.contains(&"mcp__context7__query_docs".to_owned()));

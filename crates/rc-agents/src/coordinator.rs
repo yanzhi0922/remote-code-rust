@@ -233,9 +233,7 @@ pub fn get_coordinator_user_context(
         ));
     }
 
-    if scratchpad_enabled
-        && let Some(dir) = scratchpad_dir
-    {
+    if scratchpad_enabled && let Some(dir) = scratchpad_dir {
         content.push_str(&format!(
             "\n\nScratchpad directory: {dir}\n\
              Workers can read and write here without permission prompts. \
@@ -961,8 +959,7 @@ mod tests {
         COORDINATOR_OVERRIDE.store(true, Ordering::SeqCst);
         COORDINATOR_OVERRIDE_SET.store(true, Ordering::SeqCst);
 
-        let disabled =
-            get_coordinator_user_context(&[], Some("/tmp/scratch"), false, false);
+        let disabled = get_coordinator_user_context(&[], Some("/tmp/scratch"), false, false);
         let (_, disabled_value) = disabled.iter().next().expect("entry");
         assert!(!disabled_value.contains("Scratchpad directory"));
 
