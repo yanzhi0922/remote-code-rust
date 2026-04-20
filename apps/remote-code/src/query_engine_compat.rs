@@ -7,13 +7,16 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use directories::BaseDirs;
 use rc_agents::definition::AgentDefinition;
-use rc_agents::loader::load_all_agents;
+use rc_agents::loader::load_all_agents_with_context;
 use rc_agents::prompt::{format_agent_line, visible_agents};
 use rc_config::settings_layers::load_runtime_settings;
 use rc_config::{RuntimeConfig, validate_provider_config};
+use rc_context::{
+    RuntimeFeatureGates, RuntimeIdentityContext, RuntimeSubscriptionContext, RuntimeUserType,
+};
 use rc_core::{
     Attachment, AttachmentMediaType, ConversationEntry, ConversationRole, Message, PermissionMode,
-    ProviderResponse, ToolCall, ToolResult,
+    ProviderProtocol, ProviderResponse, ToolCall, ToolResult,
 };
 use rc_mcp::McpClientInfo;
 use rc_mcp::normalization::{build_mcp_tool_name, mcp_info_from_string};
@@ -345,6 +348,7 @@ fn spawn_runtime_agent_prompt_context_provider(
     config: &RuntimeConfig,
     broker: &dyn PermissionBroker,
 ) -> Arc<rc_tools::RuntimeAgentPromptContextProvider> {
+    let runtime_identity = build_runtime_identity_context(config);
     let context = RuntimeAgentPromptContext {
         user_agents_dir: user_agents_dir(),
         project_agents_dir: Some(project_agents_dir(config)),
@@ -352,7 +356,8 @@ fn spawn_runtime_agent_prompt_context_provider(
         denied_agent_types: extract_denied_agent_types(&broker.layered_rules()),
         is_coordinator: rc_agents::coordinator::is_coordinator_mode(),
         is_non_interactive: config.print_mode,
-        list_via_attachment: runtime_agent_listing_delta_enabled(),
+        list_via_attachment: runtime_identity.features.agent_listing_delta_enabled,
+        runtime_identity,
     };
     Arc::new(move || context.clone())
 }
@@ -489,6 +494,76 @@ fn user_agents_dir() -> Option<std::path::PathBuf> {
     BaseDirs::new().map(|base| base.home_dir().join(".claude").join("agents"))
 }
 
+fn build_runtime_identity_context(config: &RuntimeConfig) -> RuntimeIdentityContext {
+    let resolved_settings = load_runtime_settings(&config.settings_files).unwrap_or_default();
+    let entrypoint = std::env::var("CLAUDE_CODE_ENTRYPOINT").ok();
+    let user_type = match std::env::var("USER_TYPE")
+        .ok()
+        .as_deref()
+        .map(|value| value.trim().to_ascii_lowercase())
+    {
+        Some(value) if value == "ant" => RuntimeUserType::Ant,
+        Some(value) if !value.is_empty() => RuntimeUserType::External,
+        _ => RuntimeUserType::Unknown,
+    };
+    let embedded_search_tools = runtime_env_truthy("EMBEDDED_SEARCH_TOOLS")
+        && !matches!(
+            entrypoint.as_deref(),
+            Some("sdk-ts" | "sdk-py" | "sdk-cli" | "local-agent")
+        );
+    let code_guide_enabled =
+        !matches!(entrypoint.as_deref(), Some("sdk-ts" | "sdk-py" | "sdk-cli"));
+    let subscription_type = std::env::var("CLAUDE_CODE_SUBSCRIPTION_TYPE")
+        .ok()
+        .or_else(|| match user_type {
+            RuntimeUserType::Ant => Some("max".to_owned()),
+            _ => None,
+        });
+
+    RuntimeIdentityContext {
+        user_type,
+        entrypoint,
+        provider_name: Some(config.provider.name.clone()),
+        auth_source: config.auth_source.clone(),
+        is_first_party: config
+            .provider
+            .base_url
+            .as_deref()
+            .map(rc_model::is_first_party_base_url)
+            .unwrap_or(matches!(
+                config.provider.protocol,
+                ProviderProtocol::Anthropic
+            )),
+        is_non_interactive: config.print_mode
+            || !matches!(config.output_format, rc_core::OutputFormat::Text),
+        kairos_active: runtime_env_truthy("KAIROS_ACTIVE"),
+        fast_mode_flag_opt_in: resolved_settings.fast_mode == Some(true),
+        fast_mode_per_session_opt_in: resolved_settings.fast_mode_per_session_opt_in == Some(true),
+        fast_mode_user_setting: resolved_settings.fast_mode,
+        subscription: RuntimeSubscriptionContext {
+            subscription_type: subscription_type.clone(),
+            rate_limit_tier: std::env::var("CLAUDE_CODE_RATE_LIMIT_TIER").ok(),
+            ..RuntimeSubscriptionContext::default()
+        },
+        features: RuntimeFeatureGates {
+            embedded_search_tools,
+            explore_plan_agents_enabled: true,
+            verification_agent_enabled: false,
+            code_guide_enabled,
+            agent_swarms_enabled: matches!(user_type, RuntimeUserType::Ant)
+                || runtime_env_truthy("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
+                || std::env::args().any(|arg| arg == "--agent-teams"),
+            show_agent_concurrency_note: subscription_type.as_deref() != Some("pro"),
+            mcp_instructions_delta_enabled: runtime_mcp_instructions_delta_enabled(),
+            deferred_tools_delta_enabled: runtime_deferred_tools_delta_enabled(),
+            agent_listing_delta_enabled: runtime_agent_listing_delta_enabled(),
+            include_token_budget_prompt: runtime_env_truthy("REMOTE_CODE_TOKEN_BUDGET_PROMPT"),
+            is_fork_subagent_enabled: false,
+        },
+        ..RuntimeIdentityContext::default()
+    }
+}
+
 fn visible_mcp_server_names_from_specs(specs: &[ToolSpec]) -> Vec<String> {
     let mut servers = Vec::new();
     for spec in specs {
@@ -558,7 +633,14 @@ fn build_agent_listing_delta_for_visible_agents(
         .iter()
         .map(|agent| format_agent_line(agent))
         .collect::<Vec<_>>();
-    let show_concurrency_note = true;
+    let show_concurrency_note = current_runtime_agent_prompt_context()
+        .map(|context| {
+            context
+                .runtime_identity
+                .features
+                .show_agent_concurrency_note
+        })
+        .unwrap_or(true);
     let mut parts = Vec::new();
     if !added_lines.is_empty() {
         let header = if is_initial {
@@ -617,7 +699,15 @@ async fn build_agent_listing_delta_entry(
         .as_ref()
         .and_then(|context| context.project_agents_dir.clone())
         .unwrap_or_else(|| project_agents_dir(config));
-    let definitions = load_all_agents(user_dir.as_deref(), Some(project_dir.as_path()));
+    let runtime_identity = runtime_context
+        .as_ref()
+        .map(|context| context.runtime_identity.clone())
+        .unwrap_or_else(RuntimeIdentityContext::from_legacy_env);
+    let definitions = load_all_agents_with_context(
+        user_dir.as_deref(),
+        Some(project_dir.as_path()),
+        &runtime_identity,
+    );
     let available_mcp_servers = visible_mcp_server_names_from_specs(&specs);
     let allowed_agent_types = runtime_context
         .as_ref()
@@ -1003,6 +1093,7 @@ async fn refresh_runtime_system_prompt(
 ) -> Result<()> {
     let prompt_settings = load_runtime_settings(&config.settings_files)?;
     let mut settings = RuntimePromptSettings::from_config(config);
+    let runtime_identity = build_runtime_identity_context(config);
     settings.language = config.language.clone().or(prompt_settings.language.clone());
     settings.output_style = config
         .output_style
@@ -1014,10 +1105,12 @@ async fn refresh_runtime_system_prompt(
     settings.brief_enabled = config.brief_enabled
         || runtime_env_truthy("REMOTE_CODE_BRIEF")
         || runtime_env_truthy("CLAUDE_CODE_BRIEF");
-    settings.mcp_instructions_delta_enabled = runtime_mcp_instructions_delta_enabled();
+    settings.mcp_instructions_delta_enabled =
+        runtime_identity.features.mcp_instructions_delta_enabled;
     settings.is_non_interactive =
         config.print_mode || !matches!(config.output_format, rc_core::OutputFormat::Text);
-    settings.include_token_budget_prompt = runtime_env_truthy("REMOTE_CODE_TOKEN_BUDGET_PROMPT");
+    settings.include_token_budget_prompt = runtime_identity.features.include_token_budget_prompt;
+    settings.runtime_identity = runtime_identity;
 
     rc_runtime_prompt::refresh_runtime_system_prompt(
         config,
@@ -1921,6 +2014,7 @@ mod tests {
     use anyhow::Result;
     use base64::Engine;
     use rc_config::{ProviderOverrides, RuntimeConfig, RuntimeOverrides, load_runtime_config};
+    use rc_context::RuntimeIdentityContext;
     use rc_core::{
         ConversationEntry, ConversationRole, InputFormat, OutputFormat, PermissionMode,
         ProviderProtocol, ProviderResponse, SubAgentCompletion, ToolCall, UsageSummary,
@@ -2257,6 +2351,7 @@ mod tests {
             is_coordinator: false,
             is_non_interactive: false,
             list_via_attachment: true,
+            runtime_identity: RuntimeIdentityContext::from_legacy_env(),
         };
 
         let entry =

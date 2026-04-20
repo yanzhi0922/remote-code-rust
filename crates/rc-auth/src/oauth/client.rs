@@ -35,6 +35,60 @@ pub enum OAuthClientError {
     Cancelled,
 }
 
+fn hydrate_tokens_from_profile(
+    mut tokens: OAuthTokens,
+    profile: Option<&OAuthProfileResponse>,
+) -> OAuthTokens {
+    let Some(profile) = profile else {
+        return tokens;
+    };
+    if let Some(organization) = profile.organization.as_ref() {
+        if tokens.subscription_type.is_none() {
+            tokens.subscription_type = organization
+                .organization_type
+                .as_deref()
+                .and_then(subscription_type_from_org_type);
+        }
+        if tokens.rate_limit_tier.is_none() {
+            tokens.rate_limit_tier = organization.rate_limit_tier.clone();
+        }
+        if tokens.billing_type.is_none() {
+            tokens.billing_type = organization.billing_type.clone();
+        }
+        if tokens.has_extra_usage_enabled.is_none() {
+            tokens.has_extra_usage_enabled = organization.has_extra_usage_enabled;
+        }
+    }
+    tokens
+}
+
+pub async fn refresh_oauth_token_with_existing(
+    config: &OAuthConfig,
+    existing_tokens: &OAuthTokens,
+    scopes: Option<&[String]>,
+) -> Result<OAuthTokens, OAuthClientError> {
+    let Some(refresh_token) = existing_tokens.refresh_token.as_deref() else {
+        return Err(OAuthClientError::RefreshFailed(
+            "missing refresh token".to_owned(),
+        ));
+    };
+
+    let mut refreshed = refresh_oauth_token(config, refresh_token, scopes).await?;
+    if refreshed.subscription_type.is_none() {
+        refreshed.subscription_type = existing_tokens.subscription_type.clone();
+    }
+    if refreshed.rate_limit_tier.is_none() {
+        refreshed.rate_limit_tier = existing_tokens.rate_limit_tier.clone();
+    }
+    if refreshed.billing_type.is_none() {
+        refreshed.billing_type = existing_tokens.billing_type.clone();
+    }
+    if refreshed.has_extra_usage_enabled.is_none() {
+        refreshed.has_extra_usage_enabled = existing_tokens.has_extra_usage_enabled;
+    }
+    Ok(refreshed)
+}
+
 /// Build the authorization URL for the OAuth flow.
 ///
 /// Constructs the URL the user's browser should navigate to, including
@@ -193,6 +247,8 @@ pub async fn refresh_oauth_token(
         scope: data.scope.clone(),
         subscription_type: None,
         rate_limit_tier: None,
+        billing_type: None,
+        has_extra_usage_enabled: None,
     })
 }
 
@@ -303,6 +359,8 @@ pub async fn run_oauth_flow(
         scope: token_response.scope.clone(),
         subscription_type: None,
         rate_limit_tier: None,
+        billing_type: None,
+        has_extra_usage_enabled: None,
     };
 
     // 6. Optionally fetch profile
@@ -322,9 +380,105 @@ pub async fn run_oauth_flow(
             organization_uuid: token_response.organization.map(|o| o.uuid),
         });
 
+    let tokens = hydrate_tokens_from_profile(tokens, profile.as_ref());
+
     Ok(OAuthFlowResult {
         tokens,
         profile,
         token_account,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::oauth::types::{OAuthProfileAccount, OAuthProfileOrganization};
+
+    #[test]
+    fn hydrate_tokens_from_profile_populates_subscription_fields() {
+        let tokens = OAuthTokens {
+            access_token: "token".to_owned(),
+            refresh_token: Some("refresh".to_owned()),
+            expires_at: Some(1),
+            scope: None,
+            subscription_type: None,
+            rate_limit_tier: None,
+            billing_type: None,
+            has_extra_usage_enabled: None,
+        };
+        let profile = OAuthProfileResponse {
+            account: Some(OAuthProfileAccount {
+                uuid: "acct".to_owned(),
+                email: "user@example.com".to_owned(),
+                display_name: Some("User".to_owned()),
+                created_at: Some("2025-01-01T00:00:00Z".to_owned()),
+            }),
+            organization: Some(OAuthProfileOrganization {
+                uuid: "org".to_owned(),
+                organization_type: Some("claude_pro".to_owned()),
+                rate_limit_tier: Some("elevated".to_owned()),
+                has_extra_usage_enabled: Some(true),
+                billing_type: Some("stripe_subscription".to_owned()),
+                subscription_created_at: Some("2025-01-02T00:00:00Z".to_owned()),
+            }),
+        };
+
+        let hydrated = hydrate_tokens_from_profile(tokens, Some(&profile));
+        assert_eq!(hydrated.subscription_type.as_deref(), Some("pro"));
+        assert_eq!(hydrated.rate_limit_tier.as_deref(), Some("elevated"));
+        assert_eq!(
+            hydrated.billing_type.as_deref(),
+            Some("stripe_subscription")
+        );
+        assert_eq!(hydrated.has_extra_usage_enabled, Some(true));
+    }
+
+    #[test]
+    fn refresh_identity_can_be_preserved_locally() {
+        let refreshed = OAuthTokens {
+            access_token: "fresh".to_owned(),
+            refresh_token: Some("refresh-2".to_owned()),
+            expires_at: Some(2),
+            scope: None,
+            subscription_type: None,
+            rate_limit_tier: None,
+            billing_type: None,
+            has_extra_usage_enabled: None,
+        };
+        let existing = OAuthTokens {
+            access_token: "old".to_owned(),
+            refresh_token: Some("refresh".to_owned()),
+            expires_at: Some(1),
+            scope: None,
+            subscription_type: Some("team".to_owned()),
+            rate_limit_tier: Some("high".to_owned()),
+            billing_type: Some("stripe_subscription_contracted".to_owned()),
+            has_extra_usage_enabled: Some(false),
+        };
+
+        let merged = OAuthTokens {
+            subscription_type: refreshed
+                .subscription_type
+                .or_else(|| existing.subscription_type.clone()),
+            rate_limit_tier: refreshed
+                .rate_limit_tier
+                .or_else(|| existing.rate_limit_tier.clone()),
+            billing_type: refreshed
+                .billing_type
+                .or_else(|| existing.billing_type.clone()),
+            has_extra_usage_enabled: refreshed
+                .has_extra_usage_enabled
+                .or(existing.has_extra_usage_enabled),
+            ..refreshed
+        };
+
+        assert_eq!(merged.access_token, "fresh");
+        assert_eq!(merged.subscription_type.as_deref(), Some("team"));
+        assert_eq!(merged.rate_limit_tier.as_deref(), Some("high"));
+        assert_eq!(
+            merged.billing_type.as_deref(),
+            Some("stripe_subscription_contracted")
+        );
+        assert_eq!(merged.has_extra_usage_enabled, Some(false));
+    }
 }

@@ -4,6 +4,7 @@
 //! token-exchange response shape used by the Anthropic OAuth endpoints.
 
 use chrono::{DateTime, Utc};
+use rc_context::{RuntimeIdentityContext, RuntimeSubscriptionContext, RuntimeUserType};
 use serde::{Deserialize, Serialize};
 
 /// OAuth token set returned by the token endpoint or stored locally.
@@ -21,6 +22,10 @@ pub struct OAuthTokens {
     pub subscription_type: Option<String>,
     /// Rate-limit tier from the profile endpoint.
     pub rate_limit_tier: Option<String>,
+    /// Billing type from the profile endpoint.
+    pub billing_type: Option<String>,
+    /// Whether extra usage is enabled.
+    pub has_extra_usage_enabled: Option<bool>,
 }
 
 impl OAuthTokens {
@@ -152,6 +157,50 @@ pub struct OAuthFlowResult {
     pub tokens: OAuthTokens,
     pub profile: Option<OAuthProfileResponse>,
     pub token_account: Option<TokenAccountInfo>,
+}
+
+impl OAuthFlowResult {
+    #[must_use]
+    pub fn runtime_identity_context(&self) -> RuntimeIdentityContext {
+        let account = self
+            .profile
+            .as_ref()
+            .and_then(|profile| profile.account.as_ref());
+        let organization = self
+            .profile
+            .as_ref()
+            .and_then(|profile| profile.organization.as_ref());
+
+        RuntimeIdentityContext {
+            user_type: RuntimeUserType::External,
+            account_uuid: self
+                .token_account
+                .as_ref()
+                .map(|account| account.uuid.clone())
+                .or_else(|| account.map(|account| account.uuid.clone())),
+            organization_uuid: self
+                .token_account
+                .as_ref()
+                .and_then(|account| account.organization_uuid.clone())
+                .or_else(|| organization.map(|organization| organization.uuid.clone())),
+            email: self
+                .token_account
+                .as_ref()
+                .map(|account| account.email_address.clone())
+                .or_else(|| account.map(|account| account.email.clone())),
+            subscription: RuntimeSubscriptionContext {
+                subscription_type: self.tokens.subscription_type.clone(),
+                rate_limit_tier: self.tokens.rate_limit_tier.clone(),
+                billing_type: self.tokens.billing_type.clone(),
+                has_extra_usage_enabled: self.tokens.has_extra_usage_enabled,
+                display_name: account.and_then(|account| account.display_name.clone()),
+                account_created_at: account.and_then(|account| account.created_at.clone()),
+                subscription_created_at: organization
+                    .and_then(|organization| organization.subscription_created_at.clone()),
+            },
+            ..RuntimeIdentityContext::default()
+        }
+    }
 }
 
 /// Token-derived account info.

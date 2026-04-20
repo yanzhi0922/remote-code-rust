@@ -8,6 +8,7 @@ use rc_agents::coordinator::{
     COORDINATOR_MODE_ALLOWED_TOOLS, get_coordinator_system_prompt, is_coordinator_mode,
 };
 use rc_config::RuntimeConfig;
+use rc_context::RuntimeIdentityContext;
 use rc_core::{ConversationEntry, ConversationRole, ProviderProtocol};
 use rc_model::is_first_party_base_url;
 use rc_provider::{DiscoveredToolScope, provider_runtime_tool_specs_for_request};
@@ -88,6 +89,7 @@ pub struct RuntimePromptSettings {
     pub is_non_interactive: bool,
     pub user_invocable_skills_available: bool,
     pub include_token_budget_prompt: bool,
+    pub runtime_identity: RuntimeIdentityContext,
 }
 
 impl RuntimePromptSettings {
@@ -102,6 +104,7 @@ impl RuntimePromptSettings {
             is_non_interactive: false,
             user_invocable_skills_available: discover_user_invocable_skills(config),
             include_token_budget_prompt: false,
+            runtime_identity: RuntimeIdentityContext::from_legacy_env(),
         }
     }
 }
@@ -378,17 +381,23 @@ pub async fn build_runtime_system_prompt(
         is_worktree: detect_git_worktree(&config.cwd),
         additional_dirs: Vec::new(),
         is_non_interactive: settings.is_non_interactive,
-        is_fork_subagent_enabled: false,
+        is_fork_subagent_enabled: settings.runtime_identity.features.is_fork_subagent_enabled,
         session_start_date,
         features: PromptFeatures {
-            ant_user: runtime_is_ant_user(),
+            ant_user: settings.runtime_identity.is_ant_user(),
             proactive_active: settings.proactive_active,
             brief_enabled: settings.brief_enabled,
             repl_mode_active: false,
-            embedded_search_tools: false,
+            embedded_search_tools: settings.runtime_identity.features.embedded_search_tools,
             user_invocable_skills_available: settings.user_invocable_skills_available,
-            explore_plan_agents_enabled: true,
-            verification_agent_enabled: false,
+            explore_plan_agents_enabled: settings
+                .runtime_identity
+                .features
+                .explore_plan_agents_enabled,
+            verification_agent_enabled: settings
+                .runtime_identity
+                .features
+                .verification_agent_enabled,
             memory_prompt: None,
             scratchpad_dir: None,
             function_result_keep_recent: None,
@@ -638,12 +647,6 @@ fn runtime_user_context_entries(
 
 fn detect_git_worktree(cwd: &Path) -> bool {
     cwd.join(".git").is_file()
-}
-
-fn runtime_is_ant_user() -> bool {
-    std::env::var("USER_TYPE")
-        .ok()
-        .is_some_and(|value| value.trim().eq_ignore_ascii_case("ant"))
 }
 
 fn discover_user_invocable_skills(config: &RuntimeConfig) -> bool {

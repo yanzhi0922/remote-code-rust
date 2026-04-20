@@ -26,6 +26,7 @@ tracing.workspace = true
 uuid.workspace = true
 directories.workspace = true
 rc-config = { path = "../../crates/rc-config" }
+rc-context = { path = "../../crates/rc-context" }
 rc-control-plane = { path = "../../crates/rc-control-plane" }
 rc-core = { path = "../../crates/rc-core" }
 rc-engine-events = { path = "../../crates/rc-engine-events" }

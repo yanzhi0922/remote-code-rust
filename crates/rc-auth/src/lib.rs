@@ -37,7 +37,7 @@ pub use oauth::{
     AuthCodeListener, AuthCodeListenerError, CallbackResult, OAuthClientError, OAuthConfig,
     OAuthFlowResult, OAuthTokens, build_auth_url, exchange_code_for_tokens, fetch_profile,
     generate_code_challenge, generate_code_verifier, generate_state, refresh_oauth_token,
-    run_oauth_flow,
+    refresh_oauth_token_with_existing, run_oauth_flow,
 };
 
 // Provider auth

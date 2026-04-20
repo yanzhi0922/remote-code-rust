@@ -77,9 +77,9 @@ fn agent_source_display_variants() {
 // ─── Built-in agents registry ─────────────────────────────────────────────
 
 #[test]
-fn built_in_agents_returns_six_agents() {
+fn built_in_agents_returns_default_gated_set() {
     let agents = rc_agents::builtins::get_built_in_agents();
-    assert_eq!(agents.len(), 6);
+    assert_eq!(agents.len(), 5);
 }
 
 #[test]
@@ -87,9 +87,11 @@ fn built_in_agents_have_correct_types() {
     let agents = rc_agents::builtins::get_built_in_agents();
     let types: Vec<&str> = agents.iter().map(|a| a.agent_type.as_str()).collect();
     assert!(types.contains(&"general-purpose"));
+    assert!(types.contains(&"statusline-setup"));
     assert!(types.contains(&"Explore"));
     assert!(types.contains(&"Plan"));
-    assert!(types.contains(&"verification"));
+    assert!(types.contains(&"claude-code-guide"));
+    assert!(!types.contains(&"verification"));
 }
 
 #[test]

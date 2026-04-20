@@ -48,6 +48,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow};
 use once_cell::sync::Lazy;
+use rc_context::RuntimeIdentityContext;
 use rc_core::task_stack::TaskStack;
 use rc_core::{
     ConversationEntry, ConversationRole, HookEvent, HookShell, SubAgentCompletion, ToolCall,
@@ -116,6 +117,8 @@ pub struct RuntimeAgentPromptContext {
     pub is_non_interactive: bool,
     #[serde(default)]
     pub list_via_attachment: bool,
+    #[serde(default)]
+    pub runtime_identity: RuntimeIdentityContext,
 }
 
 /// Process-scoped runtime policy for tool exposure and task artifacts.
