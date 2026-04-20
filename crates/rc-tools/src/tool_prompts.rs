@@ -9,7 +9,8 @@ use std::path::PathBuf;
 use directories::BaseDirs;
 use rc_agents::coordinator::is_coordinator_mode;
 use rc_agents::fork::is_fork_subagent_enabled;
-use rc_agents::loader::load_all_agents;
+use rc_agents::loader::load_all_agents_with_context;
+use rc_context::RuntimeIdentityContext;
 use rc_mcp::normalization::mcp_info_from_string;
 
 // ── Core tools (P0) ──────────────────────────────────────────────────────────
@@ -1184,7 +1185,11 @@ fn runtime_agent_tool_prompt() -> String {
     let project_agents_dir = context
         .project_agents_dir
         .or_else(default_project_agents_dir);
-    let definitions = load_all_agents(user_agents_dir.as_deref(), project_agents_dir.as_deref());
+    let definitions = load_all_agents_with_context(
+        user_agents_dir.as_deref(),
+        project_agents_dir.as_deref(),
+        &context.runtime_identity,
+    );
     let available_mcp_servers = runtime_mcp_servers_with_tools();
     let is_fork_enabled =
         is_fork_subagent_enabled(context.is_coordinator, context.is_non_interactive);
@@ -1213,6 +1218,7 @@ fn default_runtime_agent_prompt_context() -> crate::RuntimeAgentPromptContext {
         is_coordinator: is_coordinator_mode(),
         is_non_interactive: false,
         list_via_attachment: false,
+        runtime_identity: RuntimeIdentityContext::from_legacy_env(),
     }
 }
 
@@ -1741,6 +1747,7 @@ mod tests {
             is_coordinator: false,
             is_non_interactive: false,
             list_via_attachment: true,
+            runtime_identity: RuntimeIdentityContext::from_legacy_env(),
         };
         let context_provider = Arc::new(move || context.clone());
 

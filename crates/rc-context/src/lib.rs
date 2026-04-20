@@ -23,6 +23,7 @@
 
 pub mod effort;
 pub mod fast_mode;
+pub mod runtime_identity;
 pub mod window;
 
 // Re-export the most commonly used types at the crate root.
@@ -50,4 +51,9 @@ pub use fast_mode::{
     get_disabled_reason_message, get_fast_mode_model, get_fast_mode_simple_state,
     get_initial_fast_mode_setting, get_overage_disabled_message, is_fast_mode_available,
     is_fast_mode_supported_by_model,
+};
+
+// ── From runtime_identity ───────────────────────────────────────────────
+pub use runtime_identity::{
+    RuntimeFeatureGates, RuntimeIdentityContext, RuntimeSubscriptionContext, RuntimeUserType,
 };

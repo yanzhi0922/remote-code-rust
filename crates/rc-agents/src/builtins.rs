@@ -4,6 +4,7 @@
 //! Verification, ClaudeCodeGuide, and StatuslineSetup.
 
 use crate::definition::{AgentDefinition, AgentSource};
+use rc_context::{RuntimeIdentityContext, RuntimeUserType};
 
 /// Returns all built-in agent definitions.
 ///
@@ -15,14 +16,26 @@ use crate::definition::{AgentDefinition, AgentSource};
 /// - **claude-code-guide**: Help agent for Claude Code documentation.
 /// - **statusline-setup**: Statusline configuration agent.
 pub fn get_built_in_agents() -> Vec<AgentDefinition> {
-    vec![
-        general_purpose_agent(),
-        explore_agent(),
-        plan_agent(),
-        verification_agent(),
-        claude_code_guide_agent(),
-        statusline_setup_agent(),
-    ]
+    get_built_in_agents_with_context(&RuntimeIdentityContext::from_legacy_env())
+}
+
+pub fn get_built_in_agents_with_context(ctx: &RuntimeIdentityContext) -> Vec<AgentDefinition> {
+    let mut agents = vec![general_purpose_agent(), statusline_setup_agent()];
+
+    if ctx.features.explore_plan_agents_enabled {
+        agents.push(explore_agent_with_context(ctx));
+        agents.push(plan_agent());
+    }
+
+    if ctx.features.code_guide_enabled {
+        agents.push(claude_code_guide_agent_with_context(ctx));
+    }
+
+    if ctx.features.verification_agent_enabled {
+        agents.push(verification_agent());
+    }
+
+    agents
 }
 
 /// General-purpose agent for researching complex questions, searching for code,
@@ -68,6 +81,10 @@ fn general_purpose_system_prompt() -> String {
 /// Fast agent specialized for exploring codebases.
 /// Read-only: cannot create, modify, or delete files.
 pub fn explore_agent() -> AgentDefinition {
+    explore_agent_with_context(&RuntimeIdentityContext::from_legacy_env())
+}
+
+pub fn explore_agent_with_context(ctx: &RuntimeIdentityContext) -> AgentDefinition {
     AgentDefinition {
         agent_type: "Explore".to_owned(),
         when_to_use: "Fast agent specialized for exploring codebases. Use this \
@@ -88,7 +105,7 @@ pub fn explore_agent() -> AgentDefinition {
         ],
         max_turns: 200,
         model: Some(
-            if std::env::var("USER_TYPE").is_ok_and(|value| value == "ant") {
+            if matches!(ctx.user_type, RuntimeUserType::Ant) {
                 "inherit"
             } else {
                 "haiku"
@@ -331,11 +348,15 @@ Use the literal string `VERDICT: ` followed by exactly one of `PASS`, `FAIL`, `P
 
 /// Help agent for Claude Code documentation and configuration.
 pub fn claude_code_guide_agent() -> AgentDefinition {
+    claude_code_guide_agent_with_context(&RuntimeIdentityContext::from_legacy_env())
+}
+
+pub fn claude_code_guide_agent_with_context(ctx: &RuntimeIdentityContext) -> AgentDefinition {
     AgentDefinition {
         agent_type: "claude-code-guide".to_owned(),
         when_to_use: "Use this agent when the user asks questions (\"Can Claude...\", \"Does Claude...\", \"How do I...\") about: (1) Claude Code (the CLI tool) - features, hooks, slash commands, MCP servers, settings, IDE integrations, keyboard shortcuts; (2) Claude Agent SDK - building custom agents; (3) Claude API (formerly Anthropic API) - API usage, tool use, Anthropic SDK usage. **IMPORTANT:** Before spawning a new agent, check if there is already a running or recently completed claude-code-guide agent that you can continue via SendMessage."
             .to_owned(),
-        tools: claude_code_guide_tools(),
+        tools: claude_code_guide_tools(ctx),
         disallowed_tools: Vec::new(),
         max_turns: 200,
         model: Some("haiku".to_owned()),
@@ -343,7 +364,7 @@ pub fn claude_code_guide_agent() -> AgentDefinition {
         permission_mode: Some("dontAsk".to_owned()),
         source: AgentSource::BuiltIn,
         base_dir: "built-in".to_owned(),
-        system_prompt: Some(claude_code_guide_system_prompt()),
+        system_prompt: Some(claude_code_guide_system_prompt(ctx)),
         skills: Vec::new(),
         mcp_servers: Vec::new(),
         hooks: None,
@@ -359,8 +380,8 @@ pub fn claude_code_guide_agent() -> AgentDefinition {
     }
 }
 
-fn claude_code_guide_tools() -> Vec<String> {
-    if has_embedded_search_tools() {
+fn claude_code_guide_tools(ctx: &RuntimeIdentityContext) -> Vec<String> {
+    if ctx.features.embedded_search_tools {
         vec![
             "Bash".to_owned(),
             "Read".to_owned(),
@@ -378,27 +399,8 @@ fn claude_code_guide_tools() -> Vec<String> {
     }
 }
 
-fn has_embedded_search_tools() -> bool {
-    let enabled = std::env::var("EMBEDDED_SEARCH_TOOLS")
-        .map(|value| {
-            matches!(
-                value.to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(false);
-    if !enabled {
-        return false;
-    }
-
-    !matches!(
-        std::env::var("CLAUDE_CODE_ENTRYPOINT").as_deref(),
-        Ok("sdk-ts" | "sdk-py" | "sdk-cli" | "local-agent")
-    )
-}
-
-fn claude_code_guide_system_prompt() -> String {
-    let local_search_hint = if has_embedded_search_tools() {
+fn claude_code_guide_system_prompt(ctx: &RuntimeIdentityContext) -> String {
+    let local_search_hint = if ctx.features.embedded_search_tools {
         "Read, `find`, and `grep`"
     } else {
         "Read, Glob, and Grep"
@@ -639,7 +641,7 @@ mod tests {
     #[test]
     fn all_six_built_in_agents_load() {
         let agents = get_built_in_agents();
-        assert_eq!(agents.len(), 6);
+        assert_eq!(agents.len(), 5);
     }
 
     #[test]
@@ -647,7 +649,7 @@ mod tests {
         let agents = get_built_in_agents();
         let types: std::collections::HashSet<&str> =
             agents.iter().map(|a| a.agent_type.as_str()).collect();
-        assert_eq!(types.len(), 6);
+        assert_eq!(types.len(), 5);
     }
 
     #[test]
@@ -683,6 +685,16 @@ mod tests {
         assert!(agent.disallowed_tools.contains(&"Write".to_owned()));
         assert!(agent.omit_claude_md);
         assert_eq!(agent.model.as_deref(), Some("haiku"));
+    }
+
+    #[test]
+    fn ant_explore_agent_inherits_model() {
+        let ctx = RuntimeIdentityContext {
+            user_type: RuntimeUserType::Ant,
+            ..RuntimeIdentityContext::default()
+        };
+        let agent = explore_agent_with_context(&ctx);
+        assert_eq!(agent.model.as_deref(), Some("inherit"));
     }
 
     #[test]
@@ -737,6 +749,23 @@ mod tests {
                 .unwrap_or_default()
                 .contains("https://code.claude.com/docs/en/claude_code_docs_map.md")
         );
+    }
+
+    #[test]
+    fn embedded_search_guide_uses_bash_and_read() {
+        let ctx = RuntimeIdentityContext {
+            features: rc_context::RuntimeFeatureGates {
+                embedded_search_tools: true,
+                code_guide_enabled: true,
+                ..rc_context::RuntimeFeatureGates::default()
+            },
+            ..RuntimeIdentityContext::default()
+        };
+        let agent = claude_code_guide_agent_with_context(&ctx);
+        assert!(agent.tools.contains(&"Bash".to_owned()));
+        assert!(agent.tools.contains(&"Read".to_owned()));
+        assert!(!agent.tools.contains(&"Glob".to_owned()));
+        assert!(!agent.tools.contains(&"Grep".to_owned()));
     }
 
     #[test]

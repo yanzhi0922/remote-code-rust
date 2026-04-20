@@ -31,6 +31,7 @@ uuid.workspace = true
 walkdir.workspace = true
 rc-agents = { path = "../rc-agents" }
 rc-config = { path = "../rc-config" }
+rc-context = { path = "../rc-context" }
 rc-core = { path = "../rc-core" }
 rc-mcp = { path = "../rc-mcp" }
 rc-permissions = { path = "../rc-permissions" }

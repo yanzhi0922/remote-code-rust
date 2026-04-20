@@ -604,6 +604,7 @@ mod tests {
         assert!(prompt.contains("general-purpose"));
         assert!(prompt.contains("Explore"));
         assert!(prompt.contains("Plan"));
-        assert!(prompt.contains("verification"));
+        assert!(prompt.contains("claude-code-guide"));
+        assert!(!prompt.contains("verification"));
     }
 }

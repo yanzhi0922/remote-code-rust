@@ -9,8 +9,9 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use directories::BaseDirs;
-use rc_agents::loader::load_all_agents;
+use rc_agents::loader::load_all_agents_with_context;
 use rc_agents::{AgentDefinition, AgentIsolation, AgentSource};
+use rc_context::RuntimeIdentityContext;
 use rc_core::PermissionMode;
 use rc_mcp::normalization::mcp_info_from_string;
 use serde::{Deserialize, Serialize};
@@ -27,7 +28,10 @@ use crate::tasks::{
     mark_task_running, start_tracked_task,
 };
 use crate::team_runtime::{LiveTeammateRegistration, finish_live_teammate, start_live_teammate};
-use crate::{ToolSpec, current_runtime_mcp_cli_state, runtime_provider_tool_specs};
+use crate::{
+    ToolSpec, current_runtime_agent_prompt_context, current_runtime_mcp_cli_state,
+    runtime_provider_tool_specs,
+};
 
 const ALL_AGENT_DISALLOWED_TOOLS: &[&str] = &[
     "task_output",
@@ -747,7 +751,10 @@ fn resolve_agent_definition_from_dirs(
     project_dir: Option<&Path>,
 ) -> Result<AgentDefinition> {
     let requested_type = subagent_type.unwrap_or("general-purpose");
-    let definitions = load_all_agents(user_dir, project_dir);
+    let runtime_identity = current_runtime_agent_prompt_context()
+        .map(|context| context.runtime_identity)
+        .unwrap_or_else(RuntimeIdentityContext::from_legacy_env);
+    let definitions = load_all_agents_with_context(user_dir, project_dir, &runtime_identity);
     if let Some(definition) = find_agent_definition(&definitions.active_agents, requested_type) {
         return Ok(definition);
     }
@@ -1315,14 +1322,30 @@ mod tests {
             },
         });
         let context = test_context(Some(runtime));
+        let runtime_context = crate::RuntimeAgentPromptContext {
+            runtime_identity: RuntimeIdentityContext {
+                features: rc_context::RuntimeFeatureGates {
+                    verification_agent_enabled: true,
+                    ..rc_context::RuntimeFeatureGates::default()
+                },
+                ..RuntimeIdentityContext::from_legacy_env()
+            },
+            ..crate::RuntimeAgentPromptContext::default()
+        };
 
-        let result = agent_tool_inner(
-            &json!({
-                "prompt": "Review the recent Rust refactor for regressions.",
-                "description": "Verify refactor",
-                "subagent_type": "verification"
-            }),
-            &context,
+        let result = crate::with_runtime_agent_prompt_context_provider(
+            Arc::new(move || runtime_context.clone()),
+            async {
+                agent_tool_inner(
+                    &json!({
+                        "prompt": "Review the recent Rust refactor for regressions.",
+                        "description": "Verify refactor",
+                        "subagent_type": "verification"
+                    }),
+                    &context,
+                )
+                .await
+            },
         )
         .await
         .expect("agent tool should succeed");

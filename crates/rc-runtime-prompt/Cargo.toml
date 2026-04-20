@@ -16,6 +16,7 @@ chrono.workspace = true
 serde_json.workspace = true
 rc-agents = { path = "../rc-agents" }
 rc-config = { path = "../rc-config" }
+rc-context = { path = "../rc-context" }
 rc-core = { path = "../rc-core" }
 rc-model = { path = "../rc-model" }
 rc-provider = { path = "../rc-provider" }

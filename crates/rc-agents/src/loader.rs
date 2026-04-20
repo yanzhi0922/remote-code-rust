@@ -8,9 +8,10 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use rc_context::RuntimeIdentityContext;
 use serde::Deserialize;
 
-use crate::builtins::get_built_in_agents;
+use crate::builtins::get_built_in_agents_with_context;
 use crate::definition::{AgentDefinition, AgentSource};
 
 /// JSON schema for agent definitions loaded from files.
@@ -460,7 +461,19 @@ pub fn load_all_agents(
     user_dir: Option<&Path>,
     project_dir: Option<&Path>,
 ) -> AgentDefinitionsResult {
-    let mut all_agents = get_built_in_agents();
+    load_all_agents_with_context(
+        user_dir,
+        project_dir,
+        &RuntimeIdentityContext::from_legacy_env(),
+    )
+}
+
+pub fn load_all_agents_with_context(
+    user_dir: Option<&Path>,
+    project_dir: Option<&Path>,
+    ctx: &RuntimeIdentityContext,
+) -> AgentDefinitionsResult {
+    let mut all_agents = get_built_in_agents_with_context(ctx);
     let mut failed_files = Vec::new();
 
     if let Some(dir) = user_dir {
@@ -667,7 +680,7 @@ mod tests {
 
         let result = load_all_agents(Some(dir.path()), None);
         // Should have built-in agents + custom
-        assert!(result.active_agents.len() > 6);
+        assert!(result.active_agents.len() > 5);
         assert!(
             result
                 .active_agents

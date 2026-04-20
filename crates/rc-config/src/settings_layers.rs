@@ -56,11 +56,14 @@ pub struct ResolvedRuntimeSettings {
     pub provider_name: Option<String>,
     pub base_url: Option<String>,
     pub api_key: Option<String>,
+    pub api_key_helper: Option<String>,
     pub model: Option<String>,
     pub protocol: Option<ProviderProtocol>,
     pub timeout_ms: Option<u64>,
     pub max_output_tokens: Option<u32>,
     pub thinking_budget: Option<u32>,
+    pub fast_mode: Option<bool>,
+    pub fast_mode_per_session_opt_in: Option<bool>,
     pub session_name: Option<String>,
     pub allowed_tools: Vec<String>,
     pub disallowed_tools: Vec<String>,
@@ -84,7 +87,16 @@ struct SettingsDocument {
     #[serde(default)]
     provider: Option<SettingsProvider>,
     #[serde(default)]
+    #[serde(alias = "apiKeyHelper")]
+    api_key_helper: Option<String>,
+    #[serde(default)]
     session_name: Option<String>,
+    #[serde(default)]
+    #[serde(alias = "fastMode")]
+    fast_mode: Option<bool>,
+    #[serde(default)]
+    #[serde(alias = "fastModePerSessionOptIn")]
+    fast_mode_per_session_opt_in: Option<bool>,
     #[serde(default)]
     allowed_tools: Option<Vec<String>>,
     #[serde(default)]
@@ -237,6 +249,15 @@ pub fn load_runtime_settings(paths: &[PathBuf]) -> Result<ResolvedRuntimeSetting
         }
         if let Some(session_name) = document.session_name {
             resolved.session_name = normalize_optional_string(Some(session_name));
+        }
+        if let Some(api_key_helper) = document.api_key_helper {
+            resolved.api_key_helper = normalize_optional_string(Some(api_key_helper));
+        }
+        if let Some(fast_mode) = document.fast_mode {
+            resolved.fast_mode = Some(fast_mode);
+        }
+        if let Some(fast_mode_per_session_opt_in) = document.fast_mode_per_session_opt_in {
+            resolved.fast_mode_per_session_opt_in = Some(fast_mode_per_session_opt_in);
         }
         if let Some(allowed_tools) = document.allowed_tools {
             resolved.allowed_tools = merge_tool_filters(&resolved.allowed_tools, &allowed_tools);
