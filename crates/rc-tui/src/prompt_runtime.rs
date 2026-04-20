@@ -4,7 +4,14 @@ use rc_core::ConversationEntry;
 use rc_provider::DiscoveredToolScope;
 use rc_runtime_prompt::RuntimePromptSettings;
 
-pub use rc_runtime_prompt::{PromptRuntimeOverrides, conversation_with_runtime_user_context};
+pub use rc_runtime_prompt::{
+    PromptRuntimeOverrides, conversation_with_runtime_user_context_with_settings,
+};
+
+#[must_use]
+pub fn runtime_prompt_settings(config: &RuntimeConfig) -> RuntimePromptSettings {
+    RuntimePromptSettings::from_config(config)
+}
 
 pub async fn refresh_runtime_system_prompt(
     config: &RuntimeConfig,
@@ -12,7 +19,7 @@ pub async fn refresh_runtime_system_prompt(
     overrides: &PromptRuntimeOverrides,
     discovered_tool_scope: &DiscoveredToolScope,
 ) -> Result<()> {
-    let settings = RuntimePromptSettings::from_config(config);
+    let settings = runtime_prompt_settings(config);
     rc_runtime_prompt::refresh_runtime_system_prompt(
         config,
         conversation,

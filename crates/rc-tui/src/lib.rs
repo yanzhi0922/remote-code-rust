@@ -91,7 +91,8 @@ use rc_tools::{
 use app::{App, AppAction};
 use event::{convert_event, handle_event};
 use prompt_runtime::{
-    PromptRuntimeOverrides, conversation_with_runtime_user_context, refresh_runtime_system_prompt,
+    PromptRuntimeOverrides, conversation_with_runtime_user_context_with_settings,
+    refresh_runtime_system_prompt, runtime_prompt_settings,
 };
 use runtime_hooks::{
     PreparedToolCall, SessionHookRunOutcome, ToolHookRunOutcome, apply_post_tool_hooks,
@@ -688,11 +689,14 @@ async fn run_conversation_turn(
         .await?;
 
         // Call provider
-        let request_conversation = conversation_with_runtime_user_context(
+        let prompt_settings = runtime_prompt_settings(config);
+        let request_conversation = conversation_with_runtime_user_context_with_settings(
             config,
             conversation,
             &config_prompt_runtime_overrides(config),
-        );
+            &prompt_settings,
+        )
+        .await;
         let mut response = backend.complete(&request_conversation).await?;
         normalize_exit_plan_mode_tool_calls(&mut response.tool_calls);
         total_input_tokens += response.usage.input_tokens;
