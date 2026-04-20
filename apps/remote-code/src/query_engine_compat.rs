@@ -6,6 +6,7 @@ use std::time::Instant;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use directories::BaseDirs;
+use rc_auth::load_persisted_oauth_state;
 use rc_agents::definition::AgentDefinition;
 use rc_agents::loader::load_all_agents_with_context;
 use rc_agents::prompt::{format_agent_line, visible_agents};
@@ -538,13 +539,44 @@ fn build_runtime_identity_context(config: &RuntimeConfig) -> RuntimeIdentityCont
         runtime_env_truthy("EMBEDDED_SEARCH_TOOLS"),
     );
     let code_guide = code_guide_enabled(entrypoint.as_deref());
-    let show_concurrency_note = show_agent_concurrency_note(subscription_type.as_deref());
+    let persisted_oauth = if config.auth_source.is_none()
+        && config
+            .provider
+            .base_url
+            .as_deref()
+            .map(rc_model::is_first_party_base_url)
+            .unwrap_or(matches!(
+                config.provider.protocol,
+                ProviderProtocol::Anthropic
+            ))
+    {
+        load_persisted_oauth_state(&config.paths.profile_dir).ok()
+    } else {
+        None
+    };
+    let persisted_identity = persisted_oauth
+        .as_ref()
+        .map(|state| state.runtime_identity_fragment())
+        .unwrap_or_default();
+    let effective_subscription_type = subscription_type
+        .clone()
+        .or_else(|| persisted_identity.subscription.subscription_type.clone());
+    let show_concurrency_note = show_agent_concurrency_note(effective_subscription_type.as_deref());
 
     RuntimeIdentityContext {
-        user_type,
+        user_type: if matches!(user_type, RuntimeUserType::Unknown)
+            && persisted_oauth.as_ref().is_some_and(|state| state.has_tokens())
+        {
+            RuntimeUserType::External
+        } else {
+            user_type
+        },
         entrypoint,
         provider_name: Some(config.provider.name.clone()),
-        auth_source: config.auth_source.clone(),
+        auth_source: config
+            .auth_source
+            .clone()
+            .or_else(|| persisted_oauth.as_ref().is_some_and(|state| state.has_tokens()).then_some("claude.ai".to_owned())),
         is_first_party: config
             .provider
             .base_url
@@ -559,10 +591,19 @@ fn build_runtime_identity_context(config: &RuntimeConfig) -> RuntimeIdentityCont
         fast_mode_flag_opt_in: resolved_settings.fast_mode == Some(true),
         fast_mode_per_session_opt_in: resolved_settings.fast_mode_per_session_opt_in == Some(true),
         fast_mode_user_setting: resolved_settings.fast_mode,
+        organization_uuid: persisted_identity.organization_uuid,
+        account_uuid: persisted_identity.account_uuid,
+        email: persisted_identity.email,
         subscription: RuntimeSubscriptionContext {
-            subscription_type: subscription_type.clone(),
-            rate_limit_tier: std::env::var("CLAUDE_CODE_RATE_LIMIT_TIER").ok(),
-            ..RuntimeSubscriptionContext::default()
+            subscription_type: effective_subscription_type,
+            rate_limit_tier: std::env::var("CLAUDE_CODE_RATE_LIMIT_TIER")
+                .ok()
+                .or_else(|| persisted_identity.subscription.rate_limit_tier.clone()),
+            billing_type: persisted_identity.subscription.billing_type,
+            has_extra_usage_enabled: persisted_identity.subscription.has_extra_usage_enabled,
+            display_name: persisted_identity.subscription.display_name,
+            account_created_at: persisted_identity.subscription.account_created_at,
+            subscription_created_at: persisted_identity.subscription.subscription_created_at,
         },
         features: RuntimeFeatureGates {
             embedded_search_tools,
@@ -2038,7 +2079,7 @@ mod tests {
     use anyhow::Result;
     use base64::Engine;
     use rc_config::{ProviderOverrides, RuntimeConfig, RuntimeOverrides, load_runtime_config};
-    use rc_context::RuntimeIdentityContext;
+    use rc_context::{RuntimeIdentityContext, RuntimeUserType};
     use rc_core::{
         ConversationEntry, ConversationRole, InputFormat, OutputFormat, PermissionMode,
         ProviderProtocol, ProviderResponse, SubAgentCompletion, ToolCall, UsageSummary,
@@ -2372,6 +2413,101 @@ mod tests {
         assert_eq!(identity.entrypoint.as_deref(), Some("sdk-cli"));
         assert!(identity.is_non_interactive);
         assert!(!identity.features.is_fork_subagent_enabled);
+    }
+
+    #[test]
+    fn build_runtime_identity_context_hydrates_persisted_oauth_identity_when_auth_source_missing() {
+        let (_tempdir, mut config, _store) = mock_config_and_store();
+        config.auth_source = None;
+        config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
+        fs::write(
+            config.paths.profile_dir.join(".credentials.json"),
+            serde_json::json!({
+                "claudeAiOauth": {
+                    "accessToken": "oauth-token",
+                    "refreshToken": "refresh-token",
+                    "expiresAt": 1234,
+                    "scopes": ["user:profile", "user:inference"],
+                    "subscriptionType": "team",
+                    "rateLimitTier": "high"
+                }
+            })
+            .to_string(),
+        )
+        .expect("write credentials");
+        fs::write(
+            config.paths.profile_dir.join(".config.json"),
+            serde_json::json!({
+                "oauthAccount": {
+                    "accountUuid": "acct-1",
+                    "emailAddress": "dev@example.com",
+                    "organizationUuid": "org-1",
+                    "displayName": "Dev User",
+                    "hasExtraUsageEnabled": false,
+                    "billingType": "stripe_subscription_contracted",
+                    "accountCreatedAt": "2025-01-01T00:00:00Z",
+                    "subscriptionCreatedAt": "2025-02-01T00:00:00Z"
+                }
+            })
+            .to_string(),
+        )
+        .expect("write config");
+
+        let identity = build_runtime_identity_context(&config);
+
+        assert_eq!(identity.auth_source.as_deref(), Some("claude.ai"));
+        assert_eq!(identity.user_type, RuntimeUserType::External);
+        assert_eq!(identity.account_uuid.as_deref(), Some("acct-1"));
+        assert_eq!(identity.organization_uuid.as_deref(), Some("org-1"));
+        assert_eq!(identity.email.as_deref(), Some("dev@example.com"));
+        assert_eq!(identity.subscription.subscription_type.as_deref(), Some("team"));
+        assert_eq!(identity.subscription.rate_limit_tier.as_deref(), Some("high"));
+        assert_eq!(
+            identity.subscription.billing_type.as_deref(),
+            Some("stripe_subscription_contracted")
+        );
+        assert_eq!(identity.subscription.has_extra_usage_enabled, Some(false));
+        assert_eq!(identity.subscription.display_name.as_deref(), Some("Dev User"));
+    }
+
+    #[test]
+    fn build_runtime_identity_context_prefers_explicit_auth_source_over_persisted_oauth_identity() {
+        let (_tempdir, mut config, _store) = mock_config_and_store();
+        config.auth_source = Some("env:ANTHROPIC_API_KEY".to_owned());
+        config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
+        fs::write(
+            config.paths.profile_dir.join(".credentials.json"),
+            serde_json::json!({
+                "claudeAiOauth": {
+                    "accessToken": "oauth-token",
+                    "refreshToken": "refresh-token",
+                    "expiresAt": 1234,
+                    "subscriptionType": "team",
+                    "rateLimitTier": "high"
+                }
+            })
+            .to_string(),
+        )
+        .expect("write credentials");
+        fs::write(
+            config.paths.profile_dir.join(".config.json"),
+            serde_json::json!({
+                "oauthAccount": {
+                    "accountUuid": "acct-1",
+                    "emailAddress": "dev@example.com",
+                    "organizationUuid": "org-1"
+                }
+            })
+            .to_string(),
+        )
+        .expect("write config");
+
+        let identity = build_runtime_identity_context(&config);
+
+        assert_eq!(identity.auth_source.as_deref(), Some("env:ANTHROPIC_API_KEY"));
+        assert_eq!(identity.account_uuid, None);
+        assert_eq!(identity.organization_uuid, None);
+        assert_eq!(identity.subscription.subscription_type, None);
     }
 
     #[tokio::test]

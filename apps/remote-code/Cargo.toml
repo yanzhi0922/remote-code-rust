@@ -31,6 +31,7 @@ rc-control-plane = { path = "../../crates/rc-control-plane" }
 rc-core = { path = "../../crates/rc-core" }
 rc-engine-events = { path = "../../crates/rc-engine-events" }
 rc-agents = { path = "../../crates/rc-agents" }
+rc-auth = { path = "../../crates/rc-auth" }
 rc-mcp = { path = "../../crates/rc-mcp" }
 rc-model = { path = "../../crates/rc-model" }
 rc-permissions = { path = "../../crates/rc-permissions" }
