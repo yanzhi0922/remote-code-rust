@@ -1239,6 +1239,7 @@ fn default_runtime_agent_prompt_context() -> crate::RuntimeAgentPromptContext {
         auto_memory_read_dir: None,
         project_temp_dir: None,
         preview_launch_config_path: None,
+        teams_dir: None,
         agent_memory_dirs: Vec::new(),
     }
 }
@@ -1776,6 +1777,7 @@ mod tests {
             auto_memory_read_dir: None,
             project_temp_dir: None,
             preview_launch_config_path: None,
+            teams_dir: None,
             agent_memory_dirs: Vec::new(),
         };
         let context_provider = Arc::new(move || context.clone());
