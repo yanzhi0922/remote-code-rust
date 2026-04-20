@@ -196,9 +196,13 @@ pub trait PermissionBroker: Send + Sync {
     fn layered_rules(&self) -> Vec<SourceAwarePermissionRule> {
         Vec::new()
     }
-    /// Return the first matching rule action, if the broker has layered rules.
-    fn matching_rule_action(&self, _request: &PermissionRequest) -> Option<RuleAction> {
+    /// Return the highest-priority matching rule, if this broker has layered rules.
+    fn matching_rule(&self, _request: &PermissionRequest) -> Option<SourceAwarePermissionRule> {
         None
+    }
+    /// Return the first matching rule action, if the broker has layered rules.
+    fn matching_rule_action(&self, request: &PermissionRequest) -> Option<RuleAction> {
+        self.matching_rule(request).map(|rule| rule.action)
     }
 }
 
@@ -291,12 +295,23 @@ impl<B: PermissionBroker> LayeredPermissionBroker<B> {
             .push(record);
     }
 
-    fn matching_rule(&self, request: &PermissionRequest) -> Option<SourceAwarePermissionRule> {
+    fn matching_rule_for_action(
+        &self,
+        request: &PermissionRequest,
+        action_filter: Option<RuleAction>,
+    ) -> Option<SourceAwarePermissionRule> {
         {
             let session = self.session_rules.read().unwrap_or_else(|e| e.into_inner());
             if let Some(rule) = session
                 .iter()
-                .find(|rule| shell_rules::rule_matches_request(&rule.tool_pattern, request))
+                .filter(|rule| action_filter.is_none_or(|action| rule.action == action))
+                .find(|rule| {
+                    shell_rules::rule_action_matches_request_action(
+                        &rule.tool_pattern,
+                        request,
+                        rule.action,
+                    )
+                })
             {
                 return Some(rule.clone());
             }
@@ -304,7 +319,14 @@ impl<B: PermissionBroker> LayeredPermissionBroker<B> {
 
         self.rules
             .iter()
-            .find(|rule| shell_rules::rule_matches_request(&rule.tool_pattern, request))
+            .filter(|rule| action_filter.is_none_or(|action| rule.action == action))
+            .find(|rule| {
+                shell_rules::rule_action_matches_request_action(
+                    &rule.tool_pattern,
+                    request,
+                    rule.action,
+                )
+            })
             .cloned()
     }
 }
@@ -312,7 +334,7 @@ impl<B: PermissionBroker> LayeredPermissionBroker<B> {
 #[async_trait]
 impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissionBroker<B> {
     async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
-        if let Some(rule) = self.matching_rule(&request) {
+        if let Some(rule) = PermissionBroker::matching_rule(self, &request) {
             self.push_audit(PermissionAuditRecord {
                 tool_name: request.tool_name.clone(),
                 tool_use_id: String::new(),
@@ -337,6 +359,29 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
 
         // Fall back to the inner broker
         self.fallback.decide(request).await
+    }
+
+    async fn decide_forced_prompt(&self, request: PermissionRequest) -> PermissionDecision {
+        if let Some(rule) = self.matching_rule_for_action(&request, Some(RuleAction::Deny)) {
+            self.push_audit(PermissionAuditRecord {
+                tool_name: request.tool_name.clone(),
+                tool_use_id: String::new(),
+                source: Some(rule.source),
+                matched_pattern: Some(rule.tool_pattern.clone()),
+                action: rule.action,
+                final_allowed: false,
+                reason: Some("forced prompt denied by matching rule".to_owned()),
+            });
+            return PermissionDecision::deny(match rule.source {
+                RuleSource::Session => format!("Denied by session rule: {}", rule.tool_pattern),
+                _ => format!(
+                    "Denied by rule from {:?}: {}",
+                    rule.source, rule.tool_pattern
+                ),
+            });
+        }
+
+        self.fallback.decide_forced_prompt(request).await
     }
 
     fn add_session_rule(&self, action: RuleAction, tool_pattern: String) -> Result<()> {
@@ -381,8 +426,19 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
         self.fallback.mode()
     }
 
+    fn matching_rule(&self, request: &PermissionRequest) -> Option<SourceAwarePermissionRule> {
+        [RuleAction::Deny, RuleAction::Ask, RuleAction::Allow]
+            .into_iter()
+            .find_map(|action| self.matching_rule_for_action(request, Some(action)))
+    }
+
     fn matching_rule_action(&self, request: &PermissionRequest) -> Option<RuleAction> {
-        self.matching_rule(request).map(|rule| rule.action)
+        [RuleAction::Deny, RuleAction::Ask, RuleAction::Allow]
+            .into_iter()
+            .find(|action| {
+                self.matching_rule_for_action(request, Some(*action))
+                    .is_some()
+            })
     }
 }
 
@@ -654,6 +710,41 @@ mod tests {
 
         assert!(allowed.allowed);
         assert!(!denied.allowed);
+        Ok(())
+    }
+
+    #[test]
+    fn matching_rule_action_prioritizes_deny_over_allow() -> anyhow::Result<()> {
+        let fallback = StaticPermissionBroker::new(false);
+        let rules = vec![
+            SourceAwarePermissionRule {
+                tool_pattern: "Read(src/**)".to_owned(),
+                action: RuleAction::Allow,
+                source: RuleSource::User,
+            },
+            SourceAwarePermissionRule {
+                tool_pattern: "Read(src/secrets/**)".to_owned(),
+                action: RuleAction::Deny,
+                source: RuleSource::User,
+            },
+        ];
+        let layered = LayeredPermissionBroker::new(fallback, rules);
+        let request = PermissionRequest {
+            tool_name: "read_file".to_owned(),
+            permission_class: None,
+            tool_input: serde_json::json!({"path": "src/secrets/token.txt"}),
+            working_directory: Some("C:/repo".to_owned()),
+            tool_use_id: None,
+            title: None,
+            description: None,
+            blocked_path: Some("C:/repo/src/secrets/token.txt".to_owned()),
+            permission_suggestions: Vec::new(),
+        };
+
+        assert_eq!(
+            layered.matching_rule_action(&request),
+            Some(RuleAction::Deny)
+        );
         Ok(())
     }
 

@@ -471,9 +471,12 @@ fn spawn_runtime_agent_prompt_context_provider(
                 .sessions_dir
                 .join(config.session_id.to_string()),
         ),
-        auto_memory_dir: std::env::var_os("CLAUDE_CODE_REMOTE_MEMORY_DIR")
-            .map(PathBuf::from)
-            .or_else(|| Some(config.paths.profile_dir.join("projects"))),
+        auto_memory_dir: prompt_settings
+            .auto_memory_permission_dir
+            .map(PathBuf::from),
+        auto_memory_read_dir: prompt_settings.auto_memory_read_dir.map(PathBuf::from),
+        project_temp_dir: prompt_settings.project_temp_dir.map(PathBuf::from),
+        preview_launch_config_path: Some(config.original_cwd.join(".claude").join("launch.json")),
         agent_memory_dirs,
     };
     Arc::new(move || context.clone())
@@ -2707,6 +2710,9 @@ mod tests {
             scratchpad_dir: None,
             session_memory_dir: None,
             auto_memory_dir: None,
+            auto_memory_read_dir: None,
+            project_temp_dir: None,
+            preview_launch_config_path: None,
             agent_memory_dirs: Vec::new(),
         };
 

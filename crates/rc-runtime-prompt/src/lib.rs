@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use auto_memory::{
-    has_valid_cowork_memory_path_override, load_cowork_memory_mechanics_prompt,
-    load_default_memory_prompt, sanitize_path_component,
+    default_memory_dir_for_permissions, has_valid_cowork_memory_path_override,
+    load_cowork_memory_mechanics_prompt, load_default_memory_prompt,
+    memory_dir_for_read_permissions, sanitize_path_component,
 };
 use chrono::Local;
 use rc_agents::coordinator::{
@@ -103,6 +104,9 @@ pub struct RuntimePromptSettings {
     pub include_token_budget_prompt: bool,
     pub scratchpad_enabled: bool,
     pub scratchpad_dir: Option<String>,
+    pub project_temp_dir: Option<String>,
+    pub auto_memory_read_dir: Option<String>,
+    pub auto_memory_permission_dir: Option<String>,
     pub additional_working_directories: Vec<PathBuf>,
     pub runtime_identity: RuntimeIdentityContext,
 }
@@ -111,6 +115,16 @@ impl RuntimePromptSettings {
     #[must_use]
     pub fn from_config(config: &RuntimeConfig) -> Self {
         let scratchpad = build_runtime_scratchpad_state(config);
+        let tmp_root_override = env::var_os("CLAUDE_CODE_TMPDIR").map(PathBuf::from);
+        let project_temp_dir = runtime_project_temp_dir(config, tmp_root_override.as_deref());
+        let auto_memory_permission_dir = default_memory_dir_for_permissions(config)
+            .ok()
+            .flatten()
+            .map(|path| path.to_string_lossy().into_owned());
+        let auto_memory_read_dir = memory_dir_for_read_permissions(config)
+            .ok()
+            .flatten()
+            .map(|path| path.to_string_lossy().into_owned());
         Self {
             language: config.language.clone(),
             output_style: config.output_style.clone(),
@@ -122,6 +136,9 @@ impl RuntimePromptSettings {
             include_token_budget_prompt: false,
             scratchpad_enabled: scratchpad.enabled,
             scratchpad_dir: scratchpad.dir,
+            project_temp_dir: Some(project_temp_dir.to_string_lossy().into_owned()),
+            auto_memory_read_dir,
+            auto_memory_permission_dir,
             additional_working_directories: Vec::new(),
             runtime_identity: RuntimeIdentityContext::from_legacy_env(),
         }
@@ -947,8 +964,9 @@ mod tests {
     use rc_provider::DiscoveredToolScope;
     use std::fs;
     use std::path::PathBuf;
-    use std::sync::{Mutex, MutexGuard, OnceLock};
+    use std::sync::OnceLock;
     use tempfile::tempdir;
+    use tokio::sync::{Mutex, MutexGuard};
 
     fn test_config(explicit_settings: Option<std::path::PathBuf>) -> rc_config::RuntimeConfig {
         let tempdir = tempdir().expect("tempdir");
@@ -994,16 +1012,17 @@ mod tests {
             include_token_budget_prompt: false,
             scratchpad_enabled: false,
             scratchpad_dir: None,
+            project_temp_dir: None,
+            auto_memory_read_dir: None,
+            auto_memory_permission_dir: None,
             additional_working_directories: Vec::new(),
             runtime_identity: RuntimeIdentityContext::default(),
         }
     }
 
-    fn coordinator_override_lock() -> MutexGuard<'static, ()> {
+    async fn coordinator_override_lock() -> MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("coordinator override test lock")
+        LOCK.get_or_init(|| Mutex::new(())).lock().await
     }
 
     #[tokio::test]
@@ -1095,7 +1114,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_user_context_entries_include_worker_tools_context_when_coordinator_enabled() {
-        let _guard = coordinator_override_lock();
+        let _guard = coordinator_override_lock().await;
         rc_agents::coordinator::reset_coordinator_override();
         rc_agents::coordinator::match_session_mode(Some(
             rc_agents::coordinator::CoordinatorMode::Coordinator,

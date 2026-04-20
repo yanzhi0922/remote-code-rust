@@ -5,8 +5,6 @@
 //! flag path forms that require an explicit permission prompt instead of silent
 //! auto-approval.
 
-use std::path::{Component, Path};
-
 /// Result of coarse path validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PathValidation {
@@ -27,8 +25,8 @@ pub fn clean_path_input(path: &str) -> String {
 /// Validate a path for impossible inputs.
 ///
 /// This intentionally stays conservative: it rejects inputs that cannot be
-/// safely interpreted (`NUL`, overlong paths, traversal above the lexical
-/// root), while leaving "prompt-worthy" cases like UNC paths to
+/// safely interpreted (`NUL`, overlong paths), while leaving prompt-worthy
+/// cases like UNC paths and lexical traversal outside the working directory to
 /// [`path_requires_manual_approval`].
 #[must_use]
 pub fn validate_path(path: &str) -> PathValidation {
@@ -40,10 +38,6 @@ pub fn validate_path(path: &str) -> PathValidation {
 
     if cleaned.len() > MAX_PATH_LEN {
         return PathValidation::Invalid("Path exceeds the maximum supported length.".to_owned());
-    }
-
-    if traversal_escapes_lexical_root(&cleaned) {
-        return PathValidation::Invalid("Path traversal escapes the lexical root.".to_owned());
     }
 
     PathValidation::Valid
@@ -93,7 +87,11 @@ pub fn has_glob_pattern(path: &str) -> bool {
 pub fn has_suspicious_windows_path_pattern(path: &str) -> bool {
     let normalized = path.replace('/', "\\");
 
-    if normalized.starts_with(r"\\?\") || normalized.starts_with(r"\\.\") {
+    if normalized.starts_with(r"\\?\")
+        || normalized.starts_with(r"\\.\")
+        || normalized.starts_with("//?/")
+        || normalized.starts_with("//./")
+    {
         return true;
     }
 
@@ -107,13 +105,21 @@ pub fn has_suspicious_windows_path_pattern(path: &str) -> bool {
             continue;
         }
 
-        if segment.ends_with('.') || segment.ends_with(' ') {
+        if !matches!(segment, "." | "..") && (segment.ends_with('.') || segment.ends_with(' ')) {
             return true;
         }
 
         if contains_short_name_component(segment) {
             return true;
         }
+    }
+
+    if has_windows_device_suffix(&lowered) {
+        return true;
+    }
+
+    if has_three_dot_component(&lowered) {
+        return true;
     }
 
     false
@@ -146,24 +152,6 @@ fn home_dir() -> Option<String> {
         .or_else(|| std::env::var("USERPROFILE").ok())
 }
 
-fn traversal_escapes_lexical_root(path: &str) -> bool {
-    let mut depth = 0i32;
-    for component in Path::new(path).components() {
-        match component {
-            Component::Prefix(_) | Component::RootDir => depth = 0,
-            Component::CurDir => {}
-            Component::ParentDir => {
-                depth -= 1;
-                if depth < 0 {
-                    return true;
-                }
-            }
-            Component::Normal(_) => depth += 1,
-        }
-    }
-    false
-}
-
 fn contains_vulnerable_unc_path(path: &str) -> bool {
     path.starts_with(r"\\") || path.starts_with("//")
 }
@@ -191,6 +179,21 @@ fn contains_short_name_component(segment: &str) -> bool {
     let digits = suffix.chars().take_while(|ch| ch.is_ascii_digit()).count();
 
     digits > 0
+}
+
+fn has_windows_device_suffix(path: &str) -> bool {
+    const DEVICES: &[&str] = &[
+        ".con", ".prn", ".aux", ".nul", ".com1", ".com2", ".com3", ".com4", ".com5", ".com6",
+        ".com7", ".com8", ".com9", ".lpt1", ".lpt2", ".lpt3", ".lpt4", ".lpt5", ".lpt6", ".lpt7",
+        ".lpt8", ".lpt9",
+    ];
+
+    DEVICES.iter().any(|suffix| path.ends_with(suffix))
+}
+
+fn has_three_dot_component(path: &str) -> bool {
+    path.split('\\')
+        .any(|segment| segment.chars().all(|ch| ch == '.') && segment.len() >= 3)
 }
 
 #[cfg(test)]
@@ -225,10 +228,10 @@ mod tests {
     }
 
     #[test]
-    fn traversal_above_root_rejected() {
+    fn traversal_above_root_is_left_for_permission_checks() {
         assert!(matches!(
             validate_path("../../../etc/passwd"),
-            PathValidation::Invalid(_)
+            PathValidation::Valid
         ));
     }
 
@@ -264,5 +267,9 @@ mod tests {
         assert!(has_suspicious_windows_path_pattern(
             r"C:\repo\dir. \file.txt"
         ));
+        assert!(has_suspicious_windows_path_pattern(
+            r"C:\repo\settings.json.PRN"
+        ));
+        assert!(has_suspicious_windows_path_pattern(r"C:\repo\...\file.txt"));
     }
 }

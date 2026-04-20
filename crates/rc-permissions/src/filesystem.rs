@@ -176,7 +176,7 @@ pub fn assess_filesystem_access(
 /// Resolve a user-provided path against the current working directory.
 #[must_use]
 pub fn resolve_candidate_path(cwd: &Path, maybe_relative: Option<&str>) -> PathBuf {
-    match maybe_relative {
+    let candidate = match maybe_relative {
         Some(path) if !path.trim().is_empty() => {
             let candidate = PathBuf::from(clean_path_input(path));
             if candidate.is_absolute() {
@@ -186,13 +186,16 @@ pub fn resolve_candidate_path(cwd: &Path, maybe_relative: Option<&str>) -> PathB
             }
         }
         _ => cwd.to_path_buf(),
-    }
+    };
+
+    normalize_path_lexically(&candidate)
 }
 
 /// Normalize a path for case-insensitive comparison.
 #[must_use]
 pub fn normalize_for_comparison(path: &Path) -> String {
-    let raw = path.to_string_lossy();
+    let lexically_normalized = normalize_path_lexically(path);
+    let raw = lexically_normalized.to_string_lossy();
     let stripped = raw.strip_prefix(r"\\?\").unwrap_or(&raw);
     let mut normalized = stripped.replace('\\', "/").to_ascii_lowercase();
 
@@ -201,6 +204,45 @@ pub fn normalize_for_comparison(path: &Path) -> String {
     }
 
     normalized
+}
+
+/// Normalize a path without requiring it to exist.
+///
+/// This mirrors Node's lexical `resolve/normalize` behavior closely enough for
+/// permission checks, so paths like `../outside.txt` are compared against the
+/// real working-directory boundary instead of being treated as invalid or
+/// accidentally left under the workspace prefix.
+#[must_use]
+pub fn normalize_path_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    let mut has_root = false;
+
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            std::path::Component::RootDir => {
+                has_root = true;
+                normalized.push(std::path::MAIN_SEPARATOR.to_string());
+            }
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if normalized.file_name().is_some() {
+                    normalized.pop();
+                } else if !has_root {
+                    normalized.push("..");
+                }
+            }
+            std::path::Component::Normal(segment) => normalized.push(segment),
+        }
+    }
+
+    if normalized.as_os_str().is_empty() && has_root {
+        PathBuf::from(std::path::MAIN_SEPARATOR.to_string())
+    } else if normalized.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        normalized
+    }
 }
 
 /// Resolve a path without failing on non-existent targets or broken symlinks.
@@ -841,5 +883,32 @@ mod tests {
         );
         assert!(!result.allowed);
         assert!(result.requires_confirmation);
+    }
+
+    #[test]
+    fn lexical_parent_traversal_routes_to_outside_workspace_confirmation() {
+        let tempdir = tempdir().expect("tempdir");
+        let workspace = tempdir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+
+        let result = assess_filesystem_access(
+            "../outside.txt",
+            &workspace,
+            &FilesystemAccessOptions::default(),
+            FilesystemOperation::Read,
+        );
+        assert!(!result.allowed);
+        assert!(result.requires_confirmation);
+        assert_eq!(
+            result.cause,
+            FilesystemCheckCause::OutsideWorkingDirectories
+        );
+        assert!(
+            result
+                .normalized_path
+                .to_string_lossy()
+                .replace('\\', "/")
+                .ends_with("/outside.txt")
+        );
     }
 }
