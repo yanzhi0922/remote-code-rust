@@ -128,6 +128,12 @@ pub struct RuntimeAgentPromptContext {
     #[serde(default)]
     pub auto_memory_dir: Option<PathBuf>,
     #[serde(default)]
+    pub auto_memory_read_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub project_temp_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub preview_launch_config_path: Option<PathBuf>,
+    #[serde(default)]
     pub agent_memory_dirs: Vec<PathBuf>,
 }
 
@@ -944,8 +950,8 @@ pub(crate) fn filesystem_access_options() -> rc_permissions::FilesystemAccessOpt
     let policy = current_tool_runtime_policy();
     let mut internal_read_dirs = Vec::new();
     let mut internal_write_dirs = Vec::new();
-    let internal_read_files = Vec::new();
-    let internal_write_files = Vec::new();
+    let mut internal_read_files = Vec::new();
+    let mut internal_write_files = Vec::new();
 
     if let Some(task_output_dir) = policy.task_output_dir {
         internal_read_dirs.push(task_output_dir);
@@ -963,11 +969,22 @@ pub(crate) fn filesystem_access_options() -> rc_permissions::FilesystemAccessOpt
             internal_read_dirs.push(session_memory_dir.clone());
         }
         if let Some(auto_memory_dir) = &context.auto_memory_dir {
-            internal_read_dirs.push(auto_memory_dir.clone());
             internal_write_dirs.push(auto_memory_dir.clone());
+        }
+        if let Some(auto_memory_read_dir) = &context.auto_memory_read_dir {
+            internal_read_dirs.push(auto_memory_read_dir.clone());
+        } else if let Some(auto_memory_dir) = &context.auto_memory_dir {
+            internal_read_dirs.push(auto_memory_dir.clone());
+        }
+        if let Some(project_temp_dir) = &context.project_temp_dir {
+            internal_read_dirs.push(project_temp_dir.clone());
         }
         internal_read_dirs.extend(context.agent_memory_dirs.clone());
         internal_write_dirs.extend(context.agent_memory_dirs.clone());
+        if let Some(preview_launch_config_path) = &context.preview_launch_config_path {
+            internal_read_files.push(preview_launch_config_path.clone());
+            internal_write_files.push(preview_launch_config_path.clone());
+        }
     }
 
     rc_permissions::FilesystemAccessOptions {
@@ -1034,6 +1051,51 @@ fn filesystem_permission_request(
         permission_suggestions: filesystem_precheck
             .map(|precheck| precheck.suggestions.clone())
             .unwrap_or_default(),
+    }
+}
+
+fn session_claude_folder_allow_rule(rule: &rc_permissions::SourceAwarePermissionRule) -> bool {
+    if rule.action != rc_permissions::RuleAction::Allow
+        || rule.source != rc_permissions::RuleSource::Session
+    {
+        return false;
+    }
+
+    let Some(open) = rule.tool_pattern.find('(') else {
+        return false;
+    };
+    let Some(close) = rule.tool_pattern.rfind(')') else {
+        return false;
+    };
+    if open >= close {
+        return false;
+    }
+
+    let content = rule.tool_pattern[open + 1..close].trim();
+    (content.starts_with("/.claude/") || content.starts_with("~/.claude/"))
+        && content.ends_with("/**")
+        && !content.contains("..")
+}
+
+fn allow_rule_can_bypass_filesystem_precheck(
+    matching_rule: Option<&rc_permissions::SourceAwarePermissionRule>,
+    filesystem_precheck: Option<&FilesystemPermissionPrecheck>,
+) -> bool {
+    let Some(rule) = matching_rule else {
+        return false;
+    };
+    let Some(precheck) = filesystem_precheck else {
+        return true;
+    };
+
+    match precheck.cause {
+        rc_permissions::FilesystemCheckCause::Allowed
+        | rc_permissions::FilesystemCheckCause::OutsideWorkingDirectories => true,
+        rc_permissions::FilesystemCheckCause::DangerousEdit => {
+            session_claude_folder_allow_rule(rule)
+        }
+        rc_permissions::FilesystemCheckCause::ManualApprovalRequired
+        | rc_permissions::FilesystemCheckCause::InvalidPath => false,
     }
 }
 
@@ -1106,11 +1168,12 @@ pub async fn execute_tool_call(
             &permission,
             filesystem_precheck.as_ref(),
         );
-        let filesystem_rule_action = if filesystem_operation_for_tool(&spec.name).is_some() {
-            broker.matching_rule_action(&permission_request)
+        let filesystem_rule = if filesystem_operation_for_tool(&spec.name).is_some() {
+            broker.matching_rule(&permission_request)
         } else {
             None
         };
+        let filesystem_rule_action = filesystem_rule.as_ref().map(|rule| rule.action);
         if matches!(
             filesystem_rule_action,
             Some(rc_permissions::RuleAction::Deny | rc_permissions::RuleAction::Ask)
@@ -1128,15 +1191,27 @@ pub async fn execute_tool_call(
         } else if matches!(
             filesystem_rule_action,
             Some(rc_permissions::RuleAction::Allow)
-        ) && filesystem_precheck.as_ref().is_none_or(|precheck| {
-            matches!(
-                precheck.cause,
-                rc_permissions::FilesystemCheckCause::Allowed
-                    | rc_permissions::FilesystemCheckCause::OutsideWorkingDirectories
-            )
-        }) {
+        ) && allow_rule_can_bypass_filesystem_precheck(
+            filesystem_rule.as_ref(),
+            filesystem_precheck.as_ref(),
+        ) {
             // Explicit filesystem allow rules are enough to proceed; keep the
             // dispatch guard marked confirmed because the path precheck asked.
+        } else if matches!(
+            filesystem_rule_action,
+            Some(rc_permissions::RuleAction::Allow)
+        ) && filesystem_precheck.is_some()
+        {
+            let decision = broker.decide_forced_prompt(permission_request).await;
+            if !decision.allowed {
+                return Ok(ToolResult {
+                    content: decision
+                        .message
+                        .unwrap_or_else(|| format!("Permission denied for {}.", spec.name)),
+                    is_error: true,
+                    content_blocks: Vec::new(),
+                });
+            }
         } else if permission.requires_permission || filesystem_precheck.is_some() {
             let skip_broker = filesystem_precheck.is_none()
                 && broker_mode.is_some_and(|m| auto_allows(m, permission.class));
@@ -1364,6 +1439,7 @@ mod tests {
         mode: rc_core::PermissionMode,
         action: Option<rc_permissions::RuleAction>,
         allow: bool,
+        matching_rule: Option<rc_permissions::SourceAwarePermissionRule>,
         requests: Arc<Mutex<Vec<PermissionRequest>>>,
         forced_requests: Arc<Mutex<Vec<PermissionRequest>>>,
     }
@@ -1396,6 +1472,20 @@ mod tests {
 
         fn mode(&self) -> Option<rc_core::PermissionMode> {
             Some(self.mode)
+        }
+
+        fn matching_rule(
+            &self,
+            _request: &PermissionRequest,
+        ) -> Option<rc_permissions::SourceAwarePermissionRule> {
+            self.matching_rule.clone().or_else(|| {
+                self.action
+                    .map(|action| rc_permissions::SourceAwarePermissionRule {
+                        tool_pattern: "*".to_owned(),
+                        action,
+                        source: rc_permissions::RuleSource::Session,
+                    })
+            })
         }
 
         fn matching_rule_action(
@@ -1732,6 +1822,7 @@ mod tests {
             mode: rc_core::PermissionMode::DontAsk,
             action: Some(rc_permissions::RuleAction::Ask),
             allow: false,
+            matching_rule: None,
             requests,
             forced_requests: forced_requests.clone(),
         };
@@ -1772,6 +1863,7 @@ mod tests {
             mode: rc_core::PermissionMode::AcceptEdits,
             action: Some(rc_permissions::RuleAction::Deny),
             allow: false,
+            matching_rule: None,
             requests: Arc::new(Mutex::new(Vec::new())),
             forced_requests: forced_requests.clone(),
         };
@@ -1828,6 +1920,140 @@ mod tests {
         assert!(result.is_error);
         let requests = requests.lock().expect("requests");
         assert!(!requests[0].permission_suggestions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn dangerous_write_allow_rule_still_routes_through_forced_prompt() {
+        let tempdir = tempdir().expect("tempdir");
+        let git_dir = tempdir.path().join(".git");
+        std::fs::create_dir_all(&git_dir).expect("git dir");
+        let target = git_dir.join("config");
+        std::fs::write(&target, "[core]\n").expect("git config");
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let forced_requests = Arc::new(Mutex::new(Vec::new()));
+        let broker = RuleAwareBroker {
+            mode: rc_core::PermissionMode::AcceptEdits,
+            action: Some(rc_permissions::RuleAction::Allow),
+            allow: false,
+            matching_rule: Some(rc_permissions::SourceAwarePermissionRule {
+                tool_pattern: "Edit(*)".to_owned(),
+                action: rc_permissions::RuleAction::Allow,
+                source: rc_permissions::RuleSource::Session,
+            }),
+            requests: Arc::new(Mutex::new(Vec::new())),
+            forced_requests: forced_requests.clone(),
+        };
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "dangerous-allow".to_owned(),
+                name: "write_file".to_owned(),
+                input: json!({"path": target.to_string_lossy().to_string(), "content": "[core]\n\teditor = vim\n"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("tool call should return result");
+
+        assert!(result.is_error);
+        assert_eq!(forced_requests.lock().expect("forced requests").len(), 1);
+        assert_eq!(std::fs::read_to_string(&target).expect("read"), "[core]\n");
+    }
+
+    #[tokio::test]
+    async fn session_claude_allow_rule_bypasses_dangerous_write_precheck() {
+        let tempdir = tempdir().expect("tempdir");
+        let claude_dir = tempdir.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).expect("claude dir");
+        let target = claude_dir.join("notes.json");
+        std::fs::write(&target, "{\"before\":true}").expect("claude file");
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let forced_requests = Arc::new(Mutex::new(Vec::new()));
+        let broker = RuleAwareBroker {
+            mode: rc_core::PermissionMode::DontAsk,
+            action: Some(rc_permissions::RuleAction::Allow),
+            allow: true,
+            matching_rule: Some(rc_permissions::SourceAwarePermissionRule {
+                tool_pattern: "Edit(/.claude/**)".to_owned(),
+                action: rc_permissions::RuleAction::Allow,
+                source: rc_permissions::RuleSource::Session,
+            }),
+            requests: Arc::new(Mutex::new(Vec::new())),
+            forced_requests: forced_requests.clone(),
+        };
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "claude-allow".to_owned(),
+                name: "write_file".to_owned(),
+                input: json!({"path": target.to_string_lossy().to_string(), "content": "{\"after\":true}"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("tool call should return result");
+
+        assert!(!result.is_error, "{}", result.content);
+        assert!(forced_requests.lock().expect("forced requests").is_empty());
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("read"),
+            "{\"after\":true}"
+        );
+    }
+
+    #[tokio::test]
+    async fn relative_parent_read_routes_through_permission_broker() {
+        let tempdir = tempdir().expect("tempdir");
+        let workspace = tempdir.path().join("workspace");
+        let outside = tempdir.path().join("outside.txt");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        std::fs::write(&outside, "secret").expect("outside");
+        let context = ToolExecutionContext {
+            cwd: workspace,
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let broker = RecordingPermissionBroker {
+            allow: false,
+            requests: requests.clone(),
+        };
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "read-relative-parent".to_owned(),
+                name: "read_file".to_owned(),
+                input: json!({"path": "../outside.txt"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("tool call should return result");
+
+        assert!(result.is_error);
+        let requests = requests.lock().expect("requests");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].blocked_path.as_deref(),
+            Some(outside.to_string_lossy().as_ref())
+        );
     }
 
     #[tokio::test]

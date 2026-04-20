@@ -134,6 +134,28 @@ pub fn has_valid_cowork_memory_path_override() -> bool {
     .is_some()
 }
 
+pub fn default_memory_dir_for_permissions(config: &RuntimeConfig) -> Result<Option<PathBuf>> {
+    let inputs = AutoMemoryInputs::from_process_env(config)?;
+    if !inputs.auto_memory_enabled || inputs.cowork_memory_path_override.is_some() {
+        return Ok(None);
+    }
+
+    Ok(Some(PathBuf::from(resolve_default_memory_dir(
+        config, &inputs,
+    )?)))
+}
+
+pub fn memory_dir_for_read_permissions(config: &RuntimeConfig) -> Result<Option<PathBuf>> {
+    let inputs = AutoMemoryInputs::from_process_env(config)?;
+    if !inputs.auto_memory_enabled {
+        return Ok(None);
+    }
+
+    Ok(Some(PathBuf::from(resolve_default_memory_dir(
+        config, &inputs,
+    )?)))
+}
+
 pub fn load_cowork_memory_mechanics_prompt(config: &RuntimeConfig) -> Result<Option<String>> {
     load_cowork_memory_mechanics_prompt_with(config, &AutoMemoryInputs::from_process_env(config)?)
 }

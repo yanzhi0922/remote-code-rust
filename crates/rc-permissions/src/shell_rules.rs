@@ -1,5 +1,6 @@
 use serde_json::Value;
 
+use crate::filesystem::{normalize_for_comparison, resolve_candidate_path};
 use crate::{PermissionClass, PermissionRequest, classify_tool};
 
 #[must_use]
@@ -15,6 +16,42 @@ pub fn rule_matches_request(pattern: &str, request: &PermissionRequest) -> bool 
     if let Some(command) = extract_shell_command(&request.tool_input) {
         return wildcard_match(input_pattern, command);
     }
+
+    if matches!(
+        classify_tool(&request.tool_name),
+        PermissionClass::Read | PermissionClass::Edit
+    ) {
+        return file_rule_matches_request(input_pattern, request);
+    }
+
+    wildcard_match_values(input_pattern, &request.tool_input)
+}
+
+#[must_use]
+pub fn rule_action_matches_request_action(
+    pattern: &str,
+    request: &PermissionRequest,
+    action: crate::RuleAction,
+) -> bool {
+    let (name_part, input_pattern) = split_pattern(pattern);
+    if !name_matches(name_part, &request.tool_name) {
+        return false;
+    }
+    let Some(input_pattern) = input_pattern else {
+        return true;
+    };
+
+    if let Some(command) = extract_shell_command(&request.tool_input) {
+        return wildcard_match(input_pattern, command);
+    }
+
+    if matches!(
+        classify_tool(&request.tool_name),
+        PermissionClass::Read | PermissionClass::Edit
+    ) {
+        return file_rule_matches_request_for_action(input_pattern, request, action);
+    }
+
     wildcard_match_values(input_pattern, &request.tool_input)
 }
 
@@ -48,6 +85,139 @@ fn name_matches(pattern: &str, tool_name: &str) -> bool {
 
 fn extract_shell_command(input: &Value) -> Option<&str> {
     input.get("command").and_then(Value::as_str)
+}
+
+fn file_rule_matches_request(pattern: &str, request: &PermissionRequest) -> bool {
+    file_rule_matches_request_for_action(pattern, request, crate::RuleAction::Allow)
+}
+
+fn file_rule_matches_request_for_action(
+    pattern: &str,
+    request: &PermissionRequest,
+    action: crate::RuleAction,
+) -> bool {
+    let candidates = file_path_candidates_for_request(request);
+    if candidates.is_empty() {
+        return false;
+    }
+    let working_directory = request
+        .working_directory
+        .as_deref()
+        .map(std::path::Path::new)
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let normalized_pattern = normalize_permission_pattern(pattern, working_directory, action);
+
+    candidates
+        .iter()
+        .any(|candidate| file_pattern_match(&normalized_pattern, candidate))
+}
+
+fn file_path_candidates_for_request(request: &PermissionRequest) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let working_directory = request
+        .working_directory
+        .as_deref()
+        .map(std::path::Path::new)
+        .unwrap_or_else(|| std::path::Path::new("."));
+
+    for raw in [
+        request.blocked_path.as_deref(),
+        request.tool_input.get("path").and_then(Value::as_str),
+        request.tool_input.get("directory").and_then(Value::as_str),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        push_unique_candidate(&mut candidates, normalize_filesystem_value(raw));
+
+        let absolute_path = resolve_candidate_path(working_directory, Some(raw));
+        let absolute = normalize_for_comparison(&absolute_path);
+        push_unique_candidate(&mut candidates, absolute);
+
+        if let Ok(relative) = absolute_path.strip_prefix(working_directory) {
+            push_unique_candidate(
+                &mut candidates,
+                normalize_filesystem_value(&relative.to_string_lossy()),
+            );
+        }
+    }
+
+    candidates
+}
+
+fn normalize_permission_pattern(
+    pattern: &str,
+    working_directory: &std::path::Path,
+    action: crate::RuleAction,
+) -> String {
+    let mut rendered = pattern.trim().replace('\\', "/");
+    if rendered.starts_with("~/") {
+        if let Some(home) = home_dir() {
+            rendered = format!("{}/{}", home.replace('\\', "/"), &rendered[2..]);
+        }
+    } else if let Some(rest) = rendered.strip_prefix("//") {
+        if rest.len() >= 2 && rest.as_bytes()[1] == b'/' && rest.as_bytes()[0].is_ascii_alphabetic()
+        {
+            let drive = char::from(rest.as_bytes()[0]).to_ascii_lowercase();
+            rendered = format!("{drive}:{}", &rest[1..]);
+        } else {
+            rendered = format!("/{rest}");
+        }
+    } else if rendered.starts_with('/') {
+        rendered = format!(
+            "{}{}",
+            normalize_for_comparison(working_directory),
+            rendered
+        );
+    } else if rendered.starts_with("./") {
+        rendered = format!(
+            "{}/{}",
+            normalize_for_comparison(working_directory),
+            rendered.trim_start_matches("./")
+        );
+    }
+
+    rendered = rendered.to_ascii_lowercase();
+
+    if action == crate::RuleAction::Allow && (rendered.ends_with("/**") || rendered.ends_with("/"))
+    {
+        rendered
+    } else {
+        rendered.trim_end_matches('/').to_owned()
+    }
+}
+
+fn file_pattern_match(pattern: &str, path: &str) -> bool {
+    let normalized_path = path.trim_end_matches('/');
+    if let Some(root) = pattern.strip_suffix("/**") {
+        let root = root.trim_end_matches('/');
+        return normalized_path == root || normalized_path.starts_with(&format!("{root}/"));
+    }
+    if pattern.ends_with('/') {
+        let root = pattern.trim_end_matches('/');
+        return normalized_path == root || normalized_path.starts_with(&format!("{root}/"));
+    }
+    wildcard_match(pattern, normalized_path)
+}
+
+fn normalize_filesystem_value(value: &str) -> String {
+    value
+        .replace('\\', "/")
+        .to_ascii_lowercase()
+        .trim_end_matches('/')
+        .to_owned()
+}
+
+fn push_unique_candidate(candidates: &mut Vec<String>, candidate: String) {
+    if !candidate.is_empty() && !candidates.iter().any(|existing| existing == &candidate) {
+        candidates.push(candidate);
+    }
+}
+
+fn home_dir() -> Option<String> {
+    std::env::var("HOME")
+        .ok()
+        .or_else(|| std::env::var("USERPROFILE").ok())
 }
 
 fn wildcard_match_values(pattern: &str, value: &Value) -> bool {
@@ -131,5 +301,25 @@ mod tests {
             "Bash(git *)",
             &request("bash_command", json!({"command":"cargo test"}))
         ));
+    }
+
+    #[test]
+    fn file_rules_match_only_path_like_inputs() {
+        assert!(!rule_matches_request(
+            "Read(src/**)",
+            &request("read_file", json!({"pattern":"src/main.rs"}))
+        ));
+        assert!(rule_matches_request(
+            "Read(src/**)",
+            &request("read_file", json!({"path":"src/main.rs"}))
+        ));
+    }
+
+    #[test]
+    fn file_rules_match_blocked_path_with_working_directory_root() {
+        let mut request = request("read_file", json!({"path":"ignored.txt"}));
+        request.working_directory = Some("C:/repo".to_owned());
+        request.blocked_path = Some("C:/repo/src/main.rs".to_owned());
+        assert!(rule_matches_request("Read(/src/**)", &request));
     }
 }
