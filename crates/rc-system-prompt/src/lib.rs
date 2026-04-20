@@ -111,6 +111,8 @@ pub struct PromptFeatures {
     pub verification_agent_enabled: bool,
     /// Exact memory prompt content, if the runtime resolved one.
     pub memory_prompt: Option<String>,
+    /// Whether scratchpad prompting is enabled for this runtime.
+    pub scratchpad_enabled: bool,
     /// Scratchpad directory path, when scratchpad guidance should be shown.
     pub scratchpad_dir: Option<String>,
     /// Keep-recent count for function-result clearing guidance.

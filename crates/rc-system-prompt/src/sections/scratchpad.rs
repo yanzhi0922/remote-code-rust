@@ -19,10 +19,9 @@ impl SystemPromptSection for ScratchpadSection {
     }
 
     fn compute(&self, ctx: &PromptContext) -> Result<Option<String>> {
-        Ok(ctx
-            .features
-            .scratchpad_dir
-            .as_deref()
+        Ok((ctx.features.scratchpad_enabled)
+            .then_some(ctx.features.scratchpad_dir.as_deref())
+            .flatten()
             .map(build_scratchpad_instructions))
     }
 }
@@ -78,6 +77,26 @@ mod tests {
         let section = ScratchpadSection;
         let result = section.compute(&test_ctx()).expect("compute ok");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn scratchpad_requires_gate_even_when_dir_is_present() {
+        let mut ctx = test_ctx();
+        ctx.features.scratchpad_dir = Some("/tmp/scratch".to_owned());
+
+        let result = ScratchpadSection.compute(&ctx).expect("compute ok");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn scratchpad_returns_content_when_gate_and_dir_are_present() {
+        let mut ctx = test_ctx();
+        ctx.features.scratchpad_enabled = true;
+        ctx.features.scratchpad_dir = Some("/tmp/scratch".to_owned());
+
+        let result = ScratchpadSection.compute(&ctx).expect("compute ok");
+        assert!(result.is_some());
+        assert!(result.expect("content").contains("/tmp/scratch"));
     }
 
     #[test]

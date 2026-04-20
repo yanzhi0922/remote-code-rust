@@ -18,7 +18,7 @@ use rc_system_prompt::{
     SystemPromptBuilder, SystemPromptSplitOptions, build_effective_system_prompt,
     render_system_prompt_for_api,
 };
-use rc_tools::{ToolSpec, is_runtime_dynamic_mcp_tool_name, runtime_provider_tool_specs};
+use rc_tools::{ToolSpec, is_runtime_dynamic_mcp_tool_name};
 
 const MEMORY_INSTRUCTION_PROMPT: &str = "Codebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.";
 const MAX_GIT_STATUS_CHARS: usize = 2000;
@@ -336,7 +336,6 @@ pub async fn build_runtime_system_prompt(
         });
     }
 
-    let tool_specs = runtime_provider_tool_specs().await;
     let carried_discovered_tools = discovered_tool_scope.snapshot();
     let visible_tool_specs = provider_runtime_tool_specs_for_request(
         &config.provider,
@@ -349,7 +348,7 @@ pub async fn build_runtime_system_prompt(
     for spec in &visible_tool_specs {
         insert_prompt_tool_aliases(spec, &mut enabled_tools);
     }
-    if let Some(allowed) = effective_allowed_tool_names(overrides, &tool_specs) {
+    if let Some(allowed) = effective_allowed_tool_names(overrides, &visible_tool_specs) {
         enabled_tools.retain(|tool| allowed.contains(tool.as_str()));
     }
     let enabled_tool_names = enabled_tools.clone();
@@ -399,6 +398,7 @@ pub async fn build_runtime_system_prompt(
                 .features
                 .verification_agent_enabled,
             memory_prompt: None,
+            scratchpad_enabled: false,
             scratchpad_dir: None,
             function_result_keep_recent: None,
             include_token_budget_prompt: settings.include_token_budget_prompt,
