@@ -470,7 +470,7 @@ fn git_absolute_path(cwd: &Path, args: &[&str]) -> Option<PathBuf> {
 pub(crate) fn sanitize_path_component(raw: &str) -> String {
     let sanitized = raw
         .chars()
-        .map(|ch| ch.is_ascii_alphanumeric().then_some(ch).unwrap_or('-'))
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
         .collect::<String>();
     if sanitized.len() <= MAX_SANITIZED_LENGTH {
         return sanitized;

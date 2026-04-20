@@ -1965,11 +1965,13 @@ mod tests {
         .expect("named teammate should succeed");
 
         assert_eq!(result, "planned");
-        let requests = requests.lock().expect("requests lock");
-        let request = &requests[0];
-        assert_eq!(request.agent_name.as_deref(), Some("planner"));
-        assert_eq!(request.team_name.as_deref(), Some("alpha-team"));
-        assert_eq!(request.permission_mode, Some(PermissionMode::Plan));
+        {
+            let requests = requests.lock().expect("requests lock");
+            let request = &requests[0];
+            assert_eq!(request.agent_name.as_deref(), Some("planner"));
+            assert_eq!(request.team_name.as_deref(), Some("alpha-team"));
+            assert_eq!(request.permission_mode, Some(PermissionMode::Plan));
+        }
 
         let team = team_helpers::read_team("alpha-team")
             .await

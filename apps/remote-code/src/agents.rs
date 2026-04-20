@@ -512,11 +512,11 @@ fn discover_guide_custom_skills(config: &RuntimeConfig) -> Vec<(String, String)>
 }
 
 fn guide_skill_roots(config: &RuntimeConfig) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    roots.push(config.paths.skills_dir.clone());
-    roots.push(config.cwd.join(".claude").join("skills"));
-    roots.push(config.cwd.join(".remote-code").join("skills"));
-    roots
+    vec![
+        config.paths.skills_dir.clone(),
+        config.cwd.join(".claude").join("skills"),
+        config.cwd.join(".remote-code").join("skills"),
+    ]
 }
 
 fn collect_skill_entries(root: &Path, skills: &mut BTreeMap<String, String>) {

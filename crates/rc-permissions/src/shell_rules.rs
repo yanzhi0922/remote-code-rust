@@ -32,11 +32,16 @@ fn split_pattern(pattern: &str) -> (&str, Option<&str>) {
 fn name_matches(pattern: &str, tool_name: &str) -> bool {
     let normalized = pattern.trim().to_ascii_lowercase();
     match normalized.as_str() {
-        "bash" => tool_name.eq_ignore_ascii_case("bash_command"),
+        "bash" => {
+            tool_name.eq_ignore_ascii_case("bash") || tool_name.eq_ignore_ascii_case("bash_command")
+        }
         "powershell" => tool_name.eq_ignore_ascii_case("powershell"),
         "read" => classify_tool(tool_name) == PermissionClass::Read,
         "edit" => classify_tool(tool_name) == PermissionClass::Edit,
         "command" => classify_tool(tool_name) == PermissionClass::Bash,
+        _ if pattern.contains('*') || pattern.contains('?') => {
+            wildcard_match(&normalized, &tool_name.to_ascii_lowercase())
+        }
         _ => pattern.eq_ignore_ascii_case(tool_name),
     }
 }

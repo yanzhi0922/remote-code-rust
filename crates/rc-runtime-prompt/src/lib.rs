@@ -374,7 +374,7 @@ pub async fn build_runtime_system_prompt(
     let agent_system_prompt_provided = overrides.agent_system_prompt.is_some();
     let use_default_system_prompt = !custom_system_prompt_provided
         && !override_system_prompt_provided
-        && !(agent_system_prompt_provided && !settings.proactive_active);
+        && (!agent_system_prompt_provided || settings.proactive_active);
     let memory_mechanics_prompt = if custom_prompt_uses_main_thread_precedence(
         custom_system_prompt_provided,
         override_system_prompt_provided,
@@ -406,7 +406,6 @@ pub async fn build_runtime_system_prompt(
                 append_system_prompt: None,
                 override_system_prompt: overrides.override_system_prompt.clone(),
                 proactive_active: settings.proactive_active,
-                ..Default::default()
             },
         );
         if !custom_system_prompt_provided
@@ -523,7 +522,6 @@ pub async fn build_runtime_system_prompt(
             append_system_prompt: None,
             override_system_prompt: overrides.override_system_prompt.clone(),
             proactive_active: prompt_ctx.features.proactive_active,
-            ..Default::default()
         },
     );
     if !custom_system_prompt_provided

@@ -101,7 +101,11 @@ pub(crate) fn notebook_edit(input: &Value, context: &ToolExecutionContext) -> Re
         .as_str()
         .ok_or_else(|| anyhow!("new_source is required"))?;
 
-    let target = super::file_ops::resolve_workspace_path(&context.cwd, Some(path))?;
+    let target = super::file_ops::resolve_workspace_path_for_operation(
+        context,
+        Some(path),
+        rc_permissions::FilesystemOperation::Write,
+    )?;
     let content = std::fs::read_to_string(&target)
         .with_context(|| format!("failed to read notebook {}", target.display()))?;
     let mut notebook: Value = serde_json::from_str(&content)
