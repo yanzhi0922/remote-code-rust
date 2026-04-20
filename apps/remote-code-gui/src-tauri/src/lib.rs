@@ -2430,7 +2430,9 @@ impl PermissionBroker for GuiPermissionBroker {
     }
 
     async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
-        if auto_allows(self.mode, classify_tool(&request.tool_name)) {
+        if request.blocked_path.is_none()
+            && auto_allows(self.mode, classify_tool(&request.tool_name))
+        {
             return PermissionDecision::allow();
         }
 

@@ -109,6 +109,7 @@ mod tests {
             title: None,
             description: None,
             blocked_path: None,
+            permission_suggestions: Vec::new(),
         }
     }
 

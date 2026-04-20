@@ -32,12 +32,6 @@ fn filesystem_permission_confirmed_for_dispatch() -> bool {
         .unwrap_or(false)
 }
 
-fn additional_working_directories() -> Vec<PathBuf> {
-    crate::current_runtime_agent_prompt_context()
-        .map(|context| context.additional_working_directories)
-        .unwrap_or_default()
-}
-
 fn normalize_for_comparison(path: PathBuf) -> PathBuf {
     let rendered = path.to_string_lossy();
     if let Some(stripped) = rendered.strip_prefix(r"\\?\") {
@@ -53,13 +47,8 @@ pub(crate) fn resolve_workspace_path_for_operation(
     operation: FilesystemOperation,
 ) -> Result<PathBuf> {
     let raw_path = maybe_relative.unwrap_or(".");
-    let check = assess_filesystem_access(
-        raw_path,
-        &context.cwd,
-        &additional_working_directories(),
-        operation,
-        current_plan_file_path().as_deref(),
-    );
+    let options = crate::filesystem_access_options();
+    let check = assess_filesystem_access(raw_path, &context.cwd, &options, operation);
 
     if check.allowed
         || (check.requires_confirmation && filesystem_permission_confirmed_for_dispatch())

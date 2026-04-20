@@ -1220,6 +1220,10 @@ fn default_runtime_agent_prompt_context() -> crate::RuntimeAgentPromptContext {
         is_non_interactive: false,
         list_via_attachment: false,
         runtime_identity: RuntimeIdentityContext::from_legacy_env(),
+        scratchpad_dir: None,
+        session_memory_dir: None,
+        auto_memory_dir: None,
+        agent_memory_dirs: Vec::new(),
     }
 }
 
@@ -1750,6 +1754,10 @@ mod tests {
             is_non_interactive: false,
             list_via_attachment: true,
             runtime_identity: RuntimeIdentityContext::from_legacy_env(),
+            scratchpad_dir: None,
+            session_memory_dir: None,
+            auto_memory_dir: None,
+            agent_memory_dirs: Vec::new(),
         };
         let context_provider = Arc::new(move || context.clone());
 

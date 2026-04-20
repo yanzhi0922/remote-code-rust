@@ -5,11 +5,16 @@
 //! detection, and working-directory/additional-directory allowlists.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 
+use rc_core::permission_types::PermissionBehavior;
+
+use crate::decision::{PermissionUpdate, PermissionUpdateDestination};
+use crate::mode::ExtendedPermissionMode;
 use crate::path_validation::{
     PathValidation, clean_path_input, path_requires_manual_approval, validate_path,
 };
+use crate::rule::PermissionRuleValue;
 
 /// Filesystem operation kind used for permission checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,7 +25,7 @@ pub enum FilesystemOperation {
 }
 
 /// Result of a filesystem permission check.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct FilesystemCheckResult {
     /// Whether the operation can proceed without an explicit permission prompt.
     pub allowed: bool,
@@ -32,6 +37,10 @@ pub struct FilesystemCheckResult {
     pub normalized_path: PathBuf,
     /// All path forms considered during the decision (original, symlinks, real path).
     pub checked_paths: Vec<PathBuf>,
+    /// Structured suggestion payloads for permission UIs / SDK hosts.
+    pub suggestions: Vec<PermissionUpdate>,
+    /// Machine-readable cause for the decision.
+    pub cause: FilesystemCheckCause,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +48,25 @@ pub struct ResolvedPath {
     pub resolved_path: PathBuf,
     pub is_symlink: bool,
     pub is_canonical: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilesystemCheckCause {
+    Allowed,
+    OutsideWorkingDirectories,
+    ManualApprovalRequired,
+    DangerousEdit,
+    InvalidPath,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FilesystemAccessOptions {
+    pub additional_dirs: Vec<PathBuf>,
+    pub plan_file: Option<PathBuf>,
+    pub internal_read_dirs: Vec<PathBuf>,
+    pub internal_write_dirs: Vec<PathBuf>,
+    pub internal_read_files: Vec<PathBuf>,
+    pub internal_write_files: Vec<PathBuf>,
 }
 
 const DANGEROUS_FILES: &[&str] = &[
@@ -65,17 +93,11 @@ pub fn check_filesystem_permission(
     additional_dirs: &[String],
 ) -> FilesystemCheckResult {
     let cwd = PathBuf::from(cwd);
-    let additional_dirs = additional_dirs
-        .iter()
-        .map(PathBuf::from)
-        .collect::<Vec<_>>();
-    assess_filesystem_access(
-        path,
-        &cwd,
-        &additional_dirs,
-        FilesystemOperation::Read,
-        None,
-    )
+    let options = FilesystemAccessOptions {
+        additional_dirs: additional_dirs.iter().map(PathBuf::from).collect(),
+        ..FilesystemAccessOptions::default()
+    };
+    assess_filesystem_access(path, &cwd, &options, FilesystemOperation::Read)
 }
 
 /// Main path permission entry point used by the tool runtime.
@@ -83,9 +105,8 @@ pub fn check_filesystem_permission(
 pub fn assess_filesystem_access(
     path: &str,
     cwd: &Path,
-    additional_dirs: &[PathBuf],
+    options: &FilesystemAccessOptions,
     operation: FilesystemOperation,
-    plan_file: Option<&Path>,
 ) -> FilesystemCheckResult {
     let cleaned = clean_path_input(path);
     let normalized_path = resolve_candidate_path(cwd, Some(cleaned.as_str()));
@@ -93,20 +114,32 @@ pub fn assess_filesystem_access(
     match validate_path(&cleaned) {
         PathValidation::Valid => {}
         PathValidation::Invalid(reason) => {
-            return deny(normalized_path, reason);
+            return deny(normalized_path, reason, FilesystemCheckCause::InvalidPath);
         }
     }
 
     let checked_paths = get_paths_for_permission_check(&normalized_path);
 
-    if is_plan_file_path(&checked_paths, plan_file) {
+    if is_plan_file_path(&checked_paths, options.plan_file.as_deref()) {
+        return allow(normalized_path, checked_paths);
+    }
+
+    if internal_path_allowed(&checked_paths, operation, options) {
         return allow(normalized_path, checked_paths);
     }
 
     if let Some(reason) =
         path_requires_manual_approval(&cleaned, !matches!(operation, FilesystemOperation::Read))
     {
-        return ask(normalized_path, checked_paths, reason);
+        let suggestions =
+            generate_suggestions(&normalized_path, operation, cwd, options, &checked_paths);
+        return ask(
+            normalized_path,
+            checked_paths,
+            reason,
+            suggestions,
+            FilesystemCheckCause::ManualApprovalRequired,
+        );
     }
 
     if matches!(
@@ -114,17 +147,29 @@ pub fn assess_filesystem_access(
         FilesystemOperation::Write | FilesystemOperation::Create
     ) && let Some(reason) = check_path_safety_for_auto_edit(&checked_paths)
     {
-        return ask(normalized_path, checked_paths, reason);
+        let suggestions =
+            generate_suggestions(&normalized_path, operation, cwd, options, &checked_paths);
+        return ask(
+            normalized_path,
+            checked_paths,
+            reason,
+            suggestions,
+            FilesystemCheckCause::DangerousEdit,
+        );
     }
 
-    if path_in_allowed_working_path(&checked_paths, cwd, additional_dirs) {
+    if path_in_allowed_working_path(&checked_paths, cwd, &options.additional_dirs) {
         return allow(normalized_path, checked_paths);
     }
 
+    let suggestions =
+        generate_suggestions(&normalized_path, operation, cwd, options, &checked_paths);
     ask(
         normalized_path,
         checked_paths,
         "Path is outside the allowed working directories.".to_owned(),
+        suggestions,
+        FilesystemCheckCause::OutsideWorkingDirectories,
     )
 }
 
@@ -370,6 +415,48 @@ fn is_plan_file_path(checked_paths: &[PathBuf], plan_file: Option<&Path>) -> boo
     })
 }
 
+fn internal_path_allowed(
+    checked_paths: &[PathBuf],
+    operation: FilesystemOperation,
+    options: &FilesystemAccessOptions,
+) -> bool {
+    match operation {
+        FilesystemOperation::Read => {
+            path_matches_any_file(checked_paths, &options.internal_read_files)
+                || path_matches_any_root(checked_paths, &options.internal_read_dirs)
+        }
+        FilesystemOperation::Write | FilesystemOperation::Create => {
+            path_matches_any_file(checked_paths, &options.internal_write_files)
+                || path_matches_any_root(checked_paths, &options.internal_write_dirs)
+        }
+    }
+}
+
+fn path_matches_any_file(checked_paths: &[PathBuf], files: &[PathBuf]) -> bool {
+    checked_paths.iter().any(|checked| {
+        files.iter().any(|file| {
+            get_paths_for_permission_check(file)
+                .iter()
+                .any(|candidate| {
+                    normalize_for_comparison(checked) == normalize_for_comparison(candidate)
+                })
+        })
+    })
+}
+
+fn path_matches_any_root(checked_paths: &[PathBuf], roots: &[PathBuf]) -> bool {
+    if roots.is_empty() {
+        return false;
+    }
+    checked_paths.iter().all(|checked| {
+        roots.iter().any(|root| {
+            get_paths_for_permission_check(root)
+                .iter()
+                .any(|candidate| path_in_working_path(checked, candidate))
+        })
+    })
+}
+
 fn check_path_safety_for_auto_edit(checked_paths: &[PathBuf]) -> Option<String> {
     for path in checked_paths {
         if is_claude_config_file_path(path) {
@@ -401,16 +488,86 @@ fn is_dangerous_file_path_to_auto_edit(path: &Path) -> bool {
         .filter(|segment| !segment.is_empty())
         .collect::<Vec<_>>();
 
-    if segments
-        .iter()
-        .any(|segment| DANGEROUS_DIRECTORIES.contains(segment))
-    {
+    for (index, segment) in segments.iter().enumerate() {
+        if !DANGEROUS_DIRECTORIES.contains(segment) {
+            continue;
+        }
+        if *segment == ".claude"
+            && segments
+                .get(index + 1)
+                .is_some_and(|next| *next == "worktrees")
+        {
+            continue;
+        }
         return true;
     }
 
     segments
         .last()
         .is_some_and(|segment| DANGEROUS_FILES.contains(segment))
+}
+
+fn generate_suggestions(
+    path: &Path,
+    operation: FilesystemOperation,
+    cwd: &Path,
+    options: &FilesystemAccessOptions,
+    checked_paths: &[PathBuf],
+) -> Vec<PermissionUpdate> {
+    let outside_working_dir =
+        !path_in_allowed_working_path(checked_paths, cwd, &options.additional_dirs);
+    match operation {
+        FilesystemOperation::Read if outside_working_dir => {
+            let dirs_to_add = path
+                .parent()
+                .map(get_paths_for_permission_check)
+                .unwrap_or_default();
+            dirs_to_add
+                .into_iter()
+                .map(|dir| PermissionUpdate::AddRules {
+                    destination: PermissionUpdateDestination::Session,
+                    rules: vec![PermissionRuleValue {
+                        tool_name: "Read".to_owned(),
+                        rule_content: Some(permission_rule_path_pattern(&dir)),
+                    }],
+                    behavior: PermissionBehavior::Allow,
+                })
+                .collect()
+        }
+        FilesystemOperation::Write | FilesystemOperation::Create => {
+            let mut updates = vec![PermissionUpdate::SetMode {
+                destination: PermissionUpdateDestination::Session,
+                mode: ExtendedPermissionMode::AcceptEdits,
+            }];
+            if outside_working_dir {
+                let dirs_to_add = path
+                    .parent()
+                    .map(get_paths_for_permission_check)
+                    .unwrap_or_default();
+                updates.push(PermissionUpdate::AddDirectories {
+                    destination: PermissionUpdateDestination::Session,
+                    directories: dirs_to_add
+                        .into_iter()
+                        .map(|dir| dir.to_string_lossy().into_owned())
+                        .collect(),
+                });
+            }
+            updates
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn permission_rule_path_pattern(path: &Path) -> String {
+    let mut rendered = normalize_for_comparison(path);
+    if MAIN_SEPARATOR == '\\' {
+        rendered = rendered.replace('\\', "/");
+    }
+    if rendered.ends_with('/') {
+        format!("{rendered}**")
+    } else {
+        format!("{rendered}/**")
+    }
 }
 
 fn is_root_like(path: &str) -> bool {
@@ -455,6 +612,8 @@ fn allow(normalized_path: PathBuf, checked_paths: Vec<PathBuf>) -> FilesystemChe
         reason: None,
         normalized_path,
         checked_paths,
+        suggestions: Vec::new(),
+        cause: FilesystemCheckCause::Allowed,
     }
 }
 
@@ -462,6 +621,8 @@ fn ask(
     normalized_path: PathBuf,
     checked_paths: Vec<PathBuf>,
     reason: String,
+    suggestions: Vec<PermissionUpdate>,
+    cause: FilesystemCheckCause,
 ) -> FilesystemCheckResult {
     FilesystemCheckResult {
         allowed: false,
@@ -469,16 +630,24 @@ fn ask(
         reason: Some(reason),
         normalized_path,
         checked_paths,
+        suggestions,
+        cause,
     }
 }
 
-fn deny(normalized_path: PathBuf, reason: String) -> FilesystemCheckResult {
+fn deny(
+    normalized_path: PathBuf,
+    reason: String,
+    cause: FilesystemCheckCause,
+) -> FilesystemCheckResult {
     FilesystemCheckResult {
         allowed: false,
         requires_confirmation: false,
         reason: Some(reason),
         normalized_path,
         checked_paths: Vec::new(),
+        suggestions: Vec::new(),
+        cause,
     }
 }
 
@@ -504,9 +673,8 @@ mod tests {
         let result = assess_filesystem_access(
             "src/main.rs",
             tempdir.path(),
-            &[],
+            &FilesystemAccessOptions::default(),
             FilesystemOperation::Read,
-            None,
         );
         assert!(result.allowed);
     }
@@ -518,12 +686,12 @@ mod tests {
         let result = assess_filesystem_access(
             outside.to_string_lossy().as_ref(),
             tempdir.path(),
-            &[],
+            &FilesystemAccessOptions::default(),
             FilesystemOperation::Read,
-            None,
         );
         assert!(!result.allowed);
         assert!(result.requires_confirmation);
+        assert!(!result.suggestions.is_empty());
     }
 
     #[test]
@@ -536,9 +704,11 @@ mod tests {
         let result = assess_filesystem_access(
             target.to_string_lossy().as_ref(),
             tempdir.path(),
-            std::slice::from_ref(&extra),
+            &FilesystemAccessOptions {
+                additional_dirs: vec![extra],
+                ..FilesystemAccessOptions::default()
+            },
             FilesystemOperation::Read,
-            None,
         );
         assert!(result.allowed);
     }
@@ -550,13 +720,50 @@ mod tests {
         let result = assess_filesystem_access(
             target.to_string_lossy().as_ref(),
             tempdir.path(),
-            &[],
+            &FilesystemAccessOptions::default(),
             FilesystemOperation::Write,
-            None,
         );
         assert!(!result.allowed);
         assert!(result.requires_confirmation);
         assert!(result.reason.is_some());
+    }
+
+    #[test]
+    fn claude_worktrees_are_not_dangerous_auto_edit_path() {
+        let tempdir = tempdir().expect("tempdir");
+        let target = tempdir
+            .path()
+            .join(".claude")
+            .join("worktrees")
+            .join("feature")
+            .join("notes.md");
+        let result = assess_filesystem_access(
+            target.to_string_lossy().as_ref(),
+            tempdir.path(),
+            &FilesystemAccessOptions::default(),
+            FilesystemOperation::Write,
+        );
+        assert!(result.allowed, "{:?}", result.reason);
+    }
+
+    #[test]
+    fn nested_claude_inside_worktree_still_requires_confirmation() {
+        let tempdir = tempdir().expect("tempdir");
+        let target = tempdir
+            .path()
+            .join(".claude")
+            .join("worktrees")
+            .join("feature")
+            .join(".claude")
+            .join("settings.json");
+        let result = assess_filesystem_access(
+            target.to_string_lossy().as_ref(),
+            tempdir.path(),
+            &FilesystemAccessOptions::default(),
+            FilesystemOperation::Write,
+        );
+        assert!(!result.allowed);
+        assert!(result.requires_confirmation);
     }
 
     #[test]
@@ -565,9 +772,8 @@ mod tests {
         let result = assess_filesystem_access(
             "file\0.txt",
             tempdir.path(),
-            &[],
+            &FilesystemAccessOptions::default(),
             FilesystemOperation::Read,
-            None,
         );
         assert!(!result.allowed);
         assert!(!result.requires_confirmation);
@@ -585,11 +791,33 @@ mod tests {
         let result = assess_filesystem_access(
             plan_file.to_string_lossy().as_ref(),
             &workspace,
-            &[],
+            &FilesystemAccessOptions {
+                plan_file: Some(plan_file.clone()),
+                ..FilesystemAccessOptions::default()
+            },
             FilesystemOperation::Write,
-            Some(&plan_file),
         );
         assert!(result.allowed);
+    }
+
+    #[test]
+    fn internal_write_dir_is_allowed_before_dangerous_claude_check() {
+        let tempdir = tempdir().expect("tempdir");
+        let workspace = tempdir.path().join("workspace");
+        let internal = tempdir.path().join(".claude").join("agent-memory");
+        let target = internal.join("reviewer").join("MEMORY.md");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+
+        let result = assess_filesystem_access(
+            target.to_string_lossy().as_ref(),
+            &workspace,
+            &FilesystemAccessOptions {
+                internal_write_dirs: vec![internal],
+                ..FilesystemAccessOptions::default()
+            },
+            FilesystemOperation::Write,
+        );
+        assert!(result.allowed, "{:?}", result.reason);
     }
 
     #[test]
@@ -608,9 +836,8 @@ mod tests {
         let result = assess_filesystem_access(
             link.join("new.txt").to_string_lossy().as_ref(),
             &workspace,
-            &[],
+            &FilesystemAccessOptions::default(),
             FilesystemOperation::Create,
-            None,
         );
         assert!(!result.allowed);
         assert!(result.requires_confirmation);

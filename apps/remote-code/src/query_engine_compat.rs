@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Instant;
 
@@ -358,6 +359,25 @@ fn spawn_runtime_agent_prompt_context_provider(
 ) -> Arc<rc_tools::RuntimeAgentPromptContextProvider> {
     let runtime_identity = build_runtime_identity_context(config);
     let inherited_context = current_runtime_agent_prompt_context();
+    let prompt_settings = rc_runtime_prompt::RuntimePromptSettings::from_config(config);
+    let user_agent_memory_dir =
+        BaseDirs::new().map(|dirs| dirs.home_dir().join(".claude").join("agent-memory"));
+    let mut agent_memory_dirs = inherited_context
+        .as_ref()
+        .map(|context| context.agent_memory_dirs.clone())
+        .unwrap_or_default();
+    agent_memory_dirs.extend([
+        config.original_cwd.join(".claude").join("agent-memory"),
+        config
+            .original_cwd
+            .join(".claude")
+            .join("agent-memory-local"),
+    ]);
+    if let Some(user_agent_memory_dir) = user_agent_memory_dir {
+        agent_memory_dirs.push(user_agent_memory_dir);
+    }
+    agent_memory_dirs.sort();
+    agent_memory_dirs.dedup();
     let context = RuntimeAgentPromptContext {
         user_agents_dir: inherited_context
             .as_ref()
@@ -377,6 +397,17 @@ fn spawn_runtime_agent_prompt_context_provider(
         is_non_interactive: config.print_mode,
         list_via_attachment: runtime_identity.features.agent_listing_delta_enabled,
         runtime_identity,
+        scratchpad_dir: prompt_settings.scratchpad_dir.map(PathBuf::from),
+        session_memory_dir: Some(
+            config
+                .paths
+                .sessions_dir
+                .join(config.session_id.to_string()),
+        ),
+        auto_memory_dir: std::env::var_os("CLAUDE_CODE_REMOTE_MEMORY_DIR")
+            .map(PathBuf::from)
+            .or_else(|| Some(config.paths.profile_dir.join("projects"))),
+        agent_memory_dirs,
     };
     Arc::new(move || context.clone())
 }
@@ -2606,6 +2637,10 @@ mod tests {
             is_non_interactive: false,
             list_via_attachment: true,
             runtime_identity: RuntimeIdentityContext::from_legacy_env(),
+            scratchpad_dir: None,
+            session_memory_dir: None,
+            auto_memory_dir: None,
+            agent_memory_dirs: Vec::new(),
         };
 
         let entry =
