@@ -1,17 +1,19 @@
 mod auto_memory;
 
 use std::collections::HashSet;
+use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use auto_memory::{
     has_valid_cowork_memory_path_override, load_cowork_memory_mechanics_prompt,
-    load_default_memory_prompt,
+    load_default_memory_prompt, sanitize_path_component,
 };
 use chrono::Local;
 use rc_agents::coordinator::{
-    COORDINATOR_MODE_ALLOWED_TOOLS, get_coordinator_system_prompt, is_coordinator_mode,
+    COORDINATOR_MODE_ALLOWED_TOOLS, McpClientInfo as CoordinatorMcpClientInfo,
+    get_coordinator_system_prompt, get_coordinator_user_context, is_coordinator_mode,
 };
 use rc_config::RuntimeConfig;
 use rc_context::RuntimeIdentityContext;
@@ -28,6 +30,8 @@ use rc_tools::{ToolSpec, is_runtime_dynamic_mcp_tool_name};
 
 const MEMORY_INSTRUCTION_PROMPT: &str = "Codebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.";
 const MAX_GIT_STATUS_CHARS: usize = 2000;
+const SCRATCHPAD_FEATURE_KEY: &str = "tengu_scratch";
+const SCRATCHPAD_DIRNAME: &str = "scratchpad";
 
 #[derive(Debug, Clone, Default)]
 pub struct PromptRuntimeOverrides {
@@ -97,21 +101,26 @@ pub struct RuntimePromptSettings {
     pub is_non_interactive: bool,
     pub user_invocable_skills_available: bool,
     pub include_token_budget_prompt: bool,
+    pub scratchpad_enabled: bool,
+    pub scratchpad_dir: Option<String>,
     pub runtime_identity: RuntimeIdentityContext,
 }
 
 impl RuntimePromptSettings {
     #[must_use]
     pub fn from_config(config: &RuntimeConfig) -> Self {
+        let scratchpad = build_runtime_scratchpad_state(config);
         Self {
             language: config.language.clone(),
             output_style: config.output_style.clone(),
             proactive_active: config.proactive_active,
             brief_enabled: config.brief_enabled,
-            mcp_instructions_delta_enabled: true,
+            mcp_instructions_delta_enabled: runtime_mcp_instructions_delta_enabled(),
             is_non_interactive: false,
             user_invocable_skills_available: discover_user_invocable_skills(config),
             include_token_budget_prompt: false,
+            scratchpad_enabled: scratchpad.enabled,
+            scratchpad_dir: scratchpad.dir,
             runtime_identity: RuntimeIdentityContext::from_legacy_env(),
         }
     }
@@ -121,6 +130,12 @@ impl RuntimePromptSettings {
 pub struct RuntimeSystemPrompt {
     pub text: String,
     pub content_blocks: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct RuntimeScratchpadState {
+    enabled: bool,
+    dir: Option<String>,
 }
 
 pub fn runtime_env_truthy(name: &str) -> bool {
@@ -292,7 +307,25 @@ pub fn conversation_with_runtime_user_context(
     conversation: &[ConversationEntry],
     overrides: &PromptRuntimeOverrides,
 ) -> Vec<ConversationEntry> {
-    let context_entries = runtime_user_context_entries(config, overrides);
+    let context_entries = base_runtime_user_context_entries(config, overrides);
+    augment_conversation_with_runtime_user_context(conversation, context_entries)
+}
+
+pub async fn conversation_with_runtime_user_context_with_settings(
+    config: &RuntimeConfig,
+    conversation: &[ConversationEntry],
+    overrides: &PromptRuntimeOverrides,
+    settings: &RuntimePromptSettings,
+) -> Vec<ConversationEntry> {
+    let context_entries =
+        runtime_user_context_entries_with_settings(config, overrides, settings).await;
+    augment_conversation_with_runtime_user_context(conversation, context_entries)
+}
+
+fn augment_conversation_with_runtime_user_context(
+    conversation: &[ConversationEntry],
+    context_entries: Vec<(String, String)>,
+) -> Vec<ConversationEntry> {
     if context_entries.is_empty()
         || conversation.iter().any(|entry| {
             entry.role == ConversationRole::User
@@ -464,8 +497,8 @@ pub async fn build_runtime_system_prompt(
             } else {
                 None
             },
-            scratchpad_enabled: false,
-            scratchpad_dir: None,
+            scratchpad_enabled: settings.scratchpad_enabled,
+            scratchpad_dir: settings.scratchpad_dir.clone(),
             function_result_keep_recent: None,
             include_token_budget_prompt: settings.include_token_budget_prompt,
         },
@@ -701,21 +734,153 @@ fn collect_claude_md_context(cwd: &Path) -> Option<String> {
     }
 }
 
-fn runtime_user_context_entries(
+fn base_runtime_user_context_entries(
     config: &RuntimeConfig,
     overrides: &PromptRuntimeOverrides,
-) -> Vec<(&'static str, String)> {
+) -> Vec<(String, String)> {
     let mut entries = Vec::new();
     if !overrides.omit_claude_md
         && let Some(claude_md) = collect_claude_md_context(&config.cwd)
     {
-        entries.push(("claudeMd", claude_md));
+        entries.push(("claudeMd".to_owned(), claude_md));
     }
     entries.push((
-        "currentDate",
+        "currentDate".to_owned(),
         format!("Today's date is {}.", Local::now().format("%Y-%m-%d")),
     ));
     entries
+}
+
+async fn runtime_user_context_entries_with_settings(
+    config: &RuntimeConfig,
+    overrides: &PromptRuntimeOverrides,
+    settings: &RuntimePromptSettings,
+) -> Vec<(String, String)> {
+    let mut entries = base_runtime_user_context_entries(config, overrides);
+    let mcp_catalog = rc_tools::mcp_catalog::runtime_mcp_catalog().await;
+    let coordinator_mcp_clients = mcp_catalog
+        .clients
+        .into_iter()
+        .map(|client| CoordinatorMcpClientInfo {
+            name: client.server_name,
+        })
+        .collect::<Vec<_>>();
+    entries.extend(get_coordinator_user_context(
+        &coordinator_mcp_clients,
+        settings.scratchpad_dir.as_deref(),
+        runtime_env_truthy("CLAUDE_CODE_SIMPLE"),
+        settings.scratchpad_enabled,
+    ));
+    entries
+}
+
+fn runtime_feature_gate_enabled(feature_key: &str, default: bool) -> bool {
+    let env_suffix = feature_key
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let env_names = [
+        format!("CLAUDE_CODE_FEATURE_{env_suffix}"),
+        format!("REMOTE_CODE_FEATURE_{env_suffix}"),
+        env_suffix,
+    ];
+
+    for env_name in env_names {
+        if runtime_env_truthy(&env_name) {
+            return true;
+        }
+        if runtime_env_defined_falsy(&env_name) {
+            return false;
+        }
+    }
+
+    default
+}
+
+fn runtime_scratchpad_enabled() -> bool {
+    runtime_feature_gate_enabled(SCRATCHPAD_FEATURE_KEY, false)
+}
+
+fn build_runtime_scratchpad_state(config: &RuntimeConfig) -> RuntimeScratchpadState {
+    let tmp_root_override = env::var_os("CLAUDE_CODE_TMPDIR").map(PathBuf::from);
+    build_runtime_scratchpad_state_with(
+        config,
+        runtime_scratchpad_enabled(),
+        tmp_root_override.as_deref(),
+    )
+}
+
+fn build_runtime_scratchpad_state_with(
+    config: &RuntimeConfig,
+    gate_enabled: bool,
+    tmp_root_override: Option<&Path>,
+) -> RuntimeScratchpadState {
+    if !gate_enabled {
+        return RuntimeScratchpadState::default();
+    }
+
+    let scratchpad_dir = runtime_scratchpad_dir(config, tmp_root_override);
+    let _ = ensure_runtime_scratchpad_dir(&scratchpad_dir);
+
+    RuntimeScratchpadState {
+        enabled: true,
+        dir: Some(scratchpad_dir.to_string_lossy().into_owned()),
+    }
+}
+
+fn runtime_scratchpad_dir(config: &RuntimeConfig, tmp_root_override: Option<&Path>) -> PathBuf {
+    runtime_project_temp_dir(config, tmp_root_override)
+        .join(config.session_id.to_string())
+        .join(SCRATCHPAD_DIRNAME)
+}
+
+fn runtime_project_temp_dir(config: &RuntimeConfig, tmp_root_override: Option<&Path>) -> PathBuf {
+    runtime_claude_temp_dir(tmp_root_override).join(sanitize_path_component(
+        &config.original_cwd.to_string_lossy(),
+    ))
+}
+
+fn runtime_claude_temp_dir(tmp_root_override: Option<&Path>) -> PathBuf {
+    let base_tmp_dir = tmp_root_override.map(Path::to_path_buf).unwrap_or_else(|| {
+        if cfg!(windows) {
+            env::temp_dir()
+        } else {
+            PathBuf::from("/tmp")
+        }
+    });
+    let resolved_base_tmp_dir = fs::canonicalize(&base_tmp_dir).unwrap_or(base_tmp_dir);
+    resolved_base_tmp_dir.join(runtime_claude_temp_dir_name())
+}
+
+#[cfg(windows)]
+fn runtime_claude_temp_dir_name() -> String {
+    "claude".to_owned()
+}
+
+#[cfg(not(windows))]
+fn runtime_claude_temp_dir_name() -> String {
+    let uid = env::var("UID")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(0);
+    format!("claude-{uid}")
+}
+
+fn ensure_runtime_scratchpad_dir(path: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
 }
 
 fn detect_git_worktree(cwd: &Path) -> bool {
@@ -770,13 +935,18 @@ fn should_use_global_prompt_cache_scope(config: &RuntimeConfig) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{PromptRuntimeOverrides, RuntimePromptSettings, build_runtime_system_prompt};
+    use super::{
+        PromptRuntimeOverrides, RuntimePromptSettings, build_runtime_scratchpad_state_with,
+        build_runtime_system_prompt, sanitize_path_component,
+        runtime_claude_temp_dir_name, runtime_user_context_entries_with_settings,
+    };
     use rc_config::settings_layers::RuntimeOverrides;
     use rc_config::{ProviderOverrides, load_runtime_config};
     use rc_context::RuntimeIdentityContext;
     use rc_core::{ConversationEntry, InputFormat, OutputFormat, PermissionMode, ProviderProtocol};
     use rc_provider::DiscoveredToolScope;
     use std::fs;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
     use tempfile::tempdir;
 
     fn test_config(explicit_settings: Option<std::path::PathBuf>) -> rc_config::RuntimeConfig {
@@ -821,8 +991,17 @@ mod tests {
             is_non_interactive: false,
             user_invocable_skills_available: false,
             include_token_budget_prompt: false,
+            scratchpad_enabled: false,
+            scratchpad_dir: None,
             runtime_identity: RuntimeIdentityContext::default(),
         }
+    }
+
+    fn coordinator_override_lock() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("coordinator override test lock")
     }
 
     #[tokio::test]
@@ -864,5 +1043,86 @@ mod tests {
 
         assert!(prompt.text.contains("Custom prompt"));
         assert!(!prompt.text.contains("# auto memory"));
+    }
+
+    #[test]
+    fn scratchpad_state_derives_session_directory_from_original_cwd() {
+        let tempdir = tempdir().expect("tempdir");
+        let config = test_config(None);
+
+        let scratchpad = build_runtime_scratchpad_state_with(&config, true, Some(tempdir.path()));
+        let expected = fs::canonicalize(tempdir.path())
+            .unwrap_or_else(|_| tempdir.path().to_path_buf())
+            .join(runtime_claude_temp_dir_name())
+            .join(sanitize_path_component(
+                &config.original_cwd.to_string_lossy(),
+            ))
+            .join(config.session_id.to_string())
+            .join("scratchpad")
+            .to_string_lossy()
+            .into_owned();
+
+        assert!(scratchpad.enabled);
+        assert_eq!(scratchpad.dir.as_deref(), Some(expected.as_str()));
+        assert!(std::path::Path::new(&expected).is_dir());
+    }
+
+    #[tokio::test]
+    async fn runtime_user_context_entries_include_worker_tools_context_when_coordinator_enabled() {
+        let _guard = coordinator_override_lock();
+        rc_agents::coordinator::reset_coordinator_override();
+        rc_agents::coordinator::match_session_mode(Some(
+            rc_agents::coordinator::CoordinatorMode::Coordinator,
+        ));
+
+        let config = test_config(None);
+        let mut settings = test_settings(&config);
+        settings.scratchpad_enabled = true;
+        settings.scratchpad_dir = Some("C:/scratchpad/session".to_owned());
+
+        let entries = runtime_user_context_entries_with_settings(
+            &config,
+            &PromptRuntimeOverrides::default(),
+            &settings,
+        )
+        .await;
+
+        let worker_context = entries
+            .iter()
+            .find(|(key, _)| key == "workerToolsContext")
+            .expect("workerToolsContext entry");
+        assert!(
+            worker_context
+                .1
+                .contains("Workers spawned via the Agent tool")
+        );
+        assert!(
+            worker_context
+                .1
+                .contains("Scratchpad directory: C:/scratchpad/session")
+        );
+
+        rc_agents::coordinator::reset_coordinator_override();
+    }
+
+    #[tokio::test]
+    async fn default_prompt_populates_scratchpad_section_when_enabled() {
+        let config = test_config(None);
+        let mut settings = test_settings(&config);
+        settings.scratchpad_enabled = true;
+        settings.scratchpad_dir = Some("C:/scratchpad/session".to_owned());
+
+        let prompt = build_runtime_system_prompt(
+            &config,
+            &[ConversationEntry::user("test")],
+            &PromptRuntimeOverrides::default(),
+            &settings,
+            &DiscoveredToolScope::default(),
+        )
+        .await
+        .expect("prompt");
+
+        assert!(prompt.text.contains("# Scratchpad Directory"));
+        assert!(prompt.text.contains("C:/scratchpad/session"));
     }
 }

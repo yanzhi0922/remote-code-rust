@@ -37,9 +37,9 @@ use rc_query_engine::{
     QueryEngineConfig, QueryObserver, QueryObserverEvent, ToolRunResult, ToolRunner,
 };
 use rc_runtime_prompt::{
-    PromptRuntimeOverrides, RuntimePromptSettings, conversation_with_runtime_user_context,
-    effective_allowed_tool_names, runtime_agent_listing_delta_enabled,
-    runtime_deferred_tools_delta_enabled, runtime_env_truthy,
+    PromptRuntimeOverrides, RuntimePromptSettings,
+    conversation_with_runtime_user_context_with_settings, effective_allowed_tool_names,
+    runtime_agent_listing_delta_enabled, runtime_deferred_tools_delta_enabled, runtime_env_truthy,
     runtime_mcp_instructions_delta_enabled,
 };
 use rc_session::SessionStore;
@@ -1155,12 +1155,7 @@ fn append_post_compact_plan_mode_reminder(
     }
 }
 
-async fn refresh_runtime_system_prompt(
-    config: &RuntimeConfig,
-    conversation: &mut Vec<ConversationEntry>,
-    overrides: &CompatRunOverrides,
-    discovered_tool_scope: &DiscoveredToolScope,
-) -> Result<()> {
+fn load_query_runtime_prompt_settings(config: &RuntimeConfig) -> Result<RuntimePromptSettings> {
     let prompt_settings = load_runtime_settings(&config.settings_files)?;
     let mut settings = RuntimePromptSettings::from_config(config);
     let runtime_identity = build_runtime_identity_context(config);
@@ -1181,7 +1176,16 @@ async fn refresh_runtime_system_prompt(
         config.print_mode || !matches!(config.output_format, rc_core::OutputFormat::Text);
     settings.include_token_budget_prompt = runtime_identity.features.include_token_budget_prompt;
     settings.runtime_identity = runtime_identity;
+    Ok(settings)
+}
 
+async fn refresh_runtime_system_prompt(
+    config: &RuntimeConfig,
+    conversation: &mut Vec<ConversationEntry>,
+    overrides: &CompatRunOverrides,
+    discovered_tool_scope: &DiscoveredToolScope,
+) -> Result<()> {
+    let settings = load_query_runtime_prompt_settings(config)?;
     rc_runtime_prompt::refresh_runtime_system_prompt(
         config,
         conversation,
@@ -1735,8 +1739,14 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
     inject_plan_mode_runtime_messages(store, config.session_id, conversation)?;
     inject_runtime_delta_messages(config, store, broker.as_ref(), conversation).await?;
     refresh_runtime_system_prompt(config, conversation, &overrides, &discovered_tool_scope).await?;
-    let provider_conversation =
-        conversation_with_runtime_user_context(config, conversation, &overrides);
+    let prompt_settings = load_query_runtime_prompt_settings(config)?;
+    let provider_conversation = conversation_with_runtime_user_context_with_settings(
+        config,
+        conversation,
+        &overrides,
+        &prompt_settings,
+    )
+    .await;
     let existing_messages = provider_conversation
         .iter()
         .cloned()
@@ -3506,6 +3516,61 @@ while True:
             .find(|entry| entry.role == ConversationRole::System)
             .expect("system entry");
         assert!(!system_entry.text.contains("gitStatus:"));
+    }
+
+    #[tokio::test]
+    async fn compat_run_includes_coordinator_worker_tools_context_in_user_reminder() {
+        let _guard = RUNTIME_POLICY_TEST_MUTEX
+            .get_or_init(|| AsyncMutex::new(()))
+            .lock()
+            .await;
+        rc_agents::coordinator::reset_coordinator_override();
+        rc_agents::coordinator::match_session_mode(Some(
+            rc_agents::coordinator::CoordinatorMode::Coordinator,
+        ));
+
+        let (_tempdir, config, store) = mock_config_and_store();
+        let discovery = RuntimeHookDiscovery::default();
+        let mut conversation = initialize_conversation(&store, &config, Some("coordinate this"))
+            .expect("conversation");
+        let mut hook_state = HookRunState::load(&store, config.session_id).expect("hook state");
+        let backend = Arc::new(RecordingBackend::default());
+
+        run_prompt_with_query_engine_compat_overrides(
+            &config,
+            &store,
+            backend.clone(),
+            DiscoveredToolScope::default(),
+            mock_broker(&config),
+            None,
+            &discovery,
+            &mut hook_state,
+            &mut conversation,
+            "coordinate this",
+            CompatRunOverrides::default(),
+        )
+        .await
+        .expect("compat run");
+
+        let calls = backend.conversations.lock().expect("recording lock");
+        let first_call = calls.first().expect("provider call");
+        let user_context = first_call
+            .iter()
+            .find(|entry| {
+                entry.role == ConversationRole::User
+                    && entry.text.contains(
+                        "As you answer the user's questions, you can use the following context:",
+                    )
+            })
+            .expect("runtime user context");
+        assert!(user_context.text.contains("workerToolsContext"));
+        assert!(
+            user_context
+                .text
+                .contains("Workers spawned via the Agent tool")
+        );
+
+        rc_agents::coordinator::reset_coordinator_override();
     }
 
     #[tokio::test]

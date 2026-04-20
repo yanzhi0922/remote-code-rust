@@ -467,7 +467,7 @@ fn git_absolute_path(cwd: &Path, args: &[&str]) -> Option<PathBuf> {
     Some(PathBuf::from(value))
 }
 
-fn sanitize_path_component(raw: &str) -> String {
+pub(crate) fn sanitize_path_component(raw: &str) -> String {
     let sanitized = raw
         .chars()
         .map(|ch| ch.is_ascii_alphanumeric().then_some(ch).unwrap_or('-'))
@@ -484,11 +484,32 @@ fn sanitize_path_component(raw: &str) -> String {
 }
 
 fn simple_hash(raw: &str) -> String {
-    let mut hash: u32 = 5381;
-    for byte in raw.bytes() {
-        hash = hash.wrapping_mul(33).wrapping_add(u32::from(byte));
+    let mut hash: i32 = 0;
+    for ch in raw.chars() {
+        hash = hash
+            .wrapping_shl(5)
+            .wrapping_sub(hash)
+            .wrapping_add(ch as i32);
     }
-    hash.to_string()
+    to_base36(i64::from(hash).unsigned_abs())
+}
+
+fn to_base36(mut value: u64) -> String {
+    if value == 0 {
+        return "0".to_owned();
+    }
+
+    let mut digits = Vec::new();
+    while value > 0 {
+        let rem = (value % 36) as u8;
+        let digit = match rem {
+            0..=9 => char::from(b'0' + rem),
+            _ => char::from(b'a' + (rem - 10)),
+        };
+        digits.push(digit);
+        value /= 36;
+    }
+    digits.into_iter().rev().collect()
 }
 
 fn with_trailing_separator(path: PathBuf) -> String {
