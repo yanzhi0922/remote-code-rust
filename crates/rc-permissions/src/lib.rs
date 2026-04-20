@@ -80,8 +80,8 @@ pub use decision::{
 pub use denial_tracking::{DenialTracker, SharedDenialTracker};
 pub use explainer::explain_permission;
 pub use filesystem::{
-    FilesystemCheckResult, FilesystemOperation, assess_filesystem_access,
-    check_filesystem_permission, get_paths_for_permission_check,
+    FilesystemAccessOptions, FilesystemCheckCause, FilesystemCheckResult, FilesystemOperation,
+    assess_filesystem_access, check_filesystem_permission, get_paths_for_permission_check,
 };
 pub use handler::{
     CoordinatorHandler, InteractiveHandler, PermissionCheckContext, PermissionHandler,
@@ -129,6 +129,8 @@ pub struct PermissionRequest {
     pub description: Option<String>,
     /// Optional blocked path (set when a path violation is detected).
     pub blocked_path: Option<String>,
+    /// Suggested permission updates surfaced to SDK/headless clients.
+    pub permission_suggestions: Vec<serde_json::Value>,
 }
 
 impl PermissionRequest {
@@ -144,6 +146,7 @@ impl PermissionRequest {
 pub struct PermissionDecision {
     pub allowed: bool,
     pub message: Option<String>,
+    pub permission_suggestions: Vec<serde_json::Value>,
 }
 
 impl PermissionDecision {
@@ -151,6 +154,7 @@ impl PermissionDecision {
         Self {
             allowed: true,
             message: None,
+            permission_suggestions: Vec::new(),
         }
     }
 
@@ -158,6 +162,7 @@ impl PermissionDecision {
         Self {
             allowed: false,
             message: Some(message.into()),
+            permission_suggestions: Vec::new(),
         }
     }
 }
@@ -167,6 +172,10 @@ impl PermissionDecision {
 pub trait PermissionBroker: Send + Sync {
     /// Decide whether to allow or deny a permission request.
     async fn decide(&self, request: PermissionRequest) -> PermissionDecision;
+    /// Decide while forcing an interactive confirmation when supported.
+    async fn decide_forced_prompt(&self, request: PermissionRequest) -> PermissionDecision {
+        self.decide(request).await
+    }
     /// Add a session-scoped rule.
     fn add_session_rule(&self, _action: RuleAction, _tool_pattern: String) -> Result<()> {
         Ok(())
@@ -186,6 +195,10 @@ pub trait PermissionBroker: Send + Sync {
     /// Return the layered rules, if this broker has any.
     fn layered_rules(&self) -> Vec<SourceAwarePermissionRule> {
         Vec::new()
+    }
+    /// Return the first matching rule action, if the broker has layered rules.
+    fn matching_rule_action(&self, _request: &PermissionRequest) -> Option<RuleAction> {
+        None
     }
 }
 
@@ -277,49 +290,49 @@ impl<B: PermissionBroker> LayeredPermissionBroker<B> {
             .unwrap_or_else(|e| e.into_inner())
             .push(record);
     }
+
+    fn matching_rule(&self, request: &PermissionRequest) -> Option<SourceAwarePermissionRule> {
+        {
+            let session = self.session_rules.read().unwrap_or_else(|e| e.into_inner());
+            if let Some(rule) = session
+                .iter()
+                .find(|rule| shell_rules::rule_matches_request(&rule.tool_pattern, request))
+            {
+                return Some(rule.clone());
+            }
+        }
+
+        self.rules
+            .iter()
+            .find(|rule| shell_rules::rule_matches_request(&rule.tool_pattern, request))
+            .cloned()
+    }
 }
 
 #[async_trait]
 impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissionBroker<B> {
     async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
-        // Check session rules first (highest priority)
-        {
-            let session = self.session_rules.read().unwrap_or_else(|e| e.into_inner());
-            for rule in session.iter() {
-                if shell_rules::rule_matches_request(&rule.tool_pattern, &request) {
-                    return match rule.action {
-                        RuleAction::Allow => PermissionDecision::allow(),
-                        RuleAction::Deny => PermissionDecision::deny(format!(
-                            "Denied by session rule: {}",
-                            rule.tool_pattern
-                        )),
-                        RuleAction::Ask => continue,
-                    };
-                }
-            }
-        }
-
-        // Check persistent rules
-        for rule in &self.rules {
-            if shell_rules::rule_matches_request(&rule.tool_pattern, &request) {
-                self.push_audit(PermissionAuditRecord {
-                    tool_name: request.tool_name.clone(),
-                    tool_use_id: String::new(),
-                    source: Some(rule.source),
-                    matched_pattern: Some(rule.tool_pattern.clone()),
-                    action: rule.action,
-                    final_allowed: rule.action == RuleAction::Allow,
-                    reason: None,
-                });
-                return match rule.action {
-                    RuleAction::Allow => PermissionDecision::allow(),
-                    RuleAction::Deny => PermissionDecision::deny(format!(
+        if let Some(rule) = self.matching_rule(&request) {
+            self.push_audit(PermissionAuditRecord {
+                tool_name: request.tool_name.clone(),
+                tool_use_id: String::new(),
+                source: Some(rule.source),
+                matched_pattern: Some(rule.tool_pattern.clone()),
+                action: rule.action,
+                final_allowed: rule.action == RuleAction::Allow,
+                reason: None,
+            });
+            return match rule.action {
+                RuleAction::Allow => PermissionDecision::allow(),
+                RuleAction::Deny => PermissionDecision::deny(match rule.source {
+                    RuleSource::Session => format!("Denied by session rule: {}", rule.tool_pattern),
+                    _ => format!(
                         "Denied by rule from {:?}: {}",
                         rule.source, rule.tool_pattern
-                    )),
-                    RuleAction::Ask => continue,
-                };
-            }
+                    ),
+                }),
+                RuleAction::Ask => self.fallback.decide_forced_prompt(request).await,
+            };
         }
 
         // Fall back to the inner broker
@@ -354,11 +367,22 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
     }
 
     fn layered_rules(&self) -> Vec<SourceAwarePermissionRule> {
-        self.rules.clone()
+        let session = self
+            .session_rules
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let mut combined = session;
+        combined.extend(self.rules.clone());
+        combined
     }
 
     fn mode(&self) -> Option<rc_core::PermissionMode> {
         self.fallback.mode()
+    }
+
+    fn matching_rule_action(&self, request: &PermissionRequest) -> Option<RuleAction> {
+        self.matching_rule(request).map(|rule| rule.action)
     }
 }
 
@@ -500,6 +524,7 @@ mod tests {
             title: None,
             description: None,
             blocked_path: None,
+            permission_suggestions: Vec::new(),
         }));
         assert!(decision.allowed);
         Ok(())
@@ -518,6 +543,7 @@ mod tests {
             title: None,
             description: None,
             blocked_path: None,
+            permission_suggestions: Vec::new(),
         }));
         assert!(!decision.allowed);
         Ok(())
@@ -537,6 +563,7 @@ mod tests {
             title: None,
             description: None,
             blocked_path: None,
+            permission_suggestions: Vec::new(),
         }));
         assert!(decision.allowed);
         Ok(())
@@ -561,6 +588,7 @@ mod tests {
             title: None,
             description: None,
             blocked_path: None,
+            permission_suggestions: Vec::new(),
         }));
         assert!(!decision.allowed);
         Ok(())
@@ -585,6 +613,7 @@ mod tests {
             title: None,
             description: None,
             blocked_path: None,
+            permission_suggestions: Vec::new(),
         }));
         assert!(decision.allowed);
         Ok(())
@@ -609,6 +638,7 @@ mod tests {
             title: None,
             description: None,
             blocked_path: None,
+            permission_suggestions: Vec::new(),
         }));
         let denied = rt.block_on(layered.decide(PermissionRequest {
             tool_name: "read_file".to_owned(),
@@ -619,6 +649,7 @@ mod tests {
             title: None,
             description: None,
             blocked_path: None,
+            permission_suggestions: Vec::new(),
         }));
 
         assert!(allowed.allowed);
@@ -667,6 +698,7 @@ mod tests {
             title: None,
             description: None,
             blocked_path: None,
+            permission_suggestions: Vec::new(),
         };
         assert_eq!(request.resolved_permission_class(), PermissionClass::Bash);
     }
@@ -693,6 +725,7 @@ mod tests {
             title: None,
             description: None,
             blocked_path: None,
+            permission_suggestions: Vec::new(),
         }));
         assert!(!decision.allowed);
         Ok(())
@@ -728,6 +761,7 @@ mod tests {
             title: None,
             description: None,
             blocked_path: None,
+            permission_suggestions: Vec::new(),
         }));
         let records = layered.audit_records();
         assert_eq!(records.len(), 1);

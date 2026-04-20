@@ -449,6 +449,7 @@ async fn resolve_pending_permission<W: Write + Send>(
         let _ = sender.send(PermissionDecision {
             allowed: allow,
             message,
+            permission_suggestions: Vec::new(),
         });
         let mut emitter = emitter.lock().await;
         emitter.emit_state(SessionState::Running)?;
@@ -481,14 +482,14 @@ impl PermissionBroker for ChannelPermissionFallbackBroker {
         let mode = self.controller.current_mode();
 
         // Auto-approve in bypass-permissions mode (all tools).
-        if matches!(mode, PermissionMode::BypassPermissions) {
+        if matches!(mode, PermissionMode::BypassPermissions) && request.blocked_path.is_none() {
             return PermissionDecision::allow();
         }
 
         // Auto-approve in dont-ask mode when the tool class is auto-allowed.
         if matches!(mode, PermissionMode::DontAsk) {
             let class = rc_permissions::classify_tool(&request.tool_name);
-            if rc_permissions::auto_allows(mode, class) {
+            if request.blocked_path.is_none() && rc_permissions::auto_allows(mode, class) {
                 return PermissionDecision::allow();
             }
         }
@@ -496,7 +497,7 @@ impl PermissionBroker for ChannelPermissionFallbackBroker {
         // Auto-approve file edits in accept-edits mode.
         if matches!(mode, PermissionMode::AcceptEdits) {
             let class = rc_permissions::classify_tool(&request.tool_name);
-            if rc_permissions::auto_allows(mode, class) {
+            if request.blocked_path.is_none() && rc_permissions::auto_allows(mode, class) {
                 return PermissionDecision::allow();
             }
         }
@@ -507,7 +508,16 @@ impl PermissionBroker for ChannelPermissionFallbackBroker {
             );
         }
 
-        // Default mode: emit permission request and wait for external response.
+        self.prompt(request).await
+    }
+
+    async fn decide_forced_prompt(&self, request: PermissionRequest) -> PermissionDecision {
+        self.prompt(request).await
+    }
+}
+
+impl ChannelPermissionFallbackBroker {
+    async fn prompt(&self, request: PermissionRequest) -> PermissionDecision {
         let request_id = Uuid::new_v4().to_string();
         let (tx, rx) = oneshot::channel();
         self.pending_permissions
@@ -527,7 +537,7 @@ impl PermissionBroker for ChannelPermissionFallbackBroker {
                 description: request.description.unwrap_or_default(),
                 input: request.tool_input.clone(),
                 blocked_path: request.blocked_path,
-                permission_suggestions: Vec::new(),
+                permission_suggestions: request.permission_suggestions,
             }) {
                 warn!("failed to emit permission request: {error}");
             }
@@ -623,8 +633,8 @@ mod tests {
     use std::collections::HashMap;
     use std::fs;
     use std::io::{BufRead, BufReader};
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex as StdMutex};
 
     use anyhow::{Result, anyhow};
     use rc_config::{ProviderOverrides, RuntimeConfig, RuntimeOverrides, load_runtime_config};
@@ -632,7 +642,10 @@ mod tests {
         ConversationEntry, InputFormat, OutputFormat, PermissionMode, ProviderProtocol,
         ProviderResponse, SubAgentCompletion, UsageSummary,
     };
-    use rc_permissions::{LayeredPermissionBroker, PermissionBroker, StaticPermissionBroker};
+    use rc_permissions::{
+        LayeredPermissionBroker, PermissionBroker, PermissionDecision, PermissionRequest,
+        StaticPermissionBroker,
+    };
     use rc_provider::{ConversationBackend, StreamingCallbacks};
     use rc_session::SessionStore;
     use serde_json::Value;
@@ -803,6 +816,73 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct SuggestionCaptureBroker {
+        captured: Arc<StdMutex<Vec<PermissionRequest>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl PermissionBroker for SuggestionCaptureBroker {
+        async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
+            self.captured
+                .lock()
+                .expect("captured requests")
+                .push(request);
+            PermissionDecision::deny("permission denied")
+        }
+    }
+
+    struct ToolCallingBackend {
+        outside_path: String,
+        turn: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl ConversationBackend for ToolCallingBackend {
+        async fn complete(&self, _conversation: &[ConversationEntry]) -> Result<ProviderResponse> {
+            let turn = self.turn.fetch_add(1, Ordering::SeqCst);
+            if turn == 0 {
+                Ok(ProviderResponse {
+                    text: String::new(),
+                    history_text: None,
+                    thinking: None,
+                    content_blocks: Vec::new(),
+                    tool_calls: vec![rc_core::ToolCall {
+                        id: "tool-read-outside".to_owned(),
+                        name: "read_file".to_owned(),
+                        input: serde_json::json!({"path": self.outside_path}),
+                    }],
+                    request_id: None,
+                    usage: UsageSummary::default(),
+                    stop_reason: "tool_use".to_owned(),
+                })
+            } else {
+                Ok(ProviderResponse {
+                    text: "done".to_owned(),
+                    history_text: None,
+                    thinking: None,
+                    content_blocks: Vec::new(),
+                    tool_calls: Vec::new(),
+                    request_id: None,
+                    usage: UsageSummary::default(),
+                    stop_reason: "end_turn".to_owned(),
+                })
+            }
+        }
+
+        async fn complete_streaming(
+            &self,
+            conversation: &[ConversationEntry],
+            _callbacks: Option<StreamingCallbacks>,
+        ) -> Result<ProviderResponse> {
+            self.complete(conversation).await
+        }
+
+        fn sub_agent_completion(&self) -> Arc<dyn SubAgentCompletion> {
+            Arc::new(DummySubAgentCompletion)
+        }
+    }
+
     #[tokio::test]
     async fn headless_default_compat_path_emits_stream_json_message_events_and_result() {
         let (_tempdir, mut config, store) = mock_config_and_store();
@@ -960,5 +1040,47 @@ mod tests {
         assert_eq!(events[0]["type"], "system");
         assert_eq!(events[0]["subtype"], "session_state_changed");
         assert_eq!(events[0]["state"], "running");
+    }
+
+    #[tokio::test]
+    async fn headless_permission_request_preserves_suggestions() {
+        let (_tempdir, mut config, store) = mock_config_and_store();
+        let outside = config.cwd.parent().expect("parent").join("outside.txt");
+        fs::write(&outside, "secret").expect("outside file");
+        config.include_partial_messages = true;
+        let mut conversation =
+            initialize_conversation(&store, &config, Some("streaming")).expect("conversation");
+        let mut hook_state = HookRunState::load(&store, config.session_id).expect("hook state");
+        let output = NamedTempFile::new().expect("protocol output");
+        let emitter = Arc::new(Mutex::new(ProtocolEmitter::new(
+            output.reopen().expect("reopen output"),
+            config.session_id,
+        )));
+        let captured = Arc::new(StdMutex::new(Vec::new()));
+
+        run_headless_prompt_once(
+            Arc::clone(&emitter),
+            &config,
+            &store,
+            Arc::new(ToolCallingBackend {
+                outside_path: outside.to_string_lossy().into_owned(),
+                turn: AtomicUsize::new(0),
+            }),
+            rc_provider::DiscoveredToolScope::default(),
+            Arc::new(SuggestionCaptureBroker {
+                captured: captured.clone(),
+            }),
+            &RuntimeHookDiscovery::default(),
+            &mut hook_state,
+            &mut conversation,
+            "streaming",
+        )
+        .await
+        .expect("headless prompt should succeed");
+
+        drop(emitter);
+        let requests = captured.lock().expect("captured");
+        assert_eq!(requests.len(), 1);
+        assert!(!requests[0].permission_suggestions.is_empty());
     }
 }

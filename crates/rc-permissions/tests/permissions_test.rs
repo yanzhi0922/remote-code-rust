@@ -87,6 +87,7 @@ async fn static_broker_allow_all_permits_read() {
             title: None,
             description: None,
             blocked_path: None,
+            permission_suggestions: Vec::new(),
         })
         .await;
     assert!(decision.allowed);
@@ -105,6 +106,7 @@ async fn static_broker_deny_all_rejects_edit() {
             title: None,
             description: None,
             blocked_path: None,
+            permission_suggestions: Vec::new(),
         })
         .await;
     assert!(!decision.allowed);
@@ -123,6 +125,7 @@ async fn static_broker_allow_all_permits_bash() {
             title: None,
             description: None,
             blocked_path: None,
+            permission_suggestions: Vec::new(),
         })
         .await;
     assert!(decision.allowed);
@@ -144,6 +147,7 @@ async fn layered_broker_falls_through_to_fallback() {
             title: None,
             description: None,
             blocked_path: None,
+            permission_suggestions: Vec::new(),
         })
         .await;
     assert!(decision.allowed);
@@ -168,6 +172,7 @@ async fn layered_broker_deny_rule_overrides_fallback() {
             title: None,
             description: None,
             blocked_path: None,
+            permission_suggestions: Vec::new(),
         })
         .await;
     assert!(!decision.allowed);
@@ -192,6 +197,7 @@ async fn layered_broker_allow_rule_overrides_deny_fallback() {
             title: None,
             description: None,
             blocked_path: None,
+            permission_suggestions: Vec::new(),
         })
         .await;
     assert!(decision.allowed);
@@ -219,6 +225,7 @@ async fn layered_broker_session_rule_highest_priority() -> anyhow::Result<()> {
             title: None,
             description: None,
             blocked_path: None,
+            permission_suggestions: Vec::new(),
         })
         .await;
     assert!(!decision.allowed);
@@ -255,6 +262,7 @@ async fn layered_broker_tracks_audit_records() {
             title: None,
             description: None,
             blocked_path: None,
+            permission_suggestions: Vec::new(),
         })
         .await;
     let records = layered.audit_records();

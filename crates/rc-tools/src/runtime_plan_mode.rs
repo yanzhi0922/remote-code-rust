@@ -348,7 +348,8 @@ struct DynamicPermissionFallbackBroker {
 impl PermissionBroker for DynamicPermissionFallbackBroker {
     async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
         let mode = self.controller.current_mode();
-        if auto_allows(mode, request.resolved_permission_class()) {
+        if request.blocked_path.is_none() && auto_allows(mode, request.resolved_permission_class())
+        {
             return PermissionDecision::allow();
         }
         PermissionDecision::deny("Permission denied by runtime broker")
@@ -816,6 +817,7 @@ mod tests {
             title: None,
             description: None,
             blocked_path: None,
+            permission_suggestions: Vec::new(),
         }
     }
 
