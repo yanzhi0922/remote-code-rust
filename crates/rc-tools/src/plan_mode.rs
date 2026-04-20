@@ -77,14 +77,28 @@ pub struct PlanModeRuntimeSnapshot {
     pub plan_file_path: Option<PathBuf>,
 }
 
+/// Normalized `ExitPlanMode` input after runtime/API-side plan injection.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExitPlanModeInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_file_path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_prompts: Vec<AllowedPrompt>,
+}
+
+/// Prompt-based permission requested by a plan-mode exit.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AllowedPrompt {
+    pub tool: String,
+    pub prompt: String,
+}
+
 /// Host-owned runtime seam for real plan-mode state transitions.
 pub trait PlanModeRuntime: Send + Sync {
     fn enter_plan_mode(&self, objective: &str) -> Result<String>;
-    fn exit_plan_mode(
-        &self,
-        plan_summary: Option<&str>,
-        steps_planned: &[String],
-    ) -> Result<String>;
+    fn exit_plan_mode(&self, input: ExitPlanModeInput) -> Result<String>;
     fn snapshot(&self) -> PlanModeRuntimeSnapshot;
 
     fn persist_plan_snapshot(&self) -> Result<()> {
@@ -146,22 +160,23 @@ pub fn enter_plan_mode(input: &Value, _context: &ToolExecutionContext) -> Result
 /// # Errors
 /// Returns an error if the host runtime rejects the transition.
 pub fn exit_plan_mode(input: &Value, _context: &ToolExecutionContext) -> Result<String> {
-    let plan_summary = input.get("plan_summary").and_then(Value::as_str);
-    let steps_planned = input["steps_planned"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let normalized = parse_exit_plan_mode_input(input);
 
     if let Some(runtime) = current_runtime() {
-        return runtime.exit_plan_mode(plan_summary, &steps_planned);
+        return runtime.exit_plan_mode(normalized);
     }
 
-    Ok("Exited plan mode. You can now proceed with implementation.".to_owned())
+    Ok(render_exit_plan_mode_result(&ExitPlanModeToolResult {
+        plan: normalized.plan,
+        file_path: normalized
+            .plan_file_path
+            .map(|path| path.display().to_string()),
+        is_agent: false,
+        has_task_tool: false,
+        plan_was_edited: false,
+        awaiting_leader_approval: false,
+        request_id: None,
+    }))
 }
 
 /// Inject the current plan content into any `exit_plan_mode` tool call before
@@ -186,6 +201,9 @@ pub fn normalize_exit_plan_mode_tool_calls(tool_calls: &mut [ToolCall]) {
         };
         input
             .entry("plan_file_path".to_owned())
+            .or_insert_with(|| Value::String(plan_file_path_string.clone()));
+        input
+            .entry("planFilePath".to_owned())
             .or_insert_with(|| Value::String(plan_file_path_string.clone()));
         if let Some(plan_content) = plan_content.as_ref() {
             input
@@ -296,6 +314,103 @@ fn normalize_path(path: impl Into<PathBuf>) -> PathBuf {
     normalized
 }
 
+fn parse_exit_plan_mode_input(input: &Value) -> ExitPlanModeInput {
+    let plan = input
+        .get("plan")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let plan_file_path = input
+        .get("planFilePath")
+        .or_else(|| input.get("plan_file_path"))
+        .and_then(Value::as_str)
+        .map(PathBuf::from);
+    let allowed_prompts = input
+        .get("allowedPrompts")
+        .or_else(|| input.get("allowed_prompts"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let tool = item.get("tool")?.as_str()?.trim();
+                    let prompt = item.get("prompt")?.as_str()?.trim();
+                    if tool.is_empty() || prompt.is_empty() {
+                        None
+                    } else {
+                        Some(AllowedPrompt {
+                            tool: tool.to_owned(),
+                            prompt: prompt.to_owned(),
+                        })
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    ExitPlanModeInput {
+        plan,
+        plan_file_path,
+        allowed_prompts,
+    }
+}
+
+/// Data returned by the host runtime and rendered like the upstream
+/// `mapToolResultToToolResultBlockParam` contract.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExitPlanModeToolResult {
+    pub plan: Option<String>,
+    pub file_path: Option<String>,
+    #[serde(default)]
+    pub is_agent: bool,
+    #[serde(default)]
+    pub has_task_tool: bool,
+    #[serde(default)]
+    pub plan_was_edited: bool,
+    #[serde(default)]
+    pub awaiting_leader_approval: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+}
+
+#[must_use]
+pub fn render_exit_plan_mode_result(result: &ExitPlanModeToolResult) -> String {
+    if result.awaiting_leader_approval {
+        let file_path = result.file_path.as_deref().unwrap_or("(missing)");
+        let request_id = result.request_id.as_deref().unwrap_or("(missing)");
+        return format!(
+            "Your plan has been submitted to the team lead for approval.\n\nPlan file: {file_path}\n\n**What happens next:**\n1. Wait for the team lead to review your plan\n2. You will receive a message in your inbox with approval/rejection\n3. If approved, you can proceed with implementation\n4. If rejected, refine your plan based on the feedback\n\n**Important:** Do NOT proceed until you receive approval. Check your inbox for response.\n\nRequest ID: {request_id}"
+        );
+    }
+
+    if result.is_agent {
+        return "User has approved the plan. There is nothing else needed from you now. Please respond with \"ok\"".to_owned();
+    }
+
+    let Some(plan) = result
+        .plan
+        .as_deref()
+        .filter(|plan| !plan.trim().is_empty())
+    else {
+        return "User has approved exiting plan mode. You can now proceed.".to_owned();
+    };
+
+    let file_path = result.file_path.as_deref().unwrap_or("(missing)");
+    let team_hint = if result.has_task_tool {
+        "\n\nIf this plan can be broken down into multiple independent tasks, consider using the TeamCreate tool to create a team and parallelize the work."
+    } else {
+        ""
+    };
+    let plan_label = if result.plan_was_edited {
+        "Approved Plan (edited by user)"
+    } else {
+        "Approved Plan"
+    };
+
+    format!(
+        "User has approved your plan. You can now start coding. Start with updating your todo list if applicable\n\nYour plan has been saved to: {file_path}\nYou can refer back to it if needed during implementation.{team_hint}\n\n## {plan_label}:\n{plan}"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,14 +436,10 @@ mod tests {
             ))
         }
 
-        fn exit_plan_mode(
-            &self,
-            plan_summary: Option<&str>,
-            _steps_planned: &[String],
-        ) -> Result<String> {
+        fn exit_plan_mode(&self, input: ExitPlanModeInput) -> Result<String> {
             Ok(format!(
                 "Exited plan mode.\nSummary: {}",
-                plan_summary.unwrap_or("(none)")
+                input.plan.as_deref().unwrap_or("(none)")
             ))
         }
 
@@ -504,10 +615,40 @@ mod tests {
             Some(plan_path.to_string_lossy().as_ref())
         );
         assert_eq!(
+            tool_calls[0].input["planFilePath"].as_str(),
+            Some(plan_path.to_string_lossy().as_ref())
+        );
+        assert_eq!(
             tool_calls[0].input["plan"].as_str(),
             Some("# Plan\n- inspect\n")
         );
 
         configure_plan_mode_runtime(None).expect("clear runtime");
+    }
+
+    #[test]
+    fn exit_plan_mode_result_matches_research_empty_plan_contract() {
+        let content = render_exit_plan_mode_result(&ExitPlanModeToolResult::default());
+        assert_eq!(
+            content,
+            "User has approved exiting plan mode. You can now proceed."
+        );
+    }
+
+    #[test]
+    fn exit_plan_mode_result_matches_research_approved_plan_contract() {
+        let content = render_exit_plan_mode_result(&ExitPlanModeToolResult {
+            plan: Some("# Plan\n- implement".to_owned()),
+            file_path: Some("/tmp/plan.md".to_owned()),
+            is_agent: false,
+            has_task_tool: true,
+            plan_was_edited: true,
+            awaiting_leader_approval: false,
+            request_id: None,
+        });
+        assert!(content.contains("User has approved your plan. You can now start coding."));
+        assert!(content.contains("Your plan has been saved to: /tmp/plan.md"));
+        assert!(content.contains("consider using the TeamCreate tool"));
+        assert!(content.contains("## Approved Plan (edited by user):\n# Plan\n- implement"));
     }
 }

@@ -477,7 +477,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::plan_mode::{self, PlanModeRuntime, PlanModeRuntimeSnapshot};
+    use crate::plan_mode::{self, ExitPlanModeInput, PlanModeRuntime, PlanModeRuntimeSnapshot};
 
     static FILE_OPS_TEST_MUTEX: Lazy<std::sync::Mutex<()>> =
         Lazy::new(|| std::sync::Mutex::new(()));
@@ -492,11 +492,7 @@ mod tests {
             Ok(String::new())
         }
 
-        fn exit_plan_mode(
-            &self,
-            _plan_summary: Option<&str>,
-            _steps_planned: &[String],
-        ) -> Result<String> {
+        fn exit_plan_mode(&self, _input: ExitPlanModeInput) -> Result<String> {
             Ok(String::new())
         }
 

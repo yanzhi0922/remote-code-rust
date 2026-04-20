@@ -485,12 +485,18 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "plan": {"type": "string"},
-                    "plan_file_path": {"type": "string"},
-                    "plan_summary": {"type": "string"},
-                    "steps_planned": {
+                    "allowedPrompts": {
                         "type": "array",
-                        "items": {"type": "string"}
+                        "description": "Prompt-based permissions needed to implement the plan. These describe categories of actions rather than specific commands.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "tool": {"type": "string", "enum": ["Bash"], "description": "The tool this prompt applies to"},
+                                "prompt": {"type": "string", "description": "Semantic description of the action, e.g. \"run tests\", \"install dependencies\""}
+                            },
+                            "required": ["tool", "prompt"],
+                            "additionalProperties": false
+                        }
                     }
                 },
                 "additionalProperties": false,
