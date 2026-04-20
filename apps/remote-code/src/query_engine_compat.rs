@@ -29,7 +29,7 @@ use rc_mcp::normalization::{build_mcp_tool_name, mcp_info_from_string};
 use rc_mcp::serialization::{McpCliState, SerializedClient, SerializedTool};
 use rc_permissions::PermissionBroker;
 use rc_protocol::UsagePayload;
-use rc_provider::{ConversationBackend, DiscoveredToolScope};
+use rc_provider::{ConversationBackend, DiscoveredToolScope, provider_runtime_tool_specs_for_request};
 use rc_query_engine::{
     EffortLevel, ProcessUserInputContext, ProviderInvocationMode, QueryCheckpointKind, QueryEngine,
     QueryEngineConfig, QueryObserver, QueryObserverEvent, ToolRunResult, ToolRunner,
@@ -1756,8 +1756,13 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         event_sink: event_sink.clone(),
         include_partial_messages: config.include_partial_messages,
     });
-    let expanded_allowed_tools =
-        effective_allowed_tool_names(&overrides, &runtime_provider_tool_specs().await);
+    let visible_tool_specs = provider_runtime_tool_specs_for_request(
+        &config.provider,
+        conversation,
+        &discovered_tool_scope.snapshot(),
+    )
+    .await;
+    let expanded_allowed_tools = effective_allowed_tool_names(&overrides, &visible_tool_specs);
     let tool_runner = Arc::new(CompatToolRunner {
         config: config.clone(),
         store: compat_store.clone(),
