@@ -108,6 +108,14 @@ pub use message::{
     ChatMessage, McpServerStatus, MessageRole, ModelInfo, PermissionRequest, StatusBarInfo,
     ToolCallInfo,
 };
+
+fn config_prompt_runtime_overrides(config: &RuntimeConfig) -> PromptRuntimeOverrides {
+    PromptRuntimeOverrides {
+        system_prompt: config.system_prompt.clone(),
+        append_system_prompt: config.append_system_prompt.clone(),
+        ..PromptRuntimeOverrides::default()
+    }
+}
 pub use style::StyleConfig;
 pub use vim::{VimAction, VimMode, VimStateMachine};
 
@@ -185,10 +193,11 @@ pub async fn run_tui_app(mut config: RuntimeConfig, store: &SessionStore) -> Res
     let context_manager = ContextWindowManager::for_model(model_name);
     let cost_tracker = CostTracker::new();
     let mut conversation = load_or_create_conversation(store, &config)?;
+    let prompt_overrides = config_prompt_runtime_overrides(&config);
     refresh_runtime_system_prompt(
         &config,
         &mut conversation,
-        &PromptRuntimeOverrides::default(),
+        &prompt_overrides,
         &backend.discovered_tool_scope(),
     )
     .await?;
@@ -374,10 +383,11 @@ pub async fn run_tui_app(mut config: RuntimeConfig, store: &SessionStore) -> Res
                         install_plan_mode_runtime(plan_mode_controller.clone())?;
                     session_hooks = discover_runtime_session_hooks(&config);
                     conversation = load_or_create_conversation(store, &config)?;
+                    let prompt_overrides = config_prompt_runtime_overrides(&config);
                     if let Err(error) = refresh_runtime_system_prompt(
                         &config,
                         &mut conversation,
-                        &PromptRuntimeOverrides::default(),
+                        &prompt_overrides,
                         &backend.discovered_tool_scope(),
                     )
                     .await
@@ -672,7 +682,7 @@ async fn run_conversation_turn(
         refresh_runtime_system_prompt(
             config,
             conversation,
-            &PromptRuntimeOverrides::default(),
+            &config_prompt_runtime_overrides(config),
             &backend.discovered_tool_scope(),
         )
         .await?;
@@ -681,7 +691,7 @@ async fn run_conversation_turn(
         let request_conversation = conversation_with_runtime_user_context(
             config,
             conversation,
-            &PromptRuntimeOverrides::default(),
+            &config_prompt_runtime_overrides(config),
         );
         let mut response = backend.complete(&request_conversation).await?;
         normalize_exit_plan_mode_tool_calls(&mut response.tool_calls);

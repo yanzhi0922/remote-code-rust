@@ -35,6 +35,7 @@ use rc_tools::{
 };
 use rc_ui_bridge::UiTaskNode;
 
+use crate::ResolvedPromptOverrides;
 use crate::agents::build_remote_code_sub_agent_runtime;
 use crate::cli::Cli;
 use crate::conversation_backend::ConversationBackend;
@@ -382,6 +383,7 @@ pub(crate) fn restore_session_context(
 
 pub(crate) fn reapply_cli_overrides(
     cli: &Cli,
+    prompt_overrides: &ResolvedPromptOverrides,
     config: &mut RuntimeConfig,
     permission_mode_explicit: bool,
 ) {
@@ -410,6 +412,12 @@ pub(crate) fn reapply_cli_overrides(
     } else if cli.protocol.is_some() {
         config.provider.base_url =
             normalize_base_url(config.provider.base_url.clone(), config.provider.protocol);
+    }
+    if prompt_overrides.system_prompt.is_some() || cli.system_prompt_file.is_some() {
+        config.system_prompt = prompt_overrides.system_prompt.clone();
+    }
+    if prompt_overrides.append_system_prompt.is_some() || cli.append_system_prompt_file.is_some() {
+        config.append_system_prompt = prompt_overrides.append_system_prompt.clone();
     }
 }
 
@@ -1448,6 +1456,7 @@ mod tests {
         reapply_cli_overrides, resolve_first_run_settings_path, should_run_first_run_wizard,
         write_wizard_settings_file,
     };
+    use crate::ResolvedPromptOverrides;
 
     fn test_config() -> (tempfile::TempDir, rc_config::RuntimeConfig) {
         let tempdir = tempdir().expect("tempdir");
@@ -1575,7 +1584,7 @@ mod tests {
             "accept-edits",
             "resume prompt",
         ]);
-        reapply_cli_overrides(&cli, &mut config, true);
+        reapply_cli_overrides(&cli, &ResolvedPromptOverrides::default(), &mut config, true);
 
         assert_eq!(config.permission_mode, rc_core::PermissionMode::AcceptEdits);
     }
@@ -1586,9 +1595,41 @@ mod tests {
         config.permission_mode = rc_core::PermissionMode::Plan;
 
         let cli = crate::cli::Cli::parse_from(["remote-code", "resume prompt"]);
-        reapply_cli_overrides(&cli, &mut config, false);
+        reapply_cli_overrides(
+            &cli,
+            &ResolvedPromptOverrides::default(),
+            &mut config,
+            false,
+        );
 
         assert_eq!(config.permission_mode, rc_core::PermissionMode::Plan);
+    }
+
+    #[test]
+    fn reapply_cli_overrides_restores_prompt_overrides() {
+        let (_tempdir, mut config) = test_config();
+        config.system_prompt = Some("restored system".to_owned());
+        config.append_system_prompt = Some("restored append".to_owned());
+
+        let cli = crate::cli::Cli::parse_from([
+            "remote-code",
+            "--system-prompt",
+            "inline system",
+            "--append-system-prompt",
+            "inline append",
+            "resume prompt",
+        ]);
+        let prompt_overrides = ResolvedPromptOverrides {
+            system_prompt: Some("inline system".to_owned()),
+            append_system_prompt: Some("inline append".to_owned()),
+        };
+        reapply_cli_overrides(&cli, &prompt_overrides, &mut config, false);
+
+        assert_eq!(config.system_prompt.as_deref(), Some("inline system"));
+        assert_eq!(
+            config.append_system_prompt.as_deref(),
+            Some("inline append")
+        );
     }
 
     #[test]

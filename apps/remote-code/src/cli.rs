@@ -43,6 +43,18 @@ pub struct Cli {
     #[arg(long)]
     pub name: Option<String>,
 
+    #[arg(long = "system-prompt")]
+    pub system_prompt: Option<String>,
+
+    #[arg(long = "system-prompt-file", hide = true)]
+    pub system_prompt_file: Option<PathBuf>,
+
+    #[arg(long = "append-system-prompt")]
+    pub append_system_prompt: Option<String>,
+
+    #[arg(long = "append-system-prompt-file", hide = true)]
+    pub append_system_prompt_file: Option<PathBuf>,
+
     #[arg(long = "settings")]
     pub settings_files: Vec<PathBuf>,
 
@@ -1278,6 +1290,7 @@ pub enum ExportFormat {
 mod tests {
     use super::{Cli, SettingSourceArgValue};
     use clap::Parser;
+    use std::path::PathBuf;
 
     #[test]
     fn parses_setting_source_filters_and_show_flag_independently() {
@@ -1295,5 +1308,24 @@ mod tests {
             vec![SettingSourceArgValue::User, SettingSourceArgValue::Local]
         );
         assert!(cli.show_setting_sources);
+    }
+
+    #[test]
+    fn parses_system_prompt_file_flags() {
+        let cli = Cli::try_parse_from([
+            "remote-code",
+            "--system-prompt-file",
+            "system.txt",
+            "--append-system-prompt-file",
+            "append.txt",
+            "status",
+        ])
+        .expect("cli should parse");
+
+        assert_eq!(cli.system_prompt_file, Some(PathBuf::from("system.txt")));
+        assert_eq!(
+            cli.append_system_prompt_file,
+            Some(PathBuf::from("append.txt"))
+        );
     }
 }

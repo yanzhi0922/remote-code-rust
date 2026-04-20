@@ -283,6 +283,10 @@ pub struct RuntimeConfig {
     pub max_turns: usize,
     /// Optional human-friendly display name for the session.
     pub session_name: Option<String>,
+    /// Optional custom system prompt supplied by the current runtime entrypoint.
+    pub system_prompt: Option<String>,
+    /// Optional prompt suffix appended after the effective system prompt.
+    pub append_system_prompt: Option<String>,
     /// Explanation of which settings layers were applied.
     pub setting_sources: Vec<String>,
     /// Enabled user/project/local setting scopes for startup discovery.
@@ -425,6 +429,8 @@ pub fn load_runtime_config(
         include_partial_messages,
         max_turns: max_turns.max(1),
         session_name,
+        system_prompt: runtime_overrides.system_prompt.clone(),
+        append_system_prompt: runtime_overrides.append_system_prompt.clone(),
         setting_sources,
         allowed_setting_sources,
         settings_files: resolved_settings_files,

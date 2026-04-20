@@ -37,6 +37,8 @@ impl SettingSource {
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeOverrides {
     pub session_name: Option<String>,
+    pub system_prompt: Option<String>,
+    pub append_system_prompt: Option<String>,
     pub settings_files: Vec<PathBuf>,
     pub show_setting_sources: bool,
     pub allowed_setting_sources: Option<Vec<SettingSource>>,
