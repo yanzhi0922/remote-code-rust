@@ -25,6 +25,7 @@ directories = "6.0.0"
 futures = "0.3.31"
 globset = "0.4.17"
 ignore = "0.4.24"
+indexmap = { version = "2.12.0", features = ["serde"] }
 once_cell = "1.21.3"
 rand = "0.9"
 ratatui = "0.29.0"
