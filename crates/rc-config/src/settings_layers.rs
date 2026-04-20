@@ -73,6 +73,7 @@ pub struct ResolvedRuntimeSettings {
     pub fallback_model: Option<String>,
     pub output_style: Option<String>,
     pub language: Option<String>,
+    pub auto_memory_enabled: Option<bool>,
     pub setting_sources: Vec<String>,
     pub auth_source: Option<String>,
 }
@@ -111,6 +112,9 @@ struct SettingsDocument {
     output_style: Option<String>,
     #[serde(default)]
     language: Option<String>,
+    #[serde(default)]
+    #[serde(alias = "autoMemoryEnabled")]
+    auto_memory_enabled: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -280,6 +284,9 @@ pub fn load_runtime_settings(paths: &[PathBuf]) -> Result<ResolvedRuntimeSetting
         if let Some(language) = document.language {
             resolved.language = normalize_optional_string(Some(language));
         }
+        if let Some(auto_memory_enabled) = document.auto_memory_enabled {
+            resolved.auto_memory_enabled = Some(auto_memory_enabled);
+        }
     }
     resolved.allowed_tools = normalize_tool_filters(&resolved.allowed_tools);
     resolved.disallowed_tools = normalize_tool_filters(&resolved.disallowed_tools);
@@ -408,6 +415,16 @@ base_url = "https://example.com/v1"
                 .is_some_and(|source| source.starts_with("settings:"))
         );
         assert!(resolved.allowed_tools.contains(&"glob".to_owned()));
+    }
+
+    #[test]
+    fn load_runtime_settings_supports_auto_memory_enabled_alias() {
+        let tempdir = tempdir().expect("tempdir");
+        let settings = tempdir.path().join("settings.json");
+        fs::write(&settings, r#"{ "autoMemoryEnabled": false }"#).expect("write settings");
+
+        let resolved = load_runtime_settings(&[settings]).expect("load settings");
+        assert_eq!(resolved.auto_memory_enabled, Some(false));
     }
 
     #[test]
