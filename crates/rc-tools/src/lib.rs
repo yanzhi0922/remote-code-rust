@@ -108,6 +108,8 @@ pub struct RuntimeAgentPromptContext {
     #[serde(default)]
     pub project_agents_dir: Option<PathBuf>,
     #[serde(default)]
+    pub additional_working_directories: Vec<PathBuf>,
+    #[serde(default)]
     pub allowed_agent_types: Option<Vec<String>>,
     #[serde(default)]
     pub denied_agent_types: Vec<String>,

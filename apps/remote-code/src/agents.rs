@@ -218,6 +218,7 @@ impl SubAgentCompletion for RemoteCodeSubAgentRuntime {
                 tools: request.allowed_tools,
                 permission_mode: request.permission_mode,
                 working_dir: request.working_dir,
+                additional_working_directories: request.additional_working_directories,
             })
             .await?;
         Ok(SubAgentExecutionResult {
@@ -410,11 +411,17 @@ fn resolve_runtime_agent_system_prompt(
     config: &RuntimeConfig,
     request: &AgentExecutionRequest,
 ) -> String {
+    let base_prompt = if request.agent_type == CLAUDE_CODE_GUIDE_AGENT_TYPE {
+        build_claude_code_guide_runtime_prompt(config, &request.system_prompt)
+    } else {
+        request.system_prompt.clone()
+    };
+
     if request.agent_type != CLAUDE_CODE_GUIDE_AGENT_TYPE {
-        return request.system_prompt.clone();
+        return base_prompt;
     }
 
-    build_claude_code_guide_runtime_prompt(config, &request.system_prompt)
+    base_prompt
 }
 
 fn build_claude_code_guide_runtime_prompt(config: &RuntimeConfig, base_prompt: &str) -> String {
@@ -734,6 +741,7 @@ pub(crate) async fn run_agents_plan(config: &RuntimeConfig, args: &AgentsPlanArg
                 tools: available_tools.clone(),
                 system_prompt: None,
                 working_dir: config.cwd.clone(),
+                additional_working_directories: Vec::new(),
             },
         );
         let _ = scheduler.start_task(task_id);

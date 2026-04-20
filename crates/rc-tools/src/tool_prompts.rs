@@ -1213,6 +1213,7 @@ fn default_runtime_agent_prompt_context() -> crate::RuntimeAgentPromptContext {
         project_agents_dir: std::env::current_dir()
             .ok()
             .map(|cwd| cwd.join(".claude").join("agents")),
+        additional_working_directories: Vec::new(),
         allowed_agent_types: None,
         denied_agent_types: Vec::new(),
         is_coordinator: is_coordinator_mode(),
@@ -1742,6 +1743,7 @@ mod tests {
         let context = crate::RuntimeAgentPromptContext {
             user_agents_dir: Some(user_agents_dir),
             project_agents_dir: Some(project_agents_dir),
+            additional_working_directories: Vec::new(),
             allowed_agent_types: None,
             denied_agent_types: Vec::new(),
             is_coordinator: false,

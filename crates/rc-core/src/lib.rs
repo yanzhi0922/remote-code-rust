@@ -616,6 +616,9 @@ pub struct SubAgentExecutionRequest {
     pub permission_mode: Option<PermissionMode>,
     /// Working directory for the child agent.
     pub working_dir: PathBuf,
+    /// Additional working directories available to the child agent.
+    #[serde(default)]
+    pub additional_working_directories: Vec<PathBuf>,
 }
 
 /// Result returned by a concrete sub-agent runtime.

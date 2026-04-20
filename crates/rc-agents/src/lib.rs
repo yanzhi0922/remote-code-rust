@@ -54,7 +54,7 @@ pub use definition::{AgentDefinition, AgentIsolation, AgentMemoryScope, AgentSou
 pub use resume::{AgentCheckpoint, ResumableAgentState};
 pub use runner::{
     AgentExecutionRequest, AgentExecutor, AgentRunConfig, AgentRunResult, AgentRunner,
-    ConversationEntry, UsageSummary,
+    ConversationEntry, UsageSummary, compose_agent_system_prompt,
 };
 pub use worker::{WorkerAgent, WorkerConfig, WorkerResult, WorkerStatus};
 

@@ -357,9 +357,20 @@ fn spawn_runtime_agent_prompt_context_provider(
     broker: &dyn PermissionBroker,
 ) -> Arc<rc_tools::RuntimeAgentPromptContextProvider> {
     let runtime_identity = build_runtime_identity_context(config);
+    let inherited_context = current_runtime_agent_prompt_context();
     let context = RuntimeAgentPromptContext {
-        user_agents_dir: user_agents_dir(),
-        project_agents_dir: Some(project_agents_dir(config)),
+        user_agents_dir: inherited_context
+            .as_ref()
+            .and_then(|context| context.user_agents_dir.clone())
+            .or_else(user_agents_dir),
+        project_agents_dir: inherited_context
+            .as_ref()
+            .and_then(|context| context.project_agents_dir.clone())
+            .or_else(|| Some(project_agents_dir(config))),
+        additional_working_directories: inherited_context
+            .as_ref()
+            .map(|context| context.additional_working_directories.clone())
+            .unwrap_or_default(),
         allowed_agent_types: None,
         denied_agent_types: extract_denied_agent_types(&broker.layered_rules()),
         is_coordinator: rc_agents::coordinator::is_coordinator_mode(),
@@ -1158,6 +1169,9 @@ fn append_post_compact_plan_mode_reminder(
 fn load_query_runtime_prompt_settings(config: &RuntimeConfig) -> Result<RuntimePromptSettings> {
     let prompt_settings = load_runtime_settings(&config.settings_files)?;
     let mut settings = RuntimePromptSettings::from_config(config);
+    if let Some(runtime_context) = current_runtime_agent_prompt_context() {
+        settings.additional_working_directories = runtime_context.additional_working_directories;
+    }
     let runtime_identity = build_runtime_identity_context(config);
     settings.language = config.language.clone().or(prompt_settings.language.clone());
     settings.output_style = config
@@ -2585,6 +2599,7 @@ mod tests {
         let context = RuntimeAgentPromptContext {
             user_agents_dir: None,
             project_agents_dir: Some(agents_dir),
+            additional_working_directories: Vec::new(),
             allowed_agent_types: Some(vec!["alpha-agent".to_owned()]),
             denied_agent_types: Vec::new(),
             is_coordinator: false,
