@@ -18,7 +18,10 @@ use rc_session::{SessionStore, plan_state::PlanModeState};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::plan_mode::{self, PlanModeRuntime, PlanModeRuntimeSnapshot};
+use crate::plan_mode::{
+    self, ExitPlanModeInput, ExitPlanModeToolResult, PlanModeRuntime, PlanModeRuntimeSnapshot,
+    render_exit_plan_mode_result,
+};
 
 const PLAN_MODE_MARKER: &str = "## Plan Mode Active";
 const PLAN_MODE_REENTRY_MARKER: &str = "## Re-entering Plan Mode";
@@ -248,26 +251,37 @@ impl RuntimePlanModeController {
         )
     }
 
-    fn exit_plan_mode_message(&self, state: &PlanModeState) -> String {
-        let plan_file_path = state
-            .plan_file_path
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "(missing)".to_owned());
-        let plan = state
-            .plan_file_path
-            .as_ref()
-            .and_then(|path| std::fs::read_to_string(path).ok())
-            .filter(|content| !content.trim().is_empty());
-
-        match plan {
-            Some(plan) => format!(
-                "Exited plan mode. You can now proceed with implementation.\n\nPlan file: {plan_file_path}\n\nApproved plan:\n{plan}"
-            ),
-            None => format!(
-                "Exited plan mode. You can now proceed with implementation.\n\nPlan file: {plan_file_path}"
-            ),
+    fn resolve_exit_plan_path(
+        &self,
+        state: &mut PlanModeState,
+        input: &ExitPlanModeInput,
+    ) -> Result<PathBuf> {
+        if let Some(path) = input.plan_file_path.clone() {
+            if state.plan_file_path.as_ref() != Some(&path) {
+                state.plan_file_path = Some(path.clone());
+            }
+            return Ok(path);
         }
+
+        state
+            .plan_file_path
+            .clone()
+            .ok_or_else(|| anyhow!("No plan file found at (missing). Please write your plan to this file before calling ExitPlanMode."))
+    }
+
+    fn read_plan_for_exit_result(
+        &self,
+        plan_file_path: &Path,
+        input_plan: Option<&str>,
+    ) -> Result<Option<String>> {
+        if let Some(plan) = input_plan {
+            return Ok(Some(plan.to_owned()));
+        }
+        if !plan_file_path.exists() {
+            return Ok(None);
+        }
+        let plan = fs::read_to_string(plan_file_path)?;
+        Ok((!plan.trim().is_empty()).then_some(plan))
     }
 }
 
@@ -293,21 +307,26 @@ impl PlanModeRuntime for RuntimePlanModeController {
         Ok(self.enter_plan_mode_message(&state, objective))
     }
 
-    fn exit_plan_mode(
-        &self,
-        _plan_summary: Option<&str>,
-        _steps_planned: &[String],
-    ) -> Result<String> {
+    fn exit_plan_mode(&self, input: ExitPlanModeInput) -> Result<String> {
         let mut state = self
             .state
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if !state.is_plan_mode() {
-            return Ok(
-                "You are not currently in plan mode. Continue implementing or enter plan mode first."
-                    .to_owned(),
-            );
+            return Err(anyhow!(
+                "You are not in plan mode. This tool is only for exiting plan mode after writing a plan. If your plan was already approved, continue with implementation."
+            ));
         }
+
+        let plan_file_path = self.resolve_exit_plan_path(&mut state, &input)?;
+        if let Some(plan) = input.plan.as_deref() {
+            if let Some(parent) = plan_file_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&plan_file_path, plan)?;
+        }
+        let plan = self.read_plan_for_exit_result(&plan_file_path, input.plan.as_deref())?;
+        let plan_was_edited = input.plan.is_some();
 
         let restored_mode = state
             .pre_plan_permission_mode
@@ -316,11 +335,17 @@ impl PlanModeRuntime for RuntimePlanModeController {
         state.current_permission_mode = restored_mode;
         state.has_exited_plan_mode = true;
         state.needs_plan_mode_exit_attachment = true;
-        if let Some(plan_file_path) = state.plan_file_path.clone() {
-            let _ = self.persist_plan_snapshot_for_path(&plan_file_path);
-        }
+        let _ = self.persist_plan_snapshot_for_path(&plan_file_path);
         self.persist_locked(&mut state)?;
-        Ok(self.exit_plan_mode_message(&state))
+        Ok(render_exit_plan_mode_result(&ExitPlanModeToolResult {
+            plan,
+            file_path: Some(plan_file_path.display().to_string()),
+            is_agent: false,
+            has_task_tool: false,
+            plan_was_edited,
+            awaiting_leader_approval: false,
+            request_id: None,
+        }))
     }
 
     fn snapshot(&self) -> PlanModeRuntimeSnapshot {
@@ -767,7 +792,7 @@ mod tests {
         PLAN_CONTENT_EVENT, RuntimePermissionBroker, copy_plan_mode_state_for_fork,
         restore_plan_mode_state_for_resume,
     };
-    use crate::plan_mode::PlanModeRuntime;
+    use crate::plan_mode::{ExitPlanModeInput, PlanModeRuntime};
     use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
     use rc_core::{
         Attachment, AttachmentMediaType, ConversationEntry, InputFormat, OutputFormat,
@@ -967,6 +992,52 @@ mod tests {
     }
 
     #[test]
+    fn exit_plan_mode_writes_injected_plan_back_to_disk_and_returns_approved_marker() {
+        let (config, store) = test_config_and_store();
+        let controller = RuntimePlanModeController::load(&config, &store).expect("controller");
+        controller
+            .enter_plan_mode("audit runtime")
+            .expect("enter plan mode");
+        let state = controller.snapshot_state();
+        let plan_path = state.plan_file_path.clone().expect("plan path");
+        fs::write(&plan_path, "# Plan\n- old\n").expect("write initial plan");
+
+        let result = controller
+            .exit_plan_mode(ExitPlanModeInput {
+                plan: Some("# Plan\n- edited by user\n".to_owned()),
+                plan_file_path: Some(plan_path.clone()),
+                allowed_prompts: Vec::new(),
+            })
+            .expect("exit plan mode");
+
+        assert_eq!(
+            fs::read_to_string(&plan_path).expect("read edited plan"),
+            "# Plan\n- edited by user\n"
+        );
+        assert!(result.contains("User has approved your plan. You can now start coding."));
+        assert!(result.contains(&format!(
+            "Your plan has been saved to: {}",
+            plan_path.display()
+        )));
+        assert!(result.contains("## Approved Plan (edited by user):"));
+    }
+
+    #[test]
+    fn exit_plan_mode_outside_plan_mode_returns_reference_error() {
+        let (config, store) = test_config_and_store();
+        let controller = RuntimePlanModeController::load(&config, &store).expect("controller");
+
+        let error = controller
+            .exit_plan_mode(ExitPlanModeInput::default())
+            .expect_err("should reject when plan mode is inactive");
+
+        assert_eq!(
+            error.to_string(),
+            "You are not in plan mode. This tool is only for exiting plan mode after writing a plan. If your plan was already approved, continue with implementation."
+        );
+    }
+
+    #[test]
     fn resume_falls_back_to_exit_plan_mode_tool_result_when_snapshot_missing() {
         let (config, store) = test_config_and_store();
         let controller = RuntimePlanModeController::load(&config, &store).expect("controller");
@@ -978,7 +1049,7 @@ mod tests {
         fs::write(&plan_path, "# Plan\n- exit fallback\n").expect("write plan");
 
         let exit_message = controller
-            .exit_plan_mode(None, &[])
+            .exit_plan_mode(ExitPlanModeInput::default())
             .expect("exit plan mode");
         store
             .append_conversation_entry(

@@ -3078,7 +3078,12 @@ mod tests {
             "exit_plan_mode error: {}",
             exit_result.content
         );
-        assert!(exit_result.content.contains("Exited plan mode"));
+        assert!(
+            exit_result
+                .content
+                .contains("User has approved exiting plan mode")
+                || exit_result.content.contains("User has approved your plan")
+        );
     }
 
     #[tokio::test]
