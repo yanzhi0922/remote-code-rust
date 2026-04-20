@@ -477,6 +477,7 @@ fn spawn_runtime_agent_prompt_context_provider(
         auto_memory_read_dir: prompt_settings.auto_memory_read_dir.map(PathBuf::from),
         project_temp_dir: prompt_settings.project_temp_dir.map(PathBuf::from),
         preview_launch_config_path: Some(config.original_cwd.join(".claude").join("launch.json")),
+        teams_dir: Some(rc_swarm::team_helpers::teams_base_dir()),
         agent_memory_dirs,
     };
     Arc::new(move || context.clone())
@@ -2713,6 +2714,7 @@ mod tests {
             auto_memory_read_dir: None,
             project_temp_dir: None,
             preview_launch_config_path: None,
+            teams_dir: None,
             agent_memory_dirs: Vec::new(),
         };
 

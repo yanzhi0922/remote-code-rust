@@ -4724,6 +4724,7 @@ dependencies = [
  "rc-runtime-prompt",
  "rc-session",
  "rc-skills",
+ "rc-swarm",
  "rc-system-prompt",
  "rc-telemetry",
  "rc-tools",

@@ -43,6 +43,7 @@ rc-runtime-prompt = { path = "../../crates/rc-runtime-prompt" }
 rc-runner = { path = "../../crates/rc-runner" }
 rc-session = { path = "../../crates/rc-session" }
 rc-skills = { path = "../../crates/rc-skills" }
+rc-swarm = { path = "../../crates/rc-swarm" }
 rc-system-prompt = { path = "../../crates/rc-system-prompt" }
 rc-telemetry = { path = "../../crates/rc-telemetry" }
 rc-tools = { path = "../../crates/rc-tools" }

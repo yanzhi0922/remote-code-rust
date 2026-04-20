@@ -7,7 +7,6 @@ pub mod actions;
 pub mod agent;
 pub mod ant_model_override;
 pub mod brief;
-pub mod coordinator;
 pub mod doing_tasks;
 pub mod env_info;
 pub mod hooks;

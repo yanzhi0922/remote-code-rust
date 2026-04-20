@@ -134,6 +134,8 @@ pub struct RuntimeAgentPromptContext {
     #[serde(default)]
     pub preview_launch_config_path: Option<PathBuf>,
     #[serde(default)]
+    pub teams_dir: Option<PathBuf>,
+    #[serde(default)]
     pub agent_memory_dirs: Vec<PathBuf>,
 }
 
@@ -979,6 +981,9 @@ pub(crate) fn filesystem_access_options() -> rc_permissions::FilesystemAccessOpt
         if let Some(project_temp_dir) = &context.project_temp_dir {
             internal_read_dirs.push(project_temp_dir.clone());
         }
+        if let Some(teams_dir) = &context.teams_dir {
+            internal_read_dirs.push(teams_dir.clone());
+        }
         internal_read_dirs.extend(context.agent_memory_dirs.clone());
         internal_write_dirs.extend(context.agent_memory_dirs.clone());
         if let Some(preview_launch_config_path) = &context.preview_launch_config_path {
@@ -1803,6 +1808,51 @@ mod tests {
 
         assert!(!result.is_error, "{}", result.content);
         assert!(result.content.contains("allowed"));
+    }
+
+    #[tokio::test]
+    async fn read_file_allows_runtime_teams_directory() {
+        let tempdir = tempdir().expect("tempdir");
+        let workspace = tempdir.path().join("workspace");
+        let teams = tempdir.path().join("teams");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        std::fs::create_dir_all(&teams).expect("teams");
+        let target = teams.join("alpha").join("team.json");
+        std::fs::create_dir_all(target.parent().expect("team dir")).expect("team dir");
+        std::fs::write(&target, "{\"name\":\"alpha\"}").expect("team file");
+        let context = ToolExecutionContext {
+            cwd: workspace,
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let broker = StaticPermissionBroker::new(false);
+        let runtime_context = crate::RuntimeAgentPromptContext {
+            teams_dir: Some(teams),
+            ..crate::RuntimeAgentPromptContext::default()
+        };
+
+        let result = with_runtime_agent_prompt_context_provider(
+            Arc::new(move || runtime_context.clone()),
+            async {
+                execute_tool_call(
+                    &ToolCall {
+                        id: "read-team".to_owned(),
+                        name: "read_file".to_owned(),
+                        input: json!({"path": target.to_string_lossy().to_string()}),
+                    },
+                    &context,
+                    &broker,
+                )
+                .await
+            },
+        )
+        .await
+        .expect("tool call should return result");
+
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("\"name\":\"alpha\""));
     }
 
     #[tokio::test]
