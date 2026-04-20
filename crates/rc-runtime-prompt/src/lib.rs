@@ -1,8 +1,11 @@
+mod auto_memory;
+
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
 use anyhow::Result;
+use auto_memory::{has_valid_cowork_memory_path_override, load_cowork_memory_mechanics_prompt};
 use chrono::Local;
 use rc_agents::coordinator::{
     COORDINATOR_MODE_ALLOWED_TOOLS, get_coordinator_system_prompt, is_coordinator_mode,
@@ -168,6 +171,39 @@ pub fn runtime_agent_listing_delta_enabled() -> bool {
     false
 }
 
+fn custom_prompt_uses_main_thread_precedence(
+    custom_system_prompt_provided: bool,
+    override_system_prompt_provided: bool,
+    agent_system_prompt_provided: bool,
+) -> bool {
+    custom_system_prompt_provided
+        && !override_system_prompt_provided
+        && !agent_system_prompt_provided
+}
+
+fn non_empty_prompt_block(value: Option<&str>) -> Option<String> {
+    value
+        .filter(|candidate| !candidate.trim().is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn append_runtime_prompt_suffixes(
+    prompt_blocks: &mut Vec<String>,
+    memory_mechanics_prompt: Option<String>,
+    append_system_prompt: Option<&str>,
+    override_system_prompt_provided: bool,
+) {
+    if override_system_prompt_provided {
+        return;
+    }
+    if let Some(memory_mechanics_prompt) = memory_mechanics_prompt {
+        prompt_blocks.push(memory_mechanics_prompt);
+    }
+    if let Some(append_system_prompt) = non_empty_prompt_block(append_system_prompt) {
+        prompt_blocks.push(append_system_prompt);
+    }
+}
+
 pub fn insert_prompt_tool_aliases(spec: &ToolSpec, enabled_tools: &mut HashSet<String>) {
     enabled_tools.insert(spec.name.clone());
     enabled_tools.insert(spec.protocol_name.clone());
@@ -298,6 +334,16 @@ pub async fn build_runtime_system_prompt(
     let custom_system_prompt_provided = overrides.system_prompt.is_some();
     let override_system_prompt_provided = overrides.override_system_prompt.is_some();
     let agent_system_prompt_provided = overrides.agent_system_prompt.is_some();
+    let memory_mechanics_prompt = if custom_prompt_uses_main_thread_precedence(
+        custom_system_prompt_provided,
+        override_system_prompt_provided,
+        agent_system_prompt_provided,
+    ) && has_valid_cowork_memory_path_override()
+    {
+        load_cowork_memory_mechanics_prompt(config)?
+    } else {
+        None
+    };
     let session_start_date = Local::now().format("%Y-%m-%d").to_string();
     if runtime_env_truthy("CLAUDE_CODE_SIMPLE") {
         let default_prompt_blocks = if custom_system_prompt_provided
@@ -319,7 +365,7 @@ pub async fn build_runtime_system_prompt(
                 coordinator_system_prompt: is_coordinator_mode()
                     .then(|| get_coordinator_system_prompt(true)),
                 custom_system_prompt: overrides.system_prompt.clone(),
-                append_system_prompt: overrides.append_system_prompt.clone(),
+                append_system_prompt: None,
                 override_system_prompt: overrides.override_system_prompt.clone(),
                 proactive_active: settings.proactive_active,
                 ..Default::default()
@@ -331,6 +377,12 @@ pub async fn build_runtime_system_prompt(
         {
             prompt_blocks.push(system_context);
         }
+        append_runtime_prompt_suffixes(
+            &mut prompt_blocks,
+            memory_mechanics_prompt.clone(),
+            overrides.append_system_prompt.as_deref(),
+            override_system_prompt_provided,
+        );
         let rendered = render_system_prompt_for_api(
             &prompt_blocks,
             &SystemPromptSplitOptions {
@@ -429,7 +481,7 @@ pub async fn build_runtime_system_prompt(
             coordinator_system_prompt: is_coordinator_mode()
                 .then(|| get_coordinator_system_prompt(false)),
             custom_system_prompt: overrides.system_prompt.clone(),
-            append_system_prompt: overrides.append_system_prompt.clone(),
+            append_system_prompt: None,
             override_system_prompt: overrides.override_system_prompt.clone(),
             proactive_active: prompt_ctx.features.proactive_active,
             ..Default::default()
@@ -441,6 +493,12 @@ pub async fn build_runtime_system_prompt(
     {
         prompt_blocks.push(system_context);
     }
+    append_runtime_prompt_suffixes(
+        &mut prompt_blocks,
+        memory_mechanics_prompt,
+        overrides.append_system_prompt.as_deref(),
+        override_system_prompt_provided,
+    );
 
     let skip_global_cache_for_system_prompt = use_global_prompt_cache
         && visible_tool_specs
