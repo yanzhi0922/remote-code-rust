@@ -51,6 +51,21 @@ export function PermissionModal() {
               </div>
             </div>
           )}
+          {pendingPermission.permission_suggestions.length > 0 && (
+            <div>
+              <div className="text-sm font-medium text-slate-700">权限建议</div>
+              <div className="mt-1 space-y-2">
+                {pendingPermission.permission_suggestions.map((suggestion, index) => (
+                  <pre
+                    key={index}
+                    className="max-h-40 overflow-auto rounded-2xl bg-[#f7f5ef] p-4 text-xs leading-6 text-slate-700"
+                  >
+                    {formatInput(suggestion)}
+                  </pre>
+                ))}
+              </div>
+            </div>
+          )}
           <div>
             <div className="text-sm font-medium text-slate-700">输入参数</div>
             <pre className="mt-1 max-h-64 overflow-auto rounded-2xl bg-[#f7f5ef] p-4 text-xs leading-6 text-slate-700">

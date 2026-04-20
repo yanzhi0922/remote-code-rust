@@ -121,7 +121,10 @@ export function normalizeLocalPermissionRequest(
     state: 'pending',
     title: permission.title,
     description: permission.description,
-    metadata: {},
+    metadata:
+      permission.permission_suggestions.length > 0
+        ? { permission_suggestions_count: String(permission.permission_suggestions.length) }
+        : {},
     blockedPath: permission.blocked_path,
     createdAt: null,
     updatedAt: null,

@@ -380,6 +380,10 @@ impl PermissionBroker for DynamicPermissionFallbackBroker {
         PermissionDecision::deny("Permission denied by runtime broker")
     }
 
+    async fn decide_forced_prompt(&self, _request: PermissionRequest) -> PermissionDecision {
+        PermissionDecision::deny("Permission denied by runtime broker")
+    }
+
     fn mode(&self) -> Option<PermissionMode> {
         Some(self.controller.current_mode())
     }
@@ -915,6 +919,40 @@ mod tests {
         assert!(
             bash.allowed,
             "bypass-permissions should allow bash execution"
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_permission_broker_forces_prompt_for_ask_rules_even_in_accept_edits_mode() {
+        let (mut config, store) = test_config_and_store();
+        config.permission_mode = PermissionMode::AcceptEdits;
+        let controller = RuntimePlanModeController::load(&config, &store).expect("controller");
+        let broker = RuntimePermissionBroker::new(&config, controller);
+        broker
+            .add_session_rule(rc_permissions::RuleAction::Ask, "edit_file".to_owned())
+            .expect("session rule");
+
+        let decision = broker
+            .decide(PermissionRequest {
+                tool_name: "edit_file".to_owned(),
+                permission_class: Some(PermissionClass::Edit),
+                tool_input: json!({"path": "src/main.rs"}),
+                working_directory: None,
+                tool_use_id: Some("tool-edit".to_owned()),
+                title: None,
+                description: None,
+                blocked_path: None,
+                permission_suggestions: Vec::new(),
+            })
+            .await;
+
+        assert!(
+            !decision.allowed,
+            "Ask rules should not be bypassed by accept-edits auto-allow"
+        );
+        assert_eq!(
+            decision.message.as_deref(),
+            Some("Permission denied by runtime broker")
         );
     }
 

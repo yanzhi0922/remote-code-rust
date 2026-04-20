@@ -332,6 +332,7 @@ struct PermissionRequestDto {
     description: String,
     input: serde_json::Value,
     blocked_path: Option<String>,
+    permission_suggestions: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2423,35 +2424,21 @@ struct GuiPermissionBroker {
     pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
 }
 
-#[async_trait]
-impl PermissionBroker for GuiPermissionBroker {
-    fn mode(&self) -> Option<PermissionMode> {
-        Some(self.mode)
+fn permission_request_dto(request_id: String, request: &PermissionRequest) -> PermissionRequestDto {
+    PermissionRequestDto {
+        request_id,
+        tool_name: request.tool_name.clone(),
+        tool_use_id: request.tool_use_id.clone().unwrap_or_default(),
+        title: request.title.clone().unwrap_or_default(),
+        description: request.description.clone().unwrap_or_default(),
+        input: request.tool_input.clone(),
+        blocked_path: request.blocked_path.clone(),
+        permission_suggestions: request.permission_suggestions.clone(),
     }
+}
 
-    async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
-        if request.blocked_path.is_none()
-            && auto_allows(self.mode, classify_tool(&request.tool_name))
-        {
-            return PermissionDecision::allow();
-        }
-
-        match self.mode {
-            PermissionMode::DontAsk => {
-                return PermissionDecision::deny(format!(
-                    "Permission mode {} denied {}.",
-                    self.mode.as_legacy_str(),
-                    request.tool_name
-                ));
-            }
-            PermissionMode::Plan => {
-                return PermissionDecision::deny("Plan mode does not execute tools.");
-            }
-            PermissionMode::Default
-            | PermissionMode::AcceptEdits
-            | PermissionMode::BypassPermissions => {}
-        }
-
+impl GuiPermissionBroker {
+    async fn prompt(&self, request: PermissionRequest) -> PermissionDecision {
         let request_id = Uuid::new_v4().to_string();
         let (tx, rx) = oneshot::channel();
         {
@@ -2459,15 +2446,7 @@ impl PermissionBroker for GuiPermissionBroker {
             pending.insert(request_id.clone(), tx);
         }
 
-        let payload = PermissionRequestDto {
-            request_id: request_id.clone(),
-            tool_name: request.tool_name.clone(),
-            tool_use_id: request.tool_use_id.unwrap_or_default(),
-            title: request.title.unwrap_or_default(),
-            description: request.description.unwrap_or_default(),
-            input: request.tool_input.clone(),
-            blocked_path: request.blocked_path,
-        };
+        let payload = permission_request_dto(request_id.clone(), &request);
 
         if self
             .app
@@ -2499,6 +2478,43 @@ impl PermissionBroker for GuiPermissionBroker {
         } else {
             PermissionDecision::deny(format!("Permission denied for {}.", request.tool_name))
         }
+    }
+}
+
+#[async_trait]
+impl PermissionBroker for GuiPermissionBroker {
+    fn mode(&self) -> Option<PermissionMode> {
+        Some(self.mode)
+    }
+
+    async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
+        if request.blocked_path.is_none()
+            && auto_allows(self.mode, classify_tool(&request.tool_name))
+        {
+            return PermissionDecision::allow();
+        }
+
+        match self.mode {
+            PermissionMode::DontAsk => {
+                return PermissionDecision::deny(format!(
+                    "Permission mode {} denied {}.",
+                    self.mode.as_legacy_str(),
+                    request.tool_name
+                ));
+            }
+            PermissionMode::Plan => {
+                return PermissionDecision::deny("Plan mode does not execute tools.");
+            }
+            PermissionMode::Default
+            | PermissionMode::AcceptEdits
+            | PermissionMode::BypassPermissions => {}
+        }
+
+        self.prompt(request).await
+    }
+
+    async fn decide_forced_prompt(&self, request: PermissionRequest) -> PermissionDecision {
+        self.prompt(request).await
     }
 }
 
@@ -3865,6 +3881,36 @@ mod tests {
         assert_eq!(
             parse_permission_mode(Some("yolo")),
             Some(PermissionMode::BypassPermissions)
+        );
+    }
+
+    #[test]
+    fn permission_request_dto_preserves_permission_suggestions() {
+        let request = PermissionRequest {
+            tool_name: "read_file".to_owned(),
+            permission_class: Some(rc_permissions::PermissionClass::Read),
+            tool_input: json!({"path": "..\\outside.txt"}),
+            working_directory: None,
+            tool_use_id: Some("tool-1".to_owned()),
+            title: Some("Read outside workspace".to_owned()),
+            description: Some("Read requires approval".to_owned()),
+            blocked_path: Some("C:\\outside.txt".to_owned()),
+            permission_suggestions: vec![json!({
+                "action": "addRules",
+                "toolPattern": "Read(C:\\outside.txt)",
+            })],
+        };
+
+        let dto = permission_request_dto("request-1".to_owned(), &request);
+
+        assert_eq!(dto.request_id, "request-1");
+        assert_eq!(dto.tool_use_id, "tool-1");
+        assert_eq!(dto.blocked_path.as_deref(), Some("C:\\outside.txt"));
+        assert_eq!(dto.permission_suggestions.len(), 1);
+        assert_eq!(dto.permission_suggestions[0]["action"], "addRules");
+        assert_eq!(
+            dto.permission_suggestions[0]["toolPattern"],
+            "Read(C:\\outside.txt)"
         );
     }
 
