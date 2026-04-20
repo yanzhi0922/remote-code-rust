@@ -3974,6 +3974,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "directories 6.0.0",
  "indexmap 2.13.1",
  "rc-context",
  "rc-core",

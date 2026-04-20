@@ -2,15 +2,14 @@
 
 use std::collections::BTreeSet;
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
-use directories::BaseDirs;
 use rc_agents::loader::load_all_agents_with_context;
-use rc_agents::{AgentDefinition, AgentIsolation, AgentSource};
+use rc_agents::{AgentDefinition, AgentIsolation, AgentSource, compose_agent_system_prompt};
 use rc_context::RuntimeIdentityContext;
 use rc_core::PermissionMode;
 use rc_mcp::normalization::mcp_info_from_string;
@@ -289,7 +288,7 @@ async fn run_resolved_agent_execution(
             task: input.prompt.clone(),
             description: Some(input.description.clone()),
             context: Vec::new(),
-            system_prompt: definition.system_prompt.clone(),
+            system_prompt: Some(compose_agent_system_prompt(&definition, None, &working_dir)),
             critical_system_reminder: definition.critical_system_reminder_experimental.clone(),
             omit_claude_md: definition.omit_claude_md,
             omit_git_status: matches!(definition.agent_type.as_str(), "Explore" | "Plan"),
@@ -298,6 +297,7 @@ async fn run_resolved_agent_execution(
             allowed_tools,
             permission_mode,
             working_dir,
+            additional_working_directories: inherited_additional_working_directories(),
         })
         .await;
 
@@ -390,7 +390,7 @@ async fn run_background_agent_execution(
     let description = input.description.clone();
     let model = input.model.clone().or_else(|| definition.model.clone());
     let agent_type = definition.agent_type.clone();
-    let system_prompt = definition.system_prompt.clone();
+    let additional_working_directories = inherited_additional_working_directories();
     let critical_system_reminder = definition.critical_system_reminder_experimental.clone();
     let max_turns = definition.max_turns;
     tokio::spawn(async move {
@@ -402,7 +402,7 @@ async fn run_background_agent_execution(
                 task: prompt,
                 description: Some(description),
                 context: Vec::new(),
-                system_prompt,
+                system_prompt: Some(compose_agent_system_prompt(&definition, None, &working_dir)),
                 critical_system_reminder,
                 omit_claude_md: definition.omit_claude_md,
                 omit_git_status: matches!(definition.agent_type.as_str(), "Explore" | "Plan"),
@@ -411,6 +411,7 @@ async fn run_background_agent_execution(
                 allowed_tools,
                 permission_mode,
                 working_dir,
+                additional_working_directories,
             })
             .await;
 
@@ -739,9 +740,14 @@ fn emit_delegate_event(context: &ToolExecutionContext, event: DelegateProgressEv
 }
 
 fn resolve_agent_definition(subagent_type: Option<&str>, cwd: &Path) -> Result<AgentDefinition> {
-    let user_agents_dir =
-        BaseDirs::new().map(|base| base.home_dir().join(".claude").join("agents"));
-    let project_agents_dir = cwd.join(".claude").join("agents");
+    let runtime_context = current_runtime_agent_prompt_context();
+    let user_agents_dir = runtime_context
+        .as_ref()
+        .and_then(|context| context.user_agents_dir.clone());
+    let project_agents_dir = runtime_context
+        .as_ref()
+        .and_then(|context| context.project_agents_dir.clone())
+        .unwrap_or_else(|| cwd.join(".claude").join("agents"));
     resolve_agent_definition_from_dirs(
         subagent_type,
         user_agents_dir.as_deref(),
@@ -1198,6 +1204,12 @@ fn start_agent_tracking(
         Some("started"),
     )?;
     Ok((task_id, parent_task_id, depth))
+}
+
+fn inherited_additional_working_directories() -> Vec<PathBuf> {
+    current_runtime_agent_prompt_context()
+        .map(|context| context.additional_working_directories)
+        .unwrap_or_default()
 }
 
 /// Truncate a string to `max_bytes` bytes, respecting UTF-8 boundaries.
@@ -1850,6 +1862,75 @@ mod tests {
         );
         assert!(request.allowed_tools.contains(&"read_file".to_owned()));
         assert!(!request.allowed_tools.contains(&"write_file".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn resolved_agent_execution_inherits_runtime_prompt_context_and_agent_memory() {
+        let temp = tempdir().expect("tempdir");
+        let project_agents_dir = temp.path().join("project-agents");
+        let extra_dir = temp.path().join("extra");
+        let memory_dir = temp
+            .path()
+            .join(".claude")
+            .join("agent-memory")
+            .join("reviewer");
+        std::fs::create_dir_all(&project_agents_dir).expect("project agents dir");
+        std::fs::create_dir_all(&extra_dir).expect("extra dir");
+        std::fs::create_dir_all(&memory_dir).expect("memory dir");
+        std::fs::write(
+            project_agents_dir.join("reviewer.md"),
+            "---\nname: reviewer\ndescription: Project reviewer\ntools: [Read]\nmemory: project\n---\nUse the project reviewer prompt.\n",
+        )
+        .expect("write project reviewer");
+        std::fs::write(
+            memory_dir.join("MEMORY.md"),
+            "- [Review preference](review.md) — prefer focused diffs\n",
+        )
+        .expect("write memory entrypoint");
+
+        let requests = Arc::new(StdMutex::new(Vec::new()));
+        let runtime: Arc<dyn SubAgentCompletion> = Arc::new(RecordingAgentRuntime {
+            requests: Arc::clone(&requests),
+            result: rc_core::SubAgentExecutionResult {
+                output: "reviewed".to_owned(),
+                success: true,
+                turns: 2,
+                usage: UsageSummary::default(),
+            },
+        });
+        let context = test_context_with_cwd(temp.path().to_path_buf(), Some(runtime));
+        let runtime_context = crate::RuntimeAgentPromptContext {
+            project_agents_dir: Some(project_agents_dir),
+            additional_working_directories: vec![extra_dir.clone()],
+            ..crate::RuntimeAgentPromptContext::default()
+        };
+
+        let result = crate::with_runtime_agent_prompt_context_provider(
+            Arc::new(move || runtime_context.clone()),
+            async {
+                agent_tool_inner(
+                    &json!({
+                        "prompt": "Review the custom project agent path.",
+                        "description": "Project review",
+                        "subagent_type": "reviewer"
+                    }),
+                    &context,
+                )
+                .await
+            },
+        )
+        .await
+        .expect("custom project agent should succeed");
+
+        assert_eq!(result, "reviewed");
+        let requests = requests.lock().expect("requests lock");
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        assert_eq!(request.additional_working_directories, vec![extra_dir]);
+        let system_prompt = request.system_prompt.as_deref().unwrap_or_default();
+        assert!(system_prompt.contains("project reviewer prompt"));
+        assert!(system_prompt.contains("# Persistent Agent Memory"));
+        assert!(system_prompt.contains("prefer focused diffs"));
     }
 
     #[tokio::test]

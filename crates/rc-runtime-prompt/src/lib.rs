@@ -103,6 +103,7 @@ pub struct RuntimePromptSettings {
     pub include_token_budget_prompt: bool,
     pub scratchpad_enabled: bool,
     pub scratchpad_dir: Option<String>,
+    pub additional_working_directories: Vec<PathBuf>,
     pub runtime_identity: RuntimeIdentityContext,
 }
 
@@ -121,6 +122,7 @@ impl RuntimePromptSettings {
             include_token_budget_prompt: false,
             scratchpad_enabled: scratchpad.enabled,
             scratchpad_dir: scratchpad.dir,
+            additional_working_directories: Vec::new(),
             runtime_identity: RuntimeIdentityContext::from_legacy_env(),
         }
     }
@@ -473,7 +475,7 @@ pub async fn build_runtime_system_prompt(
             .collect(),
         mcp_instructions_delta_enabled: settings.mcp_instructions_delta_enabled,
         is_worktree: detect_git_worktree(&config.cwd),
-        additional_dirs: Vec::new(),
+        additional_dirs: settings.additional_working_directories.clone(),
         is_non_interactive: settings.is_non_interactive,
         is_fork_subagent_enabled: settings.runtime_identity.features.is_fork_subagent_enabled,
         session_start_date,
@@ -937,8 +939,8 @@ fn should_use_global_prompt_cache_scope(config: &RuntimeConfig) -> bool {
 mod tests {
     use super::{
         PromptRuntimeOverrides, RuntimePromptSettings, build_runtime_scratchpad_state_with,
-        build_runtime_system_prompt, sanitize_path_component,
-        runtime_claude_temp_dir_name, runtime_user_context_entries_with_settings,
+        build_runtime_system_prompt, runtime_claude_temp_dir_name,
+        runtime_user_context_entries_with_settings, sanitize_path_component,
     };
     use rc_config::settings_layers::RuntimeOverrides;
     use rc_config::{ProviderOverrides, load_runtime_config};
@@ -946,6 +948,7 @@ mod tests {
     use rc_core::{ConversationEntry, InputFormat, OutputFormat, PermissionMode, ProviderProtocol};
     use rc_provider::DiscoveredToolScope;
     use std::fs;
+    use std::path::PathBuf;
     use std::sync::{Mutex, MutexGuard, OnceLock};
     use tempfile::tempdir;
 
@@ -993,6 +996,7 @@ mod tests {
             include_token_budget_prompt: false,
             scratchpad_enabled: false,
             scratchpad_dir: None,
+            additional_working_directories: Vec::new(),
             runtime_identity: RuntimeIdentityContext::default(),
         }
     }
@@ -1043,6 +1047,30 @@ mod tests {
 
         assert!(prompt.text.contains("Custom prompt"));
         assert!(!prompt.text.contains("# auto memory"));
+    }
+
+    #[tokio::test]
+    async fn runtime_prompt_includes_additional_working_directories() {
+        let config = test_config(None);
+        let mut settings = test_settings(&config);
+        settings.additional_working_directories = vec![
+            PathBuf::from("C:/workspace/extra-one"),
+            PathBuf::from("D:/workspace/extra-two"),
+        ];
+
+        let prompt = build_runtime_system_prompt(
+            &config,
+            &[ConversationEntry::user("test")],
+            &PromptRuntimeOverrides::default(),
+            &settings,
+            &DiscoveredToolScope::default(),
+        )
+        .await
+        .expect("prompt");
+
+        assert!(prompt.text.contains("Additional working directories:"));
+        assert!(prompt.text.contains("C:/workspace/extra-one"));
+        assert!(prompt.text.contains("D:/workspace/extra-two"));
     }
 
     #[test]

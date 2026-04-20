@@ -18,6 +18,7 @@ use rc_core::PermissionMode;
 use serde::{Deserialize, Serialize};
 
 use crate::definition::AgentDefinition;
+use crate::memory::append_memory_prompt_to_system_prompt;
 
 /// Configuration for a single agent run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,6 +33,9 @@ pub struct AgentRunConfig {
     pub system_prompt: Option<String>,
     /// Working directory for the agent.
     pub working_dir: PathBuf,
+    /// Additional working directories visible to the agent.
+    #[serde(default)]
+    pub additional_working_directories: Vec<PathBuf>,
 }
 
 /// Summary of token usage from an agent run.
@@ -103,6 +107,9 @@ pub struct AgentExecutionRequest {
     pub permission_mode: Option<PermissionMode>,
     /// Working directory for the run.
     pub working_dir: PathBuf,
+    /// Additional working directories available to the child runtime.
+    #[serde(default)]
+    pub additional_working_directories: Vec<PathBuf>,
 }
 
 /// Concrete host runtime capable of executing an agent request.
@@ -191,18 +198,11 @@ impl AgentRunner {
     /// Uses the agent's system prompt if defined, otherwise generates a
     /// default prompt based on the agent type.
     pub fn build_system_prompt(&self) -> String {
-        if let Some(prompt) = &self.config.system_prompt
-            && !prompt.is_empty()
-        {
-            return prompt.clone();
-        }
-        match &self.definition.system_prompt {
-            Some(prompt) if !prompt.is_empty() => prompt.clone(),
-            _ => format!(
-                "You are an agent of type '{}'. Complete the task as instructed.",
-                self.definition.agent_type
-            ),
-        }
+        compose_agent_system_prompt(
+            &self.definition,
+            self.config.system_prompt.as_deref(),
+            &self.config.working_dir,
+        )
     }
 
     /// Resolve the model to use for this run.
@@ -253,6 +253,7 @@ impl AgentRunner {
             tools: self.resolve_tools(&self.config.tools),
             permission_mode: None,
             working_dir: self.config.working_dir.clone(),
+            additional_working_directories: self.config.additional_working_directories.clone(),
         }
     }
 
@@ -284,6 +285,37 @@ impl AgentRunner {
         );
         executor.execute(request).await
     }
+}
+
+#[must_use]
+pub fn compose_agent_system_prompt(
+    definition: &AgentDefinition,
+    system_prompt_override: Option<&str>,
+    working_dir: &Path,
+) -> String {
+    if let Some(prompt) = system_prompt_override.filter(|prompt| !prompt.trim().is_empty()) {
+        return prompt.to_owned();
+    }
+
+    let base_prompt = match &definition.system_prompt {
+        Some(prompt) if !prompt.is_empty() => prompt.clone(),
+        _ => format!(
+            "You are an agent of type '{}'. Complete the task as instructed.",
+            definition.agent_type
+        ),
+    };
+
+    if let Some(scope) = definition.memory {
+        return append_memory_prompt_to_system_prompt(
+            &base_prompt,
+            &definition.agent_type,
+            scope,
+            working_dir,
+            None,
+        );
+    }
+
+    base_prompt
 }
 
 // ── Enhanced functions ────────────────────────────────────────────────────
@@ -502,6 +534,7 @@ mod tests {
             tools: vec!["Bash".to_owned(), "Read".to_owned(), "Write".to_owned()],
             system_prompt: None,
             working_dir: PathBuf::from("/tmp"),
+            additional_working_directories: Vec::new(),
         }
     }
 
@@ -583,6 +616,48 @@ mod tests {
         let runner = AgentRunner::new(def, test_config());
         let prompt = runner.build_system_prompt();
         assert!(prompt.contains("test-agent"));
+    }
+
+    #[test]
+    fn build_system_prompt_appends_agent_memory_when_enabled() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut def = test_definition();
+        def.memory = Some(crate::definition::AgentMemoryScope::Project);
+        let mut config = test_config();
+        config.working_dir = temp.path().to_path_buf();
+        let memory_dir = crate::memory::get_agent_memory_dir(
+            &def.agent_type,
+            crate::definition::AgentMemoryScope::Project,
+            &config.working_dir,
+            &PathBuf::from("/unused"),
+        );
+        std::fs::create_dir_all(&memory_dir).expect("memory dir");
+        std::fs::write(
+            memory_dir.join("MEMORY.md"),
+            "- [User preference](pref.md) — keep responses terse\n",
+        )
+        .expect("memory file");
+
+        let runner = AgentRunner::new(def, config);
+        let prompt = runner.build_system_prompt();
+
+        assert!(prompt.starts_with("You are a test agent.\n\n# Persistent Agent Memory"));
+        assert!(prompt.contains("Since this memory is project-scope"));
+        assert!(prompt.contains("keep responses terse"));
+    }
+
+    #[test]
+    fn build_request_carries_additional_working_directories() {
+        let mut config = test_config();
+        config.additional_working_directories = vec![PathBuf::from("/workspace/extra")];
+        let runner = AgentRunner::new(test_definition(), config);
+
+        let request = runner.build_request("task", &[]);
+
+        assert_eq!(
+            request.additional_working_directories,
+            vec![PathBuf::from("/workspace/extra")]
+        );
     }
 
     #[test]

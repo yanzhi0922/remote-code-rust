@@ -126,6 +126,7 @@ fn runner_resolves_wildcard_tools() {
         tools: vec![],
         system_prompt: None,
         working_dir: PathBuf::from("."),
+        additional_working_directories: Vec::new(),
     };
     let runner = rc_agents::AgentRunner::new(def, config);
     let available = ["Read".to_owned(), "Write".to_owned(), "Bash".to_owned()];
@@ -142,6 +143,7 @@ fn runner_filters_denylisted_tools() {
         tools: vec![],
         system_prompt: None,
         working_dir: PathBuf::from("."),
+        additional_working_directories: Vec::new(),
     };
     let runner = rc_agents::AgentRunner::new(explore, config);
     let available = [
@@ -166,6 +168,7 @@ fn runner_builds_system_prompt_from_definition() {
         tools: vec![],
         system_prompt: None,
         working_dir: PathBuf::from("."),
+        additional_working_directories: Vec::new(),
     };
     let runner = rc_agents::AgentRunner::new(def, config);
     let prompt = runner.build_system_prompt();
@@ -181,6 +184,7 @@ async fn runner_requires_host_executor_for_execution() {
         tools: vec!["Read".to_owned(), "Write".to_owned()],
         system_prompt: None,
         working_dir: PathBuf::from("."),
+        additional_working_directories: Vec::new(),
     };
     let runner = rc_agents::AgentRunner::new(def, config);
     let error = runner
@@ -234,6 +238,7 @@ async fn runner_executes_via_mock_executor_with_resolved_request() {
         ],
         system_prompt: None,
         working_dir: PathBuf::from("."),
+        additional_working_directories: Vec::new(),
     };
     let runner = rc_agents::AgentRunner::new(def, config);
     let result = runner

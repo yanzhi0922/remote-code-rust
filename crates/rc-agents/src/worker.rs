@@ -359,6 +359,7 @@ pub fn worker_run_config(worker_config: &WorkerConfig) -> AgentRunConfig {
         tools,
         system_prompt: None,
         working_dir,
+        additional_working_directories: Vec::new(),
     }
 }
 
