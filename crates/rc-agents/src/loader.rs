@@ -3,13 +3,14 @@
 //! Loads agent definitions from `.claude/agents/` directories (user, project,
 //! and local settings) as well as from JSON configuration files.
 
-use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use indexmap::IndexMap;
 use rc_context::RuntimeIdentityContext;
 use serde::Deserialize;
+use walkdir::WalkDir;
 
 use crate::builtins::get_built_in_agents_with_context;
 use crate::definition::{AgentDefinition, AgentSource};
@@ -75,20 +76,22 @@ pub fn load_agents_from_dir(dir: &Path, source: AgentSource) -> Result<Vec<Agent
     }
 
     let mut agents = Vec::new();
-    let entries = fs::read_dir(dir)
-        .with_context(|| format!("Failed to read agent directory: {}", dir.display()))?;
-
-    for entry in entries {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(e) => {
-                // Skip entries we can't read but continue
-                tracing::warn!("Skipping unreadable dir entry: {}", e);
-                continue;
+    let mut paths = WalkDir::new(dir)
+        .follow_links(true)
+        .sort_by(|a, b| a.path().cmp(b.path()))
+        .into_iter()
+        .filter_map(|entry| match entry {
+            Ok(entry) if entry.file_type().is_file() => Some(entry.into_path()),
+            Ok(_) => None,
+            Err(error) => {
+                tracing::warn!("Skipping unreadable dir entry: {}", error);
+                None
             }
-        };
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
 
-        let path = entry.path();
+    for path in paths {
         let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
         match extension {
@@ -106,7 +109,6 @@ pub fn load_agents_from_dir(dir: &Path, source: AgentSource) -> Result<Vec<Agent
         }
     }
 
-    agents.sort_by(|a, b| a.agent_type.cmp(&b.agent_type));
     Ok(agents)
 }
 
@@ -211,7 +213,7 @@ pub fn load_agents_from_json(path: &Path, source: AgentSource) -> Result<Vec<Age
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read agent JSON file: {}", path.display()))?;
 
-    let entries: std::collections::HashMap<String, AgentFileEntry> = serde_json::from_str(&content)
+    let entries: IndexMap<String, AgentFileEntry> = serde_json::from_str(&content)
         .with_context(|| format!("Failed to parse agent JSON file: {}", path.display()))?;
 
     let base_dir = path
@@ -473,20 +475,31 @@ pub fn load_all_agents_with_context(
     project_dir: Option<&Path>,
     ctx: &RuntimeIdentityContext,
 ) -> AgentDefinitionsResult {
+    load_all_agents_with_options(user_dir, project_dir, ctx, simple_mode_enabled())
+}
+
+fn load_all_agents_with_options(
+    user_dir: Option<&Path>,
+    project_dir: Option<&Path>,
+    ctx: &RuntimeIdentityContext,
+    simple_mode: bool,
+) -> AgentDefinitionsResult {
     let mut all_agents = get_built_in_agents_with_context(ctx);
     let mut failed_files = Vec::new();
 
-    if let Some(dir) = user_dir {
-        match load_agents_from_dir(dir, AgentSource::User) {
-            Ok(agents) => all_agents.extend(agents),
-            Err(e) => failed_files.push((dir.display().to_string(), e.to_string())),
+    if !simple_mode {
+        if let Some(dir) = user_dir {
+            match load_agents_from_dir(dir, AgentSource::User) {
+                Ok(agents) => all_agents.extend(agents),
+                Err(e) => failed_files.push((dir.display().to_string(), e.to_string())),
+            }
         }
-    }
 
-    if let Some(dir) = project_dir {
-        match load_agents_from_dir(dir, AgentSource::Project) {
-            Ok(agents) => all_agents.extend(agents),
-            Err(e) => failed_files.push((dir.display().to_string(), e.to_string())),
+        if let Some(dir) = project_dir {
+            match load_agents_from_dir(dir, AgentSource::Project) {
+                Ok(agents) => all_agents.extend(agents),
+                Err(e) => failed_files.push((dir.display().to_string(), e.to_string())),
+            }
         }
     }
 
@@ -499,21 +512,35 @@ pub fn load_all_agents_with_context(
     }
 }
 
-/// Resolve which agents are active based on priority (later source wins).
-fn resolve_active_agents(all_agents: &[AgentDefinition]) -> Vec<AgentDefinition> {
-    let mut seen_types: HashSet<String> = HashSet::new();
-    let mut active: Vec<AgentDefinition> = Vec::new();
+fn simple_mode_enabled() -> bool {
+    std::env::var("CLAUDE_CODE_SIMPLE").is_ok_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
 
-    // Process in reverse order so later entries (higher priority) win
-    for agent in all_agents.iter().rev() {
-        if !seen_types.contains(&agent.agent_type) {
-            seen_types.insert(agent.agent_type.clone());
-            active.push(agent.clone());
+/// Resolve which agents are active using research precedence while preserving
+/// first-seen ordering.
+fn resolve_active_agents(all_agents: &[AgentDefinition]) -> Vec<AgentDefinition> {
+    let mut active = IndexMap::<String, AgentDefinition>::new();
+    for source in [
+        AgentSource::BuiltIn,
+        AgentSource::Plugin,
+        AgentSource::Marketplace,
+        AgentSource::User,
+        AgentSource::Project,
+        AgentSource::Local,
+        AgentSource::Flag,
+        AgentSource::Policy,
+    ] {
+        for agent in all_agents.iter().filter(|agent| agent.source == source) {
+            active.insert(agent.agent_type.clone(), agent.clone());
         }
     }
 
-    active.sort_by(|a, b| a.agent_type.cmp(&b.agent_type));
-    active
+    active.into_values().collect()
 }
 
 #[cfg(test)]
@@ -546,6 +573,22 @@ mod tests {
         assert_eq!(agents[0].agent_type, "my-agent");
         assert_eq!(agents[0].tools, vec!["Bash", "Read"]);
         assert_eq!(agents[0].source, AgentSource::User);
+    }
+
+    #[test]
+    fn load_agents_from_json_preserves_insertion_order() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let json = r#"{
+            "z-agent": {"description": "Z", "prompt": "z"},
+            "a-agent": {"description": "A", "prompt": "a"}
+        }"#;
+        let path = dir.path().join("agents.json");
+        fs::write(&path, json).expect("write");
+
+        let agents = load_agents_from_json(&path, AgentSource::User).expect("load");
+        assert_eq!(agents.len(), 2);
+        assert_eq!(agents[0].agent_type, "z-agent");
+        assert_eq!(agents[1].agent_type, "a-agent");
     }
 
     #[test]
@@ -593,6 +636,22 @@ mod tests {
 
         let agents = load_agents_from_dir(dir.path(), AgentSource::Project).expect("load dir");
         assert!(agents.is_empty());
+    }
+
+    #[test]
+    fn load_agents_from_dir_recurses_into_nested_directories() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let nested = dir.path().join("nested").join("deeper");
+        fs::create_dir_all(&nested).expect("nested agents dir");
+        fs::write(
+            nested.join("reviewer.md"),
+            "---\nname: reviewer\ndescription: Nested reviewer\n---\nUse nested prompt.\n",
+        )
+        .expect("write nested agent");
+
+        let agents = load_agents_from_dir(dir.path(), AgentSource::Project).expect("load dir");
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].agent_type, "reviewer");
     }
 
     #[test]
@@ -701,6 +760,43 @@ mod tests {
         // Should have exactly one "test" agent
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].source, AgentSource::User);
+    }
+
+    #[test]
+    fn resolve_active_agents_preserves_first_seen_order_while_overriding_values() {
+        let built_in_alpha = AgentDefinition::new("alpha", "built-in alpha");
+        let built_in_beta = AgentDefinition::new("beta", "built-in beta");
+        let user_beta = {
+            let mut definition = AgentDefinition::new("beta", "user beta");
+            definition.source = AgentSource::User;
+            definition
+        };
+
+        let active = resolve_active_agents(&[built_in_alpha, built_in_beta, user_beta]);
+        assert_eq!(active.len(), 2);
+        assert_eq!(active[0].agent_type, "alpha");
+        assert_eq!(active[1].agent_type, "beta");
+        assert_eq!(active[1].source, AgentSource::User);
+    }
+
+    #[test]
+    fn simple_mode_skips_custom_agent_loading() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join("custom.md"),
+            "---\nname: custom\ndescription: Custom agent\n---\nCustom prompt.\n",
+        )
+        .expect("write custom agent");
+
+        let result = load_all_agents_with_options(
+            Some(dir.path()),
+            Some(dir.path()),
+            &RuntimeIdentityContext::from_legacy_env(),
+            true,
+        );
+
+        assert!(!result.active_agents.iter().any(|agent| agent.agent_type == "custom"));
+        assert!(!result.all_agents.iter().any(|agent| agent.agent_type == "custom"));
     }
 
     #[test]

@@ -3974,6 +3974,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "indexmap 2.13.1",
  "rc-context",
  "rc-core",
  "serde",
@@ -3982,6 +3983,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "walkdir",
 ]
 
 [[package]]
