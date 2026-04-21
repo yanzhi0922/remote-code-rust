@@ -556,6 +556,18 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                             "required": ["tool", "prompt"],
                             "additionalProperties": false
                         }
+                    },
+                    "plan": {
+                        "type": "string",
+                        "description": "The plan content (injected by normalizeToolInput from disk)"
+                    },
+                    "planFilePath": {
+                        "type": "string",
+                        "description": "The plan file path (injected by normalizeToolInput)"
+                    },
+                    "plan_file_path": {
+                        "type": "string",
+                        "description": "The plan file path (runtime compatibility alias)"
                     }
                 },
                 "additionalProperties": false,
@@ -1282,6 +1294,29 @@ mod tests {
                 "properties": {},
                 "additionalProperties": false,
             })
+        );
+    }
+
+    #[test]
+    fn exit_plan_mode_schema_allows_runtime_injected_plan_fields() {
+        let specs = builtin_tool_specs();
+        let spec = specs
+            .iter()
+            .find(|spec| spec.name == "exit_plan_mode")
+            .expect("exit_plan_mode spec");
+        let properties = spec
+            .input_schema
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .expect("properties");
+
+        assert!(properties.contains_key("allowedPrompts"));
+        assert!(properties.contains_key("plan"));
+        assert!(properties.contains_key("planFilePath"));
+        assert!(properties.contains_key("plan_file_path"));
+        assert_eq!(
+            spec.input_schema["additionalProperties"],
+            serde_json::Value::Bool(false)
         );
     }
 
