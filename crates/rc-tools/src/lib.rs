@@ -381,6 +381,33 @@ pub enum ToolSourceKind {
     McpResource,
 }
 
+pub const DEFAULT_TOOL_MAX_RESULT_SIZE_CHARS: usize = 100_000;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolResultSizePolicy {
+    Finite(usize),
+    NeverPersist,
+}
+
+impl Default for ToolResultSizePolicy {
+    fn default() -> Self {
+        Self::Finite(DEFAULT_TOOL_MAX_RESULT_SIZE_CHARS)
+    }
+}
+
+impl ToolResultSizePolicy {
+    #[must_use]
+    pub fn finite(chars: usize) -> Self {
+        Self::Finite(chars)
+    }
+
+    #[must_use]
+    pub fn is_never_persist(self) -> bool {
+        matches!(self, Self::NeverPersist)
+    }
+}
+
 const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
 const TOOL_SEARCH_COMPAT_NAME: &str = "toolsearch";
 
@@ -607,6 +634,15 @@ pub async fn runtime_provider_tool_spec(name: &str) -> Option<ToolSpec> {
         .find(|spec| spec.name == name)
 }
 
+#[must_use]
+pub fn runtime_tool_result_persistence_skip_names() -> std::collections::HashSet<String> {
+    runtime_builtin_tool_specs()
+        .into_iter()
+        .filter(|spec| spec.tool_result_size_policy().is_never_persist())
+        .map(|spec| spec.name)
+        .collect()
+}
+
 /// Specification for a single built-in tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolSpec {
@@ -625,6 +661,20 @@ pub struct ToolSpec {
 }
 
 impl ToolSpec {
+    #[must_use]
+    pub fn tool_result_size_policy(&self) -> ToolResultSizePolicy {
+        match self.name.as_str() {
+            // Research Read declares maxResultSizeChars: Infinity. Its output is
+            // already bounded by file-reading limits; persisting it would create
+            // a circular "read this file to read that file" flow.
+            "read_file" => ToolResultSizePolicy::NeverPersist,
+            "bash_command" | "powershell" => ToolResultSizePolicy::finite(30_000),
+            "grep" => ToolResultSizePolicy::finite(20_000),
+            "mcp_auth" => ToolResultSizePolicy::finite(10_000),
+            _ => ToolResultSizePolicy::default(),
+        }
+    }
+
     #[must_use]
     pub fn source_kind(&self) -> ToolSourceKind {
         if matches!(
@@ -1407,11 +1457,11 @@ pub(crate) fn tool_allowed_by_policy(tool_name: &str, policy: &ToolRuntimePolicy
 mod tests {
     use super::{
         CommandHookExecutionRequest, HookShell, RuntimeMcpServerPolicyEntry, ToolExecutionContext,
-        ToolRuntimePolicy, ToolRuntimePolicyOverlay, builtin_tool_specs,
+        ToolResultSizePolicy, ToolRuntimePolicy, ToolRuntimePolicyOverlay, builtin_tool_specs,
         configure_tool_runtime_policy, execute_command_hook, execute_tool_call,
         extract_discovered_tool_names, extract_discovered_tool_names_from_conversation,
-        runtime_provider_tool_specs, runtime_tool_search_candidate_specs,
-        runtime_visible_provider_tool_specs,
+        runtime_provider_tool_specs, runtime_tool_result_persistence_skip_names,
+        runtime_tool_search_candidate_specs, runtime_visible_provider_tool_specs,
         runtime_visible_provider_tool_specs_with_discovered_tools,
         with_runtime_agent_prompt_context_provider, with_tool_runtime_policy_overlay,
     };
@@ -1436,6 +1486,47 @@ mod tests {
     use tokio::sync::Mutex as AsyncMutex;
 
     static RUNTIME_POLICY_TEST_MUTEX: Lazy<AsyncMutex<()>> = Lazy::new(|| AsyncMutex::new(()));
+
+    #[test]
+    fn builtin_tool_result_size_policies_match_research_overrides() {
+        let specs = builtin_tool_specs();
+        let read_file = specs
+            .iter()
+            .find(|spec| spec.name == "read_file")
+            .expect("read_file spec");
+        let bash = specs
+            .iter()
+            .find(|spec| spec.name == "bash_command")
+            .expect("bash_command spec");
+        let powershell = specs
+            .iter()
+            .find(|spec| spec.name == "powershell")
+            .expect("powershell spec");
+        let grep = specs
+            .iter()
+            .find(|spec| spec.name == "grep")
+            .expect("grep spec");
+        let skip_tool_names = runtime_tool_result_persistence_skip_names();
+
+        assert_eq!(
+            read_file.tool_result_size_policy(),
+            ToolResultSizePolicy::NeverPersist
+        );
+        assert_eq!(
+            bash.tool_result_size_policy(),
+            ToolResultSizePolicy::Finite(30_000)
+        );
+        assert_eq!(
+            powershell.tool_result_size_policy(),
+            ToolResultSizePolicy::Finite(30_000)
+        );
+        assert_eq!(
+            grep.tool_result_size_policy(),
+            ToolResultSizePolicy::Finite(20_000)
+        );
+        assert!(skip_tool_names.contains("read_file"));
+        assert!(!skip_tool_names.contains("bash_command"));
+    }
 
     #[derive(Debug)]
     struct RecordingPermissionBroker {

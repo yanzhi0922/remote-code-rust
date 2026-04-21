@@ -30,7 +30,7 @@ use rc_tools::{
     runtime_plan_mode::{
         build_runtime_plan_mode, inject_plan_mode_runtime_messages, install_plan_mode_runtime,
     },
-    runtime_provider_tool_spec,
+    runtime_provider_tool_spec, runtime_tool_result_persistence_skip_names,
     tasks::load_persisted_ui_task_snapshots,
     tool_result_storage::{
         ContentReplacementRecord, ContentReplacementState,
@@ -691,13 +691,14 @@ pub(crate) async fn run_prompt(
 ) -> Result<PromptRunOutcome> {
     let replacement_state =
         provision_content_replacement_state(store, config.session_id, conversation)?;
+    let skip_tool_names = runtime_tool_result_persistence_skip_names();
     let backend = ContentReplacementBackend::new(
         backend,
         Arc::new(SessionStore::open(config.paths.clone())?),
         config.session_id,
         session_tool_results_dir(config),
         replacement_state,
-        HashSet::new(),
+        skip_tool_names,
     );
     if env::var_os("REMOTE_CODE_FORCE_LEGACY_PROMPT_LOOP").is_some() {
         return run_prompt_legacy(
@@ -965,7 +966,7 @@ async fn run_prompt_legacy(
         )?;
 
         for tool_call in &response.tool_calls {
-            let _ = runtime_provider_tool_spec(&tool_call.name)
+            let original_tool_spec = runtime_provider_tool_spec(&tool_call.name)
                 .await
                 .ok_or_else(|| anyhow!("unknown tool {}", tool_call.name))?;
 
@@ -980,6 +981,13 @@ async fn run_prompt_legacy(
             .await?;
 
             let effective_tool_call = prepared.call;
+            let effective_tool_spec = if effective_tool_call.name == original_tool_spec.name {
+                original_tool_spec
+            } else {
+                runtime_provider_tool_spec(&effective_tool_call.name)
+                    .await
+                    .ok_or_else(|| anyhow!("unknown tool {}", effective_tool_call.name))?
+            };
             let audit_count_before = broker.audit_records().len();
             let tool_result = if let Some(blocked_reason) = &prepared.blocked_reason {
                 rc_core::ToolResult {
@@ -1048,7 +1056,7 @@ async fn run_prompt_legacy(
                 &effective_tool_call.id,
                 &effective_tool_call.name,
                 Some(&tool_results_dir),
-                None,
+                effective_tool_spec.tool_result_size_policy(),
             )?;
             let tool_preview = truncate_preview(&processed_result.content, 160);
             if let Some(event_sink) = event_sink.as_ref() {
