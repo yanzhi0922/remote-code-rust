@@ -55,6 +55,7 @@ use rc_tools::{
     plan_mode::normalize_exit_plan_mode_tool_calls,
     runtime_plan_mode::inject_plan_mode_runtime_messages,
     runtime_provider_tool_spec, runtime_provider_tool_specs,
+    tool_result_storage::process_tool_result_text,
     with_runtime_agent_prompt_context_provider, with_runtime_mcp_observation_provider,
     with_runtime_mcp_state_provider, with_tool_runtime_policy_overlay,
 };
@@ -445,6 +446,10 @@ fn spawn_runtime_agent_prompt_context_provider(
     }
     agent_memory_dirs.sort();
     agent_memory_dirs.dedup();
+    let session_dir = config
+        .paths
+        .sessions_dir
+        .join(config.session_id.to_string());
     let context = RuntimeAgentPromptContext {
         user_agents_dir: inherited_context
             .as_ref()
@@ -465,12 +470,9 @@ fn spawn_runtime_agent_prompt_context_provider(
         list_via_attachment: runtime_identity.features.agent_listing_delta_enabled,
         runtime_identity,
         scratchpad_dir: prompt_settings.scratchpad_dir.map(PathBuf::from),
-        session_memory_dir: Some(
-            config
-                .paths
-                .sessions_dir
-                .join(config.session_id.to_string()),
-        ),
+        session_memory_dir: Some(session_dir.join("session-memory")),
+        tasks_dir: Some(rc_swarm::team_helpers::claude_config_home_dir().join("tasks")),
+        tool_results_dir: Some(session_dir.join("tool-results")),
         auto_memory_dir: prompt_settings
             .auto_memory_permission_dir
             .map(PathBuf::from),
@@ -1738,10 +1740,23 @@ impl ToolRunner for CompatToolRunner {
                 })
             });
 
-        let tool_preview = truncate_preview(&raw_result.content, 160);
+        let tool_results_dir = Some(
+            self.config
+                .paths
+                .sessions_dir
+                .join(self.config.session_id.to_string())
+                .join("tool-results"),
+        );
+        let persisted_content = process_tool_result_text(
+            &raw_result.content,
+            &effective_tool_call.id,
+            tool_results_dir.as_deref(),
+            None,
+        )?;
+        let tool_preview = truncate_preview(&persisted_content, 160);
         let model_name = self.config.provider.model.as_deref().unwrap_or("unknown");
         let truncated_content = rc_provider::context::ContextWindowManager::for_model(model_name)
-            .truncate_tool_output_default(&raw_result.content);
+            .truncate_tool_output_default(&persisted_content);
         let result = ToolResult {
             content: truncated_content.clone(),
             is_error: raw_result.is_error,
@@ -2710,6 +2725,8 @@ mod tests {
             runtime_identity: RuntimeIdentityContext::from_legacy_env(),
             scratchpad_dir: None,
             session_memory_dir: None,
+            tasks_dir: None,
+            tool_results_dir: None,
             auto_memory_dir: None,
             auto_memory_read_dir: None,
             project_temp_dir: None,
@@ -2788,6 +2805,8 @@ mod tests {
             allowed_tools: Vec::new(),
             disallowed_tools: Vec::new(),
             task_output_dir: None,
+            tasks_dir: None,
+            tool_results_dir: None,
             mcp_servers: vec![RuntimeMcpServerPolicyEntry {
                 origin_kind: "cwd".to_owned(),
                 origin_name: "workspace".to_owned(),
@@ -2893,6 +2912,8 @@ mod tests {
             allowed_tools: Vec::new(),
             disallowed_tools: Vec::new(),
             task_output_dir: None,
+            tasks_dir: None,
+            tool_results_dir: None,
             mcp_servers: vec![fake_runtime_mcp_policy_entry(
                 "context7",
                 config_path.clone(),
@@ -2973,6 +2994,8 @@ mod tests {
             allowed_tools: Vec::new(),
             disallowed_tools: Vec::new(),
             task_output_dir: None,
+            tasks_dir: None,
+            tool_results_dir: None,
             mcp_servers: vec![RuntimeMcpServerPolicyEntry {
                 origin_kind: discovered_entry.origin_kind.to_owned(),
                 origin_name: discovered_entry.origin_name.clone(),
@@ -4154,6 +4177,8 @@ while True:
             allowed_tools: Vec::new(),
             disallowed_tools: Vec::new(),
             task_output_dir: None,
+            tasks_dir: None,
+            tool_results_dir: None,
             mcp_servers: vec![RuntimeMcpServerPolicyEntry {
                 origin_kind: "cwd".to_owned(),
                 origin_name: "workspace".to_owned(),

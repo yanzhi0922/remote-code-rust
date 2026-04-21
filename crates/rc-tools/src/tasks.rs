@@ -786,6 +786,14 @@ pub fn configure_task_list_context(
     Ok(())
 }
 
+pub fn configure_task_list_base_dir(base_dir: Option<PathBuf>) -> Result<()> {
+    let mut configured_base_dir = TASK_LIST_BASE_DIR
+        .lock()
+        .map_err(|_| anyhow!("task list base dir lock poisoned"))?;
+    *configured_base_dir = base_dir;
+    Ok(())
+}
+
 pub fn set_leader_team_name(team_name: Option<String>) -> Result<()> {
     let mut current = LEADER_TEAM_NAME
         .lock()

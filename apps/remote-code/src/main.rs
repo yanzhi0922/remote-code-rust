@@ -256,6 +256,10 @@ fn setting_sources_from_cli(values: &[SettingSourceArgValue]) -> Option<Vec<Sett
 }
 
 fn configure_runtime_policy(config: &rc_config::RuntimeConfig) -> Result<()> {
+    let session_dir = config
+        .paths
+        .sessions_dir
+        .join(config.session_id.to_string());
     configure_tool_runtime_policy(ToolRuntimePolicy {
         allowed_tools: config.allowed_tools.clone(),
         disallowed_tools: config.disallowed_tools.clone(),
@@ -266,6 +270,8 @@ fn configure_runtime_policy(config: &rc_config::RuntimeConfig) -> Result<()> {
                 .join("tasks")
                 .join(config.session_id.to_string()),
         ),
+        tasks_dir: Some(rc_swarm::team_helpers::claude_config_home_dir().join("tasks")),
+        tool_results_dir: Some(session_dir.join("tool-results")),
         shell_policy: ShellExecutionPolicy {
             block_inline_cwd: true,
             allow_background: true,

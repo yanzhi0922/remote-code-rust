@@ -1975,10 +1975,16 @@ fn shell_output_dir_for_paths(paths: &AppPaths, session_id: Uuid) -> PathBuf {
 }
 
 fn configure_runtime_policy_for_config(config: &RuntimeConfig) -> Result<()> {
+    let session_dir = config
+        .paths
+        .sessions_dir
+        .join(config.session_id.to_string());
     configure_tool_runtime_policy(ToolRuntimePolicy {
         allowed_tools: config.allowed_tools.clone(),
         disallowed_tools: config.disallowed_tools.clone(),
         task_output_dir: Some(task_dir_for_paths(&config.paths, config.session_id)),
+        tasks_dir: Some(rc_tools::tasks::task_list_base_dir()),
+        tool_results_dir: Some(session_dir.join("tool-results")),
         mcp_servers: runtime_mcp_policy_entries(config, &[]),
         shell_policy: ShellExecutionPolicy {
             block_inline_cwd: true,

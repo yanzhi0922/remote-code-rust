@@ -32,6 +32,7 @@ use rc_tools::{
     },
     runtime_provider_tool_spec,
     tasks::load_persisted_ui_task_snapshots,
+    tool_result_storage::process_tool_result_text,
 };
 use rc_ui_bridge::UiTaskNode;
 
@@ -890,7 +891,18 @@ async fn run_prompt_legacy(
                     "message": tool_result.content.clone(),
                 }));
             }
-            let tool_preview = truncate_preview(&tool_result.content, 160);
+            let tool_results_dir = config
+                .paths
+                .sessions_dir
+                .join(config.session_id.to_string())
+                .join("tool-results");
+            let persisted_content = process_tool_result_text(
+                &tool_result.content,
+                &effective_tool_call.id,
+                Some(&tool_results_dir),
+                None,
+            )?;
+            let tool_preview = truncate_preview(&persisted_content, 160);
             if let Some(event_sink) = event_sink.as_ref() {
                 event_sink(PromptStreamEvent::ToolFinished {
                     tool_call_id: effective_tool_call.id.clone(),
@@ -900,7 +912,7 @@ async fn run_prompt_legacy(
                 });
             }
             let truncated_content =
-                context_manager.truncate_tool_output_default(&tool_result.content);
+                context_manager.truncate_tool_output_default(&persisted_content);
             let mut tool_entry = ConversationEntry::tool(
                 effective_tool_call.id.clone(),
                 effective_tool_call.name.clone(),
