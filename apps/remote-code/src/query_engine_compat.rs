@@ -55,7 +55,7 @@ use rc_tools::{
     plan_mode::normalize_exit_plan_mode_tool_calls,
     runtime_plan_mode::inject_plan_mode_runtime_messages,
     runtime_provider_tool_spec, runtime_provider_tool_specs,
-    tool_result_storage::process_tool_result_text,
+    tool_result_storage::process_tool_result_content,
     with_runtime_agent_prompt_context_provider, with_runtime_mcp_observation_provider,
     with_runtime_mcp_state_provider, with_tool_runtime_policy_overlay,
 };
@@ -1747,20 +1747,22 @@ impl ToolRunner for CompatToolRunner {
                 .join(self.config.session_id.to_string())
                 .join("tool-results"),
         );
-        let persisted_content = process_tool_result_text(
+        let processed_result = process_tool_result_content(
             &raw_result.content,
+            &raw_result.content_blocks,
             &effective_tool_call.id,
+            &effective_tool_call.name,
             tool_results_dir.as_deref(),
             None,
         )?;
-        let tool_preview = truncate_preview(&persisted_content, 160);
+        let tool_preview = truncate_preview(&processed_result.content, 160);
         let model_name = self.config.provider.model.as_deref().unwrap_or("unknown");
         let truncated_content = rc_provider::context::ContextWindowManager::for_model(model_name)
-            .truncate_tool_output_default(&persisted_content);
+            .truncate_tool_output_default(&processed_result.content);
         let result = ToolResult {
             content: truncated_content.clone(),
             is_error: raw_result.is_error,
-            content_blocks: raw_result.content_blocks.clone(),
+            content_blocks: processed_result.content_blocks.clone(),
         };
 
         {
@@ -1771,7 +1773,7 @@ impl ToolRunner for CompatToolRunner {
                 truncated_content,
                 raw_result.is_error,
             );
-            tool_entry.content_blocks = raw_result.content_blocks.clone();
+            tool_entry.content_blocks = processed_result.content_blocks.clone();
             self.store
                 .append_conversation_entry(self.config.session_id, &tool_entry)?;
             self.store.append_named_event(

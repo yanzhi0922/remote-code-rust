@@ -34,7 +34,7 @@ use rc_tools::{
     tasks::load_persisted_ui_task_snapshots,
     tool_result_storage::{
         ContentReplacementRecord, ContentReplacementState,
-        apply_tool_result_budget_to_conversation, process_tool_result_text,
+        apply_tool_result_budget_to_conversation, process_tool_result_content,
         reconstruct_content_replacement_state,
     },
 };
@@ -1042,13 +1042,15 @@ async fn run_prompt_legacy(
                 .sessions_dir
                 .join(config.session_id.to_string())
                 .join("tool-results");
-            let persisted_content = process_tool_result_text(
+            let processed_result = process_tool_result_content(
                 &tool_result.content,
+                &tool_result.content_blocks,
                 &effective_tool_call.id,
+                &effective_tool_call.name,
                 Some(&tool_results_dir),
                 None,
             )?;
-            let tool_preview = truncate_preview(&persisted_content, 160);
+            let tool_preview = truncate_preview(&processed_result.content, 160);
             if let Some(event_sink) = event_sink.as_ref() {
                 event_sink(PromptStreamEvent::ToolFinished {
                     tool_call_id: effective_tool_call.id.clone(),
@@ -1058,14 +1060,14 @@ async fn run_prompt_legacy(
                 });
             }
             let truncated_content =
-                context_manager.truncate_tool_output_default(&persisted_content);
+                context_manager.truncate_tool_output_default(&processed_result.content);
             let mut tool_entry = ConversationEntry::tool(
                 effective_tool_call.id.clone(),
                 effective_tool_call.name.clone(),
                 truncated_content,
                 tool_result.is_error,
             );
-            tool_entry.content_blocks = tool_result.content_blocks.clone();
+            tool_entry.content_blocks = processed_result.content_blocks.clone();
             store.append_conversation_entry(config.session_id, &tool_entry)?;
             store.append_named_event(
                 config.session_id,
