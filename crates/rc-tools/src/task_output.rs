@@ -21,13 +21,23 @@ struct PersistedTaskMetadata<'a> {
     output_path: Option<&'a str>,
 }
 
+/// # Errors
+/// Returns an error if the task-output directory cannot be created.
+pub fn ensure_task_output_dir(base_dir: &Path) -> Result<()> {
+    fs::create_dir_all(base_dir).with_context(|| format!("failed to create {}", base_dir.display()))
+}
+
+#[must_use]
+pub fn task_output_file_path(base_dir: &Path, task_id: &str) -> PathBuf {
+    base_dir.join(format!("{task_id}.output"))
+}
+
 /// Persist a task's metadata and output to the configured artifact directory.
 ///
 /// # Errors
 /// Returns an error if the task files cannot be written.
 pub fn persist_task(base_dir: &Path, task: &BackgroundTask) -> Result<Option<PathBuf>> {
-    fs::create_dir_all(base_dir)
-        .with_context(|| format!("failed to create {}", base_dir.display()))?;
+    ensure_task_output_dir(base_dir)?;
 
     let output_path = if task.output.trim().is_empty() {
         None
@@ -69,7 +79,13 @@ mod tests {
 
     use crate::tasks::{BackgroundTask, TaskStatus};
 
-    use super::persist_task;
+    use super::{persist_task, task_output_file_path};
+
+    #[test]
+    fn task_output_file_path_matches_research_suffix() {
+        let path = task_output_file_path(PathBuf::from("base").as_path(), "task-1");
+        assert_eq!(path, PathBuf::from("base").join("task-1.output"));
+    }
 
     #[test]
     fn persist_task_writes_metadata_and_output() {

@@ -5,6 +5,7 @@ pub mod path_validation;
 pub mod readonly;
 pub mod semantics;
 
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -15,10 +16,12 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
 use crate::ToolExecutionContext;
+use crate::task_output::{ensure_task_output_dir, task_output_file_path};
 use crate::tasks;
 
 use self::output::{
-    ShellOutputSummary, format_shell_result, persist_shell_output, prepare_stdout_for_display,
+    ShellOutputSummary, format_shell_result, output_size, persist_shell_output,
+    prepare_stdout_for_display, prepare_stdout_for_display_from_file, read_shell_output_preview,
     truncate_output,
 };
 use self::path_validation::resolve_working_dir;
@@ -34,6 +37,8 @@ pub struct ShellExecutionPolicy {
     pub output_dir: Option<std::path::PathBuf>,
     #[serde(default)]
     pub tool_results_dir: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub task_output_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for ShellExecutionPolicy {
@@ -45,6 +50,7 @@ impl Default for ShellExecutionPolicy {
             max_capture_chars: max_capture_chars_from_env(),
             output_dir: None,
             tool_results_dir: None,
+            task_output_dir: None,
         }
     }
 }
@@ -65,6 +71,8 @@ struct ShellExecutionOutcome {
     stdout: String,
     stderr: String,
     timed_out: bool,
+    stdout_file_path: Option<PathBuf>,
+    stdout_size: u64,
 }
 
 pub async fn execute_shell_command(
@@ -136,19 +144,27 @@ async fn execute_foreground(
 ) -> Result<String> {
     let mut process = build_process(request.kind, &request.command);
     process.current_dir(&request.cwd);
-    process.stdout(Stdio::piped());
+
+    let file_stem = shell_file_stem();
+    let stdout_file_path =
+        shell_task_output_path(policy.task_output_dir.as_deref(), &file_stem).await?;
+    if let Some(stdout_file_path) = stdout_file_path.as_ref() {
+        process.stdout(stdout_file(stdout_file_path)?);
+    } else {
+        process.stdout(Stdio::piped());
+    }
     process.stderr(Stdio::piped());
 
     let child = process.spawn().context("failed to spawn shell command")?;
-    let outcome = capture_process_output(child, request.timeout_ms).await?;
-
-    let file_stem = shell_file_stem();
-    let stdout = prepare_stdout_for_display(
-        &outcome.stdout,
+    let outcome = capture_process_output(
+        child,
+        request.timeout_ms,
+        stdout_file_path,
         policy.max_capture_chars,
-        policy.tool_results_dir.as_deref(),
-        &file_stem,
-    );
+    )
+    .await?;
+
+    let stdout = render_stdout_for_display(&outcome, policy.max_capture_chars, policy, &file_stem);
     let stderr = truncate_output(&outcome.stderr, policy.max_capture_chars);
     let artifact_contents = build_artifact_contents(
         &request.command,
@@ -207,28 +223,48 @@ async fn execute_background(
     let response_description = request.description.clone();
     let output_dir = policy.output_dir.clone();
     let tool_results_dir = policy.tool_results_dir.clone();
+    let task_output_dir = policy.task_output_dir.clone();
     let max_capture_chars = policy.max_capture_chars;
     tokio::spawn(async move {
         let outcome = async {
             let mut process = build_process(request.kind, &request.command);
             process.current_dir(&request.cwd);
-            process.stdout(Stdio::piped());
+            let file_stem = format!("task-{task_id_for_task}");
+            let stdout_file_path =
+                shell_task_output_path(task_output_dir.as_deref(), &file_stem).await?;
+            if let Some(stdout_file_path) = stdout_file_path.as_ref() {
+                process.stdout(stdout_file(stdout_file_path)?);
+            } else {
+                process.stdout(Stdio::piped());
+            }
             process.stderr(Stdio::piped());
 
             let child = process
                 .spawn()
                 .context("failed to spawn background shell command")?;
-            capture_process_output(child, request.timeout_ms).await
+            capture_process_output(
+                child,
+                request.timeout_ms,
+                stdout_file_path,
+                max_capture_chars,
+            )
+            .await
         }
         .await;
 
         match outcome {
             Ok(outcome) => {
                 let file_stem = format!("task-{}", task_id_for_task);
-                let stdout = prepare_stdout_for_display(
-                    &outcome.stdout,
+                let shell_policy = ShellExecutionPolicy {
                     max_capture_chars,
-                    tool_results_dir.as_deref(),
+                    tool_results_dir: tool_results_dir.clone(),
+                    task_output_dir: task_output_dir.clone(),
+                    ..ShellExecutionPolicy::default()
+                };
+                let stdout = render_stdout_for_display(
+                    &outcome,
+                    max_capture_chars,
+                    &shell_policy,
                     &file_stem,
                 );
                 let stderr = truncate_output(&outcome.stderr, max_capture_chars);
@@ -291,14 +327,20 @@ async fn execute_background(
 async fn capture_process_output(
     mut child: tokio::process::Child,
     timeout_ms: u64,
+    stdout_file_path: Option<PathBuf>,
+    max_capture_chars: usize,
 ) -> Result<ShellExecutionOutcome> {
-    let stdout_task = child.stdout.take().map(|mut stream| {
-        tokio::spawn(async move {
-            let mut stdout = String::new();
-            let _ = stream.read_to_string(&mut stdout).await;
-            stdout
+    let stdout_task = if stdout_file_path.is_none() {
+        child.stdout.take().map(|mut stream| {
+            tokio::spawn(async move {
+                let mut stdout = String::new();
+                let _ = stream.read_to_string(&mut stdout).await;
+                stdout
+            })
         })
-    });
+    } else {
+        None
+    };
     let stderr_task = child.stderr.take().map(|mut stream| {
         tokio::spawn(async move {
             let mut stderr = String::new();
@@ -317,10 +359,15 @@ async fn capture_process_output(
             }
         };
 
-    let stdout = match stdout_task {
+    let mut stdout = match stdout_task {
         Some(task) => task.await.unwrap_or_default(),
         None => String::new(),
     };
+    let mut stdout_size = stdout.len() as u64;
+    if let Some(path) = stdout_file_path.as_ref() {
+        stdout_size = output_size(path).unwrap_or(0);
+        stdout = read_shell_output_preview(path, max_capture_chars).unwrap_or_default();
+    }
     let stderr = match stderr_task {
         Some(task) => task.await.unwrap_or_default(),
         None => String::new(),
@@ -331,7 +378,57 @@ async fn capture_process_output(
         stdout,
         stderr,
         timed_out,
+        stdout_file_path,
+        stdout_size,
     })
+}
+
+async fn shell_task_output_path(
+    task_output_dir: Option<&Path>,
+    file_stem: &str,
+) -> Result<Option<PathBuf>> {
+    let Some(task_output_dir) = task_output_dir else {
+        return Ok(None);
+    };
+    let dir = task_output_dir.to_path_buf();
+    tokio::task::spawn_blocking(move || ensure_task_output_dir(&dir))
+        .await
+        .context("failed to join task output dir creation")??;
+    Ok(Some(task_output_file_path(task_output_dir, file_stem)))
+}
+
+fn stdout_file(path: &Path) -> Result<Stdio> {
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(path)
+        .with_context(|| format!("failed to create {}", path.display()))?;
+    Ok(Stdio::from(file))
+}
+
+fn render_stdout_for_display(
+    outcome: &ShellExecutionOutcome,
+    max_capture_chars: usize,
+    policy: &ShellExecutionPolicy,
+    persist_id: &str,
+) -> String {
+    if let Some(path) = outcome.stdout_file_path.as_ref() {
+        return prepare_stdout_for_display_from_file(
+            &outcome.stdout,
+            outcome.stdout_size,
+            path,
+            max_capture_chars,
+            policy.tool_results_dir.as_deref(),
+            persist_id,
+        );
+    }
+    prepare_stdout_for_display(
+        &outcome.stdout,
+        max_capture_chars,
+        policy.tool_results_dir.as_deref(),
+        persist_id,
+    )
 }
 
 fn build_process(kind: ShellKind, command: &str) -> Command {
@@ -436,6 +533,14 @@ mod tests {
         }
     }
 
+    fn large_output_command() -> &'static str {
+        if cfg!(windows) {
+            "1..4000 | ForEach-Object { 'line' }"
+        } else {
+            "yes line | head -n 4000"
+        }
+    }
+
     #[tokio::test]
     async fn timed_out_commands_return_rich_error_and_artifact() {
         let tempdir = tempdir().expect("tempdir");
@@ -492,6 +597,90 @@ mod tests {
 
         assert!(result.contains("description: print a greeting"));
         assert!(result.contains("stdout:"));
+    }
+
+    #[tokio::test]
+    async fn task_output_dir_receives_raw_stdout_file() {
+        let tempdir = tempdir().expect("tempdir");
+        let task_output_dir = tempdir.path().join("tasks");
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 2_000,
+            ..ToolExecutionContext::default()
+        };
+        let policy = ShellExecutionPolicy {
+            task_output_dir: Some(task_output_dir.clone()),
+            ..ShellExecutionPolicy::default()
+        };
+
+        let result = execute_shell_command(
+            test_shell_kind(),
+            &json!({
+                "command": echo_command(),
+                "description": "task output file"
+            }),
+            &context,
+            &policy,
+        )
+        .await
+        .expect("command should succeed");
+
+        assert!(result.contains("hello"));
+        let outputs = std::fs::read_dir(&task_output_dir)
+            .expect("task output dir")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("entries");
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(
+            outputs[0].path().extension().and_then(|ext| ext.to_str()),
+            Some("output")
+        );
+        let raw = std::fs::read_to_string(outputs[0].path()).expect("raw output");
+        assert!(raw.contains("hello"));
+    }
+
+    #[tokio::test]
+    async fn large_task_output_is_persisted_from_output_file() {
+        let tempdir = tempdir().expect("tempdir");
+        let task_output_dir = tempdir.path().join("tasks");
+        let tool_results_dir = tempdir.path().join("tool-results");
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            ..ToolExecutionContext::default()
+        };
+        let policy = ShellExecutionPolicy {
+            max_capture_chars: 128,
+            task_output_dir: Some(task_output_dir.clone()),
+            tool_results_dir: Some(tool_results_dir.clone()),
+            ..ShellExecutionPolicy::default()
+        };
+
+        let result = execute_shell_command(
+            test_shell_kind(),
+            &json!({
+                "command": large_output_command(),
+                "description": "large task output"
+            }),
+            &context,
+            &policy,
+        )
+        .await
+        .expect("command should succeed");
+
+        assert!(result.contains("<persisted-output>"));
+        let persisted = std::fs::read_dir(&tool_results_dir)
+            .expect("tool results dir")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("entries");
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(
+            persisted[0].path().extension().and_then(|ext| ext.to_str()),
+            Some("txt")
+        );
+        let full = std::fs::read_to_string(persisted[0].path()).expect("persisted output");
+        assert!(full.len() > 128);
+        assert!(full.contains("line"));
     }
 
     #[tokio::test]

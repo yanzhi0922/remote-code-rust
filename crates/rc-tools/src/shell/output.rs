@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -61,6 +62,23 @@ pub fn persist_large_shell_output(
     )
 }
 
+pub fn persist_large_shell_output_file(
+    tool_results_dir: Option<&Path>,
+    persist_id: &str,
+    source_path: &Path,
+    original_size: u64,
+    preview_source: &str,
+) -> Result<Option<PersistedToolResult>> {
+    persist_large_shell_output_file_with_cap(
+        tool_results_dir,
+        persist_id,
+        source_path,
+        original_size,
+        preview_source,
+        MAX_PERSISTED_SHELL_OUTPUT_BYTES as u64,
+    )
+}
+
 fn persist_large_shell_output_with_cap(
     tool_results_dir: Option<&Path>,
     persist_id: &str,
@@ -94,13 +112,70 @@ fn persist_large_shell_output_with_cap(
     }
 
     let (preview, has_more) = generate_preview(preview_source, PREVIEW_SIZE_BYTES);
-    Ok(Some(PersistedToolResult {
+    Ok(Some(build_persisted_shell_output_result(
         filepath,
-        original_size: contents.len(),
+        contents.len() as u64,
+        preview,
+        has_more,
+    )))
+}
+
+fn persist_large_shell_output_file_with_cap(
+    tool_results_dir: Option<&Path>,
+    persist_id: &str,
+    source_path: &Path,
+    original_size: u64,
+    preview_source: &str,
+    max_persisted_bytes: u64,
+) -> Result<Option<PersistedToolResult>> {
+    let Some(tool_results_dir) = tool_results_dir else {
+        return Ok(None);
+    };
+
+    ensure_tool_results_dir(tool_results_dir)?;
+    let filepath = get_tool_result_path(tool_results_dir, persist_id, false);
+
+    if !filepath.exists() {
+        if original_size > max_persisted_bytes {
+            let file = fs::OpenOptions::new()
+                .write(true)
+                .open(source_path)
+                .with_context(|| format!("failed to open {}", source_path.display()))?;
+            file.set_len(max_persisted_bytes)
+                .with_context(|| format!("failed to truncate {}", source_path.display()))?;
+        }
+
+        match fs::hard_link(source_path, &filepath) {
+            Ok(()) => {}
+            Err(_) => {
+                fs::copy(source_path, &filepath)
+                    .with_context(|| format!("failed to copy {}", filepath.display()))?;
+            }
+        }
+    }
+
+    let (preview, has_more) = generate_preview(preview_source, PREVIEW_SIZE_BYTES);
+    Ok(Some(build_persisted_shell_output_result(
+        filepath,
+        original_size,
+        preview,
+        has_more,
+    )))
+}
+
+fn build_persisted_shell_output_result(
+    filepath: PathBuf,
+    original_size: u64,
+    preview: String,
+    has_more: bool,
+) -> PersistedToolResult {
+    PersistedToolResult {
+        filepath,
+        original_size: usize::try_from(original_size).unwrap_or(usize::MAX),
         is_json: false,
         preview,
         has_more,
-    }))
+    }
 }
 
 #[must_use]
@@ -117,6 +192,31 @@ pub fn prepare_stdout_for_display(
     match persist_large_shell_output(tool_results_dir, persist_id, stdout) {
         Ok(Some(persisted)) => build_large_tool_result_message(&persisted),
         Ok(None) | Err(_) => truncate_output(stdout, max_chars),
+    }
+}
+
+#[must_use]
+pub fn prepare_stdout_for_display_from_file(
+    stdout_preview: &str,
+    stdout_size: u64,
+    stdout_file_path: &Path,
+    max_chars: usize,
+    tool_results_dir: Option<&Path>,
+    persist_id: &str,
+) -> String {
+    if stdout_size <= max_chars as u64 {
+        return stdout_preview.to_owned();
+    }
+
+    match persist_large_shell_output_file(
+        tool_results_dir,
+        persist_id,
+        stdout_file_path,
+        stdout_size,
+        shell_preview_content(stdout_preview).as_ref(),
+    ) {
+        Ok(Some(persisted)) => build_large_tool_result_message(&persisted),
+        Ok(None) | Err(_) => truncate_output(stdout_preview, max_chars),
     }
 }
 
@@ -180,6 +280,35 @@ fn shell_preview_content(content: &str) -> std::borrow::Cow<'_, str> {
         }
     }
     std::borrow::Cow::Borrowed("")
+}
+
+pub fn read_shell_output_preview(path: &Path, max_chars: usize) -> Result<String> {
+    let preview_bytes = max_chars.saturating_mul(4).saturating_add(4);
+    let mut file =
+        fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let mut buffer = vec![0u8; preview_bytes];
+    let bytes_read = file
+        .read(&mut buffer)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    buffer.truncate(bytes_read);
+    Ok(utf8_prefix(&buffer)
+        .map(|text| text.chars().take(max_chars).collect::<String>())
+        .unwrap_or_default())
+}
+
+pub fn output_size(path: &Path) -> Result<u64> {
+    Ok(fs::metadata(path)
+        .with_context(|| format!("failed to stat {}", path.display()))?
+        .len())
+}
+
+fn utf8_prefix(bytes: &[u8]) -> Option<&str> {
+    for boundary in (0..=bytes.len()).rev() {
+        if let Ok(text) = std::str::from_utf8(&bytes[..boundary]) {
+            return Some(text);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
