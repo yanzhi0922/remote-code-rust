@@ -3,8 +3,7 @@ use std::collections::BTreeMap;
 use anyhow::{Result, anyhow};
 use once_cell::sync::Lazy;
 use rc_mcp::{
-    McpClientInfo, McpListChangedSurface, McpServerConfig, McpServerInspection, McpToolCallResult,
-    inspect_server,
+    McpClientInfo, McpListChangedSurface, McpServerConfig, McpServerInspection, inspect_server,
     normalization::{build_mcp_tool_name, normalize_name_for_mcp},
 };
 use rc_ui_bridge::UiRuntimeMcpServerStatus;
@@ -251,25 +250,11 @@ pub async fn resolve_runtime_mcp_tool(name: &str) -> Result<RuntimeMcpToolDescri
         .ok_or_else(|| anyhow!("MCP tool '{name}' is not available in the current runtime catalog"))
 }
 
-fn format_mcp_tool_result(result: &McpToolCallResult) -> Result<String> {
-    let text_blocks = result
-        .content
-        .iter()
-        .filter(|content| content.kind == "text")
-        .filter_map(|content| content.fields.get("text").and_then(Value::as_str))
-        .collect::<Vec<_>>();
-    if !text_blocks.is_empty() {
-        return Ok(text_blocks.join("\n"));
-    }
-    if let Some(structured) = &result.structured_content {
-        return serde_json::to_string_pretty(structured)
-            .map_err(|error| anyhow!("failed to serialize MCP structured content: {error}"));
-    }
-    serde_json::to_string_pretty(&result.content)
-        .map_err(|error| anyhow!("failed to serialize MCP content blocks: {error}"))
-}
-
-pub async fn execute_runtime_mcp_tool(name: &str, input: &Value) -> Result<String> {
+pub async fn execute_runtime_mcp_tool(
+    name: &str,
+    input: &Value,
+    context: &crate::ToolExecutionContext,
+) -> Result<rc_core::ToolResult> {
     let descriptor = resolve_runtime_mcp_tool(name).await?;
     let response = rc_mcp::call_tool(
         &descriptor.server_config,
@@ -279,11 +264,7 @@ pub async fn execute_runtime_mcp_tool(name: &str, input: &Value) -> Result<Strin
     )
     .await?;
 
-    let formatted = format_mcp_tool_result(&response.result)?;
-    if response.result.is_error {
-        return Err(anyhow!(formatted));
-    }
-    Ok(formatted)
+    crate::mcp_tools::transform_mcp_tool_response(&response, context)
 }
 
 pub async fn clear_runtime_mcp_catalog_cache() {

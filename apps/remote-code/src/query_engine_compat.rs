@@ -4269,7 +4269,8 @@ while True:
         configure_tool_runtime_policy(original_policy).expect("restore runtime policy");
 
         let (outcome, conversation) = run_result.expect("compat run should succeed");
-        assert!(outcome.text.contains("resolved: tokio"));
+        assert!(outcome.text.contains("tokio"));
+        assert!(outcome.text.contains("library"));
         assert!(conversation.iter().any(|entry| {
             entry.role == ConversationRole::Tool
                 && entry.tool_call_id.as_deref() == Some("mcp-dynamic-1")
