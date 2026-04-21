@@ -49,17 +49,65 @@ describe('PermissionModal', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '允许执行' }));
     await waitFor(() => {
-      expect(resolvePermission).toHaveBeenCalledWith(true);
+      expect(resolvePermission).toHaveBeenCalledWith({ allowed: true });
     });
 
     resolvePermission.mockClear();
     fireEvent.click(screen.getByRole('button', { name: '拒绝' }));
     await waitFor(() => {
-      expect(resolvePermission).toHaveBeenCalledWith(false);
+      expect(resolvePermission).toHaveBeenCalledWith({ allowed: false });
     });
 
     resetAppStore({ pendingPermission: null });
     rerender(<PermissionModal />);
     expect(screen.queryByText('权限确认')).not.toBeInTheDocument();
+  });
+
+  it('builds structured exit plan approvals with prompt-rule updates and feedback', async () => {
+    const resolvePermission = vi.fn().mockResolvedValue(undefined);
+
+    resetAppStore({
+      pendingPermission: {
+        request_id: 'perm-plan',
+        tool_name: 'exit_plan_mode',
+        tool_use_id: 'tool-plan',
+        title: 'Allow ExitPlanMode',
+        description: 'Claude 已经写好计划，等待批准后开始执行。',
+        input: {
+          plan: '# Plan\n- run tests\n- ship it\n',
+          planFilePath: 'C:\\repo\\.remote-code\\plans\\ship.md',
+          allowedPrompts: [{ tool: 'Bash', prompt: 'run tests' }],
+        },
+        blocked_path: null,
+        permission_suggestions: [],
+      },
+      resolvePermission,
+    });
+
+    render(<PermissionModal />);
+
+    expect(screen.getByText('请求的语义权限')).toBeInTheDocument();
+    expect(screen.getByText('Bash(prompt: run tests)')).toBeInTheDocument();
+    expect(screen.getByText('C:\\repo\\.remote-code\\plans\\ship.md')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('审批反馈'), {
+      target: { value: 'Approved, but keep the verification step.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '允许执行' }));
+
+    await waitFor(() => {
+      expect(resolvePermission).toHaveBeenCalledWith({
+        allowed: true,
+        feedback: 'Approved, but keep the verification step.',
+        permission_updates: [
+          {
+            type: 'addRules',
+            destination: 'session',
+            behavior: 'allow',
+            rules: [{ tool_name: 'Bash', rule_content: 'prompt: run tests' }],
+          },
+        ],
+      });
+    });
   });
 });
