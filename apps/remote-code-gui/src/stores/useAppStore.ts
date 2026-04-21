@@ -172,7 +172,7 @@ interface AppState {
   deleteProviderConfig: (name: string) => Promise<void>;
   setActiveProvider: (name: string) => Promise<void>;
   switchProfile: (providerName: string, profileName: string | null) => Promise<void>;
-  resolvePermission: (allowed: boolean) => Promise<void>;
+  resolvePermission: (resolution: boolean | tauri.PermissionResolutionRequest) => Promise<void>;
 }
 
 async function registerEventListeners() {
@@ -716,10 +716,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     ]);
   },
 
-  resolvePermission: async (allowed: boolean) => {
+  resolvePermission: async (resolution: boolean | tauri.PermissionResolutionRequest) => {
     const pendingPermission = get().pendingPermission;
     if (!pendingPermission) return;
-    await tauri.resolvePermissionRequest(pendingPermission.request_id, { allowed });
+    await tauri.resolvePermissionRequest(
+      pendingPermission.request_id,
+      typeof resolution === 'boolean' ? { allowed: resolution } : resolution,
+    );
     set({ pendingPermission: null });
   },
 }));
