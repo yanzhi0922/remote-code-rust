@@ -1,6 +1,6 @@
 //! Shared helpers for persistent team and mailbox-backed collaboration tools.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -27,6 +27,30 @@ fn requested_team_name(input: &Value) -> Option<String> {
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn requested_description(input: &Value) -> Option<String> {
+    input
+        .get("description")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+pub(crate) fn current_session_team_name() -> Result<Option<String>> {
+    if let Some(team_name) = tasks::leader_team_name()? {
+        return Ok(Some(team_name));
+    }
+
+    if let Ok(value) = std::env::var(rc_swarm::constants::ENV_TEAM_NAME) {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Ok(Some(trimmed.to_owned()));
+        }
+    }
+
+    Ok(None)
 }
 
 fn sanitize_team_name(raw: &str) -> String {
@@ -134,56 +158,6 @@ pub(crate) async fn load_team(team_name: &str) -> Result<TeamFile> {
 
 pub(crate) fn team_name_from_input(input: &Value) -> Option<String> {
     requested_team_name(input)
-}
-
-fn build_member(
-    agent_def: &Value,
-    cwd: &Path,
-    index: usize,
-    fallback_role: &str,
-) -> Result<TeamMember> {
-    let name = agent_def
-        .get("name")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .ok_or_else(|| anyhow!("agent definition is missing a non-empty `name`"))?;
-    team_helpers::validate_agent_name(name).map_err(anyhow::Error::from)?;
-
-    let mut member = TeamMember::new(
-        format!("agent-{}", Uuid::new_v4().simple()),
-        name,
-        format!("pane-{index}"),
-        agent_def
-            .get("cwd")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| cwd.to_string_lossy().to_string()),
-    );
-    member.agent_type = Some(
-        agent_def
-            .get("role")
-            .and_then(Value::as_str)
-            .unwrap_or(fallback_role)
-            .to_owned(),
-    );
-    member.model = agent_def
-        .get("model")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    member.color = agent_def
-        .get("color")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    member.worktree_path = agent_def
-        .get("worktree_path")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    member.session_id = agent_def
-        .get("session_id")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    Ok(member)
 }
 
 #[derive(Debug, Clone)]
@@ -321,92 +295,50 @@ pub(crate) async fn finish_live_teammate(handle: &LiveTeammateHandle) -> Result<
 }
 
 pub(crate) async fn create_team(input: &Value, cwd: &Path) -> Result<String> {
-    let objective = input
-        .get("objective")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|objective| !objective.is_empty())
-        .ok_or_else(|| anyhow!("objective is required"))?;
-    let lead = input
-        .get("lead")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|lead| !lead.is_empty())
-        .unwrap_or("lead");
-
     let requested = requested_team_name(input)
-        .map(|name| sanitize_team_name(&name))
-        .unwrap_or_else(|| sanitize_team_name(objective));
+        .ok_or_else(|| anyhow!("team_name is required"))?;
+    let requested = sanitize_team_name(&requested);
+    let description = requested_description(input);
     team_helpers::validate_team_name(&requested).map_err(anyhow::Error::from)?;
 
-    let existing = match team_helpers::read_team(&requested).await {
-        Ok(team) => Some(team),
-        Err(SwarmError::TeamNotFound(_)) => None,
-        Err(other) => return Err(anyhow!(other)),
-    };
+    if let Some(existing_team_name) = current_session_team_name()? {
+        match team_helpers::read_team(&existing_team_name).await {
+            Ok(_) => {
+                return Err(anyhow!(
+                    "Already leading team \"{existing_team_name}\". A leader can only manage one team at a time. Use TeamDelete to end the current team before creating a new one."
+                ));
+            }
+            Err(SwarmError::TeamNotFound(_)) => {
+                tasks::clear_leader_team_name()?;
+            }
+            Err(other) => return Err(anyhow!(other)),
+        }
+    }
 
-    let existed = existing.is_some();
-    let team_name = if existed {
-        requested
-    } else {
-        unique_team_name(&requested).await?
-    };
-
-    let mut team = existing.unwrap_or_else(|| TeamFile::new(&team_name, lead));
+    let team_name = unique_team_name(&requested).await?;
+    let mut team = TeamFile::new(&team_name, rc_swarm::constants::TEAM_LEAD_NAME);
     team.name = team_name.clone();
-    team.lead_agent_id = lead.to_owned();
-    team.description = Some(objective.to_owned());
+    team.lead_agent_id = rc_swarm::constants::TEAM_LEAD_NAME.to_owned();
+    team.description = description.clone();
     team.members.clear();
     team.hidden_pane_ids.clear();
     team.team_allowed_paths = vec![TeamAllowedPath {
         path: cwd.to_string_lossy().to_string(),
         read_only: false,
     }];
-
-    let mut seen_members = BTreeSet::new();
-    if let Some(agents) = input.get("agents").and_then(Value::as_array) {
-        for (index, agent_def) in agents.iter().enumerate() {
-            let member = build_member(agent_def, cwd, index, "worker")?;
-            if member.name == team.lead_agent_id {
-                return Err(anyhow!(
-                    "agent '{}' cannot reuse the team lead name",
-                    member.name
-                ));
-            }
-            if !seen_members.insert(member.name.clone()) {
-                return Err(anyhow!("duplicate agent name '{}'", member.name));
-            }
-            team.members.push(member);
-        }
-    }
-
-    let status = if existed {
-        team_helpers::update_team(&team)
-            .await
-            .with_context(|| format!("failed to update team '{}'", team.name))?;
-        "updated"
-    } else {
-        team_helpers::create_team(&team)
-            .await
-            .with_context(|| format!("failed to create team '{}'", team.name))?;
-        "created"
-    };
+    team_helpers::create_team(&team)
+        .await
+        .with_context(|| format!("failed to create team '{}'", team.name))?;
 
     tasks::reset_task_list(&team.name)
         .with_context(|| format!("failed to reset task list for team '{}'", team.name))?;
     tasks::set_leader_team_name(Some(team.name.clone()))
         .with_context(|| format!("failed to set leader team name for '{}'", team.name))?;
 
-    let peers = peer_entries(&team);
     Ok(json!({
-        "type": "team_create",
-        "status": status,
         "team_name": team.name,
-        "objective": objective_from_team(&team),
-        "lead": team.lead_agent_id,
-        "member_count": team.members.len(),
-        "active_member_count": team.active_member_count(),
-        "peers": peers,
+        "team_file_path": team_helpers::team_file_path(&team.name).to_string_lossy().to_string(),
+        "lead_agent_id": team.lead_agent_id,
     })
     .to_string())
 }

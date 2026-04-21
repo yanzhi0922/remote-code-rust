@@ -1974,7 +1974,6 @@ while True:
         context: &ToolExecutionContext,
         broker: &StaticPermissionBroker,
         team_name: &str,
-        agents: serde_json::Value,
     ) {
         let result = execute_tool_call(
             &ToolCall {
@@ -1982,9 +1981,7 @@ while True:
                 name: "team_create".to_owned(),
                 input: json!({
                     "team_name": team_name,
-                    "objective": format!("Coordinate work for {team_name}"),
-                    "lead": "lead",
-                    "agents": agents,
+                    "description": format!("Coordinate work for {team_name}"),
                 }),
             },
             context,
@@ -1993,6 +1990,36 @@ while True:
         .await
         .expect("team_create should work");
         assert!(!result.is_error, "team_create error: {}", result.content);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result.content).expect("team_create should return json");
+        assert_eq!(parsed["team_name"], team_name);
+        assert!(parsed["team_file_path"].as_str().is_some());
+        assert!(parsed["lead_agent_id"].as_str().is_some());
+    }
+
+    async fn add_team_member_for_test(
+        team_name: &str,
+        agent_name: &str,
+        agent_type: &str,
+        cwd: &std::path::Path,
+        color: Option<&str>,
+    ) {
+        let mut team = team_helpers::read_team(team_name)
+            .await
+            .expect("team should exist");
+        let mut member = TeamMember::new(
+            format!("agent-{agent_name}"),
+            agent_name,
+            format!("pane-{agent_name}"),
+            cwd.to_string_lossy().to_string(),
+        );
+        member.agent_type = Some(agent_type.to_owned());
+        member.color = color.map(ToOwned::to_owned);
+        member.is_active = Some(true);
+        team.members.push(member);
+        team_helpers::update_team(&team)
+            .await
+            .expect("team should update");
     }
 
     fn fake_runtime_mcp_policy_entry(name: &str) -> RuntimeMcpServerPolicyEntry {
@@ -3506,16 +3533,11 @@ while True:
         };
         let broker = StaticPermissionBroker::new(true);
 
-        create_team_via_tool(
-            &context,
-            &broker,
-            "review-team",
-            json!([
-                {"name": "agent-1", "role": "worker", "color": "blue"},
-                {"name": "agent-2", "role": "reviewer", "cwd": tempdir.path().to_string_lossy()}
-            ]),
-        )
-        .await;
+        create_team_via_tool(&context, &broker, "review-team").await;
+        add_team_member_for_test("review-team", "agent-1", "worker", tempdir.path(), Some("blue"))
+            .await;
+        add_team_member_for_test("review-team", "agent-2", "reviewer", tempdir.path(), None)
+            .await;
 
         let created_team = team_helpers::read_team("review-team")
             .await
@@ -3638,13 +3660,8 @@ while True:
             task_stack: Default::default(),
         };
         let allow_broker = StaticPermissionBroker::new(true);
-        create_team_via_tool(
-            &context,
-            &allow_broker,
-            "cleanup-team",
-            json!([{"name": "agent-1", "role": "worker"}]),
-        )
-        .await;
+        create_team_via_tool(&context, &allow_broker, "cleanup-team").await;
+        add_team_member_for_test("cleanup-team", "agent-1", "worker", tempdir.path(), None).await;
 
         let list_result = execute_tool_call(
             &ToolCall {
@@ -3677,7 +3694,7 @@ while True:
             &ToolCall {
                 id: "team-delete-denied".to_owned(),
                 name: "team_delete".to_owned(),
-                input: json!({"team_name": "cleanup-team"}),
+                input: json!({}),
             },
             &context,
             &deny_broker,
@@ -3701,7 +3718,7 @@ while True:
             &ToolCall {
                 id: "team-delete".to_owned(),
                 name: "team_delete".to_owned(),
-                input: json!({"team_name": "cleanup-team"}),
+                input: json!({}),
             },
             &context,
             &allow_broker,
@@ -3711,8 +3728,14 @@ while True:
         assert!(!deleted.is_error, "team_delete error: {}", deleted.content);
         let parsed: serde_json::Value =
             serde_json::from_str(&deleted.content).expect("valid delete json");
-        assert_eq!(parsed["status"], "deleted");
-        assert_eq!(parsed["cleanup"]["team_dir"], "removed");
+        assert_eq!(parsed["success"], true);
+        assert_eq!(parsed["team_name"], "cleanup-team");
+        assert!(
+            parsed["message"]
+                .as_str()
+                .expect("message string")
+                .contains("Cleaned up directories and worktrees")
+        );
         assert!(team_helpers::read_team("cleanup-team").await.is_err());
     }
 
