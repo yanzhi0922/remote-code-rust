@@ -469,6 +469,21 @@ impl ConversationEntry {
         }
     }
 
+    /// Create a user-role entry backed entirely by provider content blocks.
+    pub fn user_with_content_blocks(content_blocks: Vec<Value>) -> Self {
+        Self {
+            role: ConversationRole::User,
+            text: String::new(),
+            history_text: None,
+            content_blocks,
+            tool_calls: Vec::new(),
+            attachments: Vec::new(),
+            tool_call_id: None,
+            name: None,
+            is_error: false,
+        }
+    }
+
     /// Create a user-role entry with multimodal attachments.
     pub fn user_with_attachments(text: impl Into<String>, attachments: Vec<Attachment>) -> Self {
         Self {
@@ -570,6 +585,9 @@ pub struct ToolResult {
     /// Provider-facing structured content blocks (for example `tool_reference`).
     #[serde(default)]
     pub content_blocks: Vec<Value>,
+    /// Additional user-role provider blocks that should be appended after the tool result.
+    #[serde(default)]
+    pub follow_up_user_blocks: Vec<Value>,
 }
 
 /// Fully-resolved execution request for a concrete sub-agent runtime.

@@ -229,6 +229,7 @@ pub fn plan_mode_guard(
         content: blocked_tool_message(spec.name.as_str(), current_plan_file_path()),
         is_error: true,
         content_blocks: Vec::new(),
+        follow_up_user_blocks: Vec::new(),
     })
 }
 

@@ -2599,6 +2599,42 @@ mod tests {
     }
 
     #[test]
+    fn anthropic_groups_tool_result_with_follow_up_user_blocks() {
+        let mut assistant = ConversationEntry::assistant("");
+        assistant.tool_calls = vec![ToolCall {
+            id: "call-1".to_owned(),
+            name: "read_file".to_owned(),
+            input: json!({"path":"src/main.rs"}),
+        }];
+        let tool = ConversationEntry::tool("call-1", "read_file", "ok", false);
+        let follow_up = ConversationEntry::user_with_content_blocks(vec![
+            json!({
+                "type": "text",
+                "text": "Approved. Proceed with the change.",
+            }),
+            json!({
+                "type": "text",
+                "text": "Extra UI note.",
+            }),
+        ]);
+
+        let (_system, messages) = to_anthropic_messages(&[
+            ConversationEntry::user("inspect"),
+            assistant,
+            tool,
+            follow_up,
+        ]);
+        let content = messages[2]["content"]
+            .as_array()
+            .expect("tool result turn should be grouped");
+        assert_eq!(content[0]["type"], "tool_result");
+        assert_eq!(content[1]["type"], "text");
+        assert_eq!(content[1]["text"], "Approved. Proceed with the change.");
+        assert_eq!(content[2]["type"], "text");
+        assert_eq!(content[2]["text"], "Extra UI note.");
+    }
+
+    #[test]
     fn anthropic_tool_reference_messages_relocate_text_siblings() {
         let relocated = relocate_tool_reference_siblings(vec![
             json!({

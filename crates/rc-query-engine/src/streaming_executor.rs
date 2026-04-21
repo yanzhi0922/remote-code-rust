@@ -125,6 +125,7 @@ impl StreamingToolExecutor {
                             content: format!("Tool execution error: {error:#}"),
                             is_error: true,
                             content_blocks: Vec::new(),
+                            follow_up_user_blocks: Vec::new(),
                         }),
                     );
                 }
@@ -174,6 +175,7 @@ mod tests {
                 content: format!("result:{}", tool_call.name),
                 is_error: false,
                 content_blocks: Vec::new(),
+                follow_up_user_blocks: Vec::new(),
             }))
         }
     }

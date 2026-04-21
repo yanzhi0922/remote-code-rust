@@ -219,6 +219,7 @@ fn tool_search_result(
             content: message,
             is_error: false,
             content_blocks: Vec::new(),
+            follow_up_user_blocks: Vec::new(),
         };
     }
 
@@ -235,6 +236,7 @@ fn tool_search_result(
                 })
             })
             .collect(),
+        follow_up_user_blocks: Vec::new(),
     }
 }
 

@@ -1704,6 +1704,7 @@ impl ToolRunner for CompatToolRunner {
                 content: blocked_reason.clone(),
                 is_error: true,
                 content_blocks: Vec::new(),
+                follow_up_user_blocks: Vec::new(),
             }
         } else if self
             .allowed_tools
@@ -1717,6 +1718,7 @@ impl ToolRunner for CompatToolRunner {
                 ),
                 is_error: true,
                 content_blocks: Vec::new(),
+                follow_up_user_blocks: Vec::new(),
             }
         } else {
             match execute_tool_call(
@@ -1745,6 +1747,7 @@ impl ToolRunner for CompatToolRunner {
                         content: format!("Tool execution error: {error}"),
                         is_error: true,
                         content_blocks: Vec::new(),
+                        follow_up_user_blocks: Vec::new(),
                     }
                 }
             }
@@ -1798,8 +1801,10 @@ impl ToolRunner for CompatToolRunner {
             content: truncated_content.clone(),
             is_error: raw_result.is_error,
             content_blocks: processed_result.content_blocks.clone(),
+            follow_up_user_blocks: raw_result.follow_up_user_blocks.clone(),
         };
 
+        let mut post_messages = Vec::new();
         {
             let mut conversation = self.shared.conversation.lock().await;
             let mut tool_entry = ConversationEntry::tool(
@@ -1822,9 +1827,18 @@ impl ToolRunner for CompatToolRunner {
                 }),
             )?;
             conversation.push(tool_entry);
+            if !raw_result.follow_up_user_blocks.is_empty() {
+                let follow_up_entry = ConversationEntry::user_with_content_blocks(
+                    raw_result.follow_up_user_blocks.clone(),
+                );
+                self.store
+                    .append_conversation_entry(self.config.session_id, &follow_up_entry)?;
+                post_messages.push(Message::from(follow_up_entry.clone()));
+                conversation.push(follow_up_entry);
+            }
         }
 
-        let post_messages = {
+        {
             let mut conversation = self.shared.conversation.lock().await;
             let mut hook_state = self.shared.hook_state.lock().await;
             let before_messages = conversation.len();
@@ -1838,12 +1852,13 @@ impl ToolRunner for CompatToolRunner {
                 &raw_result,
             )
             .await?;
-            conversation[before_messages..]
-                .iter()
-                .cloned()
-                .map(Message::from)
-                .collect::<Vec<_>>()
-        };
+            post_messages.extend(
+                conversation[before_messages..]
+                    .iter()
+                    .cloned()
+                    .map(Message::from),
+            );
+        }
 
         Ok(ToolRunResult {
             result,

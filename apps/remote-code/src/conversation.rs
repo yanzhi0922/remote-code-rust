@@ -994,6 +994,7 @@ async fn run_prompt_legacy(
                     content: blocked_reason.clone(),
                     is_error: true,
                     content_blocks: Vec::new(),
+                    follow_up_user_blocks: Vec::new(),
                 }
             } else {
                 // Capture tool execution errors as error tool results instead of
@@ -1019,6 +1020,7 @@ async fn run_prompt_legacy(
                             content: format!("Tool execution error: {error}"),
                             is_error: true,
                             content_blocks: Vec::new(),
+                            follow_up_user_blocks: Vec::new(),
                         }
                     }
                 }
@@ -1088,6 +1090,13 @@ async fn run_prompt_legacy(
                 }),
             )?;
             conversation.push(tool_entry);
+            if !tool_result.follow_up_user_blocks.is_empty() {
+                let follow_up_entry = ConversationEntry::user_with_content_blocks(
+                    tool_result.follow_up_user_blocks.clone(),
+                );
+                store.append_conversation_entry(config.session_id, &follow_up_entry)?;
+                conversation.push(follow_up_entry);
+            }
 
             apply_post_tool_hooks(
                 discovery,

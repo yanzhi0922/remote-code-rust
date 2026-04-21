@@ -798,6 +798,7 @@ async fn run_conversation_turn(
                     content: reason,
                     is_error: true,
                     content_blocks: Vec::new(),
+                    follow_up_user_blocks: Vec::new(),
                 },
                 None => {
                     match execute_tool_call(&effective_tool_call, &tool_context, broker).await {
@@ -813,6 +814,7 @@ async fn run_conversation_turn(
                                 content: format!("Tool execution error: {error}"),
                                 is_error: true,
                                 content_blocks: Vec::new(),
+                                follow_up_user_blocks: Vec::new(),
                             }
                         }
                     }
@@ -864,6 +866,13 @@ async fn run_conversation_turn(
             tool_entry.content_blocks = tool_result.content_blocks.clone();
             store.append_conversation_entry(config.session_id, &tool_entry)?;
             conversation.push(tool_entry);
+            if !tool_result.follow_up_user_blocks.is_empty() {
+                let follow_up_entry = ConversationEntry::user_with_content_blocks(
+                    tool_result.follow_up_user_blocks.clone(),
+                );
+                store.append_conversation_entry(config.session_id, &follow_up_entry)?;
+                conversation.push(follow_up_entry);
+            }
         }
         store.clear_resume_state(config.session_id)?;
     }

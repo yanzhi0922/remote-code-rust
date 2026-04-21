@@ -346,6 +346,7 @@ fn handle_large_mcp_output(input: McpLargeOutput<'_>) -> Result<ToolResult> {
             content: input.content.to_owned(),
             is_error: input.is_error,
             content_blocks: input.content_blocks,
+            follow_up_user_blocks: Vec::new(),
         });
     }
 
@@ -355,6 +356,7 @@ fn handle_large_mcp_output(input: McpLargeOutput<'_>) -> Result<ToolResult> {
             content: truncate_mcp_string(input.content),
             is_error: input.is_error,
             content_blocks: truncate_mcp_content_blocks(&input.content_blocks),
+            follow_up_user_blocks: Vec::new(),
         });
     }
 
@@ -363,6 +365,7 @@ fn handle_large_mcp_output(input: McpLargeOutput<'_>) -> Result<ToolResult> {
             content: truncate_mcp_string(input.content),
             is_error: input.is_error,
             content_blocks: truncate_mcp_content_blocks(&input.content_blocks),
+            follow_up_user_blocks: Vec::new(),
         });
     };
 
@@ -384,6 +387,7 @@ fn handle_large_mcp_output(input: McpLargeOutput<'_>) -> Result<ToolResult> {
                 content: large_output_persist_failure_message(raw_output.chars().count(), &error),
                 is_error: input.is_error,
                 content_blocks: Vec::new(),
+                follow_up_user_blocks: Vec::new(),
             });
         }
     };
@@ -397,6 +401,7 @@ fn handle_large_mcp_output(input: McpLargeOutput<'_>) -> Result<ToolResult> {
         content: instructions,
         is_error: input.is_error,
         content_blocks: Vec::new(),
+        follow_up_user_blocks: Vec::new(),
     })
 }
 
@@ -800,6 +805,7 @@ fn tool_result_from_text(content: String, is_error: bool) -> ToolResult {
         content,
         is_error,
         content_blocks: Vec::new(),
+        follow_up_user_blocks: Vec::new(),
     }
 }
 

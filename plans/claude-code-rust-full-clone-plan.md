@@ -4761,14 +4761,14 @@ crates/rc-provider/src/
 [provider]
 name = "minimax"
 base_url = "https://api.minimaxi.com/anthropic"
-api_key = "sk-cp-LwRmRL7DyMsvEVVYBo4t8ZQ_8tgy9_Pm5iQ2SZMyLOOjFVYeKeEX6rz97GY6um4VftEwLkyaXOnLJbftnGW13DkLyUjV9Pdq37uKS8IVEeLaEIpt4Vcey6o"
+api_key = "${MINIMAX_API_KEY}"
 protocol = "anthropic"
 model = "minimax-m2.7"
 ```
 
 或通过环境变量：
 ```bash
-export ANTHROPIC_API_KEY="sk-cp-LwRmRL7DyMsvEVVYBo4t8ZQ_8tgy9_Pm5iQ2SZMyLOOjFVYeKeEX6rz97GY6um4VftEwLkyaXOnLJbftnGW13DkLyUjV9Pdq37uKS8IVEeLaEIpt4Vcey6o"
+export ANTHROPIC_API_KEY="${MINIMAX_API_KEY}"
 export ANTHROPIC_BASE_URL="https://api.minimaxi.com/anthropic"
 export REMOTE_CODE_MODEL="minimax-m2.7"
 ```
@@ -4784,7 +4784,7 @@ export REMOTE_CODE_MODEL="minimax-m2.7"
       "command": "uvx",
       "args": ["minimax-coding-plan-mcp", "-y"],
       "env": {
-        "MINIMAX_API_KEY": "sk-cp-LwRmRL7DyMsvEVVYBo4t8ZQ_8tgy9_Pm5iQ2SZMyLOOjFVYeKeEX6rz97GY6um4VftEwLkyaXOnLJbftnGW13DkLyUjV9Pdq37uKS8IVEeLaEIpt4Vcey6o",
+        "MINIMAX_API_KEY": "${MINIMAX_API_KEY}",
         "MINIMAX_API_HOST": "https://api.minimaxi.com"
       }
     }

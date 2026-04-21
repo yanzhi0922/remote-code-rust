@@ -335,6 +335,7 @@ pub async fn run_query_loop(
                         content: format!("Tool execution error: {error:#}"),
                         is_error: true,
                         content_blocks: Vec::new(),
+                        follow_up_user_blocks: Vec::new(),
                     })
                 }
             };
