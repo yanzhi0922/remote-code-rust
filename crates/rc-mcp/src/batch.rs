@@ -672,6 +672,7 @@ mod tests {
     fn batch_tool_call_result_success() {
         let call = BatchToolCall::new("srv", "tool", serde_json::json!({}));
         let tool_result = McpToolCallResult {
+            tool_result: None,
             content: vec![McpToolCallContent {
                 kind: "text".to_owned(),
                 fields: {
@@ -707,6 +708,7 @@ mod tests {
         // Add a success
         let call1 = BatchToolCall::new("srv1", "tool1", serde_json::json!({}));
         let tool_result = McpToolCallResult {
+            tool_result: None,
             content: vec![McpToolCallContent {
                 kind: "text".to_owned(),
                 fields: {
@@ -738,6 +740,7 @@ mod tests {
         for i in 0..3 {
             let call = BatchToolCall::new("srv", "tool", serde_json::json!({}));
             let tool_result = McpToolCallResult {
+                tool_result: None,
                 content: vec![McpToolCallContent {
                     kind: "text".to_owned(),
                     fields: {
@@ -764,6 +767,7 @@ mod tests {
         let mut results = BatchOperationResults::new("op-3");
         let call = BatchToolCall::new("srv", "tool", serde_json::json!({}));
         let tool_result = McpToolCallResult {
+            tool_result: None,
             content: vec![],
             structured_content: None,
             is_error: false,

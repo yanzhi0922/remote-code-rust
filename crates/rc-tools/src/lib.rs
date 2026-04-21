@@ -1509,14 +1509,91 @@ mod tests {
         PermissionBroker, PermissionDecision, PermissionRequest, StaticPermissionBroker,
     };
     use rc_swarm::{TeamFile, TeamMember, mailbox, team_helpers};
-    use serde_json::json;
+    use serde_json::{Value, json};
     use std::collections::BTreeMap;
+    use std::fs;
     use std::path::PathBuf;
+    use std::process::Command as ProcessCommand;
     use std::sync::{Arc, Mutex};
     use tempfile::tempdir;
     use tokio::sync::Mutex as AsyncMutex;
 
     static RUNTIME_POLICY_TEST_MUTEX: Lazy<AsyncMutex<()>> = Lazy::new(|| AsyncMutex::new(()));
+
+    fn python_command() -> Option<(String, Vec<String>)> {
+        let probe = |cmd: &str, args: &[&str]| -> bool {
+            let mut cmd = ProcessCommand::new(cmd);
+            cmd.args(args).args(["-c", "import json"]);
+            cmd.output().is_ok_and(|output| output.status.success())
+        };
+
+        if let Ok(path) = std::env::var("PYTHON")
+            && probe(&path, &[])
+        {
+            return Some((path, Vec::new()));
+        }
+
+        for candidate in ["python", "python3"] {
+            if probe(candidate, &[]) {
+                return Some((candidate.to_owned(), Vec::new()));
+            }
+        }
+
+        if cfg!(windows) && probe("py", &["-3"]) {
+            return Some(("py".to_owned(), vec!["-3".to_owned()]));
+        }
+
+        None
+    }
+
+    fn mock_mcp_resource_server_script() -> &'static str {
+        r#"
+import json
+import sys
+
+while True:
+    raw = sys.stdin.readline()
+    if not raw:
+        break
+    raw = raw.strip()
+    if not raw:
+        continue
+    message = json.loads(raw)
+    method = message.get("method")
+    message_id = message.get("id")
+
+    if method == "initialize":
+        print(json.dumps({
+            "jsonrpc": "2.0",
+            "id": message_id,
+            "result": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {"resources": {}},
+                "serverInfo": {"name": "mock-resource-mcp", "version": "0.1.0"}
+            }
+        }), flush=True)
+    elif method == "notifications/initialized":
+        continue
+    elif method == "resources/read":
+        print(json.dumps({
+            "jsonrpc": "2.0",
+            "id": message_id,
+            "result": {
+                "contents": [{
+                    "uri": message["params"]["uri"],
+                    "mimeType": "text/plain",
+                    "text": "hello from resource"
+                }]
+            }
+        }), flush=True)
+    else:
+        print(json.dumps({
+            "jsonrpc": "2.0",
+            "id": message_id,
+            "error": {"code": -32601, "message": "unknown method"}
+        }), flush=True)
+"#
+    }
 
     #[test]
     fn builtin_tool_result_size_policies_match_research_overrides() {
@@ -4743,10 +4820,17 @@ mod tests {
     #[tokio::test]
     async fn read_mcp_resource_returns_json() {
         let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX.lock().await;
+        let Some((python, mut prefix_args)) = python_command() else {
+            eprintln!("Skipping read_mcp_resource test because Python is unavailable.");
+            return;
+        };
         let tempdir = match tempdir() {
             Ok(dir) => dir,
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
+        let script = tempdir.path().join("mock_mcp_resource.py");
+        fs::write(&script, mock_mcp_resource_server_script()).expect("mock mcp resource script");
+        prefix_args.push(script.display().to_string());
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
@@ -4770,9 +4854,9 @@ mod tests {
                     name: "test".to_owned(),
                     enabled: true,
                     transport: McpTransportConfig::Stdio {
-                        command: "python".to_owned(),
-                        args: Vec::new(),
-                        cwd: None,
+                        command: python,
+                        args: prefix_args,
+                        cwd: Some(tempdir.path().to_path_buf()),
                         env: Default::default(),
                     },
                     capabilities: McpCapabilityMatrix {
@@ -4806,6 +4890,11 @@ mod tests {
             !result.is_error,
             "read_mcp_resource error: {}",
             result.content
+        );
+        let payload: Value = serde_json::from_str(&result.content).expect("resource payload json");
+        assert_eq!(
+            payload["contents"][0]["text"].as_str(),
+            Some("hello from resource")
         );
     }
 
