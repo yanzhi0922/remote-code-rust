@@ -1,5 +1,6 @@
 use serde_json::Value;
 
+use crate::classifier::{extract_prompt_description, shell_prompt_rule_matches_command};
 use crate::filesystem::{normalize_for_comparison, resolve_candidate_path};
 use crate::{PermissionClass, PermissionRequest, classify_tool};
 
@@ -14,7 +15,7 @@ pub fn rule_matches_request(pattern: &str, request: &PermissionRequest) -> bool 
     };
 
     if let Some(command) = extract_shell_command(&request.tool_input) {
-        return wildcard_match(input_pattern, command);
+        return shell_input_pattern_matches_command(input_pattern, command);
     }
 
     if matches!(
@@ -42,7 +43,7 @@ pub fn rule_action_matches_request_action(
     };
 
     if let Some(command) = extract_shell_command(&request.tool_input) {
-        return wildcard_match(input_pattern, command);
+        return shell_input_pattern_matches_command(input_pattern, command);
     }
 
     if matches!(
@@ -85,6 +86,13 @@ fn name_matches(pattern: &str, tool_name: &str) -> bool {
 
 fn extract_shell_command(input: &Value) -> Option<&str> {
     input.get("command").and_then(Value::as_str)
+}
+
+fn shell_input_pattern_matches_command(input_pattern: &str, command: &str) -> bool {
+    if let Some(description) = extract_prompt_description(input_pattern) {
+        return shell_prompt_rule_matches_command(command, description);
+    }
+    wildcard_match(input_pattern, command)
 }
 
 fn file_rule_matches_request(pattern: &str, request: &PermissionRequest) -> bool {
@@ -300,6 +308,18 @@ mod tests {
         assert!(!rule_matches_request(
             "Bash(git *)",
             &request("bash_command", json!({"command":"cargo test"}))
+        ));
+    }
+
+    #[test]
+    fn prompt_rules_match_semantic_bash_intents() {
+        assert!(rule_matches_request(
+            "Bash(prompt: run tests)",
+            &request("bash_command", json!({"command":"cargo test --workspace"}))
+        ));
+        assert!(!rule_matches_request(
+            "Bash(prompt: run tests)",
+            &request("bash_command", json!({"command":"cargo build"}))
         ));
     }
 

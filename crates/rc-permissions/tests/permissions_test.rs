@@ -1,8 +1,11 @@
+use rc_core::permission_types::PermissionBehavior;
+use rc_permissions::rule::PermissionRuleValue;
 use rc_permissions::{
     LayeredPermissionBroker, PermissionBroker, PermissionClass, PermissionDecision,
     PermissionRequest, RuleAction, RuleSource, SourceAwarePermissionRule, StaticPermissionBroker,
     classify_tool, rule_matches_pattern,
 };
+use rc_permissions::{PermissionUpdate, PermissionUpdateDestination};
 
 // ── classify_tool tests ───────────────────────────────────────
 
@@ -269,6 +272,53 @@ async fn layered_broker_tracks_audit_records() {
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].tool_name, "Read");
     assert!(records[0].final_allowed);
+}
+
+#[tokio::test]
+async fn layered_broker_applies_prompt_rule_permission_updates() -> anyhow::Result<()> {
+    let fallback = StaticPermissionBroker::new(false);
+    let layered = LayeredPermissionBroker::new(fallback, vec![]);
+
+    layered.apply_permission_updates(&[PermissionUpdate::AddRules {
+        destination: PermissionUpdateDestination::Session,
+        rules: vec![PermissionRuleValue::new(
+            "Bash",
+            Some("prompt: run tests".to_owned()),
+        )],
+        behavior: PermissionBehavior::Allow,
+    }])?;
+
+    let allowed = layered
+        .decide(PermissionRequest {
+            tool_name: "bash_command".to_owned(),
+            permission_class: None,
+            tool_input: serde_json::json!({"command":"cargo test --workspace"}),
+            working_directory: None,
+            tool_use_id: None,
+            title: None,
+            description: None,
+            blocked_path: None,
+            permission_suggestions: Vec::new(),
+        })
+        .await;
+    assert!(allowed.allowed);
+
+    let denied = layered
+        .decide(PermissionRequest {
+            tool_name: "bash_command".to_owned(),
+            permission_class: None,
+            tool_input: serde_json::json!({"command":"cargo build"}),
+            working_directory: None,
+            tool_use_id: None,
+            title: None,
+            description: None,
+            blocked_path: None,
+            permission_suggestions: Vec::new(),
+        })
+        .await;
+    assert!(!denied.allowed);
+
+    Ok(())
 }
 
 // ── rule_matches_pattern tests ────────────────────────────────
