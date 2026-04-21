@@ -101,6 +101,10 @@ pub struct McpToolCallContent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpToolCallResult {
+    /// Legacy/simple MCP result field. Claude Code gives this precedence over
+    /// structuredContent and content when servers return it.
+    #[serde(default)]
+    pub tool_result: Option<Value>,
     /// Content blocks returned by the tool.
     #[serde(default)]
     pub content: Vec<McpToolCallContent>,
@@ -181,6 +185,7 @@ mod tests {
     #[test]
     fn tool_call_result_is_error_default_false() {
         let result = McpToolCallResult {
+            tool_result: None,
             content: vec![],
             structured_content: None,
             is_error: false,

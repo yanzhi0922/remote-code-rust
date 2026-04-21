@@ -140,20 +140,7 @@ pub(crate) async fn read_mcp_resource_tool(
         .ok_or_else(|| anyhow!("uri is required"))?;
 
     let runtime_policy = current_tool_runtime_policy();
-    let server = match resolve_runtime_policy_mcp_server(&runtime_policy, server_name) {
-        Ok(server) => server.server,
-        Err(_) => {
-            return Ok(tool_result_from_text(
-                json!({
-                    "uri": uri,
-                    "content": Value::Null,
-                    "error": format!("MCP server '{}' not found in runtime policy.", server_name),
-                })
-                .to_string(),
-                false,
-            ));
-        }
-    };
+    let server = resolve_runtime_policy_mcp_server(&runtime_policy, server_name)?.server;
 
     let client_info = rc_mcp::McpClientInfo::new("remote-code-rust", env!("CARGO_PKG_VERSION"));
     match rc_mcp::read_resource(&server, &client_info, uri).await {
@@ -166,24 +153,13 @@ pub(crate) async fn read_mcp_resource_tool(
             );
             Ok(tool_result_from_text(
                 json!({
-                    "uri": uri,
-                    "server": server_name,
                     "contents": payload,
                 })
                 .to_string(),
                 false,
             ))
         }
-        Err(error) => Ok(tool_result_from_text(
-            json!({
-                "uri": uri,
-                "server": server_name,
-                "contents": [],
-                "error": error.to_string(),
-            })
-            .to_string(),
-            false,
-        )),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -226,6 +202,20 @@ pub(crate) fn transform_mcp_tool_result(
     tool_name: &str,
     tool_results_dir: Option<&Path>,
 ) -> Result<ToolResult> {
+    if let Some(tool_result) = &result.tool_result {
+        let content = legacy_tool_result_to_text(tool_result);
+        return handle_large_mcp_output(McpLargeOutput {
+            is_error: result.is_error,
+            server_name,
+            tool_name,
+            format: McpResultFormat::ToolResult,
+            schema: None,
+            content: &content,
+            content_blocks: Vec::new(),
+            tool_results_dir,
+        });
+    }
+
     if let Some(structured_content) = &result.structured_content {
         let content = serde_json::to_string_pretty(structured_content)?;
         return handle_large_mcp_output(McpLargeOutput {
@@ -259,7 +249,9 @@ pub(crate) fn transform_mcp_tool_result(
         });
     }
 
-    Ok(tool_result_from_text(String::new(), result.is_error))
+    Err(anyhow!(
+        "MCP server \"{server_name}\" tool \"{tool_name}\": unexpected response format"
+    ))
 }
 
 pub(crate) fn transform_read_mcp_resource_contents(
@@ -376,7 +368,16 @@ fn handle_large_mcp_output(input: McpLargeOutput<'_>) -> Result<ToolResult> {
         normalize_name_for_mcp(input.tool_name),
         timestamp_fragment(),
     );
-    let persisted = persist_tool_result_text(&raw_output, &persist_id, tool_results_dir)?;
+    let persisted = match persist_tool_result_text(&raw_output, &persist_id, tool_results_dir) {
+        Ok(persisted) => persisted,
+        Err(error) => {
+            return Ok(ToolResult {
+                content: large_output_persist_failure_message(raw_output.chars().count(), &error),
+                is_error: input.is_error,
+                content_blocks: Vec::new(),
+            });
+        }
+    };
     let instructions = get_large_output_instructions(
         &persisted.filepath,
         raw_output.chars().count(),
@@ -620,6 +621,41 @@ fn mcp_truncation_message() -> String {
     )
 }
 
+fn large_output_persist_failure_message(content_length: usize, error: &anyhow::Error) -> String {
+    format!(
+        "Error: result ({} characters) exceeds maximum allowed tokens. Failed to save output to file: {}. If this MCP server provides pagination or filtering tools, use them to retrieve specific portions of the data.",
+        format_number_with_commas(content_length),
+        error
+    )
+}
+
+fn legacy_tool_result_to_text(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        Value::Null => "null".to_owned(),
+        Value::Bool(flag) => flag.to_string(),
+        Value::Number(number) => number.to_string(),
+        Value::Array(items) => items
+            .iter()
+            .map(legacy_tool_result_to_text)
+            .collect::<Vec<_>>()
+            .join(","),
+        Value::Object(_) => "[object Object]".to_owned(),
+    }
+}
+
+fn format_number_with_commas(value: usize) -> String {
+    let digits = value.to_string();
+    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, ch) in digits.chars().rev().enumerate() {
+        if index != 0 && index % 3 == 0 {
+            formatted.push(',');
+        }
+        formatted.push(ch);
+    }
+    formatted.chars().rev().collect()
+}
+
 fn infer_compact_schema(value: &Value, depth: usize) -> String {
     match value {
         Value::Null => "null".to_owned(),
@@ -809,6 +845,7 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let large = "x".repeat(120_000);
         let result = McpToolCallResult {
+            tool_result: None,
             content: Vec::new(),
             structured_content: Some(json!({"payload": large})),
             is_error: false,
@@ -830,6 +867,7 @@ mod tests {
     fn transform_mcp_tool_result_preserves_image_blocks() {
         let temp = tempdir().expect("tempdir");
         let result = McpToolCallResult {
+            tool_result: None,
             content: vec![McpToolCallContent {
                 kind: "image".to_owned(),
                 fields: BTreeMap::from([
@@ -857,6 +895,48 @@ mod tests {
     fn flatten_text_blocks_joins_text_content() {
         let blocks = vec![text_block("one".to_owned()), text_block("two".to_owned())];
         assert_eq!(flatten_text_blocks(&blocks), "one\ntwo");
+    }
+
+    #[test]
+    fn transform_mcp_tool_result_prefers_legacy_tool_result_field() {
+        let temp = tempdir().expect("tempdir");
+        let result = McpToolCallResult {
+            tool_result: Some(json!("legacy-result")),
+            content: vec![McpToolCallContent {
+                kind: "text".to_owned(),
+                fields: BTreeMap::from([("text".to_owned(), Value::String("ignored".to_owned()))]),
+            }],
+            structured_content: Some(json!({"library": "ignored"})),
+            is_error: false,
+        };
+
+        let processed =
+            transform_mcp_tool_result(&result, "demo", "resolve", Some(temp.path())).expect("ok");
+
+        assert_eq!(processed.content, "legacy-result");
+        assert!(processed.content_blocks.is_empty());
+    }
+
+    #[test]
+    fn transform_mcp_tool_result_falls_back_to_message_when_large_output_persist_fails() {
+        let temp = tempdir().expect("tempdir");
+        let invalid_tool_results_dir = temp.path().join("not-a-dir");
+        std::fs::write(&invalid_tool_results_dir, "file").expect("write blocking file");
+        let large = "x".repeat(120_000);
+        let result = McpToolCallResult {
+            tool_result: None,
+            content: Vec::new(),
+            structured_content: Some(json!({"payload": large})),
+            is_error: false,
+        };
+
+        let processed =
+            transform_mcp_tool_result(&result, "demo", "search", Some(&invalid_tool_results_dir))
+                .expect("ok");
+
+        assert!(processed.content.contains("Failed to save output to file"));
+        assert!(processed.content.contains("pagination or filtering tools"));
+        assert!(processed.content_blocks.is_empty());
     }
 
     #[test]
