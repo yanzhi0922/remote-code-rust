@@ -13,6 +13,7 @@ pub mod git;
 pub mod hooks;
 pub mod lsp;
 pub mod mcp_catalog;
+pub mod mcp_output_storage;
 pub mod mcp_runtime;
 pub mod mcp_tools;
 pub mod memory_tools;
@@ -1317,6 +1318,41 @@ pub async fn execute_tool_call(
             };
         }
 
+        if spec.name == "mcp_call" {
+            return match mcp_tools::mcp_call_tool(&call.input, context).await {
+                Ok(result) => Ok(result),
+                Err(error) => Ok(ToolResult {
+                    content: error.to_string(),
+                    is_error: true,
+                    content_blocks: Vec::new(),
+                }),
+            };
+        }
+
+        if spec.name == "read_mcp_resource" {
+            return match mcp_tools::read_mcp_resource_tool(&call.input, context).await {
+                Ok(result) => Ok(result),
+                Err(error) => Ok(ToolResult {
+                    content: error.to_string(),
+                    is_error: true,
+                    content_blocks: Vec::new(),
+                }),
+            };
+        }
+
+        if call.name.starts_with("mcp__") {
+            return match mcp_catalog::execute_runtime_mcp_tool(&call.name, &call.input, context)
+                .await
+            {
+                Ok(result) => Ok(result),
+                Err(error) => Ok(ToolResult {
+                    content: error.to_string(),
+                    is_error: true,
+                    content_blocks: Vec::new(),
+                }),
+            };
+        }
+
         let result = match spec.name.as_str() {
             "list_directory" => file_ops::list_directory(&call.input, context),
             "read_file" => file_ops::read_file(&call.input, context),
@@ -1372,9 +1408,7 @@ pub async fn execute_tool_call(
             "overflow_test" => misc::overflow_test_tool(&call.input),
             "synthetic_output" => misc::synthetic_output_tool(&call.input),
             "mcp_auth" => mcp_tools::mcp_auth_tool(&call.input, context),
-            "mcp_call" => mcp_tools::mcp_call_tool(&call.input, context).await,
             "list_mcp_resources" => mcp_tools::list_mcp_resources_tool(&call.input, context).await,
-            "read_mcp_resource" => mcp_tools::read_mcp_resource_tool(&call.input, context).await,
             "skill_execute" => misc::skill_execute_tool(&call.input, context),
             "voice_input" => misc::voice_input_tool(&call.input),
             "daemon" => workflow::daemon_tool(&call.input, context),
@@ -1385,9 +1419,6 @@ pub async fn execute_tool_call(
             "broadcast_message" => send_message::broadcast_message(&call.input, context).await,
             "review_artifact" => review_artifact::review_artifact(&call.input, context),
             "send_user_file" => send_user_file::send_user_file(&call.input, context),
-            _ if call.name.starts_with("mcp__") => {
-                mcp_catalog::execute_runtime_mcp_tool(&call.name, &call.input).await
-            }
             _ => Err(anyhow!("unsupported tool {}", spec.name)),
         };
 
