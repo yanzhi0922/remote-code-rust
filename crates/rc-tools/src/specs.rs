@@ -684,28 +684,11 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "team_name": {"type": "string", "description": "Optional persistent team name to create or update."},
-                    "objective": {"type": "string"},
-                    "lead": {"type": "string"},
-                    "agents": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "name": {"type": "string"},
-                                "role": {"type": "string"},
-                                "cwd": {"type": "string"},
-                                "model": {"type": "string"},
-                                "color": {"type": "string"},
-                                "worktree_path": {"type": "string"},
-                                "session_id": {"type": "string"}
-                            },
-                            "required": ["name", "role"],
-                            "additionalProperties": false
-                        }
-                    }
+                    "team_name": {"type": "string", "description": "Name for the new team to create."},
+                    "description": {"type": "string", "description": "Team description/purpose."},
+                    "agent_type": {"type": "string", "description": "Type/role of the team lead (for team file and inter-agent coordination)."}
                 },
-                "required": ["objective"],
+                "required": ["team_name"],
                 "additionalProperties": false,
             }),
         },
@@ -1196,10 +1179,7 @@ pub fn phase9_tool_specs() -> Vec<ToolSpec> {
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
-                "properties": {
-                    "team_name": {"type": "string", "description": "Name of the team to delete"}
-                },
-                "required": ["team_name"],
+                "properties": {},
                 "additionalProperties": false,
             }),
         },
@@ -1478,32 +1458,28 @@ mod tests {
         }
 
         let team_create = properties_for("team_create");
-        for field in ["team_name", "objective", "lead", "agents"] {
+        for field in ["team_name", "description", "agent_type"] {
             assert!(
                 team_create.contains_key(field),
                 "team_create should expose {field}"
             );
         }
-        let agent_properties = team_create
-            .get("agents")
-            .and_then(|value| value.get("items"))
-            .and_then(|value| value.get("properties"))
-            .and_then(|value| value.as_object())
-            .expect("team_create agents items should expose properties");
-        for field in [
-            "name",
-            "role",
-            "cwd",
-            "model",
-            "color",
-            "worktree_path",
-            "session_id",
-        ] {
+        for hidden in ["objective", "lead", "agents"] {
             assert!(
-                agent_properties.contains_key(field),
-                "team_create agents should expose {field}"
+                !team_create.contains_key(hidden),
+                "team_create should hide legacy field {hidden}"
             );
         }
+
+        let team_create_required = spec_by_name("team_create")
+            .input_schema
+            .get("required")
+            .and_then(|value| value.as_array())
+            .expect("team_create required list")
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(team_create_required, vec!["team_name"]);
 
         let team_status = properties_for("team_status");
         assert!(
@@ -1515,6 +1491,16 @@ mod tests {
         assert!(
             list_peers.contains_key("team_name"),
             "list_peers should expose team_name"
+        );
+
+        let team_delete = spec_by_name("team_delete");
+        assert_eq!(
+            team_delete.input_schema,
+            serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false,
+            })
         );
 
         let broadcast = properties_for("broadcast_message");

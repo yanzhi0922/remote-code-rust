@@ -804,6 +804,17 @@ pub fn set_leader_team_name(team_name: Option<String>) -> Result<()> {
     Ok(())
 }
 
+pub fn leader_team_name() -> Result<Option<String>> {
+    LEADER_TEAM_NAME
+        .lock()
+        .map(|guard| guard.clone())
+        .map_err(|_| anyhow!("leader team name lock poisoned"))
+}
+
+pub fn clear_leader_team_name() -> Result<()> {
+    set_leader_team_name(None)
+}
+
 #[must_use]
 pub fn task_list_base_dir() -> PathBuf {
     TASK_LIST_BASE_DIR
