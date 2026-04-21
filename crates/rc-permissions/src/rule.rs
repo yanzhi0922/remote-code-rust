@@ -6,6 +6,9 @@
 use rc_core::permission_types::{PermissionBehavior, PermissionRuleSource};
 use serde::{Deserialize, Serialize};
 
+use crate::classifier::{extract_prompt_description, shell_prompt_rule_matches_command};
+use crate::{PermissionClass, classify_tool};
+
 /// The value of a permission rule — specifies which tool and optional content.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct PermissionRuleValue {
@@ -65,6 +68,15 @@ impl PermissionRuleV2 {
         }
         match (&self.value.rule_content, content) {
             (None, _) => true,
+            (Some(pattern), Some(c))
+                if classify_tool(tool_name) == PermissionClass::Bash
+                    && extract_prompt_description(pattern).is_some() =>
+            {
+                shell_prompt_rule_matches_command(
+                    c,
+                    extract_prompt_description(pattern).expect("checked"),
+                )
+            }
             (Some(pattern), Some(c)) => glob_match(pattern, c),
             (Some(_), None) => false,
         }
@@ -155,6 +167,18 @@ mod tests {
         assert!(rule.matches("Bash", Some("git status")));
         assert!(rule.matches("Bash", Some("git push origin main")));
         assert!(!rule.matches("Bash", Some("npm install")));
+    }
+
+    #[test]
+    fn prompt_rule_matches_semantic_shell_command() {
+        let rule = PermissionRuleV2::new(
+            PermissionRuleSource::Session,
+            PermissionBehavior::Allow,
+            "Bash",
+            Some("prompt: run tests".to_string()),
+        );
+        assert!(rule.matches("Bash", Some("cargo test --workspace")));
+        assert!(!rule.matches("Bash", Some("cargo build")));
     }
 
     #[test]
