@@ -86,6 +86,7 @@ use rc_tools::{
     },
     shell::ShellExecutionPolicy,
     tasks::stop_and_clear_tracked_tasks,
+    tool_result_storage,
 };
 
 use app::{App, AppAction};
@@ -370,6 +371,14 @@ pub async fn run_tui_app(mut config: RuntimeConfig, store: &SessionStore) -> Res
                 if let Some(next_session_id) = next_session_id {
                     if is_clear_command {
                         stop_and_clear_tracked_tasks("stopped by session clear")?;
+                        let session_dir = config
+                            .paths
+                            .sessions_dir
+                            .join(config.session_id.to_string());
+                        let _ = tool_result_storage::cleanup_tool_results_for_session(
+                            &session_dir,
+                            std::time::SystemTime::now(),
+                        );
                     }
                     clear_runtime_mcp_catalog_cache().await;
                     restamp_runtime_session(&mut config, next_session_id);
@@ -547,6 +556,13 @@ fn refresh_runtime_tool_policy(config: &RuntimeConfig) -> Result<()> {
                     .join(config.session_id.to_string()),
             ),
             tool_results_dir: Some(session_dir.join("tool-results")),
+            task_output_dir: Some(
+                config
+                    .paths
+                    .artifacts_dir
+                    .join("tasks")
+                    .join(config.session_id.to_string()),
+            ),
         },
         mcp_servers: runtime_mcp_policy_entries(config, &[]),
     })

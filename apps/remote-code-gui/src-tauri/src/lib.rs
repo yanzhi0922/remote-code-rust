@@ -1993,6 +1993,7 @@ fn configure_runtime_policy_for_config(config: &RuntimeConfig) -> Result<()> {
             max_capture_chars: ShellExecutionPolicy::default().max_capture_chars,
             output_dir: Some(shell_output_dir_for_paths(&config.paths, config.session_id)),
             tool_results_dir: Some(session_dir.join("tool-results")),
+            task_output_dir: Some(task_dir_for_paths(&config.paths, config.session_id)),
         },
     })
 }

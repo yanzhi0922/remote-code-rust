@@ -285,6 +285,13 @@ fn configure_runtime_policy(config: &rc_config::RuntimeConfig) -> Result<()> {
                     .join(config.session_id.to_string()),
             ),
             tool_results_dir: Some(session_dir.join("tool-results")),
+            task_output_dir: Some(
+                config
+                    .paths
+                    .artifacts_dir
+                    .join("tasks")
+                    .join(config.session_id.to_string()),
+            ),
         },
         mcp_servers: runtime_mcp_policy_entries(config, &[]),
     })
