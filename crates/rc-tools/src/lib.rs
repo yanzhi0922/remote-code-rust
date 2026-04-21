@@ -933,6 +933,7 @@ impl Default for ToolRegistry {
 struct EffectivePermission {
     class: PermissionClass,
     requires_permission: bool,
+    requires_explicit_approval: bool,
     blocked_path: Option<String>,
 }
 
@@ -949,6 +950,7 @@ fn effective_permission_for_call(call: &ToolCall, spec: &ToolSpec) -> EffectiveP
     let default = EffectivePermission {
         class: classify_tool(&spec.permission_tool_name),
         requires_permission: spec.requires_permission,
+        requires_explicit_approval: false,
         blocked_path: call
             .input
             .get("path")
@@ -961,19 +963,28 @@ fn effective_permission_for_call(call: &ToolCall, spec: &ToolSpec) -> EffectiveP
             Some("run") => EffectivePermission {
                 class: PermissionClass::Bash,
                 requires_permission: true,
+                requires_explicit_approval: false,
                 blocked_path: None,
             },
             Some("create") | Some("delete") => EffectivePermission {
                 class: PermissionClass::Edit,
                 requires_permission: true,
+                requires_explicit_approval: false,
                 blocked_path: Some(".remote-code-rust/workflows.json".to_owned()),
             },
             Some("list") | Some("status") => EffectivePermission {
                 class: PermissionClass::Read,
                 requires_permission: false,
+                requires_explicit_approval: false,
                 blocked_path: Some(".remote-code-rust/workflows.json".to_owned()),
             },
             _ => default,
+        },
+        "enter_plan_mode" | "exit_plan_mode" => EffectivePermission {
+            class: default.class,
+            requires_permission: true,
+            requires_explicit_approval: true,
+            blocked_path: None,
         },
         _ => default,
     }
@@ -1244,6 +1255,23 @@ pub async fn execute_tool_call(
             &permission,
             filesystem_precheck.as_ref(),
         );
+        let explicit_approval_handled = if permission.requires_explicit_approval {
+            let decision = broker
+                .decide_forced_prompt(permission_request.clone())
+                .await;
+            if !decision.allowed {
+                return Ok(ToolResult {
+                    content: decision
+                        .message
+                        .unwrap_or_else(|| format!("Permission denied for {}.", spec.name)),
+                    is_error: true,
+                    content_blocks: Vec::new(),
+                });
+            }
+            true
+        } else {
+            false
+        };
         let filesystem_rule = if filesystem_operation_for_tool(&spec.name).is_some() {
             broker.matching_rule(&permission_request)
         } else {
@@ -1288,7 +1316,9 @@ pub async fn execute_tool_call(
                     content_blocks: Vec::new(),
                 });
             }
-        } else if permission.requires_permission || filesystem_precheck.is_some() {
+        } else if !explicit_approval_handled
+            && (permission.requires_permission || filesystem_precheck.is_some())
+        {
             let skip_broker = filesystem_precheck.is_none()
                 && broker_mode.is_some_and(|m| auto_allows(m, permission.class));
             if !skip_broker {
@@ -1519,6 +1549,7 @@ mod tests {
     use tokio::sync::Mutex as AsyncMutex;
 
     static RUNTIME_POLICY_TEST_MUTEX: Lazy<AsyncMutex<()>> = Lazy::new(|| AsyncMutex::new(()));
+    static PLAN_MODE_RUNTIME_TEST_MUTEX: Lazy<AsyncMutex<()>> = Lazy::new(|| AsyncMutex::new(()));
 
     fn python_command() -> Option<(String, Vec<String>)> {
         let probe = |cmd: &str, args: &[&str]| -> bool {
@@ -1717,6 +1748,59 @@ while True:
         ) -> Option<rc_permissions::RuleAction> {
             self.action
         }
+    }
+
+    #[derive(Debug)]
+    struct RecordingPlanModeRuntime {
+        enter_calls: Arc<Mutex<Vec<String>>>,
+        exit_calls: Arc<Mutex<Vec<crate::plan_mode::ExitPlanModeInput>>>,
+        plan_file_path: PathBuf,
+    }
+
+    impl crate::plan_mode::PlanModeRuntime for RecordingPlanModeRuntime {
+        fn enter_plan_mode(&self, objective: &str) -> anyhow::Result<String> {
+            self.enter_calls
+                .lock()
+                .expect("enter calls")
+                .push(objective.to_owned());
+            Ok(format!("entered plan mode for {objective}"))
+        }
+
+        fn exit_plan_mode(
+            &self,
+            input: crate::plan_mode::ExitPlanModeInput,
+        ) -> anyhow::Result<String> {
+            self.exit_calls.lock().expect("exit calls").push(input);
+            Ok("exited plan mode".to_owned())
+        }
+
+        fn snapshot(&self) -> crate::plan_mode::PlanModeRuntimeSnapshot {
+            crate::plan_mode::PlanModeRuntimeSnapshot {
+                permission_mode: PermissionMode::Plan,
+                plan_file_path: Some(self.plan_file_path.clone()),
+            }
+        }
+    }
+
+    struct PlanModeRuntimeGuard;
+
+    impl Drop for PlanModeRuntimeGuard {
+        fn drop(&mut self) {
+            let _ = crate::plan_mode::configure_plan_mode_runtime(None);
+        }
+    }
+
+    fn install_recording_plan_mode_runtime(
+        enter_calls: Arc<Mutex<Vec<String>>>,
+        exit_calls: Arc<Mutex<Vec<crate::plan_mode::ExitPlanModeInput>>>,
+    ) -> PlanModeRuntimeGuard {
+        crate::plan_mode::configure_plan_mode_runtime(Some(Arc::new(RecordingPlanModeRuntime {
+            enter_calls,
+            exit_calls,
+            plan_file_path: PathBuf::from("plan.md"),
+        })))
+        .expect("configure plan mode runtime");
+        PlanModeRuntimeGuard
     }
 
     #[cfg(unix)]
@@ -3742,6 +3826,98 @@ while True:
                 .contains("User has approved exiting plan mode")
                 || exit_result.content.contains("User has approved your plan")
         );
+    }
+
+    #[tokio::test]
+    async fn enter_plan_mode_uses_forced_prompt_and_denial_blocks_runtime_transition() {
+        let _guard = PLAN_MODE_RUNTIME_TEST_MUTEX.lock().await;
+        let tempdir = tempdir().expect("tempdir");
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let enter_calls = Arc::new(Mutex::new(Vec::new()));
+        let exit_calls = Arc::new(Mutex::new(Vec::new()));
+        let _runtime_guard =
+            install_recording_plan_mode_runtime(enter_calls.clone(), exit_calls.clone());
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let forced_requests = Arc::new(Mutex::new(Vec::new()));
+        let broker = RuleAwareBroker {
+            mode: PermissionMode::DontAsk,
+            action: None,
+            allow: false,
+            matching_rule: None,
+            requests: requests.clone(),
+            forced_requests: forced_requests.clone(),
+        };
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "enter-plan-denied".to_owned(),
+                name: "enter_plan_mode".to_owned(),
+                input: json!({}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("tool call should return result");
+
+        assert!(result.is_error);
+        assert!(result.content.contains("forced recorded denial"));
+        assert!(requests.lock().expect("requests").is_empty());
+        assert_eq!(forced_requests.lock().expect("forced requests").len(), 1);
+        assert!(enter_calls.lock().expect("enter calls").is_empty());
+        assert!(exit_calls.lock().expect("exit calls").is_empty());
+    }
+
+    #[tokio::test]
+    async fn exit_plan_mode_uses_forced_prompt_and_denial_blocks_runtime_transition() {
+        let _guard = PLAN_MODE_RUNTIME_TEST_MUTEX.lock().await;
+        let tempdir = tempdir().expect("tempdir");
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let enter_calls = Arc::new(Mutex::new(Vec::new()));
+        let exit_calls = Arc::new(Mutex::new(Vec::new()));
+        let _runtime_guard =
+            install_recording_plan_mode_runtime(enter_calls.clone(), exit_calls.clone());
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let forced_requests = Arc::new(Mutex::new(Vec::new()));
+        let broker = RuleAwareBroker {
+            mode: PermissionMode::Plan,
+            action: None,
+            allow: false,
+            matching_rule: None,
+            requests: requests.clone(),
+            forced_requests: forced_requests.clone(),
+        };
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "exit-plan-denied".to_owned(),
+                name: "exit_plan_mode".to_owned(),
+                input: json!({}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("tool call should return result");
+
+        assert!(result.is_error);
+        assert!(result.content.contains("forced recorded denial"));
+        assert!(requests.lock().expect("requests").is_empty());
+        assert_eq!(forced_requests.lock().expect("forced requests").len(), 1);
+        assert!(enter_calls.lock().expect("enter calls").is_empty());
+        assert!(exit_calls.lock().expect("exit calls").is_empty());
     }
 
     #[tokio::test]

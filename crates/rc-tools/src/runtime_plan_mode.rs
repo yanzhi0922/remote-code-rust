@@ -465,6 +465,10 @@ impl PermissionBroker for RuntimePermissionBroker {
         self.inner.decide(request).await
     }
 
+    async fn decide_forced_prompt(&self, request: PermissionRequest) -> PermissionDecision {
+        self.inner.decide_forced_prompt(request).await
+    }
+
     fn add_session_rule(
         &self,
         action: rc_permissions::RuleAction,
@@ -1119,6 +1123,24 @@ mod tests {
             !decision.allowed,
             "Ask rules should not be bypassed by accept-edits auto-allow"
         );
+        assert_eq!(
+            decision.message.as_deref(),
+            Some("Permission denied by runtime broker")
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_permission_broker_forced_prompt_does_not_auto_allow_plan_mode_exit() {
+        let (mut config, store) = test_config_and_store();
+        config.permission_mode = PermissionMode::Plan;
+        let controller = RuntimePlanModeController::load(&config, &store).expect("controller");
+        let broker = RuntimePermissionBroker::new(&config, controller);
+
+        let decision = broker
+            .decide_forced_prompt(permission_request("exit_plan_mode", PermissionClass::Read))
+            .await;
+
+        assert!(!decision.allowed);
         assert_eq!(
             decision.message.as_deref(),
             Some("Permission denied by runtime broker")
