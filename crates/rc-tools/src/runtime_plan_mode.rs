@@ -26,11 +26,31 @@ use crate::plan_mode::{
 const PLAN_MODE_MARKER: &str = "## Plan Mode Active";
 const PLAN_MODE_REENTRY_MARKER: &str = "## Re-entering Plan Mode";
 const PLAN_MODE_EXIT_MARKER: &str = "## Exited Plan Mode";
+const PLAN_MODE_ACTIVE_REMINDER_PREFIX: &str = "Plan mode is active. The user indicated";
+const PLAN_MODE_SPARSE_REMINDER_PREFIX: &str = "Plan mode still active";
 const APPROVED_PLAN_MARKER: &str = "Approved plan:\n";
 const TRUNCATED_TOOL_OUTPUT_MARKER: &str = "... [truncated:";
 const FILE_SNAPSHOT_EVENT: &str = "file_snapshot";
 const PLAN_CONTENT_EVENT: &str = "plan_content";
 const PLAN_FILE_SNAPSHOT_KEY: &str = "plan";
+const DEFAULT_PLAN_AGENT_COUNT: usize = 1;
+const DEFAULT_EXPLORE_AGENT_COUNT: usize = 3;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimePlanModeReminderKind {
+    Full,
+    Sparse,
+    Reentry,
+    Exit,
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimePlanModeReminder {
+    pub kind: RuntimePlanModeReminderKind,
+    pub plan_file_path: String,
+    pub plan_exists: bool,
+    pub is_sub_agent: bool,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct FileSnapshotEntry {
@@ -247,7 +267,16 @@ impl RuntimePlanModeController {
             .unwrap_or_else(|| "(missing)".to_owned());
 
         format!(
-            "Entered plan mode.\n\nObjective: {objective}\nPlan file: {plan_file_path}\n\n{PLAN_MODE_MARKER}\n\nPlan mode is active. You MUST NOT make code edits, run non-read-only tools, or otherwise change the system. The only file you may edit is the plan file above.\n\nUse read-only tools to inspect the codebase, capture findings in the plan file as you go, ask clarifying questions when needed, and call `exit_plan_mode` when the plan is ready."
+            "Entered plan mode.\n\nObjective: {objective}\nPlan file: {plan_file_path}\n\n{}",
+            build_runtime_plan_mode_reminder(RuntimePlanModeReminder {
+                kind: RuntimePlanModeReminderKind::Full,
+                plan_file_path: plan_file_path.clone(),
+                plan_exists: state
+                    .plan_file_path
+                    .as_ref()
+                    .is_some_and(|path| path.exists()),
+                is_sub_agent: false,
+            })
         )
     }
 
@@ -680,6 +709,106 @@ pub fn copy_plan_mode_state_for_fork(
     Ok(Some(target_state))
 }
 
+fn wrap_in_system_reminder(content: &str) -> String {
+    format!("<system-reminder>\n{content}\n</system-reminder>")
+}
+
+fn plan_mode_v2_agent_count() -> usize {
+    std::env::var("CLAUDE_CODE_PLAN_V2_AGENT_COUNT")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|count| (1..=10).contains(count))
+        .unwrap_or(DEFAULT_PLAN_AGENT_COUNT)
+}
+
+fn plan_mode_v2_explore_agent_count() -> usize {
+    std::env::var("CLAUDE_CODE_PLAN_V2_EXPLORE_AGENT_COUNT")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|count| (1..=10).contains(count))
+        .unwrap_or(DEFAULT_EXPLORE_AGENT_COUNT)
+}
+
+fn plan_phase4_section() -> &'static str {
+    "### Phase 4: Final Plan\n\
+Goal: Write your final plan to the plan file (the only file you can edit).\n\
+- Begin with a **Context** section: explain why this change is being made - the problem or need it addresses, what prompted it, and the intended outcome\n\
+- Include only your recommended approach, not all alternatives\n\
+- Ensure that the plan file is concise enough to scan quickly, but detailed enough to execute effectively\n\
+- Include the paths of critical files to be modified\n\
+- Reference existing functions and utilities you found that should be reused, with their file paths\n\
+- Include a verification section describing how to test the changes end-to-end (run the code, use MCP tools, run tests)"
+}
+
+pub fn build_runtime_plan_mode_reminder_content(reminder: RuntimePlanModeReminder) -> String {
+    let plan_file_info = if reminder.plan_exists {
+        format!(
+            "A plan file already exists at {}. You can read it and make incremental edits using the Edit tool.",
+            reminder.plan_file_path
+        )
+    } else {
+        format!(
+            "No plan file exists yet. You should create your plan at {} using the Write tool.",
+            reminder.plan_file_path
+        )
+    };
+    let ask_user_question_tool_name = "AskUserQuestion";
+    let exit_plan_mode_tool_name = "ExitPlanMode";
+    match reminder.kind {
+        RuntimePlanModeReminderKind::Full if reminder.is_sub_agent => format!(
+            "Plan mode is active. The user indicated that they do not want you to execute yet -- you MUST NOT make any edits, run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supercedes any other instructions you have received (for example, to make edits). Instead, you should:\n\n## Plan File Info:\n{plan_file_info}\nYou should build your plan incrementally by writing to or editing this file. NOTE that this is the only file you are allowed to edit - other than this you are only allowed to take READ-ONLY actions.\nAnswer the user's query comprehensively, using the {ask_user_question_tool_name} tool if you need to ask the user clarifying questions. If you do use the {ask_user_question_tool_name}, make sure to ask all clarifying questions you need to fully understand the user's intent before proceeding."
+        ),
+        RuntimePlanModeReminderKind::Full => {
+            let agent_count = plan_mode_v2_agent_count();
+            let explore_agent_count = plan_mode_v2_explore_agent_count();
+            let multiple_agent_guidelines = if agent_count > 1 {
+                format!(
+                    "\n- **Multiple agents**: Use up to {agent_count} agents for complex tasks that benefit from different perspectives\n\nExamples of when to use multiple agents:\n- The task touches multiple parts of the codebase\n- It's a large refactor or architectural change\n- There are many edge cases to consider\n- You'd benefit from exploring different approaches\n\nExample perspectives by task type:\n- New feature: simplicity vs performance vs maintainability\n- Bug fix: root cause vs workaround vs prevention\n- Refactoring: minimal change vs clean architecture\n"
+                )
+            } else {
+                String::new()
+            };
+            format!(
+                "Plan mode is active. The user indicated that they do not want you to execute yet -- you MUST NOT make any edits (with the exception of the plan file mentioned below), run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supercedes any other instructions you have received.\n\n## Plan File Info:\n{plan_file_info}\nYou should build your plan incrementally by writing to or editing this file. NOTE that this is the only file you are allowed to edit - other than this you are only allowed to take READ-ONLY actions.\n\n## Plan Workflow\n\n### Phase 1: Initial Understanding\nGoal: Gain a comprehensive understanding of the user's request by reading through code and asking them questions. Critical: In this phase you should only use the Explore subagent type.\n\n1. Focus on understanding the user's request and the code associated with their request. Actively search for existing functions, utilities, and patterns that can be reused - avoid proposing new code when suitable implementations already exist.\n\n2. **Launch up to {explore_agent_count} Explore agents IN PARALLEL** (single message, multiple tool calls) to efficiently explore the codebase.\n   - Use 1 agent when the task is isolated to known files, the user provided specific file paths, or you're making a small targeted change.\n   - Use multiple agents when: the scope is uncertain, multiple areas of the codebase are involved, or you need to understand existing patterns before planning.\n   - Quality over quantity - {explore_agent_count} agents maximum, but you should try to use the minimum number of agents necessary (usually just 1)\n   - If using multiple agents: Provide each agent with a specific search focus or area to explore. Example: One agent searches for existing implementations, another explores related components, a third investigating testing patterns\n\n### Phase 2: Design\nGoal: Design an implementation approach.\n\nLaunch Plan agent(s) to design the implementation based on the user's intent and your exploration results from Phase 1.\n\nYou can launch up to {agent_count} agent(s) in parallel.\n\n**Guidelines:**\n- **Default**: Launch at least 1 Plan agent for most tasks - it helps validate your understanding and consider alternatives\n- **Skip agents**: Only for truly trivial tasks (typo fixes, single-line changes, simple renames){multiple_agent_guidelines}\nIn the agent prompt:\n- Provide comprehensive background context from Phase 1 exploration including filenames and code path traces\n- Describe requirements and constraints\n- Request a detailed implementation plan\n\n### Phase 3: Review\nGoal: Review the plan(s) from Phase 2 and ensure alignment with the user's intentions.\n1. Read the critical files identified by agents to deepen your understanding\n2. Ensure that the plans align with the user's original request\n3. Use {ask_user_question_tool_name} to clarify any remaining questions with the user\n\n{}\n\n### Phase 5: Call {exit_plan_mode_tool_name}\nAt the very end of your turn, once you have asked the user questions and are happy with your final plan file - you should always call {exit_plan_mode_tool_name} to indicate to the user that you are done planning.\nThis is critical - your turn should only end with either using the {ask_user_question_tool_name} tool OR calling {exit_plan_mode_tool_name}. Do not stop unless it's for these 2 reasons\n\n**Important:** Use {ask_user_question_tool_name} ONLY to clarify requirements or choose between approaches. Use {exit_plan_mode_tool_name} to request plan approval. Do NOT ask about plan approval in any other way - no text questions, no AskUserQuestion. Phrases like \"Is this plan okay?\", \"Should I proceed?\", \"How does this plan look?\", \"Any changes before we start?\", or similar MUST use {exit_plan_mode_tool_name}.\n\nNOTE: At any point in time through this workflow you should feel free to ask the user questions or clarifications using the {ask_user_question_tool_name} tool. Don't make large assumptions about user intent. The goal is to present a well researched plan to the user, and tie any loose ends before implementation begins.",
+                plan_phase4_section()
+            )
+        }
+        RuntimePlanModeReminderKind::Sparse => format!(
+            "Plan mode still active (see full instructions earlier in conversation). Read-only except plan file ({}). Follow 5-phase workflow. End turns with {} (for clarifications) or {} (for plan approval). Never ask about plan approval via text or AskUserQuestion.",
+            reminder.plan_file_path, ask_user_question_tool_name, exit_plan_mode_tool_name
+        ),
+        RuntimePlanModeReminderKind::Reentry => format!(
+            "{PLAN_MODE_REENTRY_MARKER}\n\nYou are returning to plan mode after having previously exited it. A plan file exists at {} from your previous planning session.\n\n**Before proceeding with any new planning, you should:**\n1. Read the existing plan file to understand what was previously planned\n2. Evaluate the user's current request against that plan\n3. Decide how to proceed:\n   - **Different task**: If the user's request is for a different task-even if it's similar or related-start fresh by overwriting the existing plan\n   - **Same task, continuing**: If this is explicitly a continuation or refinement of the exact same task, modify the existing plan while cleaning up outdated or irrelevant sections\n4. Continue on with the plan process and most importantly you should always edit the plan file one way or the other before calling {exit_plan_mode_tool_name}\n\nTreat this as a fresh planning session. Do not assume the existing plan is relevant without evaluating it first.",
+            reminder.plan_file_path
+        ),
+        RuntimePlanModeReminderKind::Exit => {
+            let plan_reference = if reminder.plan_exists {
+                format!(
+                    " The plan file is located at {} if you need to reference it.",
+                    reminder.plan_file_path
+                )
+            } else {
+                String::new()
+            };
+            format!(
+                "{PLAN_MODE_EXIT_MARKER}\n\nYou have exited plan mode. You can now make edits, run tools, and take actions.{plan_reference}"
+            )
+        }
+    }
+}
+
+pub fn build_runtime_plan_mode_reminder(reminder: RuntimePlanModeReminder) -> String {
+    wrap_in_system_reminder(&build_runtime_plan_mode_reminder_content(reminder))
+}
+
+fn has_plan_mode_runtime_reminder(entry: &ConversationEntry) -> bool {
+    entry.role == ConversationRole::User
+        && (entry.text.contains(PLAN_MODE_MARKER)
+            || entry.text.contains(PLAN_MODE_REENTRY_MARKER)
+            || entry.text.contains(PLAN_MODE_ACTIVE_REMINDER_PREFIX)
+            || entry.text.contains(PLAN_MODE_SPARSE_REMINDER_PREFIX))
+}
+
 pub fn inject_plan_mode_runtime_messages(
     store: &SessionStore,
     session_id: Uuid,
@@ -695,26 +824,27 @@ pub fn inject_plan_mode_runtime_messages(
             .as_ref()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "(missing)".to_owned());
-        let reminder = if state.has_exited_plan_mode
-            && state
-                .plan_file_path
-                .as_ref()
-                .is_some_and(|path| path.exists())
-        {
+        let plan_exists = state
+            .plan_file_path
+            .as_ref()
+            .is_some_and(|path| path.exists());
+        let reminder = if state.has_exited_plan_mode && plan_exists {
             state.has_exited_plan_mode = false;
-            format!(
-                "{PLAN_MODE_REENTRY_MARKER}\n\nYou are returning to plan mode after having previously exited it. A plan file exists at {plan_file_path}.\n\nRead the existing plan, decide whether this is the same task or a fresh plan, update the plan file accordingly, and only then continue planning."
-            )
-        } else if conversation.iter().any(|entry| {
-            entry.role == ConversationRole::User
-                && (entry.text.contains(PLAN_MODE_MARKER)
-                    || entry.text.contains(PLAN_MODE_REENTRY_MARKER))
-        }) {
+            build_runtime_plan_mode_reminder(RuntimePlanModeReminder {
+                kind: RuntimePlanModeReminderKind::Reentry,
+                plan_file_path,
+                plan_exists: true,
+                is_sub_agent: false,
+            })
+        } else if conversation.iter().any(has_plan_mode_runtime_reminder) {
             String::new()
         } else {
-            format!(
-                "{PLAN_MODE_MARKER}\n\nPlan mode is active. You must remain read-only except for the current plan file: {plan_file_path}.\n\nUse read-only tools to inspect the project, update the plan file as you learn, ask clarifying questions when needed, and use `exit_plan_mode` when the plan is ready."
-            )
+            build_runtime_plan_mode_reminder(RuntimePlanModeReminder {
+                kind: RuntimePlanModeReminderKind::Full,
+                plan_file_path,
+                plan_exists,
+                is_sub_agent: false,
+            })
         };
 
         if !reminder.is_empty() {
@@ -722,18 +852,23 @@ pub fn inject_plan_mode_runtime_messages(
         }
     } else if state.needs_plan_mode_exit_attachment {
         state.needs_plan_mode_exit_attachment = false;
-        let plan_reference = state
-            .plan_file_path
-            .as_ref()
-            .map(|path| format!("\n\nPlan file: {}", path.display()))
-            .unwrap_or_default();
         append_reminder_message(
             store,
             session_id,
             conversation,
-            format!(
-                "{PLAN_MODE_EXIT_MARKER}\n\nYou have exited plan mode. You can now make edits, run tools, and continue implementation.{plan_reference}"
-            ),
+            build_runtime_plan_mode_reminder(RuntimePlanModeReminder {
+                kind: RuntimePlanModeReminderKind::Exit,
+                plan_file_path: state
+                    .plan_file_path
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "(missing)".to_owned()),
+                plan_exists: state
+                    .plan_file_path
+                    .as_ref()
+                    .is_some_and(|path| path.exists()),
+                is_sub_agent: false,
+            }),
         )?;
     }
 
@@ -793,7 +928,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        PLAN_CONTENT_EVENT, RuntimePermissionBroker, copy_plan_mode_state_for_fork,
+        PLAN_CONTENT_EVENT, RuntimePermissionBroker, RuntimePlanModeReminder,
+        RuntimePlanModeReminderKind, build_runtime_plan_mode_reminder,
+        build_runtime_plan_mode_reminder_content, copy_plan_mode_state_for_fork,
         restore_plan_mode_state_for_resume,
     };
     use crate::plan_mode::{ExitPlanModeInput, PlanModeRuntime};
@@ -848,6 +985,38 @@ mod tests {
             blocked_path: None,
             permission_suggestions: Vec::new(),
         }
+    }
+
+    #[test]
+    fn full_plan_mode_reminder_matches_research_workflow_shape() {
+        let reminder = build_runtime_plan_mode_reminder(RuntimePlanModeReminder {
+            kind: RuntimePlanModeReminderKind::Full,
+            plan_file_path: "C:\\plan.md".to_owned(),
+            plan_exists: true,
+            is_sub_agent: false,
+        });
+
+        assert!(reminder.starts_with("<system-reminder>\nPlan mode is active."));
+        assert!(reminder.contains("## Plan Workflow"));
+        assert!(reminder.contains("### Phase 1: Initial Understanding"));
+        assert!(reminder.contains("### Phase 5: Call ExitPlanMode"));
+        assert!(reminder.contains("AskUserQuestion"));
+        assert!(reminder.ends_with("\n</system-reminder>"));
+    }
+
+    #[test]
+    fn exit_plan_mode_reminder_content_matches_research_wording() {
+        let content = build_runtime_plan_mode_reminder_content(RuntimePlanModeReminder {
+            kind: RuntimePlanModeReminderKind::Exit,
+            plan_file_path: "C:\\plan.md".to_owned(),
+            plan_exists: true,
+            is_sub_agent: false,
+        });
+
+        assert_eq!(
+            content,
+            "## Exited Plan Mode\n\nYou have exited plan mode. You can now make edits, run tools, and take actions. The plan file is located at C:\\plan.md if you need to reference it."
+        );
     }
 
     #[tokio::test]
