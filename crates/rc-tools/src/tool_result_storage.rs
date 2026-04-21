@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use anyhow::{Context, Result, anyhow};
 use once_cell::sync::Lazy;
@@ -97,6 +98,53 @@ pub fn ensure_tool_results_dir(tool_results_dir: &Path) -> Result<()> {
         .with_context(|| format!("failed to create {}", tool_results_dir.display()))
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolResultsCleanupSummary {
+    pub removed_files: usize,
+    pub errors: usize,
+}
+
+pub fn cleanup_tool_results_for_session(
+    session_dir: &Path,
+    cutoff: SystemTime,
+) -> ToolResultsCleanupSummary {
+    let tool_results_dir = session_tool_results_dir(session_dir);
+    cleanup_tool_results_dir(&tool_results_dir, cutoff)
+}
+
+pub fn cleanup_tool_results_dir(
+    tool_results_dir: &Path,
+    cutoff: SystemTime,
+) -> ToolResultsCleanupSummary {
+    let mut summary = ToolResultsCleanupSummary::default();
+    let Ok(entries) = fs::read_dir(tool_results_dir) else {
+        let _ = fs::remove_dir(session_parent(tool_results_dir));
+        return summary;
+    };
+
+    for entry in entries {
+        let Ok(entry) = entry else {
+            summary.errors += 1;
+            continue;
+        };
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            summary.errors += 1;
+            continue;
+        };
+        if file_type.is_file() {
+            unlink_if_old(&path, cutoff, &mut summary);
+        } else if file_type.is_dir() {
+            cleanup_one_level_tool_dir(&path, cutoff, &mut summary);
+            let _ = fs::remove_dir(&path);
+        }
+    }
+
+    let _ = fs::remove_dir(tool_results_dir);
+    let _ = fs::remove_dir(session_parent(tool_results_dir));
+    summary
+}
+
 pub fn process_tool_result_text(
     content: &str,
     tool_use_id: &str,
@@ -113,6 +161,47 @@ pub fn process_tool_result_text(
 
     let persisted = persist_tool_result_text(content, tool_use_id, tool_results_dir)?;
     Ok(build_large_tool_result_message(&persisted))
+}
+
+fn cleanup_one_level_tool_dir(
+    tool_dir: &Path,
+    cutoff: SystemTime,
+    summary: &mut ToolResultsCleanupSummary,
+) {
+    let Ok(entries) = fs::read_dir(tool_dir) else {
+        return;
+    };
+    for entry in entries {
+        let Ok(entry) = entry else {
+            summary.errors += 1;
+            continue;
+        };
+        let Ok(file_type) = entry.file_type() else {
+            summary.errors += 1;
+            continue;
+        };
+        if file_type.is_file() {
+            unlink_if_old(&entry.path(), cutoff, summary);
+        }
+    }
+}
+
+fn unlink_if_old(path: &Path, cutoff: SystemTime, summary: &mut ToolResultsCleanupSummary) {
+    match fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .map(|modified| modified <= cutoff)
+    {
+        Ok(true) => match fs::remove_file(path) {
+            Ok(()) => summary.removed_files += 1,
+            Err(_) => summary.errors += 1,
+        },
+        Ok(false) => {}
+        Err(_) => summary.errors += 1,
+    }
+}
+
+fn session_parent(tool_results_dir: &Path) -> &Path {
+    tool_results_dir.parent().unwrap_or(tool_results_dir)
 }
 
 pub fn persist_tool_result_text(
@@ -526,6 +615,7 @@ fn char_boundary_prefix(content: &str, max_bytes: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::time::{Duration, SystemTime};
 
     use rc_core::ConversationEntry;
     use serde_json::json;
@@ -534,8 +624,9 @@ mod tests {
     use super::{
         PERSISTED_OUTPUT_CLOSING_TAG, PERSISTED_OUTPUT_TAG, PREVIEW_SIZE_BYTES,
         apply_tool_result_budget_to_conversation, build_large_tool_result_message,
-        generate_preview, persist_tool_result_blocks, persist_tool_result_text,
-        process_tool_result_text, reconstruct_content_replacement_state, session_tool_results_dir,
+        cleanup_tool_results_for_session, generate_preview, persist_tool_result_blocks,
+        persist_tool_result_text, process_tool_result_text, reconstruct_content_replacement_state,
+        session_tool_results_dir,
     };
 
     #[test]
@@ -697,5 +788,23 @@ mod tests {
             Some("cached replacement")
         );
         assert!(!state.replacements.contains_key("plain"));
+    }
+
+    #[test]
+    fn cleanup_tool_results_removes_old_files_in_flat_and_nested_layouts() {
+        let temp = tempdir().expect("tempdir");
+        let session_dir = temp.path().join("session");
+        let tool_results_dir = session_tool_results_dir(&session_dir);
+        std::fs::create_dir_all(tool_results_dir.join("nested")).expect("tool results");
+        std::fs::write(tool_results_dir.join("flat.txt"), "old").expect("flat");
+        std::fs::write(tool_results_dir.join("nested").join("inner.txt"), "old").expect("inner");
+
+        let cutoff = SystemTime::now() + Duration::from_secs(1);
+        let summary = cleanup_tool_results_for_session(&session_dir, cutoff);
+
+        assert_eq!(summary.removed_files, 2);
+        assert!(summary.errors == 0, "cleanup errors: {}", summary.errors);
+        assert!(!tool_results_dir.exists());
+        assert!(!session_dir.exists());
     }
 }

@@ -276,7 +276,7 @@ fn configure_runtime_policy(config: &rc_config::RuntimeConfig) -> Result<()> {
             block_inline_cwd: true,
             allow_background: true,
             block_destructive_git: true,
-            max_capture_chars: 16_000,
+            max_capture_chars: ShellExecutionPolicy::default().max_capture_chars,
             output_dir: Some(
                 config
                     .paths
@@ -284,6 +284,7 @@ fn configure_runtime_policy(config: &rc_config::RuntimeConfig) -> Result<()> {
                     .join("shell")
                     .join(config.session_id.to_string()),
             ),
+            tool_results_dir: Some(session_dir.join("tool-results")),
         },
         mcp_servers: runtime_mcp_policy_entries(config, &[]),
     })
