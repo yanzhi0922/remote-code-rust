@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -32,7 +32,11 @@ use rc_tools::{
     },
     runtime_provider_tool_spec,
     tasks::load_persisted_ui_task_snapshots,
-    tool_result_storage::process_tool_result_text,
+    tool_result_storage::{
+        ContentReplacementRecord, ContentReplacementState,
+        apply_tool_result_budget_to_conversation, process_tool_result_text,
+        reconstruct_content_replacement_state,
+    },
 };
 use rc_ui_bridge::UiTaskNode;
 
@@ -45,6 +49,8 @@ use crate::hooks::{
     discover_runtime_hooks, ensure_session_start_hooks,
 };
 use crate::query_engine_compat::run_prompt_with_query_engine_compat;
+
+pub(crate) const CONTENT_REPLACEMENT_EVENT_TYPE: &str = "content-replacement";
 
 #[derive(Debug, Default)]
 pub(crate) struct RuntimeExtensionDiscovery {
@@ -96,6 +102,136 @@ struct WizardProviderSelection {
 }
 
 pub(crate) type PromptEventSink = Arc<dyn Fn(PromptStreamEvent) + Send + Sync>;
+
+pub(crate) fn load_content_replacement_records(
+    store: &SessionStore,
+    session_id: uuid::Uuid,
+) -> Result<Vec<ContentReplacementRecord>> {
+    let transcript = store.load_transcript(session_id)?;
+    let mut records = Vec::new();
+    for payload in transcript.named_event_payloads(CONTENT_REPLACEMENT_EVENT_TYPE) {
+        if payload.get("sessionId").and_then(serde_json::Value::as_str)
+            != Some(session_id.to_string().as_str())
+        {
+            continue;
+        }
+        if payload.get("agentId").is_some() {
+            continue;
+        }
+        let Some(replacements) = payload.get("replacements").cloned() else {
+            continue;
+        };
+        records.extend(serde_json::from_value::<Vec<ContentReplacementRecord>>(
+            replacements,
+        )?);
+    }
+    Ok(records)
+}
+
+pub(crate) fn provision_content_replacement_state(
+    store: &SessionStore,
+    session_id: uuid::Uuid,
+    conversation: &[ConversationEntry],
+) -> Result<ContentReplacementState> {
+    let records = load_content_replacement_records(store, session_id)?;
+    Ok(reconstruct_content_replacement_state(
+        conversation,
+        &records,
+        None,
+    ))
+}
+
+pub(crate) fn session_tool_results_dir(config: &RuntimeConfig) -> PathBuf {
+    config
+        .paths
+        .sessions_dir
+        .join(config.session_id.to_string())
+        .join("tool-results")
+}
+
+pub(crate) struct ContentReplacementBackend {
+    inner: Arc<dyn ConversationBackend>,
+    store: Arc<SessionStore>,
+    session_id: uuid::Uuid,
+    tool_results_dir: PathBuf,
+    state: tokio::sync::Mutex<ContentReplacementState>,
+    skip_tool_names: HashSet<String>,
+}
+
+impl ContentReplacementBackend {
+    pub(crate) fn new(
+        inner: Arc<dyn ConversationBackend>,
+        store: Arc<SessionStore>,
+        session_id: uuid::Uuid,
+        tool_results_dir: PathBuf,
+        initial_state: ContentReplacementState,
+        skip_tool_names: HashSet<String>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            inner,
+            store,
+            session_id,
+            tool_results_dir,
+            state: tokio::sync::Mutex::new(initial_state),
+            skip_tool_names,
+        })
+    }
+
+    async fn prepare_conversation(
+        &self,
+        conversation: &[ConversationEntry],
+    ) -> Result<Vec<ConversationEntry>> {
+        let mut provider_conversation = conversation.to_vec();
+        let outcome = {
+            let mut state = self.state.lock().await;
+            apply_tool_result_budget_to_conversation(
+                &mut provider_conversation,
+                &mut state,
+                &self.tool_results_dir,
+                &self.skip_tool_names,
+            )?
+        };
+
+        if !outcome.newly_replaced.is_empty() {
+            self.store.append_named_event(
+                self.session_id,
+                CONTENT_REPLACEMENT_EVENT_TYPE,
+                serde_json::json!({
+                    "sessionId": self.session_id,
+                    "replacements": outcome.newly_replaced,
+                }),
+            )?;
+        }
+
+        Ok(provider_conversation)
+    }
+}
+
+#[async_trait::async_trait]
+impl ConversationBackend for ContentReplacementBackend {
+    async fn complete(
+        &self,
+        conversation: &[ConversationEntry],
+    ) -> Result<rc_core::ProviderResponse> {
+        let provider_conversation = self.prepare_conversation(conversation).await?;
+        self.inner.complete(&provider_conversation).await
+    }
+
+    async fn complete_streaming(
+        &self,
+        conversation: &[ConversationEntry],
+        callbacks: Option<StreamingCallbacks>,
+    ) -> Result<rc_core::ProviderResponse> {
+        let provider_conversation = self.prepare_conversation(conversation).await?;
+        self.inner
+            .complete_streaming(&provider_conversation, callbacks)
+            .await
+    }
+
+    fn sub_agent_completion(&self) -> Arc<dyn rc_core::SubAgentCompletion> {
+        self.inner.sub_agent_completion()
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) enum PromptStreamEvent {
@@ -553,6 +689,16 @@ pub(crate) async fn run_prompt(
     conversation: &mut Vec<ConversationEntry>,
     prompt: &str,
 ) -> Result<PromptRunOutcome> {
+    let replacement_state =
+        provision_content_replacement_state(store, config.session_id, conversation)?;
+    let backend = ContentReplacementBackend::new(
+        backend,
+        Arc::new(SessionStore::open(config.paths.clone())?),
+        config.session_id,
+        session_tool_results_dir(config),
+        replacement_state,
+        HashSet::new(),
+    );
     if env::var_os("REMOTE_CODE_FORCE_LEGACY_PROMPT_LOOP").is_some() {
         return run_prompt_legacy(
             config,
@@ -1453,22 +1599,73 @@ fn read_line_prompt(prompt: &str) -> Result<String> {
 mod tests {
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::{Arc, Mutex as StdMutex};
 
+    use anyhow::Result;
+    use async_trait::async_trait;
     use clap::Parser;
     use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
-    use rc_core::{ConversationEntry, ConversationRole, ToolCall};
+    use rc_core::{
+        ConversationEntry, ConversationRole, ProviderResponse, SubAgentCompletion, ToolCall,
+    };
     use rc_protocol::{MessageRole, RuntimeEventDetail};
+    use rc_provider::StreamingCallbacks;
     use rc_session::SessionStore;
     use rc_session::resume_state::{PendingToolCall, ResumeState};
     use tempfile::tempdir;
 
     use super::{
-        PromptStreamEvent, WizardProviderSelection, apply_wizard_settings,
-        discover_runtime_extensions, has_unanswered_user_prompt, initialize_conversation,
-        reapply_cli_overrides, resolve_first_run_settings_path, should_run_first_run_wizard,
+        ContentReplacementBackend, PromptStreamEvent, WizardProviderSelection,
+        apply_wizard_settings, discover_runtime_extensions, has_unanswered_user_prompt,
+        initialize_conversation, provision_content_replacement_state, reapply_cli_overrides,
+        resolve_first_run_settings_path, session_tool_results_dir, should_run_first_run_wizard,
         write_wizard_settings_file,
     };
     use crate::ResolvedPromptOverrides;
+    use crate::conversation_backend::ConversationBackend;
+
+    struct DummyCompletion;
+
+    #[async_trait]
+    impl SubAgentCompletion for DummyCompletion {
+        async fn complete(
+            &self,
+            _conversation: &[ConversationEntry],
+        ) -> anyhow::Result<ProviderResponse> {
+            Ok(ProviderResponse::default())
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingBackend {
+        conversations: StdMutex<Vec<Vec<ConversationEntry>>>,
+    }
+
+    #[async_trait]
+    impl ConversationBackend for RecordingBackend {
+        async fn complete(&self, conversation: &[ConversationEntry]) -> Result<ProviderResponse> {
+            self.conversations
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(conversation.to_vec());
+            Ok(ProviderResponse {
+                text: "ok".to_owned(),
+                ..ProviderResponse::default()
+            })
+        }
+
+        async fn complete_streaming(
+            &self,
+            conversation: &[ConversationEntry],
+            _callbacks: Option<StreamingCallbacks>,
+        ) -> Result<ProviderResponse> {
+            self.complete(conversation).await
+        }
+
+        fn sub_agent_completion(&self) -> Arc<dyn SubAgentCompletion> {
+            Arc::new(DummyCompletion)
+        }
+    }
 
     fn test_config() -> (tempfile::TempDir, rc_config::RuntimeConfig) {
         let tempdir = tempdir().expect("tempdir");
@@ -1599,6 +1796,111 @@ mod tests {
         reapply_cli_overrides(&cli, &ResolvedPromptOverrides::default(), &mut config, true);
 
         assert_eq!(config.permission_mode, rc_core::PermissionMode::AcceptEdits);
+    }
+
+    #[tokio::test]
+    async fn content_replacement_backend_rewrites_prompt_and_records_transcript() {
+        let (_tempdir, config) = test_config();
+        let store = Arc::new(SessionStore::open(config.paths.clone()).expect("store"));
+        store
+            .ensure_session(
+                config.session_id,
+                &config.cwd,
+                &config.provider.name,
+                config.provider.model.as_deref(),
+                Some("content replacement"),
+            )
+            .expect("ensure session");
+        let backend = Arc::new(RecordingBackend::default());
+        let replacement_backend = ContentReplacementBackend::new(
+            backend.clone(),
+            store.clone(),
+            config.session_id,
+            session_tool_results_dir(&config),
+            super::ContentReplacementState::new(),
+            std::collections::HashSet::new(),
+        );
+        let conversation = vec![
+            ConversationEntry::assistant(""),
+            ConversationEntry::tool("call-large", "bash_command", "x".repeat(210_000), false),
+        ];
+
+        replacement_backend
+            .complete(&conversation)
+            .await
+            .expect("complete");
+
+        let captured = backend
+            .conversations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        assert_eq!(captured.len(), 1);
+        assert!(captured[0][1].text.starts_with("<persisted-output>"));
+        assert!(
+            session_tool_results_dir(&config)
+                .join("call-large.txt")
+                .exists()
+        );
+
+        let records = super::load_content_replacement_records(store.as_ref(), config.session_id)
+            .expect("replacement records");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].tool_use_id, "call-large");
+        assert_eq!(records[0].replacement, captured[0][1].text);
+    }
+
+    #[tokio::test]
+    async fn content_replacement_resume_reapplies_exact_transcript_replacement() {
+        let (_tempdir, config) = test_config();
+        let store = Arc::new(SessionStore::open(config.paths.clone()).expect("store"));
+        store
+            .ensure_session(
+                config.session_id,
+                &config.cwd,
+                &config.provider.name,
+                config.provider.model.as_deref(),
+                Some("content replacement resume"),
+            )
+            .expect("ensure session");
+        let original = vec![
+            ConversationEntry::assistant(""),
+            ConversationEntry::tool("call-large", "bash_command", "x".repeat(210_000), false),
+        ];
+        let first_backend = Arc::new(RecordingBackend::default());
+        let first = ContentReplacementBackend::new(
+            first_backend,
+            store.clone(),
+            config.session_id,
+            session_tool_results_dir(&config),
+            super::ContentReplacementState::new(),
+            std::collections::HashSet::new(),
+        );
+        first.complete(&original).await.expect("first complete");
+
+        let state =
+            provision_content_replacement_state(store.as_ref(), config.session_id, &original)
+                .expect("resume state");
+        let second_backend = Arc::new(RecordingBackend::default());
+        let second = ContentReplacementBackend::new(
+            second_backend.clone(),
+            store.clone(),
+            config.session_id,
+            session_tool_results_dir(&config),
+            state,
+            std::collections::HashSet::new(),
+        );
+        second.complete(&original).await.expect("second complete");
+
+        let captured = second_backend
+            .conversations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let records = super::load_content_replacement_records(store.as_ref(), config.session_id)
+            .expect("replacement records");
+        assert_eq!(records.len(), 1);
+        assert_eq!(captured[0][1].text, records[0].replacement);
     }
 
     #[test]

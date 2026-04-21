@@ -113,6 +113,17 @@ impl SessionTranscript {
             .map_err(Into::into)
     }
 
+    pub fn named_event_payloads<'a>(
+        &'a self,
+        event_type: &'a str,
+    ) -> impl Iterator<Item = &'a Value> {
+        self.events.iter().filter_map(move |event| {
+            (event.event_type == event_type)
+                .then_some(event.payload.as_ref())
+                .flatten()
+        })
+    }
+
     /// Load the latest persisted resume-state snapshot from the transcript.
     ///
     /// # Errors
