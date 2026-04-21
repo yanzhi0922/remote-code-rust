@@ -64,6 +64,12 @@ pub struct ToolResultBudgetOutcome {
     pub newly_replaced: Vec<ContentReplacementRecord>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessedToolResultContent {
+    pub content: String,
+    pub content_blocks: Vec<Value>,
+}
+
 #[derive(Debug, Clone)]
 struct ToolResultCandidate {
     tool_use_id: String,
@@ -155,9 +161,82 @@ pub fn process_tool_result_text(
     tool_results_dir: Option<&Path>,
     threshold: Option<usize>,
 ) -> Result<String> {
+    process_tool_result_text_with_empty_message(
+        content,
+        tool_use_id,
+        tool_results_dir,
+        threshold,
+        "(tool completed with no output)",
+    )
+}
+
+pub fn process_tool_result_content(
+    content: &str,
+    content_blocks: &[Value],
+    tool_use_id: &str,
+    tool_name: &str,
+    tool_results_dir: Option<&Path>,
+    threshold: Option<usize>,
+) -> Result<ProcessedToolResultContent> {
+    if content_blocks.is_empty() {
+        return Ok(ProcessedToolResultContent {
+            content: process_tool_result_text_with_empty_message(
+                content,
+                tool_use_id,
+                tool_results_dir,
+                threshold,
+                &empty_tool_result_message(tool_name),
+            )?,
+            content_blocks: Vec::new(),
+        });
+    }
+
+    if content_blocks_are_empty(content_blocks) {
+        return Ok(ProcessedToolResultContent {
+            content: empty_tool_result_message(tool_name),
+            content_blocks: Vec::new(),
+        });
+    }
+
+    if !content_blocks_are_text_only(content_blocks) || content_blocks_have_image(content_blocks) {
+        return Ok(ProcessedToolResultContent {
+            content: content.to_owned(),
+            content_blocks: content_blocks.to_vec(),
+        });
+    }
+
+    let limit = persistence_threshold(threshold);
+    if content_blocks_size(content_blocks) <= limit {
+        return Ok(ProcessedToolResultContent {
+            content: content.to_owned(),
+            content_blocks: content_blocks.to_vec(),
+        });
+    }
+
+    let Some(tool_results_dir) = tool_results_dir else {
+        return Ok(ProcessedToolResultContent {
+            content: content.to_owned(),
+            content_blocks: content_blocks.to_vec(),
+        });
+    };
+
+    let persisted = persist_tool_result_blocks(content_blocks, tool_use_id, tool_results_dir)?;
+    Ok(ProcessedToolResultContent {
+        content: build_large_tool_result_message(&persisted),
+        content_blocks: Vec::new(),
+    })
+}
+
+fn process_tool_result_text_with_empty_message(
+    content: &str,
+    tool_use_id: &str,
+    tool_results_dir: Option<&Path>,
+    threshold: Option<usize>,
+    empty_message: &str,
+) -> Result<String> {
     let limit = persistence_threshold(threshold);
     if is_tool_result_text_empty(content) {
-        return Ok("(tool completed with no output)".to_owned());
+        return Ok(empty_message.to_owned());
     }
     if content.chars().count() <= limit {
         return Ok(content.to_owned());
@@ -168,6 +247,10 @@ pub fn process_tool_result_text(
 
     let persisted = persist_tool_result_text(content, tool_use_id, tool_results_dir)?;
     Ok(build_large_tool_result_message(&persisted))
+}
+
+fn empty_tool_result_message(tool_name: &str) -> String {
+    format!("({tool_name} completed with no output)")
 }
 
 #[must_use]
@@ -568,6 +651,13 @@ fn content_blocks_have_image(content_blocks: &[Value]) -> bool {
         .any(|block| block.get("type").and_then(Value::as_str) == Some("image"))
 }
 
+fn content_blocks_are_text_only(content_blocks: &[Value]) -> bool {
+    content_blocks.iter().all(|block| {
+        block.get("type").and_then(Value::as_str) == Some("text")
+            && block.get("text").and_then(Value::as_str).is_some()
+    })
+}
+
 fn content_blocks_are_empty(content_blocks: &[Value]) -> bool {
     content_blocks.is_empty()
         || content_blocks.iter().all(|block| {
@@ -662,7 +752,8 @@ mod tests {
         TOOL_RESULT_CLEARED_MESSAGE, apply_tool_result_budget_to_conversation,
         build_large_tool_result_message, cleanup_tool_results_for_session, generate_preview,
         persist_tool_result_blocks, persist_tool_result_text, persistence_threshold,
-        process_tool_result_text, reconstruct_content_replacement_state, session_tool_results_dir,
+        process_tool_result_content, process_tool_result_text,
+        reconstruct_content_replacement_state, session_tool_results_dir,
     };
 
     #[test]
@@ -701,6 +792,69 @@ mod tests {
         let processed =
             process_tool_result_text("   \n", "call-empty", None, None).expect("process");
         assert_eq!(processed, "(tool completed with no output)");
+    }
+
+    #[test]
+    fn process_tool_result_content_persists_large_text_blocks() {
+        let temp = tempdir().expect("tempdir");
+        let tool_results_dir = session_tool_results_dir(temp.path());
+        let blocks = vec![json!({"type":"text","text":"x".repeat(60_000)})];
+
+        let processed = process_tool_result_content(
+            "",
+            &blocks,
+            "call-blocks",
+            "bash_command",
+            Some(&tool_results_dir),
+            None,
+        )
+        .expect("process");
+
+        assert!(processed.content.starts_with(PERSISTED_OUTPUT_TAG));
+        assert!(processed.content_blocks.is_empty());
+        assert!(tool_results_dir.join("call-blocks.json").exists());
+    }
+
+    #[test]
+    fn process_tool_result_content_keeps_small_text_blocks() {
+        let blocks = vec![json!({"type":"text","text":"small"})];
+
+        let processed =
+            process_tool_result_content("", &blocks, "call-small", "bash_command", None, None)
+                .expect("process");
+
+        assert_eq!(processed.content, "");
+        assert_eq!(processed.content_blocks, blocks);
+    }
+
+    #[test]
+    fn process_tool_result_content_normalizes_empty_text_blocks() {
+        let blocks = vec![json!({"type":"text","text":"   "})];
+
+        let processed =
+            process_tool_result_content("", &blocks, "call-empty", "bash_command", None, None)
+                .expect("process");
+
+        assert_eq!(processed.content, "(bash_command completed with no output)");
+        assert!(processed.content_blocks.is_empty());
+    }
+
+    #[test]
+    fn process_tool_result_content_preserves_non_text_blocks() {
+        let blocks = vec![json!({"type":"image","source":"x"})];
+
+        let processed = process_tool_result_content(
+            "image content",
+            &blocks,
+            "call-image",
+            "web_fetch",
+            None,
+            None,
+        )
+        .expect("process");
+
+        assert_eq!(processed.content, "image content");
+        assert_eq!(processed.content_blocks, blocks);
     }
 
     #[test]
