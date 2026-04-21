@@ -194,20 +194,89 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "ask_user".to_owned(),
-            protocol_name: "AskUser".to_owned(),
-            permission_tool_name: "AskUser".to_owned(),
+            protocol_name: "AskUserQuestion".to_owned(),
+            permission_tool_name: "AskUserQuestion".to_owned(),
             description: tool_prompts::ASK_USER.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "question": {"type": "string"},
+                    "questions": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 4,
+                        "description": "Questions to ask the user (1-4 questions)",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "question": {
+                                    "type": "string",
+                                    "description": "The complete question to ask the user. Should be clear, specific, and end with a question mark."
+                                },
+                                "header": {
+                                    "type": "string",
+                                    "maxLength": 12,
+                                    "description": "Very short label displayed as a chip/tag (max 12 chars)."
+                                },
+                                "options": {
+                                    "type": "array",
+                                    "minItems": 2,
+                                    "maxItems": 4,
+                                    "description": "The available choices for this question. Do not include an Other option; it is provided automatically.",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "label": {
+                                                "type": "string",
+                                                "description": "The display text for this option that the user will see and select. Should be concise (1-5 words)."
+                                            },
+                                            "description": {
+                                                "type": "string",
+                                                "description": "Explanation of what this option means or what will happen if chosen."
+                                            },
+                                            "preview": {
+                                                "type": "string",
+                                                "description": "Optional preview content rendered when this option is focused. Only use for single-select questions."
+                                            }
+                                        },
+                                        "required": ["label", "description"],
+                                        "additionalProperties": false
+                                    }
+                                },
+                                "multiSelect": {
+                                    "type": "boolean",
+                                    "default": false,
+                                    "description": "Set to true to allow the user to select multiple options instead of just one."
+                                }
+                            },
+                            "required": ["question", "header", "options"],
+                            "additionalProperties": false
+                        }
+                    },
+                    "answers": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                        "description": "User answers collected by the permission component"
+                    },
+                    "annotations": {
+                        "type": "object",
+                        "description": "Optional per-question annotations from the user, keyed by question text."
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "properties": {
+                            "source": {"type": "string"}
+                        },
+                        "additionalProperties": true
+                    },
+                    "question": {"type": "string", "description": "Deprecated compatibility alias; use questions[].question."},
                     "suggestions": {
                         "type": "array",
-                        "items": {"type": "string"}
+                        "items": {"type": "string"},
+                        "description": "Deprecated compatibility alias; use questions[].options[]."
                     }
                 },
-                "required": ["question"],
+                "required": ["questions"],
                 "additionalProperties": false,
             }),
         },

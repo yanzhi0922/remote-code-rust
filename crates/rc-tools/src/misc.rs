@@ -12,27 +12,130 @@ use tokio::process::Command;
 use super::ToolExecutionContext;
 
 pub(crate) fn ask_user(input: &Value, _context: &ToolExecutionContext) -> Result<String> {
+    let questions = normalize_ask_user_questions(input)?;
+    let answers = input.get("answers").cloned().unwrap_or_else(|| json!({}));
+    let annotations = input
+        .get("annotations")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let metadata = input.get("metadata").cloned();
+
+    let mut payload = json!({
+        "type": "ask_user",
+        "questions": questions,
+        "answers": answers,
+        "annotations": annotations,
+        "message": "Waiting for user input. In headless mode, please provide the answer via the input stream."
+    });
+    if let Some(metadata) = metadata
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("metadata".to_owned(), metadata);
+    }
+    Ok(payload.to_string())
+}
+
+fn normalize_ask_user_questions(input: &Value) -> Result<Vec<Value>> {
+    if let Some(questions) = input.get("questions").and_then(Value::as_array) {
+        validate_ask_user_questions(questions)?;
+        return Ok(questions.clone());
+    }
+
     let question = input
         .get("question")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("ask_user requires a question"))?;
-    let suggestions: Vec<String> = input
+        .ok_or_else(|| anyhow!("ask_user requires questions"))?;
+    let options = input
         .get("suggestions")
         .and_then(Value::as_array)
         .map(|arr| {
             arr.iter()
                 .filter_map(Value::as_str)
-                .map(String::from)
-                .collect()
+                .map(|label| {
+                    json!({
+                        "label": label,
+                        "description": label,
+                    })
+                })
+                .collect::<Vec<_>>()
         })
-        .unwrap_or_default();
-    Ok(json!({
-        "type": "ask_user",
+        .unwrap_or_else(|| {
+            vec![
+                json!({"label": "Yes", "description": "Proceed with this option."}),
+                json!({"label": "No", "description": "Do not proceed with this option."}),
+            ]
+        });
+    let header = input
+        .get("header")
+        .and_then(Value::as_str)
+        .unwrap_or("Question");
+    let legacy_questions = vec![json!({
         "question": question,
-        "suggestions": suggestions,
-        "message": "Waiting for user input. In headless mode, please provide the answer via the input stream."
-    })
-    .to_string())
+        "header": header,
+        "options": options,
+        "multiSelect": false,
+    })];
+    validate_ask_user_questions(&legacy_questions)?;
+    Ok(legacy_questions)
+}
+
+fn validate_ask_user_questions(questions: &[Value]) -> Result<()> {
+    if !(1..=4).contains(&questions.len()) {
+        return Err(anyhow!("ask_user requires 1-4 questions"));
+    }
+
+    let mut seen_questions = std::collections::HashSet::new();
+    for question in questions {
+        let text = question
+            .get("question")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("ask_user question text is required"))?;
+        if !seen_questions.insert(text.to_owned()) {
+            return Err(anyhow!("ask_user question texts must be unique"));
+        }
+        let header = question
+            .get("header")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("ask_user question header is required"))?;
+        if header.chars().count() > 12 {
+            return Err(anyhow!("ask_user question header must be at most 12 chars"));
+        }
+        let options = question
+            .get("options")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("ask_user question options are required"))?;
+        if !(2..=4).contains(&options.len()) {
+            return Err(anyhow!(
+                "ask_user question options must contain 2-4 choices"
+            ));
+        }
+        let multi_select = question
+            .get("multiSelect")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let mut seen_labels = std::collections::HashSet::new();
+        for option in options {
+            let label = option
+                .get("label")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("ask_user option label is required"))?;
+            if !seen_labels.insert(label.to_owned()) {
+                return Err(anyhow!(
+                    "ask_user option labels must be unique within each question"
+                ));
+            }
+            option
+                .get("description")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("ask_user option description is required"))?;
+            if multi_select && option.get("preview").is_some() {
+                return Err(anyhow!(
+                    "ask_user option previews are only supported for single-select questions"
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(crate) async fn lsp_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {

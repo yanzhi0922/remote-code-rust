@@ -2613,8 +2613,15 @@ while True:
                 id: "1".to_owned(),
                 name: "ask_user".to_owned(),
                 input: json!({
-                    "question": "What is your name?",
-                    "suggestions": ["Alice", "Bob"]
+                    "questions": [{
+                        "question": "What is your name?",
+                        "header": "Name",
+                        "options": [
+                            {"label": "Alice", "description": "Use Alice as the name."},
+                            {"label": "Bob", "description": "Use Bob as the name."}
+                        ],
+                        "multiSelect": false
+                    }]
                 }),
             },
             &context,
@@ -2627,10 +2634,50 @@ while True:
         let parsed: serde_json::Value =
             serde_json::from_str(&result.content).expect("should be valid JSON");
         assert_eq!(parsed["type"], "ask_user");
-        assert_eq!(parsed["question"], "What is your name?");
-        assert!(parsed["suggestions"].is_array());
-        let suggestions = parsed["suggestions"].as_array().expect("should be array");
-        assert_eq!(suggestions.len(), 2);
+        assert_eq!(parsed["questions"][0]["question"], "What is your name?");
+        assert_eq!(parsed["questions"][0]["header"], "Name");
+        let options = parsed["questions"][0]["options"]
+            .as_array()
+            .expect("should be array");
+        assert_eq!(options.len(), 2);
+        assert_eq!(options[0]["label"], "Alice");
+    }
+
+    #[tokio::test]
+    async fn ask_user_accepts_legacy_question_alias() {
+        let tempdir = match tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("failed to create tempdir: {error}"),
+        };
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let broker = StaticPermissionBroker::new(true);
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "ask_user".to_owned(),
+                input: json!({
+                    "question": "Which option?",
+                    "suggestions": ["A", "B"]
+                }),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("ask_user should work");
+
+        assert!(!result.is_error, "ask_user error: {}", result.content);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result.content).expect("should be valid JSON");
+        assert_eq!(parsed["questions"][0]["question"], "Which option?");
+        assert_eq!(parsed["questions"][0]["options"][0]["label"], "A");
     }
 
     #[tokio::test]
