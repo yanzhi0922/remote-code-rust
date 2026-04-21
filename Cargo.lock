@@ -4289,6 +4289,7 @@ dependencies = [
  "anyhow",
  "rc-core",
  "rc-engine-events",
+ "rc-permissions",
  "rc-ui-bridge",
  "serde",
  "serde_json",

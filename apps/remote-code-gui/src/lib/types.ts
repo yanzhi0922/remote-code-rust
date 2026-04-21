@@ -357,6 +357,11 @@ export interface PermissionRequestInfo {
 export interface PermissionDecisionInfo {
   request_id: string;
   allowed: boolean;
+  message?: string | null;
+  updated_input?: unknown;
+  permission_updates?: unknown[];
+  feedback?: string | null;
+  content_blocks?: unknown[];
 }
 
 export interface ToolProgressInfo {

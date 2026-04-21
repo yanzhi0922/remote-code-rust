@@ -147,6 +147,10 @@ pub struct PermissionDecision {
     pub allowed: bool,
     pub message: Option<String>,
     pub permission_suggestions: Vec<serde_json::Value>,
+    pub updated_input: Option<serde_json::Value>,
+    pub permission_updates: Vec<PermissionUpdate>,
+    pub feedback: Option<String>,
+    pub content_blocks: Vec<serde_json::Value>,
 }
 
 impl PermissionDecision {
@@ -155,6 +159,10 @@ impl PermissionDecision {
             allowed: true,
             message: None,
             permission_suggestions: Vec::new(),
+            updated_input: None,
+            permission_updates: Vec::new(),
+            feedback: None,
+            content_blocks: Vec::new(),
         }
     }
 
@@ -163,6 +171,10 @@ impl PermissionDecision {
             allowed: false,
             message: Some(message.into()),
             permission_suggestions: Vec::new(),
+            updated_input: None,
+            permission_updates: Vec::new(),
+            feedback: None,
+            content_blocks: Vec::new(),
         }
     }
 }
@@ -182,6 +194,10 @@ pub trait PermissionBroker: Send + Sync {
     }
     /// Clear all session-scoped rules, returning the count removed.
     fn clear_session_rules(&self) -> Result<usize> {
+        Ok(0)
+    }
+    /// Apply session-scoped permission updates, returning the count of applied changes.
+    fn apply_permission_updates(&self, _updates: &[PermissionUpdate]) -> Result<usize> {
         Ok(0)
     }
     /// Return the current permission mode, if known.
@@ -407,6 +423,62 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
         Ok(count)
     }
 
+    fn apply_permission_updates(&self, updates: &[PermissionUpdate]) -> Result<usize> {
+        let mut applied = 0usize;
+        for update in updates {
+            match update {
+                PermissionUpdate::AddRules {
+                    destination,
+                    rules,
+                    behavior,
+                } if *destination == PermissionUpdateDestination::Session => {
+                    let action = permission_behavior_to_rule_action(*behavior);
+                    for rule in rules {
+                        self.add_session_rule(action, permission_rule_value_to_pattern(rule))?;
+                        applied += 1;
+                    }
+                }
+                PermissionUpdate::ReplaceRules {
+                    destination,
+                    rules,
+                    behavior,
+                } if *destination == PermissionUpdateDestination::Session => {
+                    applied += self.clear_session_rules()?;
+                    let action = permission_behavior_to_rule_action(*behavior);
+                    for rule in rules {
+                        self.add_session_rule(action, permission_rule_value_to_pattern(rule))?;
+                        applied += 1;
+                    }
+                }
+                PermissionUpdate::RemoveRules {
+                    destination,
+                    rules,
+                    behavior,
+                } if *destination == PermissionUpdateDestination::Session => {
+                    let action = permission_behavior_to_rule_action(*behavior);
+                    let patterns = rules
+                        .iter()
+                        .map(permission_rule_value_to_pattern)
+                        .collect::<Vec<_>>();
+                    let mut session = self
+                        .session_rules
+                        .write()
+                        .unwrap_or_else(|e| e.into_inner());
+                    let original_len = session.len();
+                    session.retain(|existing| {
+                        !(existing.action == action
+                            && patterns
+                                .iter()
+                                .any(|pattern| pattern == &existing.tool_pattern))
+                    });
+                    applied += original_len.saturating_sub(session.len());
+                }
+                _ => {}
+            }
+        }
+        Ok(applied)
+    }
+
     fn audit_records(&self) -> Vec<PermissionAuditRecord> {
         self.audit.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
@@ -439,6 +511,23 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
                 self.matching_rule_for_action(request, Some(*action))
                     .is_some()
             })
+    }
+}
+
+fn permission_behavior_to_rule_action(
+    behavior: rc_core::permission_types::PermissionBehavior,
+) -> RuleAction {
+    match behavior {
+        rc_core::permission_types::PermissionBehavior::Allow => RuleAction::Allow,
+        rc_core::permission_types::PermissionBehavior::Deny => RuleAction::Deny,
+        rc_core::permission_types::PermissionBehavior::Ask => RuleAction::Ask,
+    }
+}
+
+fn permission_rule_value_to_pattern(rule: &crate::rule::PermissionRuleValue) -> String {
+    match &rule.rule_content {
+        Some(content) => format!("{}({content})", rule.tool_name),
+        None => rule.tool_name.clone(),
     }
 }
 
