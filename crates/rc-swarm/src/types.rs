@@ -318,6 +318,9 @@ pub struct MailboxMessage {
     pub message_type: MailboxMessageType,
     /// Message content.
     pub content: String,
+    /// Optional short preview summary for UI rendering.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
     /// Optional message priority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<String>,
@@ -346,6 +349,7 @@ impl MailboxMessage {
             to_agent: to_agent.into(),
             message_type,
             content: content.into(),
+            summary: None,
             priority: None,
             correlation_id: None,
             timestamp: Utc::now().timestamp(),

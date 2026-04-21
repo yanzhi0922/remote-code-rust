@@ -352,7 +352,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "web_search".to_owned(),
             protocol_name: "WebSearch".to_owned(),
             permission_tool_name: "WebSearch".to_owned(),
-            description: tool_prompts::WEB_SEARCH.to_owned(),
+            description: tool_prompts::web_search_tool_prompt(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -506,19 +506,56 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "send_message".to_owned(),
             protocol_name: "SendMessage".to_owned(),
             permission_tool_name: "SendMessage".to_owned(),
-            description: tool_prompts::SEND_MESSAGE.to_owned(),
+            description: tool_prompts::send_message_tool_prompt(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "team_name": {"type": "string", "description": "Optional team name when more than one team exists."},
-                    "recipient": {"type": "string", "description": "Target agent name within the selected team."},
-                    "message": {"type": "string", "description": "Message content to deliver."},
-                    "sender": {"type": "string", "description": "Optional sender agent name (default: coordinator)."},
-                    "priority": {"type": "string", "enum": ["low", "normal", "high"], "description": "Optional message priority."},
-                    "correlation_id": {"type": "string", "description": "Optional correlation identifier for request/response flows."}
+                    "to": {"type": "string", "description": "Recipient: teammate name, or \"*\" for broadcast to all teammates"},
+                    "summary": {"type": "string", "description": "A 5-10 word summary shown as a preview in the UI (required when message is a string)"},
+                    "message": {
+                        "oneOf": [
+                            {"type": "string", "description": "Plain text message content"},
+                            {
+                                "type": "object",
+                                "oneOf": [
+                                    {
+                                        "type": "object",
+                                        "properties": {
+                                            "type": {"const": "shutdown_request"},
+                                            "reason": {"type": "string"}
+                                        },
+                                        "required": ["type"],
+                                        "additionalProperties": false
+                                    },
+                                    {
+                                        "type": "object",
+                                        "properties": {
+                                            "type": {"const": "shutdown_response"},
+                                            "request_id": {"type": "string"},
+                                            "approve": {"type": "boolean"},
+                                            "reason": {"type": "string"}
+                                        },
+                                        "required": ["type", "request_id", "approve"],
+                                        "additionalProperties": false
+                                    },
+                                    {
+                                        "type": "object",
+                                        "properties": {
+                                            "type": {"const": "plan_approval_response"},
+                                            "request_id": {"type": "string"},
+                                            "approve": {"type": "boolean"},
+                                            "feedback": {"type": "string"}
+                                        },
+                                        "required": ["type", "request_id", "approve"],
+                                        "additionalProperties": false
+                                    }
+                                ]
+                            }
+                        ]
+                    }
                 },
-                "required": ["recipient", "message"],
+                "required": ["to", "message"],
                 "additionalProperties": false,
             }),
         },
@@ -642,7 +679,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "team_create".to_owned(),
             protocol_name: "TeamCreate".to_owned(),
             permission_tool_name: "TeamCreate".to_owned(),
-            description: tool_prompts::TEAM_CREATE.to_owned(),
+            description: tool_prompts::team_create_tool_prompt(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -882,14 +919,13 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "enter_worktree".to_owned(),
             protocol_name: "EnterWorktree".to_owned(),
             permission_tool_name: "Edit".to_owned(),
-            description: tool_prompts::ENTER_WORKTREE.to_owned(),
+            description: tool_prompts::enter_worktree_tool_prompt(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "branch": {"type": "string"}
+                    "name": {"type": "string", "description": "Optional name for the new worktree"}
                 },
-                "required": ["branch"],
                 "additionalProperties": false,
             }),
         },
@@ -897,14 +933,15 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "exit_worktree".to_owned(),
             protocol_name: "ExitWorktree".to_owned(),
             permission_tool_name: "Edit".to_owned(),
-            description: tool_prompts::EXIT_WORKTREE.to_owned(),
+            description: tool_prompts::exit_worktree_tool_prompt(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "branch": {"type": "string"}
+                    "action": {"type": "string", "enum": ["keep", "remove"]},
+                    "discard_changes": {"type": "boolean"}
                 },
-                "required": ["branch"],
+                "required": ["action"],
                 "additionalProperties": false,
             }),
         },
@@ -1155,7 +1192,7 @@ pub fn phase9_tool_specs() -> Vec<ToolSpec> {
             name: "team_delete".to_owned(),
             protocol_name: "TeamDelete".to_owned(),
             permission_tool_name: "TeamDelete".to_owned(),
-            description: tool_prompts::TEAM_DELETE.to_owned(),
+            description: tool_prompts::team_delete_tool_prompt(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -1290,6 +1327,8 @@ mod tests {
             ("write_file", tool_prompts::file_write_tool_prompt()),
             ("edit_file", tool_prompts::file_edit_tool_prompt()),
             ("bash_command", tool_prompts::bash_tool_prompt()),
+            ("web_search", tool_prompts::web_search_tool_prompt()),
+            ("send_message", tool_prompts::send_message_tool_prompt()),
         ];
 
         for (tool_name, prompt) in expected {
@@ -1419,17 +1458,22 @@ mod tests {
         };
 
         let send_message = properties_for("send_message");
-        for field in [
+        for field in ["to", "summary", "message"] {
+            assert!(
+                send_message.contains_key(field),
+                "send_message should expose {field}"
+            );
+        }
+        for hidden in [
             "team_name",
             "recipient",
-            "message",
             "sender",
             "priority",
             "correlation_id",
         ] {
             assert!(
-                send_message.contains_key(field),
-                "send_message should expose {field}"
+                !send_message.contains_key(hidden),
+                "send_message should hide legacy field {hidden}"
             );
         }
 
