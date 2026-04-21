@@ -53,7 +53,10 @@ use rc_tools::{
         observe_runtime_mcp_servers,
     },
     plan_mode::normalize_exit_plan_mode_tool_calls,
-    runtime_plan_mode::inject_plan_mode_runtime_messages,
+    runtime_plan_mode::{
+        RuntimePlanModeReminder, RuntimePlanModeReminderKind, build_runtime_plan_mode_reminder,
+        build_runtime_plan_mode_reminder_content, inject_plan_mode_runtime_messages,
+    },
     runtime_provider_tool_spec, runtime_provider_tool_specs,
     tool_result_storage::process_tool_result_content,
     with_runtime_agent_prompt_context_provider, with_runtime_mcp_observation_provider,
@@ -99,7 +102,8 @@ struct CriticalReminderBackend {
 
 const PLAN_MODE_MARKER: &str = "## Plan Mode Active";
 const PLAN_MODE_REENTRY_MARKER: &str = "## Re-entering Plan Mode";
-const PLAN_MODE_EXIT_MARKER: &str = "## Exited Plan Mode";
+const PLAN_MODE_ACTIVE_REMINDER_PREFIX: &str = "Plan mode is active. The user indicated";
+const PLAN_MODE_SPARSE_REMINDER_PREFIX: &str = "Plan mode still active";
 const DEFERRED_TOOLS_DELTA_MARKER: &str = "__remote_code_meta__:deferred_tools_delta:";
 const AGENT_LISTING_DELTA_MARKER: &str = "__remote_code_meta__:agent_listing_delta:";
 const MCP_INSTRUCTIONS_DELTA_MARKER: &str = "__remote_code_meta__:mcp_instructions_delta:";
@@ -1233,12 +1237,10 @@ fn append_post_compact_plan_mode_reminder(
     let existing_plan_mode_marker = conversation.iter().any(|entry| {
         entry.role == ConversationRole::User
             && (entry.text.contains(PLAN_MODE_MARKER)
-                || entry.text.contains(PLAN_MODE_REENTRY_MARKER))
+                || entry.text.contains(PLAN_MODE_REENTRY_MARKER)
+                || entry.text.contains(PLAN_MODE_ACTIVE_REMINDER_PREFIX)
+                || entry.text.contains(PLAN_MODE_SPARSE_REMINDER_PREFIX))
     });
-    let existing_exit_marker = conversation.iter().any(|entry| {
-        entry.role == ConversationRole::User && entry.text.contains(PLAN_MODE_EXIT_MARKER)
-    });
-
     if state.current_permission_mode == PermissionMode::Plan {
         if existing_plan_mode_marker {
             return;
@@ -1249,23 +1251,49 @@ fn append_post_compact_plan_mode_reminder(
             .as_ref()
             .is_some_and(|path| path.exists());
         let reminder = if state.has_exited_plan_mode && plan_file_exists {
-            format!(
-                "{PLAN_MODE_REENTRY_MARKER}\n\nYou are returning to plan mode after having previously exited it. A plan file exists at {plan_file_path}.\n\nRead the existing plan, decide whether this is the same task or a fresh plan, update the plan file accordingly, and only then continue planning."
-            )
+            build_runtime_plan_mode_reminder(RuntimePlanModeReminder {
+                kind: RuntimePlanModeReminderKind::Reentry,
+                plan_file_path,
+                plan_exists: true,
+                is_sub_agent: false,
+            })
         } else {
-            format!(
-                "{PLAN_MODE_MARKER}\n\nPlan mode is active. You must remain read-only except for the current plan file: {plan_file_path}.\n\nUse read-only tools to inspect the project, update the plan file as you learn, ask clarifying questions when needed, and use `exit_plan_mode` when the plan is ready."
-            )
+            build_runtime_plan_mode_reminder(RuntimePlanModeReminder {
+                kind: RuntimePlanModeReminderKind::Full,
+                plan_file_path,
+                plan_exists: plan_file_exists,
+                is_sub_agent: false,
+            })
         };
         conversation.push(ConversationEntry::user(reminder));
-    } else if state.needs_plan_mode_exit_attachment && !existing_exit_marker {
-        let plan_reference = state
-            .plan_file_path
-            .as_ref()
-            .map(|path| format!("\n\nPlan file: {}", path.display()))
-            .unwrap_or_default();
-        conversation.push(ConversationEntry::user(format!(
-            "{PLAN_MODE_EXIT_MARKER}\n\nYou have exited plan mode. You can now make edits, run tools, and continue implementation.{plan_reference}"
+    } else if state.needs_plan_mode_exit_attachment
+        && !conversation.iter().any(|entry| {
+            entry.role == ConversationRole::User
+                && entry
+                    .text
+                    .contains(&build_runtime_plan_mode_reminder_content(
+                        RuntimePlanModeReminder {
+                            kind: RuntimePlanModeReminderKind::Exit,
+                            plan_file_path: plan_file_path.clone(),
+                            plan_exists: state
+                                .plan_file_path
+                                .as_ref()
+                                .is_some_and(|path| path.exists()),
+                            is_sub_agent: false,
+                        },
+                    ))
+        })
+    {
+        conversation.push(ConversationEntry::user(build_runtime_plan_mode_reminder(
+            RuntimePlanModeReminder {
+                kind: RuntimePlanModeReminderKind::Exit,
+                plan_file_path,
+                plan_exists: state
+                    .plan_file_path
+                    .as_ref()
+                    .is_some_and(|path| path.exists()),
+                is_sub_agent: false,
+            },
         )));
     }
 }
@@ -2432,7 +2460,9 @@ mod tests {
             "# Plan\n\n- keep this"
         );
         assert!(augmented.iter().any(|entry| {
-            entry.role == ConversationRole::User && entry.text.contains("## Plan Mode Active")
+            entry.role == ConversationRole::User
+                && entry.text.contains("## Plan Workflow")
+                && entry.text.contains("### Phase 5: Call ExitPlanMode")
         }));
     }
 
