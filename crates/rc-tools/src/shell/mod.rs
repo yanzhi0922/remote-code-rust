@@ -18,7 +18,8 @@ use crate::ToolExecutionContext;
 use crate::tasks;
 
 use self::output::{
-    ShellOutputSummary, format_shell_result, persist_shell_output, truncate_output,
+    ShellOutputSummary, format_shell_result, persist_shell_output, prepare_stdout_for_display,
+    truncate_output,
 };
 use self::path_validation::resolve_working_dir;
 use self::readonly::ShellKind;
@@ -31,6 +32,8 @@ pub struct ShellExecutionPolicy {
     pub block_destructive_git: bool,
     pub max_capture_chars: usize,
     pub output_dir: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub tool_results_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for ShellExecutionPolicy {
@@ -39,8 +42,9 @@ impl Default for ShellExecutionPolicy {
             block_inline_cwd: true,
             allow_background: true,
             block_destructive_git: true,
-            max_capture_chars: 16_000,
+            max_capture_chars: max_capture_chars_from_env(),
             output_dir: None,
+            tool_results_dir: None,
         }
     }
 }
@@ -139,7 +143,12 @@ async fn execute_foreground(
     let outcome = capture_process_output(child, request.timeout_ms).await?;
 
     let file_stem = shell_file_stem();
-    let stdout = truncate_output(&outcome.stdout, policy.max_capture_chars);
+    let stdout = prepare_stdout_for_display(
+        &outcome.stdout,
+        policy.max_capture_chars,
+        policy.tool_results_dir.as_deref(),
+        &file_stem,
+    );
     let stderr = truncate_output(&outcome.stderr, policy.max_capture_chars);
     let artifact_contents = build_artifact_contents(
         &request.command,
@@ -197,6 +206,7 @@ async fn execute_background(
     let analysis_for_task = analysis.clone();
     let response_description = request.description.clone();
     let output_dir = policy.output_dir.clone();
+    let tool_results_dir = policy.tool_results_dir.clone();
     let max_capture_chars = policy.max_capture_chars;
     tokio::spawn(async move {
         let outcome = async {
@@ -214,9 +224,14 @@ async fn execute_background(
 
         match outcome {
             Ok(outcome) => {
-                let stdout = truncate_output(&outcome.stdout, max_capture_chars);
-                let stderr = truncate_output(&outcome.stderr, max_capture_chars);
                 let file_stem = format!("task-{}", task_id_for_task);
+                let stdout = prepare_stdout_for_display(
+                    &outcome.stdout,
+                    max_capture_chars,
+                    tool_results_dir.as_deref(),
+                    &file_stem,
+                );
+                let stderr = truncate_output(&outcome.stderr, max_capture_chars);
                 let artifact_contents = build_artifact_contents(
                     &request.command,
                     request.description.as_deref(),
@@ -355,6 +370,18 @@ fn shell_file_stem() -> String {
         .map(|duration| duration.as_millis())
         .unwrap_or(0);
     format!("shell-{millis}")
+}
+
+fn max_capture_chars_from_env() -> usize {
+    const DEFAULT: usize = 30_000;
+    const UPPER_LIMIT: usize = 150_000;
+
+    std::env::var("BASH_MAX_OUTPUT_LENGTH")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .map(|value| value.min(UPPER_LIMIT))
+        .unwrap_or(DEFAULT)
 }
 
 fn build_artifact_contents(

@@ -1990,8 +1990,9 @@ fn configure_runtime_policy_for_config(config: &RuntimeConfig) -> Result<()> {
             block_inline_cwd: true,
             allow_background: true,
             block_destructive_git: true,
-            max_capture_chars: 16_000,
+            max_capture_chars: ShellExecutionPolicy::default().max_capture_chars,
             output_dir: Some(shell_output_dir_for_paths(&config.paths, config.session_id)),
+            tool_results_dir: Some(session_dir.join("tool-results")),
         },
     })
 }
