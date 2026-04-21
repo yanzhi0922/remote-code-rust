@@ -27,11 +27,6 @@ impl SystemPromptSection for SessionGuidanceSection {
         "session_guidance"
     }
 
-    /// This section is dynamic and depends on enabled tools.
-    fn is_cacheable(&self) -> bool {
-        false
-    }
-
     fn compute(&self, ctx: &PromptContext) -> Result<Option<String>> {
         let has_ask = ctx.enabled_tools.contains(ASK_USER_QUESTION_TOOL_NAME);
         let has_agent = ctx.enabled_tools.contains(AGENT_TOOL_NAME);
@@ -187,9 +182,9 @@ mod tests {
     }
 
     #[test]
-    fn session_guidance_not_cacheable() {
+    fn session_guidance_matches_research_cacheability() {
         let section = SessionGuidanceSection;
-        assert!(!section.is_cacheable());
+        assert!(section.is_cacheable());
     }
 
     #[test]

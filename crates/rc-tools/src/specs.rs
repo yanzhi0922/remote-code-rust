@@ -28,7 +28,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "read_file".to_owned(),
             protocol_name: "ReadFile".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: tool_prompts::READ_FILE.to_owned(),
+            description: tool_prompts::file_read_tool_prompt(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -63,7 +63,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "write_file".to_owned(),
             protocol_name: "WriteFile".to_owned(),
             permission_tool_name: "Edit".to_owned(),
-            description: tool_prompts::WRITE_FILE.to_owned(),
+            description: tool_prompts::file_write_tool_prompt(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -98,7 +98,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "edit_file".to_owned(),
             protocol_name: "EditFile".to_owned(),
             permission_tool_name: "Edit".to_owned(),
-            description: tool_prompts::EDIT_FILE.to_owned(),
+            description: tool_prompts::file_edit_tool_prompt(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -127,7 +127,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "bash_command".to_owned(),
             protocol_name: "Bash".to_owned(),
             permission_tool_name: "Bash".to_owned(),
-            description: tool_prompts::BASH_COMMAND.to_owned(),
+            description: tool_prompts::bash_tool_prompt(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
@@ -1250,6 +1250,7 @@ pub fn phase9_tool_specs() -> Vec<ToolSpec> {
 #[cfg(test)]
 mod tests {
     use super::{builtin_tool_specs, mcp_resource_tool_specs};
+    use crate::tool_prompts;
 
     #[test]
     fn shell_tool_schemas_expose_cwd_controls() {
@@ -1276,6 +1277,29 @@ mod tests {
             assert!(
                 properties.contains_key("background"),
                 "{tool_name} should expose background"
+            );
+        }
+    }
+
+    #[test]
+    fn rich_tool_prompt_generators_drive_primary_file_and_shell_specs() {
+        let specs = builtin_tool_specs();
+
+        let expected = [
+            ("read_file", tool_prompts::file_read_tool_prompt()),
+            ("write_file", tool_prompts::file_write_tool_prompt()),
+            ("edit_file", tool_prompts::file_edit_tool_prompt()),
+            ("bash_command", tool_prompts::bash_tool_prompt()),
+        ];
+
+        for (tool_name, prompt) in expected {
+            let spec = specs
+                .iter()
+                .find(|spec| spec.name == tool_name)
+                .unwrap_or_else(|| panic!("missing tool spec for {tool_name}"));
+            assert_eq!(
+                spec.description, prompt,
+                "{tool_name} should use the dynamic parity prompt generator"
             );
         }
     }

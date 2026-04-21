@@ -1,4 +1,5 @@
 use rc_core::permission_types::PermissionBehavior;
+use rc_core::PermissionMode;
 use rc_permissions::rule::PermissionRuleValue;
 use rc_permissions::{
     LayeredPermissionBroker, PermissionBroker, PermissionClass, PermissionDecision,
@@ -6,6 +7,8 @@ use rc_permissions::{
     classify_tool, rule_matches_pattern,
 };
 use rc_permissions::{PermissionUpdate, PermissionUpdateDestination};
+use rc_permissions::mode::ExtendedPermissionMode;
+use tempfile::tempdir;
 
 // ── classify_tool tests ───────────────────────────────────────
 
@@ -317,6 +320,88 @@ async fn layered_broker_applies_prompt_rule_permission_updates() -> anyhow::Resu
         })
         .await;
     assert!(!denied.allowed);
+
+    Ok(())
+}
+
+#[test]
+fn layered_broker_applies_session_mode_and_directory_updates() -> anyhow::Result<()> {
+    let fallback = StaticPermissionBroker::new(false);
+    let layered = LayeredPermissionBroker::new(fallback, vec![]);
+    let tempdir = tempdir()?;
+    let extra = tempdir.path().join("extra");
+
+    layered.apply_permission_updates(&[
+        PermissionUpdate::SetMode {
+            destination: PermissionUpdateDestination::Session,
+            mode: ExtendedPermissionMode::AcceptEdits,
+        },
+        PermissionUpdate::AddDirectories {
+            destination: PermissionUpdateDestination::Session,
+            directories: vec![extra.to_string_lossy().into_owned()],
+        },
+    ])?;
+
+    assert_eq!(layered.mode(), Some(PermissionMode::AcceptEdits));
+    assert_eq!(layered.additional_working_directories(), vec![extra.clone()]);
+
+    layered.apply_permission_updates(&[PermissionUpdate::RemoveDirectories {
+        destination: PermissionUpdateDestination::Session,
+        directories: vec![extra.to_string_lossy().into_owned()],
+    }])?;
+    assert!(layered.additional_working_directories().is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn layered_broker_session_mode_changes_decision_semantics() -> anyhow::Result<()> {
+    let fallback = StaticPermissionBroker::new(false);
+    let layered = LayeredPermissionBroker::new(fallback, vec![]);
+
+    layered.apply_permission_updates(&[PermissionUpdate::SetMode {
+        destination: PermissionUpdateDestination::Session,
+        mode: ExtendedPermissionMode::AcceptEdits,
+    }])?;
+
+    let edit = layered
+        .decide(PermissionRequest {
+            tool_name: "edit_file".to_owned(),
+            permission_class: Some(PermissionClass::Edit),
+            tool_input: serde_json::json!({"path":"src/main.rs"}),
+            working_directory: None,
+            tool_use_id: None,
+            title: None,
+            description: None,
+            blocked_path: None,
+            permission_suggestions: Vec::new(),
+        })
+        .await;
+    assert!(edit.allowed);
+
+    layered.apply_permission_updates(&[PermissionUpdate::SetMode {
+        destination: PermissionUpdateDestination::Session,
+        mode: ExtendedPermissionMode::DontAsk,
+    }])?;
+
+    let bash = layered
+        .decide(PermissionRequest {
+            tool_name: "bash_command".to_owned(),
+            permission_class: Some(PermissionClass::Bash),
+            tool_input: serde_json::json!({"command":"cargo test"}),
+            working_directory: None,
+            tool_use_id: None,
+            title: None,
+            description: None,
+            blocked_path: None,
+            permission_suggestions: Vec::new(),
+        })
+        .await;
+    assert!(!bash.allowed);
+    assert_eq!(
+        bash.message.as_deref(),
+        Some("Permission denied by session mode")
+    );
 
     Ok(())
 }

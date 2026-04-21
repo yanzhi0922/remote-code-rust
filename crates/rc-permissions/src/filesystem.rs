@@ -7,6 +7,7 @@
 use std::collections::HashSet;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 
+use rc_core::PermissionMode;
 use rc_core::permission_types::PermissionBehavior;
 
 use crate::decision::{PermissionUpdate, PermissionUpdateDestination};
@@ -62,6 +63,7 @@ pub enum FilesystemCheckCause {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FilesystemAccessOptions {
     pub additional_dirs: Vec<PathBuf>,
+    pub current_mode: Option<PermissionMode>,
     pub plan_file: Option<PathBuf>,
     pub internal_read_dirs: Vec<PathBuf>,
     pub internal_write_dirs: Vec<PathBuf>,
@@ -95,6 +97,7 @@ pub fn check_filesystem_permission(
     let cwd = PathBuf::from(cwd);
     let options = FilesystemAccessOptions {
         additional_dirs: additional_dirs.iter().map(PathBuf::from).collect(),
+        current_mode: None,
         ..FilesystemAccessOptions::default()
     };
     assess_filesystem_access(path, &cwd, &options, FilesystemOperation::Read)
@@ -558,6 +561,10 @@ fn generate_suggestions(
 ) -> Vec<PermissionUpdate> {
     let outside_working_dir =
         !path_in_allowed_working_path(checked_paths, cwd, &options.additional_dirs);
+    let should_suggest_accept_edits = matches!(
+        options.current_mode.unwrap_or(PermissionMode::Default),
+        PermissionMode::Default | PermissionMode::Plan
+    );
     match operation {
         FilesystemOperation::Read if outside_working_dir => {
             let dirs_to_add = path
@@ -577,10 +584,14 @@ fn generate_suggestions(
                 .collect()
         }
         FilesystemOperation::Write | FilesystemOperation::Create => {
-            let mut updates = vec![PermissionUpdate::SetMode {
-                destination: PermissionUpdateDestination::Session,
-                mode: ExtendedPermissionMode::AcceptEdits,
-            }];
+            let mut updates = if should_suggest_accept_edits {
+                vec![PermissionUpdate::SetMode {
+                    destination: PermissionUpdateDestination::Session,
+                    mode: ExtendedPermissionMode::AcceptEdits,
+                }]
+            } else {
+                Vec::new()
+            };
             if outside_working_dir {
                 let dirs_to_add = path
                     .parent()
@@ -596,6 +607,10 @@ fn generate_suggestions(
             }
             updates
         }
+        _ if should_suggest_accept_edits => vec![PermissionUpdate::SetMode {
+            destination: PermissionUpdateDestination::Session,
+            mode: ExtendedPermissionMode::AcceptEdits,
+        }],
         _ => Vec::new(),
     }
 }
@@ -909,6 +924,49 @@ mod tests {
                 .to_string_lossy()
                 .replace('\\', "/")
                 .ends_with("/outside.txt")
+        );
+    }
+
+    #[test]
+    fn write_suggestions_respect_current_mode_for_accept_edits_upgrade() {
+        let tempdir = tempdir().expect("tempdir");
+        let workspace = tempdir.path().join("workspace");
+        let outside = tempdir.path().join("outside").join("file.txt");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        std::fs::create_dir_all(outside.parent().expect("outside dir")).expect("outside dir");
+
+        let default_result = assess_filesystem_access(
+            outside.to_string_lossy().as_ref(),
+            &workspace,
+            &FilesystemAccessOptions {
+                current_mode: Some(PermissionMode::Default),
+                ..FilesystemAccessOptions::default()
+            },
+            FilesystemOperation::Write,
+        );
+        assert!(default_result.requires_confirmation);
+        assert!(
+            default_result
+                .suggestions
+                .iter()
+                .any(|update| matches!(update, PermissionUpdate::SetMode { .. }))
+        );
+
+        let auto_result = assess_filesystem_access(
+            outside.to_string_lossy().as_ref(),
+            &workspace,
+            &FilesystemAccessOptions {
+                current_mode: Some(PermissionMode::DontAsk),
+                ..FilesystemAccessOptions::default()
+            },
+            FilesystemOperation::Write,
+        );
+        assert!(auto_result.requires_confirmation);
+        assert!(
+            !auto_result
+                .suggestions
+                .iter()
+                .any(|update| matches!(update, PermissionUpdate::SetMode { .. }))
         );
     }
 }

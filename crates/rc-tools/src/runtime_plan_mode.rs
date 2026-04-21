@@ -489,7 +489,15 @@ impl PermissionBroker for RuntimePermissionBroker {
     }
 
     fn mode(&self) -> Option<PermissionMode> {
-        Some(self.controller.current_mode())
+        if self.controller.current_mode() == PermissionMode::Plan {
+            Some(PermissionMode::Plan)
+        } else {
+            self.inner.mode()
+        }
+    }
+
+    fn additional_working_directories(&self) -> Vec<std::path::PathBuf> {
+        self.inner.additional_working_directories()
     }
 
     fn audit_records(&self) -> Vec<rc_permissions::PermissionAuditRecord> {
