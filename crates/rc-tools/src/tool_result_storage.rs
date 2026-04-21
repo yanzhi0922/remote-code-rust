@@ -10,7 +10,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const DEFAULT_MAX_RESULT_SIZE_CHARS: usize = 50_000;
+pub const MAX_TOOL_RESULT_TOKENS: usize = 100_000;
+pub const BYTES_PER_TOKEN: usize = 4;
+pub const MAX_TOOL_RESULT_BYTES: usize = MAX_TOOL_RESULT_TOKENS * BYTES_PER_TOKEN;
 pub const MAX_TOOL_RESULTS_PER_MESSAGE_CHARS: usize = 200_000;
+pub const TOOL_RESULT_CLEARED_MESSAGE: &str = "[Old tool result content cleared]";
 pub const TOOL_RESULTS_SUBDIR: &str = "tool-results";
 pub const PERSISTED_OUTPUT_TAG: &str = "<persisted-output>";
 pub const PERSISTED_OUTPUT_CLOSING_TAG: &str = "</persisted-output>";
@@ -151,7 +155,10 @@ pub fn process_tool_result_text(
     tool_results_dir: Option<&Path>,
     threshold: Option<usize>,
 ) -> Result<String> {
-    let limit = threshold.unwrap_or(DEFAULT_MAX_RESULT_SIZE_CHARS);
+    let limit = persistence_threshold(threshold);
+    if is_tool_result_text_empty(content) {
+        return Ok("(tool completed with no output)".to_owned());
+    }
     if content.chars().count() <= limit {
         return Ok(content.to_owned());
     }
@@ -161,6 +168,13 @@ pub fn process_tool_result_text(
 
     let persisted = persist_tool_result_text(content, tool_use_id, tool_results_dir)?;
     Ok(build_large_tool_result_message(&persisted))
+}
+
+#[must_use]
+pub fn persistence_threshold(declared_max_result_size_chars: Option<usize>) -> usize {
+    declared_max_result_size_chars
+        .unwrap_or(MAX_TOOL_RESULT_BYTES)
+        .min(DEFAULT_MAX_RESULT_SIZE_CHARS)
 }
 
 fn cleanup_one_level_tool_dir(
@@ -384,12 +398,11 @@ pub fn apply_tool_result_budget_to_conversation(
         let fresh_size = eligible
             .iter()
             .fold(0usize, |sum, candidate| sum.saturating_add(candidate.size));
-        let selected =
-            if frozen_size.saturating_add(fresh_size) > MAX_TOOL_RESULTS_PER_MESSAGE_CHARS {
-                select_fresh_to_replace(eligible.as_slice(), frozen_size)
-            } else {
-                Vec::new()
-            };
+        let selected = if frozen_size.saturating_add(fresh_size) > per_message_budget_limit() {
+            select_fresh_to_replace(eligible.as_slice(), frozen_size)
+        } else {
+            Vec::new()
+        };
         let selected_ids = selected
             .iter()
             .map(|candidate| candidate.tool_use_id.clone())
@@ -473,7 +486,9 @@ fn collect_candidates_from_entry(entry: &ConversationEntry) -> Vec<ToolResultCan
     let tool_name = entry.name.clone().unwrap_or_default();
 
     if !entry.content_blocks.is_empty() {
-        if content_blocks_have_image(&entry.content_blocks) {
+        if content_blocks_have_image(&entry.content_blocks)
+            || content_blocks_are_empty(&entry.content_blocks)
+        {
             return Vec::new();
         }
         let size = content_blocks_size(&entry.content_blocks);
@@ -485,7 +500,7 @@ fn collect_candidates_from_entry(entry: &ConversationEntry) -> Vec<ToolResultCan
         }];
     }
 
-    if entry.text.is_empty() || is_content_already_compacted(&entry.text) {
+    if is_tool_result_text_empty(&entry.text) || is_content_already_compacted(&entry.text) {
         return Vec::new();
     }
     vec![ToolResultCandidate {
@@ -509,13 +524,18 @@ fn select_fresh_to_replace(
             .fold(0usize, |sum, candidate| sum.saturating_add(candidate.size)),
     );
     for candidate in sorted {
-        if remaining <= MAX_TOOL_RESULTS_PER_MESSAGE_CHARS {
+        if remaining <= per_message_budget_limit() {
             break;
         }
         remaining = remaining.saturating_sub(candidate.size);
         selected.push(candidate);
     }
     selected
+}
+
+#[must_use]
+pub const fn per_message_budget_limit() -> usize {
+    MAX_TOOL_RESULTS_PER_MESSAGE_CHARS
 }
 
 fn replace_tool_result_contents(
@@ -548,6 +568,17 @@ fn content_blocks_have_image(content_blocks: &[Value]) -> bool {
         .any(|block| block.get("type").and_then(Value::as_str) == Some("image"))
 }
 
+fn content_blocks_are_empty(content_blocks: &[Value]) -> bool {
+    content_blocks.is_empty()
+        || content_blocks.iter().all(|block| {
+            block.get("type").and_then(Value::as_str) == Some("text")
+                && block
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_none_or(|text| text.trim().is_empty())
+        })
+}
+
 fn content_blocks_size(content_blocks: &[Value]) -> usize {
     content_blocks
         .iter()
@@ -555,6 +586,10 @@ fn content_blocks_size(content_blocks: &[Value]) -> usize {
         .filter_map(|block| block.get("text").and_then(Value::as_str))
         .map(str::len)
         .sum()
+}
+
+fn is_tool_result_text_empty(content: &str) -> bool {
+    content.trim().is_empty()
 }
 
 pub fn generate_preview(content: &str, max_bytes: usize) -> (String, bool) {
@@ -622,11 +657,12 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
+        BYTES_PER_TOKEN, DEFAULT_MAX_RESULT_SIZE_CHARS, MAX_TOOL_RESULT_BYTES,
         PERSISTED_OUTPUT_CLOSING_TAG, PERSISTED_OUTPUT_TAG, PREVIEW_SIZE_BYTES,
-        apply_tool_result_budget_to_conversation, build_large_tool_result_message,
-        cleanup_tool_results_for_session, generate_preview, persist_tool_result_blocks,
-        persist_tool_result_text, process_tool_result_text, reconstruct_content_replacement_state,
-        session_tool_results_dir,
+        TOOL_RESULT_CLEARED_MESSAGE, apply_tool_result_budget_to_conversation,
+        build_large_tool_result_message, cleanup_tool_results_for_session, generate_preview,
+        persist_tool_result_blocks, persist_tool_result_text, persistence_threshold,
+        process_tool_result_text, reconstruct_content_replacement_state, session_tool_results_dir,
     };
 
     #[test]
@@ -639,6 +675,32 @@ mod tests {
         assert!(processed.starts_with(PERSISTED_OUTPUT_TAG));
         assert!(processed.ends_with(PERSISTED_OUTPUT_CLOSING_TAG));
         assert!(tool_results_dir.join("call-1.txt").exists());
+    }
+
+    #[test]
+    fn persistence_threshold_clamps_large_declared_sizes_to_default_limit() {
+        assert_eq!(
+            persistence_threshold(Some(MAX_TOOL_RESULT_BYTES)),
+            DEFAULT_MAX_RESULT_SIZE_CHARS
+        );
+        assert_eq!(persistence_threshold(Some(4_000)), 4_000);
+        assert_eq!(
+            persistence_threshold(None),
+            DEFAULT_MAX_RESULT_SIZE_CHARS,
+            "fallback remains clamped to the research default even with byte constants present"
+        );
+        assert_eq!(MAX_TOOL_RESULT_BYTES, 100_000 * BYTES_PER_TOKEN);
+        assert_eq!(
+            TOOL_RESULT_CLEARED_MESSAGE,
+            "[Old tool result content cleared]"
+        );
+    }
+
+    #[test]
+    fn process_tool_result_text_normalizes_empty_output() {
+        let processed =
+            process_tool_result_text("   \n", "call-empty", None, None).expect("process");
+        assert_eq!(processed, "(tool completed with no output)");
     }
 
     #[test]
