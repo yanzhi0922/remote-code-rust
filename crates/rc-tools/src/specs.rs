@@ -528,7 +528,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             protocol_name: "EnterPlanMode".to_owned(),
             permission_tool_name: "EnterPlanMode".to_owned(),
             description: tool_prompts::ENTER_PLAN_MODE.to_owned(),
-            requires_permission: false,
+            requires_permission: true,
             input_schema: json!({
                 "type": "object",
                 "properties": {},
@@ -540,7 +540,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             protocol_name: "ExitPlanMode".to_owned(),
             permission_tool_name: "ExitPlanMode".to_owned(),
             description: tool_prompts::EXIT_PLAN_MODE.to_owned(),
-            requires_permission: false,
+            requires_permission: true,
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -1287,6 +1287,7 @@ mod tests {
             .expect("enter_plan_mode spec");
 
         assert_eq!(spec.protocol_name, "EnterPlanMode");
+        assert!(spec.requires_permission);
         assert_eq!(
             spec.input_schema,
             serde_json::json!({
@@ -1310,6 +1311,7 @@ mod tests {
             .and_then(|value| value.as_object())
             .expect("properties");
 
+        assert!(spec.requires_permission);
         assert!(properties.contains_key("allowedPrompts"));
         assert!(properties.contains_key("plan"));
         assert!(properties.contains_key("planFilePath"));

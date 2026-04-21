@@ -603,6 +603,10 @@ impl PermissionBroker for HeadlessPermissionBroker {
         self.inner.decide(request).await
     }
 
+    async fn decide_forced_prompt(&self, request: PermissionRequest) -> PermissionDecision {
+        self.inner.decide_forced_prompt(request).await
+    }
+
     fn mode(&self) -> Option<PermissionMode> {
         Some(self.controller.current_mode())
     }
@@ -643,8 +647,8 @@ mod tests {
         ProviderResponse, SubAgentCompletion, UsageSummary,
     };
     use rc_permissions::{
-        LayeredPermissionBroker, PermissionBroker, PermissionDecision, PermissionRequest,
-        StaticPermissionBroker,
+        LayeredPermissionBroker, PermissionBroker, PermissionClass, PermissionDecision,
+        PermissionRequest, StaticPermissionBroker,
     };
     use rc_provider::{ConversationBackend, StreamingCallbacks};
     use rc_session::SessionStore;
@@ -652,10 +656,11 @@ mod tests {
     use tempfile::{NamedTempFile, TempDir, tempdir};
     use tokio::sync::{Mutex, oneshot};
 
-    use super::{resolve_pending_permission, run_headless_prompt_once};
+    use super::{HeadlessPermissionBroker, resolve_pending_permission, run_headless_prompt_once};
     use crate::conversation::initialize_conversation;
     use crate::hooks::{HookRunState, RuntimeHookDiscovery};
     use rc_protocol::ProtocolEmitter;
+    use rc_tools::runtime_plan_mode::RuntimePlanModeController;
 
     fn mock_config_and_store() -> (TempDir, RuntimeConfig, SessionStore) {
         let tempdir = tempdir().expect("tempdir");
@@ -1082,5 +1087,72 @@ mod tests {
         let requests = captured.lock().expect("captured");
         assert_eq!(requests.len(), 1);
         assert!(!requests[0].permission_suggestions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn headless_plan_mode_exit_forced_prompt_enqueues_pending_permission() {
+        let (_tempdir, config, store) = mock_config_and_store();
+        let controller = RuntimePlanModeController::load(&config, &store).expect("controller");
+        controller
+            .activate_for_slash_command(Some("audit runtime"))
+            .expect("enter plan mode");
+        let emitter = Arc::new(Mutex::new(ProtocolEmitter::new(
+            std::io::stdout(),
+            config.session_id,
+        )));
+        let pending_permissions = Arc::new(Mutex::new(HashMap::new()));
+        let broker = Arc::new(HeadlessPermissionBroker::new(
+            &config,
+            controller,
+            Arc::clone(&emitter),
+            pending_permissions.clone(),
+        ));
+
+        let broker_task = {
+            let broker = Arc::clone(&broker);
+            let cwd = config.cwd.to_string_lossy().into_owned();
+            tokio::spawn(async move {
+                broker
+                    .decide_forced_prompt(PermissionRequest {
+                        tool_name: "exit_plan_mode".to_owned(),
+                        permission_class: Some(PermissionClass::Read),
+                        tool_input: serde_json::json!({}),
+                        working_directory: Some(cwd),
+                        tool_use_id: Some("tool-exit-plan".to_owned()),
+                        title: Some("Allow ExitPlanMode".to_owned()),
+                        description: Some(
+                            "Prompts the user to exit plan mode and start coding".to_owned(),
+                        ),
+                        blocked_path: None,
+                        permission_suggestions: Vec::new(),
+                    })
+                    .await
+            })
+        };
+
+        let request_id = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let Some(request_id) = pending_permissions.lock().await.keys().next().cloned() {
+                    break request_id;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("permission request should be emitted");
+
+        resolve_pending_permission(
+            &pending_permissions,
+            &emitter,
+            request_id,
+            true,
+            Some("approved".to_owned()),
+        )
+        .await
+        .expect("resolve permission");
+
+        let decision = broker_task.await.expect("broker task");
+        assert!(decision.allowed);
+        assert_eq!(decision.message.as_deref(), Some("approved"));
     }
 }
