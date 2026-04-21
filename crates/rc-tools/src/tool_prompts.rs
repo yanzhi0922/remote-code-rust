@@ -1335,6 +1335,277 @@ Notes:
 - Use `send_message` for direct one-to-one communication.
 - High-priority messages may interrupt agent workflows.";
 
+#[must_use]
+pub fn send_message_tool_prompt() -> String {
+    "\
+# SendMessage
+
+Send a message to another agent.
+
+```json
+{\"to\": \"researcher\", \"summary\": \"assign task 1\", \"message\": \"start on task #1\"}
+```
+
+| `to` | |
+|---|---|
+| `\"researcher\"` | Teammate by name |
+| `\"*\"` | Broadcast to all teammates — expensive (linear in team size), use only when everyone genuinely needs it |
+
+Your plain text output is NOT visible to other agents — to communicate, you MUST call this tool. Messages from teammates are delivered automatically; you don't check an inbox. Refer to teammates by name, never by UUID. When relaying, don't quote the original — it's already rendered to the user.
+
+## Protocol responses (legacy)
+
+If you receive a JSON message with `type: \"shutdown_request\"` or `type: \"plan_approval_request\"`, respond with the matching `_response` type — echo the `request_id`, set `approve` true/false:
+
+```json
+{\"to\": \"team-lead\", \"message\": {\"type\": \"shutdown_response\", \"request_id\": \"...\", \"approve\": true}}
+{\"to\": \"researcher\", \"message\": {\"type\": \"plan_approval_response\", \"request_id\": \"...\", \"approve\": false, \"feedback\": \"add error handling\"}}
+```
+
+Approving shutdown terminates your process. Rejecting plan sends the teammate back to revise. Don't originate `shutdown_request` unless asked. Don't send structured JSON status messages — use TaskUpdate."
+        .to_owned()
+}
+
+#[must_use]
+pub fn team_create_tool_prompt() -> String {
+    "\
+# TeamCreate
+
+## When to Use
+
+Use this tool proactively whenever:
+- The user explicitly asks to use a team, swarm, or group of agents
+- The user mentions wanting agents to work together, coordinate, or collaborate
+- A task is complex enough that it would benefit from parallel work by multiple agents (e.g., building a full-stack feature with frontend and backend work, refactoring a codebase while keeping tests passing, implementing a multi-step project with research, planning, and coding phases)
+
+When in doubt about whether a task warrants a team, prefer spawning a team.
+
+## Choosing Agent Types for Teammates
+
+When spawning teammates via the Agent tool, choose the `subagent_type` based on what tools the agent needs for its task. Each agent type has a different set of available tools — match the agent to the work:
+
+- **Read-only agents** (e.g., Explore, Plan) cannot edit or write files. Only assign them research, search, or planning tasks. Never assign them implementation work.
+- **Full-capability agents** (e.g., general-purpose) have access to all tools including file editing, writing, and bash. Use these for tasks that require making changes.
+- **Custom agents** defined in `.claude/agents/` may have their own tool restrictions. Check their descriptions to understand what they can and cannot do.
+
+Always review the agent type descriptions and their available tools listed in the Agent tool prompt before selecting a `subagent_type` for a teammate.
+
+Create a new team to coordinate multiple agents working on a project. Teams have a 1:1 correspondence with task lists (Team = TaskList).
+
+```json
+{
+  \"team_name\": \"my-project\",
+  \"description\": \"Working on feature X\"
+}
+```
+
+This creates:
+- A team file at `~/.claude/teams/{team-name}/config.json`
+- A corresponding task list directory at `~/.claude/tasks/{team-name}/`
+
+## Team Workflow
+
+1. **Create a team** with TeamCreate - this creates both the team and its task list
+2. **Create tasks** using the Task tools (TaskCreate, TaskList, etc.) - they automatically use the team's task list
+3. **Spawn teammates** using the Agent tool with `team_name` and `name` parameters to create teammates that join the team
+4. **Assign tasks** using TaskUpdate with `owner` to give tasks to idle teammates
+5. **Teammates work on assigned tasks** and mark them completed via TaskUpdate
+6. **Teammates go idle between turns** - after each turn, teammates automatically go idle and send a notification. IMPORTANT: Be patient with idle teammates! Don't comment on their idleness until it actually impacts your work.
+7. **Shutdown your team** - when the task is completed, gracefully shut down your teammates via SendMessage with `message: {type: \"shutdown_request\"}`.
+
+## Task Ownership
+
+Tasks are assigned using TaskUpdate with the `owner` parameter. Any agent can set or change task ownership via TaskUpdate.
+
+## Automatic Message Delivery
+
+**IMPORTANT**: Messages from teammates are automatically delivered to you. You do NOT need to manually check your inbox.
+
+When you spawn teammates:
+- They will send you messages when they complete tasks or need help
+- These messages appear automatically as new conversation turns (like user messages)
+- If you're busy (mid-turn), messages are queued and delivered when your turn ends
+- The UI shows a brief notification with the sender's name when messages are waiting
+
+Messages will be delivered automatically.
+
+When reporting on teammate messages, you do NOT need to quote the original message—it's already rendered to the user.
+
+## Teammate Idle State
+
+Teammates go idle after every turn—this is completely normal and expected. A teammate going idle immediately after sending you a message does NOT mean they are done or unavailable. Idle simply means they are waiting for input.
+
+- **Idle teammates can receive messages.** Sending a message to an idle teammate wakes them up and they will process it normally.
+- **Idle notifications are automatic.** The system sends an idle notification whenever a teammate's turn ends. You do not need to react to idle notifications unless you want to assign new work or send a follow-up message.
+- **Do not treat idle as an error.** A teammate sending a message and then going idle is the normal flow—they sent their message and are now waiting for a response.
+- **Peer DM visibility.** When a teammate sends a DM to another teammate, a brief summary is included in their idle notification. This gives you visibility into peer collaboration without the full message content. You do not need to respond to these summaries — they are informational.
+
+## Discovering Team Members
+
+Teammates can read the team config file to discover other team members:
+- **Team config location**: `~/.claude/teams/{team-name}/config.json`
+
+The config file contains a `members` array with each teammate's:
+- `name`: Human-readable name (**always use this** for messaging and task assignment)
+- `agentId`: Unique identifier (for reference only - do not use for communication)
+- `agentType`: Role/type of the agent
+
+**IMPORTANT**: Always refer to teammates by their NAME (e.g., \"team-lead\", \"researcher\", \"tester\"). Names are used for:
+- `to` when sending messages
+- Identifying task owners
+
+Example of reading team config:
+```text
+Use the Read tool to read ~/.claude/teams/{team-name}/config.json
+```
+
+## Task List Coordination
+
+Teams share a task list that all teammates can access at `~/.claude/tasks/{team-name}/`.
+
+Teammates should:
+1. Check TaskList periodically, **especially after completing each task**, to find available work or see newly unblocked tasks
+2. Claim unassigned, unblocked tasks with TaskUpdate (set `owner` to your name). **Prefer tasks in ID order** (lowest ID first) when multiple tasks are available, as earlier tasks often set up context for later ones
+3. Create new tasks with `TaskCreate` when identifying additional work
+4. Mark tasks as completed with `TaskUpdate` when done, then check TaskList for next work
+5. Coordinate with other teammates by reading the task list status
+6. If all available tasks are blocked, notify the team lead or help resolve blocking tasks
+
+**IMPORTANT notes for communication with your team**:
+- Do not use terminal tools to view your team's activity; always send a message to your teammates (and remember, refer to them by name).
+- Your team cannot hear you if you do not use the SendMessage tool. Always send a message to your teammates if you are responding to them.
+- Do NOT send structured JSON status messages like `{\"type\":\"idle\",...}` or `{\"type\":\"task_completed\",...}`. Just communicate in plain text when you need to message teammates.
+- Use TaskUpdate to mark tasks completed.
+- If you are an agent in the team, the system will automatically send idle notifications to the team lead when you stop."
+        .to_owned()
+}
+
+#[must_use]
+pub fn team_delete_tool_prompt() -> String {
+    "\
+# TeamDelete
+
+Remove team and task directories when the swarm work is complete.
+
+This operation:
+- Removes the team directory (`~/.claude/teams/{team-name}/`)
+- Removes the task directory (`~/.claude/tasks/{team-name}/`)
+- Clears team context from the current session
+
+**IMPORTANT**: TeamDelete will fail if the team still has active members. Gracefully terminate teammates first, then call TeamDelete after all teammates have shut down.
+
+Use this when all teammates have finished their work and you want to clean up the team resources. The team name is automatically determined from the current session's team context."
+        .to_owned()
+}
+
+#[must_use]
+pub fn enter_worktree_tool_prompt() -> String {
+    "\
+Use this tool ONLY when the user explicitly asks to work in a worktree. This tool creates an isolated git worktree and switches the current session into it.
+
+## When to Use
+
+- The user explicitly says \"worktree\" (e.g., \"start a worktree\", \"work in a worktree\", \"create a worktree\", \"use a worktree\")
+
+## When NOT to Use
+
+- The user asks to create a branch, switch branches, or work on a different branch — use git commands instead
+- The user asks to fix a bug or work on a feature — use normal git workflow unless they specifically mention worktrees
+- Never use this tool unless the user explicitly mentions \"worktree\"
+
+## Requirements
+
+- Must be in a git repository, OR have WorktreeCreate/WorktreeRemove hooks configured in settings.json
+- Must not already be in a worktree
+
+## Behavior
+
+- In a git repository: creates a new git worktree inside `.claude/worktrees/` with a new branch based on HEAD
+- Outside a git repository: delegates to WorktreeCreate/WorktreeRemove hooks for VCS-agnostic isolation
+- Switches the session's working directory to the new worktree
+- Use ExitWorktree to leave the worktree mid-session (keep or remove). On session exit, if still in the worktree, the user will be prompted to keep or remove it
+
+## Parameters
+
+- `name` (optional): A name for the worktree. If not provided, a random name is generated."
+        .to_owned()
+}
+
+#[must_use]
+pub fn exit_worktree_tool_prompt() -> String {
+    "\
+Exit a worktree session created by EnterWorktree and return the session to the original working directory.
+
+## Scope
+
+This tool ONLY operates on worktrees created by EnterWorktree in this session. It will NOT touch:
+- Worktrees you created manually with `git worktree add`
+- Worktrees from a previous session (even if created by EnterWorktree then)
+- The directory you're in if EnterWorktree was never called
+
+If called outside an EnterWorktree session, the tool is a **no-op**: it reports that no worktree session is active and takes no action. Filesystem state is unchanged.
+
+## When to Use
+
+- The user explicitly asks to \"exit the worktree\", \"leave the worktree\", \"go back\", or otherwise end the worktree session
+- Do NOT call this proactively — only when the user asks
+
+## Parameters
+
+- `action` (required): `\"keep\"` or `\"remove\"`
+  - `\"keep\"` — leave the worktree directory and branch intact on disk. Use this if the user wants to come back to the work later, or if there are changes to preserve.
+  - `\"remove\"` — delete the worktree directory and its branch. Use this for a clean exit when the work is done or abandoned.
+- `discard_changes` (optional, default false): only meaningful with `action: \"remove\"`. If the worktree has uncommitted files or commits not on the original branch, the tool will REFUSE to remove it unless this is set to `true`. If the tool returns an error listing changes, confirm with the user before re-invoking with `discard_changes: true`.
+
+## Behavior
+
+- Restores the session's working directory to where it was before EnterWorktree
+- Clears CWD-dependent caches (system prompt sections, memory files, plans directory) so the session state reflects the original directory
+- If a tmux session was attached to the worktree: killed on `remove`, left running on `keep` (its name is returned so the user can reattach)
+- Once exited, EnterWorktree can be called again to create a fresh worktree"
+        .to_owned()
+}
+
+#[must_use]
+pub fn web_search_tool_prompt() -> String {
+    let override_date = std::env::var("CLAUDE_CODE_OVERRIDE_DATE").ok();
+    let current_month_year = override_date
+        .as_deref()
+        .and_then(|value| chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
+        .map(|date| date.format("%B %Y").to_string())
+        .unwrap_or_else(|| chrono::Local::now().format("%B %Y").to_string());
+
+    format!(
+        "\
+- Allows Claude to search the web and use the results to inform responses
+- Provides up-to-date information for current events and recent data
+- Returns search result information formatted as search result blocks, including links as markdown hyperlinks
+- Use this tool for accessing information beyond Claude's knowledge cutoff
+- Searches are performed automatically within a single API call
+
+CRITICAL REQUIREMENT - You MUST follow this:
+  - After answering the user's question, you MUST include a \"Sources:\" section at the end of your response
+  - In the Sources section, list all relevant URLs from the search results as markdown hyperlinks: [Title](URL)
+  - This is MANDATORY - never skip including sources in your response
+  - Example format:
+
+    [Your answer here]
+
+    Sources:
+    - [Source Title 1](https://example.com/1)
+    - [Source Title 2](https://example.com/2)
+
+Usage notes:
+  - Domain filtering is supported to include or block specific websites
+  - Web search is only available in the US
+
+IMPORTANT - Use the correct year in search queries:
+  - The current month is {current_month_year}. You MUST use this year when searching for recent information, documentation, or current events.
+  - Example: If the user asks for \"latest React docs\", search for \"React documentation\" with the current year, NOT last year
+"
+    )
+}
+
 // ── Detailed prompt functions (Claude Code parity) ───────────────────────────
 
 /// Returns the full Bash tool prompt matching Claude Code's BashTool/prompt.ts.

@@ -3467,10 +3467,9 @@ while True:
                 name: "send_message".to_owned(),
                 input: json!({
                     "team_name": "message-team",
-                    "recipient": "agent-007",
-                    "message": "Hello from test",
-                    "priority": "high",
-                    "correlation_id": "corr-1"
+                    "to": "agent-007",
+                    "summary": "share greeting",
+                    "message": "Hello from test"
                 }),
             },
             &context,
@@ -3482,17 +3481,16 @@ while True:
         assert!(!result.is_error, "send_message error: {}", result.content);
         let parsed: serde_json::Value =
             serde_json::from_str(&result.content).expect("should be valid JSON");
-        assert_eq!(parsed["type"], "agent_message");
-        assert_eq!(parsed["to"], "agent-007");
-        assert_eq!(parsed["team_name"], "message-team");
-        assert_eq!(parsed["priority"], "high");
-        assert_eq!(parsed["correlation_id"], "corr-1");
+        assert_eq!(parsed["success"], true);
+        assert_eq!(parsed["routing"]["target"], "@agent-007");
+        assert_eq!(parsed["routing"]["summary"], "share greeting");
+        assert_eq!(parsed["routing"]["content"], "Hello from test");
         let stored = mailbox::read_messages("message-team", "agent-007")
             .await
             .expect("read mailbox");
         assert_eq!(stored.len(), 1);
-        assert_eq!(stored[0].priority.as_deref(), Some("high"));
-        assert_eq!(stored[0].correlation_id.as_deref(), Some("corr-1"));
+        assert_eq!(stored[0].summary.as_deref(), Some("share greeting"));
+        assert_eq!(stored[0].content, "Hello from test");
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -5988,6 +5986,9 @@ while True:
         };
 
         let precheck = super::precheck_filesystem_permission(&spec, &call, &context, &layered);
-        assert!(precheck.is_none(), "session directory should suppress prompt");
+        assert!(
+            precheck.is_none(),
+            "session directory should suppress prompt"
+        );
     }
 }

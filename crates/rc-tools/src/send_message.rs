@@ -1,228 +1,516 @@
-//! Multi-agent message sending tools: send_message, broadcast_message.
+//! Multi-agent messaging tools.
 //!
-//! Provides tools for sending messages to specific agents or broadcasting
-//! to all agents in the multi-agent system via the Mailbox system.
+//! `send_message` is aligned to the research surface:
+//! - `to`
+//! - `summary`
+//! - `message` (plain text or structured protocol object)
+//!
+//! We still keep `broadcast_message` as a legacy compatibility tool because
+//! other runtime surfaces still expose it.
 
 use anyhow::{Result, anyhow};
+use chrono::Utc;
+use rc_core::PermissionMode;
+use rc_swarm::constants::{ENV_AGENT_NAME, ENV_PERMISSION_MODE, ENV_TEAM_NAME, TEAM_LEAD_NAME};
+use rc_swarm::{MailboxMessage, MailboxMessageType, TeamFile, mailbox};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::ToolExecutionContext;
-use rc_swarm::{MailboxMessage, MailboxMessageType, mailbox};
 
-/// Message priority levels.
+const RESEARCH_TEAM_LEAD_NAME: &str = "team-lead";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum StructuredMessageInput {
+    ShutdownRequest {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    ShutdownResponse {
+        request_id: String,
+        approve: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    PlanApprovalResponse {
+        request_id: String,
+        approve: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        feedback: Option<String>,
+    },
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-#[derive(Default)]
-pub enum MessagePriority {
-    /// Low priority (informational).
+enum MessagePriority {
     Low,
-    /// Normal priority (default).
-    #[default]
     Normal,
-    /// High priority (urgent).
     High,
 }
 
-/// A structured agent message.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct AgentMessage {
-    /// Unique message identifier.
-    pub id: String,
-    /// Sender agent name.
-    pub from: String,
-    /// Recipient agent name (or "all" for broadcast).
-    pub to: String,
-    /// Message content.
-    pub content: String,
-    /// Message priority.
-    #[serde(default)]
-    pub priority: MessagePriority,
-    /// Unix timestamp (milliseconds).
-    pub timestamp: i64,
-    /// Optional correlation ID for request/response patterns.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub correlation_id: Option<String>,
-}
-
-impl AgentMessage {
-    /// Create a new agent message.
-    #[must_use]
-    pub fn new(from: &str, to: &str, content: &str) -> Self {
-        Self {
-            id: format!("msg-{}", uuid::Uuid::new_v4().as_simple()),
-            from: from.to_string(),
-            to: to.to_string(),
-            content: content.to_string(),
-            priority: MessagePriority::default(),
-            timestamp: chrono::Utc::now().timestamp_millis(),
-            correlation_id: None,
-        }
-    }
-
-    /// Set the message priority.
-    #[must_use]
-    pub fn with_priority(mut self, priority: MessagePriority) -> Self {
-        self.priority = priority;
-        self
-    }
-
-    /// Set the correlation ID.
-    #[must_use]
-    pub fn with_correlation_id(mut self, id: &str) -> Self {
-        self.correlation_id = Some(id.to_string());
-        self
+impl Default for MessagePriority {
+    fn default() -> Self {
+        Self::Normal
     }
 }
 
-/// Send a message to a specific agent.
-///
-/// The message is queued for delivery via the mailbox system.
+/// Send a message to a specific agent or broadcast with `to: "*"`.
 ///
 /// # Errors
-/// Returns an error if recipient or message is missing.
+/// Returns an error when required inputs are missing or invalid.
 pub async fn send_message(input: &Value, _context: &ToolExecutionContext) -> Result<String> {
-    let recipient = input["recipient"]
-        .as_str()
-        .ok_or_else(|| anyhow!("recipient is required"))?;
-    let message = input["message"]
-        .as_str()
+    let raw_to = input
+        .get("to")
+        .and_then(Value::as_str)
+        .or_else(|| input.get("recipient").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("to is required"))?;
+
+    validate_target(raw_to)?;
+
+    let explicit_team_name = super::team_runtime::team_name_from_input(input);
+    let team_name = resolve_team_name(explicit_team_name.as_deref()).await?;
+    let team = super::team_runtime::load_team(&team_name).await?;
+
+    let sender = resolve_sender(input, &team);
+    let resolved_to = normalize_lead_alias(raw_to, &team);
+    let summary = read_summary(input);
+    let message_value = input
+        .get("message")
         .ok_or_else(|| anyhow!("message is required"))?;
 
-    if recipient.trim().is_empty() {
-        return Err(anyhow!("recipient cannot be empty"));
-    }
-    if message.trim().is_empty() {
-        return Err(anyhow!("message cannot be empty"));
+    if let Some(content) = message_value.as_str() {
+        let content = content.trim();
+        if content.is_empty() {
+            return Err(anyhow!("message cannot be empty"));
+        }
+        let summary =
+            summary.ok_or_else(|| anyhow!("summary is required when message is a string"))?;
+
+        if raw_to == "*" {
+            return handle_broadcast_plain_text(&team_name, &team, &sender, content, &summary)
+                .await;
+        }
+
+        ensure_recipient_exists(&team, &resolved_to)?;
+        let mut mailbox_message = MailboxMessage::new(
+            sender.clone(),
+            resolved_to.clone(),
+            MailboxMessageType::Text,
+            content.to_owned(),
+        );
+        mailbox_message.summary = Some(summary.clone());
+        mailbox::send_message(&team_name, &mailbox_message).await?;
+
+        return Ok(json!({
+            "success": true,
+            "message": format!("Message sent to {}'s inbox", resolved_to),
+            "routing": {
+                "sender": sender,
+                "target": format!("@{}", resolved_to),
+                "summary": summary,
+                "content": content,
+            }
+        })
+        .to_string());
     }
 
-    let priority = parse_priority(input["priority"].as_str());
-    let correlation_id = input["correlation_id"].as_str().map(String::from);
-    let sender = input["sender"].as_str().unwrap_or("coordinator");
-    let explicit_team_name = super::team_runtime::team_name_from_input(input);
-    let team_name =
-        super::team_runtime::resolve_single_team_name(explicit_team_name.as_deref()).await?;
-    let team = super::team_runtime::load_team(&team_name).await?;
-    let recipient_exists = recipient == team.lead_agent_id
-        || team.members.iter().any(|member| member.name == recipient);
-    if !recipient_exists {
+    if raw_to == "*" {
         return Err(anyhow!(
-            "recipient '{recipient}' is not a member of team '{team_name}'"
+            "structured messages cannot be broadcast (to: \"*\")"
         ));
     }
-    ensure_sender_is_allowed(&team, sender)?;
 
-    let mut msg = AgentMessage::new(sender, recipient, message);
-    msg.priority = priority;
-    msg.correlation_id = correlation_id;
+    let message: StructuredMessageInput = serde_json::from_value(message_value.clone())
+        .map_err(|error| anyhow!("invalid structured message: {error}"))?;
 
-    let mut mailbox_message = MailboxMessage::new(
-        sender,
-        recipient,
-        MailboxMessageType::Text,
-        message.to_owned(),
-    );
-    mailbox_message.priority = Some(priority_label(priority).to_owned());
-    mailbox_message.correlation_id = msg.correlation_id.clone();
-    mailbox::send_message(&team_name, &mailbox_message).await?;
+    match message {
+        StructuredMessageInput::ShutdownRequest { reason } => {
+            ensure_recipient_exists(&team, &resolved_to)?;
+            let request_id = generate_request_id("shutdown", &resolved_to);
+            let payload = json!({
+                "type": "shutdown_request",
+                "requestId": request_id,
+                "from": sender,
+                "reason": reason,
+                "timestamp": Utc::now().to_rfc3339(),
+            });
+            let mailbox_message = MailboxMessage::new(
+                payload["from"].as_str().unwrap_or_default(),
+                resolved_to.clone(),
+                MailboxMessageType::Coordination,
+                serde_json::to_string(&payload)?,
+            );
+            mailbox::send_message(&team_name, &mailbox_message).await?;
 
-    Ok(json!({
-        "type": "agent_message",
-        "id": msg.id,
-        "from": msg.from,
-        "to": msg.to,
-        "content": msg.content,
-        "priority": serde_json::to_value(msg.priority).expect("priority serializes"),
-        "timestamp": msg.timestamp,
-        "correlation_id": msg.correlation_id,
-        "team_name": team_name,
-        "status": "queued",
-        "delivery": "mailbox_written"
-    })
-    .to_string())
+            Ok(json!({
+                "success": true,
+                "message": format!("Shutdown request sent to {}. Request ID: {}", resolved_to, request_id),
+                "request_id": request_id,
+                "target": resolved_to,
+            })
+            .to_string())
+        }
+        StructuredMessageInput::ShutdownResponse {
+            request_id,
+            approve,
+            reason,
+        } => {
+            if !is_lead_address(raw_to, &team) {
+                return Err(anyhow!(
+                    "shutdown_response must be sent to \"{}\"",
+                    RESEARCH_TEAM_LEAD_NAME
+                ));
+            }
+            if !approve
+                && reason
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .is_none()
+            {
+                return Err(anyhow!(
+                    "reason is required when rejecting a shutdown request"
+                ));
+            }
+
+            let payload = if approve {
+                json!({
+                    "type": "shutdown_approved",
+                    "requestId": request_id,
+                    "from": sender,
+                    "timestamp": Utc::now().to_rfc3339(),
+                })
+            } else {
+                json!({
+                    "type": "shutdown_rejected",
+                    "requestId": request_id,
+                    "from": sender,
+                    "reason": reason.unwrap_or_default(),
+                    "timestamp": Utc::now().to_rfc3339(),
+                })
+            };
+            let mailbox_message = MailboxMessage::new(
+                payload["from"].as_str().unwrap_or_default(),
+                team.lead_agent_id.clone(),
+                MailboxMessageType::Coordination,
+                serde_json::to_string(&payload)?,
+            );
+            mailbox::send_message(&team_name, &mailbox_message).await?;
+
+            let message = if approve {
+                format!(
+                    "Shutdown approved. Sent confirmation to {}. Agent {} is now exiting.",
+                    RESEARCH_TEAM_LEAD_NAME, sender
+                )
+            } else {
+                format!(
+                    "Shutdown rejected. Reason: \"{}\". Continuing to work.",
+                    payload["reason"].as_str().unwrap_or_default()
+                )
+            };
+
+            Ok(json!({
+                "success": true,
+                "message": message,
+                "request_id": request_id,
+            })
+            .to_string())
+        }
+        StructuredMessageInput::PlanApprovalResponse {
+            request_id,
+            approve,
+            feedback,
+        } => {
+            if !sender_is_team_lead(&sender, &team) {
+                return Err(anyhow!(
+                    "Only the team lead can approve plans. Teammates cannot approve their own or other plans."
+                ));
+            }
+            ensure_recipient_exists(&team, &resolved_to)?;
+
+            let inherited_mode = inherited_permission_mode();
+            let payload = if approve {
+                json!({
+                    "type": "plan_approval_response",
+                    "requestId": request_id,
+                    "approved": true,
+                    "timestamp": Utc::now().to_rfc3339(),
+                    "permissionMode": inherited_mode,
+                })
+            } else {
+                json!({
+                    "type": "plan_approval_response",
+                    "requestId": request_id,
+                    "approved": false,
+                    "feedback": feedback.clone().unwrap_or_else(|| "Plan needs revision".to_owned()),
+                    "timestamp": Utc::now().to_rfc3339(),
+                })
+            };
+
+            let mailbox_message = MailboxMessage::new(
+                team.lead_agent_id.clone(),
+                resolved_to.clone(),
+                MailboxMessageType::Coordination,
+                serde_json::to_string(&payload)?,
+            );
+            mailbox::send_message(&team_name, &mailbox_message).await?;
+
+            let message = if approve {
+                format!(
+                    "Plan approved for {}. They will receive the approval and can proceed with implementation.",
+                    resolved_to
+                )
+            } else {
+                format!(
+                    "Plan rejected for {} with feedback: \"{}\"",
+                    resolved_to,
+                    payload["feedback"].as_str().unwrap_or_default()
+                )
+            };
+
+            Ok(json!({
+                "success": true,
+                "message": message,
+                "request_id": request_id,
+            })
+            .to_string())
+        }
+    }
 }
 
-/// Broadcast a message to all agents in the system.
-///
-/// The message is queued for delivery to every registered agent.
+/// Broadcast a message to multiple agents using the legacy compatibility
+/// surface exposed elsewhere in the Rust runtime.
 ///
 /// # Errors
-/// Returns an error if the message is missing.
+/// Returns an error when required inputs are missing or invalid.
 pub async fn broadcast_message(input: &Value, _context: &ToolExecutionContext) -> Result<String> {
-    let message = input["message"]
-        .as_str()
+    let message = input
+        .get("message")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow!("message is required for broadcast"))?;
 
-    if message.trim().is_empty() {
-        return Err(anyhow!("message cannot be empty"));
-    }
-
-    let priority = parse_priority(input["priority"].as_str());
-    let sender = input["sender"].as_str().unwrap_or("coordinator");
-
     let explicit_team_name = super::team_runtime::team_name_from_input(input);
-    let team_name =
-        super::team_runtime::resolve_single_team_name(explicit_team_name.as_deref()).await?;
+    let team_name = resolve_team_name(explicit_team_name.as_deref()).await?;
     let team = super::team_runtime::load_team(&team_name).await?;
-    ensure_sender_is_allowed(&team, sender)?;
-    let known_recipients: Vec<String> = std::iter::once(team.lead_agent_id.clone())
-        .chain(team.members.iter().map(|member| member.name.clone()))
-        .filter(|name| name != sender)
-        .collect();
-    let recipients: Vec<String> = if let Some(arr) = input["recipients"].as_array() {
-        let parsed = arr
-            .iter()
-            .filter_map(Value::as_str)
-            .map(String::from)
-            .collect::<Vec<_>>();
-        if parsed.is_empty() {
-            known_recipients.clone()
-        } else {
-            parsed
-        }
-    } else {
-        known_recipients.clone()
-    };
 
-    for recipient in &recipients {
-        if !known_recipients.iter().any(|known| known == recipient) {
-            return Err(anyhow!(
-                "recipient '{recipient}' is not a member of team '{team_name}'"
-            ));
-        }
-    }
+    let sender = resolve_sender(input, &team);
+    let priority = parse_priority(input.get("priority").and_then(Value::as_str));
+    let recipients = requested_or_known_recipients(input, &team, &sender)?;
 
-    let broadcast_id = format!("broadcast-{}", uuid::Uuid::new_v4().as_simple());
-    let mut messages = Vec::with_capacity(recipients.len());
+    let mut message_ids = Vec::with_capacity(recipients.len());
     for recipient in &recipients {
         let mut mailbox_message = MailboxMessage::new(
-            sender,
-            recipient,
+            sender.clone(),
+            recipient.clone(),
             MailboxMessageType::Text,
             message.to_owned(),
         );
         mailbox_message.priority = Some(priority_label(priority).to_owned());
         mailbox::send_message(&team_name, &mailbox_message).await?;
-        messages.push(mailbox_message);
+        message_ids.push(mailbox_message.id);
     }
 
     Ok(json!({
         "type": "broadcast_message",
-        "broadcast_id": broadcast_id,
+        "broadcast_id": format!("broadcast-{}", uuid::Uuid::new_v4().simple()),
         "team_name": team_name,
         "from": sender,
         "content": message,
-        "priority": serde_json::to_value(priority).expect("priority serializes"),
+        "priority": serde_json::to_value(priority)?,
         "recipients": recipients,
-        "message_ids": messages.iter().map(|entry| entry.id.clone()).collect::<Vec<_>>(),
-        "timestamp": chrono::Utc::now().timestamp_millis(),
+        "message_ids": message_ids,
+        "timestamp": Utc::now().timestamp_millis(),
         "status": "queued",
-        "delivery": "mailbox_written"
+        "delivery": "mailbox_written",
     })
     .to_string())
 }
 
-/// Parse a priority string into a `MessagePriority`.
+async fn handle_broadcast_plain_text(
+    team_name: &str,
+    team: &TeamFile,
+    sender: &str,
+    content: &str,
+    summary: &str,
+) -> Result<String> {
+    let recipients = known_recipients(team, sender);
+    if recipients.is_empty() {
+        return Ok(json!({
+            "success": true,
+            "message": "No teammates to broadcast to (you are the only team member)",
+            "recipients": [],
+        })
+        .to_string());
+    }
+
+    for recipient in &recipients {
+        let mut mailbox_message = MailboxMessage::new(
+            sender.to_owned(),
+            recipient.clone(),
+            MailboxMessageType::Text,
+            content.to_owned(),
+        );
+        mailbox_message.summary = Some(summary.to_owned());
+        mailbox::send_message(team_name, &mailbox_message).await?;
+    }
+
+    Ok(json!({
+        "success": true,
+        "message": format!(
+            "Message broadcast to {} teammate(s): {}",
+            recipients.len(),
+            recipients.join(", ")
+        ),
+        "recipients": recipients,
+        "routing": {
+            "sender": sender,
+            "target": "@team",
+            "summary": summary,
+            "content": content,
+        }
+    })
+    .to_string())
+}
+
+async fn resolve_team_name(explicit: Option<&str>) -> Result<String> {
+    if let Some(name) = explicit {
+        return super::team_runtime::resolve_single_team_name(Some(name)).await;
+    }
+    if let Ok(env_team) = std::env::var(ENV_TEAM_NAME)
+        && !env_team.trim().is_empty()
+    {
+        return Ok(env_team);
+    }
+    super::team_runtime::resolve_single_team_name(None).await
+}
+
+fn validate_target(target: &str) -> Result<()> {
+    if target.contains('@') {
+        return Err(anyhow!(
+            "to must be a bare teammate name or \"*\" — there is only one team per session"
+        ));
+    }
+    Ok(())
+}
+
+fn resolve_sender(input: &Value, team: &TeamFile) -> String {
+    input
+        .get("sender")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            std::env::var(ENV_AGENT_NAME)
+                .ok()
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or_else(|| team.lead_agent_id.clone())
+}
+
+fn normalize_lead_alias(target: &str, team: &TeamFile) -> String {
+    if is_lead_alias(target) {
+        team.lead_agent_id.clone()
+    } else {
+        target.to_owned()
+    }
+}
+
+fn is_lead_alias(value: &str) -> bool {
+    value == TEAM_LEAD_NAME || value == RESEARCH_TEAM_LEAD_NAME
+}
+
+fn is_lead_address(target: &str, team: &TeamFile) -> bool {
+    target == team.lead_agent_id || is_lead_alias(target)
+}
+
+fn sender_is_team_lead(sender: &str, team: &TeamFile) -> bool {
+    sender == team.lead_agent_id || is_lead_alias(sender)
+}
+
+fn ensure_recipient_exists(team: &TeamFile, recipient: &str) -> Result<()> {
+    if recipient == team.lead_agent_id || team.members.iter().any(|member| member.name == recipient)
+    {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "recipient '{}' is not a member of team '{}'",
+            recipient,
+            team.name
+        ))
+    }
+}
+
+fn read_summary(input: &Value) -> Option<String> {
+    input
+        .get("summary")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn generate_request_id(request_type: &str, target: &str) -> String {
+    format!("{request_type}-{}@{target}", Utc::now().timestamp_millis())
+}
+
+fn inherited_permission_mode() -> String {
+    let mode = std::env::var(ENV_PERMISSION_MODE)
+        .ok()
+        .and_then(|raw| match raw.as_str() {
+            "default" => Some(PermissionMode::Default),
+            "acceptEdits" => Some(PermissionMode::AcceptEdits),
+            "bypassPermissions" => Some(PermissionMode::BypassPermissions),
+            "dontAsk" => Some(PermissionMode::DontAsk),
+            "plan" => Some(PermissionMode::Plan),
+            _ => None,
+        })
+        .unwrap_or(PermissionMode::Default);
+
+    match mode {
+        PermissionMode::Plan => PermissionMode::Default.as_legacy_str().to_owned(),
+        other => other.as_legacy_str().to_owned(),
+    }
+}
+
+fn known_recipients(team: &TeamFile, sender: &str) -> Vec<String> {
+    std::iter::once(team.lead_agent_id.clone())
+        .chain(team.members.iter().map(|member| member.name.clone()))
+        .filter(|name| name != sender)
+        .collect()
+}
+
+fn requested_or_known_recipients(
+    input: &Value,
+    team: &TeamFile,
+    sender: &str,
+) -> Result<Vec<String>> {
+    let known = known_recipients(team, sender);
+    if let Some(items) = input.get("recipients").and_then(Value::as_array) {
+        let recipients = items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| normalize_lead_alias(value, team))
+            .collect::<Vec<_>>();
+        if recipients.is_empty() {
+            return Ok(known);
+        }
+        for recipient in &recipients {
+            ensure_recipient_exists(team, recipient)?;
+        }
+        return Ok(recipients);
+    }
+    Ok(known)
+}
+
 fn parse_priority(priority: Option<&str>) -> MessagePriority {
     match priority.unwrap_or("normal") {
         "low" => MessagePriority::Low,
@@ -239,33 +527,14 @@ fn priority_label(priority: MessagePriority) -> &'static str {
     }
 }
 
-fn ensure_sender_is_allowed(team: &rc_swarm::TeamFile, sender: &str) -> Result<()> {
-    if sender == "coordinator"
-        || sender == team.lead_agent_id
-        || team
-            .members
-            .iter()
-            .any(|member| member.name == sender || member.agent_id == sender)
-    {
-        Ok(())
-    } else {
-        Err(anyhow!(
-            "sender '{sender}' is not a member of team '{}'",
-            team.name
-        ))
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rc_swarm::{TeamFile, TeamMember, mailbox, team_helpers};
+
     use std::path::PathBuf;
     use std::sync::Arc;
+
+    use rc_swarm::{TeamMember, team_helpers};
     use tempfile::TempDir;
 
     fn test_context() -> ToolExecutionContext {
@@ -293,283 +562,249 @@ mod tests {
         let mut team = TeamFile::new(team_name, "lead");
         team.description = Some("test objective".to_owned());
         team.members
-            .push(TeamMember::new("worker-1", "agent-1", "pane-1", "/tmp"));
+            .push(TeamMember::new("agent-1-id", "agent-1", "pane-1", "/tmp"));
         team.members
-            .push(TeamMember::new("worker-2", "agent-2", "pane-2", "/tmp"));
+            .push(TeamMember::new("agent-2-id", "agent-2", "pane-2", "/tmp"));
         team_helpers::create_team(&team)
             .await
             .expect("create test team");
         TeamDirGuard
     }
 
-    #[test]
-    fn message_priority_default_is_normal() {
-        assert_eq!(MessagePriority::default(), MessagePriority::Normal);
-    }
-
-    #[test]
-    fn message_priority_serializes() {
-        assert_eq!(
-            serde_json::to_string(&MessagePriority::High).expect("serialize"),
-            "\"high\""
-        );
-        assert_eq!(
-            serde_json::to_string(&MessagePriority::Low).expect("serialize"),
-            "\"low\""
-        );
-    }
-
-    #[test]
-    fn agent_message_new_generates_id() {
-        let msg = AgentMessage::new("sender", "receiver", "hello");
-        assert!(msg.id.starts_with("msg-"));
-        assert_eq!(msg.from, "sender");
-        assert_eq!(msg.to, "receiver");
-        assert_eq!(msg.content, "hello");
-    }
-
-    #[test]
-    fn agent_message_with_priority() {
-        let msg = AgentMessage::new("a", "b", "hi").with_priority(MessagePriority::High);
-        assert_eq!(msg.priority, MessagePriority::High);
-    }
-
-    #[test]
-    fn agent_message_with_correlation_id() {
-        let msg = AgentMessage::new("a", "b", "hi").with_correlation_id("corr-123");
-        assert_eq!(msg.correlation_id.as_deref(), Some("corr-123"));
-    }
-
-    #[test]
-    fn agent_message_round_trips_json() {
-        let msg = AgentMessage::new("sender", "receiver", "test message")
-            .with_priority(MessagePriority::High)
-            .with_correlation_id("corr-1");
-        let json = serde_json::to_string(&msg).expect("serialize");
-        let parsed: AgentMessage = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(parsed.from, "sender");
-        assert_eq!(parsed.to, "receiver");
-        assert_eq!(parsed.content, "test message");
-        assert_eq!(parsed.priority, MessagePriority::High);
-        assert_eq!(parsed.correlation_id.as_deref(), Some("corr-1"));
+    #[tokio::test(flavor = "current_thread")]
+    async fn send_message_requires_to() {
+        let result = send_message(&json!({"message": "hello"}), &test_context()).await;
+        let error = result.expect_err("missing to should fail");
+        assert!(error.to_string().contains("to"));
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn send_message_requires_recipient() {
-        let input = json!({"message": "hello"});
-        let context = test_context();
-        let result = send_message(&input, &context).await;
-        let error = result.expect_err("missing recipient should fail");
-        assert!(error.to_string().contains("recipient"));
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn send_message_requires_message() {
-        let input = json!({"recipient": "agent-1"});
-        let context = test_context();
-        let result = send_message(&input, &context).await;
-        let error = result.expect_err("missing message should fail");
-        assert!(error.to_string().contains("message"));
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn send_message_rejects_empty_recipient() {
-        let input = json!({"recipient": "", "message": "hello"});
-        let context = test_context();
-        let result = send_message(&input, &context).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn send_message_rejects_empty_message() {
-        let input = json!({"recipient": "agent-1", "message": ""});
-        let context = test_context();
-        let result = send_message(&input, &context).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn send_message_returns_queued_status() {
+    async fn send_message_requires_summary_for_plain_text() {
         let temp = TempDir::new().expect("temp dir");
-        let _guard = setup_team(&temp, "test-team").await;
-        let input = json!({
-            "team_name": "test-team",
-            "recipient": "agent-1",
-            "message": "hello"
-        });
-        let context = test_context();
-        let result = send_message(&input, &context)
-            .await
-            .expect("send_message should succeed");
-        let parsed: Value = serde_json::from_str(&result).expect("valid json");
-        assert_eq!(parsed["status"], "queued");
-        assert_eq!(parsed["to"], "agent-1");
-        assert_eq!(parsed["content"], "hello");
-        assert!(
-            parsed["id"]
-                .as_str()
-                .expect("message id should be a string")
-                .starts_with("msg-")
-        );
-        let stored = mailbox::read_messages("test-team", "agent-1")
+        let _guard = setup_team(&temp, "summary-team").await;
+        let result = send_message(
+            &json!({
+                "team_name": "summary-team",
+                "to": "agent-1",
+                "message": "hello"
+            }),
+            &test_context(),
+        )
+        .await;
+        let error = result.expect_err("summary should be required");
+        assert!(error.to_string().contains("summary"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn send_message_plain_text_writes_mailbox_summary() {
+        let temp = TempDir::new().expect("temp dir");
+        let _guard = setup_team(&temp, "direct-team").await;
+        let result = send_message(
+            &json!({
+                "team_name": "direct-team",
+                "to": "agent-1",
+                "summary": "assign task",
+                "message": "start on task #1"
+            }),
+            &test_context(),
+        )
+        .await
+        .expect("send message");
+
+        let parsed: Value = serde_json::from_str(&result).expect("json result");
+        assert_eq!(parsed["success"], true);
+        assert_eq!(parsed["routing"]["target"], "@agent-1");
+        assert_eq!(parsed["routing"]["summary"], "assign task");
+
+        let stored = mailbox::read_messages("direct-team", "agent-1")
             .await
             .expect("read mailbox");
         assert_eq!(stored.len(), 1);
-        assert_eq!(stored[0].content, "hello");
+        assert_eq!(stored[0].content, "start on task #1");
+        assert_eq!(stored[0].summary.as_deref(), Some("assign task"));
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn send_message_with_priority() {
+    async fn send_message_broadcasts_with_to_star() {
         let temp = TempDir::new().expect("temp dir");
-        let _guard = setup_team(&temp, "priority-team").await;
-        let input = json!({
-            "team_name": "priority-team",
-            "recipient": "agent-1",
-            "message": "urgent!",
-            "priority": "high"
-        });
-        let context = test_context();
-        let result = send_message(&input, &context)
-            .await
-            .expect("priority send_message should succeed");
-        let parsed: Value = serde_json::from_str(&result).expect("valid json");
-        assert_eq!(parsed["priority"], "high");
-    }
+        let _guard = setup_team(&temp, "broadcast-star-team").await;
+        let result = send_message(
+            &json!({
+                "team_name": "broadcast-star-team",
+                "to": "*",
+                "summary": "sync status",
+                "message": "check in"
+            }),
+            &test_context(),
+        )
+        .await
+        .expect("broadcast send_message");
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn send_message_with_correlation_id() {
-        let temp = TempDir::new().expect("temp dir");
-        let _guard = setup_team(&temp, "correlation-team").await;
-        let input = json!({
-            "team_name": "correlation-team",
-            "recipient": "agent-1",
-            "message": "response",
-            "correlation_id": "corr-123"
-        });
-        let context = test_context();
-        let result = send_message(&input, &context)
-            .await
-            .expect("correlated send_message should succeed");
-        let parsed: Value = serde_json::from_str(&result).expect("valid json");
-        assert_eq!(parsed["correlation_id"], "corr-123");
-    }
+        let parsed: Value = serde_json::from_str(&result).expect("json result");
+        assert_eq!(parsed["success"], true);
+        assert_eq!(parsed["recipients"].as_array().map(Vec::len), Some(2));
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn send_message_default_sender_is_coordinator() {
-        let temp = TempDir::new().expect("temp dir");
-        let _guard = setup_team(&temp, "default-sender-team").await;
-        let input = json!({
-            "team_name": "default-sender-team",
-            "recipient": "agent-1",
-            "message": "hello"
-        });
-        let context = test_context();
-        let result = send_message(&input, &context)
-            .await
-            .expect("default sender send_message should succeed");
-        let parsed: Value = serde_json::from_str(&result).expect("valid json");
-        assert_eq!(parsed["from"], "coordinator");
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn send_message_custom_sender() {
-        let temp = TempDir::new().expect("temp dir");
-        let _guard = setup_team(&temp, "custom-sender-team").await;
-        let input = json!({
-            "team_name": "custom-sender-team",
-            "recipient": "agent-1",
-            "message": "hello",
-            "sender": "worker-1"
-        });
-        let context = test_context();
-        let result = send_message(&input, &context)
-            .await
-            .expect("custom sender send_message should succeed");
-        let parsed: Value = serde_json::from_str(&result).expect("valid json");
-        assert_eq!(parsed["from"], "worker-1");
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn broadcast_message_requires_message() {
-        let input = json!({});
-        let context = test_context();
-        let result = broadcast_message(&input, &context).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn broadcast_message_rejects_empty_message() {
-        let input = json!({"message": ""});
-        let context = test_context();
-        let result = broadcast_message(&input, &context).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn broadcast_message_returns_queued_status() {
-        let temp = TempDir::new().expect("temp dir");
-        let _guard = setup_team(&temp, "broadcast-team").await;
-        let input = json!({"team_name": "broadcast-team", "message": "Hello everyone!"});
-        let context = test_context();
-        let result = broadcast_message(&input, &context)
-            .await
-            .expect("broadcast_message should succeed");
-        let parsed: Value = serde_json::from_str(&result).expect("valid json");
-        assert_eq!(parsed["status"], "queued");
-        assert_eq!(parsed["type"], "broadcast_message");
-        assert!(
-            parsed["broadcast_id"]
-                .as_str()
-                .expect("broadcast_id should be a string")
-                .starts_with("broadcast-")
-        );
-        let agent_1 = mailbox::read_messages("broadcast-team", "agent-1")
+        let agent_1 = mailbox::read_messages("broadcast-star-team", "agent-1")
             .await
             .expect("agent-1 mailbox");
-        let agent_2 = mailbox::read_messages("broadcast-team", "agent-2")
+        let agent_2 = mailbox::read_messages("broadcast-star-team", "agent-2")
             .await
             .expect("agent-2 mailbox");
         assert_eq!(agent_1.len(), 1);
         assert_eq!(agent_2.len(), 1);
+        assert_eq!(agent_1[0].summary.as_deref(), Some("sync status"));
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn broadcast_message_with_recipients() {
+    async fn structured_messages_cannot_broadcast() {
         let temp = TempDir::new().expect("temp dir");
-        let _guard = setup_team(&temp, "recipient-team").await;
-        let input = json!({
-            "team_name": "recipient-team",
-            "message": "Hello team!",
-            "recipients": ["agent-1", "agent-2", "agent-3"]
-        });
-        let context = test_context();
-        let result = broadcast_message(&input, &context).await;
-        assert!(result.is_err());
+        let _guard = setup_team(&temp, "structured-broadcast-team").await;
+        let result = send_message(
+            &json!({
+                "team_name": "structured-broadcast-team",
+                "to": "*",
+                "message": {"type": "shutdown_request"}
+            }),
+            &test_context(),
+        )
+        .await;
+        let error = result.expect_err("structured broadcast should fail");
+        assert!(error.to_string().contains("cannot be broadcast"));
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn broadcast_message_with_priority() {
+    async fn shutdown_request_writes_research_payload() {
         let temp = TempDir::new().expect("temp dir");
-        let _guard = setup_team(&temp, "priority-broadcast-team").await;
-        let input = json!({
-            "team_name": "priority-broadcast-team",
-            "message": "Urgent broadcast!",
-            "priority": "high"
-        });
-        let context = test_context();
-        let result = broadcast_message(&input, &context)
+        let _guard = setup_team(&temp, "shutdown-team").await;
+        let result = send_message(
+            &json!({
+                "team_name": "shutdown-team",
+                "to": "agent-1",
+                "message": {"type": "shutdown_request", "reason": "work complete"},
+            }),
+            &test_context(),
+        )
+        .await
+        .expect("shutdown request");
+
+        let parsed: Value = serde_json::from_str(&result).expect("json result");
+        assert_eq!(parsed["success"], true);
+        assert_eq!(parsed["target"], "agent-1");
+        assert!(
+            parsed["request_id"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("shutdown-")
+        );
+
+        let stored = mailbox::read_messages("shutdown-team", "agent-1")
             .await
-            .expect("priority broadcast_message should succeed");
-        let parsed: Value = serde_json::from_str(&result).expect("valid json");
-        assert_eq!(parsed["priority"], "high");
+            .expect("read mailbox");
+        let content: Value = serde_json::from_str(&stored[0].content).expect("structured payload");
+        assert_eq!(content["type"], "shutdown_request");
+        assert_eq!(content["reason"], "work complete");
+        assert_eq!(content["from"], "lead");
+        assert_eq!(content["requestId"], parsed["request_id"]);
     }
 
-    #[test]
-    fn parse_priority_handles_all_values() {
-        assert_eq!(parse_priority(Some("low")), MessagePriority::Low);
-        assert_eq!(parse_priority(Some("normal")), MessagePriority::Normal);
-        assert_eq!(parse_priority(Some("high")), MessagePriority::High);
-        assert_eq!(parse_priority(None), MessagePriority::Normal);
-        assert_eq!(parse_priority(Some("invalid")), MessagePriority::Normal);
+    #[tokio::test(flavor = "current_thread")]
+    async fn shutdown_response_writes_shutdown_approved_for_lead() {
+        let temp = TempDir::new().expect("temp dir");
+        let _guard = setup_team(&temp, "shutdown-response-team").await;
+        let result = send_message(
+            &json!({
+                "team_name": "shutdown-response-team",
+                "sender": "agent-1",
+                "to": "team-lead",
+                "message": {"type": "shutdown_response", "request_id": "req-1", "approve": true},
+            }),
+            &test_context(),
+        )
+        .await
+        .expect("shutdown approval");
+
+        let parsed: Value = serde_json::from_str(&result).expect("json result");
+        assert_eq!(parsed["request_id"], "req-1");
+
+        let stored = mailbox::read_messages("shutdown-response-team", "lead")
+            .await
+            .expect("lead mailbox");
+        let content: Value = serde_json::from_str(&stored[0].content).expect("structured payload");
+        assert_eq!(content["type"], "shutdown_approved");
+        assert_eq!(content["requestId"], "req-1");
+        assert_eq!(content["from"], "agent-1");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn plan_approval_response_requires_team_lead_sender() {
+        let temp = TempDir::new().expect("temp dir");
+        let _guard = setup_team(&temp, "plan-team").await;
+        let result = send_message(
+            &json!({
+                "team_name": "plan-team",
+                "sender": "agent-1",
+                "to": "agent-2",
+                "message": {"type": "plan_approval_response", "request_id": "req-2", "approve": true},
+            }),
+            &test_context(),
+        )
+        .await;
+        let error = result.expect_err("non-lead should be rejected");
+        assert!(error.to_string().contains("Only the team lead"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn plan_approval_response_writes_permission_mode() {
+        let temp = TempDir::new().expect("temp dir");
+        let _guard = setup_team(&temp, "plan-approve-team").await;
+        let result = send_message(
+            &json!({
+                "team_name": "plan-approve-team",
+                "sender": "lead",
+                "to": "agent-1",
+                "message": {"type": "plan_approval_response", "request_id": "req-2", "approve": true},
+            }),
+            &test_context(),
+        )
+        .await
+        .expect("plan approval");
+
+        let parsed: Value = serde_json::from_str(&result).expect("json result");
+        assert_eq!(parsed["request_id"], "req-2");
+
+        let stored = mailbox::read_messages("plan-approve-team", "agent-1")
+            .await
+            .expect("worker mailbox");
+        let content: Value = serde_json::from_str(&stored[0].content).expect("structured payload");
+        assert_eq!(content["type"], "plan_approval_response");
+        assert_eq!(content["requestId"], "req-2");
+        assert_eq!(content["approved"], true);
+        assert_eq!(content["permissionMode"], "default");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn legacy_broadcast_message_keeps_priority_behavior() {
+        let temp = TempDir::new().expect("temp dir");
+        let _guard = setup_team(&temp, "legacy-broadcast-team").await;
+        let result = broadcast_message(
+            &json!({
+                "team_name": "legacy-broadcast-team",
+                "sender": "lead",
+                "message": "urgent",
+                "priority": "high"
+            }),
+            &test_context(),
+        )
+        .await
+        .expect("legacy broadcast");
+
+        let parsed: Value = serde_json::from_str(&result).expect("json result");
+        assert_eq!(parsed["priority"], "high");
+        assert_eq!(parsed["recipients"].as_array().map(Vec::len), Some(2));
+
+        let stored = mailbox::read_messages("legacy-broadcast-team", "agent-1")
+            .await
+            .expect("read mailbox");
+        assert_eq!(stored[0].priority.as_deref(), Some("high"));
     }
 }
