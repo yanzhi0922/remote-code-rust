@@ -1080,6 +1080,7 @@ pub(crate) fn filesystem_access_options() -> rc_permissions::FilesystemAccessOpt
         additional_dirs: runtime_context
             .map(|context| context.additional_working_directories)
             .unwrap_or_default(),
+        current_mode: None,
         plan_file: plan_mode::current_plan_file_path(),
         internal_read_dirs,
         internal_write_dirs,
@@ -1092,10 +1093,16 @@ fn precheck_filesystem_permission(
     spec: &ToolSpec,
     call: &ToolCall,
     context: &ToolExecutionContext,
+    broker: &dyn PermissionBroker,
 ) -> Option<FilesystemPermissionPrecheck> {
     let operation = filesystem_operation_for_tool(&spec.name)?;
     let raw_path = path_input_for_filesystem_tool(&spec.name, &call.input)?;
-    let options = filesystem_access_options();
+    let mut options = filesystem_access_options();
+    let mut additional_dirs = broker.additional_working_directories();
+    if !additional_dirs.is_empty() {
+        options.additional_dirs.extend(additional_dirs.drain(..));
+    }
+    options.current_mode = broker.mode();
     let check =
         rc_permissions::assess_filesystem_access(raw_path, &context.cwd, &options, operation);
     if check.allowed {
@@ -1291,7 +1298,7 @@ pub async fn execute_tool_call(
     }
 
     let permission = effective_permission_for_call(call, &spec);
-    let filesystem_precheck = precheck_filesystem_permission(&spec, call, context);
+    let filesystem_precheck = precheck_filesystem_permission(&spec, call, context, broker);
     let filesystem_rule_relevant = filesystem_operation_for_tool(&spec.name).is_some()
         && path_input_for_filesystem_tool(&spec.name, &call.input).is_some();
 
@@ -1601,8 +1608,8 @@ pub(crate) fn tool_allowed_by_policy(tool_name: &str, policy: &ToolRuntimePolicy
 mod tests {
     use super::{
         CommandHookExecutionRequest, HookShell, RuntimeMcpServerPolicyEntry, ToolExecutionContext,
-        ToolResultSizePolicy, ToolRuntimePolicy, ToolRuntimePolicyOverlay, builtin_tool_specs,
-        configure_tool_runtime_policy, execute_command_hook, execute_tool_call,
+        ToolResultSizePolicy, ToolRuntimePolicy, ToolRuntimePolicyOverlay, ToolSpec,
+        builtin_tool_specs, configure_tool_runtime_policy, execute_command_hook, execute_tool_call,
         extract_discovered_tool_names, extract_discovered_tool_names_from_conversation,
         runtime_provider_tool_specs, runtime_tool_result_persistence_skip_names,
         runtime_tool_search_candidate_specs, runtime_visible_provider_tool_specs,
@@ -1620,7 +1627,8 @@ mod tests {
         McpTransportConfig,
     };
     use rc_permissions::{
-        PermissionBroker, PermissionDecision, PermissionRequest, StaticPermissionBroker,
+        LayeredPermissionBroker, PermissionBroker, PermissionDecision, PermissionRequest,
+        PermissionUpdate, PermissionUpdateDestination, StaticPermissionBroker,
     };
     use rc_swarm::{TeamFile, TeamMember, mailbox, team_helpers};
     use serde_json::{Value, json};
@@ -5939,5 +5947,47 @@ while True:
         assert!(names.contains(&"tool_search"));
         assert!(names.contains(&"web_fetch"));
         assert!(!names.contains(&"todo_write"));
+    }
+
+    #[test]
+    fn filesystem_precheck_includes_session_directory_overrides_from_broker() {
+        let tempdir = tempdir().expect("tempdir");
+        let workspace = tempdir.path().join("workspace");
+        let extra = tempdir.path().join("extra");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        std::fs::create_dir_all(&extra).expect("extra");
+
+        let fallback = StaticPermissionBroker::new(false);
+        let layered = LayeredPermissionBroker::new(fallback, vec![]);
+        layered
+            .apply_permission_updates(&[PermissionUpdate::AddDirectories {
+                destination: PermissionUpdateDestination::Session,
+                directories: vec![extra.to_string_lossy().into_owned()],
+            }])
+            .expect("add session directory");
+
+        let spec = ToolSpec {
+            name: "read_file".to_owned(),
+            protocol_name: "ReadFile".to_owned(),
+            permission_tool_name: "Read".to_owned(),
+            description: "read".to_owned(),
+            requires_permission: false,
+            input_schema: serde_json::json!({}),
+        };
+        let call = ToolCall {
+            id: "tool-1".to_owned(),
+            name: "read_file".to_owned(),
+            input: serde_json::json!({"path": extra.join("allowed.txt")}),
+        };
+        let context = ToolExecutionContext {
+            cwd: workspace,
+            timeout_ms: 1_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+
+        let precheck = super::precheck_filesystem_permission(&spec, &call, &context, &layered);
+        assert!(precheck.is_none(), "session directory should suppress prompt");
     }
 }

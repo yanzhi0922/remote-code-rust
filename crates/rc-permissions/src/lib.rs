@@ -100,6 +100,7 @@ pub use shell_matching::shell_command_matches_pattern;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 // ── V1 core types (kept for backward compatibility) ───────────
 
@@ -204,6 +205,10 @@ pub trait PermissionBroker: Send + Sync {
     fn mode(&self) -> Option<rc_core::PermissionMode> {
         None
     }
+    /// Return additional working directories granted for the current session.
+    fn additional_working_directories(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
     /// Return audit records collected so far.
     fn audit_records(&self) -> Vec<PermissionAuditRecord> {
         Vec::new()
@@ -283,6 +288,8 @@ pub struct LayeredPermissionBroker<B> {
     fallback: B,
     rules: Vec<SourceAwarePermissionRule>,
     session_rules: std::sync::RwLock<Vec<SourceAwarePermissionRule>>,
+    session_mode: std::sync::RwLock<Option<rc_core::PermissionMode>>,
+    session_additional_dirs: std::sync::RwLock<Vec<PathBuf>>,
     audit: std::sync::Mutex<Vec<PermissionAuditRecord>>,
 }
 
@@ -292,6 +299,8 @@ impl<B: PermissionBroker> LayeredPermissionBroker<B> {
             fallback,
             rules,
             session_rules: std::sync::RwLock::new(Vec::new()),
+            session_mode: std::sync::RwLock::new(None),
+            session_additional_dirs: std::sync::RwLock::new(Vec::new()),
             audit: std::sync::Mutex::new(Vec::new()),
         }
     }
@@ -370,6 +379,32 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
                     ),
                 }),
                 RuleAction::Ask => self.fallback.decide_forced_prompt(request).await,
+            };
+        }
+
+        let session_mode = {
+            self.session_mode
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .copied()
+        };
+        if let Some(session_mode) = session_mode {
+            let resolved_class = request.resolved_permission_class();
+            if request.blocked_path.is_none() && auto_allows(session_mode, resolved_class) {
+                return PermissionDecision::allow();
+            }
+
+            return match session_mode {
+                rc_core::PermissionMode::BypassPermissions
+                | rc_core::PermissionMode::AcceptEdits
+                | rc_core::PermissionMode::Default => {
+                    self.fallback.decide_forced_prompt(request).await
+                }
+                rc_core::PermissionMode::DontAsk => {
+                    PermissionDecision::deny("Permission denied by session mode")
+                }
+                rc_core::PermissionMode::Plan => self.fallback.decide(request).await,
             };
         }
 
@@ -473,6 +508,63 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
                     });
                     applied += original_len.saturating_sub(session.len());
                 }
+                PermissionUpdate::SetMode { destination, mode }
+                    if *destination == PermissionUpdateDestination::Session =>
+                {
+                    let mut session_mode = self
+                        .session_mode
+                        .write()
+                        .unwrap_or_else(|e| e.into_inner());
+                    let mapped_mode = extended_permission_mode_to_core_mode(*mode);
+                    if session_mode.as_ref() != Some(&mapped_mode) {
+                        *session_mode = Some(mapped_mode);
+                        applied += 1;
+                    }
+                }
+                PermissionUpdate::AddDirectories {
+                    destination,
+                    directories,
+                } if *destination == PermissionUpdateDestination::Session => {
+                    let mut session_dirs = self
+                        .session_additional_dirs
+                        .write()
+                        .unwrap_or_else(|e| e.into_inner());
+                    for directory in directories {
+                        let normalized = normalize_session_directory(directory);
+                        if !session_dirs.iter().any(|existing| {
+                            filesystem::normalize_for_comparison(existing)
+                                == filesystem::normalize_for_comparison(&normalized)
+                        }) {
+                            session_dirs.push(normalized);
+                            applied += 1;
+                        }
+                    }
+                }
+                PermissionUpdate::RemoveDirectories {
+                    destination,
+                    directories,
+                } if *destination == PermissionUpdateDestination::Session => {
+                    let patterns = directories
+                        .iter()
+                        .map(|directory| {
+                            filesystem::normalize_for_comparison(&normalize_session_directory(
+                                directory,
+                            ))
+                        })
+                        .collect::<Vec<_>>();
+                    let mut session_dirs = self
+                        .session_additional_dirs
+                        .write()
+                        .unwrap_or_else(|e| e.into_inner());
+                    let original_len = session_dirs.len();
+                    session_dirs.retain(|existing| {
+                        let existing_normalized = filesystem::normalize_for_comparison(existing);
+                        !patterns
+                            .iter()
+                            .any(|pattern| pattern == &existing_normalized)
+                    });
+                    applied += original_len.saturating_sub(session_dirs.len());
+                }
                 _ => {}
             }
         }
@@ -495,7 +587,19 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
     }
 
     fn mode(&self) -> Option<rc_core::PermissionMode> {
-        self.fallback.mode()
+        self.session_mode
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .copied()
+            .or_else(|| self.fallback.mode())
+    }
+
+    fn additional_working_directories(&self) -> Vec<PathBuf> {
+        self.session_additional_dirs
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     fn matching_rule(&self, request: &PermissionRequest) -> Option<SourceAwarePermissionRule> {
@@ -522,6 +626,28 @@ fn permission_behavior_to_rule_action(
         rc_core::permission_types::PermissionBehavior::Deny => RuleAction::Deny,
         rc_core::permission_types::PermissionBehavior::Ask => RuleAction::Ask,
     }
+}
+
+fn extended_permission_mode_to_core_mode(
+    mode: crate::mode::ExtendedPermissionMode,
+) -> rc_core::PermissionMode {
+    match mode {
+        crate::mode::ExtendedPermissionMode::Default => rc_core::PermissionMode::Default,
+        crate::mode::ExtendedPermissionMode::Plan => rc_core::PermissionMode::Plan,
+        crate::mode::ExtendedPermissionMode::AcceptEdits => {
+            rc_core::PermissionMode::AcceptEdits
+        }
+        crate::mode::ExtendedPermissionMode::BypassPermissions => {
+            rc_core::PermissionMode::BypassPermissions
+        }
+        crate::mode::ExtendedPermissionMode::DontAsk => rc_core::PermissionMode::DontAsk,
+        crate::mode::ExtendedPermissionMode::Auto
+        | crate::mode::ExtendedPermissionMode::Bubble => rc_core::PermissionMode::Default,
+    }
+}
+
+fn normalize_session_directory(directory: &str) -> PathBuf {
+    filesystem::normalize_path_lexically(Path::new(directory))
 }
 
 fn permission_rule_value_to_pattern(rule: &crate::rule::PermissionRuleValue) -> String {

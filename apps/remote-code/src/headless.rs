@@ -614,7 +614,15 @@ impl PermissionBroker for HeadlessPermissionBroker {
     }
 
     fn mode(&self) -> Option<PermissionMode> {
-        Some(self.controller.current_mode())
+        if self.controller.current_mode() == PermissionMode::Plan {
+            Some(PermissionMode::Plan)
+        } else {
+            self.inner.mode()
+        }
+    }
+
+    fn additional_working_directories(&self) -> Vec<std::path::PathBuf> {
+        self.inner.additional_working_directories()
     }
 
     fn add_session_rule(
