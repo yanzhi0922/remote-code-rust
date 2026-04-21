@@ -79,53 +79,53 @@ pub(crate) async fn list_mcp_resources_tool(
     input: &Value,
     _context: &ToolExecutionContext,
 ) -> Result<String> {
-    let server_name = input["server"]
-        .as_str()
-        .ok_or_else(|| anyhow!("server is required"))?;
-
     let runtime_policy = current_tool_runtime_policy();
-    let server = match resolve_runtime_policy_mcp_server(&runtime_policy, server_name) {
-        Ok(server) => server.server,
-        Err(_) => {
-            return Ok(json!({
-                "server": server_name,
-                "resources": [],
-                "message": format!("MCP server '{}' not found in runtime policy. Configure it in .remote-code-rust/mcp.toml, a Claude-style .mcp.json, or settings.", server_name)
-            })
-            .to_string());
+    let target_server = input
+        .get("server")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|server| !server.is_empty());
+    let servers = if let Some(server_name) = target_server {
+        match resolve_runtime_policy_mcp_server(&runtime_policy, server_name) {
+            Ok(entry) => vec![(server_name.to_owned(), entry.server)],
+            Err(_) => {
+                let available = runtime_policy
+                    .mcp_servers
+                    .iter()
+                    .map(|entry| entry.server.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(anyhow!(
+                    "Server \"{}\" not found. Available servers: {}",
+                    server_name,
+                    available
+                ));
+            }
         }
+    } else {
+        runtime_policy
+            .mcp_servers
+            .iter()
+            .map(|entry| (entry.server.name.clone(), entry.server.clone()))
+            .collect::<Vec<_>>()
     };
 
     let client_info = rc_mcp::McpClientInfo::new("remote-code-rust", env!("CARGO_PKG_VERSION"));
-    match rc_mcp::list_resources(&server, &client_info).await {
-        Ok(resources) => {
-            let resource_list: Vec<Value> = resources
-                .iter()
-                .map(|resource| {
-                    json!({
-                        "uri": resource.uri,
-                        "name": resource.name,
-                        "description": resource.description,
-                        "mimeType": resource.mime_type,
-                        "server": server_name,
-                    })
+    let mut resource_list = Vec::new();
+    for (server_name, server) in servers {
+        if let Ok(resources) = rc_mcp::list_resources(&server, &client_info).await {
+            resource_list.extend(resources.iter().map(|resource| {
+                json!({
+                    "uri": resource.uri,
+                    "name": resource.name,
+                    "mimeType": resource.mime_type,
+                    "description": resource.description,
+                    "server": server_name,
                 })
-                .collect();
-            Ok(json!({
-                "server": server_name,
-                "resources": resource_list,
-                "count": resource_list.len(),
-            })
-            .to_string())
+            }));
         }
-        Err(error) => Ok(json!({
-            "server": server_name,
-            "resources": [],
-            "error": error.to_string(),
-            "message": format!("Failed to list resources from MCP server '{}': {}", server_name, error)
-        })
-        .to_string()),
     }
+    Ok(json!(resource_list).to_string())
 }
 
 pub(crate) async fn read_mcp_resource_tool(

@@ -1097,9 +1097,11 @@ pub fn mcp_resource_tool_specs() -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "server": {"type": "string"}
+                    "server": {
+                        "type": "string",
+                        "description": "Optional server name to filter resources by"
+                    }
                 },
-                "required": ["server"],
                 "additionalProperties": false,
             }),
         },
@@ -1477,14 +1479,10 @@ mod tests {
             .iter()
             .find(|spec| spec.name == "list_mcp_resources")
             .expect("list_mcp_resources spec");
-        let required = list
-            .input_schema
-            .get("required")
-            .and_then(|value| value.as_array())
-            .expect("required array")
-            .iter()
-            .filter_map(|value| value.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(required, vec!["server"]);
+        assert!(
+            list.input_schema.get("required").is_none(),
+            "server filter is optional like upstream ListMcpResources"
+        );
+        assert!(list.input_schema["properties"].get("server").is_some());
     }
 }
