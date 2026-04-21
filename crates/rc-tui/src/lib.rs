@@ -518,6 +518,10 @@ pub async fn run_tui_app(mut config: RuntimeConfig, store: &SessionStore) -> Res
 }
 
 fn refresh_runtime_tool_policy(config: &RuntimeConfig) -> Result<()> {
+    let session_dir = config
+        .paths
+        .sessions_dir
+        .join(config.session_id.to_string());
     configure_tool_runtime_policy(ToolRuntimePolicy {
         allowed_tools: config.allowed_tools.clone(),
         disallowed_tools: config.disallowed_tools.clone(),
@@ -528,6 +532,8 @@ fn refresh_runtime_tool_policy(config: &RuntimeConfig) -> Result<()> {
                 .join("tasks")
                 .join(config.session_id.to_string()),
         ),
+        tasks_dir: Some(rc_tools::tasks::task_list_base_dir()),
+        tool_results_dir: Some(session_dir.join("tool-results")),
         shell_policy: ShellExecutionPolicy {
             block_inline_cwd: true,
             allow_background: true,

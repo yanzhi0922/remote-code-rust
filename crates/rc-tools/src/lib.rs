@@ -36,6 +36,7 @@ pub mod tool_hooks;
 pub mod tool_orchestration;
 pub mod tool_progress;
 pub mod tool_prompts;
+pub mod tool_result_storage;
 pub mod tool_result_summary;
 pub mod web;
 pub mod web_browser;
@@ -126,6 +127,10 @@ pub struct RuntimeAgentPromptContext {
     #[serde(default)]
     pub session_memory_dir: Option<PathBuf>,
     #[serde(default)]
+    pub tasks_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub tool_results_dir: Option<PathBuf>,
+    #[serde(default)]
     pub auto_memory_dir: Option<PathBuf>,
     #[serde(default)]
     pub auto_memory_read_dir: Option<PathBuf>,
@@ -155,6 +160,10 @@ pub struct ToolRuntimePolicy {
     pub disallowed_tools: Vec<String>,
     pub task_output_dir: Option<PathBuf>,
     #[serde(default)]
+    pub tasks_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub tool_results_dir: Option<PathBuf>,
+    #[serde(default)]
     pub mcp_servers: Vec<RuntimeMcpServerPolicyEntry>,
     #[serde(default)]
     pub shell_policy: shell::ShellExecutionPolicy,
@@ -178,6 +187,7 @@ pub struct ToolRuntimePolicyOverlay {
 /// Returns an error if task-output persistence cannot be configured.
 pub fn configure_tool_runtime_policy(policy: ToolRuntimePolicy) -> Result<()> {
     tasks::configure_task_output_dir(policy.task_output_dir.clone())?;
+    tasks::configure_task_list_base_dir(policy.tasks_dir.clone())?;
     let mut current = TOOL_RUNTIME_POLICY
         .lock()
         .map_err(|_| anyhow!("tool runtime policy lock poisoned"))?;
@@ -956,6 +966,12 @@ pub(crate) fn filesystem_access_options() -> rc_permissions::FilesystemAccessOpt
     if let Some(task_output_dir) = policy.task_output_dir {
         internal_read_dirs.push(task_output_dir);
     }
+    if let Some(tasks_dir) = policy.tasks_dir {
+        internal_read_dirs.push(tasks_dir);
+    }
+    if let Some(tool_results_dir) = policy.tool_results_dir {
+        internal_read_dirs.push(tool_results_dir);
+    }
     if let Some(shell_output_dir) = policy.shell_policy.output_dir {
         internal_read_dirs.push(shell_output_dir);
     }
@@ -967,6 +983,12 @@ pub(crate) fn filesystem_access_options() -> rc_permissions::FilesystemAccessOpt
         }
         if let Some(session_memory_dir) = &context.session_memory_dir {
             internal_read_dirs.push(session_memory_dir.clone());
+        }
+        if let Some(tasks_dir) = &context.tasks_dir {
+            internal_read_dirs.push(tasks_dir.clone());
+        }
+        if let Some(tool_results_dir) = &context.tool_results_dir {
+            internal_read_dirs.push(tool_results_dir.clone());
         }
         if let Some(auto_memory_dir) = &context.auto_memory_dir {
             internal_write_dirs.push(auto_memory_dir.clone());
@@ -1877,6 +1899,94 @@ mod tests {
 
         assert!(!result.is_error, "{}", result.content);
         assert!(result.content.contains("\"name\":\"alpha\""));
+    }
+
+    #[tokio::test]
+    async fn read_file_allows_runtime_tool_results_directory() {
+        let tempdir = tempdir().expect("tempdir");
+        let workspace = tempdir.path().join("workspace");
+        let tool_results = tempdir.path().join("tool-results");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        std::fs::create_dir_all(&tool_results).expect("tool results");
+        let target = tool_results.join("call-1.txt");
+        std::fs::write(&target, "persisted").expect("tool result");
+        let context = ToolExecutionContext {
+            cwd: workspace,
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let broker = StaticPermissionBroker::new(false);
+        let runtime_context = crate::RuntimeAgentPromptContext {
+            tool_results_dir: Some(tool_results),
+            ..crate::RuntimeAgentPromptContext::default()
+        };
+
+        let result = with_runtime_agent_prompt_context_provider(
+            Arc::new(move || runtime_context.clone()),
+            async {
+                execute_tool_call(
+                    &ToolCall {
+                        id: "read-tool-result".to_owned(),
+                        name: "read_file".to_owned(),
+                        input: json!({"path": target.to_string_lossy().to_string()}),
+                    },
+                    &context,
+                    &broker,
+                )
+                .await
+            },
+        )
+        .await
+        .expect("tool call should return result");
+
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("persisted"));
+    }
+
+    #[tokio::test]
+    async fn read_file_allows_runtime_tasks_directory() {
+        let tempdir = tempdir().expect("tempdir");
+        let workspace = tempdir.path().join("workspace");
+        let tasks = tempdir.path().join("tasks");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let target = tasks.join("team-alpha").join("1.json");
+        std::fs::create_dir_all(target.parent().expect("task dir")).expect("task dir");
+        std::fs::write(&target, "{\"id\":\"1\"}").expect("task file");
+        let context = ToolExecutionContext {
+            cwd: workspace,
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let broker = StaticPermissionBroker::new(false);
+        let runtime_context = crate::RuntimeAgentPromptContext {
+            tasks_dir: Some(tasks),
+            ..crate::RuntimeAgentPromptContext::default()
+        };
+
+        let result = with_runtime_agent_prompt_context_provider(
+            Arc::new(move || runtime_context.clone()),
+            async {
+                execute_tool_call(
+                    &ToolCall {
+                        id: "read-task".to_owned(),
+                        name: "read_file".to_owned(),
+                        input: json!({"path": target.to_string_lossy().to_string()}),
+                    },
+                    &context,
+                    &broker,
+                )
+                .await
+            },
+        )
+        .await
+        .expect("tool call should return result");
+
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("\"id\":\"1\""));
     }
 
     #[tokio::test]
@@ -4262,6 +4372,8 @@ mod tests {
             allowed_tools: Vec::new(),
             disallowed_tools: Vec::new(),
             task_output_dir: None,
+            tasks_dir: None,
+            tool_results_dir: None,
             mcp_servers: vec![RuntimeMcpServerPolicyEntry {
                 origin_kind: "profile".to_owned(),
                 origin_name: "profile".to_owned(),
@@ -4330,6 +4442,8 @@ mod tests {
             allowed_tools: Vec::new(),
             disallowed_tools: Vec::new(),
             task_output_dir: None,
+            tasks_dir: None,
+            tool_results_dir: None,
             mcp_servers: Vec::new(),
             shell_policy: Default::default(),
         })
@@ -4400,6 +4514,8 @@ mod tests {
             allowed_tools: Vec::new(),
             disallowed_tools: Vec::new(),
             task_output_dir: None,
+            tasks_dir: None,
+            tool_results_dir: None,
             mcp_servers: vec![
                 demo_server("cwd", "workspace", "cwd-mcp.toml"),
                 demo_server("profile", "profile", "profile-mcp.toml"),
@@ -4453,6 +4569,8 @@ mod tests {
             allowed_tools: Vec::new(),
             disallowed_tools: Vec::new(),
             task_output_dir: None,
+            tasks_dir: None,
+            tool_results_dir: None,
             mcp_servers: vec![RuntimeMcpServerPolicyEntry {
                 origin_kind: "profile".to_owned(),
                 origin_name: "profile".to_owned(),
@@ -4520,6 +4638,8 @@ mod tests {
             allowed_tools: Vec::new(),
             disallowed_tools: Vec::new(),
             task_output_dir: None,
+            tasks_dir: None,
+            tool_results_dir: None,
             mcp_servers: vec![RuntimeMcpServerPolicyEntry {
                 origin_kind: "profile".to_owned(),
                 origin_name: "profile".to_owned(),
@@ -4867,6 +4987,8 @@ mod tests {
             allowed_tools: Vec::new(),
             disallowed_tools: Vec::new(),
             task_output_dir: None,
+            tasks_dir: None,
+            tool_results_dir: None,
             mcp_servers: vec![fake_runtime_mcp_policy_entry("context7")],
             shell_policy: Default::default(),
         })
@@ -4934,6 +5056,8 @@ mod tests {
             allowed_tools: Vec::new(),
             disallowed_tools: Vec::new(),
             task_output_dir: None,
+            tasks_dir: None,
+            tool_results_dir: None,
             mcp_servers: vec![fake_runtime_mcp_policy_entry("context7")],
             shell_policy: Default::default(),
         })
@@ -4981,6 +5105,8 @@ mod tests {
             allowed_tools: Vec::new(),
             disallowed_tools: vec!["tool_search".to_owned()],
             task_output_dir: None,
+            tasks_dir: None,
+            tool_results_dir: None,
             mcp_servers: Vec::new(),
             shell_policy: Default::default(),
         })
