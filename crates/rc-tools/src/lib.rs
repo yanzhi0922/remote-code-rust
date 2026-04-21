@@ -4866,7 +4866,28 @@ while True:
             task_output_dir: None,
             tasks_dir: None,
             tool_results_dir: None,
-            mcp_servers: Vec::new(),
+            mcp_servers: vec![RuntimeMcpServerPolicyEntry {
+                origin_kind: "profile".to_owned(),
+                origin_name: "profile".to_owned(),
+                config_path: tempdir.path().join("alpha.toml"),
+                server: McpServerConfig {
+                    name: "alpha".to_owned(),
+                    enabled: true,
+                    transport: McpTransportConfig::Stdio {
+                        command: "definitely-missing-mcp-command".to_owned(),
+                        args: Vec::new(),
+                        cwd: None,
+                        env: Default::default(),
+                    },
+                    capabilities: McpCapabilityMatrix {
+                        supports_resources: true,
+                        ..Default::default()
+                    },
+                    startup_timeout_secs: Some(1),
+                    request_timeout_secs: Some(1),
+                    metadata: Default::default(),
+                },
+            }],
             shell_policy: Default::default(),
         })
         .expect("set runtime policy");
@@ -5038,6 +5059,148 @@ while True:
             "list_mcp_resources error: {}",
             result.content
         );
+        let parsed: Value = serde_json::from_str(&result.content).expect("json result");
+        assert!(
+            parsed.is_array(),
+            "list_mcp_resources should return a flat resource array"
+        );
+        assert!(
+            parsed
+                .as_array()
+                .expect("array")
+                .iter()
+                .all(|resource| resource.get("server").and_then(Value::as_str) == Some("test")),
+            "resources should be annotated with their provider server"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_mcp_resources_without_server_returns_flat_array() {
+        let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX.lock().await;
+        let tempdir = tempdir().expect("tempdir");
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let broker = StaticPermissionBroker::new(true);
+        let original_policy = super::current_tool_runtime_policy();
+        let make_server = |name: &str| RuntimeMcpServerPolicyEntry {
+            origin_kind: "profile".to_owned(),
+            origin_name: "profile".to_owned(),
+            config_path: tempdir.path().join(format!("{name}.toml")),
+            server: McpServerConfig {
+                name: name.to_owned(),
+                enabled: true,
+                transport: McpTransportConfig::Stdio {
+                    command: "definitely-missing-mcp-command".to_owned(),
+                    args: Vec::new(),
+                    cwd: None,
+                    env: Default::default(),
+                },
+                capabilities: McpCapabilityMatrix {
+                    supports_resources: true,
+                    ..Default::default()
+                },
+                startup_timeout_secs: Some(1),
+                request_timeout_secs: Some(1),
+                metadata: Default::default(),
+            },
+        };
+        configure_tool_runtime_policy(ToolRuntimePolicy {
+            allowed_tools: Vec::new(),
+            disallowed_tools: Vec::new(),
+            task_output_dir: None,
+            tasks_dir: None,
+            tool_results_dir: None,
+            mcp_servers: vec![make_server("alpha"), make_server("beta")],
+            shell_policy: Default::default(),
+        })
+        .expect("set runtime policy");
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "list-all".to_owned(),
+                name: "list_mcp_resources".to_owned(),
+                input: json!({}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("list_mcp_resources should return result");
+
+        configure_tool_runtime_policy(original_policy).expect("restore runtime policy");
+
+        assert!(!result.is_error, "{}", result.content);
+        let parsed: Value = serde_json::from_str(&result.content).expect("json array");
+        assert!(parsed.is_array(), "unexpected result: {}", result.content);
+    }
+
+    #[tokio::test]
+    async fn list_mcp_resources_unknown_server_errors_like_upstream() {
+        let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX.lock().await;
+        let tempdir = tempdir().expect("tempdir");
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let broker = StaticPermissionBroker::new(true);
+        let original_policy = super::current_tool_runtime_policy();
+        configure_tool_runtime_policy(ToolRuntimePolicy {
+            allowed_tools: Vec::new(),
+            disallowed_tools: Vec::new(),
+            task_output_dir: None,
+            tasks_dir: None,
+            tool_results_dir: None,
+            mcp_servers: vec![RuntimeMcpServerPolicyEntry {
+                origin_kind: "profile".to_owned(),
+                origin_name: "profile".to_owned(),
+                config_path: tempdir.path().join("alpha.toml"),
+                server: McpServerConfig {
+                    name: "alpha".to_owned(),
+                    enabled: true,
+                    transport: McpTransportConfig::Stdio {
+                        command: "definitely-missing-mcp-command".to_owned(),
+                        args: Vec::new(),
+                        cwd: None,
+                        env: Default::default(),
+                    },
+                    capabilities: McpCapabilityMatrix {
+                        supports_resources: true,
+                        ..Default::default()
+                    },
+                    startup_timeout_secs: Some(1),
+                    request_timeout_secs: Some(1),
+                    metadata: Default::default(),
+                },
+            }],
+            shell_policy: Default::default(),
+        })
+        .expect("set runtime policy");
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "missing-server".to_owned(),
+                name: "list_mcp_resources".to_owned(),
+                input: json!({"server": "missing"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("list_mcp_resources should return result");
+
+        configure_tool_runtime_policy(original_policy).expect("restore runtime policy");
+
+        assert!(result.is_error);
+        assert!(result.content.contains("Server \"missing\" not found"));
+        assert!(result.content.contains("Available servers:"));
     }
 
     #[tokio::test]
