@@ -9,6 +9,8 @@ use rc_core::{ConversationEntry, ConversationRole};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::ToolResultSizePolicy;
+
 pub const DEFAULT_MAX_RESULT_SIZE_CHARS: usize = 50_000;
 pub const MAX_TOOL_RESULT_TOKENS: usize = 100_000;
 pub const BYTES_PER_TOKEN: usize = 4;
@@ -159,13 +161,13 @@ pub fn process_tool_result_text(
     content: &str,
     tool_use_id: &str,
     tool_results_dir: Option<&Path>,
-    threshold: Option<usize>,
+    result_size_policy: ToolResultSizePolicy,
 ) -> Result<String> {
     process_tool_result_text_with_empty_message(
         content,
         tool_use_id,
         tool_results_dir,
-        threshold,
+        result_size_policy,
         "(tool completed with no output)",
     )
 }
@@ -176,7 +178,7 @@ pub fn process_tool_result_content(
     tool_use_id: &str,
     tool_name: &str,
     tool_results_dir: Option<&Path>,
-    threshold: Option<usize>,
+    result_size_policy: ToolResultSizePolicy,
 ) -> Result<ProcessedToolResultContent> {
     if content_blocks.is_empty() {
         return Ok(ProcessedToolResultContent {
@@ -184,7 +186,7 @@ pub fn process_tool_result_content(
                 content,
                 tool_use_id,
                 tool_results_dir,
-                threshold,
+                result_size_policy,
                 &empty_tool_result_message(tool_name),
             )?,
             content_blocks: Vec::new(),
@@ -205,7 +207,12 @@ pub fn process_tool_result_content(
         });
     }
 
-    let limit = persistence_threshold(threshold);
+    let Some(limit) = persistence_threshold(result_size_policy) else {
+        return Ok(ProcessedToolResultContent {
+            content: content.to_owned(),
+            content_blocks: content_blocks.to_vec(),
+        });
+    };
     if content_blocks_size(content_blocks) <= limit {
         return Ok(ProcessedToolResultContent {
             content: content.to_owned(),
@@ -231,13 +238,15 @@ fn process_tool_result_text_with_empty_message(
     content: &str,
     tool_use_id: &str,
     tool_results_dir: Option<&Path>,
-    threshold: Option<usize>,
+    result_size_policy: ToolResultSizePolicy,
     empty_message: &str,
 ) -> Result<String> {
-    let limit = persistence_threshold(threshold);
     if is_tool_result_text_empty(content) {
         return Ok(empty_message.to_owned());
     }
+    let Some(limit) = persistence_threshold(result_size_policy) else {
+        return Ok(content.to_owned());
+    };
     if content.chars().count() <= limit {
         return Ok(content.to_owned());
     }
@@ -254,10 +263,13 @@ fn empty_tool_result_message(tool_name: &str) -> String {
 }
 
 #[must_use]
-pub fn persistence_threshold(declared_max_result_size_chars: Option<usize>) -> usize {
-    declared_max_result_size_chars
-        .unwrap_or(MAX_TOOL_RESULT_BYTES)
-        .min(DEFAULT_MAX_RESULT_SIZE_CHARS)
+pub fn persistence_threshold(result_size_policy: ToolResultSizePolicy) -> Option<usize> {
+    match result_size_policy {
+        ToolResultSizePolicy::NeverPersist => None,
+        ToolResultSizePolicy::Finite(declared_max_result_size_chars) => {
+            Some(declared_max_result_size_chars.min(DEFAULT_MAX_RESULT_SIZE_CHARS))
+        }
+    }
 }
 
 fn cleanup_one_level_tool_dir(
@@ -755,14 +767,23 @@ mod tests {
         process_tool_result_content, process_tool_result_text,
         reconstruct_content_replacement_state, session_tool_results_dir,
     };
+    use crate::{
+        DEFAULT_TOOL_MAX_RESULT_SIZE_CHARS, ToolResultSizePolicy, builtin_tool_specs,
+        runtime_tool_result_persistence_skip_names,
+    };
 
     #[test]
     fn process_tool_result_text_persists_large_output() {
         let temp = tempdir().expect("tempdir");
         let tool_results_dir = session_tool_results_dir(temp.path());
         let content = "x".repeat(60_000);
-        let processed = process_tool_result_text(&content, "call-1", Some(&tool_results_dir), None)
-            .expect("process");
+        let processed = process_tool_result_text(
+            &content,
+            "call-1",
+            Some(&tool_results_dir),
+            ToolResultSizePolicy::default(),
+        )
+        .expect("process");
         assert!(processed.starts_with(PERSISTED_OUTPUT_TAG));
         assert!(processed.ends_with(PERSISTED_OUTPUT_CLOSING_TAG));
         assert!(tool_results_dir.join("call-1.txt").exists());
@@ -771,14 +792,25 @@ mod tests {
     #[test]
     fn persistence_threshold_clamps_large_declared_sizes_to_default_limit() {
         assert_eq!(
-            persistence_threshold(Some(MAX_TOOL_RESULT_BYTES)),
-            DEFAULT_MAX_RESULT_SIZE_CHARS
+            persistence_threshold(ToolResultSizePolicy::Finite(MAX_TOOL_RESULT_BYTES)),
+            Some(DEFAULT_MAX_RESULT_SIZE_CHARS)
         );
-        assert_eq!(persistence_threshold(Some(4_000)), 4_000);
         assert_eq!(
-            persistence_threshold(None),
-            DEFAULT_MAX_RESULT_SIZE_CHARS,
-            "fallback remains clamped to the research default even with byte constants present"
+            persistence_threshold(ToolResultSizePolicy::Finite(4_000)),
+            Some(4_000)
+        );
+        assert_eq!(
+            persistence_threshold(ToolResultSizePolicy::default()),
+            Some(DEFAULT_MAX_RESULT_SIZE_CHARS),
+            "default declared size still clamps to the research persistence cap"
+        );
+        assert_eq!(
+            DEFAULT_TOOL_MAX_RESULT_SIZE_CHARS, 100_000,
+            "default per-tool declaration should mirror research tools"
+        );
+        assert_eq!(
+            persistence_threshold(ToolResultSizePolicy::NeverPersist),
+            None
         );
         assert_eq!(MAX_TOOL_RESULT_BYTES, 100_000 * BYTES_PER_TOKEN);
         assert_eq!(
@@ -790,7 +822,8 @@ mod tests {
     #[test]
     fn process_tool_result_text_normalizes_empty_output() {
         let processed =
-            process_tool_result_text("   \n", "call-empty", None, None).expect("process");
+            process_tool_result_text("   \n", "call-empty", None, ToolResultSizePolicy::default())
+                .expect("process");
         assert_eq!(processed, "(tool completed with no output)");
     }
 
@@ -806,7 +839,7 @@ mod tests {
             "call-blocks",
             "bash_command",
             Some(&tool_results_dir),
-            None,
+            ToolResultSizePolicy::default(),
         )
         .expect("process");
 
@@ -819,9 +852,15 @@ mod tests {
     fn process_tool_result_content_keeps_small_text_blocks() {
         let blocks = vec![json!({"type":"text","text":"small"})];
 
-        let processed =
-            process_tool_result_content("", &blocks, "call-small", "bash_command", None, None)
-                .expect("process");
+        let processed = process_tool_result_content(
+            "",
+            &blocks,
+            "call-small",
+            "bash_command",
+            None,
+            ToolResultSizePolicy::default(),
+        )
+        .expect("process");
 
         assert_eq!(processed.content, "");
         assert_eq!(processed.content_blocks, blocks);
@@ -831,9 +870,15 @@ mod tests {
     fn process_tool_result_content_normalizes_empty_text_blocks() {
         let blocks = vec![json!({"type":"text","text":"   "})];
 
-        let processed =
-            process_tool_result_content("", &blocks, "call-empty", "bash_command", None, None)
-                .expect("process");
+        let processed = process_tool_result_content(
+            "",
+            &blocks,
+            "call-empty",
+            "bash_command",
+            None,
+            ToolResultSizePolicy::default(),
+        )
+        .expect("process");
 
         assert_eq!(processed.content, "(bash_command completed with no output)");
         assert!(processed.content_blocks.is_empty());
@@ -849,12 +894,94 @@ mod tests {
             "call-image",
             "web_fetch",
             None,
-            None,
+            ToolResultSizePolicy::default(),
         )
         .expect("process");
 
         assert_eq!(processed.content, "image content");
         assert_eq!(processed.content_blocks, blocks);
+    }
+
+    #[test]
+    fn process_tool_result_content_never_persist_keeps_large_read_results_inline() {
+        let temp = tempdir().expect("tempdir");
+        let tool_results_dir = session_tool_results_dir(temp.path());
+        let blocks = vec![json!({"type":"text","text":"x".repeat(60_000)})];
+
+        let processed = process_tool_result_content(
+            "",
+            &blocks,
+            "call-read-large",
+            "read_file",
+            Some(&tool_results_dir),
+            ToolResultSizePolicy::NeverPersist,
+        )
+        .expect("process");
+
+        assert_eq!(processed.content, "");
+        assert_eq!(processed.content_blocks, blocks);
+        assert!(!tool_results_dir.join("call-read-large.json").exists());
+        assert!(!tool_results_dir.join("call-read-large.txt").exists());
+    }
+
+    #[test]
+    fn process_tool_result_content_respects_bash_threshold() {
+        let temp = tempdir().expect("tempdir");
+        let tool_results_dir = session_tool_results_dir(temp.path());
+        let blocks = vec![json!({"type":"text","text":"x".repeat(30_001)})];
+
+        let processed = process_tool_result_content(
+            "",
+            &blocks,
+            "call-bash-large",
+            "bash_command",
+            Some(&tool_results_dir),
+            ToolResultSizePolicy::Finite(30_000),
+        )
+        .expect("process");
+
+        assert!(processed.content.starts_with(PERSISTED_OUTPUT_TAG));
+        assert!(tool_results_dir.join("call-bash-large.json").exists());
+    }
+
+    #[test]
+    fn process_tool_result_content_respects_grep_threshold() {
+        let temp = tempdir().expect("tempdir");
+        let tool_results_dir = session_tool_results_dir(temp.path());
+        let blocks = vec![json!({"type":"text","text":"x".repeat(20_001)})];
+
+        let processed = process_tool_result_content(
+            "",
+            &blocks,
+            "call-grep-large",
+            "grep",
+            Some(&tool_results_dir),
+            ToolResultSizePolicy::Finite(20_000),
+        )
+        .expect("process");
+
+        assert!(processed.content.starts_with(PERSISTED_OUTPUT_TAG));
+        assert!(tool_results_dir.join("call-grep-large.json").exists());
+    }
+
+    #[test]
+    fn process_tool_result_content_default_declared_size_still_clamps_to_global_cap() {
+        let temp = tempdir().expect("tempdir");
+        let tool_results_dir = session_tool_results_dir(temp.path());
+        let blocks = vec![json!({"type":"text","text":"x".repeat(60_000)})];
+
+        let processed = process_tool_result_content(
+            "",
+            &blocks,
+            "call-default-large",
+            "web_search",
+            Some(&tool_results_dir),
+            ToolResultSizePolicy::Finite(DEFAULT_TOOL_MAX_RESULT_SIZE_CHARS),
+        )
+        .expect("process");
+
+        assert!(processed.content.starts_with(PERSISTED_OUTPUT_TAG));
+        assert!(tool_results_dir.join("call-default-large.json").exists());
     }
 
     #[test]
@@ -979,6 +1106,39 @@ mod tests {
         assert_eq!(second.newly_replaced.len(), 1);
         assert_eq!(second.newly_replaced[0].tool_use_id, "fresh");
         assert_eq!(conversation[1].text, "m".repeat(150_000));
+    }
+
+    #[test]
+    fn per_message_budget_skips_read_file_candidates_from_runtime_specs() {
+        let temp = tempdir().expect("tempdir");
+        let mut conversation = vec![
+            ConversationEntry::assistant(""),
+            ConversationEntry::tool("read-large", "read_file", "r".repeat(210_000), false),
+            ConversationEntry::tool("bash-large", "bash_command", "b".repeat(210_000), false),
+        ];
+        let mut state = super::ContentReplacementState::new();
+        let specs = builtin_tool_specs();
+        let skip_tool_names = runtime_tool_result_persistence_skip_names();
+        assert!(
+            specs.iter().any(|spec| spec.name == "read_file"),
+            "builtin read_file spec should exist"
+        );
+        assert!(skip_tool_names.contains("read_file"));
+
+        let outcome = apply_tool_result_budget_to_conversation(
+            &mut conversation,
+            &mut state,
+            temp.path(),
+            &skip_tool_names,
+        )
+        .expect("budget");
+
+        assert_eq!(outcome.newly_replaced.len(), 1);
+        assert_eq!(outcome.newly_replaced[0].tool_use_id, "bash-large");
+        assert_eq!(conversation[1].text, "r".repeat(210_000));
+        assert!(conversation[2].text.starts_with(PERSISTED_OUTPUT_TAG));
+        assert!(!temp.path().join("read-large.txt").exists());
+        assert!(temp.path().join("bash-large.txt").exists());
     }
 
     #[test]

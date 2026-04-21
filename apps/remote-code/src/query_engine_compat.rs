@@ -1663,7 +1663,7 @@ impl ToolRunner for CompatToolRunner {
         tool_call: &ToolCall,
         _context: &ProcessUserInputContext,
     ) -> Result<ToolRunResult> {
-        let _ = runtime_provider_tool_spec(&tool_call.name)
+        let original_tool_spec = runtime_provider_tool_spec(&tool_call.name)
             .await
             .ok_or_else(|| anyhow!("unknown tool {}", tool_call.name))?;
 
@@ -1691,6 +1691,13 @@ impl ToolRunner for CompatToolRunner {
         };
 
         let effective_tool_call = prepared.call;
+        let effective_tool_spec = if effective_tool_call.name == original_tool_spec.name {
+            original_tool_spec
+        } else {
+            runtime_provider_tool_spec(&effective_tool_call.name)
+                .await
+                .ok_or_else(|| anyhow!("unknown tool {}", effective_tool_call.name))?
+        };
         let audit_count_before = self.broker.audit_records().len();
         let raw_result = if let Some(blocked_reason) = &prepared.blocked_reason {
             ToolResult {
@@ -1781,7 +1788,7 @@ impl ToolRunner for CompatToolRunner {
             &effective_tool_call.id,
             &effective_tool_call.name,
             tool_results_dir.as_deref(),
-            None,
+            effective_tool_spec.tool_result_size_policy(),
         )?;
         let tool_preview = truncate_preview(&processed_result.content, 160);
         let model_name = self.config.provider.model.as_deref().unwrap_or("unknown");
