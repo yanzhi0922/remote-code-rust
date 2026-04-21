@@ -20,7 +20,8 @@ use rc_mcp::{
 };
 use rc_permissions::{
     auto_allows, classify_tool, load_layered_rules, rules::summarize_rule_sources,
-    LayeredPermissionBroker, PermissionBroker, PermissionDecision, PermissionRequest,
+    LayeredPermissionBroker, PermissionBroker, PermissionClass, PermissionDecision,
+    PermissionRequest,
 };
 use rc_plugins::{discover_plugins_including_disabled, PluginBundle};
 use rc_provider::context::ContextWindowManager;
@@ -36,6 +37,10 @@ use rc_tools::{
     mcp_runtime::{
         observe_runtime_mcp_servers, runtime_mcp_inventory_summary, runtime_mcp_policy_entries,
         RuntimeMcpServerObservation,
+    },
+    plan_mode::normalize_exit_plan_mode_tool_calls,
+    runtime_plan_mode::{
+        inject_plan_mode_runtime_messages, install_plan_mode_runtime, RuntimePlanModeController,
     },
     runtime_provider_tool_spec,
     tasks::load_persisted_ui_task_snapshots,
@@ -2431,8 +2436,8 @@ fn store_provider_selection(state: &mut RuntimeState, config: &RuntimeProviderCo
 }
 
 #[derive(Debug)]
-struct GuiPermissionBroker {
-    mode: PermissionMode,
+struct GuiPermissionFallbackBroker {
+    controller: Arc<RuntimePlanModeController>,
     app: AppHandle,
     pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
 }
@@ -2450,7 +2455,7 @@ fn permission_request_dto(request_id: String, request: &PermissionRequest) -> Pe
     }
 }
 
-impl GuiPermissionBroker {
+impl GuiPermissionFallbackBroker {
     async fn prompt(&self, request: PermissionRequest) -> PermissionDecision {
         let request_id = Uuid::new_v4().to_string();
         let (tx, rx) = oneshot::channel();
@@ -2499,32 +2504,29 @@ impl GuiPermissionBroker {
 }
 
 #[async_trait]
-impl PermissionBroker for GuiPermissionBroker {
+impl PermissionBroker for GuiPermissionFallbackBroker {
     fn mode(&self) -> Option<PermissionMode> {
-        Some(self.mode)
+        Some(self.controller.current_mode())
     }
 
     async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
-        if request.blocked_path.is_none()
-            && auto_allows(self.mode, classify_tool(&request.tool_name))
+        let mode = self.controller.current_mode();
+
+        if matches!(mode, PermissionMode::BypassPermissions) && request.blocked_path.is_none() {
+            return PermissionDecision::allow();
+        }
+
+        if matches!(mode, PermissionMode::DontAsk | PermissionMode::AcceptEdits)
+            && request.blocked_path.is_none()
+            && auto_allows(mode, classify_tool(&request.tool_name))
         {
             return PermissionDecision::allow();
         }
 
-        match self.mode {
-            PermissionMode::DontAsk => {
-                return PermissionDecision::deny(format!(
-                    "Permission mode {} denied {}.",
-                    self.mode.as_legacy_str(),
-                    request.tool_name
-                ));
-            }
-            PermissionMode::Plan => {
-                return PermissionDecision::deny("Plan mode does not execute tools.");
-            }
-            PermissionMode::Default
-            | PermissionMode::AcceptEdits
-            | PermissionMode::BypassPermissions => {}
+        if matches!(mode, PermissionMode::Plan) {
+            return PermissionDecision::deny(
+                "Plan mode is active. Only read-only tools and plan-file edits are allowed.",
+            );
         }
 
         self.prompt(request).await
@@ -2533,12 +2535,116 @@ impl PermissionBroker for GuiPermissionBroker {
     async fn decide_forced_prompt(&self, request: PermissionRequest) -> PermissionDecision {
         self.prompt(request).await
     }
+}
+
+struct GuiRuntimePermissionBroker {
+    controller: Arc<RuntimePlanModeController>,
+    inner: LayeredPermissionBroker<GuiPermissionFallbackBroker>,
+}
+
+impl std::fmt::Debug for GuiRuntimePermissionBroker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GuiRuntimePermissionBroker")
+            .field("mode", &self.controller.current_mode())
+            .finish_non_exhaustive()
+    }
+}
+
+impl GuiRuntimePermissionBroker {
+    fn new(
+        config: &RuntimeConfig,
+        controller: Arc<RuntimePlanModeController>,
+        app: AppHandle,
+        pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
+    ) -> Self {
+        let inner = LayeredPermissionBroker::new(
+            GuiPermissionFallbackBroker {
+                controller: controller.clone(),
+                app,
+                pending_permissions,
+            },
+            load_layered_rules(
+                &config.cwd,
+                &config.paths.profile_dir,
+                &config.settings_files,
+                &config.cli_settings_files,
+            ),
+        );
+        Self { controller, inner }
+    }
+
+    fn decide_plan_mode(&self, request: PermissionRequest) -> PermissionDecision {
+        match request.resolved_permission_class() {
+            PermissionClass::Read => PermissionDecision::allow(),
+            PermissionClass::Edit if self.controller.plan_file_matches_request(&request) => {
+                PermissionDecision::allow()
+            }
+            PermissionClass::Edit => PermissionDecision::deny(
+                "Plan mode is active. Only the current plan file may be edited.",
+            ),
+            _ => PermissionDecision::deny(
+                "Plan mode is active. Only read-only tools and plan-file edits are allowed.",
+            ),
+        }
+    }
+}
+
+#[async_trait]
+impl PermissionBroker for GuiRuntimePermissionBroker {
+    async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
+        if self.controller.current_mode() == PermissionMode::Plan {
+            return self.decide_plan_mode(request);
+        }
+        self.inner.decide(request).await
+    }
+
+    async fn decide_forced_prompt(&self, request: PermissionRequest) -> PermissionDecision {
+        self.inner.decide_forced_prompt(request).await
+    }
+
+    fn mode(&self) -> Option<PermissionMode> {
+        Some(self.controller.current_mode())
+    }
+
+    fn add_session_rule(
+        &self,
+        action: rc_permissions::RuleAction,
+        tool_pattern: String,
+    ) -> Result<()> {
+        self.inner.add_session_rule(action, tool_pattern)
+    }
+
+    fn clear_session_rules(&self) -> Result<usize> {
+        self.inner.clear_session_rules()
+    }
 
     fn apply_permission_updates(
         &self,
-        _updates: &[rc_permissions::PermissionUpdate],
+        updates: &[rc_permissions::PermissionUpdate],
     ) -> Result<usize> {
-        Ok(0)
+        self.inner.apply_permission_updates(updates)
+    }
+
+    fn audit_records(&self) -> Vec<rc_permissions::PermissionAuditRecord> {
+        self.inner.audit_records()
+    }
+
+    fn layered_rules(&self) -> Vec<rc_permissions::SourceAwarePermissionRule> {
+        self.inner.layered_rules()
+    }
+
+    fn matching_rule(
+        &self,
+        request: &PermissionRequest,
+    ) -> Option<rc_permissions::SourceAwarePermissionRule> {
+        self.inner.matching_rule(request)
+    }
+
+    fn matching_rule_action(
+        &self,
+        request: &PermissionRequest,
+    ) -> Option<rc_permissions::RuleAction> {
+        self.inner.matching_rule_action(request)
     }
 }
 
@@ -2560,6 +2666,9 @@ async fn run_gui_prompt(
     prompt: &str,
 ) -> Result<PromptRunOutcome> {
     let mut conversation = initialize_session_conversation(&store, &config, Some(prompt))?;
+    let plan_mode_controller = RuntimePlanModeController::load(&config, store.as_ref())?;
+    let _plan_mode_runtime_guard = install_plan_mode_runtime(plan_mode_controller.clone())?;
+    inject_plan_mode_runtime_messages(store.as_ref(), config.session_id, &mut conversation)?;
     store.append_named_event(
         config.session_id,
         "prompt_started",
@@ -2689,18 +2798,11 @@ async fn run_gui_prompt(
         )),
     };
 
-    let broker = LayeredPermissionBroker::new(
-        GuiPermissionBroker {
-            mode: config.permission_mode,
-            app: app.clone(),
-            pending_permissions,
-        },
-        load_layered_rules(
-            &config.cwd,
-            &config.paths.profile_dir,
-            &config.settings_files,
-            &config.cli_settings_files,
-        ),
+    let broker = GuiRuntimePermissionBroker::new(
+        &config,
+        plan_mode_controller,
+        app.clone(),
+        pending_permissions,
     );
 
     let mut usage = UsageSummary::default();
@@ -2798,9 +2900,10 @@ async fn run_gui_prompt(
             ..Default::default()
         };
 
-        let response = backend
+        let mut response = backend
             .complete_streaming(&conversation, Some(streaming_callbacks))
             .await?;
+        normalize_exit_plan_mode_tool_calls(&mut response.tool_calls);
         usage.input_tokens += response.usage.input_tokens;
         usage.output_tokens += response.usage.output_tokens;
         let mut content_blocks = response.content_blocks.clone();
@@ -2879,6 +2982,7 @@ async fn run_gui_prompt(
                     content: format!("Tool execution error: {error}"),
                     is_error: true,
                     content_blocks: Vec::new(),
+                    follow_up_user_blocks: Vec::new(),
                 },
             };
 
@@ -2893,6 +2997,13 @@ async fn run_gui_prompt(
             tool_entry.content_blocks = tool_result.content_blocks.clone();
             store.append_conversation_entry(config.session_id, &tool_entry)?;
             conversation.push(tool_entry.clone());
+            if !tool_result.follow_up_user_blocks.is_empty() {
+                let follow_up_entry = ConversationEntry::user_with_content_blocks(
+                    tool_result.follow_up_user_blocks.clone(),
+                );
+                store.append_conversation_entry(config.session_id, &follow_up_entry)?;
+                conversation.push(follow_up_entry);
+            }
 
             store.append_named_event(
                 config.session_id,

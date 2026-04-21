@@ -4,7 +4,7 @@
 - **Binary**: `target/release/remote-code.exe`
 - **Test Directory**: `C:\Users\Yanzh\Desktop\cli-stress-test`
 - **Provider**: MiniMax (minimax-m2.7, Anthropic protocol)
-- **API Key**: `sk-cp-LwRmRL7DyMsvEVVYBo4t8ZQ_8tgy9_Pm5iQ2SZMyLOOjFVYeKeEX6rz97GY6um4VftEwLkyaXOnLJbftnGW13DkLyUjV9Pdq37uKS8IVEeLaEIpt4Vcey6o`
+- **API Key**: `$MINIMAX_API_KEY`
 - **Base URL**: `https://api.minimaxi.com/anthropic`
 - **Permission Mode**: `bypass-permissions` (for automated testing)
 

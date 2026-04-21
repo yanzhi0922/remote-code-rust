@@ -1147,6 +1147,7 @@ fn apply_permission_decision_effects(
     broker: &dyn PermissionBroker,
     decision: &PermissionDecision,
     effective_call: &mut ToolCall,
+    follow_up_user_blocks: &mut Vec<Value>,
 ) -> Result<()> {
     if let Some(updated_input) = decision.updated_input.clone() {
         effective_call.input = updated_input;
@@ -1154,7 +1155,50 @@ fn apply_permission_decision_effects(
     if !decision.permission_updates.is_empty() {
         let _ = broker.apply_permission_updates(&decision.permission_updates)?;
     }
+    follow_up_user_blocks.extend(permission_decision_follow_up_blocks(decision, true));
     Ok(())
+}
+
+fn permission_decision_follow_up_blocks(
+    decision: &PermissionDecision,
+    include_feedback: bool,
+) -> Vec<Value> {
+    let mut blocks = Vec::new();
+    if include_feedback
+        && let Some(feedback) = decision.feedback.as_deref()
+        && !feedback.is_empty()
+    {
+        blocks.push(serde_json::json!({
+            "type": "text",
+            "text": feedback,
+        }));
+    }
+    blocks.extend(decision.content_blocks.clone());
+    blocks
+}
+
+fn permission_denied_tool_result(tool_name: &str, decision: &PermissionDecision) -> ToolResult {
+    ToolResult {
+        content: decision
+            .message
+            .clone()
+            .unwrap_or_else(|| format!("Permission denied for {}.", tool_name)),
+        is_error: true,
+        content_blocks: Vec::new(),
+        follow_up_user_blocks: permission_decision_follow_up_blocks(decision, false),
+    }
+}
+
+fn append_follow_up_user_blocks(
+    mut result: ToolResult,
+    follow_up_user_blocks: &[Value],
+) -> ToolResult {
+    if !follow_up_user_blocks.is_empty() {
+        result
+            .follow_up_user_blocks
+            .extend(follow_up_user_blocks.iter().cloned());
+    }
+    result
 }
 
 fn session_claude_folder_allow_rule(rule: &rc_permissions::SourceAwarePermissionRule) -> bool {
@@ -1238,6 +1282,7 @@ pub async fn execute_tool_call(
             ),
             is_error: true,
             content_blocks: Vec::new(),
+            follow_up_user_blocks: Vec::new(),
         });
     }
 
@@ -1259,8 +1304,11 @@ pub async fn execute_tool_call(
             content: precheck.message,
             is_error: true,
             content_blocks: Vec::new(),
+            follow_up_user_blocks: Vec::new(),
         });
     }
+
+    let mut follow_up_user_blocks = Vec::new();
 
     if permission.requires_permission || filesystem_precheck.is_some() || filesystem_rule_relevant {
         // Fast-path: if the broker exposes a mode and auto_allows covers this class, skip.
@@ -1277,15 +1325,14 @@ pub async fn execute_tool_call(
                 .decide_forced_prompt(permission_request.clone())
                 .await;
             if !decision.allowed {
-                return Ok(ToolResult {
-                    content: decision
-                        .message
-                        .unwrap_or_else(|| format!("Permission denied for {}.", spec.name)),
-                    is_error: true,
-                    content_blocks: Vec::new(),
-                });
+                return Ok(permission_denied_tool_result(&spec.name, &decision));
             }
-            apply_permission_decision_effects(broker, &decision, &mut effective_call)?;
+            apply_permission_decision_effects(
+                broker,
+                &decision,
+                &mut effective_call,
+                &mut follow_up_user_blocks,
+            )?;
             true
         } else {
             false
@@ -1302,15 +1349,14 @@ pub async fn execute_tool_call(
         ) {
             let decision = broker.decide_forced_prompt(permission_request).await;
             if !decision.allowed {
-                return Ok(ToolResult {
-                    content: decision
-                        .message
-                        .unwrap_or_else(|| format!("Permission denied for {}.", spec.name)),
-                    is_error: true,
-                    content_blocks: Vec::new(),
-                });
+                return Ok(permission_denied_tool_result(&spec.name, &decision));
             }
-            apply_permission_decision_effects(broker, &decision, &mut effective_call)?;
+            apply_permission_decision_effects(
+                broker,
+                &decision,
+                &mut effective_call,
+                &mut follow_up_user_blocks,
+            )?;
         } else if matches!(
             filesystem_rule_action,
             Some(rc_permissions::RuleAction::Allow)
@@ -1327,15 +1373,14 @@ pub async fn execute_tool_call(
         {
             let decision = broker.decide_forced_prompt(permission_request).await;
             if !decision.allowed {
-                return Ok(ToolResult {
-                    content: decision
-                        .message
-                        .unwrap_or_else(|| format!("Permission denied for {}.", spec.name)),
-                    is_error: true,
-                    content_blocks: Vec::new(),
-                });
+                return Ok(permission_denied_tool_result(&spec.name, &decision));
             }
-            apply_permission_decision_effects(broker, &decision, &mut effective_call)?;
+            apply_permission_decision_effects(
+                broker,
+                &decision,
+                &mut effective_call,
+                &mut follow_up_user_blocks,
+            )?;
         } else if !explicit_approval_handled
             && (permission.requires_permission || filesystem_precheck.is_some())
         {
@@ -1344,15 +1389,14 @@ pub async fn execute_tool_call(
             if !skip_broker {
                 let decision = broker.decide(permission_request).await;
                 if !decision.allowed {
-                    return Ok(ToolResult {
-                        content: decision
-                            .message
-                            .unwrap_or_else(|| format!("Permission denied for {}.", spec.name)),
-                        is_error: true,
-                        content_blocks: Vec::new(),
-                    });
+                    return Ok(permission_denied_tool_result(&spec.name, &decision));
                 }
-                apply_permission_decision_effects(broker, &decision, &mut effective_call)?;
+                apply_permission_decision_effects(
+                    broker,
+                    &decision,
+                    &mut effective_call,
+                    &mut follow_up_user_blocks,
+                )?;
             }
         }
     }
@@ -1360,22 +1404,24 @@ pub async fn execute_tool_call(
     file_ops::with_filesystem_permission_confirmed(filesystem_precheck.is_some(), async {
         if spec.name == "tool_search" {
             return match system::tool_search_tool(&effective_call.input).await {
-                Ok(result) => Ok(result),
+                Ok(result) => Ok(append_follow_up_user_blocks(result, &follow_up_user_blocks)),
                 Err(error) => Ok(ToolResult {
                     content: error.to_string(),
                     is_error: true,
                     content_blocks: Vec::new(),
+                    follow_up_user_blocks: follow_up_user_blocks.clone(),
                 }),
             };
         }
 
         if spec.name == "mcp_call" {
             return match mcp_tools::mcp_call_tool(&effective_call.input, context).await {
-                Ok(result) => Ok(result),
+                Ok(result) => Ok(append_follow_up_user_blocks(result, &follow_up_user_blocks)),
                 Err(error) => Ok(ToolResult {
                     content: error.to_string(),
                     is_error: true,
                     content_blocks: Vec::new(),
+                    follow_up_user_blocks: follow_up_user_blocks.clone(),
                 }),
             };
         }
@@ -1384,11 +1430,12 @@ pub async fn execute_tool_call(
             return match mcp_tools::read_mcp_resource_tool(&call.id, &effective_call.input, context)
                 .await
             {
-                Ok(result) => Ok(result),
+                Ok(result) => Ok(append_follow_up_user_blocks(result, &follow_up_user_blocks)),
                 Err(error) => Ok(ToolResult {
                     content: error.to_string(),
                     is_error: true,
                     content_blocks: Vec::new(),
+                    follow_up_user_blocks: follow_up_user_blocks.clone(),
                 }),
             };
         }
@@ -1401,11 +1448,12 @@ pub async fn execute_tool_call(
             )
             .await
             {
-                Ok(result) => Ok(result),
+                Ok(result) => Ok(append_follow_up_user_blocks(result, &follow_up_user_blocks)),
                 Err(error) => Ok(ToolResult {
                     content: error.to_string(),
                     is_error: true,
                     content_blocks: Vec::new(),
+                    follow_up_user_blocks: follow_up_user_blocks.clone(),
                 }),
             };
         }
@@ -1490,11 +1538,13 @@ pub async fn execute_tool_call(
                 content,
                 is_error: false,
                 content_blocks: Vec::new(),
+                follow_up_user_blocks: follow_up_user_blocks.clone(),
             }),
             Err(error) => Ok(ToolResult {
                 content: error.to_string(),
                 is_error: true,
                 content_blocks: Vec::new(),
+                follow_up_user_blocks: follow_up_user_blocks.clone(),
             }),
         }
     })
@@ -1713,6 +1763,9 @@ while True:
     struct RecordingPermissionBroker {
         allow: bool,
         requests: Arc<Mutex<Vec<PermissionRequest>>>,
+        allow_feedback: Option<String>,
+        allow_content_blocks: Vec<Value>,
+        deny_content_blocks: Vec<Value>,
     }
 
     #[async_trait::async_trait]
@@ -1723,9 +1776,14 @@ while True:
                 .expect("permission requests")
                 .push(request);
             if self.allow {
-                PermissionDecision::allow()
+                let mut decision = PermissionDecision::allow();
+                decision.feedback = self.allow_feedback.clone();
+                decision.content_blocks = self.allow_content_blocks.clone();
+                decision
             } else {
-                PermissionDecision::deny("recorded denial")
+                let mut decision = PermissionDecision::deny("recorded denial");
+                decision.content_blocks = self.deny_content_blocks.clone();
+                decision
             }
         }
     }
@@ -2057,6 +2115,9 @@ while True:
         let broker = RecordingPermissionBroker {
             allow: false,
             requests: requests.clone(),
+            allow_feedback: None,
+            allow_content_blocks: Vec::new(),
+            deny_content_blocks: Vec::new(),
         };
 
         let result = execute_tool_call(
@@ -2086,6 +2147,99 @@ while True:
     }
 
     #[tokio::test]
+    async fn denied_permission_preserves_follow_up_user_blocks() {
+        let tempdir = tempdir().expect("tempdir");
+        let workspace = tempdir.path().join("workspace");
+        let outside = tempdir.path().join("outside.txt");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        std::fs::write(&outside, "secret").expect("outside file");
+        let context = ToolExecutionContext {
+            cwd: workspace,
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let deny_blocks = vec![json!({
+            "type": "text",
+            "text": "Use an approved path instead.",
+        })];
+        let broker = RecordingPermissionBroker {
+            allow: false,
+            requests,
+            allow_feedback: None,
+            allow_content_blocks: Vec::new(),
+            deny_content_blocks: deny_blocks.clone(),
+        };
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "read-outside-denied".to_owned(),
+                name: "read_file".to_owned(),
+                input: json!({"path": outside.to_string_lossy().to_string()}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("tool call should return result");
+
+        assert!(result.is_error);
+        assert_eq!(result.follow_up_user_blocks, deny_blocks);
+    }
+
+    #[tokio::test]
+    async fn allowed_permission_appends_feedback_and_content_blocks() {
+        let tempdir = tempdir().expect("tempdir");
+        let workspace = tempdir.path().join("workspace");
+        let outside = tempdir.path().join("outside.txt");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        std::fs::write(&outside, "secret").expect("outside file");
+        let context = ToolExecutionContext {
+            cwd: workspace,
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let extra_blocks = vec![json!({
+            "type": "text",
+            "text": "Extra approval detail.",
+        })];
+        let broker = RecordingPermissionBroker {
+            allow: true,
+            requests,
+            allow_feedback: Some("Proceed with the approved path.".to_owned()),
+            allow_content_blocks: extra_blocks.clone(),
+            deny_content_blocks: Vec::new(),
+        };
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "read-outside-allowed".to_owned(),
+                name: "read_file".to_owned(),
+                input: json!({"path": outside.to_string_lossy().to_string()}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("tool call should return result");
+
+        assert!(!result.is_error);
+        assert!(result.content.contains("secret"));
+        assert_eq!(result.follow_up_user_blocks.len(), 2);
+        assert_eq!(result.follow_up_user_blocks[0]["type"], "text");
+        assert_eq!(
+            result.follow_up_user_blocks[0]["text"],
+            "Proceed with the approved path."
+        );
+        assert_eq!(result.follow_up_user_blocks[1], extra_blocks[0]);
+    }
+
+    #[tokio::test]
     async fn write_file_symlink_parent_escape_requires_explicit_permission() {
         let tempdir = tempdir().expect("tempdir");
         let workspace = tempdir.path().join("workspace");
@@ -2108,6 +2262,9 @@ while True:
         let broker = RecordingPermissionBroker {
             allow: false,
             requests: requests.clone(),
+            allow_feedback: None,
+            allow_content_blocks: Vec::new(),
+            deny_content_blocks: Vec::new(),
         };
 
         let result = execute_tool_call(
@@ -2412,6 +2569,9 @@ while True:
         let broker = RecordingPermissionBroker {
             allow: false,
             requests: requests.clone(),
+            allow_feedback: None,
+            allow_content_blocks: Vec::new(),
+            deny_content_blocks: Vec::new(),
         };
 
         let result = execute_tool_call(
@@ -2542,6 +2702,9 @@ while True:
         let broker = RecordingPermissionBroker {
             allow: false,
             requests: requests.clone(),
+            allow_feedback: None,
+            allow_content_blocks: Vec::new(),
+            deny_content_blocks: Vec::new(),
         };
 
         let result = execute_tool_call(

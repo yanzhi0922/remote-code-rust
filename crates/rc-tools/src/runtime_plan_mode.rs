@@ -499,6 +499,20 @@ impl PermissionBroker for RuntimePermissionBroker {
     fn layered_rules(&self) -> Vec<rc_permissions::SourceAwarePermissionRule> {
         self.inner.layered_rules()
     }
+
+    fn matching_rule(
+        &self,
+        request: &PermissionRequest,
+    ) -> Option<rc_permissions::SourceAwarePermissionRule> {
+        self.inner.matching_rule(request)
+    }
+
+    fn matching_rule_action(
+        &self,
+        request: &PermissionRequest,
+    ) -> Option<rc_permissions::RuleAction> {
+        self.inner.matching_rule_action(request)
+    }
 }
 
 pub struct ActivePlanModeRuntime;
