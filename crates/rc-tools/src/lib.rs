@@ -672,6 +672,7 @@ impl ToolSpec {
             "bash_command" | "powershell" => ToolResultSizePolicy::finite(30_000),
             "grep" => ToolResultSizePolicy::finite(20_000),
             "mcp_auth" => ToolResultSizePolicy::finite(10_000),
+            "read_mcp_resource" => ToolResultSizePolicy::finite(100_000),
             _ => ToolResultSizePolicy::default(),
         }
     }
@@ -1360,7 +1361,7 @@ pub async fn execute_tool_call(
         }
 
         if spec.name == "read_mcp_resource" {
-            return match mcp_tools::read_mcp_resource_tool(&call.input, context).await {
+            return match mcp_tools::read_mcp_resource_tool(&call.id, &call.input, context).await {
                 Ok(result) => Ok(result),
                 Err(error) => Ok(ToolResult {
                     content: error.to_string(),
@@ -1526,6 +1527,7 @@ mod tests {
         runtime_visible_provider_tool_specs_with_discovered_tools,
         with_runtime_agent_prompt_context_provider, with_tool_runtime_policy_overlay,
     };
+    use crate::specs;
     use once_cell::sync::Lazy;
     use rc_core::{
         HookEvent, PermissionMode, ProviderResponse, SubAgentCompletion, SubAgentExecutionRequest,
@@ -1645,6 +1647,10 @@ while True:
             .iter()
             .find(|spec| spec.name == "grep")
             .expect("grep spec");
+        let read_mcp_resource = specs::mcp_resource_tool_specs()
+            .into_iter()
+            .find(|spec| spec.name == "read_mcp_resource")
+            .expect("read_mcp_resource spec");
         let skip_tool_names = runtime_tool_result_persistence_skip_names();
 
         assert_eq!(
@@ -1662,6 +1668,10 @@ while True:
         assert_eq!(
             grep.tool_result_size_policy(),
             ToolResultSizePolicy::Finite(20_000)
+        );
+        assert_eq!(
+            read_mcp_resource.tool_result_size_policy(),
+            ToolResultSizePolicy::Finite(100_000)
         );
         assert!(skip_tool_names.contains("read_file"));
         assert!(!skip_tool_names.contains("bash_command"));
@@ -4913,7 +4923,7 @@ while True:
         assert!(
             result
                 .content
-                .contains("MCP runtime inventory is not configured"),
+                .contains("is not available in the current runtime inventory"),
             "unexpected error: {}",
             result.content
         );

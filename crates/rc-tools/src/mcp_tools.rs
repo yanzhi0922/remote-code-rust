@@ -16,14 +16,18 @@ use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use super::{
-    ToolExecutionContext, current_runtime_agent_prompt_context, current_tool_runtime_policy,
+    ToolExecutionContext, ToolResultSizePolicy, current_runtime_agent_prompt_context,
+    current_tool_runtime_policy,
 };
 use crate::mcp_output_storage::{
     McpResultFormat, get_binary_blob_saved_message, get_format_description,
-    get_large_output_instructions, max_mcp_output_chars, persist_binary_content,
+    get_large_output_instructions, max_mcp_output_chars, max_mcp_output_tokens,
+    persist_binary_content,
 };
 use crate::mcp_runtime::resolve_runtime_policy_mcp_server;
-use crate::tool_result_storage::persist_tool_result_text;
+use crate::tool_result_storage::{persist_tool_result_text, process_tool_result_text};
+
+const MCP_RESOURCE_TOOL_MAX_RESULT_SIZE_CHARS: usize = 100_000;
 
 pub(crate) fn mcp_auth_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
     let server = input["server"]
@@ -129,6 +133,7 @@ pub(crate) async fn list_mcp_resources_tool(
 }
 
 pub(crate) async fn read_mcp_resource_tool(
+    tool_use_id: &str,
     input: &Value,
     context: &ToolExecutionContext,
 ) -> Result<ToolResult> {
@@ -151,13 +156,17 @@ pub(crate) async fn read_mcp_resource_tool(
                 server_name,
                 tool_results_dir.as_deref(),
             );
-            Ok(tool_result_from_text(
-                json!({
-                    "contents": payload,
-                })
-                .to_string(),
-                false,
-            ))
+            let content = json!({
+                "contents": payload,
+            })
+            .to_string();
+            let processed = process_tool_result_text(
+                &content,
+                tool_use_id,
+                tool_results_dir.as_deref(),
+                ToolResultSizePolicy::finite(MCP_RESOURCE_TOOL_MAX_RESULT_SIZE_CHARS),
+            )?;
+            Ok(tool_result_from_text(processed, false))
         }
         Err(error) => Err(error.into()),
     }
@@ -217,7 +226,7 @@ pub(crate) fn transform_mcp_tool_result(
     }
 
     if let Some(structured_content) = &result.structured_content {
-        let content = serde_json::to_string_pretty(structured_content)?;
+        let content = serde_json::to_string(structured_content)?;
         return handle_large_mcp_output(McpLargeOutput {
             is_error: result.is_error,
             server_name,
@@ -439,10 +448,7 @@ fn transform_mcp_content_block(
             }
             vec![text_block(text)]
         }
-        _ => match serde_json::to_string_pretty(&content.fields) {
-            Ok(serialized) => vec![text_block(serialized)],
-            Err(_) => Vec::new(),
-        },
+        _ => Vec::new(),
     }
 }
 
@@ -565,9 +571,10 @@ fn mcp_result_size_estimate(content: &str, content_blocks: &[Value]) -> usize {
             if let Some(text) = block_text(block) {
                 return text.chars().count();
             }
-            block_image_data(block)
-                .map(|data| data.len())
-                .unwrap_or_else(|| block.to_string().len())
+            if block_image_data(block).is_some() {
+                return image_token_estimate_chars();
+            }
+            block.to_string().len()
         })
         .sum()
 }
@@ -596,13 +603,17 @@ fn truncate_mcp_content_blocks(blocks: &[Value]) -> Vec<Value> {
                 result.push(text_block(truncated.to_owned()));
                 current_chars += truncated.chars().count();
             }
-            if truncated.len() < text.len() {
+            if truncated.chars().count() < text.chars().count() {
                 break;
             }
             continue;
         }
 
-        let image_size = block_image_data(block).map(str::len).unwrap_or(1_600 * 4);
+        let image_size = if block_image_data(block).is_some() {
+            image_token_estimate_chars()
+        } else {
+            0
+        };
         if current_chars + image_size > max_chars {
             break;
         }
@@ -617,7 +628,7 @@ fn truncate_mcp_content_blocks(blocks: &[Value]) -> Vec<Value> {
 fn mcp_truncation_message() -> String {
     format!(
         "\n\n[OUTPUT TRUNCATED - exceeded {} token limit]\n\nThe tool output was truncated. If this MCP server provides pagination or filtering tools, use them to retrieve specific portions of the data. If pagination is not available, inform the user that you are working with truncated output and results may be incomplete.",
-        25_000
+        max_mcp_output_tokens()
     )
 }
 
@@ -739,6 +750,10 @@ fn block_image_data(block: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
+fn image_token_estimate_chars() -> usize {
+    1_600 * 4
+}
+
 fn char_boundary_prefix(content: &str, max_chars: usize) -> &str {
     if content.chars().count() <= max_chars {
         return content;
@@ -804,7 +819,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        flatten_text_blocks, runtime_tool_results_dir, text_block, transform_mcp_tool_result,
+        MCP_RESOURCE_TOOL_MAX_RESULT_SIZE_CHARS, ToolResultSizePolicy, flatten_text_blocks,
+        process_tool_result_text, runtime_tool_results_dir, text_block, transform_mcp_tool_result,
         transform_read_mcp_resource_contents,
     };
     use crate::{
@@ -838,6 +854,33 @@ mod tests {
                 .expect("saved text")
                 .contains("Binary content")
         );
+    }
+
+    #[test]
+    fn read_mcp_resource_large_text_is_persisted_like_builtin_tool_result() {
+        let temp = tempdir().expect("tempdir");
+        let contents = vec![McpResourceContent {
+            uri: "test://large".to_owned(),
+            mime_type: Some("text/plain".to_owned()),
+            text: Some("x".repeat(120_000)),
+            blob: None,
+        }];
+        let content = json!({
+            "contents": transform_read_mcp_resource_contents(&contents, "demo", Some(temp.path())),
+        })
+        .to_string();
+
+        let processed = process_tool_result_text(
+            &content,
+            "call-large-resource",
+            Some(temp.path()),
+            ToolResultSizePolicy::finite(MCP_RESOURCE_TOOL_MAX_RESULT_SIZE_CHARS),
+        )
+        .expect("process");
+
+        assert!(processed.starts_with("<persisted-output>"));
+        assert!(processed.contains("Full output saved to:"));
+        assert!(temp.path().join("call-large-resource.txt").exists());
     }
 
     #[test]
@@ -914,6 +957,46 @@ mod tests {
             transform_mcp_tool_result(&result, "demo", "resolve", Some(temp.path())).expect("ok");
 
         assert_eq!(processed.content, "legacy-result");
+        assert!(processed.content_blocks.is_empty());
+    }
+
+    #[test]
+    fn transform_mcp_tool_result_drops_unknown_content_blocks_like_research() {
+        let temp = tempdir().expect("tempdir");
+        let result = McpToolCallResult {
+            tool_result: None,
+            content: vec![McpToolCallContent {
+                kind: "unknown_future_block".to_owned(),
+                fields: BTreeMap::from([(
+                    "payload".to_owned(),
+                    Value::String("must not leak into context".to_owned()),
+                )]),
+            }],
+            structured_content: None,
+            is_error: false,
+        };
+
+        let processed =
+            transform_mcp_tool_result(&result, "demo", "future", Some(temp.path())).expect("ok");
+
+        assert!(processed.content.is_empty());
+        assert!(processed.content_blocks.is_empty());
+    }
+
+    #[test]
+    fn structured_mcp_content_uses_compact_json_stringify() {
+        let temp = tempdir().expect("tempdir");
+        let result = McpToolCallResult {
+            tool_result: None,
+            content: Vec::new(),
+            structured_content: Some(json!({"payload": {"id": 1, "name": "demo"}})),
+            is_error: false,
+        };
+
+        let processed = transform_mcp_tool_result(&result, "demo", "structured", Some(temp.path()))
+            .expect("ok");
+
+        assert_eq!(processed.content, r#"{"payload":{"id":1,"name":"demo"}}"#);
         assert!(processed.content_blocks.is_empty());
     }
 

@@ -23,8 +23,21 @@ pub struct PersistedBinaryContent {
 }
 
 #[must_use]
+pub fn max_mcp_output_tokens() -> usize {
+    parse_max_mcp_output_tokens(std::env::var("MAX_MCP_OUTPUT_TOKENS").ok().as_deref())
+        .unwrap_or(DEFAULT_MAX_MCP_OUTPUT_TOKENS)
+}
+
+#[must_use]
 pub fn max_mcp_output_chars() -> usize {
-    DEFAULT_MAX_MCP_OUTPUT_TOKENS * BYTES_PER_TOKEN_ESTIMATE
+    max_mcp_output_tokens() * BYTES_PER_TOKEN_ESTIMATE
+}
+
+#[must_use]
+fn parse_max_mcp_output_tokens(value: Option<&str>) -> Option<usize> {
+    value
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
 }
 
 #[must_use]
@@ -204,9 +217,10 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        McpResultFormat, extension_for_mime_type, get_binary_blob_saved_message,
-        get_format_description, get_large_output_instructions, is_binary_content_type,
-        max_mcp_output_chars, persist_binary_content,
+        BYTES_PER_TOKEN_ESTIMATE, DEFAULT_MAX_MCP_OUTPUT_TOKENS, McpResultFormat,
+        extension_for_mime_type, get_binary_blob_saved_message, get_format_description,
+        get_large_output_instructions, is_binary_content_type, parse_max_mcp_output_tokens,
+        persist_binary_content,
     };
 
     #[test]
@@ -270,7 +284,20 @@ mod tests {
             get_format_description(McpResultFormat::StructuredContent, Some("{id: number}")),
             "JSON with schema: {id: number}"
         );
-        assert_eq!(max_mcp_output_chars(), 100_000);
+    }
+
+    #[test]
+    fn max_mcp_output_tokens_parser_matches_research_env_override_rules() {
+        assert_eq!(parse_max_mcp_output_tokens(Some("123")), Some(123));
+        assert_eq!(parse_max_mcp_output_tokens(Some(" 456 ")), Some(456));
+        assert_eq!(parse_max_mcp_output_tokens(Some("0")), None);
+        assert_eq!(parse_max_mcp_output_tokens(Some("-1")), None);
+        assert_eq!(parse_max_mcp_output_tokens(Some("not-a-number")), None);
+        assert_eq!(parse_max_mcp_output_tokens(None), None);
+        assert_eq!(
+            DEFAULT_MAX_MCP_OUTPUT_TOKENS * BYTES_PER_TOKEN_ESTIMATE,
+            100_000
+        );
     }
 
     #[test]
