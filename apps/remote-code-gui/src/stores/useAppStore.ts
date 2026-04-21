@@ -719,7 +719,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   resolvePermission: async (allowed: boolean) => {
     const pendingPermission = get().pendingPermission;
     if (!pendingPermission) return;
-    await tauri.resolvePermissionRequest(pendingPermission.request_id, allowed);
+    await tauri.resolvePermissionRequest(pendingPermission.request_id, { allowed });
     set({ pendingPermission: null });
   },
 }));

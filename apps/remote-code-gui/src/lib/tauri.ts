@@ -231,8 +231,20 @@ export function switchProfile(
   });
 }
 
-export function resolvePermissionRequest(requestId: string, allowed: boolean): Promise<boolean> {
-  return invoke<boolean>('resolve_permission_request', { requestId, allowed });
+export interface PermissionResolutionRequest {
+  allowed: boolean;
+  message?: string | null;
+  updated_input?: unknown;
+  permission_updates?: unknown[];
+  feedback?: string | null;
+  content_blocks?: unknown[];
+}
+
+export function resolvePermissionRequest(
+  requestId: string,
+  resolution: PermissionResolutionRequest,
+): Promise<boolean> {
+  return invoke<boolean>('resolve_permission_request', { requestId, ...resolution });
 }
 
 export function onPermissionRequest(

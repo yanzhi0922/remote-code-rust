@@ -10,6 +10,7 @@ use rc_core::SessionState;
 pub use rc_engine_events::{
     DaemonPresenceState, MessageRole, RuntimeEventCreateRequest, RuntimeEventDetail,
 };
+use rc_permissions::PermissionUpdate;
 use rc_ui_bridge::{UiRuntimeStatusSnapshot, UiTaskNode};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -31,6 +32,14 @@ pub enum ProtocolInput {
         allow: bool,
         /// Optional message.
         message: Option<String>,
+        /// Optional updated tool input supplied by the approver.
+        updated_input: Option<Value>,
+        /// Optional session/user permission updates supplied by the approver.
+        permission_updates: Vec<PermissionUpdate>,
+        /// Optional free-form approval/rejection feedback.
+        feedback: Option<String>,
+        /// Optional provider-facing content blocks attached to the decision.
+        content_blocks: Vec<Value>,
     },
     /// Interrupt signal.
     Interrupt,
@@ -664,20 +673,45 @@ pub fn parse_input_line(line: &str) -> Option<ProtocolInput> {
         "control_response" => {
             let response = value.get("response")?;
             let request_id = response.get("request_id")?.as_str()?.to_owned();
-            let behavior = response
-                .get("response")
+            let response_body = response.get("response");
+            let behavior = response_body
                 .and_then(|value| value.get("behavior"))
                 .and_then(Value::as_str)
                 .unwrap_or("deny");
-            let message = response
-                .get("response")
+            let message = response_body
                 .and_then(|value| value.get("message"))
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned);
+            let updated_input = response_body
+                .and_then(|value| value.get("updatedInput"))
+                .cloned();
+            let permission_updates = response_body
+                .and_then(|value| value.get("permissionUpdates"))
+                .and_then(|value| {
+                    serde_json::from_value::<Vec<PermissionUpdate>>(value.clone()).ok()
+                })
+                .unwrap_or_default();
+            let feedback = response_body
+                .and_then(|value| {
+                    value
+                        .get("feedback")
+                        .or_else(|| value.get("acceptFeedback"))
+                })
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            let content_blocks = response_body
+                .and_then(|value| value.get("contentBlocks"))
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
             Some(ProtocolInput::ControlResponse {
                 request_id,
                 allow: behavior.eq_ignore_ascii_case("allow"),
                 message,
+                updated_input,
+                permission_updates,
+                feedback,
+                content_blocks,
             })
         }
         "control_request" => {
@@ -1073,17 +1107,25 @@ mod tests {
 
     #[test]
     fn parse_input_line_control_response_allow() {
-        let input = r#"{"type":"control_response","response":{"request_id":"req-1","response":{"behavior":"allow","message":"ok"}}}"#;
+        let input = r#"{"type":"control_response","response":{"request_id":"req-1","response":{"behavior":"allow","message":"ok","updatedInput":{"plan":"edited"},"permissionUpdates":[{"type":"setMode","destination":"session","mode":"acceptEdits"}],"feedback":"ship it","contentBlocks":[{"type":"text","text":"extra"}]}}}"#;
         let result = parse_input_line(input).expect("should parse control response");
         match result {
             ProtocolInput::ControlResponse {
                 request_id,
                 allow,
                 message,
+                updated_input,
+                permission_updates,
+                feedback,
+                content_blocks,
             } => {
                 assert_eq!(request_id, "req-1");
                 assert!(allow);
                 assert_eq!(message.as_deref(), Some("ok"));
+                assert_eq!(updated_input, Some(json!({"plan":"edited"})));
+                assert_eq!(permission_updates.len(), 1);
+                assert_eq!(feedback.as_deref(), Some("ship it"));
+                assert_eq!(content_blocks.len(), 1);
             }
             _ => panic!("expected ControlResponse variant"),
         }

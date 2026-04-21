@@ -481,6 +481,13 @@ impl PermissionBroker for RuntimePermissionBroker {
         self.inner.clear_session_rules()
     }
 
+    fn apply_permission_updates(
+        &self,
+        updates: &[rc_permissions::PermissionUpdate],
+    ) -> Result<usize> {
+        self.inner.apply_permission_updates(updates)
+    }
+
     fn mode(&self) -> Option<PermissionMode> {
         Some(self.controller.current_mode())
     }

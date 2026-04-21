@@ -57,7 +57,8 @@ use rc_core::{
     ToolResult,
 };
 use rc_permissions::{
-    PermissionBroker, PermissionClass, PermissionRequest, auto_allows, classify_tool,
+    PermissionBroker, PermissionClass, PermissionDecision, PermissionRequest, auto_allows,
+    classify_tool,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1142,6 +1143,20 @@ fn filesystem_permission_request(
     }
 }
 
+fn apply_permission_decision_effects(
+    broker: &dyn PermissionBroker,
+    decision: &PermissionDecision,
+    effective_call: &mut ToolCall,
+) -> Result<()> {
+    if let Some(updated_input) = decision.updated_input.clone() {
+        effective_call.input = updated_input;
+    }
+    if !decision.permission_updates.is_empty() {
+        let _ = broker.apply_permission_updates(&decision.permission_updates)?;
+    }
+    Ok(())
+}
+
 fn session_claude_folder_allow_rule(rule: &rc_permissions::SourceAwarePermissionRule) -> bool {
     if rule.action != rc_permissions::RuleAction::Allow
         || rule.source != rc_permissions::RuleSource::Session
@@ -1199,6 +1214,7 @@ pub async fn execute_tool_call(
     context: &ToolExecutionContext,
     broker: &dyn PermissionBroker,
 ) -> Result<ToolResult> {
+    let mut effective_call = call.clone();
     let spec = runtime_provider_tool_spec(&call.name)
         .await
         .unwrap_or_else(|| ToolSpec {
@@ -1269,6 +1285,7 @@ pub async fn execute_tool_call(
                     content_blocks: Vec::new(),
                 });
             }
+            apply_permission_decision_effects(broker, &decision, &mut effective_call)?;
             true
         } else {
             false
@@ -1293,6 +1310,7 @@ pub async fn execute_tool_call(
                     content_blocks: Vec::new(),
                 });
             }
+            apply_permission_decision_effects(broker, &decision, &mut effective_call)?;
         } else if matches!(
             filesystem_rule_action,
             Some(rc_permissions::RuleAction::Allow)
@@ -1317,6 +1335,7 @@ pub async fn execute_tool_call(
                     content_blocks: Vec::new(),
                 });
             }
+            apply_permission_decision_effects(broker, &decision, &mut effective_call)?;
         } else if !explicit_approval_handled
             && (permission.requires_permission || filesystem_precheck.is_some())
         {
@@ -1333,13 +1352,14 @@ pub async fn execute_tool_call(
                         content_blocks: Vec::new(),
                     });
                 }
+                apply_permission_decision_effects(broker, &decision, &mut effective_call)?;
             }
         }
     }
 
     file_ops::with_filesystem_permission_confirmed(filesystem_precheck.is_some(), async {
         if spec.name == "tool_search" {
-            return match system::tool_search_tool(&call.input).await {
+            return match system::tool_search_tool(&effective_call.input).await {
                 Ok(result) => Ok(result),
                 Err(error) => Ok(ToolResult {
                     content: error.to_string(),
@@ -1350,7 +1370,7 @@ pub async fn execute_tool_call(
         }
 
         if spec.name == "mcp_call" {
-            return match mcp_tools::mcp_call_tool(&call.input, context).await {
+            return match mcp_tools::mcp_call_tool(&effective_call.input, context).await {
                 Ok(result) => Ok(result),
                 Err(error) => Ok(ToolResult {
                     content: error.to_string(),
@@ -1361,18 +1381,7 @@ pub async fn execute_tool_call(
         }
 
         if spec.name == "read_mcp_resource" {
-            return match mcp_tools::read_mcp_resource_tool(&call.id, &call.input, context).await {
-                Ok(result) => Ok(result),
-                Err(error) => Ok(ToolResult {
-                    content: error.to_string(),
-                    is_error: true,
-                    content_blocks: Vec::new(),
-                }),
-            };
-        }
-
-        if call.name.starts_with("mcp__") {
-            return match mcp_catalog::execute_runtime_mcp_tool(&call.name, &call.input, context)
+            return match mcp_tools::read_mcp_resource_tool(&call.id, &effective_call.input, context)
                 .await
             {
                 Ok(result) => Ok(result),
@@ -1384,72 +1393,95 @@ pub async fn execute_tool_call(
             };
         }
 
+        if effective_call.name.starts_with("mcp__") {
+            return match mcp_catalog::execute_runtime_mcp_tool(
+                &effective_call.name,
+                &effective_call.input,
+                context,
+            )
+            .await
+            {
+                Ok(result) => Ok(result),
+                Err(error) => Ok(ToolResult {
+                    content: error.to_string(),
+                    is_error: true,
+                    content_blocks: Vec::new(),
+                }),
+            };
+        }
+
         let result = match spec.name.as_str() {
-            "list_directory" => file_ops::list_directory(&call.input, context),
-            "read_file" => file_ops::read_file(&call.input, context),
-            "search_text" => file_ops::search_text(&call.input, context),
-            "write_file" => file_ops::write_file(&call.input, context),
-            "replace_in_file" => file_ops::replace_in_file(&call.input, context),
-            "edit_file" => file_ops::edit_file(&call.input, context),
-            "bash_command" => command::bash_command(&call.input, context).await,
-            "glob" => file_ops::glob_files(&call.input, context),
-            "grep" => file_ops::grep_files(&call.input, context),
-            "web_fetch" => web::web_fetch(&call.input, context).await,
-            "ask_user" => misc::ask_user(&call.input, context),
-            "todo_write" => system::todo_write(&call.input, context),
-            "config_read" => system::config_read(&call.input, context),
-            "agent" => agent::agent_tool(&call.input, context).await,
-            "web_search" => web::web_search(&call.input, context).await,
+            "list_directory" => file_ops::list_directory(&effective_call.input, context),
+            "read_file" => file_ops::read_file(&effective_call.input, context),
+            "search_text" => file_ops::search_text(&effective_call.input, context),
+            "write_file" => file_ops::write_file(&effective_call.input, context),
+            "replace_in_file" => file_ops::replace_in_file(&effective_call.input, context),
+            "edit_file" => file_ops::edit_file(&effective_call.input, context),
+            "bash_command" => command::bash_command(&effective_call.input, context).await,
+            "glob" => file_ops::glob_files(&effective_call.input, context),
+            "grep" => file_ops::grep_files(&effective_call.input, context),
+            "web_fetch" => web::web_fetch(&effective_call.input, context).await,
+            "ask_user" => misc::ask_user(&effective_call.input, context),
+            "todo_write" => system::todo_write(&effective_call.input, context),
+            "config_read" => system::config_read(&effective_call.input, context),
+            "agent" => agent::agent_tool(&effective_call.input, context).await,
+            "web_search" => web::web_search(&effective_call.input, context).await,
             // ── Phase 2 tools ──────────────────────────────────────────────
-            "lsp" => misc::lsp_tool(&call.input, context).await,
-            "task_create" => tasks::task_create(&call.input),
-            "task_get" => tasks::task_get(&call.input),
-            "task_list" => tasks::task_list(&call.input),
-            "task_update" => tasks::task_update(&call.input),
-            "notebook_edit" => misc::notebook_edit(&call.input, context),
-            "skill_discover" => misc::skill_discover(&call.input, context),
-            "send_message" => send_message::send_message(&call.input, context).await,
-            "enter_plan_mode" => plan_mode::enter_plan_mode(&call.input, context),
-            "exit_plan_mode" => plan_mode::exit_plan_mode(&call.input, context),
-            "sleep" => system::sleep_tool(&call.input).await,
-            "snip" => system::snip_tool(&call.input, context),
+            "lsp" => misc::lsp_tool(&effective_call.input, context).await,
+            "task_create" => tasks::task_create(&effective_call.input),
+            "task_get" => tasks::task_get(&effective_call.input),
+            "task_list" => tasks::task_list(&effective_call.input),
+            "task_update" => tasks::task_update(&effective_call.input),
+            "notebook_edit" => misc::notebook_edit(&effective_call.input, context),
+            "skill_discover" => misc::skill_discover(&effective_call.input, context),
+            "send_message" => send_message::send_message(&effective_call.input, context).await,
+            "enter_plan_mode" => plan_mode::enter_plan_mode(&effective_call.input, context),
+            "exit_plan_mode" => plan_mode::exit_plan_mode(&effective_call.input, context),
+            "sleep" => system::sleep_tool(&effective_call.input).await,
+            "snip" => system::snip_tool(&effective_call.input, context),
             // ── Phase 3 tools ──────────────────────────────────────────────
-            "memory_read" => memory_tools::memory_read_tool(&call.input, context),
-            "memory_write" => memory_tools::memory_write_tool(&call.input, context),
-            "team_create" => misc::team_create_tool(&call.input, context).await,
-            "team_status" => misc::team_status_tool(&call.input).await,
-            "web_browser" => web::web_browser_tool(&call.input, context).await,
-            "verify_plan" => system::verify_plan_tool(&call.input),
-            "terminal_capture" => system::terminal_capture_tool(&call.input, context).await,
+            "memory_read" => memory_tools::memory_read_tool(&effective_call.input, context),
+            "memory_write" => memory_tools::memory_write_tool(&effective_call.input, context),
+            "team_create" => misc::team_create_tool(&effective_call.input, context).await,
+            "team_status" => misc::team_status_tool(&effective_call.input).await,
+            "web_browser" => web::web_browser_tool(&effective_call.input, context).await,
+            "verify_plan" => system::verify_plan_tool(&effective_call.input),
+            "terminal_capture" => {
+                system::terminal_capture_tool(&effective_call.input, context).await
+            }
             // ── Phase 4: Upstream gap-fill tools ────────────────────────────
-            "powershell" => command::powershell_tool(&call.input, context).await,
-            "repl" => command::repl_tool(&call.input, context).await,
-            "monitor" => system::monitor_tool(&call.input),
-            "schedule_cron" => workflow::schedule_cron_tool(&call.input, context),
-            "remote_trigger" => misc::remote_trigger_tool(&call.input).await,
-            "workflow" => workflow::workflow_tool(&call.input, context),
+            "powershell" => command::powershell_tool(&effective_call.input, context).await,
+            "repl" => command::repl_tool(&effective_call.input, context).await,
+            "monitor" => system::monitor_tool(&effective_call.input),
+            "schedule_cron" => workflow::schedule_cron_tool(&effective_call.input, context),
+            "remote_trigger" => misc::remote_trigger_tool(&effective_call.input).await,
+            "workflow" => workflow::workflow_tool(&effective_call.input, context),
             "suggest_pr" => git::suggest_pr_tool(context),
-            "enter_worktree" => git::enter_worktree_tool(&call.input, context),
-            "exit_worktree" => git::exit_worktree_tool(&call.input, context),
+            "enter_worktree" => git::enter_worktree_tool(&effective_call.input, context),
+            "exit_worktree" => git::exit_worktree_tool(&effective_call.input, context),
             "list_worktrees" => git::list_worktrees_tool(context),
-            "brief" => system::brief_tool(&call.input),
-            "ctx_inspect" => system::ctx_inspect_tool(&call.input).await,
-            "list_peers" => system::list_peers_tool(&call.input).await,
-            "tungsten" => misc::tungsten_tool(&call.input, context).await,
-            "overflow_test" => misc::overflow_test_tool(&call.input),
-            "synthetic_output" => misc::synthetic_output_tool(&call.input),
-            "mcp_auth" => mcp_tools::mcp_auth_tool(&call.input, context),
-            "list_mcp_resources" => mcp_tools::list_mcp_resources_tool(&call.input, context).await,
-            "skill_execute" => misc::skill_execute_tool(&call.input, context),
-            "voice_input" => misc::voice_input_tool(&call.input),
-            "daemon" => workflow::daemon_tool(&call.input, context),
+            "brief" => system::brief_tool(&effective_call.input),
+            "ctx_inspect" => system::ctx_inspect_tool(&effective_call.input).await,
+            "list_peers" => system::list_peers_tool(&effective_call.input).await,
+            "tungsten" => misc::tungsten_tool(&effective_call.input, context).await,
+            "overflow_test" => misc::overflow_test_tool(&effective_call.input),
+            "synthetic_output" => misc::synthetic_output_tool(&effective_call.input),
+            "mcp_auth" => mcp_tools::mcp_auth_tool(&effective_call.input, context),
+            "list_mcp_resources" => {
+                mcp_tools::list_mcp_resources_tool(&effective_call.input, context).await
+            }
+            "skill_execute" => misc::skill_execute_tool(&effective_call.input, context),
+            "voice_input" => misc::voice_input_tool(&effective_call.input),
+            "daemon" => workflow::daemon_tool(&effective_call.input, context),
             // ── Phase 9: New dedicated tool modules ────────────────────────────
-            "discover_skills" => discover_skills::discover_skills(&call.input, context),
-            "team_delete" => team_tools::team_delete(&call.input, context),
-            "team_list" => team_tools::team_list(&call.input, context),
-            "broadcast_message" => send_message::broadcast_message(&call.input, context).await,
-            "review_artifact" => review_artifact::review_artifact(&call.input, context),
-            "send_user_file" => send_user_file::send_user_file(&call.input, context),
+            "discover_skills" => discover_skills::discover_skills(&effective_call.input, context),
+            "team_delete" => team_tools::team_delete(&effective_call.input, context),
+            "team_list" => team_tools::team_list(&effective_call.input, context),
+            "broadcast_message" => {
+                send_message::broadcast_message(&effective_call.input, context).await
+            }
+            "review_artifact" => review_artifact::review_artifact(&effective_call.input, context),
+            "send_user_file" => send_user_file::send_user_file(&effective_call.input, context),
             _ => Err(anyhow!("unsupported tool {}", spec.name)),
         };
 

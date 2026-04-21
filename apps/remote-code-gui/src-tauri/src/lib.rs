@@ -339,6 +339,11 @@ struct PermissionRequestDto {
 struct PermissionDecisionDto {
     request_id: String,
     allowed: bool,
+    message: Option<String>,
+    updated_input: Option<serde_json::Value>,
+    permission_updates: Vec<rc_permissions::PermissionUpdate>,
+    feedback: Option<String>,
+    content_blocks: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -751,7 +756,7 @@ struct RuntimeState {
 
 struct AppState {
     runtime: Mutex<RuntimeState>,
-    pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
+    pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
     running_prompts: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
 }
 
@@ -2429,7 +2434,7 @@ fn store_provider_selection(state: &mut RuntimeState, config: &RuntimeProviderCo
 struct GuiPermissionBroker {
     mode: PermissionMode,
     app: AppHandle,
-    pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
+    pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
 }
 
 fn permission_request_dto(request_id: String, request: &PermissionRequest) -> PermissionRequestDto {
@@ -2467,25 +2472,29 @@ impl GuiPermissionBroker {
         }
 
         let decision = timeout(Duration::from_secs(PERMISSION_WAIT_SECS), rx).await;
-        let allowed = match decision {
+        let decision = match decision {
             Ok(Ok(value)) => value,
-            Ok(Err(_)) => false,
-            Err(_) => false,
+            Ok(Err(_)) => PermissionDecision::deny("Permission request channel closed."),
+            Err(_) => PermissionDecision::deny(format!(
+                "Permission request timed out for {}.",
+                request.tool_name
+            )),
         };
 
         let _ = self.app.emit(
             APP_EVENT_PERMISSION_RESOLVED,
             PermissionDecisionDto {
                 request_id,
-                allowed,
+                allowed: decision.allowed,
+                message: decision.message.clone(),
+                updated_input: decision.updated_input.clone(),
+                permission_updates: decision.permission_updates.clone(),
+                feedback: decision.feedback.clone(),
+                content_blocks: decision.content_blocks.clone(),
             },
         );
 
-        if allowed {
-            PermissionDecision::allow()
-        } else {
-            PermissionDecision::deny(format!("Permission denied for {}.", request.tool_name))
-        }
+        decision
     }
 }
 
@@ -2524,6 +2533,13 @@ impl PermissionBroker for GuiPermissionBroker {
     async fn decide_forced_prompt(&self, request: PermissionRequest) -> PermissionDecision {
         self.prompt(request).await
     }
+
+    fn apply_permission_updates(
+        &self,
+        _updates: &[rc_permissions::PermissionUpdate],
+    ) -> Result<usize> {
+        Ok(0)
+    }
 }
 
 #[derive(Debug)]
@@ -2540,7 +2556,7 @@ async fn run_gui_prompt(
     config: RuntimeConfig,
     backend: &dyn ConversationBackend,
     store: Arc<SessionStore>,
-    pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
+    pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
     prompt: &str,
 ) -> Result<PromptRunOutcome> {
     let mut conversation = initialize_session_conversation(&store, &config, Some(prompt))?;
@@ -3703,13 +3719,34 @@ async fn resolve_permission_request(
     state: State<'_, AppState>,
     request_id: String,
     allowed: bool,
+    message: Option<String>,
+    updated_input: Option<serde_json::Value>,
+    permission_updates: Option<Vec<rc_permissions::PermissionUpdate>>,
+    feedback: Option<String>,
+    content_blocks: Option<Vec<serde_json::Value>>,
 ) -> std::result::Result<bool, String> {
     let sender = {
         let mut pending = state.pending_permissions.lock().await;
         pending.remove(&request_id)
     };
     if let Some(sender) = sender {
-        let _ = sender.send(allowed);
+        let mut decision = if allowed {
+            PermissionDecision::allow()
+        } else {
+            PermissionDecision::deny(
+                message
+                    .clone()
+                    .unwrap_or_else(|| "Permission denied by GUI.".to_owned()),
+            )
+        };
+        if allowed {
+            decision.message = message;
+        }
+        decision.updated_input = updated_input;
+        decision.permission_updates = permission_updates.unwrap_or_default();
+        decision.feedback = feedback;
+        decision.content_blocks = content_blocks.unwrap_or_default();
+        let _ = sender.send(decision);
         Ok(true)
     } else {
         Ok(false)

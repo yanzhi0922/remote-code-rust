@@ -163,13 +163,24 @@ pub(crate) async fn run_headless(
                 request_id,
                 allow,
                 message,
+                updated_input,
+                permission_updates,
+                feedback,
+                content_blocks,
             } => {
                 resolve_pending_permission(
                     &pending_permissions,
                     &emitter,
                     request_id,
-                    allow,
-                    message,
+                    PermissionDecision {
+                        allowed: allow,
+                        message,
+                        permission_suggestions: Vec::new(),
+                        updated_input,
+                        permission_updates,
+                        feedback,
+                        content_blocks,
+                    },
                 )
                 .await?;
             }
@@ -442,15 +453,10 @@ async fn resolve_pending_permission<W: Write + Send>(
     pending_permissions: &Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
     emitter: &Arc<Mutex<ProtocolEmitter<W>>>,
     request_id: String,
-    allow: bool,
-    message: Option<String>,
+    decision: PermissionDecision,
 ) -> Result<()> {
     if let Some(sender) = pending_permissions.lock().await.remove(&request_id) {
-        let _ = sender.send(PermissionDecision {
-            allowed: allow,
-            message,
-            permission_suggestions: Vec::new(),
-        });
+        let _ = sender.send(decision);
         let mut emitter = emitter.lock().await;
         emitter.emit_state(SessionState::Running)?;
     }
@@ -621,6 +627,13 @@ impl PermissionBroker for HeadlessPermissionBroker {
 
     fn clear_session_rules(&self) -> Result<usize> {
         self.inner.clear_session_rules()
+    }
+
+    fn apply_permission_updates(
+        &self,
+        updates: &[rc_permissions::PermissionUpdate],
+    ) -> Result<usize> {
+        self.inner.apply_permission_updates(updates)
     }
 
     fn audit_records(&self) -> Vec<rc_permissions::PermissionAuditRecord> {
@@ -1029,8 +1042,15 @@ mod tests {
             &pending_permissions,
             &emitter,
             "req-1".to_owned(),
-            true,
-            Some("approved".to_owned()),
+            PermissionDecision {
+                allowed: true,
+                message: Some("approved".to_owned()),
+                permission_suggestions: Vec::new(),
+                updated_input: Some(serde_json::json!({"plan":"edited"})),
+                permission_updates: Vec::new(),
+                feedback: Some("ship it".to_owned()),
+                content_blocks: vec![serde_json::json!({"type":"text","text":"extra"})],
+            },
         )
         .await
         .expect("resolve permission");
@@ -1038,6 +1058,12 @@ mod tests {
         let decision = rx.await.expect("decision");
         assert!(decision.allowed);
         assert_eq!(decision.message.as_deref(), Some("approved"));
+        assert_eq!(
+            decision.updated_input,
+            Some(serde_json::json!({"plan":"edited"}))
+        );
+        assert_eq!(decision.feedback.as_deref(), Some("ship it"));
+        assert_eq!(decision.content_blocks.len(), 1);
         drop(emitter);
 
         let events = read_protocol_events(output.path());
@@ -1145,8 +1171,15 @@ mod tests {
             &pending_permissions,
             &emitter,
             request_id,
-            true,
-            Some("approved".to_owned()),
+            PermissionDecision {
+                allowed: true,
+                message: Some("approved".to_owned()),
+                permission_suggestions: Vec::new(),
+                updated_input: None,
+                permission_updates: Vec::new(),
+                feedback: None,
+                content_blocks: Vec::new(),
+            },
         )
         .await
         .expect("resolve permission");
