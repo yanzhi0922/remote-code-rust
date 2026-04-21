@@ -16,7 +16,7 @@ use rc_agents::coordinator::{
     COORDINATOR_MODE_ALLOWED_TOOLS, McpClientInfo as CoordinatorMcpClientInfo,
     get_coordinator_system_prompt, get_coordinator_user_context, is_coordinator_mode,
 };
-use rc_config::RuntimeConfig;
+use rc_config::{RuntimeConfig, SettingSource};
 use rc_context::RuntimeIdentityContext;
 use rc_core::{ConversationEntry, ConversationRole, ProviderProtocol};
 use rc_model::is_first_party_base_url;
@@ -719,36 +719,717 @@ fn runtime_system_context_block(
     initial_git_status_context(&config.cwd).map(|git_status| format!("gitStatus: {git_status}"))
 }
 
-fn collect_claude_md_context(cwd: &Path) -> Option<String> {
-    let mut dirs = cwd.ancestors().collect::<Vec<_>>();
-    dirs.reverse();
-    let mut memories = Vec::new();
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClaudeMemoryType {
+    Managed,
+    User,
+    Project,
+    Local,
+}
 
-    for dir in dirs {
-        for path in [dir.join("CLAUDE.md"), dir.join(".claude").join("CLAUDE.md")] {
-            let Ok(content) = fs::read_to_string(&path) else {
-                continue;
-            };
-            let content = content.trim();
-            if content.is_empty() {
+impl ClaudeMemoryType {
+    fn description(self) -> &'static str {
+        match self {
+            Self::Project => " (project instructions, checked into the codebase)",
+            Self::Local => " (user's private project instructions, not checked in)",
+            Self::Managed | Self::User => " (user's private global instructions for all projects)",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ClaudeMemoryFile {
+    path: PathBuf,
+    memory_type: ClaudeMemoryType,
+    content: String,
+    has_paths_frontmatter: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ClaudeMemoryRoots {
+    managed_dir: PathBuf,
+    user_config_dir: PathBuf,
+    additional_dirs: Vec<PathBuf>,
+    additional_dirs_enabled: bool,
+}
+
+impl ClaudeMemoryRoots {
+    fn from_runtime_settings(settings: Option<&RuntimePromptSettings>) -> Self {
+        Self {
+            managed_dir: managed_claude_root_dir(),
+            user_config_dir: runtime_claude_config_home_dir(),
+            additional_dirs: settings
+                .map(|value| value.additional_working_directories.clone())
+                .unwrap_or_default(),
+            additional_dirs_enabled: runtime_env_truthy(
+                "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD",
+            ),
+        }
+    }
+}
+
+const MAX_CLAUDE_MD_INCLUDE_DEPTH: usize = 5;
+
+fn runtime_home_dir() -> PathBuf {
+    if let Ok(home) = env::var("HOME") {
+        PathBuf::from(home)
+    } else if let Ok(userprofile) = env::var("USERPROFILE") {
+        PathBuf::from(userprofile)
+    } else {
+        PathBuf::from(".")
+    }
+}
+
+fn runtime_claude_config_home_dir() -> PathBuf {
+    if let Ok(dir) = env::var("CLAUDE_CONFIG_DIR") {
+        PathBuf::from(dir)
+    } else {
+        runtime_home_dir().join(".claude")
+    }
+}
+
+fn managed_claude_root_dir() -> PathBuf {
+    if env::var("USER_TYPE").as_deref() == Ok("ant")
+        && let Ok(path) = env::var("CLAUDE_CODE_MANAGED_SETTINGS_PATH")
+    {
+        return PathBuf::from(path);
+    }
+
+    if cfg!(target_os = "windows") {
+        PathBuf::from(r"C:\Program Files\ClaudeCode")
+    } else if cfg!(target_os = "macos") {
+        PathBuf::from("/Library/Application Support/ClaudeCode")
+    } else {
+        PathBuf::from("/etc/claude-code")
+    }
+}
+
+fn normalize_path_for_comparison(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "/")
+        .to_ascii_lowercase()
+}
+
+fn canonical_or_original(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn path_in_original_cwd(path: &Path, original_cwd: &Path) -> bool {
+    let candidate = canonical_or_original(path);
+    let root = canonical_or_original(original_cwd);
+    candidate.starts_with(root)
+}
+
+fn read_memory_file(
+    path: &Path,
+    memory_type: ClaudeMemoryType,
+) -> Option<(ClaudeMemoryFile, Vec<PathBuf>)> {
+    let raw = fs::read_to_string(path).ok()?;
+    let (without_frontmatter, has_paths_frontmatter) = strip_frontmatter(&raw);
+    let without_comments = strip_html_comments_outside_fences(&without_frontmatter);
+    let include_paths = extract_include_paths(path, &without_frontmatter);
+    let content = without_comments.trim();
+    if content.is_empty() {
+        return None;
+    }
+
+    Some((
+        ClaudeMemoryFile {
+            path: path.to_path_buf(),
+            memory_type,
+            content: content.to_owned(),
+            has_paths_frontmatter,
+        },
+        include_paths,
+    ))
+}
+
+fn strip_frontmatter(raw: &str) -> (String, bool) {
+    let Some(rest) = raw
+        .strip_prefix("---\n")
+        .or_else(|| raw.strip_prefix("---\r\n"))
+    else {
+        return (raw.to_owned(), false);
+    };
+
+    let mut offset = raw.len() - rest.len();
+    let mut frontmatter_lines = Vec::new();
+    for line in rest.split_inclusive(['\n']) {
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        offset += line.len();
+        if trimmed == "---" {
+            let has_paths_frontmatter = frontmatter_lines.iter().any(|entry: &String| {
+                entry
+                    .split_once(':')
+                    .is_some_and(|(key, _)| key.trim() == "paths")
+            });
+            return (raw[offset..].to_owned(), has_paths_frontmatter);
+        }
+        frontmatter_lines.push(trimmed.to_owned());
+    }
+
+    (raw.to_owned(), false)
+}
+
+fn strip_html_comments_outside_fences(content: &str) -> String {
+    let mut result = String::new();
+    let mut in_fence: Option<String> = None;
+    let mut in_comment = false;
+
+    for line in content.split_inclusive(['\n']) {
+        let trimmed = line.trim_start();
+        if !in_comment {
+            if let Some(fence) = &in_fence {
+                if trimmed.starts_with(fence) {
+                    in_fence = None;
+                }
+                result.push_str(line);
                 continue;
             }
-            memories.push(format!(
-                "Contents of {} (project instructions, checked into the codebase):\n\n{}",
-                path.display(),
-                content
-            ));
+
+            if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+                in_fence = Some(trimmed.chars().take(3).collect());
+                result.push_str(line);
+                continue;
+            }
+        }
+
+        let mut cursor = 0usize;
+        while cursor < line.len() {
+            if in_comment {
+                if let Some(end) = line[cursor..].find("-->") {
+                    cursor += end + 3;
+                    in_comment = false;
+                } else {
+                    cursor = line.len();
+                }
+                continue;
+            }
+
+            if let Some(start) = line[cursor..].find("<!--") {
+                result.push_str(&line[cursor..cursor + start]);
+                cursor += start + 4;
+                in_comment = true;
+            } else {
+                result.push_str(&line[cursor..]);
+                cursor = line.len();
+            }
         }
     }
 
-    if memories.is_empty() {
-        None
-    } else {
-        Some(format!(
-            "{MEMORY_INSTRUCTION_PROMPT}\n\n{}",
-            memories.join("\n\n")
-        ))
+    result
+}
+
+fn extract_include_paths(file_path: &Path, content: &str) -> Vec<PathBuf> {
+    let mut include_paths = Vec::new();
+    let mut in_fence: Option<String> = None;
+    let mut in_comment = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if !in_comment {
+            if let Some(fence) = &in_fence {
+                if trimmed.starts_with(fence) {
+                    in_fence = None;
+                }
+                continue;
+            }
+            if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+                in_fence = Some(trimmed.chars().take(3).collect());
+                continue;
+            }
+            if trimmed.starts_with("    ") || trimmed.starts_with('\t') {
+                continue;
+            }
+        }
+
+        let mut cleaned = String::new();
+        let chars = line.as_bytes();
+        let mut index = 0usize;
+        let mut in_codespan = false;
+        let mut previous_backtick = false;
+        while index < chars.len() {
+            let slice = &line[index..];
+            if in_comment {
+                if let Some(end) = slice.find("-->") {
+                    index += end + 3;
+                    in_comment = false;
+                } else {
+                    index = chars.len();
+                }
+                continue;
+            }
+            if slice.starts_with("<!--") {
+                index += 4;
+                in_comment = true;
+                continue;
+            }
+            if chars[index] == b'`' {
+                if previous_backtick {
+                    in_codespan = false;
+                    previous_backtick = false;
+                } else {
+                    in_codespan = !in_codespan;
+                    previous_backtick = true;
+                }
+                index += 1;
+                continue;
+            }
+            previous_backtick = false;
+            if !in_codespan {
+                cleaned.push(chars[index] as char);
+            }
+            index += 1;
+        }
+
+        include_paths.extend(extract_include_paths_from_text(
+            &cleaned,
+            file_path.parent().unwrap_or_else(|| Path::new("")),
+        ));
     }
+
+    include_paths
+}
+
+fn extract_include_paths_from_text(text: &str, base_dir: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let bytes = text.as_bytes();
+    let mut index = 0usize;
+
+    while index < bytes.len() {
+        if bytes[index] != b'@' {
+            index += 1;
+            continue;
+        }
+
+        let preceded_by_whitespace = index == 0 || bytes[index - 1].is_ascii_whitespace();
+        if !preceded_by_whitespace {
+            index += 1;
+            continue;
+        }
+
+        let mut cursor = index + 1;
+        let mut raw_path = String::new();
+        while cursor < bytes.len() {
+            if bytes[cursor].is_ascii_whitespace() {
+                break;
+            }
+            if bytes[cursor] == b'\\' && cursor + 1 < bytes.len() && bytes[cursor + 1] == b' ' {
+                raw_path.push(' ');
+                cursor += 2;
+                continue;
+            }
+            if bytes[cursor] == b'\\' {
+                break;
+            }
+            raw_path.push(bytes[cursor] as char);
+            cursor += 1;
+        }
+
+        index = cursor;
+        if raw_path.is_empty() {
+            continue;
+        }
+
+        let path_without_fragment = raw_path
+            .split_once('#')
+            .map_or(raw_path.as_str(), |(path, _)| path);
+        if let Some(path) = resolve_include_path(base_dir, path_without_fragment) {
+            paths.push(path);
+        }
+    }
+
+    paths
+}
+
+fn resolve_include_path(base_dir: &Path, raw_path: &str) -> Option<PathBuf> {
+    if raw_path.is_empty() {
+        return None;
+    }
+
+    let first = raw_path.chars().next()?;
+    let valid = raw_path.starts_with("./")
+        || raw_path.starts_with("~/")
+        || (raw_path.starts_with('/') && raw_path.len() > 1)
+        || (first.is_ascii_alphanumeric() || matches!(first, '.' | '_' | '-'));
+    if !valid || raw_path.starts_with('@') || "#%^&*()".contains(first) {
+        return None;
+    }
+
+    let resolved = if let Some(rest) = raw_path.strip_prefix("~/") {
+        runtime_home_dir().join(rest)
+    } else {
+        let candidate = PathBuf::from(raw_path);
+        if candidate.is_absolute() || raw_path.starts_with('/') {
+            candidate
+        } else {
+            base_dir.join(raw_path)
+        }
+    };
+
+    if is_non_text_path(&resolved) {
+        return None;
+    }
+
+    Some(resolved)
+}
+
+fn is_non_text_path(path: &Path) -> bool {
+    let Some(extension) = path.extension().and_then(|ext| ext.to_str()) else {
+        return false;
+    };
+    !matches!(
+        extension.to_ascii_lowercase().as_str(),
+        "md" | "txt"
+            | "text"
+            | "json"
+            | "yaml"
+            | "yml"
+            | "toml"
+            | "xml"
+            | "csv"
+            | "html"
+            | "htm"
+            | "css"
+            | "scss"
+            | "sass"
+            | "less"
+            | "js"
+            | "ts"
+            | "tsx"
+            | "jsx"
+            | "mjs"
+            | "cjs"
+            | "mts"
+            | "cts"
+            | "py"
+            | "pyi"
+            | "pyw"
+            | "rb"
+            | "erb"
+            | "rake"
+            | "go"
+            | "rs"
+            | "java"
+            | "kt"
+            | "kts"
+            | "scala"
+            | "c"
+            | "cpp"
+            | "cc"
+            | "cxx"
+            | "h"
+            | "hpp"
+            | "hxx"
+            | "cs"
+            | "swift"
+            | "sh"
+            | "bash"
+            | "zsh"
+            | "fish"
+            | "ps1"
+            | "bat"
+            | "cmd"
+            | "env"
+            | "ini"
+            | "cfg"
+            | "conf"
+            | "config"
+            | "properties"
+            | "sql"
+            | "graphql"
+            | "gql"
+            | "proto"
+            | "vue"
+            | "svelte"
+            | "astro"
+            | "ejs"
+            | "hbs"
+            | "pug"
+            | "jade"
+            | "php"
+            | "pl"
+            | "pm"
+            | "lua"
+            | "r"
+            | "dart"
+            | "ex"
+            | "exs"
+            | "erl"
+            | "hrl"
+            | "clj"
+            | "cljs"
+            | "cljc"
+            | "edn"
+            | "hs"
+            | "lhs"
+            | "elm"
+            | "ml"
+            | "mli"
+            | "f"
+            | "f90"
+            | "f95"
+            | "for"
+            | "cmake"
+            | "make"
+            | "makefile"
+            | "gradle"
+            | "sbt"
+            | "rst"
+            | "adoc"
+            | "asciidoc"
+            | "org"
+            | "tex"
+            | "latex"
+            | "lock"
+            | "log"
+            | "diff"
+            | "patch"
+    )
+}
+
+fn process_memory_file(
+    path: &Path,
+    memory_type: ClaudeMemoryType,
+    processed_paths: &mut HashSet<String>,
+    include_external: bool,
+    original_cwd: &Path,
+    depth: usize,
+    results: &mut Vec<ClaudeMemoryFile>,
+) {
+    if depth >= MAX_CLAUDE_MD_INCLUDE_DEPTH {
+        return;
+    }
+
+    let normalized_path = normalize_path_for_comparison(path);
+    if !processed_paths.insert(normalized_path) {
+        return;
+    }
+
+    let canonical_path = fs::canonicalize(path).ok();
+    if let Some(canonical_path) = canonical_path.as_deref() {
+        processed_paths.insert(normalize_path_for_comparison(canonical_path));
+    }
+
+    let Some((memory_file, include_paths)) = read_memory_file(path, memory_type) else {
+        return;
+    };
+    results.push(memory_file);
+
+    for include_path in include_paths {
+        if !include_external && !path_in_original_cwd(&include_path, original_cwd) {
+            continue;
+        }
+        process_memory_file(
+            &include_path,
+            memory_type,
+            processed_paths,
+            include_external,
+            original_cwd,
+            depth + 1,
+            results,
+        );
+    }
+}
+
+fn process_rules_dir(
+    rules_dir: &Path,
+    memory_type: ClaudeMemoryType,
+    processed_paths: &mut HashSet<String>,
+    include_external: bool,
+    original_cwd: &Path,
+    results: &mut Vec<ClaudeMemoryFile>,
+) {
+    let Ok(entries) = fs::read_dir(rules_dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            process_rules_dir(
+                &path,
+                memory_type,
+                processed_paths,
+                include_external,
+                original_cwd,
+                results,
+            );
+            continue;
+        }
+        if !file_type.is_file()
+            || path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_none_or(|ext| !ext.eq_ignore_ascii_case("md"))
+        {
+            continue;
+        }
+
+        let mut file_results = Vec::new();
+        process_memory_file(
+            &path,
+            memory_type,
+            processed_paths,
+            include_external,
+            original_cwd,
+            0,
+            &mut file_results,
+        );
+        results.extend(
+            file_results
+                .into_iter()
+                .filter(|file| !file.has_paths_frontmatter),
+        );
+    }
+}
+
+fn collect_claude_md_context_with_roots(
+    config: &RuntimeConfig,
+    roots: &ClaudeMemoryRoots,
+) -> Option<String> {
+    let mut processed_paths = HashSet::new();
+    let mut memory_files = Vec::new();
+
+    process_memory_file(
+        &roots.managed_dir.join("CLAUDE.md"),
+        ClaudeMemoryType::Managed,
+        &mut processed_paths,
+        false,
+        &config.original_cwd,
+        0,
+        &mut memory_files,
+    );
+    process_rules_dir(
+        &roots.managed_dir.join(".claude").join("rules"),
+        ClaudeMemoryType::Managed,
+        &mut processed_paths,
+        false,
+        &config.original_cwd,
+        &mut memory_files,
+    );
+
+    if config
+        .allowed_setting_sources
+        .contains(&SettingSource::User)
+    {
+        process_memory_file(
+            &roots.user_config_dir.join("CLAUDE.md"),
+            ClaudeMemoryType::User,
+            &mut processed_paths,
+            true,
+            &config.original_cwd,
+            0,
+            &mut memory_files,
+        );
+        process_rules_dir(
+            &roots.user_config_dir.join("rules"),
+            ClaudeMemoryType::User,
+            &mut processed_paths,
+            true,
+            &config.original_cwd,
+            &mut memory_files,
+        );
+    }
+
+    let mut directories = config.original_cwd.ancestors().collect::<Vec<_>>();
+    directories.reverse();
+    for dir in directories {
+        if config
+            .allowed_setting_sources
+            .contains(&SettingSource::Project)
+        {
+            for path in [dir.join("CLAUDE.md"), dir.join(".claude").join("CLAUDE.md")] {
+                process_memory_file(
+                    &path,
+                    ClaudeMemoryType::Project,
+                    &mut processed_paths,
+                    false,
+                    &config.original_cwd,
+                    0,
+                    &mut memory_files,
+                );
+            }
+            process_rules_dir(
+                &dir.join(".claude").join("rules"),
+                ClaudeMemoryType::Project,
+                &mut processed_paths,
+                false,
+                &config.original_cwd,
+                &mut memory_files,
+            );
+        }
+
+        if config
+            .allowed_setting_sources
+            .contains(&SettingSource::Local)
+        {
+            process_memory_file(
+                &dir.join("CLAUDE.local.md"),
+                ClaudeMemoryType::Local,
+                &mut processed_paths,
+                false,
+                &config.original_cwd,
+                0,
+                &mut memory_files,
+            );
+        }
+    }
+
+    if roots.additional_dirs_enabled {
+        for dir in &roots.additional_dirs {
+            for path in [dir.join("CLAUDE.md"), dir.join(".claude").join("CLAUDE.md")] {
+                process_memory_file(
+                    &path,
+                    ClaudeMemoryType::Project,
+                    &mut processed_paths,
+                    false,
+                    &config.original_cwd,
+                    0,
+                    &mut memory_files,
+                );
+            }
+            process_rules_dir(
+                &dir.join(".claude").join("rules"),
+                ClaudeMemoryType::Project,
+                &mut processed_paths,
+                false,
+                &config.original_cwd,
+                &mut memory_files,
+            );
+        }
+    }
+
+    if memory_files.is_empty() {
+        return None;
+    }
+
+    let formatted = memory_files
+        .into_iter()
+        .map(|file| {
+            format!(
+                "Contents of {}{}:\n\n{}",
+                file.path.display(),
+                file.memory_type.description(),
+                file.content
+            )
+        })
+        .collect::<Vec<_>>();
+    Some(format!(
+        "{MEMORY_INSTRUCTION_PROMPT}\n\n{}",
+        formatted.join("\n\n")
+    ))
+}
+
+fn collect_claude_md_context(
+    config: &RuntimeConfig,
+    settings: Option<&RuntimePromptSettings>,
+) -> Option<String> {
+    let roots = ClaudeMemoryRoots::from_runtime_settings(settings);
+    collect_claude_md_context_with_roots(config, &roots)
 }
 
 fn base_runtime_user_context_entries(
@@ -757,7 +1438,7 @@ fn base_runtime_user_context_entries(
 ) -> Vec<(String, String)> {
     let mut entries = Vec::new();
     if !overrides.omit_claude_md
-        && let Some(claude_md) = collect_claude_md_context(&config.cwd)
+        && let Some(claude_md) = collect_claude_md_context(config, None)
     {
         entries.push(("claudeMd".to_owned(), claude_md));
     }
@@ -773,7 +1454,16 @@ async fn runtime_user_context_entries_with_settings(
     overrides: &PromptRuntimeOverrides,
     settings: &RuntimePromptSettings,
 ) -> Vec<(String, String)> {
-    let mut entries = base_runtime_user_context_entries(config, overrides);
+    let mut entries = Vec::new();
+    if !overrides.omit_claude_md
+        && let Some(claude_md) = collect_claude_md_context(config, Some(settings))
+    {
+        entries.push(("claudeMd".to_owned(), claude_md));
+    }
+    entries.push((
+        "currentDate".to_owned(),
+        format!("Today's date is {}.", Local::now().format("%Y-%m-%d")),
+    ));
     let mcp_catalog = rc_tools::mcp_catalog::runtime_mcp_catalog().await;
     let coordinator_mcp_clients = mcp_catalog
         .clients
@@ -953,12 +1643,13 @@ fn should_use_global_prompt_cache_scope(config: &RuntimeConfig) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        PromptRuntimeOverrides, RuntimePromptSettings, build_runtime_scratchpad_state_with,
-        build_runtime_system_prompt, runtime_claude_temp_dir_name,
+        ClaudeMemoryRoots, PromptRuntimeOverrides, RuntimePromptSettings,
+        build_runtime_scratchpad_state_with, build_runtime_system_prompt,
+        collect_claude_md_context_with_roots, runtime_claude_temp_dir_name,
         runtime_user_context_entries_with_settings, sanitize_path_component,
     };
     use rc_config::settings_layers::RuntimeOverrides;
-    use rc_config::{ProviderOverrides, load_runtime_config};
+    use rc_config::{ProviderOverrides, SettingSource, load_runtime_config};
     use rc_context::RuntimeIdentityContext;
     use rc_core::{ConversationEntry, InputFormat, OutputFormat, PermissionMode, ProviderProtocol};
     use rc_provider::DiscoveredToolScope;
@@ -1169,5 +1860,189 @@ mod tests {
 
         assert!(prompt.text.contains("# Scratchpad Directory"));
         assert!(prompt.text.contains("C:/scratchpad/session"));
+    }
+
+    #[test]
+    fn claude_md_context_loads_expected_memory_order() {
+        let temp = tempdir().expect("tempdir");
+        let managed = temp.path().join("managed");
+        let user = temp.path().join("user");
+        let repo = temp.path().join("repo");
+        let nested = repo.join("nested");
+        let extra = temp.path().join("extra");
+        for dir in [
+            managed.join(".claude").join("rules"),
+            user.join("rules"),
+            repo.join(".claude").join("rules"),
+            nested.join(".claude").join("rules"),
+            extra.join(".claude").join("rules"),
+        ] {
+            fs::create_dir_all(dir).expect("dir");
+        }
+        fs::write(managed.join("CLAUDE.md"), "TOKEN_MANAGED").expect("managed");
+        fs::write(
+            managed
+                .join(".claude")
+                .join("rules")
+                .join("managed-rule.md"),
+            "TOKEN_MANAGED_RULE",
+        )
+        .expect("managed rule");
+        fs::write(user.join("CLAUDE.md"), "TOKEN_USER").expect("user");
+        fs::write(user.join("rules").join("user-rule.md"), "TOKEN_USER_RULE").expect("user rule");
+        fs::write(repo.join("CLAUDE.md"), "TOKEN_REPO").expect("repo");
+        fs::write(repo.join(".claude").join("CLAUDE.md"), "TOKEN_REPO_DOT").expect("repo dot");
+        fs::write(
+            repo.join(".claude").join("rules").join("repo-rule.md"),
+            "TOKEN_REPO_RULE",
+        )
+        .expect("repo rule");
+        fs::write(nested.join("CLAUDE.md"), "TOKEN_NESTED").expect("nested");
+        fs::write(nested.join("CLAUDE.local.md"), "TOKEN_LOCAL").expect("local");
+        fs::write(
+            nested.join(".claude").join("rules").join("conditional.md"),
+            "---\npaths: src/**/*.rs\n---\nconditional rule",
+        )
+        .expect("conditional");
+        fs::write(extra.join("CLAUDE.md"), "TOKEN_EXTRA").expect("extra");
+
+        let mut config = test_config(None);
+        config.cwd = nested.clone();
+        config.original_cwd = nested.clone();
+        config.allowed_setting_sources = vec![
+            SettingSource::User,
+            SettingSource::Project,
+            SettingSource::Local,
+        ];
+
+        let context = collect_claude_md_context_with_roots(
+            &config,
+            &ClaudeMemoryRoots {
+                managed_dir: managed,
+                user_config_dir: user,
+                additional_dirs: vec![extra],
+                additional_dirs_enabled: true,
+            },
+        )
+        .expect("claude md context");
+
+        let managed_index = context.find("TOKEN_MANAGED").expect("managed");
+        let user_index = context.find("TOKEN_USER").expect("user");
+        let repo_index = context.find("TOKEN_REPO").expect("repo");
+        let nested_index = context.find("TOKEN_NESTED").expect("nested");
+        let local_index = context.find("TOKEN_LOCAL").expect("local instructions");
+        let extra_index = context.find("TOKEN_EXTRA").expect("extra");
+
+        assert!(user_index > managed_index);
+        assert!(repo_index > user_index);
+        assert!(nested_index > repo_index);
+        assert!(local_index > nested_index);
+        assert!(extra_index > local_index);
+        assert!(context.contains("(project instructions, checked into the codebase)"));
+        assert!(context.contains("(user's private project instructions, not checked in)"));
+        assert!(
+            !context.contains("conditional rule"),
+            "conditional rules should not be eagerly injected"
+        );
+    }
+
+    #[test]
+    fn claude_md_context_honors_setting_source_gates() {
+        let temp = tempdir().expect("tempdir");
+        let managed = temp.path().join("managed");
+        let user = temp.path().join("user");
+        let repo = temp.path().join("repo");
+        fs::create_dir_all(&managed).expect("managed");
+        fs::create_dir_all(&user).expect("user");
+        fs::create_dir_all(&repo).expect("repo");
+        fs::write(managed.join("CLAUDE.md"), "TOKEN_MANAGED_GATE").expect("managed");
+        fs::write(user.join("CLAUDE.md"), "TOKEN_USER_GATE").expect("user");
+        fs::write(repo.join("CLAUDE.md"), "TOKEN_PROJECT_GATE").expect("project");
+        fs::write(repo.join("CLAUDE.local.md"), "TOKEN_LOCAL_GATE").expect("local");
+
+        let mut config = test_config(None);
+        config.cwd = repo.clone();
+        config.original_cwd = repo.clone();
+        config.allowed_setting_sources = vec![SettingSource::Project];
+
+        let context = collect_claude_md_context_with_roots(
+            &config,
+            &ClaudeMemoryRoots {
+                managed_dir: managed,
+                user_config_dir: user,
+                additional_dirs: Vec::new(),
+                additional_dirs_enabled: false,
+            },
+        )
+        .expect("context");
+
+        assert!(context.contains("TOKEN_MANAGED_GATE"));
+        assert!(context.contains("TOKEN_PROJECT_GATE"));
+        assert!(!context.contains("TOKEN_USER_GATE"));
+        assert!(!context.contains("TOKEN_LOCAL_GATE"));
+    }
+
+    #[test]
+    fn claude_md_context_processes_includes_and_blocks_external_project_includes() {
+        let temp = tempdir().expect("tempdir");
+        let managed = temp.path().join("managed");
+        let user = temp.path().join("user");
+        let repo = temp.path().join("repo");
+        let external = temp.path().join("external");
+        fs::create_dir_all(&managed).expect("managed");
+        fs::create_dir_all(&user).expect("user");
+        fs::create_dir_all(&repo).expect("repo");
+        fs::create_dir_all(&external).expect("external");
+        fs::write(repo.join("child.md"), "TOKEN_CHILD_INCLUDE").expect("child");
+        fs::write(external.join("outside.md"), "TOKEN_OUTSIDE_INCLUDE").expect("outside");
+        fs::write(repo.join("ignored-too.md"), "TOKEN_IGNORED_INCLUDE").expect("ignored");
+        fs::write(
+            repo.join("CLAUDE.md"),
+            "project parent @./child.md @../external/outside.md\n`@./ignored.md`\n```text\n@./ignored-too.md\n```",
+        )
+        .expect("project claude");
+        fs::write(
+            user.join("CLAUDE.md"),
+            "user parent @../external/outside.md",
+        )
+        .expect("user claude");
+
+        let mut config = test_config(None);
+        config.cwd = repo.clone();
+        config.original_cwd = repo.clone();
+        config.allowed_setting_sources = vec![
+            SettingSource::User,
+            SettingSource::Project,
+            SettingSource::Local,
+        ];
+
+        let context = collect_claude_md_context_with_roots(
+            &config,
+            &ClaudeMemoryRoots {
+                managed_dir: managed,
+                user_config_dir: user,
+                additional_dirs: Vec::new(),
+                additional_dirs_enabled: false,
+            },
+        )
+        .expect("context");
+
+        let parent_index = context.find("project parent").expect("parent");
+        let child_index = context.find("TOKEN_CHILD_INCLUDE").expect("child include");
+        let outside_index = context
+            .find("TOKEN_OUTSIDE_INCLUDE")
+            .expect("outside include");
+        assert!(
+            child_index > parent_index,
+            "includes should come after the parent"
+        );
+        assert!(
+            outside_index < parent_index,
+            "user external include should load, project external include should not"
+        );
+        assert!(
+            !context.contains("TOKEN_IGNORED_INCLUDE"),
+            "fenced code includes should be ignored"
+        );
     }
 }
