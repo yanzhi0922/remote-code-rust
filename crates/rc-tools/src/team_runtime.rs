@@ -11,6 +11,7 @@ use rc_core::PermissionMode;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use crate::tasks;
 use rc_swarm::{
     BackendType, SwarmError, TeamAllowedPath, TeamFile, TeamMember, mailbox, team_helpers,
 };
@@ -390,6 +391,11 @@ pub(crate) async fn create_team(input: &Value, cwd: &Path) -> Result<String> {
             .with_context(|| format!("failed to create team '{}'", team.name))?;
         "created"
     };
+
+    tasks::reset_task_list(&team.name)
+        .with_context(|| format!("failed to reset task list for team '{}'", team.name))?;
+    tasks::set_leader_team_name(Some(team.name.clone()))
+        .with_context(|| format!("failed to set leader team name for '{}'", team.name))?;
 
     let peers = peer_entries(&team);
     Ok(json!({

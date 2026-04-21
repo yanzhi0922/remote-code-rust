@@ -59,7 +59,6 @@ const PLAN_MODE_DENIED_READ_CLASS_TOOLS: &[&str] = &[
     "sleep",
     "synthetic_output",
     "task_create",
-    "task_stop",
     "task_update",
     "team_delete",
     "terminal_capture",

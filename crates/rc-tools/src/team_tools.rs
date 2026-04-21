@@ -11,6 +11,7 @@ use once_cell::sync::Lazy;
 use serde_json::{Value, json};
 
 use super::ToolExecutionContext;
+use crate::tasks;
 
 /// Thread-safe override for the teams base directory (used in tests).
 static BASE_DIR_OVERRIDE: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
@@ -38,7 +39,6 @@ pub fn team_delete(input: &Value, _context: &ToolExecutionContext) -> Result<Str
         return Err(anyhow!("team_name cannot be empty"));
     }
 
-    // Resolve the team directory using the same logic as rc_swarm.
     let team_dir = resolve_team_dir(team_name);
 
     if !team_dir.exists() {
@@ -50,7 +50,17 @@ pub fn team_delete(input: &Value, _context: &ToolExecutionContext) -> Result<Str
         .to_string());
     }
 
-    // Clean up the team directory.
+    let content = std::fs::read_to_string(team_dir.join(rc_swarm::constants::TEAM_FILE_NAME))
+        .map_err(|error| anyhow!("failed to read team config: {error}"))?;
+    let team = serde_json::from_str::<rc_swarm::TeamFile>(&content)
+        .map_err(|error| anyhow!("failed to parse team config: {error}"))?;
+
+    if team.active_member_count() > 0 {
+        return Err(anyhow!(
+            "team '{team_name}' still has active members; shut them down before deleting the team"
+        ));
+    }
+
     let cleanup_results = cleanup_team_resources(&team_dir, team_name);
 
     Ok(json!({
@@ -86,7 +96,7 @@ pub fn team_list(_input: &Value, _context: &ToolExecutionContext) -> Result<Stri
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            let team_file = path.join("team.json");
+            let team_file = path.join(rc_swarm::constants::TEAM_FILE_NAME);
             if team_file.exists()
                 && let Ok(content) = std::fs::read_to_string(&team_file)
                 && let Ok(team_data) = serde_json::from_str::<Value>(&content)
@@ -184,8 +194,8 @@ fn cleanup_team_resources(team_dir: &std::path::Path, team_name: &str) -> Value 
         }
     }
 
-    // Remove team.json file.
-    let team_file = team_dir.join("team.json");
+    // Remove config.json file.
+    let team_file = team_dir.join(rc_swarm::constants::TEAM_FILE_NAME);
     if team_file.exists() {
         match std::fs::remove_file(&team_file) {
             Ok(()) => {
@@ -201,6 +211,23 @@ fn cleanup_team_resources(team_dir: &std::path::Path, team_name: &str) -> Value 
                 );
             }
         }
+    }
+
+    let task_dir = tasks::task_list_dir(team_name);
+    if task_dir.exists() {
+        match std::fs::remove_dir_all(&task_dir) {
+            Ok(()) => {
+                cleanup.insert("task_dir".to_string(), Value::String("removed".to_string()));
+            }
+            Err(e) => {
+                cleanup.insert("task_dir".to_string(), Value::String(format!("error: {e}")));
+            }
+        }
+    } else {
+        cleanup.insert(
+            "task_dir".to_string(),
+            Value::String("not_found".to_string()),
+        );
     }
 
     // Remove the team directory itself.
@@ -222,6 +249,7 @@ fn cleanup_team_resources(team_dir: &std::path::Path, team_name: &str) -> Value 
         "team_name".to_string(),
         Value::String(team_name.to_string()),
     );
+    let _ = tasks::set_leader_team_name(None);
 
     Value::Object(cleanup)
 }
@@ -245,6 +273,8 @@ mod tests {
     impl Drop for ResetBaseDirOverride {
         fn drop(&mut self) {
             set_base_dir_override(None);
+            tasks::configure_task_list_context(None, None).expect("reset task list context");
+            tasks::set_leader_team_name(None).expect("reset leader team name");
         }
     }
 
@@ -316,13 +346,18 @@ mod tests {
         let team_dir = temp.path().join("test-team");
         std::fs::create_dir_all(team_dir.join("mailbox")).expect("create mailbox");
         std::fs::create_dir_all(team_dir.join("permissions")).expect("create permissions");
+        let tasks_root = temp.path().join("tasks");
+        let task_dir = tasks_root.join("test-team");
+        std::fs::create_dir_all(&task_dir).expect("create task dir");
         std::fs::write(
-            team_dir.join("team.json"),
+            team_dir.join("config.json"),
             r#"{"name":"test-team","lead_agent_id":"lead","created_at":0,"members":[]}"#,
         )
-        .expect("write team.json");
+        .expect("write config.json");
 
         let result = with_base_dir_override(temp.path().to_path_buf(), || {
+            tasks::configure_task_list_context(None, Some(tasks_root))
+                .expect("configure tasks dir");
             let input = json!({"team_name": "test-team"});
             let context = test_context();
             team_delete(&input, &context)
@@ -332,6 +367,33 @@ mod tests {
         let output = result.expect("team_delete should succeed");
         let parsed: Value = serde_json::from_str(&output).expect("valid json");
         assert_eq!(parsed["status"], "deleted");
+        assert_eq!(parsed["cleanup"]["task_dir"], "removed");
+    }
+
+    #[test]
+    fn team_delete_fails_with_active_members() {
+        let temp = TempDir::new().expect("temp dir");
+        let team_dir = temp.path().join("active-team");
+        std::fs::create_dir_all(&team_dir).expect("create team dir");
+        std::fs::write(
+            team_dir.join("config.json"),
+            r#"{"name":"active-team","lead_agent_id":"lead","created_at":0,"members":[{"agent_id":"a1","name":"worker1","joined_at":0,"pane_id":"p1","cwd":".","is_active":true}],"hidden_pane_ids":[],"team_allowed_paths":[]}"#,
+        )
+        .expect("write config.json");
+
+        let result = with_base_dir_override(temp.path().to_path_buf(), || {
+            let input = json!({"team_name": "active-team"});
+            let context = test_context();
+            team_delete(&input, &context)
+        });
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .expect_err("should fail with active members")
+                .to_string()
+                .contains("active members")
+        );
     }
 
     #[test]
@@ -355,10 +417,10 @@ mod tests {
         let team_dir = temp.path().join("my-team");
         std::fs::create_dir_all(&team_dir).expect("create team dir");
         std::fs::write(
-            team_dir.join("team.json"),
+            team_dir.join("config.json"),
             r#"{"name":"my-team","lead_agent_id":"lead-123","created_at":1700000000,"members":[{"name":"worker1"}]}"#,
         )
-        .expect("write team.json");
+        .expect("write config.json");
 
         let result = with_base_dir_override(temp.path().to_path_buf(), || {
             let input = json!({});

@@ -376,13 +376,14 @@ mod tests {
 
     #[tokio::test]
     async fn execute_pre_tool_hooks_matching() {
-        let mut ctx = HookExecutionContext::new(std::env::temp_dir().to_string_lossy().to_string());
+        let cwd = std::env::temp_dir().to_string_lossy().to_string();
+        let mut ctx = HookExecutionContext::new(cwd.clone());
         ctx.registry.register_hooks(
             HookEventKind::PreToolUse,
             vec![make_matcher(Some("Bash"), &["echo pre-tool"])],
         );
         let result = ctx
-            .execute_pre_tool_hooks("Bash", &serde_json::json!({}), None, "/tmp")
+            .execute_pre_tool_hooks("Bash", &serde_json::json!({}), None, &cwd)
             .await;
         assert_eq!(result.outcomes.len(), 1);
         assert!(result.outcomes[0].success);
@@ -390,47 +391,51 @@ mod tests {
 
     #[tokio::test]
     async fn execute_pre_tool_hooks_non_matching() {
-        let mut ctx = HookExecutionContext::new(std::env::temp_dir().to_string_lossy().to_string());
+        let cwd = std::env::temp_dir().to_string_lossy().to_string();
+        let mut ctx = HookExecutionContext::new(cwd.clone());
         ctx.registry.register_hooks(
             HookEventKind::PreToolUse,
             vec![make_matcher(Some("Write"), &["echo pre-tool"])],
         );
         let result = ctx
-            .execute_pre_tool_hooks("Bash", &serde_json::json!({}), None, "/tmp")
+            .execute_pre_tool_hooks("Bash", &serde_json::json!({}), None, &cwd)
             .await;
         assert!(result.outcomes.is_empty());
     }
 
     #[tokio::test]
     async fn execute_session_start_hooks() {
-        let mut ctx = HookExecutionContext::new(std::env::temp_dir().to_string_lossy().to_string());
+        let cwd = std::env::temp_dir().to_string_lossy().to_string();
+        let mut ctx = HookExecutionContext::new(cwd.clone());
         ctx.registry.register_hooks(
             HookEventKind::SessionStart,
             vec![make_matcher(None, &["echo session-start"])],
         );
-        let result = ctx.execute_session_start_hooks(None, "/tmp").await;
+        let result = ctx.execute_session_start_hooks(None, &cwd).await;
         assert_eq!(result.outcomes.len(), 1);
     }
 
     #[tokio::test]
     async fn execute_stop_hooks() {
-        let mut ctx = HookExecutionContext::new(std::env::temp_dir().to_string_lossy().to_string());
+        let cwd = std::env::temp_dir().to_string_lossy().to_string();
+        let mut ctx = HookExecutionContext::new(cwd.clone());
         ctx.registry.register_hooks(
             HookEventKind::Stop,
             vec![make_matcher(None, &["echo stop"])],
         );
-        let result = ctx.execute_stop_hooks(None, "/tmp").await;
+        let result = ctx.execute_stop_hooks(None, &cwd).await;
         assert_eq!(result.outcomes.len(), 1);
     }
 
     #[tokio::test]
     async fn execute_notification_hooks() {
-        let mut ctx = HookExecutionContext::new(std::env::temp_dir().to_string_lossy().to_string());
+        let cwd = std::env::temp_dir().to_string_lossy().to_string();
+        let mut ctx = HookExecutionContext::new(cwd.clone());
         ctx.registry.register_hooks(
             HookEventKind::Notification,
             vec![make_matcher(None, &["echo notify"])],
         );
-        let result = ctx.execute_notification_hooks(None, "/tmp").await;
+        let result = ctx.execute_notification_hooks(None, &cwd).await;
         assert_eq!(result.outcomes.len(), 1);
     }
 

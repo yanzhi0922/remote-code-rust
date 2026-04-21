@@ -10,7 +10,7 @@ pub const TEAM_LEAD_NAME: &str = "lead";
 pub const SESSION_NAME_PREFIX: &str = "rc-swarm";
 
 /// File name for the team JSON data.
-pub const TEAM_FILE_NAME: &str = "team.json";
+pub const TEAM_FILE_NAME: &str = "config.json";
 
 /// Subdirectory name for permission sync files.
 pub const PERMISSIONS_DIR_NAME: &str = "permissions";
@@ -49,7 +49,7 @@ pub const ENV_TEAM_DIR: &str = "RC_SWARM_TEAM_DIR";
 pub const ENV_PERMISSION_MODE: &str = "RC_SWARM_PERMISSION_MODE";
 
 /// Default base directory for team data (relative to home).
-pub const DEFAULT_TEAMS_BASE_DIR: &str = ".remote-code/teams";
+pub const DEFAULT_TEAMS_BASE_DIR: &str = ".claude/teams";
 
 /// Maximum number of teammates allowed in a single team.
 pub const MAX_TEAMMATES: usize = 10;

@@ -1,25 +1,90 @@
-//! Background task management system.
-//!
-//! Provides an in-memory store for background tasks that can be created,
-//! queried, updated, and stopped by the agent during a session.
+//! Shared task-list tools plus tracked background task persistence helpers.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
+use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use once_cell::sync::Lazy;
 use rc_ui_bridge::{UiTaskKind, UiTaskNode, UiTaskStatus};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::task_output;
 
 static TASK_STORE: Lazy<Mutex<HashMap<String, BackgroundTask>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static TASK_OUTPUT_DIR: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
+static TASK_LIST_ID: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
+static TASK_LIST_BASE_DIR: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
+static LEADER_TEAM_NAME: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
+
+const TASK_LIST_HIGH_WATER_MARK_FILE: &str = ".highwatermark";
+const TASK_LIST_LOCK_FILE: &str = ".lock";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SharedTaskStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+impl SharedTaskStatus {
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::InProgress => "in_progress",
+            Self::Completed => "completed",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "in_progress" => Ok(Self::InProgress),
+            "completed" => Ok(Self::Completed),
+            other => Err(anyhow!("invalid status '{other}'")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SharedTask {
+    pub id: String,
+    pub subject: String,
+    pub description: String,
+    #[serde(
+        default,
+        rename = "activeForm",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub active_form: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    pub status: SharedTaskStatus,
+    #[serde(default)]
+    pub blocks: Vec<String>,
+    #[serde(default, rename = "blockedBy")]
+    pub blocked_by: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<BTreeMap<String, Value>>,
+}
+
+struct TaskListLockGuard {
+    path: PathBuf,
+}
+
+impl Drop for TaskListLockGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackgroundTask {
@@ -368,146 +433,261 @@ pub fn finish_tracked_task(
 }
 
 pub fn task_create(input: &Value) -> Result<String> {
-    let title = input["title"]
-        .as_str()
-        .ok_or_else(|| anyhow!("title is required"))?;
+    let subject = input
+        .get("subject")
+        .and_then(Value::as_str)
+        .or_else(|| input.get("title").and_then(Value::as_str))
+        .ok_or_else(|| anyhow!("subject is required"))?;
+    let description = input
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let active_form = input
+        .get("activeForm")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let metadata = input
+        .get("metadata")
+        .and_then(Value::as_object)
+        .map(|value| {
+            value
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<BTreeMap<_, _>>()
+        });
 
-    let task = BackgroundTask {
-        id: generate_id(),
-        parent_task_id: None,
-        depth: 0,
-        kind: TaskKind::Background,
-        title: title.to_owned(),
-        status: TaskStatus::Pending,
-        summary: String::new(),
-        output: String::new(),
-        output_path: None,
-        turns_used: None,
-        created_at: now_timestamp(),
-        updated_at: now_timestamp(),
+    let task_list_id = current_task_list_id();
+    ensure_task_list_dir(&task_list_id)?;
+    let _lock = TaskListLockGuard::acquire(&task_list_id)?;
+    let task = SharedTask {
+        id: next_task_id(&task_list_id)?,
+        subject: subject.to_owned(),
+        description: description.to_owned(),
+        active_form,
+        owner: None,
+        status: SharedTaskStatus::Pending,
+        blocks: Vec::new(),
+        blocked_by: Vec::new(),
+        metadata,
     };
+    write_shared_task(&task_list_id, &task)?;
 
-    let id = task.id.clone();
-    let mut store = TASK_STORE
-        .lock()
-        .map_err(|_| anyhow!("task store lock poisoned"))?;
-    store.insert(id.clone(), task);
-    drop(store);
-    persist_task_if_configured(&id)?;
-
-    Ok(json!({
-        "id": id,
-        "status": "pending",
-        "message": format!("Task '{title}' created.")
-    })
-    .to_string())
+    Ok(format!(
+        "Task #{} created successfully: {}",
+        task.id, task.subject
+    ))
 }
 
 pub fn task_get(input: &Value) -> Result<String> {
-    let id = input["id"]
-        .as_str()
-        .ok_or_else(|| anyhow!("id is required"))?;
+    let id = input
+        .get("taskId")
+        .and_then(Value::as_str)
+        .or_else(|| input.get("id").and_then(Value::as_str))
+        .ok_or_else(|| anyhow!("taskId is required"))?;
+    let task_list_id = current_task_list_id();
+    let Some(task) = read_shared_task(&task_list_id, id)? else {
+        return Ok("Task not found".to_owned());
+    };
 
-    let store = TASK_STORE
-        .lock()
-        .map_err(|_| anyhow!("task store lock poisoned"))?;
-    let task = store
-        .get(id)
-        .ok_or_else(|| anyhow!("task '{id}' not found"))?;
-
-    Ok(serde_json::to_string_pretty(task)?)
+    let mut lines = vec![
+        format!("Task #{}: {}", task.id, task.subject),
+        format!("Status: {}", task.status.as_str()),
+        format!("Description: {}", task.description),
+    ];
+    if !task.blocked_by.is_empty() {
+        lines.push(format!(
+            "Blocked by: {}",
+            task.blocked_by
+                .iter()
+                .map(|value| format!("#{value}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !task.blocks.is_empty() {
+        lines.push(format!(
+            "Blocks: {}",
+            task.blocks
+                .iter()
+                .map(|value| format!("#{value}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    Ok(lines.join("\n"))
 }
 
 pub fn task_list(_input: &Value) -> Result<String> {
-    let tasks = task_snapshots();
-
+    let task_list_id = current_task_list_id();
+    let tasks = list_shared_tasks(&task_list_id)?;
     if tasks.is_empty() {
-        return Ok("No tasks found.".to_owned());
+        return Ok("No tasks found".to_owned());
     }
 
-    Ok(serde_json::to_string_pretty(&tasks)?)
-}
+    let resolved = tasks
+        .iter()
+        .filter(|task| task.status == SharedTaskStatus::Completed)
+        .map(|task| task.id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
 
-pub fn task_stop(input: &Value) -> Result<String> {
-    let id = input["id"]
-        .as_str()
-        .ok_or_else(|| anyhow!("id is required"))?;
-
-    let mut store = TASK_STORE
-        .lock()
-        .map_err(|_| anyhow!("task store lock poisoned"))?;
-    let task = store
-        .get_mut(id)
-        .ok_or_else(|| anyhow!("task '{id}' not found"))?;
-
-    task.status = TaskStatus::Stopped;
-    task.updated_at = now_timestamp();
-    persist_existing_task(task)?;
-
-    Ok(json!({
-        "id": id,
-        "status": "stopped",
-        "message": format!("Task '{id}' stopped.")
-    })
-    .to_string())
+    Ok(tasks
+        .into_iter()
+        .filter(|task| {
+            task.metadata
+                .as_ref()
+                .and_then(|meta| meta.get("_internal"))
+                .and_then(Value::as_bool)
+                != Some(true)
+        })
+        .map(|task| {
+            let owner = task
+                .owner
+                .as_ref()
+                .map(|value| format!(" ({value})"))
+                .unwrap_or_default();
+            let blocked_by = task
+                .blocked_by
+                .into_iter()
+                .filter(|value| !resolved.contains(value))
+                .map(|value| format!("#{value}"))
+                .collect::<Vec<_>>();
+            let blocked = if blocked_by.is_empty() {
+                String::new()
+            } else {
+                format!(" [blocked by {}]", blocked_by.join(", "))
+            };
+            format!(
+                "#{} [{}] {}{}{}",
+                task.id,
+                task.status.as_str(),
+                task.subject,
+                owner,
+                blocked
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n"))
 }
 
 pub fn task_update(input: &Value) -> Result<String> {
-    let id = input["id"]
-        .as_str()
-        .ok_or_else(|| anyhow!("id is required"))?;
+    let id = input
+        .get("taskId")
+        .and_then(Value::as_str)
+        .or_else(|| input.get("id").and_then(Value::as_str))
+        .ok_or_else(|| anyhow!("taskId is required"))?;
+    let task_list_id = current_task_list_id();
+    let _lock = TaskListLockGuard::acquire(&task_list_id)?;
+    let Some(mut task) = read_shared_task(&task_list_id, id)? else {
+        return Ok(format!("Task #{id} not found"));
+    };
 
-    let mut store = TASK_STORE
-        .lock()
-        .map_err(|_| anyhow!("task store lock poisoned"))?;
-    let task = store
-        .get_mut(id)
-        .ok_or_else(|| anyhow!("task '{id}' not found"))?;
+    let mut updated_fields = Vec::new();
+    let prior_status = task.status.clone();
 
-    if let Some(status_str) = input["status"].as_str() {
-        task.status = match status_str {
-            "pending" => TaskStatus::Pending,
-            "running" => TaskStatus::Running,
-            "completed" => TaskStatus::Completed,
-            "failed" => TaskStatus::Failed,
-            "stopped" => TaskStatus::Stopped,
-            other => return Err(anyhow!("invalid status '{other}'")),
-        };
+    if let Some(subject) = input.get("subject").and_then(Value::as_str)
+        && subject != task.subject
+    {
+        task.subject = subject.to_owned();
+        updated_fields.push("subject");
     }
-    if let Some(parent_task_id) = input.get("parent_task_id").and_then(Value::as_str) {
-        task.parent_task_id = Some(parent_task_id.to_owned());
+    if let Some(description) = input.get("description").and_then(Value::as_str)
+        && description != task.description
+    {
+        task.description = description.to_owned();
+        updated_fields.push("description");
     }
-    if let Some(depth) = input.get("depth").and_then(Value::as_u64) {
-        task.depth = u32::try_from(depth).unwrap_or(u32::MAX);
+    if input.get("activeForm").is_some() {
+        let next = input
+            .get("activeForm")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        if next != task.active_form {
+            task.active_form = next;
+            updated_fields.push("activeForm");
+        }
     }
-    if let Some(kind) = input.get("kind").and_then(Value::as_str) {
-        task.kind = match kind {
-            "background" => TaskKind::Background,
-            "delegation" => TaskKind::Delegation,
-            "batch" => TaskKind::Batch,
-            other => return Err(anyhow!("invalid kind '{other}'")),
-        };
+    if input.get("owner").is_some() {
+        let next = input
+            .get("owner")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        if next != task.owner {
+            task.owner = next;
+            updated_fields.push("owner");
+        }
+    } else if input.get("status").and_then(Value::as_str) == Some("in_progress")
+        && task.owner.is_none()
+        && std::env::var(rc_swarm::constants::ENV_TEAM_NAME)
+            .ok()
+            .is_some_and(|value| !value.trim().is_empty())
+    {
+        let next = std::env::var(rc_swarm::constants::ENV_AGENT_NAME)
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
+        if next.is_some() && next != task.owner {
+            task.owner = next;
+            updated_fields.push("owner");
+        }
     }
-    if let Some(summary) = input.get("summary").and_then(Value::as_str) {
-        task.summary = summary.to_owned();
+    if let Some(status) = input.get("status").and_then(Value::as_str) {
+        if status == "deleted" {
+            let deleted = delete_shared_task(&task_list_id, id)?;
+            return Ok(if deleted {
+                format!("Updated task #{id} deleted")
+            } else {
+                format!("Task #{id} not found")
+            });
+        }
+        let next = SharedTaskStatus::parse(status)?;
+        if next != task.status {
+            task.status = next;
+            updated_fields.push("status");
+        }
     }
-    if let Some(output) = input["output"].as_str() {
-        task.output = output.to_owned();
-    }
-    if let Some(turns_used) = input.get("turns_used").and_then(Value::as_u64) {
-        task.turns_used = Some(u32::try_from(turns_used).unwrap_or(u32::MAX));
+    if let Some(metadata) = input.get("metadata").and_then(Value::as_object) {
+        task.metadata = merge_task_metadata(task.metadata.take(), Some(metadata));
+        updated_fields.push("metadata");
     }
 
-    task.updated_at = now_timestamp();
-    persist_existing_task(task)?;
+    write_shared_task(&task_list_id, &task)?;
 
-    let status_str = task.status.as_str();
-    Ok(json!({
-        "id": id,
-        "status": status_str,
-        "message": format!("Task '{id}' updated.")
-    })
-    .to_string())
+    if let Some(values) = input.get("addBlocks").and_then(Value::as_array) {
+        let mut changed = false;
+        for value in values.iter().filter_map(Value::as_str) {
+            changed |= add_task_dependency(&task_list_id, id, value)?;
+        }
+        if changed {
+            updated_fields.push("blocks");
+        }
+    }
+
+    if let Some(values) = input.get("addBlockedBy").and_then(Value::as_array) {
+        let mut changed = false;
+        for value in values.iter().filter_map(Value::as_str) {
+            changed |= add_task_dependency(&task_list_id, value, id)?;
+        }
+        if changed {
+            updated_fields.push("blockedBy");
+        }
+    }
+
+    let mut result = if updated_fields.is_empty() {
+        format!("Updated task #{id}")
+    } else {
+        format!("Updated task #{id} {}", updated_fields.join(", "))
+    };
+    if prior_status != task.status && task.status == SharedTaskStatus::Completed {
+        let has_teammate_context = std::env::var(rc_swarm::constants::ENV_TEAM_NAME)
+            .ok()
+            .is_some_and(|value| !value.trim().is_empty());
+        if has_teammate_context {
+            result.push_str(
+                "\n\nTask completed. Call TaskList now to find your next available task or see if your work unblocked others.",
+            );
+        }
+    }
+    Ok(result)
 }
 
 /// Stop any active tracked tasks and clear the in-memory task store.
@@ -587,12 +767,338 @@ fn persist_existing_task(task: &mut BackgroundTask) -> Result<()> {
     Ok(())
 }
 
+pub fn configure_task_list_context(
+    task_list_id: Option<String>,
+    base_dir: Option<PathBuf>,
+) -> Result<()> {
+    let mut configured_task_list_id = TASK_LIST_ID
+        .lock()
+        .map_err(|_| anyhow!("task list id lock poisoned"))?;
+    *configured_task_list_id = task_list_id
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    drop(configured_task_list_id);
+
+    let mut configured_base_dir = TASK_LIST_BASE_DIR
+        .lock()
+        .map_err(|_| anyhow!("task list base dir lock poisoned"))?;
+    *configured_base_dir = base_dir;
+    Ok(())
+}
+
+pub fn set_leader_team_name(team_name: Option<String>) -> Result<()> {
+    let mut current = LEADER_TEAM_NAME
+        .lock()
+        .map_err(|_| anyhow!("leader team name lock poisoned"))?;
+    *current = team_name
+        .map(|value| sanitize_task_path_component(value.trim()))
+        .filter(|value| !value.is_empty());
+    Ok(())
+}
+
+#[must_use]
+pub fn task_list_base_dir() -> PathBuf {
+    TASK_LIST_BASE_DIR
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+        .unwrap_or_else(|| rc_swarm::team_helpers::claude_config_home_dir().join("tasks"))
+}
+
+#[must_use]
+pub fn task_list_dir(task_list_id: &str) -> PathBuf {
+    task_list_base_dir().join(sanitize_task_path_component(task_list_id))
+}
+
+#[must_use]
+pub fn current_task_list_id() -> String {
+    if let Ok(value) = std::env::var("CLAUDE_CODE_TASK_LIST_ID") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_owned();
+        }
+    }
+
+    if let Ok(value) = std::env::var(rc_swarm::constants::ENV_TEAM_NAME) {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_owned();
+        }
+    }
+
+    if let Ok(guard) = TASK_LIST_ID.lock()
+        && let Some(value) = guard.as_ref()
+    {
+        return value.clone();
+    }
+
+    if let Ok(guard) = LEADER_TEAM_NAME.lock()
+        && let Some(value) = guard.as_ref()
+    {
+        return value.clone();
+    }
+
+    "default".to_owned()
+}
+
+pub fn ensure_task_list_dir(task_list_id: &str) -> Result<()> {
+    let dir = task_list_dir(task_list_id);
+    fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))
+}
+
+pub fn reset_task_list(task_list_id: &str) -> Result<()> {
+    ensure_task_list_dir(task_list_id)?;
+    let _lock = TaskListLockGuard::acquire(task_list_id)?;
+    let dir = task_list_dir(task_list_id);
+    let highest =
+        current_high_water_mark(task_list_id)?.max(find_highest_task_id_from_files(task_list_id)?);
+    if highest > 0 {
+        write_high_water_mark(task_list_id, highest)?;
+    }
+
+    for entry in fs::read_dir(&dir).with_context(|| format!("failed to read {}", dir.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+            let _ = fs::remove_file(&path);
+        }
+    }
+
+    Ok(())
+}
+
+fn sanitize_task_path_component(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+impl TaskListLockGuard {
+    fn acquire(task_list_id: &str) -> Result<Self> {
+        ensure_task_list_dir(task_list_id)?;
+        let lock_path = task_list_dir(task_list_id).join(TASK_LIST_LOCK_FILE);
+        for _ in 0..100 {
+            match OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&lock_path)
+            {
+                Ok(_) => return Ok(Self { path: lock_path }),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("failed to lock {}", lock_path.display()));
+                }
+            }
+        }
+
+        Err(anyhow!(
+            "timed out waiting for task list lock {}",
+            lock_path.display()
+        ))
+    }
+}
+
+fn high_water_mark_path(task_list_id: &str) -> PathBuf {
+    task_list_dir(task_list_id).join(TASK_LIST_HIGH_WATER_MARK_FILE)
+}
+
+fn current_high_water_mark(task_list_id: &str) -> Result<u64> {
+    let path = high_water_mark_path(task_list_id);
+    match fs::read_to_string(&path) {
+        Ok(contents) => Ok(contents.trim().parse::<u64>().unwrap_or(0)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(error) => Err(error).with_context(|| format!("failed to read {}", path.display())),
+    }
+}
+
+fn write_high_water_mark(task_list_id: &str, value: u64) -> Result<()> {
+    let path = high_water_mark_path(task_list_id);
+    fs::write(&path, value.to_string())
+        .with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn task_path(task_list_id: &str, task_id: &str) -> PathBuf {
+    task_list_dir(task_list_id).join(format!("{}.json", sanitize_task_path_component(task_id)))
+}
+
+fn find_highest_task_id_from_files(task_list_id: &str) -> Result<u64> {
+    let dir = task_list_dir(task_list_id);
+    if !dir.exists() {
+        return Ok(0);
+    }
+
+    let mut highest = 0;
+    for entry in fs::read_dir(&dir).with_context(|| format!("failed to read {}", dir.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        if let Ok(value) = stem.parse::<u64>() {
+            highest = highest.max(value);
+        }
+    }
+
+    Ok(highest)
+}
+
+fn next_task_id(task_list_id: &str) -> Result<String> {
+    let next = current_high_water_mark(task_list_id)?
+        .max(find_highest_task_id_from_files(task_list_id)?)
+        + 1;
+    write_high_water_mark(task_list_id, next)?;
+    Ok(next.to_string())
+}
+
+fn read_shared_task(task_list_id: &str, task_id: &str) -> Result<Option<SharedTask>> {
+    let path = task_path(task_list_id, task_id);
+    let contents = match fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", path.display()));
+        }
+    };
+    let task = serde_json::from_str::<SharedTask>(&contents)
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+    Ok(Some(task))
+}
+
+fn write_shared_task(task_list_id: &str, task: &SharedTask) -> Result<()> {
+    ensure_task_list_dir(task_list_id)?;
+    let path = task_path(task_list_id, &task.id);
+    let contents = serde_json::to_vec_pretty(task)?;
+    fs::write(&path, contents).with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn list_shared_tasks(task_list_id: &str) -> Result<Vec<SharedTask>> {
+    let dir = task_list_dir(task_list_id);
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut tasks = Vec::new();
+    for entry in fs::read_dir(&dir).with_context(|| format!("failed to read {}", dir.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let contents = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        if let Ok(task) = serde_json::from_str::<SharedTask>(&contents) {
+            tasks.push(task);
+        }
+    }
+
+    tasks.sort_by(|left, right| {
+        let left_num = left.id.parse::<u64>().unwrap_or(u64::MAX);
+        let right_num = right.id.parse::<u64>().unwrap_or(u64::MAX);
+        left_num
+            .cmp(&right_num)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok(tasks)
+}
+
+fn merge_task_metadata(
+    existing: Option<BTreeMap<String, Value>>,
+    update: Option<&serde_json::Map<String, Value>>,
+) -> Option<BTreeMap<String, Value>> {
+    let Some(update) = update else {
+        return existing;
+    };
+
+    let mut merged = existing.unwrap_or_default();
+    for (key, value) in update {
+        if value.is_null() {
+            merged.remove(key);
+        } else {
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+    if merged.is_empty() {
+        None
+    } else {
+        Some(merged)
+    }
+}
+
+fn add_task_dependency(task_list_id: &str, from_task_id: &str, to_task_id: &str) -> Result<bool> {
+    let Some(mut from_task) = read_shared_task(task_list_id, from_task_id)? else {
+        return Ok(false);
+    };
+    let Some(mut to_task) = read_shared_task(task_list_id, to_task_id)? else {
+        return Ok(false);
+    };
+
+    if !from_task.blocks.iter().any(|value| value == to_task_id) {
+        from_task.blocks.push(to_task_id.to_owned());
+        from_task.blocks.sort();
+        from_task.blocks.dedup();
+        write_shared_task(task_list_id, &from_task)?;
+    }
+
+    if !to_task.blocked_by.iter().any(|value| value == from_task_id) {
+        to_task.blocked_by.push(from_task_id.to_owned());
+        to_task.blocked_by.sort();
+        to_task.blocked_by.dedup();
+        write_shared_task(task_list_id, &to_task)?;
+    }
+
+    Ok(true)
+}
+
+fn delete_shared_task(task_list_id: &str, task_id: &str) -> Result<bool> {
+    let path = task_path(task_list_id, task_id);
+    match fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to delete {}", path.display()));
+        }
+    }
+
+    if let Ok(value) = task_id.parse::<u64>() {
+        let current = current_high_water_mark(task_list_id)?;
+        if value > current {
+            write_high_water_mark(task_list_id, value)?;
+        }
+    }
+
+    for mut task in list_shared_tasks(task_list_id)? {
+        let original_blocks = task.blocks.len();
+        let original_blocked_by = task.blocked_by.len();
+        task.blocks.retain(|value| value != task_id);
+        task.blocked_by.retain(|value| value != task_id);
+        if task.blocks.len() != original_blocks || task.blocked_by.len() != original_blocked_by {
+            write_shared_task(task_list_id, &task)?;
+        }
+    }
+
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use once_cell::sync::Lazy;
     use serde_json::json;
     use std::sync::{Mutex, MutexGuard};
+    use tempfile::TempDir;
 
     static TEST_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
@@ -604,6 +1110,15 @@ mod tests {
         *TASK_OUTPUT_DIR
             .lock()
             .expect("task output dir lock should work in tests") = None;
+        *TASK_LIST_ID
+            .lock()
+            .expect("task list id lock should work in tests") = None;
+        *TASK_LIST_BASE_DIR
+            .lock()
+            .expect("task list base dir lock should work in tests") = None;
+        *LEADER_TEAM_NAME
+            .lock()
+            .expect("leader team name lock should work in tests") = None;
     }
 
     fn test_guard() -> MutexGuard<'static, ()> {
@@ -614,45 +1129,72 @@ mod tests {
         guard
     }
 
-    #[test]
-    fn task_create_and_get_work() {
-        let _guard = test_guard();
-        let create_result = task_create(&json!({"title": "Test task"}));
-        assert!(create_result.is_ok(), "create failed: {:?}", create_result);
-
-        let create_str = create_result.expect("create should work");
-        let create_json: Value = serde_json::from_str(&create_str).expect("should be valid JSON");
-        let task_id = create_json["id"].as_str().expect("should have id");
-
-        let get_result = task_get(&json!({"id": task_id}));
-        assert!(get_result.is_ok(), "get failed: {:?}", get_result);
-
-        let get_str = get_result.expect("get should work");
-        let task: BackgroundTask = serde_json::from_str(&get_str).expect("should parse task");
-        assert_eq!(task.title, "Test task");
-        assert_eq!(task.status.as_str(), "pending");
-        assert!(task.output_path.is_none());
-        assert_eq!(task.kind.as_str(), "background");
+    fn configure_shared_task_list(task_list_id: &str) -> TempDir {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        configure_task_list_context(
+            Some(task_list_id.to_owned()),
+            Some(tempdir.path().join("tasks")),
+        )
+        .expect("configure task list context");
+        tempdir
     }
 
     #[test]
-    fn task_update_changes_status() {
+    fn task_create_and_get_work() {
         let _guard = test_guard();
-        let create_str = task_create(&json!({"title": "Update test"})).expect("create should work");
-        let create_json: Value = serde_json::from_str(&create_str).expect("should be valid JSON");
-        let task_id = create_json["id"].as_str().expect("should have id");
+        let _tempdir = configure_shared_task_list("task-create-and-get");
+        let create_result = task_create(&json!({
+            "subject": "Test task",
+            "description": "Do the test work"
+        }));
+        assert!(create_result.is_ok(), "create failed: {:?}", create_result);
+
+        assert_eq!(
+            create_result.expect("create should work"),
+            "Task #1 created successfully: Test task"
+        );
+
+        let get_result = task_get(&json!({"taskId": "1"}));
+        assert!(get_result.is_ok(), "get failed: {:?}", get_result);
+
+        let get_str = get_result.expect("get should work");
+        assert!(get_str.contains("Task #1: Test task"));
+        assert!(get_str.contains("Status: pending"));
+        assert!(get_str.contains("Description: Do the test work"));
+
+        let task = read_shared_task("task-create-and-get", "1")
+            .expect("read shared task")
+            .expect("task should exist");
+        assert_eq!(task.subject, "Test task");
+        assert_eq!(task.description, "Do the test work");
+        assert_eq!(task.status, SharedTaskStatus::Pending);
+    }
+
+    #[test]
+    fn task_update_changes_status_and_owner() {
+        let _guard = test_guard();
+        let _tempdir = configure_shared_task_list("task-update");
+        task_create(&json!({
+            "subject": "Update test",
+            "description": "Change the state"
+        }))
+        .expect("create should work");
 
         let update_result = task_update(&json!({
-            "id": task_id,
-            "status": "running",
-            "output": "in progress"
+            "taskId": "1",
+            "status": "in_progress",
+            "owner": "worker-1"
         }));
         assert!(update_result.is_ok(), "update failed: {:?}", update_result);
 
-        let get_str = task_get(&json!({"id": task_id})).expect("get should work");
-        let task: BackgroundTask = serde_json::from_str(&get_str).expect("should parse task");
-        assert_eq!(task.status.as_str(), "running");
-        assert_eq!(task.output, "in progress");
+        let get_str = task_get(&json!({"taskId": "1"})).expect("get should work");
+        assert!(get_str.contains("Status: in_progress"));
+
+        let task = read_shared_task("task-update", "1")
+            .expect("read shared task")
+            .expect("task should exist");
+        assert_eq!(task.status, SharedTaskStatus::InProgress);
+        assert_eq!(task.owner.as_deref(), Some("worker-1"));
     }
 
     #[test]
@@ -675,40 +1217,64 @@ mod tests {
     }
 
     #[test]
-    fn task_stop_marks_stopped() {
+    fn task_list_filters_internal_tasks_and_resolved_blockers() {
         let _guard = test_guard();
-        let create_str = task_create(&json!({"title": "Stop test"})).expect("create should work");
-        let create_json: Value = serde_json::from_str(&create_str).expect("should be valid JSON");
-        let task_id = create_json["id"].as_str().expect("should have id");
-
-        let stop_result = task_stop(&json!({"id": task_id}));
-        assert!(stop_result.is_ok(), "stop failed: {:?}", stop_result);
-
-        let get_str = task_get(&json!({"id": task_id})).expect("get should work");
-        let task: BackgroundTask = serde_json::from_str(&get_str).expect("should parse task");
-        assert_eq!(task.status.as_str(), "stopped");
-    }
-
-    #[test]
-    fn task_list_returns_tasks() {
-        let _guard = test_guard();
-        let _ = task_create(&json!({"title": "List test"}));
+        let _tempdir = configure_shared_task_list("task-list");
+        task_create(&json!({"subject": "Compile", "description": "Compile the project"}))
+            .expect("create first task");
+        task_create(&json!({"subject": "Test", "description": "Run tests"}))
+            .expect("create second task");
+        task_create(&json!({
+            "subject": "Internal",
+            "description": "Hidden task",
+            "metadata": {"_internal": true}
+        }))
+        .expect("create internal task");
+        task_update(&json!({"taskId": "2", "addBlockedBy": ["1"]})).expect("add blocker");
+        task_update(&json!({"taskId": "1", "status": "completed"})).expect("complete blocker");
 
         let list_result = task_list(&json!({}));
         assert!(list_result.is_ok(), "list failed: {:?}", list_result);
 
         let list_str = list_result.expect("list should work");
-        assert!(
-            !list_str.contains("No tasks found"),
-            "should have at least one task"
-        );
+        assert!(list_str.contains("#1 [completed] Compile"));
+        assert!(list_str.contains("#2 [pending] Test"));
+        assert!(!list_str.contains("Internal"));
+        assert!(!list_str.contains("[blocked by #1]"));
     }
 
     #[test]
-    fn task_get_missing_returns_error() {
+    fn task_get_missing_returns_task_not_found() {
         let _guard = test_guard();
-        let result = task_get(&json!({"id": "nonexistent"}));
-        assert!(result.is_err());
+        let _tempdir = configure_shared_task_list("task-missing");
+        let result = task_get(&json!({"taskId": "nonexistent"})).expect("task_get should work");
+        assert_eq!(result, "Task not found");
+    }
+
+    #[test]
+    fn task_update_deleted_removes_file_and_dependencies() {
+        let _guard = test_guard();
+        let _tempdir = configure_shared_task_list("task-delete");
+        task_create(&json!({"subject": "Blocker", "description": "Do blocker work"}))
+            .expect("create blocker");
+        task_create(&json!({"subject": "Blocked", "description": "Do blocked work"}))
+            .expect("create blocked");
+        task_update(&json!({"taskId": "1", "addBlocks": ["2"]})).expect("add dependency");
+
+        let delete_result =
+            task_update(&json!({"taskId": "1", "status": "deleted"})).expect("delete task");
+        assert_eq!(delete_result, "Updated task #1 deleted");
+        assert!(
+            read_shared_task("task-delete", "1")
+                .expect("read deleted task")
+                .is_none()
+        );
+
+        let blocked = read_shared_task("task-delete", "2")
+            .expect("read blocked task")
+            .expect("blocked task should exist");
+        assert!(blocked.blocked_by.is_empty());
+        assert!(blocked.blocks.is_empty());
     }
 
     #[test]
@@ -739,22 +1305,16 @@ mod tests {
         let _guard = test_guard();
         let tempdir = tempfile::tempdir().expect("tempdir");
         configure_task_output_dir(Some(tempdir.path().to_path_buf())).expect("configure output");
+        let task = create_background_task("Persist output test").expect("create background task");
+        finish_background_task(&task.id, TaskStatus::Completed, "done")
+            .expect("finish background task");
 
-        let create_str =
-            task_create(&json!({"title": "Persist output test"})).expect("create should work");
-        let create_json: Value = serde_json::from_str(&create_str).expect("valid JSON");
-        let task_id = create_json["id"].as_str().expect("task id");
-        task_update(&json!({
-            "id": task_id,
-            "status": "completed",
-            "output": "done"
-        }))
-        .expect("update should work");
-
-        let get_str = task_get(&json!({"id": task_id})).expect("get should work");
-        let task: BackgroundTask = serde_json::from_str(&get_str).expect("parse task");
-        assert!(task.output_path.is_some());
-        assert!(tempdir.path().join(format!("{task_id}.json")).exists());
+        let persisted = load_persisted_task(tempdir.path(), &task.id)
+            .expect("load persisted task")
+            .expect("persisted task should exist");
+        assert_eq!(persisted.output, "done");
+        assert!(persisted.output_path.is_some());
+        assert!(tempdir.path().join(format!("{}.json", task.id)).exists());
     }
 
     #[test]
@@ -832,9 +1392,8 @@ mod tests {
         let tempdir = tempfile::tempdir().expect("tempdir");
         configure_task_output_dir(Some(tempdir.path().to_path_buf())).expect("configure output");
 
-        let pending = task_create(&json!({"title": "Pending task"})).expect("create task");
-        let pending_json: Value = serde_json::from_str(&pending).expect("valid JSON");
-        let pending_id = pending_json["id"].as_str().expect("pending id");
+        let pending = create_background_task("Pending task").expect("create task");
+        let pending_id = pending.id.clone();
 
         let completed_id = allocate_task_id();
         start_tracked_task(
@@ -860,7 +1419,7 @@ mod tests {
         assert_eq!(drained.len(), 2);
         assert!(task_snapshots().is_empty(), "task store should be empty");
 
-        let pending_persisted = load_persisted_task(tempdir.path(), pending_id)
+        let pending_persisted = load_persisted_task(tempdir.path(), &pending_id)
             .expect("load persisted pending task")
             .expect("pending task should persist");
         assert!(matches!(pending_persisted.status, TaskStatus::Stopped));

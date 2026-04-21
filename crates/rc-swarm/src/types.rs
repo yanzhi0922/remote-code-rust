@@ -18,7 +18,7 @@ pub struct TeamAllowedPath {
     pub read_only: bool,
 }
 
-/// Persistent team data stored in `team.json`.
+/// Persistent team data stored in `config.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TeamFile {
     /// Team name (unique identifier).

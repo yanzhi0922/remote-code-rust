@@ -38,7 +38,6 @@ const ALL_AGENT_DISALLOWED_TOOLS: &[&str] = &[
     "enter_plan_mode",
     "agent",
     "ask_user",
-    "task_stop",
     "workflow",
 ];
 
@@ -1161,9 +1160,6 @@ fn tool_aliases(spec: &ToolSpec) -> BTreeSet<String> {
         }
         "send_message" => {
             aliases.insert("SendMessage".to_owned());
-        }
-        "task_stop" => {
-            aliases.insert("TaskStop".to_owned());
         }
         "synthetic_output" => {
             aliases.insert("SyntheticOutput".to_owned());
