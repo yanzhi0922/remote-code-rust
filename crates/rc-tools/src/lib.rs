@@ -389,7 +389,6 @@ fn builtin_tool_is_deferred(name: &str) -> bool {
             | "task_create"
             | "task_get"
             | "task_list"
-            | "task_stop"
             | "task_update"
             | "task_output"
             | "send_message"
@@ -424,7 +423,6 @@ fn builtin_tool_search_hints(name: &str) -> &'static [&'static str] {
         "task_get" => &["retrieve a task by id"],
         "task_list" => &["list all tasks"],
         "task_output" => &["read output logs from a background task"],
-        "task_stop" => &["kill a running background task"],
         "task_update" => &["update a task"],
         "team_create" => &["create a multi-agent swarm team"],
         "team_delete" => &["disband a swarm team and clean up"],
@@ -1268,7 +1266,6 @@ pub async fn execute_tool_call(
             "task_create" => tasks::task_create(&call.input),
             "task_get" => tasks::task_get(&call.input),
             "task_list" => tasks::task_list(&call.input),
-            "task_stop" => tasks::task_stop(&call.input),
             "task_update" => tasks::task_update(&call.input),
             "notebook_edit" => misc::notebook_edit(&call.input, context),
             "skill_discover" => misc::skill_discover(&call.input, context),
@@ -1511,7 +1508,31 @@ mod tests {
         std::os::windows::fs::symlink_dir(target, link)
     }
 
-    struct TeamDirGuard;
+    struct TaskListDirGuard;
+
+    impl Drop for TaskListDirGuard {
+        fn drop(&mut self) {
+            crate::tasks::configure_task_list_context(None, None).expect("reset task list context");
+            crate::tasks::set_leader_team_name(None).expect("reset leader team name");
+        }
+    }
+
+    fn configure_task_list_for_tests(
+        base: &std::path::Path,
+        task_list_id: Option<&str>,
+    ) -> TaskListDirGuard {
+        crate::tasks::configure_task_list_context(
+            task_list_id.map(ToOwned::to_owned),
+            Some(base.join("tasks")),
+        )
+        .expect("configure task list context");
+        crate::tasks::set_leader_team_name(None).expect("clear leader team name");
+        TaskListDirGuard
+    }
+
+    struct TeamDirGuard {
+        _task_list_guard: TaskListDirGuard,
+    }
 
     impl Drop for TeamDirGuard {
         fn drop(&mut self) {
@@ -1523,6 +1544,7 @@ mod tests {
     async fn seed_team(base: &std::path::Path, team_name: &str) -> TeamDirGuard {
         team_helpers::set_base_dir_override(Some(base.to_path_buf()));
         crate::team_tools::set_base_dir_override(Some(base.to_path_buf()));
+        let task_list_guard = configure_task_list_for_tests(base, None);
         let mut team = TeamFile::new(team_name, "lead");
         team.description = Some("test objective".to_owned());
         team.members
@@ -1530,7 +1552,9 @@ mod tests {
         team_helpers::create_team(&team)
             .await
             .expect("team should be created");
-        TeamDirGuard
+        TeamDirGuard {
+            _task_list_guard: task_list_guard,
+        }
     }
 
     async fn create_team_via_tool(
@@ -1817,7 +1841,7 @@ mod tests {
         let teams = tempdir.path().join("teams");
         std::fs::create_dir_all(&workspace).expect("workspace");
         std::fs::create_dir_all(&teams).expect("teams");
-        let target = teams.join("alpha").join("team.json");
+        let target = teams.join("alpha").join("config.json");
         std::fs::create_dir_all(target.parent().expect("team dir")).expect("team dir");
         std::fs::write(&target, "{\"name\":\"alpha\"}").expect("team file");
         let context = ToolExecutionContext {
@@ -2591,6 +2615,8 @@ mod tests {
             Ok(dir) => dir,
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
+        let _task_list_guard =
+            configure_task_list_for_tests(tempdir.path(), Some("task-tools-crud"));
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
             timeout_ms: 5_000,
@@ -2605,7 +2631,10 @@ mod tests {
             &ToolCall {
                 id: "1".to_owned(),
                 name: "task_create".to_owned(),
-                input: json!({"title": "Build feature"}),
+                input: json!({
+                    "subject": "Build feature",
+                    "description": "Implement the feature end-to-end"
+                }),
             },
             &context,
             &broker,
@@ -2618,16 +2647,17 @@ mod tests {
             "task_create error: {}",
             create_result.content
         );
-        let create_json: serde_json::Value =
-            serde_json::from_str(&create_result.content).expect("should be valid JSON");
-        let task_id = create_json["id"].as_str().expect("should have id");
+        assert_eq!(
+            create_result.content,
+            "Task #1 created successfully: Build feature"
+        );
 
         // Get the task
         let get_result = execute_tool_call(
             &ToolCall {
                 id: "2".to_owned(),
                 name: "task_get".to_owned(),
-                input: json!({"id": task_id}),
+                input: json!({"taskId": "1"}),
             },
             &context,
             &broker,
@@ -2650,7 +2680,7 @@ mod tests {
             &ToolCall {
                 id: "3".to_owned(),
                 name: "task_update".to_owned(),
-                input: json!({"id": task_id, "status": "running"}),
+                input: json!({"taskId": "1", "status": "in_progress"}),
             },
             &context,
             &broker,
@@ -2686,24 +2716,10 @@ mod tests {
             !list_result.content.contains("No tasks found"),
             "should have at least one task"
         );
-
-        // Stop the task
-        let stop_result = execute_tool_call(
-            &ToolCall {
-                id: "5".to_owned(),
-                name: "task_stop".to_owned(),
-                input: json!({"id": task_id}),
-            },
-            &context,
-            &broker,
-        )
-        .await
-        .expect("task_stop should work");
-
         assert!(
-            !stop_result.is_error,
-            "task_stop error: {}",
-            stop_result.content
+            list_result
+                .content
+                .contains("#1 [in_progress] Build feature")
         );
     }
 
@@ -3019,6 +3035,16 @@ mod tests {
         .expect("team_delete should return tool result");
         assert!(denied.is_error);
         assert!(team_helpers::read_team("cleanup-team").await.is_ok());
+
+        let mut cleanup_team = team_helpers::read_team("cleanup-team")
+            .await
+            .expect("cleanup team should exist");
+        for member in &mut cleanup_team.members {
+            member.is_active = Some(false);
+        }
+        team_helpers::update_team(&cleanup_team)
+            .await
+            .expect("should mark cleanup team inactive");
 
         let deleted = execute_tool_call(
             &ToolCall {
@@ -3499,10 +3525,6 @@ mod tests {
         assert!(
             names.contains(&"task_list"),
             "task_list should be registered"
-        );
-        assert!(
-            names.contains(&"task_stop"),
-            "task_stop should be registered"
         );
         assert!(
             names.contains(&"task_update"),

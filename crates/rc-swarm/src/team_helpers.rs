@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use tokio::fs;
 
-use crate::constants::{DEFAULT_TEAMS_BASE_DIR, MAX_TEAMMATES, TEAM_FILE_NAME};
+use crate::constants::{MAX_TEAMMATES, TEAM_FILE_NAME};
 use crate::error::{SwarmError, SwarmResult};
 use crate::types::{TeamFile, TeamMember};
 
@@ -98,10 +98,27 @@ pub fn validate_agent_name(name: &str) -> SwarmResult<()> {
     Ok(())
 }
 
+/// Return the Claude-style config home directory.
+///
+/// Mirrors the research implementation:
+/// - `CLAUDE_CONFIG_DIR` wins when set
+/// - otherwise fall back to `$HOME/.claude` / `%USERPROFILE%/.claude`
+pub fn claude_config_home_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
+        PathBuf::from(dir)
+    } else if let Ok(home) = std::env::var("HOME") {
+        PathBuf::from(home).join(".claude")
+    } else if let Ok(userprofile) = std::env::var("USERPROFILE") {
+        PathBuf::from(userprofile).join(".claude")
+    } else {
+        PathBuf::from(".claude")
+    }
+}
+
 /// Get the base directory for team data.
 ///
 /// Uses the thread-local override if set, then `$RC_SWARM_TEAM_DIR`,
-/// then `$HOME/.remote-code/teams/`, then a relative path.
+/// then `CLAUDE_CONFIG_DIR/teams`, then a relative path.
 pub fn teams_base_dir() -> PathBuf {
     // Check thread-local override first (for tests).
     if let Some(dir) = base_dir_override() {
@@ -110,12 +127,8 @@ pub fn teams_base_dir() -> PathBuf {
 
     if let Ok(dir) = std::env::var("RC_SWARM_TEAM_DIR") {
         PathBuf::from(dir)
-    } else if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home).join(DEFAULT_TEAMS_BASE_DIR)
-    } else if let Ok(userprofile) = std::env::var("USERPROFILE") {
-        PathBuf::from(userprofile).join(DEFAULT_TEAMS_BASE_DIR)
     } else {
-        PathBuf::from(DEFAULT_TEAMS_BASE_DIR)
+        claude_config_home_dir().join("teams")
     }
 }
 
@@ -131,7 +144,7 @@ pub fn team_file_path(team_name: &str) -> PathBuf {
 
 /// Create a new team.
 ///
-/// Creates the team directory and writes the initial `team.json`.
+/// Creates the team directory and writes the initial team config.
 pub async fn create_team(team: &TeamFile) -> SwarmResult<()> {
     validate_team_name(&team.name)?;
     let dir = team_dir(&team.name);
@@ -487,7 +500,7 @@ mod tests {
     fn team_file_path_check() {
         let _td = TestDir::new();
         let path = team_file_path("my-team");
-        assert!(path.to_string_lossy().ends_with("team.json"));
+        assert!(path.to_string_lossy().ends_with("config.json"));
     }
 
     #[test]

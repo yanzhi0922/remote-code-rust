@@ -315,7 +315,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                 "additionalProperties": false,
             }),
         },
-        // ── Background task tools ──────────────────────────────────────────
+        // ── Shared task-list tools ────────────────────────────────────────
         ToolSpec {
             name: "task_create".to_owned(),
             protocol_name: "TaskCreate".to_owned(),
@@ -325,10 +325,12 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "title": {"type": "string"},
-                    "command": {"type": "string"}
+                    "subject": {"type": "string", "description": "A brief title for the task"},
+                    "description": {"type": "string", "description": "What needs to be done"},
+                    "activeForm": {"type": "string", "description": "Present continuous form shown in spinner when in_progress (e.g., \"Running tests\")"},
+                    "metadata": {"type": "object", "description": "Arbitrary metadata to attach to the task"}
                 },
-                "required": ["title"],
+                "required": ["subject", "description"],
                 "additionalProperties": false,
             }),
         },
@@ -341,9 +343,9 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string"}
+                    "taskId": {"type": "string", "description": "The ID of the task to retrieve"}
                 },
-                "required": ["id"],
+                "required": ["taskId"],
                 "additionalProperties": false,
             }),
         },
@@ -360,21 +362,6 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
-            name: "task_stop".to_owned(),
-            protocol_name: "TaskStop".to_owned(),
-            permission_tool_name: "TaskStop".to_owned(),
-            description: tool_prompts::TASK_STOP.to_owned(),
-            requires_permission: false,
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "id": {"type": "string"}
-                },
-                "required": ["id"],
-                "additionalProperties": false,
-            }),
-        },
-        ToolSpec {
             name: "task_update".to_owned(),
             protocol_name: "TaskUpdate".to_owned(),
             permission_tool_name: "TaskUpdate".to_owned(),
@@ -383,11 +370,17 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string"},
-                    "status": {"type": "string", "enum": ["pending", "running", "completed", "failed", "stopped"]},
-                    "output": {"type": "string"}
+                    "taskId": {"type": "string", "description": "The ID of the task to update"},
+                    "subject": {"type": "string", "description": "New subject for the task"},
+                    "description": {"type": "string", "description": "New description for the task"},
+                    "activeForm": {"type": "string", "description": "Present continuous form shown in spinner when in_progress (e.g., \"Running tests\")"},
+                    "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "deleted"], "description": "New status for the task"},
+                    "addBlocks": {"type": "array", "items": {"type": "string"}, "description": "Task IDs that this task blocks"},
+                    "addBlockedBy": {"type": "array", "items": {"type": "string"}, "description": "Task IDs that block this task"},
+                    "owner": {"type": "string", "description": "New owner for the task"},
+                    "metadata": {"type": "object", "description": "Metadata keys to merge into the task. Set a key to null to delete it."}
                 },
-                "required": ["id"],
+                "required": ["taskId"],
                 "additionalProperties": false,
             }),
         },
