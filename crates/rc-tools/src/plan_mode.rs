@@ -132,18 +132,13 @@ pub(crate) fn persist_plan_snapshot_if_active() -> Result<()> {
 }
 
 /// Enter plan mode through the host runtime when available.
-///
-/// # Errors
-/// Returns an error if the objective is missing or empty.
 pub fn enter_plan_mode(input: &Value, _context: &ToolExecutionContext) -> Result<String> {
-    let objective = input["objective"]
-        .as_str()
-        .ok_or_else(|| anyhow!("objective is required for plan mode"))?
-        .trim();
-
-    if objective.is_empty() {
-        return Err(anyhow!("objective cannot be empty"));
-    }
+    let objective = input
+        .get("objective")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("implementation task");
 
     if let Some(runtime) = current_runtime() {
         return runtime.enter_plan_mode(objective);
@@ -463,11 +458,15 @@ mod tests {
     }
 
     #[test]
-    fn enter_plan_mode_requires_objective() {
+    fn enter_plan_mode_accepts_empty_input_like_research_schema() {
         let _guard = PLAN_MODE_TEST_MUTEX.lock().expect("test mutex");
         let input = json!({});
         let result = enter_plan_mode(&input, &test_context());
-        assert!(result.is_err());
+        assert!(
+            result
+                .expect("enter plan mode")
+                .contains("Entered plan mode")
+        );
     }
 
     #[test]

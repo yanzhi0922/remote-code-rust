@@ -531,10 +531,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
-                "properties": {
-                    "objective": {"type": "string"}
-                },
-                "required": ["objective"],
+                "properties": {},
                 "additionalProperties": false,
             }),
         },
@@ -1267,6 +1264,25 @@ mod tests {
                 "{tool_name} should expose background"
             );
         }
+    }
+
+    #[test]
+    fn enter_plan_mode_schema_matches_research_empty_input_contract() {
+        let specs = builtin_tool_specs();
+        let spec = specs
+            .iter()
+            .find(|spec| spec.name == "enter_plan_mode")
+            .expect("enter_plan_mode spec");
+
+        assert_eq!(spec.protocol_name, "EnterPlanMode");
+        assert_eq!(
+            spec.input_schema,
+            serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false,
+            })
+        );
     }
 
     #[test]
