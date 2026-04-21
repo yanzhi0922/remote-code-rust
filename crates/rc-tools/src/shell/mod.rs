@@ -149,11 +149,13 @@ async fn execute_foreground(
     let stdout_file_path =
         shell_task_output_path(policy.task_output_dir.as_deref(), &file_stem).await?;
     if let Some(stdout_file_path) = stdout_file_path.as_ref() {
-        process.stdout(stdout_file(stdout_file_path)?);
+        let (stdout, stderr) = merged_output_stdio(stdout_file_path)?;
+        process.stdout(stdout);
+        process.stderr(stderr);
     } else {
         process.stdout(Stdio::piped());
+        process.stderr(Stdio::piped());
     }
-    process.stderr(Stdio::piped());
 
     let child = process.spawn().context("failed to spawn shell command")?;
     let outcome = capture_process_output(
@@ -165,6 +167,7 @@ async fn execute_foreground(
     .await?;
 
     let stdout = render_stdout_for_display(&outcome, policy.max_capture_chars, policy, &file_stem);
+    cleanup_redundant_stdout_file(&outcome, policy.max_capture_chars);
     let stderr = truncate_output(&outcome.stderr, policy.max_capture_chars);
     let artifact_contents = build_artifact_contents(
         &request.command,
@@ -233,11 +236,13 @@ async fn execute_background(
             let stdout_file_path =
                 shell_task_output_path(task_output_dir.as_deref(), &file_stem).await?;
             if let Some(stdout_file_path) = stdout_file_path.as_ref() {
-                process.stdout(stdout_file(stdout_file_path)?);
+                let (stdout, stderr) = merged_output_stdio(stdout_file_path)?;
+                process.stdout(stdout);
+                process.stderr(stderr);
             } else {
                 process.stdout(Stdio::piped());
+                process.stderr(Stdio::piped());
             }
-            process.stderr(Stdio::piped());
 
             let child = process
                 .spawn()
@@ -397,14 +402,17 @@ async fn shell_task_output_path(
     Ok(Some(task_output_file_path(task_output_dir, file_stem)))
 }
 
-fn stdout_file(path: &Path) -> Result<Stdio> {
+fn merged_output_stdio(path: &Path) -> Result<(Stdio, Stdio)> {
     let file = std::fs::OpenOptions::new()
         .create(true)
         .truncate(true)
         .write(true)
         .open(path)
         .with_context(|| format!("failed to create {}", path.display()))?;
-    Ok(Stdio::from(file))
+    let stderr = file
+        .try_clone()
+        .with_context(|| format!("failed to clone {}", path.display()))?;
+    Ok((Stdio::from(file), Stdio::from(stderr)))
 }
 
 fn render_stdout_for_display(
@@ -429,6 +437,15 @@ fn render_stdout_for_display(
         policy.tool_results_dir.as_deref(),
         persist_id,
     )
+}
+
+fn cleanup_redundant_stdout_file(outcome: &ShellExecutionOutcome, max_capture_chars: usize) {
+    if outcome.stdout_size > max_capture_chars as u64 {
+        return;
+    }
+    if let Some(path) = outcome.stdout_file_path.as_ref() {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 fn build_process(kind: ShellKind, command: &str) -> Command {
@@ -541,6 +558,14 @@ mod tests {
         }
     }
 
+    fn stdout_stderr_command() -> &'static str {
+        if cfg!(windows) {
+            "Write-Output 'out'; Write-Error 'err' -ErrorAction Continue"
+        } else {
+            "printf 'out\\n'; printf 'err\\n' >&2"
+        }
+    }
+
     #[tokio::test]
     async fn timed_out_commands_return_rich_error_and_artifact() {
         let tempdir = tempdir().expect("tempdir");
@@ -600,7 +625,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn task_output_dir_receives_raw_stdout_file() {
+    async fn task_output_dir_cleans_up_redundant_small_stdout_file() {
         let tempdir = tempdir().expect("tempdir");
         let task_output_dir = tempdir.path().join("tasks");
         let context = ToolExecutionContext {
@@ -626,17 +651,51 @@ mod tests {
         .expect("command should succeed");
 
         assert!(result.contains("hello"));
+        assert!(
+            !task_output_dir.exists()
+                || std::fs::read_dir(&task_output_dir)
+                    .expect("dir")
+                    .next()
+                    .is_none(),
+            "small foreground output file should be redundant and removed"
+        );
+    }
+
+    #[tokio::test]
+    async fn task_output_file_merges_stdout_and_stderr_for_large_output() {
+        let tempdir = tempdir().expect("tempdir");
+        let task_output_dir = tempdir.path().join("tasks");
+        let context = ToolExecutionContext {
+            cwd: tempdir.path().to_path_buf(),
+            timeout_ms: 2_000,
+            ..ToolExecutionContext::default()
+        };
+        let policy = ShellExecutionPolicy {
+            max_capture_chars: 1,
+            task_output_dir: Some(task_output_dir.clone()),
+            ..ShellExecutionPolicy::default()
+        };
+
+        let result = execute_shell_command(
+            test_shell_kind(),
+            &json!({
+                "command": stdout_stderr_command(),
+                "description": "merged output"
+            }),
+            &context,
+            &policy,
+        )
+        .await
+        .expect("command should succeed");
+        assert!(result.contains("stdout:"));
         let outputs = std::fs::read_dir(&task_output_dir)
             .expect("task output dir")
             .collect::<Result<Vec<_>, _>>()
             .expect("entries");
         assert_eq!(outputs.len(), 1);
-        assert_eq!(
-            outputs[0].path().extension().and_then(|ext| ext.to_str()),
-            Some("output")
-        );
         let raw = std::fs::read_to_string(outputs[0].path()).expect("raw output");
-        assert!(raw.contains("hello"));
+        assert!(raw.contains("out"));
+        assert!(raw.to_ascii_lowercase().contains("err"));
     }
 
     #[tokio::test]
