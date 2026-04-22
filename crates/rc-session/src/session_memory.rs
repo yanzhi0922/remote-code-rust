@@ -1,9 +1,13 @@
 use std::fs;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use rc_config::{AppPaths, RuntimeConfig};
+use rc_config::RuntimeConfig;
 
 const MAX_SECTION_LENGTH: usize = 2_000;
 const MAX_TOTAL_SESSION_MEMORY_TOKENS: usize = 12_000;
@@ -11,6 +15,7 @@ const EXTRACTION_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
 const EXTRACTION_STALE_THRESHOLD: Duration = Duration::from_secs(60);
 const SESSION_MEMORY_DIRNAME: &str = "session-memory";
 const SESSION_MEMORY_FILENAME: &str = "summary.md";
+const MAX_SANITIZED_LENGTH: usize = 200;
 
 pub const DEFAULT_SESSION_MEMORY_TEMPLATE: &str = r#"
 # Session Title
@@ -116,49 +121,99 @@ impl SessionMemoryState {
     pub fn set_last_summarized_message_id(&mut self, message_id: Option<String>) {
         self.last_summarized_message_id = message_id;
     }
+}
 
-    #[must_use]
-    pub fn wait_budget_elapsed(&self) -> bool {
-        match self.extraction_started_at {
-            None => true,
-            Some(started_at) => {
-                let elapsed = started_at.elapsed();
-                elapsed >= EXTRACTION_WAIT_TIMEOUT || elapsed >= EXTRACTION_STALE_THRESHOLD
-            }
+pub fn wait_for_session_memory_extraction(state: &Mutex<SessionMemoryState>) {
+    let wait_started_at = Instant::now();
+    loop {
+        let extraction_started_at = state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .extraction_started_at;
+        let Some(extraction_started_at) = extraction_started_at else {
+            return;
+        };
+
+        if extraction_started_at.elapsed() > EXTRACTION_STALE_THRESHOLD {
+            return;
         }
+        if wait_started_at.elapsed() > EXTRACTION_WAIT_TIMEOUT {
+            return;
+        }
+
+        sleep(Duration::from_secs(1));
     }
 }
 
 #[must_use]
-pub fn session_memory_dir_for_paths(paths: &AppPaths, session_id: uuid::Uuid) -> PathBuf {
-    paths
-        .sessions_dir
+pub fn sanitize_path(name: &str) -> String {
+    let sanitized = name
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>();
+    if sanitized.len() <= MAX_SANITIZED_LENGTH {
+        return sanitized;
+    }
+
+    format!(
+        "{}-{}",
+        &sanitized[..MAX_SANITIZED_LENGTH],
+        simple_hash(name)
+    )
+}
+
+#[must_use]
+pub fn projects_dir() -> PathBuf {
+    claude_config_home_dir().join("projects")
+}
+
+#[must_use]
+pub fn project_dir(cwd: &Path) -> PathBuf {
+    projects_dir().join(sanitize_path(&cwd.to_string_lossy()))
+}
+
+#[must_use]
+pub fn session_memory_dir_for_cwd(cwd: &Path, session_id: uuid::Uuid) -> PathBuf {
+    project_dir(cwd)
         .join(session_id.to_string())
         .join(SESSION_MEMORY_DIRNAME)
 }
 
 #[must_use]
-pub fn session_memory_path_for_paths(paths: &AppPaths, session_id: uuid::Uuid) -> PathBuf {
-    session_memory_dir_for_paths(paths, session_id).join(SESSION_MEMORY_FILENAME)
+pub fn session_memory_path_for_cwd(cwd: &Path, session_id: uuid::Uuid) -> PathBuf {
+    session_memory_dir_for_cwd(cwd, session_id).join(SESSION_MEMORY_FILENAME)
 }
 
 #[must_use]
 pub fn session_memory_dir(config: &RuntimeConfig) -> PathBuf {
-    session_memory_dir_for_paths(&config.paths, config.session_id)
+    session_memory_dir_for_cwd(&config.cwd, config.session_id)
 }
 
 #[must_use]
 pub fn session_memory_path(config: &RuntimeConfig) -> PathBuf {
-    session_memory_path_for_paths(&config.paths, config.session_id)
+    session_memory_path_for_cwd(&config.cwd, config.session_id)
 }
 
 pub fn ensure_session_memory_file(config: &RuntimeConfig) -> Result<PathBuf> {
     let memory_dir = session_memory_dir(config);
     fs::create_dir_all(&memory_dir)?;
     let memory_path = memory_dir.join(SESSION_MEMORY_FILENAME);
+
     if !memory_path.exists() {
-        fs::write(&memory_path, load_session_memory_template(config))?;
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&memory_path)
+        {
+            Ok(mut file) => {
+                file.write_all(load_session_memory_template(config).as_bytes())?;
+                file.flush()?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
     }
+
     Ok(memory_path)
 }
 
@@ -211,7 +266,7 @@ pub fn build_session_memory_update_prompt(
 }
 
 pub fn truncate_session_memory_for_compact(content: &str) -> (String, bool) {
-    let lines = content.lines().collect::<Vec<_>>();
+    let lines = content.split('\n').collect::<Vec<_>>();
     let max_chars_per_section = MAX_SECTION_LENGTH * 4;
     let mut output_lines = Vec::new();
     let mut current_section_header = String::new();
@@ -258,9 +313,38 @@ fn claude_config_home_dir() -> PathBuf {
     PathBuf::from(".claude")
 }
 
+fn simple_hash(raw: &str) -> String {
+    let mut hash: i32 = 0;
+    for ch in raw.chars() {
+        hash = hash
+            .wrapping_shl(5)
+            .wrapping_sub(hash)
+            .wrapping_add(ch as i32);
+    }
+    to_base36(i64::from(hash).unsigned_abs())
+}
+
+fn to_base36(mut value: u64) -> String {
+    if value == 0 {
+        return "0".to_owned();
+    }
+
+    let mut digits = Vec::new();
+    while value > 0 {
+        let rem = (value % 36) as u8;
+        let digit = match rem {
+            0..=9 => char::from(b'0' + rem),
+            _ => char::from(b'a' + (rem - 10)),
+        };
+        digits.push(digit);
+        value /= 36;
+    }
+    digits.into_iter().rev().collect()
+}
+
 fn default_update_prompt() -> String {
     format!(
-        "IMPORTANT: This message and these instructions are NOT part of the actual user conversation. Do NOT include any references to \"note-taking\", \"session notes extraction\", or these update instructions in the notes content.\n\nBased on the user conversation above (EXCLUDING this note-taking instruction message as well as system prompt, claude.md entries, or any past session summaries), update the session notes file.\n\nThe file {{{{notesPath}}}} has already been read for you. Here are its current contents:\n<current_notes_content>\n{{{{currentNotes}}}}\n</current_notes_content>\n\nYour ONLY task is to use the Edit tool to update the notes file, then stop. You can make multiple edits (update every section as needed) - make all Edit tool calls in parallel in a single message. Do not call any other tools.\n\nCRITICAL RULES FOR EDITING:\n- The file must maintain its exact structure with all sections, headers, and italic descriptions intact\n-- NEVER modify, delete, or add section headers (the lines starting with # like # Task specification)\n-- NEVER modify or delete the italic _section description_ lines (these are the lines in italics immediately following each header - they start and end with underscores)\n-- The italic _section descriptions_ are TEMPLATE INSTRUCTIONS that must be preserved exactly as-is - they guide what content belongs in each section\n-- ONLY update the actual content that appears BELOW the italic _section descriptions_ within each existing section\n-- Do NOT add any new sections, summaries, or information outside the existing structure\n- Do NOT reference this note-taking process or instructions anywhere in the notes\n- It's OK to skip updating a section if there are no substantial new insights to add. Do not add filler content like \"No info yet\", just leave sections blank/unedited if appropriate.\n- Write DETAILED, INFO-DENSE content for each section - include specifics like file paths, function names, error messages, exact commands, technical details, etc.\n- For \"Key results\", include the complete, exact output the user requested (e.g., full table, full answer, etc.)\n- Do not include information that's already in the CLAUDE.md files included in the context\n- Keep each section under ~{MAX_SECTION_LENGTH} tokens/words - if a section is approaching this limit, condense it by cycling out less important details while preserving the most critical information\n- Focus on actionable, specific information that would help someone understand or recreate the work discussed in the conversation\n- IMPORTANT: Always update \"Current State\" to reflect the most recent work - this is critical for continuity after compaction\n\nUse the Edit tool with file_path: {{{{notesPath}}}}\n\nSTRUCTURE PRESERVATION REMINDER:\nEach section has TWO parts that must be preserved exactly as they appear in the current file:\n1. The section header (line starting with #)\n2. The italic description line (the _italicized text_ immediately after the header - this is a template instruction)\n\nYou ONLY update the actual content that comes AFTER these two preserved lines. The italic description lines starting and ending with underscores are part of the template structure, NOT content to be edited or removed.\n\nREMEMBER: Use the Edit tool in parallel and stop. Do not continue after the edits. Only include insights from the actual user conversation, never from these note-taking instructions. Do not delete or change section headers or italic _section descriptions_."
+        "IMPORTANT: This message and these instructions are NOT part of the actual user conversation. Do NOT include any references to \"note-taking\", \"session notes extraction\", or these update instructions in the notes content.\n\nBased on the user conversation above (EXCLUDING this note-taking instruction message as well as system prompt, claude.md entries, or any past session summaries), update the session notes file.\n\nThe file {{{{notesPath}}}} has already been read for you. Here are its current contents:\n<current_notes_content>\n{{{{currentNotes}}}}\n</current_notes_content>\n\nYour ONLY task is to use the Edit tool to update the notes file, then stop. You can make multiple edits (update every section as needed) - make all Edit tool calls in parallel in a single message. Do not call any other tools.\n\nCRITICAL RULES FOR EDITING:\n- The file must maintain its exact structure with all sections, headers, and italic descriptions intact\n-- NEVER modify, delete, or add section headers (the lines starting with '#' like # Task specification)\n-- NEVER modify or delete the italic _section description_ lines (these are the lines in italics immediately following each header - they start and end with underscores)\n-- The italic _section descriptions_ are TEMPLATE INSTRUCTIONS that must be preserved exactly as-is - they guide what content belongs in each section\n-- ONLY update the actual content that appears BELOW the italic _section descriptions_ within each existing section\n-- Do NOT add any new sections, summaries, or information outside the existing structure\n- Do NOT reference this note-taking process or instructions anywhere in the notes\n- It's OK to skip updating a section if there are no substantial new insights to add. Do not add filler content like \"No info yet\", just leave sections blank/unedited if appropriate.\n- Write DETAILED, INFO-DENSE content for each section - include specifics like file paths, function names, error messages, exact commands, technical details, etc.\n- For \"Key results\", include the complete, exact output the user requested (e.g., full table, full answer, etc.)\n- Do not include information that's already in the CLAUDE.md files included in the context\n- Keep each section under ~{MAX_SECTION_LENGTH} tokens/words - if a section is approaching this limit, condense it by cycling out less important details while preserving the most critical information\n- Focus on actionable, specific information that would help someone understand or recreate the work discussed in the conversation\n- IMPORTANT: Always update \"Current State\" to reflect the most recent work - this is critical for continuity after compaction\n\nUse the Edit tool with file_path: {{{{notesPath}}}}\n\nSTRUCTURE PRESERVATION REMINDER:\nEach section has TWO parts that must be preserved exactly as they appear in the current file:\n1. The section header (line starting with #)\n2. The italic description line (the _italicized text_ immediately after the header - this is a template instruction)\n\nYou ONLY update the actual content that comes AFTER these two preserved lines. The italic description lines starting and ending with underscores are part of the template structure, NOT content to be edited or removed.\n\nREMEMBER: Use the Edit tool in parallel and stop. Do not continue after the edits. Only include insights from the actual user conversation, never from these note-taking instructions. Do not delete or change section headers or italic _section descriptions_."
     )
 }
 
@@ -269,12 +353,12 @@ fn analyze_section_sizes(content: &str) -> Vec<(String, usize)> {
     let mut current_section = String::new();
     let mut current_lines = Vec::new();
 
-    for line in content.lines() {
+    for line in content.split('\n') {
         if line.starts_with("# ") {
             if !current_section.is_empty() {
                 sections.push((
                     current_section.clone(),
-                    rough_token_count_estimation(&current_lines.join("\n")),
+                    rough_token_count_estimation(current_lines.join("\n").trim()),
                 ));
             }
             current_section = line.to_owned();
@@ -287,7 +371,7 @@ fn analyze_section_sizes(content: &str) -> Vec<(String, usize)> {
     if !current_section.is_empty() {
         sections.push((
             current_section,
-            rough_token_count_estimation(&current_lines.join("\n")),
+            rough_token_count_estimation(current_lines.join("\n").trim()),
         ));
     }
 
@@ -296,13 +380,12 @@ fn analyze_section_sizes(content: &str) -> Vec<(String, usize)> {
 
 fn generate_section_reminders(section_sizes: &[(String, usize)], total_tokens: usize) -> String {
     let over_budget = total_tokens > MAX_TOTAL_SESSION_MEMORY_TOKENS;
-    let oversized = section_sizes
+    let mut oversized = section_sizes
         .iter()
         .filter(|(_, tokens)| *tokens > MAX_SECTION_LENGTH)
-        .map(|(section, tokens)| {
-            format!("- \"{section}\" is ~{tokens} tokens (limit: {MAX_SECTION_LENGTH})")
-        })
+        .cloned()
         .collect::<Vec<_>>();
+    oversized.sort_by(|(_, left_tokens), (_, right_tokens)| right_tokens.cmp(left_tokens));
 
     if oversized.is_empty() && !over_budget {
         return String::new();
@@ -320,7 +403,14 @@ fn generate_section_reminders(section_sizes: &[(String, usize)], total_tokens: u
         } else {
             "IMPORTANT: The following sections exceed the per-section limit and MUST be condensed"
         };
-        parts.push(format!("\n\n{header}:\n{}", oversized.join("\n")));
+        let items = oversized
+            .into_iter()
+            .map(|(section, tokens)| {
+                format!("- \"{section}\" is ~{tokens} tokens (limit: {MAX_SECTION_LENGTH})")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        parts.push(format!("\n\n{header}:\n{items}"));
     }
     parts.join("")
 }
@@ -340,7 +430,7 @@ fn substitute_variables(template: &str, variables: &[(&str, &str)]) -> String {
         let key = &tail[..end];
         if key
             .chars()
-            .all(|char| char.is_ascii_alphanumeric() || char == '_')
+            .all(|character| character.is_ascii_alphanumeric() || character == '_')
         {
             if let Some((_, value)) = variables.iter().find(|(candidate, _)| *candidate == key) {
                 rendered.push_str(value);
@@ -371,7 +461,7 @@ fn flush_session_section(
     }
 
     let section_content = section_lines.join("\n");
-    if section_content.len() <= max_chars_per_section {
+    if section_content.encode_utf16().count() <= max_chars_per_section {
         let mut lines = vec![section_header.to_owned()];
         lines.extend(section_lines.to_vec());
         return (lines, false);
@@ -380,22 +470,26 @@ fn flush_session_section(
     let mut kept = vec![section_header.to_owned()];
     let mut char_count = 0usize;
     for line in section_lines {
-        if char_count + line.len() + 1 > max_chars_per_section {
+        let line_chars = line.encode_utf16().count();
+        if char_count + line_chars + 1 > max_chars_per_section {
             break;
         }
         kept.push(line.clone());
-        char_count += line.len() + 1;
+        char_count += line_chars + 1;
     }
     kept.push("\n[... section truncated for length ...]".to_owned());
     (kept, true)
 }
 
 fn rough_token_count_estimation(text: &str) -> usize {
-    text.chars().count().div_ceil(4)
+    (text.encode_utf16().count() + 2) / 4
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+
     use rc_config::load_runtime_config;
     use rc_config::settings_layers::RuntimeOverrides;
     use rc_config::{ProviderOverrides, RuntimeConfig};
@@ -405,15 +499,26 @@ mod tests {
     use super::{
         DEFAULT_SESSION_MEMORY_TEMPLATE, SessionMemoryState, build_session_memory_update_prompt,
         ensure_session_memory_file, is_session_memory_empty, load_session_memory_content,
-        session_memory_dir, session_memory_path, truncate_session_memory_for_compact,
+        project_dir, sanitize_path, session_memory_dir, session_memory_path,
+        truncate_session_memory_for_compact, wait_for_session_memory_extraction,
     };
 
     struct TestRuntime {
+        _env_guard: std::sync::MutexGuard<'static, ()>,
         _tempdir: TempDir,
         config: RuntimeConfig,
+        cleanup_project_dir: PathBuf,
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
     }
 
     fn test_runtime() -> TestRuntime {
+        let env_guard = env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let tempdir = tempdir().expect("tempdir");
         let cwd = tempdir.path().join("workspace");
         let profile = tempdir.path().join(".remote-code-rust");
@@ -435,20 +540,31 @@ mod tests {
             RuntimeOverrides::default(),
         )
         .expect("runtime config");
+        let cleanup_project_dir = project_dir(&config.cwd);
         TestRuntime {
+            _env_guard: env_guard,
             _tempdir: tempdir,
             config,
+            cleanup_project_dir,
+        }
+    }
+
+    impl Drop for TestRuntime {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.cleanup_project_dir);
         }
     }
 
     #[test]
-    fn session_memory_paths_are_session_scoped() {
+    fn session_memory_paths_are_project_scoped() {
         let runtime = test_runtime();
         let dir = session_memory_dir(&runtime.config);
         let path = session_memory_path(&runtime.config);
+        let project_dir = project_dir(&runtime.config.cwd);
         assert!(dir.ends_with("session-memory"));
         assert!(path.ends_with("summary.md"));
         assert!(path.starts_with(&dir));
+        assert!(path.starts_with(project_dir.join(runtime.config.session_id.to_string())));
     }
 
     #[test]
@@ -519,9 +635,38 @@ mod tests {
         state.record_extraction_token_count(10_000);
         assert!(!state.has_met_update_threshold(14_000));
         assert!(state.has_met_update_threshold(15_000));
-        state.mark_extraction_started();
-        assert!(!state.wait_budget_elapsed());
-        state.mark_extraction_completed();
-        assert!(state.wait_budget_elapsed());
+    }
+
+    #[test]
+    fn wait_for_session_memory_extraction_returns_immediately_when_idle() {
+        let state = Mutex::new(SessionMemoryState::default());
+        wait_for_session_memory_extraction(&state);
+    }
+
+    #[test]
+    fn sanitize_path_matches_research_examples() {
+        assert_eq!(
+            sanitize_path("/Users/foo/my-project"),
+            "-Users-foo-my-project"
+        );
+        assert_eq!(sanitize_path("plugin:name:server"), "plugin-name-server");
+    }
+
+    #[test]
+    fn update_prompt_sorts_oversized_sections_descending() {
+        let runtime = test_runtime();
+        let notes = format!(
+            "# Small\n{}\n# Large\n{}\n",
+            "a".repeat(9_000),
+            "b".repeat(10_000)
+        );
+        let prompt = build_session_memory_update_prompt(
+            &runtime.config,
+            &notes,
+            &session_memory_path(&runtime.config),
+        );
+        let large_index = prompt.find("- \"# Large\"").expect("large reminder");
+        let small_index = prompt.find("- \"# Small\"").expect("small reminder");
+        assert!(large_index < small_index);
     }
 }
