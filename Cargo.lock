@@ -4370,6 +4370,7 @@ dependencies = [
  "rc-skills",
  "rc-system-prompt",
  "rc-tools",
+ "regex",
  "serde_json",
  "tempfile",
  "tokio",

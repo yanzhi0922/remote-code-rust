@@ -23,13 +23,13 @@ fn tool_file_path(tool_call: &ToolCall) -> Option<PathBuf> {
 }
 
 fn session_file_type_from_tool_call(
-    config: &RuntimeConfig,
+    _config: &RuntimeConfig,
     tool_call: &ToolCall,
 ) -> Option<SessionFileType> {
     match tool_call.name.as_str() {
         "read_file" => tool_file_path(tool_call)
             .as_deref()
-            .and_then(|path| detect_session_file_type(config, path)),
+            .and_then(detect_session_file_type),
         "grep" => {
             if let Some(path) = tool_call
                 .input
@@ -37,7 +37,7 @@ fn session_file_type_from_tool_call(
                 .and_then(Value::as_str)
                 .map(PathBuf::from)
                 .as_deref()
-                .and_then(|path| detect_session_file_type(config, path))
+                .and_then(detect_session_file_type)
             {
                 return Some(path);
             }
@@ -54,7 +54,7 @@ fn session_file_type_from_tool_call(
                 .and_then(Value::as_str)
                 .map(PathBuf::from)
                 .as_deref()
-                .and_then(|path| detect_session_file_type(config, path))
+                .and_then(detect_session_file_type)
             {
                 return Some(path);
             }
@@ -164,10 +164,10 @@ pub(crate) fn handle_session_file_access_post_tool(
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::sync::Arc;
 
     use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
     use rc_core::ToolCall;
+    use rc_runtime_prompt::RuntimePromptSettings;
     use rc_session::SessionStore;
     use tempfile::tempdir;
 
@@ -205,8 +205,12 @@ mod tests {
     #[test]
     fn records_session_memory_access_for_read_file() {
         let (_temp, config, store) = config_and_store();
-        let session_memory_path =
-            rc_session::session_memory::session_memory_dir(&config).join("summary.md");
+        let session_memory_path = rc_runtime_prompt::claude_config_home()
+            .join("projects")
+            .join("repo")
+            .join(config.session_id.to_string())
+            .join("session-memory")
+            .join("summary.md");
         fs::create_dir_all(session_memory_path.parent().expect("parent")).expect("mkdir");
         fs::write(&session_memory_path, "summary").expect("write");
 
@@ -240,12 +244,13 @@ mod tests {
     }
 
     #[test]
-    fn records_session_transcript_access_for_runtime_ndjson() {
+    fn records_session_transcript_access_for_projects_jsonl() {
         let (_temp, config, store) = config_and_store();
-        let transcript_path = config
-            .paths
-            .sessions_dir
-            .join(format!("{}.ndjson", config.session_id));
+        let transcript_path = rc_runtime_prompt::claude_config_home()
+            .join("projects")
+            .join("repo")
+            .join(format!("{}.jsonl", config.session_id));
+        fs::create_dir_all(transcript_path.parent().expect("parent")).expect("mkdir");
         fs::write(&transcript_path, "").expect("write");
 
         handle_session_file_access_post_tool(
@@ -280,64 +285,52 @@ mod tests {
     #[test]
     fn records_auto_and_team_memory_access_and_scope() {
         let (_temp, config, store) = config_and_store();
-        let auto_dir = config.cwd.join(".claude").join("memory");
-        let team_dir = auto_dir.join("team");
+        let features = RuntimePromptSettings::from_config(&config).memory_prompt_features;
+        let Some(auto_dir) = rc_runtime_prompt::auto_memory_entrypoint(&config)
+            .expect("auto memory")
+            .and_then(|entrypoint| entrypoint.parent().map(std::path::Path::to_path_buf))
+        else {
+            return;
+        };
+        let Some(team_dir) =
+            rc_runtime_prompt::team_memory_path_with_features(&config, &features)
+                .expect("team memory")
+        else {
+            return;
+        };
         fs::create_dir_all(&team_dir).expect("team dir");
         let auto_path = auto_dir.join("prefs.md");
         let team_path = team_dir.join("shared.md");
         fs::write(&auto_path, "prefs").expect("auto write");
         fs::write(&team_path, "shared").expect("team write");
 
-        let runtime_context = rc_tools::RuntimeAgentPromptContext {
-            auto_memory_dir: Some(auto_dir.clone()),
-            auto_memory_read_dir: Some(auto_dir),
-            team_memory_read_dir: Some(team_dir.clone()),
-            ..rc_tools::RuntimeAgentPromptContext::default()
-        };
-
-        let auto_result = rc_tools::with_runtime_agent_prompt_context_provider(
-            Arc::new(move || runtime_context.clone()),
-            async {
-                handle_session_file_access_post_tool(
-                    &config,
-                    &store,
-                    &ToolCall {
-                        id: "tool-3".to_owned(),
-                        name: "write_file".to_owned(),
-                        input: serde_json::json!({
-                            "path": auto_path,
-                            "content": "prefs",
-                        }),
-                    },
-                )
+        handle_session_file_access_post_tool(
+            &config,
+            &store,
+            &ToolCall {
+                id: "tool-3".to_owned(),
+                name: "write_file".to_owned(),
+                input: serde_json::json!({
+                    "path": auto_path,
+                    "content": "prefs",
+                }),
             },
-        );
-        futures::executor::block_on(auto_result).expect("auto handle");
+        )
+        .expect("auto handle");
 
-        let runtime_context = rc_tools::RuntimeAgentPromptContext {
-            auto_memory_dir: Some(team_dir.parent().expect("parent").to_path_buf()),
-            auto_memory_read_dir: Some(team_dir.parent().expect("parent").to_path_buf()),
-            team_memory_read_dir: Some(team_dir.clone()),
-            ..rc_tools::RuntimeAgentPromptContext::default()
-        };
-        let team_result = rc_tools::with_runtime_agent_prompt_context_provider(
-            Arc::new(move || runtime_context.clone()),
-            async {
-                handle_session_file_access_post_tool(
-                    &config,
-                    &store,
-                    &ToolCall {
-                        id: "tool-4".to_owned(),
-                        name: "edit_file".to_owned(),
-                        input: serde_json::json!({
-                            "path": team_path,
-                            "edits": [{"search": "shared", "replace": "shared"}],
-                        }),
-                    },
-                )
+        handle_session_file_access_post_tool(
+            &config,
+            &store,
+            &ToolCall {
+                id: "tool-4".to_owned(),
+                name: "edit_file".to_owned(),
+                input: serde_json::json!({
+                    "path": team_path,
+                    "edits": [{"search": "shared", "replace": "shared"}],
+                }),
             },
-        );
-        futures::executor::block_on(team_result).expect("team handle");
+        )
+        .expect("team handle");
 
         let transcript = store
             .load_transcript(config.session_id)

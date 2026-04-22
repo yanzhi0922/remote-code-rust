@@ -24,6 +24,7 @@ rc-provider = { path = "../rc-provider" }
 rc-skills = { path = "../rc-skills" }
 rc-system-prompt = { path = "../rc-system-prompt" }
 rc-tools = { path = "../rc-tools" }
+regex.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]

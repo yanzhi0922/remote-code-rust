@@ -434,22 +434,11 @@ fn spawn_runtime_agent_prompt_context_provider(
     let runtime_identity = build_runtime_identity_context(config);
     let inherited_context = current_runtime_agent_prompt_context();
     let prompt_settings = rc_runtime_prompt::RuntimePromptSettings::from_config(config);
-    let user_agent_memory_dir =
-        BaseDirs::new().map(|dirs| dirs.home_dir().join(".claude").join("agent-memory"));
     let mut agent_memory_dirs = inherited_context
         .as_ref()
         .map(|context| context.agent_memory_dirs.clone())
         .unwrap_or_default();
-    agent_memory_dirs.extend([
-        config.original_cwd.join(".claude").join("agent-memory"),
-        config
-            .original_cwd
-            .join(".claude")
-            .join("agent-memory-local"),
-    ]);
-    if let Some(user_agent_memory_dir) = user_agent_memory_dir {
-        agent_memory_dirs.push(user_agent_memory_dir);
-    }
+    agent_memory_dirs.extend(rc_runtime_prompt::agent_memory_dirs(config));
     agent_memory_dirs.sort();
     agent_memory_dirs.dedup();
     let context = RuntimeAgentPromptContext {
