@@ -46,6 +46,7 @@ use conversation::{
     run_oneshot_text,
 };
 use doctor::run_doctor;
+use extract_memories::drain_pending_extractions;
 use headless::{run_headless, should_run_headless};
 use hooks::run_hooks;
 use interactive::run_interactive_shell;
@@ -133,7 +134,7 @@ async fn main() -> Result<()> {
         run_first_run_wizard(&mut config)?;
     }
 
-    match cli.command {
+    let result = match cli.command {
         Some(Commands::Doctor(args)) => run_doctor(&config, args).await,
         Some(Commands::Status(args)) => run_status(&config, &store, args),
         Some(Commands::Hooks { command }) => run_hooks(&config, command).await,
@@ -191,7 +192,9 @@ async fn main() -> Result<()> {
                 run_interactive_shell(config.clone(), &store).await
             }
         }
-    }
+    };
+    drain_pending_extractions(std::time::Duration::from_secs(60)).await;
+    result
 }
 
 fn resolve_resume_session(

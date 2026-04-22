@@ -30,6 +30,7 @@ use crate::conversation::{
     PromptEventSink, PromptStreamEvent, discover_runtime_extensions, initialize_conversation,
     restore_discovered_tool_scope, run_prompt,
 };
+use crate::extract_memories::drain_pending_extractions;
 use crate::hooks::{
     HookRunState, RuntimeHookDiscovery, discover_runtime_hooks, ensure_session_start_hooks,
 };
@@ -449,6 +450,7 @@ async fn run_headless_prompt_once<W: Write + Send + 'static>(
             ))?;
         }
     }
+    drain_pending_extractions(std::time::Duration::from_secs(60)).await;
     emitter.emit_state(SessionState::Idle)?;
     Ok(())
 }
