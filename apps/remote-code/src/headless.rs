@@ -974,6 +974,7 @@ mod tests {
     async fn headless_default_compat_path_emits_stream_json_message_events_and_result() {
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.include_partial_messages = true;
+        config.input_format = InputFormat::StreamJson;
         let mut conversation =
             initialize_conversation(&store, &config, Some("streaming")).expect("conversation");
         let mut hook_state = HookRunState::load(&store, config.session_id).expect("hook state");
