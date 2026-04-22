@@ -10,6 +10,7 @@ use rc_session::SessionStore;
 use crate::conversation::PromptEventSink;
 use crate::extract_memories::spawn_extract_memories_after_turn;
 use crate::session_memory_runtime::maybe_spawn_session_memory_update;
+use crate::query_engine_compat::ForkCacheSafeParams;
 
 #[derive(Clone)]
 pub(crate) struct ReplHookRuntimeResources {
@@ -43,7 +44,8 @@ pub(crate) fn register_repl_runtime_hooks(
         move |hook_context: rc_query_engine::stop_hooks::ReplHookContext| {
             let resources = resources.clone();
             Box::pin(async move {
-                if hook_context.query_source != QuerySource::User || hook_context.agent_id.is_some()
+                if hook_context.query_source != QuerySource::ReplMainThread
+                    || hook_context.agent_id.is_some()
                 {
                     return Ok(());
                 }
@@ -75,7 +77,8 @@ pub(crate) fn register_repl_runtime_hooks(
               _request: rc_query_engine::stop_hooks::StopHookRequest| {
             let resources = resources.clone();
             Box::pin(async move {
-                if hook_context.query_source == QuerySource::User && hook_context.agent_id.is_none()
+                if hook_context.query_source == QuerySource::ReplMainThread
+                    && hook_context.agent_id.is_none()
                 {
                     let conversation = hook_context
                         .messages
@@ -89,6 +92,7 @@ pub(crate) fn register_repl_runtime_hooks(
                         resources.discovered_tool_scope.clone(),
                         &conversation,
                         resources.event_sink.clone(),
+                        Some(ForkCacheSafeParams::from_repl_hook_context(&hook_context)),
                     );
                 }
                 Ok(rc_query_engine::stop_hooks::StopHookOutcome::Allow)
@@ -326,7 +330,7 @@ mod tests {
             session_id: config.session_id.into(),
             turn: 1,
             messages: vec![Message::from(rc_core::ConversationEntry::user("hello"))],
-            query_source: rc_query_engine::QuerySource::User,
+            query_source: rc_query_engine::QuerySource::ReplMainThread,
             agent_id: Some(AgentId::from("agent-test")),
             system_prompt: None,
             user_context: Default::default(),
