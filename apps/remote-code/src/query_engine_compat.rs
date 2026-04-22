@@ -96,6 +96,27 @@ struct CompatSharedState {
 pub(crate) type CompatRunOverrides = PromptRuntimeOverrides;
 
 #[derive(Debug, Clone)]
+pub(crate) struct ForkCacheSafeParams {
+    pub(crate) fork_context_messages: Vec<rc_core::Message>,
+    pub(crate) system_prompt: Option<String>,
+    pub(crate) user_context: std::collections::BTreeMap<String, String>,
+    pub(crate) system_context: std::collections::BTreeMap<String, String>,
+}
+
+impl ForkCacheSafeParams {
+    pub(crate) fn from_repl_hook_context(
+        context: &rc_query_engine::stop_hooks::ReplHookContext,
+    ) -> Self {
+        Self {
+            fork_context_messages: context.messages.clone(),
+            system_prompt: context.system_prompt.clone(),
+            user_context: context.user_context.clone(),
+            system_context: context.system_context.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct CompatExecutionOptions {
     pub(crate) persist_session: bool,
     pub(crate) persist_transcript: bool,
@@ -114,7 +135,7 @@ impl Default for CompatExecutionOptions {
             persist_runtime_context: true,
             persist_tool_results_dir: None,
             hook_options: HookExecutionOptions::persistent(),
-            query_source: QuerySource::User,
+            query_source: QuerySource::ReplMainThread,
             agent_id: None,
         }
     }

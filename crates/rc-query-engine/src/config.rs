@@ -52,9 +52,12 @@ pub enum EffortLevel {
 pub enum QuerySource {
     #[default]
     User,
+    ReplMainThread,
+    Sdk,
     Compact,
     SessionMemory,
     Agent,
+    ExtractMemories,
     BackgroundTask,
 }
 

@@ -33,7 +33,8 @@ use uuid::Uuid;
 use crate::conversation::{PromptEventSink, PromptStreamEvent};
 use crate::hooks::{HookExecutionOptions, HookRunState};
 use crate::query_engine_compat::{
-    CompatExecutionOptions, CompatRunOverrides, run_prompt_with_query_engine_compat_overrides,
+    CompatExecutionOptions, CompatRunOverrides, ForkCacheSafeParams,
+    run_prompt_with_query_engine_compat_overrides,
 };
 
 const EXTRACTION_MAX_TURNS: u32 = 5;
@@ -51,6 +52,7 @@ struct PendingExtractionContext {
     discovered_tool_scope: DiscoveredToolScope,
     conversation: Vec<ConversationEntry>,
     event_sink: Option<PromptEventSink>,
+    fork_snapshot: Option<ForkCacheSafeParams>,
 }
 
 #[derive(Clone)]
@@ -173,6 +175,7 @@ pub(crate) fn spawn_extract_memories_after_turn(
     discovered_tool_scope: DiscoveredToolScope,
     conversation: &[ConversationEntry],
     event_sink: Option<PromptEventSink>,
+    fork_snapshot: Option<ForkCacheSafeParams>,
 ) {
     let config = config.clone();
     let discovered_tool_scope = discovered_tool_scope.clone();
@@ -191,6 +194,7 @@ pub(crate) fn spawn_extract_memories_after_turn(
             discovered_tool_scope,
             &conversation,
             event_sink,
+            fork_snapshot,
         )
         .await;
         in_flight.fetch_sub(1, Ordering::SeqCst);
@@ -204,6 +208,7 @@ async fn maybe_extract_memories_after_prompt_inner(
     discovered_tool_scope: DiscoveredToolScope,
     conversation: &[ConversationEntry],
     event_sink: Option<PromptEventSink>,
+    fork_snapshot: Option<ForkCacheSafeParams>,
 ) -> Result<()> {
     if !extract_memories_gate_enabled(config).await? {
         return Ok(());
@@ -220,6 +225,7 @@ async fn maybe_extract_memories_after_prompt_inner(
                 discovered_tool_scope,
                 conversation: conversation.to_vec(),
                 event_sink,
+                fork_snapshot,
             });
             store.append_named_event(
                 config.session_id,
@@ -236,6 +242,7 @@ async fn maybe_extract_memories_after_prompt_inner(
         discovered_tool_scope,
         conversation: conversation.to_vec(),
         event_sink,
+        fork_snapshot,
     };
     let mut is_trailing_run = false;
     loop {
@@ -247,6 +254,7 @@ async fn maybe_extract_memories_after_prompt_inner(
             &current.conversation,
             session_id,
             current.event_sink.clone(),
+            current.fork_snapshot.clone(),
             is_trailing_run,
         )
         .await;
@@ -304,6 +312,7 @@ async fn run_extract_memories_once(
     conversation: &[ConversationEntry],
     session_id: Uuid,
     event_sink: Option<PromptEventSink>,
+    fork_snapshot: Option<ForkCacheSafeParams>,
     is_trailing_run: bool,
 ) -> Result<bool> {
     let prompt_settings = RuntimePromptSettings::from_config(config);
@@ -390,6 +399,7 @@ async fn run_extract_memories_once(
         &extract_prompt,
         memory_dir.clone(),
         team_memory_dir.clone(),
+        fork_snapshot,
     )
     .await?;
 
@@ -451,6 +461,7 @@ async fn run_extraction_child(
     extract_prompt: &str,
     memory_dir: PathBuf,
     team_memory_dir: Option<PathBuf>,
+    fork_snapshot: Option<ForkCacheSafeParams>,
 ) -> Result<ExtractionRunOutcome> {
     let started = std::time::Instant::now();
     let mut child_config = config.clone();
@@ -468,7 +479,14 @@ async fn run_extraction_child(
         team_memory_dir.clone(),
     ));
     let mut hook_state = HookRunState::load(store, config.session_id)?;
-    let mut final_child_conversation = conversation.to_vec();
+    let mut final_child_conversation = match fork_snapshot {
+        Some(snapshot) => snapshot
+            .fork_context_messages
+            .iter()
+            .filter_map(rc_core::Message::as_conversation_entry)
+            .collect::<Vec<_>>(),
+        None => conversation.to_vec(),
+    };
     let outcome = run_prompt_with_query_engine_compat_overrides(
         &child_config,
         store,
@@ -487,7 +505,7 @@ async fn run_extraction_child(
             persist_runtime_context: false,
             persist_tool_results_dir: Some(tool_results_dir),
             hook_options: HookExecutionOptions::ephemeral(),
-            query_source: QuerySource::BackgroundTask,
+            query_source: QuerySource::ExtractMemories,
             agent_id: None,
         },
     )
