@@ -889,6 +889,7 @@ mod tests {
             content: "raw result".to_owned(),
             is_error: false,
             content_blocks: Vec::new(),
+            follow_up_user_blocks: Vec::new(),
         };
         let outcome = apply_post_tool_hooks(
             &discovery,

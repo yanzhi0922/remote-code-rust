@@ -5,10 +5,9 @@ use std::sync::{Arc, OnceLock};
 use anyhow::Result;
 use chrono::Utc;
 use rc_config::{RuntimeConfig, restamp_runtime_session};
-use rc_core::{
-    ConversationEntry, ConversationRole, PermissionMode, SystemMemorySavedMessage,
-};
+use rc_core::{ConversationEntry, ConversationRole, PermissionMode, SystemMemorySavedMessage};
 use rc_permissions::{PermissionBroker, PermissionDecision, PermissionRequest};
+use rc_protocol::UsagePayload;
 use rc_provider::{ConversationBackend, ProviderCompatBackend};
 use rc_runtime_prompt::{
     RuntimePromptSettings, build_extract_memory_auto_only_prompt,
@@ -22,14 +21,15 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::agents::install_ephemeral_session_paths;
-use crate::conversation::{initialize_conversation, restore_discovered_tool_scope};
+use crate::conversation::{
+    PromptEventSink, PromptStreamEvent, initialize_conversation, restore_discovered_tool_scope,
+};
 use crate::hooks::{HookRunState, discover_runtime_hooks, ensure_session_start_hooks};
 use crate::query_engine_compat::{
     CompatRunOverrides, run_prompt_with_query_engine_compat_overrides,
 };
 
 const EXTRACTION_MAX_TURNS: u32 = 5;
-const EXTRACTION_QUERY_SOURCE: &str = "extract_memories";
 const EXTRACTION_FORK_LABEL: &str = "extract_memories";
 const EXTRACT_MODE_FEATURE: &str = "tengu_passport_quail";
 const EXTRACT_NON_INTERACTIVE_FEATURE: &str = "tengu_slate_thimble";
@@ -39,13 +39,20 @@ const TEAMMEM_FEATURE: &str = "TEAMMEM";
 const TEAMMEM_ENABLE_FEATURE: &str = "tengu_herring_clock";
 const ENTRYPOINT_NAME: &str = "MEMORY.md";
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
+struct PendingExtractionContext {
+    conversation: Vec<ConversationEntry>,
+    prompt: String,
+    event_sink: Option<PromptEventSink>,
+}
+
+#[derive(Clone)]
 struct ExtractMemoriesState {
     last_visible_message_index: Option<usize>,
     has_logged_gate_failure: bool,
     in_progress: bool,
     turns_since_last_extraction: usize,
-    pending_requested: bool,
+    pending_context: Option<PendingExtractionContext>,
 }
 
 impl Default for ExtractMemoriesState {
@@ -55,7 +62,7 @@ impl Default for ExtractMemoriesState {
             has_logged_gate_failure: false,
             in_progress: false,
             turns_since_last_extraction: 0,
-            pending_requested: false,
+            pending_context: None,
         }
     }
 }
@@ -70,6 +77,10 @@ fn extraction_state_map() -> &'static Mutex<HashMap<Uuid, ExtractMemoriesState>>
 struct ExtractionRunOutcome {
     memory_paths: Vec<String>,
     team_count: Option<usize>,
+    files_written: usize,
+    turn_count: u32,
+    usage: UsagePayload,
+    duration_ms: u64,
 }
 
 #[derive(Debug)]
@@ -149,6 +160,7 @@ pub(crate) async fn maybe_extract_memories_after_prompt(
     backend: Arc<dyn ConversationBackend>,
     conversation: &[ConversationEntry],
     prompt: &str,
+    event_sink: Option<PromptEventSink>,
 ) -> Result<()> {
     if !extract_memories_gate_enabled(config).await? {
         return Ok(());
@@ -160,23 +172,66 @@ pub(crate) async fn maybe_extract_memories_after_prompt(
         let mut states = extraction_state_map().lock().await;
         let state = states.entry(session_id).or_default();
         if state.in_progress {
-            state.pending_requested = true;
+            state.pending_context = Some(PendingExtractionContext {
+                conversation: conversation.to_vec(),
+                prompt: prompt.to_owned(),
+                event_sink,
+            });
+            store.append_named_event(
+                config.session_id,
+                "tengu_extract_memories_coalesced",
+                json!({}),
+            )?;
             return Ok(());
         }
         state.in_progress = true;
     }
 
+    let mut current = PendingExtractionContext {
+        conversation: conversation.to_vec(),
+        prompt: prompt.to_owned(),
+        event_sink,
+    };
+    let mut is_trailing_run = false;
     loop {
-        let should_continue = run_extract_memories_once(config, store, Arc::clone(&backend), conversation, prompt, session_id).await?;
+        let run_result = run_extract_memories_once(
+            config,
+            store,
+            Arc::clone(&backend),
+            &current.conversation,
+            &current.prompt,
+            session_id,
+            current.event_sink.clone(),
+            is_trailing_run,
+        )
+        .await;
+        let should_continue = match run_result {
+            Ok(should_continue) => should_continue,
+            Err(error) => {
+                let _ = store.append_named_event(
+                    config.session_id,
+                    "tengu_extract_memories_error",
+                    json!({ "error": error.to_string() }),
+                );
+                let mut states = extraction_state_map().lock().await;
+                let state = states.entry(session_id).or_default();
+                state.in_progress = false;
+                state.pending_context = None;
+                return Ok(());
+            }
+        };
         let mut states = extraction_state_map().lock().await;
         let state = states.entry(session_id).or_default();
-        if should_continue && state.pending_requested {
-            state.pending_requested = false;
+        if should_continue {
+            // This branch is reserved for future fork helpers that request a follow-up.
+        }
+        if let Some(pending_context) = state.pending_context.take() {
+            current = pending_context;
+            is_trailing_run = true;
             drop(states);
             continue;
         }
         state.in_progress = false;
-        state.pending_requested = false;
         break;
     }
 
@@ -190,6 +245,8 @@ async fn run_extract_memories_once(
     conversation: &[ConversationEntry],
     prompt: &str,
     session_id: Uuid,
+    event_sink: Option<PromptEventSink>,
+    is_trailing_run: bool,
 ) -> Result<bool> {
     let prompt_settings = RuntimePromptSettings::from_config(config);
     let Some(memory_dir) = prompt_settings
@@ -201,11 +258,13 @@ async fn run_extract_memories_once(
         return Ok(false);
     };
 
-    let team_memory_enabled =
-        runtime_feature_gate_enabled(TEAMMEM_FEATURE, false)
-            && runtime_feature_gate_enabled(TEAMMEM_ENABLE_FEATURE, false);
+    let team_memory_enabled = runtime_feature_gate_enabled(TEAMMEM_FEATURE, false)
+        && runtime_feature_gate_enabled(TEAMMEM_ENABLE_FEATURE, false);
     let team_memory_dir = if team_memory_enabled {
-        prompt_settings.team_memory_read_dir.clone().map(PathBuf::from)
+        prompt_settings
+            .team_memory_read_dir
+            .clone()
+            .map(PathBuf::from)
     } else {
         None
     };
@@ -223,8 +282,12 @@ async fn run_extract_memories_once(
         return Ok(false);
     }
 
-    if has_memory_writes_since(conversation, last_visible_index, &memory_dir, team_memory_dir.as_deref())
-    {
+    if has_memory_writes_since(
+        conversation,
+        last_visible_index,
+        &memory_dir,
+        team_memory_dir.as_deref(),
+    ) {
         update_last_visible_cursor(session_id, visible_messages.len()).await;
         store.append_named_event(
             config.session_id,
@@ -235,7 +298,7 @@ async fn run_extract_memories_once(
     }
 
     let throttle = runtime_feature_gate_value_usize(EXTRACT_THROTTLE_FEATURE).unwrap_or(1);
-    {
+    if !is_trailing_run {
         let mut states = extraction_state_map().lock().await;
         let state = states.entry(session_id).or_default();
         state.turns_since_last_extraction += 1;
@@ -243,6 +306,12 @@ async fn run_extract_memories_once(
             return Ok(false);
         }
         state.turns_since_last_extraction = 0;
+    } else {
+        let mut states = extraction_state_map().lock().await;
+        states
+            .entry(session_id)
+            .or_default()
+            .turns_since_last_extraction = 0;
     }
 
     let manifest = format_auto_memory_manifest(&scan_auto_memory_files(&memory_dir));
@@ -267,6 +336,23 @@ async fn run_extract_memories_once(
 
     update_last_visible_cursor(session_id, visible_messages.len()).await;
 
+    store.append_named_event(
+        config.session_id,
+        "tengu_extract_memories_extraction",
+        json!({
+            "input_tokens": extraction.usage.input_tokens,
+            "output_tokens": extraction.usage.output_tokens,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "message_count": new_message_count,
+            "turn_count": extraction.turn_count,
+            "files_written": extraction.files_written,
+            "memories_saved": extraction.memory_paths.len(),
+            "team_memories_saved": extraction.team_count.unwrap_or(0),
+            "duration_ms": extraction.duration_ms,
+        }),
+    )?;
+
     if extraction.memory_paths.is_empty() {
         return Ok(false);
     }
@@ -283,6 +369,12 @@ async fn run_extract_memories_once(
         "memory_saved",
         serde_json::to_value(&payload)?,
     )?;
+    if let Some(event_sink) = event_sink {
+        event_sink(PromptStreamEvent::MemorySaved {
+            written_paths: extraction.memory_paths,
+            team_count: extraction.team_count,
+        });
+    }
 
     Ok(false)
 }
@@ -297,6 +389,7 @@ async fn run_extraction_child(
     memory_dir: PathBuf,
     team_memory_dir: Option<PathBuf>,
 ) -> Result<ExtractionRunOutcome> {
+    let started = std::time::Instant::now();
     let mut child_config = config.clone();
     let parent_session_id = config.session_id;
     restamp_runtime_session(&mut child_config, Uuid::new_v4());
@@ -321,9 +414,17 @@ async fn run_extraction_child(
     ));
     let discovered_tool_scope = provider_backend.discovered_tool_scope();
     let discovery = discover_runtime_hooks(&child_config, &[]);
-    let mut child_conversation = initialize_conversation(&child_store, &child_config, Some(prompt))?;
-    restore_discovered_tool_scope(&child_store, child_config.session_id, &discovered_tool_scope)?;
-    if let Some(system) = conversation.first().filter(|entry| entry.role == ConversationRole::System) {
+    let mut child_conversation =
+        initialize_conversation(&child_store, &child_config, Some(prompt))?;
+    restore_discovered_tool_scope(
+        &child_store,
+        child_config.session_id,
+        &discovered_tool_scope,
+    )?;
+    if let Some(system) = conversation
+        .first()
+        .filter(|entry| entry.role == ConversationRole::System)
+    {
         child_conversation[0] = system.clone();
     }
     child_conversation.extend(conversation.iter().skip(1).cloned());
@@ -342,7 +443,7 @@ async fn run_extraction_child(
         team_memory_dir.clone(),
     ));
     let mut final_child_conversation = child_conversation;
-    run_prompt_with_query_engine_compat_overrides(
+    let outcome = run_prompt_with_query_engine_compat_overrides(
         &child_config,
         &child_store,
         provider_backend,
@@ -373,10 +474,7 @@ async fn run_extraction_child(
     let memory_paths = written_paths
         .iter()
         .filter(|path| {
-            Path::new(path)
-                .file_name()
-                .and_then(|name| name.to_str())
-                != Some(ENTRYPOINT_NAME)
+            Path::new(path).file_name().and_then(|name| name.to_str()) != Some(ENTRYPOINT_NAME)
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -387,21 +485,13 @@ async fn run_extraction_child(
             .count()
     });
 
-    child_store.append_named_event(
-        child_config.session_id,
-        "tengu_extract_memories_extraction",
-        json!({
-            "query_source": EXTRACTION_QUERY_SOURCE,
-            "fork_label": EXTRACTION_FORK_LABEL,
-            "files_written": written_paths.len(),
-            "memories_saved": memory_paths.len(),
-            "team_memories_saved": team_count.unwrap_or(0),
-        }),
-    )?;
-
     Ok(ExtractionRunOutcome {
         memory_paths,
         team_count,
+        files_written: written_paths.len(),
+        turn_count: outcome.num_turns,
+        usage: outcome.usage,
+        duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
     })
 }
 
@@ -414,7 +504,10 @@ fn extract_written_paths(conversation: &[ConversationEntry]) -> Vec<String> {
             continue;
         }
         for tool_call in &entry.tool_calls {
-            if !matches!(tool_call.name.as_str(), "write_file" | "edit_file" | "replace_in_file") {
+            if !matches!(
+                tool_call.name.as_str(),
+                "write_file" | "edit_file" | "replace_in_file"
+            ) {
                 continue;
             }
             let Some(path) = tool_call
@@ -437,7 +530,12 @@ fn extract_written_paths(conversation: &[ConversationEntry]) -> Vec<String> {
 fn model_visible_messages(conversation: &[ConversationEntry]) -> Vec<&ConversationEntry> {
     conversation
         .iter()
-        .filter(|entry| matches!(entry.role, ConversationRole::User | ConversationRole::Assistant))
+        .filter(|entry| {
+            matches!(
+                entry.role,
+                ConversationRole::User | ConversationRole::Assistant
+            )
+        })
         .collect()
 }
 
@@ -446,7 +544,9 @@ fn count_visible_messages_since(
     last_visible_index: Option<usize>,
 ) -> usize {
     match last_visible_index {
-        Some(index) if index <= visible_messages.len() => visible_messages.len().saturating_sub(index),
+        Some(index) if index <= visible_messages.len() => {
+            visible_messages.len().saturating_sub(index)
+        }
         _ => visible_messages.len(),
     }
 }
@@ -459,7 +559,10 @@ fn has_memory_writes_since(
 ) -> bool {
     let mut visible_seen = 0usize;
     for entry in conversation {
-        if matches!(entry.role, ConversationRole::User | ConversationRole::Assistant) {
+        if matches!(
+            entry.role,
+            ConversationRole::User | ConversationRole::Assistant
+        ) {
             visible_seen += 1;
         }
         if last_visible_index.is_some_and(|index| visible_seen <= index) {
@@ -469,7 +572,10 @@ fn has_memory_writes_since(
             continue;
         }
         for tool_call in &entry.tool_calls {
-            if !matches!(tool_call.name.as_str(), "write_file" | "edit_file" | "replace_in_file") {
+            if !matches!(
+                tool_call.name.as_str(),
+                "write_file" | "edit_file" | "replace_in_file"
+            ) {
                 continue;
             }
             let Some(path) = tool_call
@@ -504,7 +610,10 @@ fn path_within(candidate: &Path, root: &Path) -> bool {
 
 async fn update_last_visible_cursor(session_id: Uuid, len: usize) {
     let mut states = extraction_state_map().lock().await;
-    states.entry(session_id).or_default().last_visible_message_index = Some(len);
+    states
+        .entry(session_id)
+        .or_default()
+        .last_visible_message_index = Some(len);
 }
 
 async fn extract_memories_gate_enabled(config: &RuntimeConfig) -> Result<bool> {
@@ -646,7 +755,10 @@ mod tests {
 
         assert_eq!(
             extract_written_paths(&conversation),
-            vec!["C:/mem/user_role.md".to_owned(), "C:/mem/project.md".to_owned()]
+            vec![
+                "C:/mem/user_role.md".to_owned(),
+                "C:/mem/project.md".to_owned()
+            ]
         );
     }
 

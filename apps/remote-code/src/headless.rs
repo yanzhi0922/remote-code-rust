@@ -351,6 +351,10 @@ fn emit_prompt_stream_event<W: Write>(
             usage_ratio,
         } => emitter.emit_context_compacted(entries_removed, usage_ratio)?,
         PromptStreamEvent::TaskSnapshot { tasks } => emitter.emit_task_snapshot(tasks)?,
+        PromptStreamEvent::MemorySaved {
+            written_paths,
+            team_count,
+        } => emitter.emit_memory_saved(&written_paths, team_count)?,
         PromptStreamEvent::MessageDelta { .. }
         | PromptStreamEvent::MessageCommitted { .. }
         | PromptStreamEvent::ToolStarted { .. }
