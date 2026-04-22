@@ -63,7 +63,7 @@ use crossterm::terminal::{
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use rc_config::{RuntimeConfig, restamp_runtime_session};
-use rc_core::{ConversationEntry, SystemMemorySavedMessage};
+use rc_core::{ConversationEntry, Message, SystemMessageSubtype};
 use rc_permissions::PermissionBroker;
 use rc_provider::context::ContextWindowManager;
 use rc_provider::cost::CostTracker;
@@ -608,19 +608,34 @@ fn render_transcript_display_events(
     for event in transcript.iter_events() {
         if let Some(entry) = event.conversation.as_ref() {
             render_conversation_entry(app, entry);
-            continue;
         }
-        if event.event_type == "memory_saved"
-            && let Some(payload) = event.payload.clone()
-            && let Ok(message) = serde_json::from_value::<SystemMemorySavedMessage>(payload)
+    }
+    for message in transcript.memory_saved_messages() {
+        if let Message::System(system) = message
+            && system.subtype == SystemMessageSubtype::MemorySaved
+            && let Some((written_paths, team_count)) = parse_memory_saved_payload(&system.text)
         {
-            app.add_message(ChatMessage::memory_saved(
-                message.written_paths,
-                message.team_count,
-            ));
+            app.add_message(ChatMessage::memory_saved(written_paths, team_count));
         }
     }
     Ok(())
+}
+
+fn parse_memory_saved_payload(text: &str) -> Option<(Vec<String>, Option<usize>)> {
+    let payload = serde_json::from_str::<serde_json::Value>(text).ok()?;
+    let written_paths = payload
+        .get("writtenPaths")
+        .or_else(|| payload.get("written_paths"))?
+        .as_array()?
+        .iter()
+        .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+        .collect::<Vec<_>>();
+    let team_count = payload
+        .get("teamCount")
+        .or_else(|| payload.get("team_count"))
+        .and_then(serde_json::Value::as_u64)
+        .map(|value| value as usize);
+    Some((written_paths, team_count))
 }
 
 fn restore_runtime_session_context(store: &SessionStore, config: &mut RuntimeConfig) -> Result<()> {
@@ -781,6 +796,7 @@ async fn run_conversation_turn(
 
         // Build and persist assistant entry
         let assistant_entry = ConversationEntry {
+            uuid: uuid::Uuid::new_v4(),
             role: rc_core::ConversationRole::Assistant,
             text: response.text.clone(),
             history_text: response.history_text.clone(),

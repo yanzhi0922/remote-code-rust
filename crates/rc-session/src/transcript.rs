@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use anyhow::Result;
-use rc_core::{ConversationEntry, StoredEvent};
+use rc_core::{ConversationEntry, Message, StoredEvent, SystemMessageSubtype};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use uuid::Uuid;
@@ -124,6 +124,30 @@ impl SessionTranscript {
         })
     }
 
+    #[must_use]
+    pub fn runtime_messages(&self) -> Vec<Message> {
+        self.events
+            .iter()
+            .filter(|event| event.event_type == "runtime_message")
+            .filter_map(|event| event.payload.clone())
+            .filter_map(|payload| serde_json::from_value::<Message>(payload).ok())
+            .collect()
+    }
+
+    #[must_use]
+    pub fn memory_saved_messages(&self) -> Vec<Message> {
+        self.runtime_messages()
+            .into_iter()
+            .filter(|message| {
+                matches!(
+                    message,
+                    Message::System(system)
+                        if system.subtype == SystemMessageSubtype::MemorySaved
+                )
+            })
+            .collect()
+    }
+
     /// Load the latest persisted resume-state snapshot from the transcript.
     ///
     /// # Errors
@@ -220,6 +244,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use chrono::Utc;
+    use rc_core::{Message, MessageBase, MessageOrigin, SystemMessage, SystemMessageSubtype};
     use uuid::Uuid;
 
     use super::SessionTranscript;
@@ -460,5 +485,38 @@ mod tests {
         let usage = transcript.accumulated_usage();
         assert_eq!(usage.input_tokens, 12);
         assert_eq!(usage.output_tokens, 34);
+    }
+
+    #[test]
+    fn transcript_reads_runtime_memory_saved_messages() {
+        let session_id = Uuid::new_v4();
+        let transcript = SessionTranscript::new(
+            session_id,
+            vec![rc_core::StoredEvent {
+                timestamp: Utc::now(),
+                session_id,
+                event_type: "runtime_message".to_owned(),
+                conversation: None,
+                payload: Some(
+                    serde_json::to_value(Message::System(SystemMessage {
+                        base: MessageBase::with_origin(MessageOrigin::System),
+                        subtype: SystemMessageSubtype::MemorySaved,
+                        text: "Saved 1 memory".to_owned(),
+                        error: None,
+                    }))
+                    .expect("serialize message"),
+                ),
+            }],
+        );
+
+        let messages = transcript.memory_saved_messages();
+        assert_eq!(messages.len(), 1);
+        assert!(matches!(
+            &messages[0],
+            Message::System(SystemMessage {
+                subtype: SystemMessageSubtype::MemorySaved,
+                ..
+            })
+        ));
     }
 }

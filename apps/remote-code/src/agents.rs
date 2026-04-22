@@ -876,6 +876,7 @@ fn append_conversation_context(
             "assistant" => CoreConversationEntry::assistant(entry.content.clone()),
             "tool" => CoreConversationEntry::user(format!("[tool context]\n{}", entry.content)),
             _ => CoreConversationEntry {
+                uuid: Uuid::new_v4(),
                 role: ConversationRole::User,
                 text: entry.content.clone(),
                 history_text: None,

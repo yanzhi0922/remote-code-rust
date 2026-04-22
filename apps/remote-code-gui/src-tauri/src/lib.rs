@@ -2872,6 +2872,7 @@ async fn run_gui_prompt(
             }));
         }
         let assistant_entry = ConversationEntry {
+            uuid: uuid::Uuid::new_v4(),
             role: ConversationRole::Assistant,
             text: response.text.clone(),
             history_text: response.history_text.clone(),
