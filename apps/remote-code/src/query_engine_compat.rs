@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
@@ -114,6 +114,19 @@ impl ForkCacheSafeParams {
             system_context: context.system_context.clone(),
         }
     }
+
+    pub(crate) fn from_conversation(conversation: &[ConversationEntry]) -> Self {
+        Self {
+            fork_context_messages: conversation.iter().cloned().map(Message::from).collect(),
+            system_prompt: conversation
+                .iter()
+                .find(|entry| entry.role == ConversationRole::System)
+                .map(|entry| entry.text.clone())
+                .filter(|text| !text.trim().is_empty()),
+            user_context: BTreeMap::new(),
+            system_context: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -125,6 +138,7 @@ pub(crate) struct CompatExecutionOptions {
     pub(crate) hook_options: HookExecutionOptions,
     pub(crate) query_source: QuerySource,
     pub(crate) agent_id: Option<rc_core::AgentId>,
+    pub(crate) fork_snapshot: Option<ForkCacheSafeParams>,
 }
 
 impl Default for CompatExecutionOptions {
@@ -137,8 +151,77 @@ impl Default for CompatExecutionOptions {
             hook_options: HookExecutionOptions::persistent(),
             query_source: QuerySource::ReplMainThread,
             agent_id: None,
+            fork_snapshot: None,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ForkedPromptRunOutcome {
+    pub(crate) messages: Vec<ConversationEntry>,
+    pub(crate) usage: UsagePayload,
+    pub(crate) num_turns: u32,
+    pub(crate) duration_ms: u64,
+}
+
+fn apply_exact_system_prompt(
+    conversation: &mut Vec<ConversationEntry>,
+    system_prompt: Option<&str>,
+) {
+    let Some(system_prompt) = system_prompt else {
+        return;
+    };
+    let Some(system_prompt) = (!system_prompt.trim().is_empty()).then_some(system_prompt) else {
+        return;
+    };
+    if let Some(system_entry) = conversation
+        .iter_mut()
+        .find(|entry| entry.role == ConversationRole::System)
+    {
+        system_entry.text = system_prompt.to_owned();
+        system_entry.history_text = None;
+        system_entry.content_blocks.clear();
+        return;
+    }
+    conversation.insert(0, ConversationEntry::system(system_prompt));
+}
+
+fn augment_conversation_with_explicit_user_context(
+    conversation: &[ConversationEntry],
+    user_context: &BTreeMap<String, String>,
+) -> Vec<ConversationEntry> {
+    if user_context.is_empty()
+        || conversation.iter().any(|entry| {
+            entry.role == ConversationRole::User
+                && entry.text.contains(
+                    "As you answer the user's questions, you can use the following context:",
+                )
+        })
+    {
+        return conversation.to_vec();
+    }
+
+    let body = user_context
+        .iter()
+        .map(|(key, value)| format!("# {key}\n{value}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let reminder = ConversationEntry::user(format!(
+        "<system-reminder>\nAs you answer the user's questions, you can use the following context:\n{body}\n\n      IMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</system-reminder>\n"
+    ));
+
+    let mut augmented = Vec::with_capacity(conversation.len() + 1);
+    if let Some((first, rest)) = conversation.split_first()
+        && first.role == ConversationRole::System
+    {
+        augmented.push(first.clone());
+        augmented.push(reminder);
+        augmented.extend(rest.iter().cloned());
+        return augmented;
+    }
+    augmented.push(reminder);
+    augmented.extend(conversation.iter().cloned());
+    augmented
 }
 
 struct CompatObserver {
@@ -2076,7 +2159,13 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
             rc_tools::runtime_tool_result_persistence_skip_names(),
             false,
         );
-        content_backend.prepare_conversation(conversation).await?
+        let mut prepared = content_backend.prepare_conversation(conversation).await?;
+        if let Some(snapshot) = execution.fork_snapshot.as_ref() {
+            apply_exact_system_prompt(&mut prepared, snapshot.system_prompt.as_deref());
+            augment_conversation_with_explicit_user_context(&prepared, &snapshot.user_context)
+        } else {
+            prepared
+        }
     };
     let existing_messages = provider_conversation
         .iter()
@@ -2176,7 +2265,12 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         .skills
         .into_iter()
         .collect::<HashSet<_>>();
-    apply_runtime_hook_context(&mut process_context, config, &provider_conversation);
+    apply_runtime_hook_context(
+        &mut process_context,
+        config,
+        &provider_conversation,
+        execution.fork_snapshot.as_ref(),
+    );
 
     let mut query_config = QueryEngineConfig::new(
         config.session_id.into(),
@@ -2455,6 +2549,73 @@ fn message_kind(message: &Message) -> &'static str {
         Message::GroupedToolUse(_) => "grouped_tool_use",
         Message::CollapsedReadSearch(_) => "collapsed_read_search",
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_no_persist_forked_query(
+    config: &RuntimeConfig,
+    store: &SessionStore,
+    backend: Arc<dyn ConversationBackend>,
+    discovered_tool_scope: DiscoveredToolScope,
+    broker: Arc<dyn PermissionBroker>,
+    discovery: &RuntimeHookDiscovery,
+    hook_state: &mut HookRunState,
+    fork_snapshot: ForkCacheSafeParams,
+    prompt: &str,
+    mut overrides: CompatRunOverrides,
+    query_source: QuerySource,
+    max_turns: Option<u32>,
+    tool_results_dir: PathBuf,
+) -> Result<ForkedPromptRunOutcome> {
+    let mut child_config = config.clone();
+    if let Some(max_turns) = max_turns {
+        child_config.max_turns = usize::try_from(max_turns).unwrap_or(usize::MAX);
+    }
+
+    let mut conversation = fork_snapshot
+        .fork_context_messages
+        .iter()
+        .filter_map(Message::as_conversation_entry)
+        .collect::<Vec<_>>();
+
+    if fork_snapshot.system_prompt.is_some() {
+        overrides.system_prompt = None;
+        overrides.append_system_prompt = None;
+        overrides.agent_system_prompt = None;
+        overrides.override_system_prompt = fork_snapshot.system_prompt.clone();
+    }
+
+    let outcome = run_prompt_with_query_engine_compat_overrides(
+        &child_config,
+        store,
+        backend,
+        discovered_tool_scope,
+        broker,
+        None,
+        discovery,
+        hook_state,
+        &mut conversation,
+        prompt,
+        overrides,
+        CompatExecutionOptions {
+            persist_session: false,
+            persist_transcript: false,
+            persist_runtime_context: false,
+            persist_tool_results_dir: Some(tool_results_dir),
+            hook_options: HookExecutionOptions::ephemeral(),
+            query_source,
+            agent_id: None,
+            fork_snapshot: Some(fork_snapshot),
+        },
+    )
+    .await?;
+
+    Ok(ForkedPromptRunOutcome {
+        messages: conversation,
+        usage: outcome.usage,
+        num_turns: outcome.num_turns,
+        duration_ms: outcome.duration_ms,
+    })
 }
 
 #[cfg(test)]
@@ -4155,6 +4316,7 @@ while True:
                 hook_options: crate::hooks::HookExecutionOptions::ephemeral(),
                 query_source: QuerySource::User,
                 agent_id: None,
+                fork_snapshot: None,
             },
         )
         .await

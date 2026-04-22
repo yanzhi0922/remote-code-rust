@@ -340,6 +340,7 @@ impl AgentExecutor for RemoteCodeAgentExecutor {
                     .as_deref()
                     .or(Some(request.agent_type.as_str()))
                     .map(rc_core::AgentId::from),
+                fork_snapshot: None,
                 ..CompatExecutionOptions::default()
             },
         )
