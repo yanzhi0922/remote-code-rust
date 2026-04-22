@@ -243,6 +243,10 @@ pub(crate) enum PromptStreamEvent {
     MessageCommitted {
         text: String,
     },
+    MemorySaved {
+        written_paths: Vec<String>,
+        team_count: Option<usize>,
+    },
     ToolStarted {
         tool_call_id: String,
         tool_name: String,
@@ -345,6 +349,7 @@ impl PromptStreamEvent {
                 summary: summary.clone(),
             }),
             Self::SubtaskStarted { .. }
+            | Self::MemorySaved { .. }
             | Self::SubtaskProgress { .. }
             | Self::SubtaskCompleted { .. }
             | Self::BatchProgress { .. }
@@ -694,6 +699,7 @@ pub(crate) async fn run_prompt(
     let replacement_state =
         provision_content_replacement_state(store, config.session_id, conversation)?;
     let skip_tool_names = runtime_tool_result_persistence_skip_names();
+    let extraction_event_sink = event_sink.clone();
     let backend = ContentReplacementBackend::new(
         backend,
         Arc::new(SessionStore::open(config.paths.clone())?),
@@ -731,7 +737,15 @@ pub(crate) async fn run_prompt(
         .await
     }?;
 
-    maybe_extract_memories_after_prompt(config, store, backend, conversation, prompt).await?;
+    maybe_extract_memories_after_prompt(
+        config,
+        store,
+        backend,
+        conversation,
+        prompt,
+        extraction_event_sink,
+    )
+    .await?;
 
     Ok(outcome)
 }

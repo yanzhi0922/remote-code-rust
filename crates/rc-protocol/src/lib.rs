@@ -100,6 +100,27 @@ impl<W: Write> ProtocolEmitter<W> {
         }))
     }
 
+    /// Emit a memory-saved system message matching Claude Code's external surface.
+    pub fn emit_memory_saved(
+        &mut self,
+        written_paths: &[String],
+        team_count: Option<usize>,
+    ) -> Result<()> {
+        let mut event = json!({
+            "type": "system",
+            "subtype": "memory_saved",
+            "writtenPaths": written_paths,
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "uuid": Uuid::new_v4(),
+            "isMeta": false,
+            "session_id": self.session_id,
+        });
+        if let Some(team_count) = team_count {
+            event["teamCount"] = json!(team_count);
+        }
+        self.emit(event)
+    }
+
     /// Emit an assistant text message.
     pub fn emit_assistant(&mut self, text: impl AsRef<str>) -> Result<()> {
         self.emit(json!({
@@ -1064,6 +1085,28 @@ mod tests {
         assert_eq!(events[0]["duration_ms"], 1234);
         assert_eq!(events[0]["num_turns"], 3);
         assert_eq!(events[0]["usage"]["input_tokens"], 100);
+    }
+
+    #[test]
+    fn emit_memory_saved_matches_system_message_surface() {
+        let mut buf = Cursor::new(Vec::new());
+        let mut emitter = ProtocolEmitter::new(&mut buf, test_session_id());
+        emitter
+            .emit_memory_saved(
+                &["user_role.md".to_owned(), "team/project.md".to_owned()],
+                Some(1),
+            )
+            .expect("emit_memory_saved should succeed");
+
+        let events = collect_lines(&buf.into_inner());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["type"], "system");
+        assert_eq!(events[0]["subtype"], "memory_saved");
+        assert_eq!(events[0]["writtenPaths"][0], "user_role.md");
+        assert_eq!(events[0]["teamCount"], 1);
+        assert_eq!(events[0]["isMeta"], false);
+        assert!(events[0]["timestamp"].is_string());
+        assert!(events[0]["uuid"].is_string());
     }
 
     #[test]

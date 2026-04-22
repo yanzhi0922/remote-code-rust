@@ -3,10 +3,30 @@
 //! Defines the data model for chat messages, tool calls, permission requests,
 //! and provides helpers for converting messages into ratatui renderable form.
 
+use std::path::Path;
+
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::style::StyleConfig;
+
+/// Structured display payload for a memory-saved system message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemorySavedInfo {
+    /// Topic memory files written by the background memory agent.
+    pub written_paths: Vec<String>,
+    /// Number of written files that belong to team memory.
+    pub team_count: Option<usize>,
+}
+
+/// UI-specific message subtype.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChatMessageKind {
+    /// Regular role/content message.
+    Plain,
+    /// Claude Code-compatible memory-saved system message.
+    MemorySaved(MemorySavedInfo),
+}
 
 /// Role of a conversation message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +89,8 @@ pub struct ChatMessage {
     pub tool_calls: Vec<ToolCallInfo>,
     /// Whether tool outputs are collapsed.
     pub is_collapsed: bool,
+    /// UI-specific subtype information.
+    pub kind: ChatMessageKind,
 }
 
 impl ChatMessage {
@@ -80,6 +102,7 @@ impl ChatMessage {
             timestamp: 0,
             tool_calls: Vec::new(),
             is_collapsed: false,
+            kind: ChatMessageKind::Plain,
         }
     }
 
@@ -91,6 +114,7 @@ impl ChatMessage {
             timestamp: 0,
             tool_calls: Vec::new(),
             is_collapsed: false,
+            kind: ChatMessageKind::Plain,
         }
     }
 
@@ -102,6 +126,28 @@ impl ChatMessage {
             timestamp: 0,
             tool_calls: Vec::new(),
             is_collapsed: false,
+            kind: ChatMessageKind::Plain,
+        }
+    }
+
+    /// Create a structured memory-saved system message.
+    pub fn memory_saved(written_paths: Vec<String>, team_count: Option<usize>) -> Self {
+        let count = written_paths.len();
+        let content = if count == 1 {
+            "Saved 1 memory".to_owned()
+        } else {
+            format!("Saved {count} memories")
+        };
+        ChatMessage {
+            role: MessageRole::System,
+            content,
+            timestamp: 0,
+            tool_calls: Vec::new(),
+            is_collapsed: false,
+            kind: ChatMessageKind::MemorySaved(MemorySavedInfo {
+                written_paths,
+                team_count,
+            }),
         }
     }
 
@@ -113,6 +159,7 @@ impl ChatMessage {
             timestamp: 0,
             tool_calls: Vec::new(),
             is_collapsed: false,
+            kind: ChatMessageKind::Plain,
         }
     }
 
@@ -257,6 +304,10 @@ pub fn message_to_lines(
     width: usize,
     style: &StyleConfig,
 ) -> Vec<Line<'static>> {
+    if let ChatMessageKind::MemorySaved(info) = &msg.kind {
+        return memory_saved_to_lines(info, width, style);
+    }
+
     let mut lines = Vec::new();
 
     // Header line with role.
@@ -309,6 +360,53 @@ pub fn message_to_lines(
     // Blank line separator.
     lines.push(Line::from(Span::raw(String::new())));
 
+    lines
+}
+
+fn memory_saved_to_lines(
+    info: &MemorySavedInfo,
+    width: usize,
+    style: &StyleConfig,
+) -> Vec<Line<'static>> {
+    let count = info.written_paths.len();
+    let title = match info.team_count {
+        Some(team_count) if team_count > 0 && team_count < count => {
+            let private_count = count - team_count;
+            format!("Saved {count} memories ({private_count} private, {team_count} team)")
+        }
+        Some(team_count) if team_count == count && count > 0 => {
+            format!(
+                "Saved {count} team {}",
+                if count == 1 { "memory" } else { "memories" }
+            )
+        }
+        _ if count == 1 => "Saved 1 memory".to_owned(),
+        _ => format!("Saved {count} memories"),
+    };
+
+    let mut lines = vec![Line::from(vec![
+        Span::styled(
+            "[system] ",
+            Style::default()
+                .fg(style.system_color)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(title, Style::default().fg(style.system_color)),
+    ])];
+
+    for path in &info.written_paths {
+        let basename = Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(path);
+        let line = format!("  {basename} — {path}");
+        lines.push(Line::from(Span::styled(
+            truncate_text(&line, width),
+            Style::default().fg(style.system_color),
+        )));
+    }
+
+    lines.push(Line::from(Span::raw(String::new())));
     lines
 }
 
@@ -418,6 +516,32 @@ mod tests {
         let msg = ChatMessage::user("test".to_owned());
         let lines = message_to_lines(&msg, 80, &style);
         assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn memory_saved_message_renders_structured_paths() {
+        let style = StyleConfig::dark();
+        let msg = ChatMessage::memory_saved(
+            vec![
+                "C:/mem/user_role.md".to_owned(),
+                "C:/team/project.md".to_owned(),
+            ],
+            Some(1),
+        );
+        let rendered = message_to_lines(&msg, 120, &style)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.into_owned())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("Saved 2 memories (1 private, 1 team)"));
+        assert!(rendered.contains("user_role.md"));
+        assert!(rendered.contains("C:/team/project.md"));
     }
 
     #[test]

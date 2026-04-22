@@ -63,7 +63,7 @@ use crossterm::terminal::{
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use rc_config::{RuntimeConfig, restamp_runtime_session};
-use rc_core::ConversationEntry;
+use rc_core::{ConversationEntry, SystemMemorySavedMessage};
 use rc_permissions::PermissionBroker;
 use rc_provider::context::ContextWindowManager;
 use rc_provider::cost::CostTracker;
@@ -225,6 +225,7 @@ pub async fn run_tui_app(mut config: RuntimeConfig, store: &SessionStore) -> Res
     app.model_info.name = model_name.to_owned();
     app.model_info.provider = config.provider.name.clone();
     seed_session_banner_messages(&mut app, &config);
+    render_transcript_display_events(&mut app, store, config.session_id)?;
     render_session_hook_outcome(&mut app, &startup_hook_outcome);
 
     let mut theme = theme::Theme::dark();
@@ -432,6 +433,7 @@ pub async fn run_tui_app(mut config: RuntimeConfig, store: &SessionStore) -> Res
                     }
                     if is_clear_command {
                         seed_session_banner_messages(&mut app, &config);
+                        render_transcript_display_events(&mut app, store, config.session_id)?;
                     }
                 }
 
@@ -597,8 +599,49 @@ fn seed_session_banner_messages(app: &mut App, config: &RuntimeConfig) {
     ));
 }
 
+fn render_transcript_display_events(
+    app: &mut App,
+    store: &SessionStore,
+    session_id: uuid::Uuid,
+) -> Result<()> {
+    let transcript = store.load_transcript(session_id)?;
+    for event in transcript.iter_events() {
+        if let Some(entry) = event.conversation.as_ref() {
+            render_conversation_entry(app, entry);
+            continue;
+        }
+        if event.event_type == "memory_saved"
+            && let Some(payload) = event.payload.clone()
+            && let Ok(message) = serde_json::from_value::<SystemMemorySavedMessage>(payload)
+        {
+            app.add_message(ChatMessage::memory_saved(
+                message.written_paths,
+                message.team_count,
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn restore_runtime_session_context(store: &SessionStore, config: &mut RuntimeConfig) -> Result<()> {
     restore_runtime_config_session_context(store, config)
+}
+
+fn render_conversation_entry(app: &mut App, entry: &ConversationEntry) {
+    match entry.role {
+        rc_core::ConversationRole::User => {
+            app.add_message(ChatMessage::user(entry.text.clone()));
+        }
+        rc_core::ConversationRole::Assistant => {
+            app.add_message(ChatMessage::assistant(entry.text.clone()));
+        }
+        rc_core::ConversationRole::System => {
+            app.add_message(ChatMessage::system(entry.text.clone()));
+        }
+        rc_core::ConversationRole::Tool => {
+            app.add_message(ChatMessage::tool(entry.text.clone()));
+        }
+    }
 }
 
 fn render_session_hook_outcome(app: &mut App, outcome: &SessionHookRunOutcome) {
@@ -606,20 +649,7 @@ fn render_session_hook_outcome(app: &mut App, outcome: &SessionHookRunOutcome) {
         app.add_message(ChatMessage::system(format!("Hook warning: {warning}")));
     }
     for entry in &outcome.appended_entries {
-        match entry.role {
-            rc_core::ConversationRole::User => {
-                app.add_message(ChatMessage::user(entry.text.clone()));
-            }
-            rc_core::ConversationRole::Assistant => {
-                app.add_message(ChatMessage::assistant(entry.text.clone()));
-            }
-            rc_core::ConversationRole::System => {
-                app.add_message(ChatMessage::system(entry.text.clone()));
-            }
-            rc_core::ConversationRole::Tool => {
-                app.add_message(ChatMessage::tool(entry.text.clone()));
-            }
-        }
+        render_conversation_entry(app, entry);
     }
 }
 
