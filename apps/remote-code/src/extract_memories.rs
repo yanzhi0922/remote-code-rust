@@ -16,7 +16,7 @@ use rc_core::{
 };
 use rc_permissions::{PermissionBroker, PermissionDecision, PermissionRequest};
 use rc_protocol::UsagePayload;
-use rc_provider::{ConversationBackend, ProviderCompatBackend};
+use rc_provider::{ConversationBackend, DiscoveredToolScope};
 use rc_runtime_prompt::{
     RuntimePromptSettings, build_extract_memory_auto_only_prompt,
     build_extract_memory_combined_prompt, format_auto_memory_manifest, runtime_env_defined_falsy,
@@ -24,16 +24,12 @@ use rc_runtime_prompt::{
 };
 use rc_session::SessionStore;
 use rc_transcript::TranscriptEntry;
-use rc_tools::runtime_tool_result_persistence_skip_names;
 use rc_tools::shell::readonly::{ShellKind, is_read_only_command};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::conversation::{
-    ContentReplacementBackend, PromptEventSink, PromptStreamEvent,
-    provision_content_replacement_state,
-};
+use crate::conversation::{PromptEventSink, PromptStreamEvent};
 use crate::hooks::{HookExecutionOptions, HookRunState};
 use crate::query_engine_compat::{
     CompatExecutionOptions, CompatRunOverrides, run_prompt_with_query_engine_compat_overrides,
@@ -50,8 +46,9 @@ const ENTRYPOINT_NAME: &str = "MEMORY.md";
 
 #[derive(Clone)]
 struct PendingExtractionContext {
+    backend: Arc<dyn ConversationBackend>,
+    discovered_tool_scope: DiscoveredToolScope,
     conversation: Vec<ConversationEntry>,
-    prompt: String,
     event_sink: Option<PromptEventSink>,
 }
 
@@ -168,17 +165,17 @@ impl PermissionBroker for ExtractMemoriesPermissionBroker {
     }
 }
 
-pub(crate) fn maybe_extract_memories_after_prompt(
+pub(crate) fn spawn_extract_memories_after_turn(
     config: &RuntimeConfig,
     _store: &SessionStore,
     backend: Arc<dyn ConversationBackend>,
+    discovered_tool_scope: DiscoveredToolScope,
     conversation: &[ConversationEntry],
-    prompt: &str,
     event_sink: Option<PromptEventSink>,
 ) {
     let config = config.clone();
+    let discovered_tool_scope = discovered_tool_scope.clone();
     let conversation = conversation.to_vec();
-    let prompt = prompt.to_owned();
     let in_flight = in_flight_extractions();
     in_flight.fetch_add(1, Ordering::SeqCst);
     tokio::spawn(async move {
@@ -190,8 +187,8 @@ pub(crate) fn maybe_extract_memories_after_prompt(
             &config,
             &store,
             backend,
+            discovered_tool_scope,
             &conversation,
-            &prompt,
             event_sink,
         )
         .await;
@@ -203,8 +200,8 @@ async fn maybe_extract_memories_after_prompt_inner(
     config: &RuntimeConfig,
     store: &SessionStore,
     backend: Arc<dyn ConversationBackend>,
+    discovered_tool_scope: DiscoveredToolScope,
     conversation: &[ConversationEntry],
-    prompt: &str,
     event_sink: Option<PromptEventSink>,
 ) -> Result<()> {
     if !extract_memories_gate_enabled(config).await? {
@@ -218,8 +215,9 @@ async fn maybe_extract_memories_after_prompt_inner(
         let state = states.entry(session_id).or_default();
         if state.in_progress {
             state.pending_context = Some(PendingExtractionContext {
+                backend,
+                discovered_tool_scope,
                 conversation: conversation.to_vec(),
-                prompt: prompt.to_owned(),
                 event_sink,
             });
             store.append_named_event(
@@ -233,8 +231,9 @@ async fn maybe_extract_memories_after_prompt_inner(
     }
 
     let mut current = PendingExtractionContext {
+        backend,
+        discovered_tool_scope,
         conversation: conversation.to_vec(),
-        prompt: prompt.to_owned(),
         event_sink,
     };
     let mut is_trailing_run = false;
@@ -242,9 +241,9 @@ async fn maybe_extract_memories_after_prompt_inner(
         let run_result = run_extract_memories_once(
             config,
             store,
-            Arc::clone(&backend),
+            Arc::clone(&current.backend),
+            current.discovered_tool_scope.clone(),
             &current.conversation,
-            &current.prompt,
             session_id,
             current.event_sink.clone(),
             is_trailing_run,
@@ -300,8 +299,8 @@ async fn run_extract_memories_once(
     config: &RuntimeConfig,
     store: &SessionStore,
     backend: Arc<dyn ConversationBackend>,
+    discovered_tool_scope: DiscoveredToolScope,
     conversation: &[ConversationEntry],
-    _prompt: &str,
     session_id: Uuid,
     event_sink: Option<PromptEventSink>,
     is_trailing_run: bool,
@@ -385,6 +384,7 @@ async fn run_extract_memories_once(
         config,
         store,
         backend,
+        discovered_tool_scope,
         conversation,
         &extract_prompt,
         memory_dir.clone(),
@@ -444,7 +444,8 @@ async fn run_extract_memories_once(
 async fn run_extraction_child(
     config: &RuntimeConfig,
     store: &SessionStore,
-    _backend: Arc<dyn ConversationBackend>,
+    backend: Arc<dyn ConversationBackend>,
+    discovered_tool_scope: DiscoveredToolScope,
     conversation: &[ConversationEntry],
     extract_prompt: &str,
     memory_dir: PathBuf,
@@ -453,11 +454,6 @@ async fn run_extraction_child(
     let started = std::time::Instant::now();
     let mut child_config = config.clone();
     child_config.max_turns = usize::try_from(EXTRACTION_MAX_TURNS).unwrap_or(usize::MAX);
-    let provider_backend = Arc::new(ProviderCompatBackend::new(
-        Arc::new(rc_provider::ProviderClient::new()?),
-        &child_config.provider,
-    ));
-    let discovered_tool_scope = provider_backend.discovered_tool_scope();
     let discovery = crate::hooks::discover_runtime_hooks(&child_config, &[]);
     let temp_root = std::env::var_os("CLAUDE_CODE_TMPDIR")
         .map(PathBuf::from)
@@ -466,27 +462,16 @@ async fn run_extraction_child(
         .join(config.session_id.to_string());
     fs::create_dir_all(&temp_root)?;
     let tool_results_dir = temp_root.join("tool-results");
-    let content_backend = ContentReplacementBackend::new_with_options(
-        provider_backend.clone(),
-        Arc::new(SessionStore::open(config.paths.clone())?),
-        config.session_id,
-        tool_results_dir.clone(),
-        provision_content_replacement_state(store, config.session_id, conversation)?,
-        runtime_tool_result_persistence_skip_names(),
-        false,
-    );
-    let child_conversation = content_backend.prepare_conversation(conversation).await?;
-
     let broker: Arc<dyn PermissionBroker> = Arc::new(ExtractMemoriesPermissionBroker::new(
         memory_dir.clone(),
         team_memory_dir.clone(),
     ));
     let mut hook_state = HookRunState::load(store, config.session_id)?;
-    let mut final_child_conversation = child_conversation;
+    let mut final_child_conversation = conversation.to_vec();
     let outcome = run_prompt_with_query_engine_compat_overrides(
         &child_config,
         store,
-        content_backend,
+        backend,
         discovered_tool_scope,
         broker,
         None,
@@ -501,6 +486,7 @@ async fn run_extraction_child(
             persist_runtime_context: false,
             persist_tool_results_dir: Some(tool_results_dir),
             hook_options: HookExecutionOptions::ephemeral(),
+            run_background_extract_memories: false,
         },
     )
     .await?;

@@ -75,6 +75,7 @@ use crate::conversation::{
     discover_runtime_extensions, provision_content_replacement_state,
     session_tool_results_dir, truncate_preview,
 };
+use crate::extract_memories::spawn_extract_memories_after_turn;
 use crate::hooks::{
     HookExecutionOptions, HookRunState, RuntimeHookDiscovery, apply_post_tool_hooks_with_options,
     apply_pre_tool_use_hooks_with_options,
@@ -99,6 +100,7 @@ pub(crate) struct CompatExecutionOptions {
     pub(crate) persist_runtime_context: bool,
     pub(crate) persist_tool_results_dir: Option<PathBuf>,
     pub(crate) hook_options: HookExecutionOptions,
+    pub(crate) run_background_extract_memories: bool,
 }
 
 impl Default for CompatExecutionOptions {
@@ -109,6 +111,7 @@ impl Default for CompatExecutionOptions {
             persist_runtime_context: true,
             persist_tool_results_dir: None,
             hook_options: HookExecutionOptions::persistent(),
+            run_background_extract_memories: false,
         }
     }
 }
@@ -1972,7 +1975,10 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
         conversation,
         prompt,
         config_prompt_runtime_overrides(config),
-        CompatExecutionOptions::default(),
+        CompatExecutionOptions {
+            run_background_extract_memories: true,
+            ..CompatExecutionOptions::default()
+        },
     )
     .await
 }
@@ -2114,6 +2120,9 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         }),
         None => backend,
     };
+    let background_extract_backend = execution
+        .run_background_extract_memories
+        .then(|| backend.clone());
     let runtime_extensions = discover_runtime_extensions(config);
     let mut process_context = ProcessUserInputContext::new(
         config.session_id.into(),
@@ -2153,7 +2162,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
             .await
         })
     }));
-    if event_sink.is_some() {
+    if event_sink.is_some() || config.print_mode {
         query_config =
             query_config.with_provider_invocation_mode(ProviderInvocationMode::Streaming);
     }
@@ -2233,6 +2242,16 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
 
     match result {
         Ok(query_result) => {
+            if let Some(background_extract_backend) = background_extract_backend {
+                spawn_extract_memories_after_turn(
+                    config,
+                    store,
+                    background_extract_backend,
+                    discovered_tool_scope.clone(),
+                    conversation,
+                    event_sink.clone(),
+                );
+            }
             let outcome = PromptRunOutcome {
                 text: query_result.final_text.unwrap_or_default(),
                 duration_ms,
@@ -4089,6 +4108,7 @@ while True:
                 persist_runtime_context: false,
                 persist_tool_results_dir: Some(tempdir.path().join("ephemeral-tool-results")),
                 hook_options: crate::hooks::HookExecutionOptions::ephemeral(),
+                run_background_extract_memories: false,
             },
         )
         .await
@@ -4663,6 +4683,36 @@ while True:
             event,
             PromptStreamEvent::MessageCommitted { text } if text == "streaming-backend"
         )));
+    }
+
+    #[tokio::test]
+    async fn compat_run_uses_streaming_backend_for_print_mode_without_event_sink() {
+        let (_tempdir, mut config, store) = mock_config_and_store();
+        config.print_mode = true;
+        let discovery = RuntimeHookDiscovery::default();
+        let mut conversation =
+            initialize_conversation(&store, &config, Some("print")).expect("conversation");
+        let mut hook_state = HookRunState::load(&store, config.session_id).expect("hook state");
+        let backend = Arc::new(RecordingStreamingBackend::default());
+
+        let outcome = run_prompt_with_query_engine_compat(
+            &config,
+            &store,
+            backend.clone(),
+            DiscoveredToolScope::default(),
+            mock_broker(&config),
+            None,
+            &discovery,
+            &mut hook_state,
+            &mut conversation,
+            "print",
+        )
+        .await
+        .expect("compat print-mode run should succeed");
+
+        assert_eq!(outcome.text, "streaming-backend");
+        assert_eq!(backend.complete_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(backend.complete_streaming_calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

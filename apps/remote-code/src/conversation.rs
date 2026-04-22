@@ -45,7 +45,6 @@ use crate::ResolvedPromptOverrides;
 use crate::agents::build_remote_code_sub_agent_runtime;
 use crate::cli::Cli;
 use crate::conversation_backend::ConversationBackend;
-use crate::extract_memories::maybe_extract_memories_after_prompt;
 use crate::hooks::{
     HookRunState, RuntimeHookDiscovery, apply_post_tool_hooks, apply_pre_tool_use_hooks,
     discover_runtime_hooks, ensure_session_start_hooks,
@@ -721,7 +720,6 @@ pub(crate) async fn run_prompt(
     let replacement_state =
         provision_content_replacement_state(store, config.session_id, conversation)?;
     let skip_tool_names = runtime_tool_result_persistence_skip_names();
-    let extraction_event_sink = event_sink.clone();
     let backend = ContentReplacementBackend::new(
         backend,
         Arc::new(SessionStore::open(config.paths.clone())?),
@@ -758,15 +756,6 @@ pub(crate) async fn run_prompt(
         )
         .await
     }?;
-
-    maybe_extract_memories_after_prompt(
-        config,
-        store,
-        backend,
-        conversation,
-        prompt,
-        extraction_event_sink,
-    );
 
     Ok(outcome)
 }
