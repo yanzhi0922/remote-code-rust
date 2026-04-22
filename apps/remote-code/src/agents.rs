@@ -40,7 +40,7 @@ use crate::conversation::{
 };
 use crate::hooks::{HookRunState, discover_runtime_hooks, ensure_session_start_hooks};
 use crate::query_engine_compat::{
-    CompatRunOverrides, run_prompt_with_query_engine_compat_overrides,
+    CompatExecutionOptions, CompatRunOverrides, run_prompt_with_query_engine_compat_overrides,
 };
 
 pub(crate) fn parse_agent_spec(spec: &str) -> Result<AgentIdentity> {
@@ -332,6 +332,7 @@ impl AgentExecutor for RemoteCodeAgentExecutor {
                 omit_git_status: request.omit_git_status,
                 ..CompatRunOverrides::default()
             },
+            CompatExecutionOptions::default(),
         )
         .await?;
 

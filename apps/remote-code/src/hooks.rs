@@ -294,6 +294,23 @@ struct HookEffects {
     additional_contexts: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HookExecutionOptions {
+    pub persist: bool,
+}
+
+impl HookExecutionOptions {
+    #[must_use]
+    pub fn persistent() -> Self {
+        Self { persist: true }
+    }
+
+    #[must_use]
+    pub fn ephemeral() -> Self {
+        Self { persist: false }
+    }
+}
+
 pub async fn run_hooks(config: &RuntimeConfig, command: HooksCommand) -> Result<()> {
     match command {
         HooksCommand::List(args) => run_hooks_list(config, args).await,
@@ -505,6 +522,25 @@ pub async fn ensure_session_start_hooks(
     conversation: &mut Vec<ConversationEntry>,
     state: &mut HookRunState,
 ) -> Result<()> {
+    ensure_session_start_hooks_with_options(
+        discovery,
+        config,
+        store,
+        conversation,
+        state,
+        HookExecutionOptions::persistent(),
+    )
+    .await
+}
+
+pub async fn ensure_session_start_hooks_with_options(
+    discovery: &RuntimeHookDiscovery,
+    config: &RuntimeConfig,
+    store: &SessionStore,
+    conversation: &mut Vec<ConversationEntry>,
+    state: &mut HookRunState,
+    options: HookExecutionOptions,
+) -> Result<()> {
     if state.session_start_completed() {
         return Ok(());
     }
@@ -527,6 +563,7 @@ pub async fn ensure_session_start_hooks(
         config.cwd.display().to_string(),
         &input,
         true,
+        options,
     )
     .await?;
     if let Some(reason) = effects.blocked_reason {
@@ -538,15 +575,18 @@ pub async fn ensure_session_start_hooks(
         conversation,
         HookEventName::SessionStart,
         &effects.additional_contexts,
+        options.persist,
     )?;
     state.mark_session_start_completed();
-    store.append_named_event(
-        config.session_id,
-        "hook_phase",
-        json!({
-            "phase": "session_start",
-        }),
-    )?;
+    if options.persist {
+        store.append_named_event(
+            config.session_id,
+            "hook_phase",
+            json!({
+                "phase": "session_start",
+            }),
+        )?;
+    }
     Ok(())
 }
 
@@ -574,6 +614,7 @@ pub async fn apply_user_prompt_hooks(
         prompt.to_owned(),
         &input,
         true,
+        HookExecutionOptions::persistent(),
     )
     .await?;
     if let Some(reason) = effects.blocked_reason {
@@ -585,6 +626,7 @@ pub async fn apply_user_prompt_hooks(
         conversation,
         HookEventName::UserPromptSubmit,
         &effects.additional_contexts,
+        true,
     )?;
     Ok(prompt.to_owned())
 }
@@ -596,6 +638,27 @@ pub async fn apply_pre_tool_use_hooks(
     conversation: &mut Vec<ConversationEntry>,
     state: &mut HookRunState,
     tool_call: &ToolCall,
+) -> Result<PreparedToolCall> {
+    apply_pre_tool_use_hooks_with_options(
+        discovery,
+        config,
+        store,
+        conversation,
+        state,
+        tool_call,
+        HookExecutionOptions::persistent(),
+    )
+    .await
+}
+
+pub async fn apply_pre_tool_use_hooks_with_options(
+    discovery: &RuntimeHookDiscovery,
+    config: &RuntimeConfig,
+    store: &SessionStore,
+    conversation: &mut Vec<ConversationEntry>,
+    state: &mut HookRunState,
+    tool_call: &ToolCall,
+    options: HookExecutionOptions,
 ) -> Result<PreparedToolCall> {
     let input = json!({
         "event": HookEventName::PreToolUse.as_str(),
@@ -614,6 +677,7 @@ pub async fn apply_pre_tool_use_hooks(
         tool_call.name.clone(),
         &input,
         true,
+        options,
     )
     .await?;
 
@@ -633,6 +697,7 @@ pub async fn apply_pre_tool_use_hooks(
                     "A hook adjusted the input for `{}` before execution.",
                     call.name
                 )],
+                options.persist,
             )?;
         }
     }
@@ -642,6 +707,7 @@ pub async fn apply_pre_tool_use_hooks(
         conversation,
         HookEventName::PreToolUse,
         &effects.additional_contexts,
+        options.persist,
     )?;
     Ok(PreparedToolCall {
         call,
@@ -657,6 +723,29 @@ pub async fn apply_post_tool_hooks(
     state: &mut HookRunState,
     tool_call: &ToolCall,
     tool_result: &ToolResult,
+) -> Result<()> {
+    apply_post_tool_hooks_with_options(
+        discovery,
+        config,
+        store,
+        conversation,
+        state,
+        tool_call,
+        tool_result,
+        HookExecutionOptions::persistent(),
+    )
+    .await
+}
+
+pub async fn apply_post_tool_hooks_with_options(
+    discovery: &RuntimeHookDiscovery,
+    config: &RuntimeConfig,
+    store: &SessionStore,
+    conversation: &mut Vec<ConversationEntry>,
+    state: &mut HookRunState,
+    tool_call: &ToolCall,
+    tool_result: &ToolResult,
+    options: HookExecutionOptions,
 ) -> Result<()> {
     let event = if tool_result.is_error {
         HookEventName::PostToolUseFailure
@@ -684,6 +773,7 @@ pub async fn apply_post_tool_hooks(
         tool_call.name.clone(),
         &input,
         false,
+        options,
     )
     .await?;
     append_contexts(
@@ -692,8 +782,9 @@ pub async fn apply_post_tool_hooks(
         conversation,
         event,
         &effects.additional_contexts,
+        options.persist,
     )?;
-    if !tool_result.is_error {
+    if options.persist && !tool_result.is_error {
         handle_session_file_access_post_tool(config, store, tool_call)?;
     }
     Ok(())
@@ -730,6 +821,7 @@ pub async fn apply_permission_denied_hooks(
         tool_call.name.clone(),
         &input,
         false,
+        HookExecutionOptions::persistent(),
     )
     .await?;
     append_contexts(
@@ -738,6 +830,7 @@ pub async fn apply_permission_denied_hooks(
         conversation,
         HookEventName::PermissionDenied,
         &effects.additional_contexts,
+        true,
     )?;
     Ok(())
 }
@@ -1024,6 +1117,7 @@ async fn run_event_hooks(
     subject: String,
     input: &Value,
     blocking: bool,
+    options: HookExecutionOptions,
 ) -> Result<HookEffects> {
     let mut effects = HookEffects::default();
     for hook in discovery
@@ -1036,25 +1130,27 @@ async fn run_event_hooks(
             continue;
         }
         let outcome = execute_command_hook(hook, config, input, blocking).await;
-        store.append_named_event(
-            config.session_id,
-            "hook_execution",
-            json!({
-                "hook_id": hook.hook_id,
-                "event": hook.event.as_str(),
-                "source_kind": hook.source_kind,
-                "source_name": hook.source_name,
-                "plugin_name": hook.plugin_name,
-                "command": hook.display,
-                "status": outcome.status,
-                "blocked_reason": outcome.blocked_reason,
-                "exit_code": outcome.exit_code,
-                "duration_ms": outcome.duration_ms,
-                "stdout_preview": outcome.stdout_preview,
-                "stderr_preview": outcome.stderr_preview,
-                "once": hook.once,
-            }),
-        )?;
+        if options.persist {
+            store.append_named_event(
+                config.session_id,
+                "hook_execution",
+                json!({
+                    "hook_id": hook.hook_id,
+                    "event": hook.event.as_str(),
+                    "source_kind": hook.source_kind,
+                    "source_name": hook.source_name,
+                    "plugin_name": hook.plugin_name,
+                    "command": hook.display,
+                    "status": outcome.status,
+                    "blocked_reason": outcome.blocked_reason,
+                    "exit_code": outcome.exit_code,
+                    "duration_ms": outcome.duration_ms,
+                    "stdout_preview": outcome.stdout_preview,
+                    "stderr_preview": outcome.stderr_preview,
+                    "once": hook.once,
+                }),
+            )?;
+        }
         state.mark_executed(hook);
         if let Some(updated_input) = outcome.updated_input {
             effects.updated_input = Some(updated_input);
@@ -1275,20 +1371,25 @@ fn append_contexts(
     conversation: &mut Vec<ConversationEntry>,
     event: HookEventName,
     contexts: &[String],
+    persist: bool,
 ) -> Result<()> {
     for context in contexts {
         let entry =
             ConversationEntry::system(format!("Hook context ({}):\n{}", event.as_str(), context));
-        store.append_conversation_entry(session_id, &entry)?;
+        if persist {
+            store.append_conversation_entry(session_id, &entry)?;
+        }
         conversation.push(entry);
-        store.append_named_event(
-            session_id,
-            "hook_context",
-            json!({
-                "event": event.as_str(),
-                "text_preview": truncate_preview(context, 200),
-            }),
-        )?;
+        if persist {
+            store.append_named_event(
+                session_id,
+                "hook_context",
+                json!({
+                    "event": event.as_str(),
+                    "text_preview": truncate_preview(context, 200),
+                }),
+            )?;
+        }
     }
     Ok(())
 }
