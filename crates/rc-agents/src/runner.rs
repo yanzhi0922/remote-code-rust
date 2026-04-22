@@ -110,6 +110,9 @@ pub struct AgentExecutionRequest {
     /// Additional working directories available to the child runtime.
     #[serde(default)]
     pub additional_working_directories: Vec<PathBuf>,
+    /// Run the child without writing transcript/session artifacts to the parent profile.
+    #[serde(default)]
+    pub skip_transcript: bool,
 }
 
 /// Concrete host runtime capable of executing an agent request.
@@ -254,6 +257,7 @@ impl AgentRunner {
             permission_mode: None,
             working_dir: self.config.working_dir.clone(),
             additional_working_directories: self.config.additional_working_directories.clone(),
+            skip_transcript: false,
         }
     }
 

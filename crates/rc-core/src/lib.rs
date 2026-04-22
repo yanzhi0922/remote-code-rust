@@ -637,6 +637,9 @@ pub struct SubAgentExecutionRequest {
     /// Additional working directories available to the child agent.
     #[serde(default)]
     pub additional_working_directories: Vec<PathBuf>,
+    /// Run the child without writing transcript/session artifacts to the parent profile.
+    #[serde(default)]
+    pub skip_transcript: bool,
 }
 
 /// Result returned by a concrete sub-agent runtime.
