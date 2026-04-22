@@ -449,6 +449,8 @@ mod tests {
     fn test_context() -> ToolExecutionContext {
         ToolExecutionContext {
             cwd: PathBuf::from("/tmp/workspace"),
+            original_cwd: PathBuf::from("/tmp/workspace"),
+            active_worktree_session: None,
             timeout_ms: 30_000,
             sub_agent: None,
             progress_cb: None,

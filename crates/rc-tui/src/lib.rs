@@ -78,6 +78,7 @@ use rc_tools::{
     ToolExecutionContext, ToolRuntimePolicy,
     agent::{parse_delegate_progress_event, render_delegate_progress_event},
     configure_tool_runtime_policy, execute_tool_call,
+    git::{apply_worktree_tool_result_to_runtime, sync_tool_context_from_runtime},
     mcp_catalog::clear_runtime_mcp_catalog_cache,
     mcp_runtime::runtime_mcp_policy_entries,
     plan_mode::normalize_exit_plan_mode_tool_calls,
@@ -191,8 +192,12 @@ pub async fn run_tui_app(mut config: RuntimeConfig, store: &SessionStore) -> Res
     let mut _plan_mode_runtime_guard = install_plan_mode_runtime(plan_mode_controller.clone())?;
     let mut session_hooks = discover_runtime_session_hooks(&config);
 
-    let model_name = config.provider.model.as_deref().unwrap_or("unknown");
-    let context_manager = ContextWindowManager::for_model(model_name);
+    let model_name = config
+        .provider
+        .model
+        .clone()
+        .unwrap_or_else(|| "unknown".to_owned());
+    let context_manager = ContextWindowManager::for_model(&model_name);
     let cost_tracker = CostTracker::new();
     let mut conversation = load_or_create_conversation(store, &config)?;
     let prompt_overrides = config_prompt_runtime_overrides(&config);
@@ -279,7 +284,7 @@ pub async fn run_tui_app(mut config: RuntimeConfig, store: &SessionStore) -> Res
                 // Execute conversation turn.
                 if let Err(error) = run_conversation_turn(
                     &backend,
-                    &config,
+                    &mut config,
                     store,
                     &session_hooks,
                     &mut conversation,
@@ -470,7 +475,7 @@ pub async fn run_tui_app(mut config: RuntimeConfig, store: &SessionStore) -> Res
 
                     if let Err(error) = run_conversation_turn(
                         &backend,
-                        &config,
+                        &mut config,
                         store,
                         &session_hooks,
                         &mut conversation,
@@ -569,7 +574,11 @@ fn refresh_runtime_tool_policy(config: &RuntimeConfig) -> Result<()> {
 }
 
 fn seed_session_banner_messages(app: &mut App, config: &RuntimeConfig) {
-    let model_name = config.provider.model.as_deref().unwrap_or("unknown");
+    let model_name = config
+        .provider
+        .model
+        .clone()
+        .unwrap_or_else(|| "unknown".to_owned());
     app.reset_for_new_session();
     app.status.model_name = model_name.to_owned();
     app.model_info.name = model_name.to_owned();
@@ -645,7 +654,7 @@ fn load_or_create_conversation(
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 async fn run_conversation_turn(
     backend: &ProviderCompatBackend,
-    config: &RuntimeConfig,
+    config: &mut RuntimeConfig,
     store: &SessionStore,
     discovery: &runtime_hooks::RuntimeSessionHookDiscovery,
     conversation: &mut Vec<ConversationEntry>,
@@ -659,8 +668,10 @@ async fn run_conversation_turn(
     store.append_conversation_entry(config.session_id, &user_entry)?;
     conversation.push(user_entry);
 
-    let tool_context = ToolExecutionContext {
+    let mut tool_context = ToolExecutionContext {
         cwd: config.cwd.clone(),
+        original_cwd: config.original_cwd.clone(),
+        active_worktree_session: config.active_worktree_session.clone(),
         timeout_ms: config.provider.timeout_ms,
         sub_agent: Some(backend.sub_agent_completion()),
         progress_cb: Some(Arc::new(|msg: &str| {
@@ -675,7 +686,11 @@ async fn run_conversation_turn(
         )),
     };
 
-    let model_name = config.provider.model.as_deref().unwrap_or("unknown");
+    let model_name = config
+        .provider
+        .model
+        .clone()
+        .unwrap_or_else(|| "unknown".to_owned());
 
     let mut total_input_tokens = 0u64;
     let mut total_output_tokens = 0u64;
@@ -727,7 +742,7 @@ async fn run_conversation_turn(
 
         // Record usage in cost tracker
         cost_tracker.record(
-            model_name,
+            &model_name,
             response.usage.input_tokens,
             response.usage.output_tokens,
         );
@@ -856,6 +871,17 @@ async fn run_conversation_turn(
                 context_manager.truncate_tool_output_default(&tool_result.content);
 
             print_tool_result(&effective_tool_call.name, &tool_result, &truncated_output);
+
+            if apply_worktree_tool_result_to_runtime(
+                &effective_tool_call.name,
+                &effective_tool_call.input,
+                &tool_result,
+                config,
+                &mut tool_context,
+            )? {
+                persist_runtime_config_session_context(store, config)?;
+                sync_tool_context_from_runtime(config, &mut tool_context);
+            }
 
             let mut tool_entry = ConversationEntry::tool(
                 effective_tool_call.id.clone(),

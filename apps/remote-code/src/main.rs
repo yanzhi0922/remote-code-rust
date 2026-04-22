@@ -155,9 +155,9 @@ async fn main() -> Result<()> {
                         "Input must be provided either through stdin or as a prompt argument when using --print"
                     )
                 })?;
-                run_oneshot_text(&config, &store, prompt).await
+                run_oneshot_text(&mut config, &store, prompt).await
             } else if let Some(prompt) = prompt {
-                run_oneshot_text(&config, &store, prompt).await
+                run_oneshot_text(&mut config, &store, prompt).await
             } else {
                 run_interactive_shell(config.clone(), &store).await
             }
@@ -181,9 +181,9 @@ async fn main() -> Result<()> {
                         "Input must be provided either through stdin or as a prompt argument when using --print"
                     )
                 })?;
-                run_oneshot_text(&config, &store, prompt).await
+                run_oneshot_text(&mut config, &store, prompt).await
             } else if let Some(prompt) = prompt {
-                run_oneshot_text(&config, &store, prompt).await
+                run_oneshot_text(&mut config, &store, prompt).await
             } else {
                 run_interactive_shell(config.clone(), &store).await
             }

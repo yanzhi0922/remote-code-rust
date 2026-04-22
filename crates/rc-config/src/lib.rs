@@ -255,6 +255,34 @@ const fn default_true() -> bool {
     true
 }
 
+/// Session-scoped active worktree state restored on resume.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActiveWorktreeSession {
+    /// Original working directory before the session entered the worktree.
+    pub original_cwd: PathBuf,
+    /// Absolute path to the active worktree.
+    pub worktree_path: PathBuf,
+    /// Logical worktree name/slug.
+    pub worktree_name: String,
+    /// Temporary worktree branch, when git-backed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_branch: Option<String>,
+    /// Branch that was active before entering the worktree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_branch: Option<String>,
+    /// Baseline HEAD commit used for safe removal checks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_head_commit: Option<String>,
+    /// Session id that owns the worktree.
+    pub session_id: Uuid,
+    /// Optional tmux session tied to this worktree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tmux_session_name: Option<String>,
+    /// Whether the worktree came from custom hooks instead of git.
+    #[serde(default)]
+    pub hook_based: bool,
+}
+
 /// Top-level runtime configuration assembled from CLI flags, env vars, and settings.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
@@ -263,6 +291,8 @@ pub struct RuntimeConfig {
     pub cwd: PathBuf,
     /// Original working directory before any runtime cwd/worktree switching.
     pub original_cwd: PathBuf,
+    /// Active worktree session owned by the current session, if any.
+    pub active_worktree_session: Option<ActiveWorktreeSession>,
     /// Active session identifier.
     pub session_id: Uuid,
     /// Permission mode for tool execution.
@@ -419,6 +449,7 @@ pub fn load_runtime_config(
     Ok(RuntimeConfig {
         cwd: cwd.clone(),
         original_cwd: cwd,
+        active_worktree_session: None,
         session_id: session_id_override.unwrap_or_else(Uuid::new_v4),
         permission_mode,
         input_format,

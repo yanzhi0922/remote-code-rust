@@ -351,10 +351,7 @@ pub struct WorktreeListArgs {
 
 #[derive(Args, Debug)]
 pub struct WorktreeAddArgs {
-    pub branch: String,
-
-    #[arg(long)]
-    pub path: Option<PathBuf>,
+    pub name: Option<String>,
 
     #[arg(long)]
     pub json: bool,
@@ -362,10 +359,10 @@ pub struct WorktreeAddArgs {
 
 #[derive(Args, Debug)]
 pub struct WorktreeRemoveArgs {
-    pub branch: String,
+    pub action: String,
 
     #[arg(long)]
-    pub path: Option<PathBuf>,
+    pub discard_changes: bool,
 
     #[arg(long)]
     pub json: bool,

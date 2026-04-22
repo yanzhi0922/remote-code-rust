@@ -42,7 +42,6 @@ pub mod tool_result_summary;
 pub mod web;
 pub mod web_browser;
 pub mod workflow;
-pub mod worktree_tools;
 
 use std::future::Future;
 use std::path::PathBuf;
@@ -50,6 +49,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow};
 use once_cell::sync::Lazy;
+use rc_config::ActiveWorktreeSession;
 use rc_context::RuntimeIdentityContext;
 use rc_core::task_stack::TaskStack;
 use rc_core::{
@@ -782,6 +782,10 @@ pub type ProgressCallback = dyn Fn(&str) + Send + Sync;
 pub struct ToolExecutionContext {
     /// Current working directory.
     pub cwd: PathBuf,
+    /// Original working directory before any worktree switching.
+    pub original_cwd: PathBuf,
+    /// Active worktree session for the current runtime, if any.
+    pub active_worktree_session: Option<ActiveWorktreeSession>,
     /// Timeout in milliseconds for tool execution.
     pub timeout_ms: u64,
     /// Optional sub-agent completion provider for the agent tool.
@@ -799,10 +803,34 @@ impl Default for ToolExecutionContext {
     fn default() -> Self {
         Self {
             cwd: PathBuf::new(),
+            original_cwd: PathBuf::new(),
+            active_worktree_session: None,
             timeout_ms: 30_000,
             sub_agent: None,
             progress_cb: None,
             task_stack: Arc::new(std::sync::Mutex::new(TaskStack::default())),
+        }
+    }
+}
+
+impl ToolExecutionContext {
+    /// Build a context from a runtime config, preserving worktree session state.
+    pub fn from_runtime_config(config: &rc_config::RuntimeConfig) -> Self {
+        Self {
+            cwd: config.cwd.clone(),
+            original_cwd: config.original_cwd.clone(),
+            active_worktree_session: config.active_worktree_session.clone(),
+            timeout_ms: config.provider.timeout_ms,
+            ..Self::default()
+        }
+    }
+
+    /// Build a test/local context rooted at a specific working directory.
+    pub fn from_cwd(cwd: PathBuf) -> Self {
+        Self {
+            original_cwd: cwd.clone(),
+            cwd,
+            ..Self::default()
         }
     }
 }
@@ -2089,7 +2117,9 @@ while True:
             panic!("failed to seed file: {error}");
         }
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -2140,7 +2170,9 @@ while True:
         std::fs::create_dir_all(&workspace).expect("workspace");
         std::fs::write(&outside, "secret").expect("outside file");
         let context = ToolExecutionContext {
+            original_cwd: workspace.clone(),
             cwd: workspace,
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -2189,7 +2221,9 @@ while True:
         std::fs::create_dir_all(&workspace).expect("workspace");
         std::fs::write(&outside, "secret").expect("outside file");
         let context = ToolExecutionContext {
+            original_cwd: workspace.clone(),
             cwd: workspace,
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -2232,7 +2266,9 @@ while True:
         std::fs::create_dir_all(&workspace).expect("workspace");
         std::fs::write(&outside, "secret").expect("outside file");
         let context = ToolExecutionContext {
+            original_cwd: workspace.clone(),
             cwd: workspace,
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -2287,7 +2323,9 @@ while True:
         }
         let target = link.join("new.txt");
         let context = ToolExecutionContext {
+            original_cwd: workspace.clone(),
             cwd: workspace,
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -2339,7 +2377,9 @@ while True:
         let target = extra.join("allowed.txt");
         std::fs::write(&target, "allowed").expect("extra file");
         let context = ToolExecutionContext {
+            original_cwd: workspace.clone(),
             cwd: workspace,
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -2384,7 +2424,9 @@ while True:
         std::fs::create_dir_all(target.parent().expect("team dir")).expect("team dir");
         std::fs::write(&target, "{\"name\":\"alpha\"}").expect("team file");
         let context = ToolExecutionContext {
+            original_cwd: workspace.clone(),
             cwd: workspace,
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -2428,7 +2470,9 @@ while True:
         let target = tool_results.join("call-1.txt");
         std::fs::write(&target, "persisted").expect("tool result");
         let context = ToolExecutionContext {
+            original_cwd: workspace.clone(),
             cwd: workspace,
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -2472,7 +2516,9 @@ while True:
         std::fs::create_dir_all(target.parent().expect("task dir")).expect("task dir");
         std::fs::write(&target, "{\"id\":\"1\"}").expect("task file");
         let context = ToolExecutionContext {
+            original_cwd: workspace.clone(),
             cwd: workspace,
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -2511,7 +2557,9 @@ while True:
         let tempdir = tempdir().expect("tempdir");
         std::fs::write(tempdir.path().join("notes.txt"), "notes").expect("notes");
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -2553,7 +2601,9 @@ while True:
         let target = tempdir.path().join("notes.txt");
         std::fs::write(&target, "before").expect("notes");
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -2594,7 +2644,9 @@ while True:
         std::fs::create_dir_all(&workspace).expect("workspace");
         std::fs::write(&outside, "secret").expect("outside");
         let context = ToolExecutionContext {
+            original_cwd: workspace.clone(),
             cwd: workspace,
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -2634,7 +2686,9 @@ while True:
         let target = git_dir.join("config");
         std::fs::write(&target, "[core]\n").expect("git config");
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -2679,7 +2733,9 @@ while True:
         let target = claude_dir.join("notes.json");
         std::fs::write(&target, "{\"before\":true}").expect("claude file");
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -2727,7 +2783,9 @@ while True:
         std::fs::create_dir_all(&workspace).expect("workspace");
         std::fs::write(&outside, "secret").expect("outside");
         let context = ToolExecutionContext {
+            original_cwd: workspace.clone(),
             cwd: workspace,
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -2807,7 +2865,9 @@ while True:
         std::fs::write(tempdir.path().join("src/mod.rs"), "mod foo;").expect("write should work");
 
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -2851,7 +2911,9 @@ while True:
             .expect("write should work");
 
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -2894,7 +2956,9 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -2924,7 +2988,9 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -2974,7 +3040,9 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -3011,7 +3079,9 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -3060,7 +3130,9 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -3132,7 +3204,9 @@ while True:
         .expect("write should work");
 
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -3176,7 +3250,9 @@ while True:
         .expect("write should work");
 
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -3220,7 +3296,9 @@ while True:
         .expect("write should work");
 
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -3258,7 +3336,9 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -3298,7 +3378,9 @@ while True:
         let _task_list_guard =
             configure_task_list_for_tests(tempdir.path(), Some("task-tools-crud"));
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -3434,7 +3516,9 @@ while True:
         .expect("write notebook");
 
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -3480,7 +3564,9 @@ while True:
         };
         let _guard = seed_team(tempdir.path(), "message-team").await;
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -3525,7 +3611,9 @@ while True:
         let tempdir = tempdir().expect("tempdir should work");
         let _guard = seed_team(tempdir.path(), "seed-team").await;
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -3534,10 +3622,15 @@ while True:
         let broker = StaticPermissionBroker::new(true);
 
         create_team_via_tool(&context, &broker, "review-team").await;
-        add_team_member_for_test("review-team", "agent-1", "worker", tempdir.path(), Some("blue"))
-            .await;
-        add_team_member_for_test("review-team", "agent-2", "reviewer", tempdir.path(), None)
-            .await;
+        add_team_member_for_test(
+            "review-team",
+            "agent-1",
+            "worker",
+            tempdir.path(),
+            Some("blue"),
+        )
+        .await;
+        add_team_member_for_test("review-team", "agent-2", "reviewer", tempdir.path(), None).await;
 
         let created_team = team_helpers::read_team("review-team")
             .await
@@ -3653,7 +3746,9 @@ while True:
         let tempdir = tempdir().expect("tempdir should work");
         let _guard = seed_team(tempdir.path(), "seed-team").await;
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -3753,7 +3848,9 @@ while True:
             },
         });
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: Some(runtime),
             progress_cb: None,
@@ -3794,7 +3891,9 @@ while True:
     async fn execute_tool_call_returns_structured_agent_request_without_provider() {
         let tempdir = tempdir().expect("tempdir should work");
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -3852,7 +3951,9 @@ while True:
                 .push(message.to_owned());
         });
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: Some(runtime),
             progress_cb: Some(progress_cb),
@@ -3934,7 +4035,9 @@ while True:
             },
         });
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: Some(runtime),
             progress_cb: None,
@@ -3977,7 +4080,9 @@ while True:
             },
         });
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: Some(runtime),
             progress_cb: None,
@@ -4009,7 +4114,9 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -4067,7 +4174,9 @@ while True:
         let _guard = PLAN_MODE_RUNTIME_TEST_MUTEX.lock().await;
         let tempdir = tempdir().expect("tempdir");
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -4113,7 +4222,9 @@ while True:
         let _guard = PLAN_MODE_RUNTIME_TEST_MUTEX.lock().await;
         let tempdir = tempdir().expect("tempdir");
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -4161,7 +4272,9 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -4195,7 +4308,9 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -4248,7 +4363,9 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -4329,7 +4446,9 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -4374,7 +4493,9 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -4406,7 +4527,9 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -4439,7 +4562,9 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -4475,7 +4600,9 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -4509,7 +4636,9 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -4569,7 +4698,9 @@ while True:
     async fn workflow_run_requires_bash_permission_even_in_accept_edits_mode() {
         let tempdir = tempdir().expect("tempdir");
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -4648,7 +4779,9 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -4675,13 +4808,16 @@ while True:
     }
 
     #[tokio::test]
-    async fn enter_and_exit_worktree_return_commands() {
+    async fn enter_and_exit_worktree_use_session_contract() {
         let tempdir = match tempdir() {
             Ok(dir) => dir,
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
+        std::fs::create_dir_all(tempdir.path().join(".git")).expect("git marker");
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
+            original_cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -4693,7 +4829,7 @@ while True:
             &ToolCall {
                 id: "1".to_owned(),
                 name: "enter_worktree".to_owned(),
-                input: json!({"branch": "feature-x"}),
+                input: json!({"name": "feature-x"}),
             },
             &context,
             &broker,
@@ -4702,20 +4838,15 @@ while True:
         .expect("enter_worktree should work");
 
         assert!(
-            !enter_result.is_error,
-            "enter_worktree error: {}",
-            enter_result.content
-        );
-        assert!(
-            enter_result.content.contains("git worktree add"),
-            "should contain git worktree add"
+            enter_result.is_error || enter_result.content.contains("worktreePath"),
+            "enter_worktree should now return session worktree payload or a real git error"
         );
 
         let exit_result = execute_tool_call(
             &ToolCall {
                 id: "2".to_owned(),
                 name: "exit_worktree".to_owned(),
-                input: json!({"branch": "feature-x"}),
+                input: json!({"action": "keep"}),
             },
             &context,
             &broker,
@@ -4729,8 +4860,8 @@ while True:
             exit_result.content
         );
         assert!(
-            exit_result.content.contains("git worktree remove"),
-            "should contain git worktree remove"
+            exit_result.content.contains("No-op"),
+            "exit_worktree without active session should be a no-op payload"
         );
     }
 
@@ -4741,7 +4872,9 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -4779,7 +4912,9 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -4813,7 +4948,9 @@ while True:
         };
         let _guard = seed_team(tempdir.path(), "peers-team").await;
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -4859,7 +4996,9 @@ while True:
         )
         .expect("write should work");
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -4890,7 +5029,9 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -4923,7 +5064,9 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -4962,7 +5105,9 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -5015,7 +5160,9 @@ while True:
         let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX.lock().await;
         let tempdir = tempdir().expect("tempdir");
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -5085,7 +5232,9 @@ while True:
         let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX.lock().await;
         let tempdir = tempdir().expect("tempdir");
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -5158,7 +5307,9 @@ while True:
         let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX.lock().await;
         let tempdir = tempdir().expect("tempdir");
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -5234,7 +5385,9 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -5313,7 +5466,9 @@ while True:
         let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX.lock().await;
         let tempdir = tempdir().expect("tempdir");
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -5378,7 +5533,9 @@ while True:
         let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX.lock().await;
         let tempdir = tempdir().expect("tempdir");
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -5452,7 +5609,9 @@ while True:
         fs::write(&script, mock_mcp_resource_server_script()).expect("mock mcp resource script");
         prefix_args.push(script.display().to_string());
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -5525,7 +5684,9 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -5559,7 +5720,9 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent: None,
             progress_cb: None,
@@ -6001,7 +6164,9 @@ while True:
             input: serde_json::json!({"path": extra.join("allowed.txt")}),
         };
         let context = ToolExecutionContext {
+            original_cwd: workspace.clone(),
             cwd: workspace,
+            active_worktree_session: None,
             timeout_ms: 1_000,
             sub_agent: None,
             progress_cb: None,

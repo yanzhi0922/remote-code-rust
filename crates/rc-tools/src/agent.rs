@@ -1271,7 +1271,9 @@ mod tests {
         sub_agent: Option<Arc<dyn SubAgentCompletion>>,
     ) -> ToolExecutionContext {
         ToolExecutionContext {
+            original_cwd: cwd.clone(),
             cwd,
+            active_worktree_session: None,
             timeout_ms: 5_000,
             sub_agent,
             progress_cb: None,

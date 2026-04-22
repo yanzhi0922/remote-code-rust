@@ -2,7 +2,9 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use rc_config::{RuntimeConfig, settings_layers::resolve_runtime_settings_files};
+use rc_config::{
+    ActiveWorktreeSession, RuntimeConfig, settings_layers::resolve_runtime_settings_files,
+};
 use rc_core::{ConversationEntry, ConversationRole, PermissionMode, ProviderProtocol};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -22,6 +24,8 @@ struct PersistedSessionContext {
     cwd: PathBuf,
     #[serde(default)]
     original_cwd: Option<PathBuf>,
+    #[serde(default)]
+    active_worktree_session: Option<PersistedActiveWorktreeSession>,
     permission_mode: String,
     #[serde(default)]
     output_style: Option<String>,
@@ -32,6 +36,56 @@ struct PersistedSessionContext {
     #[serde(default)]
     proactive_active: bool,
     provider: PersistedProviderContext,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedActiveWorktreeSession {
+    original_cwd: PathBuf,
+    worktree_path: PathBuf,
+    worktree_name: String,
+    #[serde(default)]
+    worktree_branch: Option<String>,
+    #[serde(default)]
+    original_branch: Option<String>,
+    #[serde(default)]
+    original_head_commit: Option<String>,
+    session_id: Uuid,
+    #[serde(default)]
+    tmux_session_name: Option<String>,
+    #[serde(default)]
+    hook_based: bool,
+}
+
+impl From<&ActiveWorktreeSession> for PersistedActiveWorktreeSession {
+    fn from(value: &ActiveWorktreeSession) -> Self {
+        Self {
+            original_cwd: value.original_cwd.clone(),
+            worktree_path: value.worktree_path.clone(),
+            worktree_name: value.worktree_name.clone(),
+            worktree_branch: value.worktree_branch.clone(),
+            original_branch: value.original_branch.clone(),
+            original_head_commit: value.original_head_commit.clone(),
+            session_id: value.session_id,
+            tmux_session_name: value.tmux_session_name.clone(),
+            hook_based: value.hook_based,
+        }
+    }
+}
+
+impl From<PersistedActiveWorktreeSession> for ActiveWorktreeSession {
+    fn from(value: PersistedActiveWorktreeSession) -> Self {
+        Self {
+            original_cwd: value.original_cwd,
+            worktree_path: value.worktree_path,
+            worktree_name: value.worktree_name,
+            worktree_branch: value.worktree_branch,
+            original_branch: value.original_branch,
+            original_head_commit: value.original_head_commit,
+            session_id: value.session_id,
+            tmux_session_name: value.tmux_session_name,
+            hook_based: value.hook_based,
+        }
+    }
 }
 
 /// Persist the runtime fields needed to restore a session consistently across
@@ -56,6 +110,10 @@ pub fn persist_runtime_config_session_context(
         serde_json::to_value(PersistedSessionContext {
             cwd: config.cwd.clone(),
             original_cwd: Some(config.original_cwd.clone()),
+            active_worktree_session: config
+                .active_worktree_session
+                .as_ref()
+                .map(PersistedActiveWorktreeSession::from),
             permission_mode: config.permission_mode.as_legacy_str().to_owned(),
             output_style: config.output_style.clone(),
             language: config.language.clone(),
@@ -84,6 +142,7 @@ pub fn restore_runtime_config_session_context(
         config.session_name = Some(summary.title.clone());
         config.cwd = summary.cwd;
         config.original_cwd = config.cwd.clone();
+        config.active_worktree_session = None;
         config.provider.name = summary.provider_name;
         if let Some(model) = summary.model {
             config.provider.model = Some(model);
@@ -100,6 +159,7 @@ pub fn restore_runtime_config_session_context(
     {
         config.cwd = persisted.cwd;
         config.original_cwd = persisted.original_cwd.unwrap_or_else(|| config.cwd.clone());
+        config.active_worktree_session = persisted.active_worktree_session.map(Into::into);
         if let Some(permission_mode) = parse_permission_mode(&persisted.permission_mode) {
             config.permission_mode = permission_mode;
         }

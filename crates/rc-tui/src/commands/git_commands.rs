@@ -6,11 +6,7 @@ use serde_json::Value;
 
 /// Dispatch `/commit` — one-click commit (git add + commit with generated message).
 pub fn render_commit(config: &RuntimeConfig) {
-    let context = ToolExecutionContext {
-        cwd: config.cwd.clone(),
-        timeout_ms: config.provider.timeout_ms,
-        ..ToolExecutionContext::default()
-    };
+    let context = ToolExecutionContext::from_runtime_config(config);
 
     match git::suggest_pr_tool(&context)
         .and_then(|payload| serde_json::from_str::<Value>(&payload).map_err(Into::into))
@@ -36,11 +32,7 @@ pub fn render_commit(config: &RuntimeConfig) {
 
 /// Dispatch `/diff` — view code changes.
 pub fn render_diff(config: &RuntimeConfig) {
-    let context = ToolExecutionContext {
-        cwd: config.cwd.clone(),
-        timeout_ms: config.provider.timeout_ms,
-        ..ToolExecutionContext::default()
-    };
+    let context = ToolExecutionContext::from_runtime_config(config);
 
     match git::suggest_pr_tool(&context)
         .and_then(|payload| serde_json::from_str::<Value>(&payload).map_err(Into::into))
@@ -69,11 +61,7 @@ pub fn render_diff(config: &RuntimeConfig) {
 
 /// Dispatch `/pr_comments` — view PR comments.
 pub fn render_pr_comments(config: &RuntimeConfig) {
-    let context = ToolExecutionContext {
-        cwd: config.cwd.clone(),
-        timeout_ms: config.provider.timeout_ms,
-        ..ToolExecutionContext::default()
-    };
+    let context = ToolExecutionContext::from_runtime_config(config);
 
     match git::suggest_pr_tool(&context)
         .and_then(|payload| serde_json::from_str::<Value>(&payload).map_err(Into::into))
@@ -131,11 +119,7 @@ pub fn dispatch_branch(input: &str, config: &RuntimeConfig) {
 }
 
 fn render_branch_list(config: &RuntimeConfig) {
-    let context = ToolExecutionContext {
-        cwd: config.cwd.clone(),
-        timeout_ms: config.provider.timeout_ms,
-        ..ToolExecutionContext::default()
-    };
+    let context = ToolExecutionContext::from_runtime_config(config);
 
     match git::list_worktrees_tool(&context)
         .and_then(|payload| serde_json::from_str::<Value>(&payload).map_err(Into::into))
@@ -157,11 +141,7 @@ fn render_branch_list(config: &RuntimeConfig) {
 
 /// Dispatch `/autofix-pr` — auto-fix PR issues.
 pub fn render_autofix_pr(config: &RuntimeConfig) {
-    let context = ToolExecutionContext {
-        cwd: config.cwd.clone(),
-        timeout_ms: config.provider.timeout_ms,
-        ..ToolExecutionContext::default()
-    };
+    let context = ToolExecutionContext::from_runtime_config(config);
 
     match git::suggest_pr_tool(&context)
         .and_then(|payload| serde_json::from_str::<Value>(&payload).map_err(Into::into))
@@ -186,11 +166,7 @@ pub fn render_autofix_pr(config: &RuntimeConfig) {
 /// Helper used by other modules to build a tool execution context.
 #[allow(dead_code)]
 pub fn tool_context(config: &RuntimeConfig) -> ToolExecutionContext {
-    ToolExecutionContext {
-        cwd: config.cwd.clone(),
-        timeout_ms: config.provider.timeout_ms,
-        ..ToolExecutionContext::default()
-    }
+    ToolExecutionContext::from_runtime_config(config)
 }
 
 #[cfg(test)]

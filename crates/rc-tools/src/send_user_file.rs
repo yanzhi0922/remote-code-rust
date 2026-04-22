@@ -227,6 +227,8 @@ mod tests {
     fn test_context_with_cwd(cwd: &Path) -> ToolExecutionContext {
         ToolExecutionContext {
             cwd: cwd.to_path_buf(),
+            original_cwd: cwd.to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 30_000,
             sub_agent: None,
             progress_cb: None,

@@ -511,10 +511,8 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
                 PermissionUpdate::SetMode { destination, mode }
                     if *destination == PermissionUpdateDestination::Session =>
                 {
-                    let mut session_mode = self
-                        .session_mode
-                        .write()
-                        .unwrap_or_else(|e| e.into_inner());
+                    let mut session_mode =
+                        self.session_mode.write().unwrap_or_else(|e| e.into_inner());
                     let mapped_mode = extended_permission_mode_to_core_mode(*mode);
                     if session_mode.as_ref() != Some(&mapped_mode) {
                         *session_mode = Some(mapped_mode);
@@ -634,15 +632,14 @@ fn extended_permission_mode_to_core_mode(
     match mode {
         crate::mode::ExtendedPermissionMode::Default => rc_core::PermissionMode::Default,
         crate::mode::ExtendedPermissionMode::Plan => rc_core::PermissionMode::Plan,
-        crate::mode::ExtendedPermissionMode::AcceptEdits => {
-            rc_core::PermissionMode::AcceptEdits
-        }
+        crate::mode::ExtendedPermissionMode::AcceptEdits => rc_core::PermissionMode::AcceptEdits,
         crate::mode::ExtendedPermissionMode::BypassPermissions => {
             rc_core::PermissionMode::BypassPermissions
         }
         crate::mode::ExtendedPermissionMode::DontAsk => rc_core::PermissionMode::DontAsk,
-        crate::mode::ExtendedPermissionMode::Auto
-        | crate::mode::ExtendedPermissionMode::Bubble => rc_core::PermissionMode::Default,
+        crate::mode::ExtendedPermissionMode::Auto | crate::mode::ExtendedPermissionMode::Bubble => {
+            rc_core::PermissionMode::Default
+        }
     }
 }
 
