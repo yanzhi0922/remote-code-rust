@@ -38,7 +38,7 @@ use rc_query_engine::{
     QueryEngineConfig, QueryObserver, QueryObserverEvent, ToolRunResult, ToolRunner,
 };
 use rc_runtime_prompt::{
-    PromptRuntimeOverrides, RuntimePromptSettings,
+    PromptRuntimeOverrides, RuntimePromptSettings, clear_runtime_system_prompt_state,
     conversation_with_runtime_user_context_with_settings, effective_allowed_tool_names,
     runtime_agent_listing_delta_enabled, runtime_deferred_tools_delta_enabled, runtime_env_truthy,
     runtime_mcp_instructions_delta_enabled,
@@ -1462,6 +1462,7 @@ impl QueryObserver for CompatObserver {
                 self.store.append_transcript_entry(
                     &rc_transcript::TranscriptEntry::compact_boundary_now(session_id, boundary),
                 )?;
+                clear_runtime_system_prompt_state(session_id);
                 for entry in &compacted_conversation {
                     self.store.append_conversation_entry(session_id, entry)?;
                 }
@@ -4011,11 +4012,7 @@ while True:
             .find(|entry| entry.role == ConversationRole::System)
             .expect("system entry");
         assert!(system_entry.text.contains("Specialized child agent"));
-        assert!(
-            system_entry
-                .text
-                .contains("This is the git status at the start")
-        );
+        assert!(!system_entry.text.contains("This is the git status at the start"));
     }
 
     #[tokio::test]
@@ -4087,11 +4084,7 @@ while True:
             .expect("system entry");
         assert!(system_entry.text.contains("Append runtime prompt"));
         assert!(system_entry.text.contains("You are an interactive agent"));
-        assert!(
-            system_entry
-                .text
-                .contains("This is the git status at the start")
-        );
+        assert!(!system_entry.text.contains("This is the git status at the start"));
     }
 
     #[tokio::test]

@@ -42,8 +42,10 @@ pub mod sections;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use anyhow::Result;
+use once_cell::sync::Lazy;
 use serde_json::json;
 
 use cache::{SYSTEM_PROMPT_DYNAMIC_BOUNDARY, SectionCache};
@@ -388,6 +390,9 @@ pub struct SystemPromptBuilder {
     use_global_cache_scope: bool,
 }
 
+static SESSION_PROMPT_BUILDERS: Lazy<Mutex<std::collections::HashMap<uuid::Uuid, SystemPromptBuilder>>> =
+    Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
+
 impl SystemPromptBuilder {
     /// Create a new builder with no sections.
     #[must_use]
@@ -567,6 +572,27 @@ impl SystemPromptBuilder {
 impl Default for SystemPromptBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+pub fn build_default_system_prompt_for_session(
+    session_id: uuid::Uuid,
+    ctx: &PromptContext,
+    use_global_cache_scope: bool,
+) -> Result<Vec<String>> {
+    let mut builders = SESSION_PROMPT_BUILDERS
+        .lock()
+        .expect("system prompt builder cache poisoned");
+    let builder = builders
+        .entry(session_id)
+        .or_insert_with(SystemPromptBuilder::with_default_sections);
+    builder.set_global_cache_scope(use_global_cache_scope);
+    builder.build(ctx)
+}
+
+pub fn clear_system_prompt_sections_for_session(session_id: uuid::Uuid) {
+    if let Ok(mut builders) = SESSION_PROMPT_BUILDERS.lock() {
+        builders.remove(&session_id);
     }
 }
 

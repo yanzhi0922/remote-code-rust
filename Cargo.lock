@@ -4369,6 +4369,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -4448,9 +4449,11 @@ name = "rc-system-prompt"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "once_cell",
  "rc-core",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]

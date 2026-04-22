@@ -22,15 +22,14 @@ use rc_core::{ConversationEntry, ConversationRole, ProviderProtocol};
 use rc_model::is_first_party_base_url;
 use rc_provider::{DiscoveredToolScope, provider_runtime_tool_specs_for_request};
 use rc_system_prompt::{
+    build_default_system_prompt_for_session, clear_system_prompt_sections_for_session,
     EffectiveSystemPromptOptions, McpClientInfo as PromptMcpClientInfo,
     OutputStyleConfig as PromptOutputStyleConfig, PromptContext, PromptFeatures,
-    SystemPromptBuilder, SystemPromptSplitOptions, build_effective_system_prompt,
-    render_system_prompt_for_api,
+    SystemPromptSplitOptions, build_effective_system_prompt, render_system_prompt_for_api,
 };
 use rc_tools::{ToolSpec, is_runtime_dynamic_mcp_tool_name};
 
 const MEMORY_INSTRUCTION_PROMPT: &str = "Codebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.";
-const MAX_GIT_STATUS_CHARS: usize = 2000;
 const SCRATCHPAD_FEATURE_KEY: &str = "tengu_scratch";
 const SCRATCHPAD_DIRNAME: &str = "scratchpad";
 
@@ -425,12 +424,6 @@ pub async fn build_runtime_system_prompt(
                 proactive_active: settings.proactive_active,
             },
         );
-        if !custom_system_prompt_provided
-            && !override_system_prompt_provided
-            && let Some(system_context) = runtime_system_context_block(config, overrides)
-        {
-            prompt_blocks.push(system_context);
-        }
         append_runtime_prompt_suffixes(
             &mut prompt_blocks,
             memory_mechanics_prompt.clone(),
@@ -522,10 +515,8 @@ pub async fn build_runtime_system_prompt(
         },
     };
 
-    let mut builder = SystemPromptBuilder::with_default_sections();
-    builder.set_global_cache_scope(use_global_prompt_cache);
     let default_prompt_blocks = if use_default_system_prompt {
-        builder.build(&prompt_ctx)?
+        build_default_system_prompt_for_session(config.session_id, &prompt_ctx, use_global_prompt_cache)?
     } else {
         Vec::new()
     };
@@ -541,12 +532,6 @@ pub async fn build_runtime_system_prompt(
             proactive_active: prompt_ctx.features.proactive_active,
         },
     );
-    if !custom_system_prompt_provided
-        && !override_system_prompt_provided
-        && let Some(system_context) = runtime_system_context_block(config, overrides)
-    {
-        prompt_blocks.push(system_context);
-    }
     append_runtime_prompt_suffixes(
         &mut prompt_blocks,
         memory_mechanics_prompt,
@@ -589,6 +574,10 @@ pub async fn refresh_runtime_system_prompt(
     .await?;
     apply_runtime_system_prompt(conversation, prompt);
     Ok(())
+}
+
+pub fn clear_runtime_system_prompt_state(session_id: uuid::Uuid) {
+    clear_system_prompt_sections_for_session(session_id);
 }
 
 pub fn apply_runtime_system_prompt(
@@ -641,82 +630,6 @@ fn detect_git_repository(cwd: &Path) -> bool {
         .output()
         .ok()
         .is_some_and(|output| output.status.success())
-}
-
-fn git_output(cwd: &Path, args: &[&str]) -> Option<String> {
-    std::process::Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
-        .filter(|output| !output.is_empty())
-}
-
-fn initial_git_status_context(cwd: &Path) -> Option<String> {
-    if !detect_git_repository(cwd) {
-        return None;
-    }
-
-    let branch = git_output(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
-        .unwrap_or_else(|| "HEAD".to_owned());
-    let main_branch = git_output(
-        cwd,
-        &["symbolic-ref", "refs/remotes/origin/HEAD", "--short"],
-    )
-    .map(|value| {
-        value
-            .strip_prefix("origin/")
-            .map(str::to_owned)
-            .unwrap_or(value)
-    })
-    .unwrap_or_else(|| "main".to_owned());
-    let status = git_output(cwd, &["--no-optional-locks", "status", "--short"]).unwrap_or_default();
-    let log = git_output(cwd, &["--no-optional-locks", "log", "--oneline", "-n", "5"])
-        .unwrap_or_default();
-    let user_name = git_output(cwd, &["config", "user.name"]);
-    let truncated_status = if status.chars().count() > MAX_GIT_STATUS_CHARS {
-        let prefix = status
-            .chars()
-            .take(MAX_GIT_STATUS_CHARS)
-            .collect::<String>();
-        format!(
-            "{prefix}\n... (truncated because it exceeds 2k characters. If you need more information, run \"git status\" using BashTool)"
-        )
-    } else {
-        status
-    };
-
-    let mut parts = vec![
-        "This is the git status at the start of the conversation. Note that this status is a snapshot in time, and will not update during the conversation.".to_owned(),
-        format!("Current branch: {branch}"),
-        format!("Main branch (you will usually use this for PRs): {main_branch}"),
-    ];
-    if let Some(user_name) = user_name {
-        parts.push(format!("Git user: {user_name}"));
-    }
-    parts.push(format!(
-        "Status:\n{}",
-        if truncated_status.is_empty() {
-            "(clean)"
-        } else {
-            truncated_status.as_str()
-        }
-    ));
-    parts.push(format!("Recent commits:\n{log}"));
-
-    Some(parts.join("\n\n"))
-}
-
-fn runtime_system_context_block(
-    config: &RuntimeConfig,
-    overrides: &PromptRuntimeOverrides,
-) -> Option<String> {
-    if overrides.omit_git_status {
-        return None;
-    }
-    initial_git_status_context(&config.cwd).map(|git_status| format!("gitStatus: {git_status}"))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1645,6 +1558,7 @@ mod tests {
     use super::{
         ClaudeMemoryRoots, PromptRuntimeOverrides, RuntimePromptSettings,
         build_runtime_scratchpad_state_with, build_runtime_system_prompt,
+        clear_runtime_system_prompt_state,
         collect_claude_md_context_with_roots, runtime_claude_temp_dir_name,
         runtime_user_context_entries_with_settings, sanitize_path_component,
     };
@@ -1860,6 +1774,50 @@ mod tests {
 
         assert!(prompt.text.contains("# Scratchpad Directory"));
         assert!(prompt.text.contains("C:/scratchpad/session"));
+    }
+
+    #[tokio::test]
+    async fn default_prompt_reuses_session_cached_sections_until_cleared() {
+        let config = test_config(None);
+        let mut settings = test_settings(&config);
+        settings.language = Some("English".to_owned());
+
+        let first = build_runtime_system_prompt(
+            &config,
+            &[ConversationEntry::user("test")],
+            &PromptRuntimeOverrides::default(),
+            &settings,
+            &DiscoveredToolScope::default(),
+        )
+        .await
+        .expect("first prompt");
+        assert!(first.text.contains("Always respond in English."));
+
+        settings.language = Some("Chinese".to_owned());
+        let second = build_runtime_system_prompt(
+            &config,
+            &[ConversationEntry::user("test")],
+            &PromptRuntimeOverrides::default(),
+            &settings,
+            &DiscoveredToolScope::default(),
+        )
+        .await
+        .expect("second prompt");
+        assert!(second.text.contains("Always respond in English."));
+        assert!(!second.text.contains("Always respond in Chinese."));
+
+        clear_runtime_system_prompt_state(config.session_id);
+
+        let third = build_runtime_system_prompt(
+            &config,
+            &[ConversationEntry::user("test")],
+            &PromptRuntimeOverrides::default(),
+            &settings,
+            &DiscoveredToolScope::default(),
+        )
+        .await
+        .expect("third prompt");
+        assert!(third.text.contains("Always respond in Chinese."));
     }
 
     #[test]
