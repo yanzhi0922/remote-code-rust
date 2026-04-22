@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, OnceLock,
@@ -8,7 +9,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use chrono::Utc;
-use rc_config::{RuntimeConfig, restamp_runtime_session};
+use rc_config::RuntimeConfig;
 use rc_core::{
     ConversationEntry, ConversationRole, Message, MessageBase, MessageOrigin, PermissionMode,
     SystemMemorySavedMessage, SystemMessage, SystemMessageSubtype,
@@ -23,22 +24,22 @@ use rc_runtime_prompt::{
 };
 use rc_session::SessionStore;
 use rc_transcript::TranscriptEntry;
+use rc_tools::runtime_tool_result_persistence_skip_names;
 use rc_tools::shell::readonly::{ShellKind, is_read_only_command};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::agents::install_ephemeral_session_paths;
 use crate::conversation::{
-    PromptEventSink, PromptStreamEvent, initialize_conversation, restore_discovered_tool_scope,
+    ContentReplacementBackend, PromptEventSink, PromptStreamEvent,
+    provision_content_replacement_state,
 };
-use crate::hooks::{HookRunState, discover_runtime_hooks, ensure_session_start_hooks};
+use crate::hooks::{HookExecutionOptions, HookRunState};
 use crate::query_engine_compat::{
-    CompatRunOverrides, run_prompt_with_query_engine_compat_overrides,
+    CompatExecutionOptions, CompatRunOverrides, run_prompt_with_query_engine_compat_overrides,
 };
 
 const EXTRACTION_MAX_TURNS: u32 = 5;
-const EXTRACTION_FORK_LABEL: &str = "extract_memories";
 const EXTRACT_MODE_FEATURE: &str = "tengu_passport_quail";
 const EXTRACT_NON_INTERACTIVE_FEATURE: &str = "tengu_slate_thimble";
 const EXTRACT_THROTTLE_FEATURE: &str = "tengu_bramble_lintel";
@@ -300,7 +301,7 @@ async fn run_extract_memories_once(
     store: &SessionStore,
     backend: Arc<dyn ConversationBackend>,
     conversation: &[ConversationEntry],
-    prompt: &str,
+    _prompt: &str,
     session_id: Uuid,
     event_sink: Option<PromptEventSink>,
     is_trailing_run: bool,
@@ -385,7 +386,6 @@ async fn run_extract_memories_once(
         store,
         backend,
         conversation,
-        prompt,
         &extract_prompt,
         memory_dir.clone(),
         team_memory_dir.clone(),
@@ -443,72 +443,50 @@ async fn run_extract_memories_once(
 
 async fn run_extraction_child(
     config: &RuntimeConfig,
-    _store: &SessionStore,
+    store: &SessionStore,
     _backend: Arc<dyn ConversationBackend>,
     conversation: &[ConversationEntry],
-    prompt: &str,
     extract_prompt: &str,
     memory_dir: PathBuf,
     team_memory_dir: Option<PathBuf>,
 ) -> Result<ExtractionRunOutcome> {
     let started = std::time::Instant::now();
     let mut child_config = config.clone();
-    let parent_session_id = config.session_id;
-    restamp_runtime_session(&mut child_config, Uuid::new_v4());
-    let _ephemeral = install_ephemeral_session_paths(&mut child_config)?;
     child_config.max_turns = usize::try_from(EXTRACTION_MAX_TURNS).unwrap_or(usize::MAX);
-    child_config.permission_mode = PermissionMode::DontAsk;
-    child_config.session_name = Some(format!("{EXTRACTION_FORK_LABEL}:{prompt}"));
-
-    let child_store = SessionStore::open(child_config.paths.clone())?;
-    child_store.ensure_session_with_parent(
-        child_config.session_id,
-        &child_config.cwd,
-        &child_config.provider.name,
-        child_config.provider.model.as_deref(),
-        child_config.session_name.as_deref(),
-        Some(parent_session_id),
-    )?;
-
     let provider_backend = Arc::new(ProviderCompatBackend::new(
         Arc::new(rc_provider::ProviderClient::new()?),
         &child_config.provider,
     ));
     let discovered_tool_scope = provider_backend.discovered_tool_scope();
-    let discovery = discover_runtime_hooks(&child_config, &[]);
-    let mut child_conversation =
-        initialize_conversation(&child_store, &child_config, Some(prompt))?;
-    restore_discovered_tool_scope(
-        &child_store,
-        child_config.session_id,
-        &discovered_tool_scope,
-    )?;
-    if let Some(system) = conversation
-        .first()
-        .filter(|entry| entry.role == ConversationRole::System)
-    {
-        child_conversation[0] = system.clone();
-    }
-    child_conversation.extend(conversation.iter().skip(1).cloned());
-    let mut hook_state = HookRunState::load(&child_store, child_config.session_id)?;
-    ensure_session_start_hooks(
-        &discovery,
-        &child_config,
-        &child_store,
-        &mut child_conversation,
-        &mut hook_state,
-    )
-    .await?;
+    let discovery = crate::hooks::discover_runtime_hooks(&child_config, &[]);
+    let temp_root = std::env::var_os("CLAUDE_CODE_TMPDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("remote-code-extract-memories")
+        .join(config.session_id.to_string());
+    fs::create_dir_all(&temp_root)?;
+    let tool_results_dir = temp_root.join("tool-results");
+    let content_backend = ContentReplacementBackend::new_with_options(
+        provider_backend.clone(),
+        Arc::new(SessionStore::open(config.paths.clone())?),
+        config.session_id,
+        tool_results_dir.clone(),
+        provision_content_replacement_state(store, config.session_id, conversation)?,
+        runtime_tool_result_persistence_skip_names(),
+        false,
+    );
+    let child_conversation = content_backend.prepare_conversation(conversation).await?;
 
     let broker: Arc<dyn PermissionBroker> = Arc::new(ExtractMemoriesPermissionBroker::new(
         memory_dir.clone(),
         team_memory_dir.clone(),
     ));
+    let mut hook_state = HookRunState::load(store, config.session_id)?;
     let mut final_child_conversation = child_conversation;
     let outcome = run_prompt_with_query_engine_compat_overrides(
         &child_config,
-        &child_store,
-        provider_backend,
+        store,
+        content_backend,
         discovered_tool_scope,
         broker,
         None,
@@ -516,18 +494,13 @@ async fn run_extraction_child(
         &mut hook_state,
         &mut final_child_conversation,
         extract_prompt,
-        CompatRunOverrides {
-            allowed_tools: Some(vec![
-                "read_file".to_owned(),
-                "grep".to_owned(),
-                "glob".to_owned(),
-                "bash_command".to_owned(),
-                "write_file".to_owned(),
-                "edit_file".to_owned(),
-                "replace_in_file".to_owned(),
-                "repl".to_owned(),
-            ]),
-            ..CompatRunOverrides::default()
+        CompatRunOverrides::default(),
+        CompatExecutionOptions {
+            persist_session: false,
+            persist_transcript: false,
+            persist_runtime_context: false,
+            persist_tool_results_dir: Some(tool_results_dir),
+            hook_options: HookExecutionOptions::ephemeral(),
         },
     )
     .await?;

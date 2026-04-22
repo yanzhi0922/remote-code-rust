@@ -158,6 +158,7 @@ pub(crate) struct ContentReplacementBackend {
     tool_results_dir: PathBuf,
     state: tokio::sync::Mutex<ContentReplacementState>,
     skip_tool_names: HashSet<String>,
+    persist_records: bool,
 }
 
 impl ContentReplacementBackend {
@@ -169,6 +170,26 @@ impl ContentReplacementBackend {
         initial_state: ContentReplacementState,
         skip_tool_names: HashSet<String>,
     ) -> Arc<Self> {
+        Self::new_with_options(
+            inner,
+            store,
+            session_id,
+            tool_results_dir,
+            initial_state,
+            skip_tool_names,
+            true,
+        )
+    }
+
+    pub(crate) fn new_with_options(
+        inner: Arc<dyn ConversationBackend>,
+        store: Arc<SessionStore>,
+        session_id: uuid::Uuid,
+        tool_results_dir: PathBuf,
+        initial_state: ContentReplacementState,
+        skip_tool_names: HashSet<String>,
+        persist_records: bool,
+    ) -> Arc<Self> {
         Arc::new(Self {
             inner,
             store,
@@ -176,10 +197,11 @@ impl ContentReplacementBackend {
             tool_results_dir,
             state: tokio::sync::Mutex::new(initial_state),
             skip_tool_names,
+            persist_records,
         })
     }
 
-    async fn prepare_conversation(
+    pub(crate) async fn prepare_conversation(
         &self,
         conversation: &[ConversationEntry],
     ) -> Result<Vec<ConversationEntry>> {
@@ -194,7 +216,7 @@ impl ContentReplacementBackend {
             )?
         };
 
-        if !outcome.newly_replaced.is_empty() {
+        if self.persist_records && !outcome.newly_replaced.is_empty() {
             self.store.append_named_event(
                 self.session_id,
                 CONTENT_REPLACEMENT_EVENT_TYPE,

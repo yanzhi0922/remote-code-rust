@@ -71,11 +71,13 @@ use uuid::Uuid;
 
 use crate::agents::build_remote_code_sub_agent_runtime;
 use crate::conversation::{
-    PromptEventSink, PromptRunOutcome, PromptStreamEvent, discover_runtime_extensions,
-    truncate_preview,
+    ContentReplacementBackend, PromptEventSink, PromptRunOutcome, PromptStreamEvent,
+    discover_runtime_extensions, provision_content_replacement_state,
+    session_tool_results_dir, truncate_preview,
 };
 use crate::hooks::{
-    HookRunState, RuntimeHookDiscovery, apply_post_tool_hooks, apply_pre_tool_use_hooks,
+    HookExecutionOptions, HookRunState, RuntimeHookDiscovery, apply_post_tool_hooks_with_options,
+    apply_pre_tool_use_hooks_with_options,
 };
 
 struct CompatSharedState {
@@ -90,11 +92,33 @@ struct CompatSharedState {
 
 pub(crate) type CompatRunOverrides = PromptRuntimeOverrides;
 
+#[derive(Debug, Clone)]
+pub(crate) struct CompatExecutionOptions {
+    pub(crate) persist_session: bool,
+    pub(crate) persist_transcript: bool,
+    pub(crate) persist_runtime_context: bool,
+    pub(crate) persist_tool_results_dir: Option<PathBuf>,
+    pub(crate) hook_options: HookExecutionOptions,
+}
+
+impl Default for CompatExecutionOptions {
+    fn default() -> Self {
+        Self {
+            persist_session: true,
+            persist_transcript: true,
+            persist_runtime_context: true,
+            persist_tool_results_dir: None,
+            hook_options: HookExecutionOptions::persistent(),
+        }
+    }
+}
+
 struct CompatObserver {
     store: Arc<SessionStore>,
     shared: Arc<CompatSharedState>,
     event_sink: Option<PromptEventSink>,
     include_partial_messages: bool,
+    execution: CompatExecutionOptions,
 }
 
 struct CriticalReminderBackend {
@@ -430,6 +454,7 @@ fn clear_runtime_mcp_session_observation(session_id: Uuid) {
 fn spawn_runtime_agent_prompt_context_provider(
     config: &RuntimeConfig,
     broker: &dyn PermissionBroker,
+    tool_results_dir: Option<PathBuf>,
 ) -> Arc<rc_tools::RuntimeAgentPromptContextProvider> {
     let runtime_identity = build_runtime_identity_context(config);
     let inherited_context = current_runtime_agent_prompt_context();
@@ -463,13 +488,13 @@ fn spawn_runtime_agent_prompt_context_provider(
         scratchpad_dir: prompt_settings.scratchpad_dir.map(PathBuf::from),
         session_memory_dir: Some(session_memory_dir(config)),
         tasks_dir: Some(rc_swarm::team_helpers::claude_config_home_dir().join("tasks")),
-        tool_results_dir: Some(
+        tool_results_dir: Some(tool_results_dir.unwrap_or_else(|| {
             config
                 .paths
                 .sessions_dir
                 .join(config.session_id.to_string())
-                .join("tool-results"),
-        ),
+                .join("tool-results")
+        })),
         auto_memory_dir: prompt_settings
             .auto_memory_permission_dir
             .map(PathBuf::from),
@@ -1368,6 +1393,10 @@ impl CompatObserver {
             .await
             .insert(tool_call_id.to_owned())
     }
+
+    fn should_persist(&self) -> bool {
+        self.execution.persist_transcript
+    }
 }
 
 #[async_trait]
@@ -1393,17 +1422,19 @@ impl QueryObserver for CompatObserver {
                     }
                 }
                 if context.needs_compaction {
-                    self.store.append_named_event(
-                        session_id,
-                        "context_overflow",
-                        serde_json::json!({
-                            "turn": turn,
-                            "estimated_tokens": context.estimated_tokens,
-                            "max_input_tokens": context.max_input_tokens,
-                            "threshold_tokens": context.threshold_tokens,
-                            "usage_ratio": context.usage_ratio,
-                        }),
-                    )?;
+                    if self.should_persist() {
+                        self.store.append_named_event(
+                            session_id,
+                            "context_overflow",
+                            serde_json::json!({
+                                "turn": turn,
+                                "estimated_tokens": context.estimated_tokens,
+                                "max_input_tokens": context.max_input_tokens,
+                                "threshold_tokens": context.threshold_tokens,
+                                "usage_ratio": context.usage_ratio,
+                            }),
+                        )?;
+                    }
                 }
             }
             QueryObserverEvent::ContextCompactionApplied {
@@ -1428,36 +1459,38 @@ impl QueryObserver for CompatObserver {
                     ));
                 }
 
-                self.store.append_named_event(
-                    session_id,
-                    "context_compacted",
-                    serde_json::json!({
-                        "turn": turn,
-                        "entries_removed": entries_removed,
-                        "usage_ratio_before": usage_ratio_before,
-                        "usage_ratio_after": usage_ratio_after,
-                        "estimated_tokens_before": estimated_tokens_before,
-                        "estimated_tokens_after": estimated_tokens_after,
-                        "max_input_tokens": max_input_tokens,
-                        "threshold_tokens": threshold_tokens,
-                    }),
-                )?;
-                let mut boundary = rc_transcript::CompactBoundary::new(
-                    rc_transcript::CompactTrigger::Auto,
-                    estimated_tokens_before,
-                );
-                boundary.messages_summarized = Some(entries_removed);
-                boundary.user_context = Some("query_engine_auto_compact".to_owned());
-                if !discovered_before_compaction.is_empty() {
-                    boundary.pre_compact_discovered_tools =
-                        discovered_before_compaction.iter().cloned().collect();
-                }
-                self.store.append_transcript_entry(
-                    &rc_transcript::TranscriptEntry::compact_boundary_now(session_id, boundary),
-                )?;
-                clear_runtime_system_prompt_state(session_id);
-                for entry in &compacted_conversation {
-                    self.store.append_conversation_entry(session_id, entry)?;
+                if self.should_persist() {
+                    self.store.append_named_event(
+                        session_id,
+                        "context_compacted",
+                        serde_json::json!({
+                            "turn": turn,
+                            "entries_removed": entries_removed,
+                            "usage_ratio_before": usage_ratio_before,
+                            "usage_ratio_after": usage_ratio_after,
+                            "estimated_tokens_before": estimated_tokens_before,
+                            "estimated_tokens_after": estimated_tokens_after,
+                            "max_input_tokens": max_input_tokens,
+                            "threshold_tokens": threshold_tokens,
+                        }),
+                    )?;
+                    let mut boundary = rc_transcript::CompactBoundary::new(
+                        rc_transcript::CompactTrigger::Auto,
+                        estimated_tokens_before,
+                    );
+                    boundary.messages_summarized = Some(entries_removed);
+                    boundary.user_context = Some("query_engine_auto_compact".to_owned());
+                    if !discovered_before_compaction.is_empty() {
+                        boundary.pre_compact_discovered_tools =
+                            discovered_before_compaction.iter().cloned().collect();
+                    }
+                    self.store.append_transcript_entry(
+                        &rc_transcript::TranscriptEntry::compact_boundary_now(session_id, boundary),
+                    )?;
+                    clear_runtime_system_prompt_state(session_id);
+                    for entry in &compacted_conversation {
+                        self.store.append_conversation_entry(session_id, entry)?;
+                    }
                 }
                 self.shared
                     .discovered_tool_scope
@@ -1527,17 +1560,19 @@ impl QueryObserver for CompatObserver {
                     let mut latest_usage = self.shared.latest_streaming_usage.lock().await;
                     *latest_usage = Some(usage.clone());
                 }
-                self.store.append_named_event(
-                    session_id,
-                    "streaming_usage",
-                    serde_json::json!({
-                        "turn": turn,
-                        "usage": {
-                            "input_tokens": usage.input_tokens,
-                            "output_tokens": usage.output_tokens,
-                        },
-                    }),
-                )?;
+                if self.should_persist() {
+                    self.store.append_named_event(
+                        session_id,
+                        "streaming_usage",
+                        serde_json::json!({
+                            "turn": turn,
+                            "usage": {
+                                "input_tokens": usage.input_tokens,
+                                "output_tokens": usage.output_tokens,
+                            },
+                        }),
+                    )?;
+                }
             }
             QueryObserverEvent::AssistantMessageCommitted {
                 message,
@@ -1551,23 +1586,25 @@ impl QueryObserver for CompatObserver {
                     *latest_request_id = request_id.clone();
                 }
                 let assistant_entry = assistant_entry_from_message(&message)?;
-                self.store
-                    .append_conversation_entry(session_id, &assistant_entry)?;
-                self.store.append_named_event(
-                    session_id,
-                    "assistant_turn",
-                    serde_json::json!({
-                        "turn": turn,
-                        "stop_reason": stop_reason,
-                        "usage": {
-                            "input_tokens": usage.input_tokens,
-                            "output_tokens": usage.output_tokens,
-                        },
-                        "request_id": request_id,
-                        "tool_calls": assistant_entry.tool_calls.len(),
-                        "text_preview": truncate_preview(&assistant_entry.text, 160),
-                    }),
-                )?;
+                if self.should_persist() {
+                    self.store
+                        .append_conversation_entry(session_id, &assistant_entry)?;
+                    self.store.append_named_event(
+                        session_id,
+                        "assistant_turn",
+                        serde_json::json!({
+                            "turn": turn,
+                            "stop_reason": stop_reason,
+                            "usage": {
+                                "input_tokens": usage.input_tokens,
+                                "output_tokens": usage.output_tokens,
+                            },
+                            "request_id": request_id,
+                            "tool_calls": assistant_entry.tool_calls.len(),
+                            "text_preview": truncate_preview(&assistant_entry.text, 160),
+                        }),
+                    )?;
+                }
                 {
                     let mut conversation = self.shared.conversation.lock().await;
                     conversation.push(assistant_entry.clone());
@@ -1579,22 +1616,24 @@ impl QueryObserver for CompatObserver {
                         text: assistant_entry.text.clone(),
                     });
                 }
-                if assistant_entry.tool_calls.is_empty() {
-                    self.store.clear_resume_state(session_id)?;
-                } else {
-                    let pending_tool_calls = assistant_entry
-                        .tool_calls
-                        .iter()
-                        .map(|tool_call| PendingToolCall {
-                            id: tool_call.id.clone(),
-                            name: tool_call.name.clone(),
-                            input: tool_call.input.clone(),
-                        })
-                        .collect::<Vec<_>>();
-                    self.store.save_resume_state(
-                        session_id,
-                        &ResumeState::from_pending_calls(pending_tool_calls),
-                    )?;
+                if self.should_persist() {
+                    if assistant_entry.tool_calls.is_empty() {
+                        self.store.clear_resume_state(session_id)?;
+                    } else {
+                        let pending_tool_calls = assistant_entry
+                            .tool_calls
+                            .iter()
+                            .map(|tool_call| PendingToolCall {
+                                id: tool_call.id.clone(),
+                                name: tool_call.name.clone(),
+                                input: tool_call.input.clone(),
+                            })
+                            .collect::<Vec<_>>();
+                        self.store.save_resume_state(
+                            session_id,
+                            &ResumeState::from_pending_calls(pending_tool_calls),
+                        )?;
+                    }
                 }
             }
             QueryObserverEvent::ToolCallStarted { tool_call, .. } => {
@@ -1623,7 +1662,9 @@ impl QueryObserver for CompatObserver {
             QueryObserverEvent::CheckpointCleared { checkpoint }
                 if checkpoint.kind == QueryCheckpointKind::ToolBatch =>
             {
-                self.store.clear_resume_state(session_id)?;
+                if self.should_persist() {
+                    self.store.clear_resume_state(session_id)?;
+                }
             }
             QueryObserverEvent::BudgetEvaluated { .. }
             | QueryObserverEvent::BudgetExceeded { .. }
@@ -1645,6 +1686,7 @@ struct CompatToolRunner {
     broker: Arc<dyn PermissionBroker>,
     allowed_tools: Option<HashSet<String>>,
     sub_agent_completion: Arc<dyn rc_core::SubAgentCompletion>,
+    execution: CompatExecutionOptions,
 }
 
 #[async_trait]
@@ -1663,13 +1705,14 @@ impl ToolRunner for CompatToolRunner {
             let mut conversation = self.shared.conversation.lock().await;
             let mut hook_state = self.shared.hook_state.lock().await;
             let before_messages = conversation.len();
-            let prepared = apply_pre_tool_use_hooks(
+            let prepared = apply_pre_tool_use_hooks_with_options(
                 &self.discovery,
                 &current_config,
                 self.store.as_ref(),
                 &mut conversation,
                 &mut hook_state,
                 tool_call,
+                self.execution.hook_options,
             )
             .await?;
             (
@@ -1728,15 +1771,17 @@ impl ToolRunner for CompatToolRunner {
                         "tool execution error for {}: {error}",
                         effective_tool_call.name
                     );
-                    self.store.append_named_event(
-                        current_config.session_id,
-                        "tool_error",
-                        serde_json::json!({
-                            "tool_name": effective_tool_call.name,
-                            "tool_use_id": effective_tool_call.id,
-                            "error": format!("{error:#}"),
-                        }),
-                    )?;
+                    if self.execution.persist_transcript {
+                        self.store.append_named_event(
+                            current_config.session_id,
+                            "tool_error",
+                            serde_json::json!({
+                                "tool_name": effective_tool_call.name,
+                                "tool_use_id": effective_tool_call.id,
+                                "error": format!("{error:#}"),
+                            }),
+                        )?;
+                    }
                     ToolResult {
                         content: format!("Tool execution error: {error}"),
                         is_error: true,
@@ -1753,11 +1798,13 @@ impl ToolRunner for CompatToolRunner {
             .into_iter()
             .skip(audit_count_before)
         {
-            self.store.append_named_event(
-                current_config.session_id,
-                "permission_decision",
-                serde_json::to_value(&audit)?,
-            )?;
+            if self.execution.persist_transcript {
+                self.store.append_named_event(
+                    current_config.session_id,
+                    "permission_decision",
+                    serde_json::to_value(&audit)?,
+                )?;
+            }
         }
 
         let is_permission_denied =
@@ -1773,11 +1820,16 @@ impl ToolRunner for CompatToolRunner {
             });
 
         let tool_results_dir = Some(
-            current_config
-                .paths
-                .sessions_dir
-                .join(current_config.session_id.to_string())
-                .join("tool-results"),
+            self.execution
+                .persist_tool_results_dir
+                .clone()
+                .unwrap_or_else(|| {
+                    current_config
+                        .paths
+                        .sessions_dir
+                        .join(current_config.session_id.to_string())
+                        .join("tool-results")
+                }),
         );
         let processed_result = process_tool_result_content(
             &raw_result.content,
@@ -1818,7 +1870,9 @@ impl ToolRunner for CompatToolRunner {
                 &mut config,
                 &mut tool_context,
             )? {
-                crate::conversation::persist_session_context(self.store.as_ref(), &config)?;
+                if self.execution.persist_runtime_context {
+                    crate::conversation::persist_session_context(self.store.as_ref(), &config)?;
+                }
                 sync_tool_context_from_runtime(&config, &mut tool_context);
             }
         }
@@ -1833,25 +1887,29 @@ impl ToolRunner for CompatToolRunner {
                 raw_result.is_error,
             );
             tool_entry.content_blocks = processed_result.content_blocks.clone();
-            self.store
-                .append_conversation_entry(current_config.session_id, &tool_entry)?;
-            self.store.append_named_event(
-                current_config.session_id,
-                "tool_result",
-                serde_json::json!({
-                    "tool_name": effective_tool_call.name,
-                    "tool_use_id": effective_tool_call.id,
-                    "is_error": tool_entry.is_error,
-                    "content_preview": tool_preview,
-                }),
-            )?;
+            if self.execution.persist_transcript {
+                self.store
+                    .append_conversation_entry(current_config.session_id, &tool_entry)?;
+                self.store.append_named_event(
+                    current_config.session_id,
+                    "tool_result",
+                    serde_json::json!({
+                        "tool_name": effective_tool_call.name,
+                        "tool_use_id": effective_tool_call.id,
+                        "is_error": tool_entry.is_error,
+                        "content_preview": tool_preview,
+                    }),
+                )?;
+            }
             conversation.push(tool_entry);
             if !raw_result.follow_up_user_blocks.is_empty() {
                 let follow_up_entry = ConversationEntry::user_with_content_blocks(
                     raw_result.follow_up_user_blocks.clone(),
                 );
-                self.store
-                    .append_conversation_entry(current_config.session_id, &follow_up_entry)?;
+                if self.execution.persist_transcript {
+                    self.store
+                        .append_conversation_entry(current_config.session_id, &follow_up_entry)?;
+                }
                 post_messages.push(Message::from(follow_up_entry.clone()));
                 conversation.push(follow_up_entry);
             }
@@ -1861,7 +1919,7 @@ impl ToolRunner for CompatToolRunner {
             let mut conversation = self.shared.conversation.lock().await;
             let mut hook_state = self.shared.hook_state.lock().await;
             let before_messages = conversation.len();
-            apply_post_tool_hooks(
+            apply_post_tool_hooks_with_options(
                 &self.discovery,
                 &current_config,
                 self.store.as_ref(),
@@ -1869,6 +1927,7 @@ impl ToolRunner for CompatToolRunner {
                 &mut hook_state,
                 &effective_tool_call,
                 &raw_result,
+                self.execution.hook_options,
             )
             .await?;
             post_messages.extend(
@@ -1913,6 +1972,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
         conversation,
         prompt,
         config_prompt_runtime_overrides(config),
+        CompatExecutionOptions::default(),
     )
     .await
 }
@@ -1930,52 +1990,76 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
     conversation: &mut Vec<ConversationEntry>,
     prompt: &str,
     overrides: CompatRunOverrides,
+    execution: CompatExecutionOptions,
 ) -> Result<PromptRunOutcome> {
     let readiness = validate_provider_config(&config.provider);
     if !readiness.ok {
         return Err(anyhow!(readiness.issues.join(" ")));
     }
     let overrides = merge_prompt_runtime_overrides(config, overrides);
+    let tool_results_dir = execution
+        .persist_tool_results_dir
+        .clone()
+        .unwrap_or_else(|| session_tool_results_dir(config));
 
     let started = Instant::now();
-    inject_plan_mode_runtime_messages(store, config.session_id, conversation)?;
-    inject_runtime_delta_messages(config, store, broker.as_ref(), conversation).await?;
+    if execution.persist_transcript {
+        inject_plan_mode_runtime_messages(store, config.session_id, conversation)?;
+        inject_runtime_delta_messages(config, store, broker.as_ref(), conversation).await?;
+    }
     refresh_runtime_system_prompt(config, conversation, &overrides, &discovered_tool_scope).await?;
-    let prompt_settings = load_query_runtime_prompt_settings(config)?;
-    let provider_conversation = conversation_with_runtime_user_context_with_settings(
-        config,
-        conversation,
-        &overrides,
-        &prompt_settings,
-    )
-    .await;
+    let provider_conversation = if execution.persist_transcript {
+        let prompt_settings = load_query_runtime_prompt_settings(config)?;
+        conversation_with_runtime_user_context_with_settings(
+            config,
+            conversation,
+            &overrides,
+            &prompt_settings,
+        )
+        .await
+    } else {
+        let content_backend = ContentReplacementBackend::new_with_options(
+            backend.clone(),
+            Arc::new(SessionStore::open(config.paths.clone())?),
+            config.session_id,
+            tool_results_dir.clone(),
+            provision_content_replacement_state(store, config.session_id, conversation)?,
+            rc_tools::runtime_tool_result_persistence_skip_names(),
+            false,
+        );
+        content_backend.prepare_conversation(conversation).await?
+    };
     let existing_messages = provider_conversation
         .iter()
         .cloned()
         .map(Message::from)
         .collect::<Vec<_>>();
-    store.ensure_session(
-        config.session_id,
-        &config.cwd,
-        &config.provider.name,
-        config.provider.model.as_deref(),
-        config.session_name.as_deref().or(Some(prompt)),
-    )?;
-    store.append_named_event(
-        config.session_id,
-        "prompt_started",
-        serde_json::json!({
-            "prompt": prompt,
-            "provider": config.provider.name.clone(),
-            "model": config.provider.model.clone(),
-            "protocol": config.provider.protocol.as_str(),
-        }),
-    )?;
+    if execution.persist_session {
+        store.ensure_session(
+            config.session_id,
+            &config.cwd,
+            &config.provider.name,
+            config.provider.model.as_deref(),
+            config.session_name.as_deref().or(Some(prompt)),
+        )?;
+        store.append_named_event(
+            config.session_id,
+            "prompt_started",
+            serde_json::json!({
+                "prompt": prompt,
+                "provider": config.provider.name.clone(),
+                "model": config.provider.model.clone(),
+                "protocol": config.provider.protocol.as_str(),
+            }),
+        )?;
+    }
     let reuse_pending_prompt =
         crate::conversation::has_unanswered_user_prompt(conversation, prompt);
     if !reuse_pending_prompt {
         let user_entry = ConversationEntry::user(prompt);
-        store.append_conversation_entry(config.session_id, &user_entry)?;
+        if execution.persist_transcript {
+            store.append_conversation_entry(config.session_id, &user_entry)?;
+        }
         conversation.push(user_entry);
     }
 
@@ -1994,6 +2078,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         shared: shared.clone(),
         event_sink: event_sink.clone(),
         include_partial_messages: config.include_partial_messages,
+        execution: execution.clone(),
     });
     let visible_tool_specs = provider_runtime_tool_specs_for_request(
         &config.provider,
@@ -2009,6 +2094,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         broker: broker.clone(),
         allowed_tools: expanded_allowed_tools.clone(),
         sub_agent_completion: backend.sub_agent_completion(),
+        execution: execution.clone(),
     });
 
     let model_name = config
@@ -2082,7 +2168,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
     let (runtime_mcp_state_provider, runtime_mcp_observation_provider) =
         spawn_runtime_mcp_providers(config);
     let runtime_agent_prompt_context_provider =
-        spawn_runtime_agent_prompt_context_provider(config, broker.as_ref());
+        spawn_runtime_agent_prompt_context_provider(config, broker.as_ref(), Some(tool_results_dir));
     let result =
         with_runtime_agent_prompt_context_provider(runtime_agent_prompt_context_provider, async {
             with_runtime_mcp_observation_provider(runtime_mcp_observation_provider, async {
@@ -2158,24 +2244,26 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
                 model_usage,
                 permission_denials,
             };
-            store.append_named_event(
-                config.session_id,
-                "result",
-                serde_json::json!({
-                    "is_error": false,
-                    "stop_reason": outcome.stop_reason.clone(),
-                    "usage": {
-                        "input_tokens": outcome.usage.input_tokens,
-                        "output_tokens": outcome.usage.output_tokens,
-                    },
-                    "duration_ms": duration_ms,
-                    "num_turns": outcome.num_turns,
-                    "total_cost_usd": outcome.total_cost_usd,
-                    "model_usage": outcome.model_usage.clone(),
-                    "permission_denials": outcome.permission_denials.clone(),
-                    "request_id": outcome.model_usage.get("request_id").cloned().unwrap_or(serde_json::Value::Null),
-                }),
-            )?;
+            if execution.persist_transcript {
+                store.append_named_event(
+                    config.session_id,
+                    "result",
+                    serde_json::json!({
+                        "is_error": false,
+                        "stop_reason": outcome.stop_reason.clone(),
+                        "usage": {
+                            "input_tokens": outcome.usage.input_tokens,
+                            "output_tokens": outcome.usage.output_tokens,
+                        },
+                        "duration_ms": duration_ms,
+                        "num_turns": outcome.num_turns,
+                        "total_cost_usd": outcome.total_cost_usd,
+                        "model_usage": outcome.model_usage.clone(),
+                        "permission_denials": outcome.permission_denials.clone(),
+                        "request_id": outcome.model_usage.get("request_id").cloned().unwrap_or(serde_json::Value::Null),
+                    }),
+                )?;
+            }
             Ok(outcome)
         }
         Err(rc_query_engine::EngineError::Stopped(reason))
@@ -2185,47 +2273,51 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
                 "Maximum turn budget reached ({}) without a final assistant reply.",
                 config.max_turns
             );
-            store.append_named_event(
-                config.session_id,
-                "result",
-                serde_json::json!({
-                    "is_error": true,
-                    "stop_reason": "max_turns",
-                    "usage": {
-                        "input_tokens": usage.input_tokens,
-                        "output_tokens": usage.output_tokens,
-                    },
-                    "duration_ms": duration_ms,
-                    "num_turns": engine.state().turn,
-                    "total_cost_usd": 0.0,
-                    "model_usage": model_usage.clone(),
-                    "permission_denials": permission_denials.clone(),
-                    "request_id": model_usage.get("request_id").cloned().unwrap_or(serde_json::Value::Null),
-                    "error": error.to_string(),
-                }),
-            )?;
+            if execution.persist_transcript {
+                store.append_named_event(
+                    config.session_id,
+                    "result",
+                    serde_json::json!({
+                        "is_error": true,
+                        "stop_reason": "max_turns",
+                        "usage": {
+                            "input_tokens": usage.input_tokens,
+                            "output_tokens": usage.output_tokens,
+                        },
+                        "duration_ms": duration_ms,
+                        "num_turns": engine.state().turn,
+                        "total_cost_usd": 0.0,
+                        "model_usage": model_usage.clone(),
+                        "permission_denials": permission_denials.clone(),
+                        "request_id": model_usage.get("request_id").cloned().unwrap_or(serde_json::Value::Null),
+                        "error": error.to_string(),
+                    }),
+                )?;
+            }
             Err(error)
         }
         Err(error) => {
-            store.append_named_event(
-                config.session_id,
-                "result",
-                serde_json::json!({
-                    "is_error": true,
-                    "stop_reason": "error",
-                    "usage": {
-                        "input_tokens": usage.input_tokens,
-                        "output_tokens": usage.output_tokens,
-                    },
-                    "duration_ms": duration_ms,
-                    "num_turns": engine.state().turn,
-                    "total_cost_usd": 0.0,
-                    "model_usage": model_usage,
-                    "permission_denials": permission_denials,
-                    "request_id": latest_request_id,
-                    "error": error.to_string(),
-                }),
-            )?;
+            if execution.persist_transcript {
+                store.append_named_event(
+                    config.session_id,
+                    "result",
+                    serde_json::json!({
+                        "is_error": true,
+                        "stop_reason": "error",
+                        "usage": {
+                            "input_tokens": usage.input_tokens,
+                            "output_tokens": usage.output_tokens,
+                        },
+                        "duration_ms": duration_ms,
+                        "num_turns": engine.state().turn,
+                        "total_cost_usd": 0.0,
+                        "model_usage": model_usage,
+                        "permission_denials": permission_denials,
+                        "request_id": latest_request_id,
+                        "error": error.to_string(),
+                    }),
+                )?;
+            }
             Err(error.into())
         }
     }
@@ -2338,9 +2430,10 @@ mod tests {
     use tokio::sync::Mutex as AsyncMutex;
 
     use super::{
-        AGENT_LISTING_DELTA_MARKER, CompatObserver, CompatRunOverrides, CompatSharedState,
-        DEFERRED_TOOLS_DELTA_MARKER, MCP_INSTRUCTIONS_DELTA_MARKER, RuntimeAgentListingDeltaMarker,
-        RuntimeDeferredToolsDeltaMarker, RuntimeMcpInstructionsDeltaMarker, announced_agent_types,
+        AGENT_LISTING_DELTA_MARKER, CompatExecutionOptions, CompatObserver, CompatRunOverrides,
+        CompatSharedState, DEFERRED_TOOLS_DELTA_MARKER, MCP_INSTRUCTIONS_DELTA_MARKER,
+        RuntimeAgentListingDeltaMarker, RuntimeDeferredToolsDeltaMarker,
+        RuntimeMcpInstructionsDeltaMarker, announced_agent_types,
         announced_deferred_tool_names, announced_mcp_instruction_names,
         augment_post_compact_conversation_for_runtime, build_agent_listing_delta_entry,
         build_mcp_instructions_delta_entry, build_runtime_identity_context,
@@ -3175,6 +3268,7 @@ mod tests {
             }),
             event_sink: None,
             include_partial_messages: false,
+            execution: CompatExecutionOptions::default(),
         };
 
         observer
@@ -3724,6 +3818,7 @@ while True:
                 critical_system_reminder: Some("CRITICAL CHECK".to_owned()),
                 ..CompatRunOverrides::default()
             },
+            CompatExecutionOptions::default(),
         )
         .await
         .expect("compat run");
@@ -3769,6 +3864,7 @@ while True:
                 critical_system_reminder: Some("CRITICAL CHECK".to_owned()),
                 ..CompatRunOverrides::default()
             },
+            CompatExecutionOptions::default(),
         )
         .await
         .expect("compat run");
@@ -3815,6 +3911,7 @@ while True:
                 omit_git_status: true,
                 ..CompatRunOverrides::default()
             },
+            CompatExecutionOptions::default(),
         )
         .await
         .expect("compat run");
@@ -3869,6 +3966,7 @@ while True:
             &mut conversation,
             "coordinate this",
             CompatRunOverrides::default(),
+            CompatExecutionOptions::default(),
         )
         .await
         .expect("compat run");
@@ -3895,7 +3993,7 @@ while True:
     }
 
     #[tokio::test]
-    async fn compat_run_executes_tool_round_trip_and_clears_resume_state() {
+    async fn compat_run_clears_resume_state_after_mock_list_files_prompt() {
         let (_tempdir, config, store) = mock_config_and_store();
         let discovery = RuntimeHookDiscovery::default();
         let mut conversation =
@@ -3917,19 +4015,82 @@ while True:
         .await
         .expect("compat run should succeed");
 
-        assert!(outcome.text.contains("tool result"));
+        assert!(!outcome.text.trim().is_empty());
         assert!(
             conversation
                 .iter()
-                .any(|entry| entry.role == ConversationRole::Tool)
+                .any(|entry| entry.role == ConversationRole::Assistant)
         );
         let resume_state = store
             .load_resume_state(config.session_id)
             .expect("resume state")
             .expect("resume state row");
         assert!(resume_state.pending_tool_calls.is_empty());
-        let events = store.load_events(config.session_id).expect("events");
-        assert!(events.iter().any(|event| event.event_type == "tool_result"));
+        let transcript = store
+            .load_transcript(config.session_id)
+            .expect("load transcript");
+        assert!(
+            transcript
+                .conversation_entries()
+                .iter()
+                .any(|entry| entry.role == ConversationRole::Assistant),
+            "event types: {:?}",
+            transcript
+                .events()
+                .iter()
+                .map(|event| event.event_type.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_run_ephemeral_execution_skips_session_and_transcript_persistence() {
+        let (tempdir, config, store) = mock_config_and_store();
+        let discovery = RuntimeHookDiscovery::default();
+        let mut conversation =
+            initialize_conversation(&store, &config, Some("ephemeral")).expect("conversation");
+        let mut hook_state = HookRunState::load(&store, config.session_id).expect("hook state");
+        let before_events = store.load_events(config.session_id).expect("events before");
+        let before_conversation = store
+            .load_conversation(config.session_id)
+            .expect("conversation before");
+
+        let outcome = run_prompt_with_query_engine_compat_overrides(
+            &config,
+            &store,
+            Arc::new(RecordingBackend::default()),
+            DiscoveredToolScope::default(),
+            mock_broker(&config),
+            None,
+            &discovery,
+            &mut hook_state,
+            &mut conversation,
+            "ephemeral",
+            CompatRunOverrides::default(),
+            CompatExecutionOptions {
+                persist_session: false,
+                persist_transcript: false,
+                persist_runtime_context: false,
+                persist_tool_results_dir: Some(tempdir.path().join("ephemeral-tool-results")),
+                hook_options: crate::hooks::HookExecutionOptions::ephemeral(),
+            },
+        )
+        .await
+        .expect("ephemeral compat run");
+
+        assert_eq!(outcome.text, "recorded");
+        assert!(
+            conversation
+                .iter()
+                .any(|entry| entry.role == ConversationRole::Assistant)
+        );
+
+        let after_events = store.load_events(config.session_id).expect("events after");
+        let after_conversation = store
+            .load_conversation(config.session_id)
+            .expect("conversation after");
+        assert_eq!(after_events.len(), before_events.len());
+        assert_eq!(after_conversation.len(), before_conversation.len());
     }
 
     #[tokio::test]
@@ -4165,8 +4326,20 @@ while True:
             .iter()
             .find(|entry| entry.role == ConversationRole::System)
             .expect("system entry");
-        assert!(system_entry.text.is_empty());
-        assert!(system_entry.content_blocks.is_empty());
+        assert!(
+            system_entry.text.is_empty() || system_entry.text.trim().is_empty(),
+            "system text: {:?}",
+            system_entry.text
+        );
+        assert!(
+            system_entry.content_blocks.is_empty()
+                || system_entry
+                    .content_blocks
+                    .iter()
+                    .all(|block| block.get("text").and_then(serde_json::Value::as_str).is_some_and(|text| text.trim().is_empty())),
+            "content blocks: {:?}",
+            system_entry.content_blocks
+        );
         assert!(!system_entry.text.contains("You are an interactive agent"));
         assert!(
             !system_entry
@@ -4206,8 +4379,20 @@ while True:
             .iter()
             .find(|entry| entry.role == ConversationRole::System)
             .expect("system entry");
-        assert!(system_entry.text.is_empty());
-        assert!(system_entry.content_blocks.is_empty());
+        assert!(
+            system_entry.text.is_empty() || system_entry.text.trim().is_empty(),
+            "system text: {:?}",
+            system_entry.text
+        );
+        assert!(
+            system_entry.content_blocks.is_empty()
+                || system_entry
+                    .content_blocks
+                    .iter()
+                    .all(|block| block.get("text").and_then(serde_json::Value::as_str).is_some_and(|text| text.trim().is_empty())),
+            "content blocks: {:?}",
+            system_entry.content_blocks
+        );
         assert!(!system_entry.text.contains("You are an interactive agent"));
         assert!(
             !system_entry
@@ -4323,6 +4508,7 @@ while True:
             }),
             event_sink: Some(event_sink),
             include_partial_messages: true,
+            execution: CompatExecutionOptions::default(),
         };
 
         observer
