@@ -7,7 +7,7 @@ use rc_engine_events::{
     CompactionResult, EngineEvent, EngineStateSnapshot, ToolError, ToolResult as EventToolResult,
     Usage,
 };
-use rc_provider::StreamingCallbacks;
+use rc_provider::{StreamingCallbacks, query_source::ProviderRequestContext};
 use serde_json::json;
 use tokio::sync::mpsc;
 
@@ -129,9 +129,19 @@ pub async fn run_query_loop(
             config.provider_invocation_mode,
             ProviderInvocationMode::Streaming
         ) {
-            complete_with_streaming_observer(config, &legacy_conversation, state.turn + 1).await
+            complete_with_streaming_observer(
+                config,
+                context,
+                &legacy_conversation,
+                state.turn + 1,
+            )
+            .await
         } else {
-            config.backend.complete(&legacy_conversation).await
+            let provider_context = provider_request_context(context);
+            config
+                .backend
+                .complete_with_context(&legacy_conversation, &provider_context)
+                .await
         };
 
         let response = match response {
@@ -596,6 +606,7 @@ fn checkpoints_for_tool_batch(
 
 async fn complete_with_streaming_observer(
     config: &QueryEngineConfig,
+    context: &ProcessUserInputContext,
     conversation: &[ConversationEntry],
     turn: u32,
 ) -> anyhow::Result<rc_core::ProviderResponse> {
@@ -607,17 +618,38 @@ async fn complete_with_streaming_observer(
         }
     });
 
+    let provider_context = provider_request_context(context);
     let response = config
         .backend
-        .complete_streaming(
+        .complete_streaming_with_context(
             conversation,
             Some(build_streaming_callbacks(tx.clone(), turn)),
+            &provider_context,
         )
         .await;
 
     drop(tx);
     let _ = forwarder.await;
     response
+}
+
+fn provider_request_context(context: &ProcessUserInputContext) -> ProviderRequestContext {
+    let query_source = match context.query_source {
+        crate::QuerySource::User => rc_provider::query_source::QuerySource::User,
+        crate::QuerySource::Compact => rc_provider::query_source::QuerySource::Compact,
+        crate::QuerySource::SessionMemory => rc_provider::query_source::QuerySource::SessionMemory,
+        crate::QuerySource::Agent => rc_provider::query_source::QuerySource::Agent,
+        crate::QuerySource::BackgroundTask => {
+            rc_provider::query_source::QuerySource::BackgroundTask
+        }
+    };
+
+    let mut provider_context =
+        ProviderRequestContext::new(query_source, context.session_id.clone());
+    if let Some(agent_id) = context.agent_id.clone() {
+        provider_context = provider_context.with_agent_id(agent_id);
+    }
+    provider_context
 }
 
 fn build_streaming_callbacks(
