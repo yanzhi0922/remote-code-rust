@@ -15,7 +15,15 @@ fn tool_file_path(tool_call: &ToolCall) -> Option<PathBuf> {
     match tool_call.name.as_str() {
         "read_file" | "write_file" | "replace_in_file" | "edit_file" => tool_call
             .input
-            .get("path")
+            .get("file_path")
+            .or_else(|| tool_call.input.get("path"))
+            .and_then(Value::as_str)
+            .map(PathBuf::from),
+        "notebook_edit" => tool_call
+            .input
+            .get("notebook_path")
+            .or_else(|| tool_call.input.get("file_path"))
+            .or_else(|| tool_call.input.get("path"))
             .and_then(Value::as_str)
             .map(PathBuf::from),
         _ => None,

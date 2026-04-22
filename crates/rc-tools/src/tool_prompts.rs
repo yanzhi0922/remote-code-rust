@@ -36,9 +36,9 @@ pub const READ_FILE: &str = "\
 Reads a UTF-8 text file from the local filesystem. You can access any file directly by using this tool.
 
 Usage:
-- The `path` parameter must be a path relative to the current workspace.
+- The `file_path` parameter must be an absolute path, not a relative path.
 - By default, it reads up to 2000 lines starting from the beginning of the file.
-- Use `start_line` and `end_line` to read specific ranges, especially for large files.
+- Use `offset` and `limit` to read specific ranges, especially for large files.
 - Results are returned with line numbers, starting at 1.
 - This tool can read images (PNG, JPG, etc.) — contents are presented visually.
 - This tool can read Jupyter notebooks (.ipynb) and returns all cells with outputs.
@@ -48,7 +48,7 @@ Notes:
 - If you read a file that exists but has empty contents, a warning will be returned.
 - It is okay to read a file that does not exist; an error will be returned.
 - Always read a file before editing it — the edit tool requires a prior read.
-- For very large files, read in chunks using start_line/end_line to avoid truncation.";
+- For very large files, read in chunks using offset/limit to avoid truncation.";
 
 /// Prompt for `search_text`.
 pub const SEARCH_TEXT: &str = "\
@@ -72,9 +72,8 @@ pub const WRITE_FILE: &str = "\
 Writes a file to the local filesystem. Creates the file if it does not exist; overwrites if it does.
 
 Usage:
-- The `path` parameter is relative to the current workspace directory.
+- The `file_path` parameter must be an absolute path, not a relative path.
 - The `content` parameter must contain the COMPLETE file content — partial writes are not supported.
-- Set `append` to true to append content to an existing file instead of overwriting.
 - If this is an existing file, you MUST read it first to understand its current contents.
 - Prefer the `edit_file` or `replace_in_file` tool for modifying existing files — it only sends the diff.
 
@@ -90,6 +89,7 @@ Performs a simple string replacement in an existing file.
 
 Usage:
 - You must have read the file at least once before editing. The tool will error otherwise.
+- The `file_path` parameter must be an absolute path, not a relative path.
 - The `search` string must match exactly, including whitespace and indentation.
 - The `replace` string replaces the first occurrence of `search` in the file.
 - Set `all` to true to replace every occurrence of `search` in the file.
@@ -107,18 +107,18 @@ Performs ordered search/replace edits on a text file. Applies multiple edits in 
 
 Usage:
 - You must read the file at least once before editing. The tool will error otherwise.
-- Each edit in the `edits` array has `search` and `replace` fields. Edits are applied in order.
-- The `search` string must match exactly, including whitespace and indentation.
-- Set `all` on an individual edit to replace every occurrence of that search string.
-- The edit will FAIL if any `search` string is not found in the file at its point of application.
-- Set `create_if_missing` to true to create the file if it does not exist.
+- The `file_path` parameter must be an absolute path, not a relative path.
+- The `old_string` string must match exactly, including whitespace and indentation.
+- The `new_string` string replaces `old_string` and must be different from it.
+- The edit will FAIL if `old_string` is not unique in the file. Either provide more context or use `replace_all`.
+- Use `replace_all` for replacing and renaming strings across the file.
 
 Notes:
 - ALWAYS prefer editing existing files over creating new files.
 - Use the smallest search string that is clearly unique — usually 2-4 adjacent lines is sufficient.
 - When editing text from read_file output, ensure you preserve the exact indentation.
 - Never include line number prefixes in the search or replace strings.
-- For a single replacement, `replace_in_file` is simpler.";
+- For multiple replacements, call this tool multiple times or use `replace_all` when the replacement is identical.";
 
 /// Prompt for `bash_command`.
 pub const BASH_COMMAND: &str = "\
@@ -477,14 +477,14 @@ pub const NOTEBOOK_EDIT: &str = "\
 Edit a cell in a Jupyter notebook (.ipynb) file.
 
 Usage:
-- `path` specifies the notebook file (relative to workspace).
-- `cell_index` is the 0-based index of the cell to edit.
+- `notebook_path` specifies the notebook file and must be an absolute path, not a relative path.
+- `cell_id` is the ID of the cell to edit. When inserting, the new cell is inserted after this cell, or at the beginning if omitted.
 - `new_source` is the new cell content.
 - Optionally set `cell_type` to 'code' or 'markdown' to change the cell type.
+- Optionally set `edit_mode` to 'replace', 'insert', or 'delete'. Defaults to 'replace'.
 
 Notes:
 - The notebook must be a valid .ipynb file.
-- Cell index is 0-based — the first cell has index 0.
 - Requires read permission on the notebook file.";
 
 /// Prompt for `skill_discover`.
@@ -1664,27 +1664,29 @@ always use the $TMPDIR environment variable instead of /tmp directly.";
 /// Returns the file-edit tool prompt with detailed editing instructions.
 #[must_use]
 pub fn file_edit_tool_prompt() -> String {
-    "Performs precise, targeted search/replace edits on an existing text file.\n\n\
+    "Performs exact string replacements in files.\n\n\
     # Usage\n\
-    - You MUST read the file at least once before editing. The tool will error otherwise.\n\
-    - Each edit has a `search` string and a `replace` string. Edits are applied in sequence.\n\
-    - The `search` string must match EXACTLY, including all whitespace and indentation.\n\
-    - The edit will FAIL if any `search` string is not found in the file at its point of \
-    application.\n\
-    - Set `create_if_missing` to true to create the file if it does not exist.\n\n\
+    - You must use your `Read` tool at least once in the conversation before editing. This tool \
+    will error if you attempt an edit without reading the file.\n\
+    - The `file_path` parameter must be an absolute path, not a relative path.\n\
+    - The `old_string` string must match exactly, including all whitespace and indentation.\n\
+    - The `new_string` string replaces `old_string` and must be different from it.\n\
+    - The edit will FAIL if `old_string` is not unique in the file. Either provide more context \
+    to make it unique or use `replace_all` to change every instance of `old_string`.\n\
+    - Use `replace_all` for replacing and renaming strings across the file.\n\n\
     # Best practices\n\
-    - ALWAYS prefer editing existing files over creating new files.\n\
+    - ALWAYS prefer editing existing files in the codebase. NEVER write new files unless \
+    explicitly required.\n\
     - Use the smallest search string that is clearly unique — usually 2-4 adjacent lines is \
     sufficient.\n\
-    - When editing text from read_file output, ensure you preserve the exact indentation.\n\
-    - Never include line number prefixes in the search or replace strings.\n\
-    - For a single replacement, use replace_in_file instead.\n\
-    - When editing code, always consider the context in which the code is being used. Ensure that \
-    your changes are compatible with the existing codebase and follow the project's coding \
-    standards and best practices.\n\n\
+    - When editing text from Read tool output, ensure you preserve the exact indentation after \
+    the line number prefix.\n\
+    - Never include any part of the line number prefix in the old_string or new_string.\n\
+    - Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless \
+    asked.\n\n\
     # Important\n\
     - Do NOT include `// rest of code unchanged` or similar placeholders.\n\
-    - ALWAYS provide the COMPLETE intended content in each replace block.\n\
+    - ALWAYS provide the COMPLETE intended content in `new_string`.\n\
     - Partial updates or placeholders are STRICTLY FORBIDDEN."
         .to_owned()
 }
@@ -1695,9 +1697,9 @@ pub fn file_read_tool_prompt() -> String {
     "Reads a UTF-8 text file from the local filesystem. You can access any file directly by using \
     this tool.\n\n\
     # Usage\n\
-    - The `path` parameter must be a path relative to the current workspace.\n\
+    - The `file_path` parameter must be an absolute path, not a relative path.\n\
     - By default, it reads up to 2000 lines starting from the beginning of the file.\n\
-    - Use `start_line` and `end_line` to read specific ranges, especially for large files.\n\
+    - You can optionally specify a line `offset` and `limit`, especially for large files.\n\
     - Results are returned with line numbers, starting at 1.\n\
     - This tool can read images (PNG, JPG, etc.) — contents are presented visually.\n\
     - This tool can read Jupyter notebooks (.ipynb) and returns all cells with outputs.\n\
@@ -1706,7 +1708,7 @@ pub fn file_read_tool_prompt() -> String {
     - If you read a file that exists but has empty contents, a warning will be returned.\n\
     - It is okay to read a file that does not exist; an error will be returned.\n\
     - Always read a file before editing it — the edit tool requires a prior read.\n\
-    - For very large files, read in chunks using start_line/end_line to avoid truncation.\n\
+    - For very large files, read in chunks using offset/limit to avoid truncation.\n\
     - Supports text extraction from PDF and DOCX files.\n\
     - Lines longer than 2000 characters are truncated in the output."
         .to_owned()
@@ -1718,10 +1720,9 @@ pub fn file_write_tool_prompt() -> String {
     "Writes a file to the local filesystem. Creates the file if it does not exist; overwrites if \
     it does.\n\n\
     # Usage\n\
-    - The `path` parameter is relative to the current workspace directory.\n\
+    - The `file_path` parameter must be an absolute path, not a relative path.\n\
     - The `content` parameter must contain the COMPLETE file content — partial writes are not \
     supported.\n\
-    - Set `append` to true to append content to an existing file instead of overwriting.\n\
     - If this is an existing file, you MUST read it first to understand its current contents.\n\
     - Prefer the edit_file or replace_in_file tool for modifying existing files — it only sends \
     the diff.\n\n\
@@ -2255,8 +2256,9 @@ mod tests {
             "should be >200 chars, got {}",
             prompt.len()
         );
-        assert!(prompt.contains("start_line"), "should mention start_line");
-        assert!(prompt.contains("end_line"), "should mention end_line");
+        assert!(prompt.contains("file_path"), "should mention file_path");
+        assert!(prompt.contains("offset"), "should mention offset");
+        assert!(prompt.contains("limit"), "should mention limit");
     }
 
     #[test]
@@ -2269,7 +2271,7 @@ mod tests {
             prompt.len()
         );
         assert!(prompt.contains("COMPLETE"), "should mention COMPLETE");
-        assert!(prompt.contains("append"), "should mention append");
+        assert!(prompt.contains("file_path"), "should mention file_path");
     }
 
     #[test]

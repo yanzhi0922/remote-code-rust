@@ -982,10 +982,7 @@ fn effective_permission_for_call(call: &ToolCall, spec: &ToolSpec) -> EffectiveP
         class: classify_tool(&spec.permission_tool_name),
         requires_permission: spec.requires_permission,
         requires_explicit_approval: false,
-        blocked_path: call
-            .input
-            .get("path")
-            .and_then(Value::as_str)
+        blocked_path: path_input_for_filesystem_tool(&spec.name, &call.input)
             .map(ToOwned::to_owned),
     };
 
@@ -1041,9 +1038,15 @@ fn path_input_for_filesystem_tool<'a>(tool_name: &str, input: &'a Value) -> Opti
             .and_then(Value::as_str)
             .filter(|path| !path.trim().is_empty())
             .or(Some(".")),
-        "read_file" | "write_file" | "replace_in_file" | "edit_file" | "notebook_edit" => {
-            input.get("path").and_then(Value::as_str)
+        "read_file" | "write_file" | "replace_in_file" | "edit_file" => {
+            file_ops::file_path_input(input)
         }
+        "notebook_edit" => input
+            .get("notebook_path")
+            .or_else(|| input.get("file_path"))
+            .or_else(|| input.get("path"))
+            .and_then(Value::as_str)
+            .filter(|path| !path.trim().is_empty()),
         _ => None,
     }
 }
@@ -1952,7 +1955,12 @@ while True:
         std::os::windows::fs::symlink_dir(target, link)
     }
 
-    struct TaskListDirGuard;
+    static RC_TOOLS_TASK_LIST_TEST_MUTEX: Lazy<tokio::sync::Mutex<()>> =
+        Lazy::new(|| tokio::sync::Mutex::new(()));
+
+    struct TaskListDirGuard {
+        _guard: tokio::sync::MutexGuard<'static, ()>,
+    }
 
     impl Drop for TaskListDirGuard {
         fn drop(&mut self) {
@@ -1961,17 +1969,18 @@ while True:
         }
     }
 
-    fn configure_task_list_for_tests(
+    async fn configure_task_list_for_tests(
         base: &std::path::Path,
         task_list_id: Option<&str>,
     ) -> TaskListDirGuard {
+        let guard = RC_TOOLS_TASK_LIST_TEST_MUTEX.lock().await;
         crate::tasks::configure_task_list_context(
             task_list_id.map(ToOwned::to_owned),
             Some(base.join("tasks")),
         )
         .expect("configure task list context");
         crate::tasks::set_leader_team_name(None).expect("clear leader team name");
-        TaskListDirGuard
+        TaskListDirGuard { _guard: guard }
     }
 
     struct TeamDirGuard {
@@ -1988,7 +1997,7 @@ while True:
     async fn seed_team(base: &std::path::Path, team_name: &str) -> TeamDirGuard {
         team_helpers::set_base_dir_override(Some(base.to_path_buf()));
         crate::team_tools::set_base_dir_override(Some(base.to_path_buf()));
-        let task_list_guard = configure_task_list_for_tests(base, None);
+        let task_list_guard = configure_task_list_for_tests(base, None).await;
         let mut team = TeamFile::new(team_name, "lead");
         team.description = Some("test objective".to_owned());
         team.members
@@ -2134,7 +2143,7 @@ while True:
             &ToolCall {
                 id: "1".to_owned(),
                 name: "read_file".to_owned(),
-                input: json!({"path":"notes.txt"}),
+                input: json!({"file_path":"notes.txt"}),
             },
             &context,
             &broker,
@@ -2194,7 +2203,7 @@ while True:
             &ToolCall {
                 id: "read-outside".to_owned(),
                 name: "read_file".to_owned(),
-                input: json!({"path": outside.to_string_lossy().to_string()}),
+                input: json!({"file_path": outside.to_string_lossy().to_string()}),
             },
             &context,
             &broker,
@@ -2348,7 +2357,7 @@ while True:
                 id: "write-symlink".to_owned(),
                 name: "write_file".to_owned(),
                 input: json!({
-                    "path": target.to_string_lossy().to_string(),
+                    "file_path": target.to_string_lossy().to_string(),
                     "content": "escaped",
                 }),
             },
@@ -2401,7 +2410,7 @@ while True:
                     &ToolCall {
                         id: "read-extra".to_owned(),
                         name: "read_file".to_owned(),
-                        input: json!({"path": target.to_string_lossy().to_string()}),
+                        input: json!({"file_path": target.to_string_lossy().to_string()}),
                     },
                     &context,
                     &broker,
@@ -2448,7 +2457,7 @@ while True:
                     &ToolCall {
                         id: "read-team".to_owned(),
                         name: "read_file".to_owned(),
-                        input: json!({"path": target.to_string_lossy().to_string()}),
+                        input: json!({"file_path": target.to_string_lossy().to_string()}),
                     },
                     &context,
                     &broker,
@@ -2494,7 +2503,7 @@ while True:
                     &ToolCall {
                         id: "read-tool-result".to_owned(),
                         name: "read_file".to_owned(),
-                        input: json!({"path": target.to_string_lossy().to_string()}),
+                        input: json!({"file_path": target.to_string_lossy().to_string()}),
                     },
                     &context,
                     &broker,
@@ -2540,7 +2549,7 @@ while True:
                     &ToolCall {
                         id: "read-task".to_owned(),
                         name: "read_file".to_owned(),
-                        input: json!({"path": target.to_string_lossy().to_string()}),
+                        input: json!({"file_path": target.to_string_lossy().to_string()}),
                     },
                     &context,
                     &broker,
@@ -2583,7 +2592,7 @@ while True:
             &ToolCall {
                 id: "read-ask".to_owned(),
                 name: "read_file".to_owned(),
-                input: json!({"path": "notes.txt"}),
+                input: json!({"file_path": "notes.txt"}),
             },
             &context,
             &broker,
@@ -2626,7 +2635,7 @@ while True:
             &ToolCall {
                 id: "edit-deny".to_owned(),
                 name: "write_file".to_owned(),
-                input: json!({"path": "notes.txt", "content": "after"}),
+                input: json!({"file_path": "notes.txt", "content": "after"}),
             },
             &context,
             &broker,
@@ -2668,7 +2677,7 @@ while True:
             &ToolCall {
                 id: "read-suggest".to_owned(),
                 name: "read_file".to_owned(),
-                input: json!({"path": outside.to_string_lossy().to_string()}),
+                input: json!({"file_path": outside.to_string_lossy().to_string()}),
             },
             &context,
             &broker,
@@ -2715,7 +2724,7 @@ while True:
             &ToolCall {
                 id: "dangerous-allow".to_owned(),
                 name: "write_file".to_owned(),
-                input: json!({"path": target.to_string_lossy().to_string(), "content": "[core]\n\teditor = vim\n"}),
+                input: json!({"file_path": target.to_string_lossy().to_string(), "content": "[core]\n\teditor = vim\n"}),
             },
             &context,
             &broker,
@@ -2762,7 +2771,7 @@ while True:
             &ToolCall {
                 id: "claude-allow".to_owned(),
                 name: "write_file".to_owned(),
-                input: json!({"path": target.to_string_lossy().to_string(), "content": "{\"after\":true}"}),
+                input: json!({"file_path": target.to_string_lossy().to_string(), "content": "{\"after\":true}"}),
             },
             &context,
             &broker,
@@ -3379,7 +3388,7 @@ while True:
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
         let _task_list_guard =
-            configure_task_list_for_tests(tempdir.path(), Some("task-tools-crud"));
+            configure_task_list_for_tests(tempdir.path(), Some("task-tools-crud")).await;
         let context = ToolExecutionContext {
             original_cwd: tempdir.path().to_path_buf().clone(),
             cwd: tempdir.path().to_path_buf(),
@@ -3534,8 +3543,8 @@ while True:
                 id: "1".to_owned(),
                 name: "notebook_edit".to_owned(),
                 input: json!({
-                    "path": "test.ipynb",
-                    "cell_index": 0,
+                    "notebook_path": "test.ipynb",
+                    "cell_id": "cell-0",
                     "new_source": "print('world')",
                     "cell_type": "code"
                 }),
@@ -3557,6 +3566,85 @@ while True:
             json!("print('world')"),
             "cell source should be updated"
         );
+    }
+
+    #[tokio::test]
+    async fn notebook_edit_insert_and_delete_follow_research_fields() {
+        let tempdir = tempdir().expect("tempdir");
+        let notebook = json!({
+            "cells": [
+                {
+                    "id": "first",
+                    "cell_type": "code",
+                    "source": "print('hello')",
+                    "outputs": [],
+                    "execution_count": 1
+                }
+            ],
+            "metadata": {"language_info": {"name": "python"}},
+            "nbformat": 4,
+            "nbformat_minor": 5
+        });
+        let nb_path = tempdir.path().join("test.ipynb");
+        std::fs::write(&nb_path, serde_json::to_string_pretty(&notebook).unwrap()).unwrap();
+
+        let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf(),
+            cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+        };
+        let broker = StaticPermissionBroker::new(true);
+
+        let insert = execute_tool_call(
+            &ToolCall {
+                id: "insert".to_owned(),
+                name: "notebook_edit".to_owned(),
+                input: json!({
+                    "notebook_path": "test.ipynb",
+                    "cell_id": "first",
+                    "new_source": "## Inserted",
+                    "cell_type": "markdown",
+                    "edit_mode": "insert"
+                }),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("insert notebook cell");
+        assert!(!insert.is_error, "{}", insert.content);
+
+        let after_insert: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&nb_path).unwrap()).unwrap();
+        assert_eq!(after_insert["cells"][1]["cell_type"], json!("markdown"));
+        assert_eq!(after_insert["cells"][1]["source"], json!("## Inserted"));
+
+        let delete = execute_tool_call(
+            &ToolCall {
+                id: "delete".to_owned(),
+                name: "notebook_edit".to_owned(),
+                input: json!({
+                    "notebook_path": "test.ipynb",
+                    "cell_id": "first",
+                    "new_source": "",
+                    "edit_mode": "delete"
+                }),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("delete notebook cell");
+        assert!(!delete.is_error, "{}", delete.content);
+
+        let after_delete: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&nb_path).unwrap()).unwrap();
+        assert_eq!(after_delete["cells"].as_array().unwrap().len(), 1);
+        assert_eq!(after_delete["cells"][0]["source"], json!("## Inserted"));
     }
 
     #[tokio::test(flavor = "current_thread")]

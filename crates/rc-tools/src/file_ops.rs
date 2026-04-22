@@ -41,6 +41,14 @@ fn normalize_for_comparison(path: PathBuf) -> PathBuf {
     }
 }
 
+pub(crate) fn file_path_input(input: &Value) -> Option<&str> {
+    input
+        .get("file_path")
+        .or_else(|| input.get("path"))
+        .and_then(Value::as_str)
+        .filter(|path| !path.trim().is_empty())
+}
+
 pub(crate) fn resolve_workspace_path_for_operation(
     context: &ToolExecutionContext,
     maybe_relative: Option<&str>,
@@ -145,19 +153,29 @@ pub(crate) fn list_directory(input: &Value, context: &ToolExecutionContext) -> R
 }
 
 pub(crate) fn read_file(input: &Value, context: &ToolExecutionContext) -> Result<String> {
-    let path = input
-        .get("path")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("read_file requires a path"))?;
+    let path = file_path_input(input).ok_or_else(|| anyhow!("read_file requires file_path"))?;
     let target =
         resolve_workspace_path_for_operation(context, Some(path), FilesystemOperation::Read)?;
     let contents = std::fs::read_to_string(&target)
         .with_context(|| format!("failed to read {}", target.display()))?;
-    let start_line = input.get("start_line").and_then(Value::as_u64).unwrap_or(1) as usize;
-    let end_line = input
-        .get("end_line")
+    let start_line = input
+        .get("offset")
+        .or_else(|| input.get("start_line"))
         .and_then(Value::as_u64)
-        .unwrap_or(usize::MAX as u64) as usize;
+        .unwrap_or(1) as usize;
+    let limit = input
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize);
+    let end_line = limit
+        .map(|limit| start_line.saturating_add(limit).saturating_sub(1))
+        .or_else(|| {
+            input
+                .get("end_line")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+        })
+        .unwrap_or(usize::MAX);
     let max_chars = input
         .get("max_chars")
         .and_then(Value::as_u64)
@@ -232,10 +250,7 @@ pub(crate) fn search_text(input: &Value, context: &ToolExecutionContext) -> Resu
 }
 
 pub(crate) fn write_file(input: &Value, context: &ToolExecutionContext) -> Result<String> {
-    let path = input
-        .get("path")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("write_file requires a path"))?;
+    let path = file_path_input(input).ok_or_else(|| anyhow!("write_file requires file_path"))?;
     let content = input
         .get("content")
         .and_then(Value::as_str)
@@ -264,19 +279,23 @@ pub(crate) fn write_file(input: &Value, context: &ToolExecutionContext) -> Resul
 }
 
 pub(crate) fn replace_in_file(input: &Value, context: &ToolExecutionContext) -> Result<String> {
-    let path = input
-        .get("path")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("replace_in_file requires a path"))?;
+    let path =
+        file_path_input(input).ok_or_else(|| anyhow!("replace_in_file requires file_path"))?;
     let search = input
         .get("search")
+        .or_else(|| input.get("old_string"))
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("replace_in_file requires search text"))?;
     let replace = input
         .get("replace")
+        .or_else(|| input.get("new_string"))
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("replace_in_file requires replacement text"))?;
-    let replace_all = input.get("all").and_then(Value::as_bool).unwrap_or(false);
+    let replace_all = input
+        .get("all")
+        .or_else(|| input.get("replace_all"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let target =
         resolve_workspace_path_for_operation(context, Some(path), FilesystemOperation::Write)?;
     let original = std::fs::read_to_string(&target)?;
@@ -291,16 +310,36 @@ pub(crate) fn replace_in_file(input: &Value, context: &ToolExecutionContext) -> 
 }
 
 pub(crate) fn edit_file(input: &Value, context: &ToolExecutionContext) -> Result<String> {
-    let path = input
-        .get("path")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("edit_file requires a path"))?;
+    let path = file_path_input(input).ok_or_else(|| anyhow!("edit_file requires file_path"))?;
     let target =
         resolve_workspace_path_for_operation(context, Some(path), FilesystemOperation::Write)?;
-    let edits = input
-        .get("edits")
-        .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("edit_file requires edits"))?;
+    let legacy_edits;
+    let edits = if let Some(edits) = input.get("edits").and_then(Value::as_array) {
+        edits
+    } else {
+        let old_string = input
+            .get("old_string")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("edit_file requires old_string"))?;
+        let new_string = input
+            .get("new_string")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("edit_file requires new_string"))?;
+        if old_string == new_string {
+            return Err(anyhow!(
+                "No changes to make: old_string and new_string are exactly the same."
+            ));
+        }
+        legacy_edits = vec![serde_json::json!({
+            "search": old_string,
+            "replace": new_string,
+            "all": input
+                .get("replace_all")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        })];
+        &legacy_edits
+    };
     let create_if_missing = input
         .get("create_if_missing")
         .and_then(Value::as_bool)
