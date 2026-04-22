@@ -11,8 +11,8 @@ mod mcp_cli;
 mod memory_file_detection;
 mod plugins;
 mod query_engine_compat;
-mod repl_hook_runtime;
 mod remote;
+mod repl_hook_runtime;
 mod review_cli;
 #[allow(dead_code)]
 mod runtime_hooks;

@@ -6,8 +6,8 @@ use anyhow::Result;
 use rc_config::RuntimeConfig;
 use rc_core::{ConversationEntry, ConversationRole, PermissionMode};
 use rc_permissions::{PermissionBroker, PermissionDecision, PermissionRequest};
-use rc_provider::{ConversationBackend, DiscoveredToolScope};
 use rc_provider::context::TokenEstimator;
+use rc_provider::{ConversationBackend, DiscoveredToolScope};
 use rc_query_engine::QuerySource;
 use rc_runtime_prompt::{runtime_env_defined_falsy, runtime_env_truthy};
 use rc_session::SessionStore;
@@ -245,7 +245,10 @@ fn should_extract_memory(
     let current_token_count = count_conversation_tokens(conversation);
 
     if !state.shared.initialized {
-        if !state.shared.has_met_initialization_threshold(current_token_count) {
+        if !state
+            .shared
+            .has_met_initialization_threshold(current_token_count)
+        {
             return false;
         }
         state.shared.mark_initialized();
@@ -278,7 +281,8 @@ fn update_last_summarized_message_id_if_safe(
         return;
     }
     if let Some(last_message) = conversation.last() {
-        state.shared
+        state
+            .shared
             .set_last_summarized_message_id(Some(last_message.uuid.to_string()));
     }
 }
@@ -401,8 +405,9 @@ async fn run_session_memory_update(
         &file_setup.current_memory,
         &file_setup.summary_path,
     );
-    let broker: Arc<dyn PermissionBroker> =
-        Arc::new(SessionMemoryPermissionBroker::new(file_setup.summary_path.clone()));
+    let broker: Arc<dyn PermissionBroker> = Arc::new(SessionMemoryPermissionBroker::new(
+        file_setup.summary_path.clone(),
+    ));
     let discovery = crate::hooks::discover_runtime_hooks(config, &[]);
     let mut hook_state = crate::hooks::HookRunState::load(store, config.session_id)?;
 

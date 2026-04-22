@@ -437,7 +437,7 @@ impl Message {
                 tool_calls: Vec::new(),
                 attachments: Vec::new(),
                 tool_call_id: None,
-                name: None,
+                name: system_subtype_name(&message.subtype).map(ToOwned::to_owned),
                 is_error: matches!(message.subtype, SystemMessageSubtype::ApiError),
             }),
             Self::ToolUseSummary(message) => Some(ConversationEntry {
@@ -469,8 +469,12 @@ impl From<ConversationEntry> for Message {
     fn from(value: ConversationEntry) -> Self {
         match value.role {
             ConversationRole::System => Self::System(SystemMessage {
-                base: MessageBase::with_origin(MessageOrigin::System),
-                subtype: SystemMessageSubtype::Informational,
+                base: MessageBase {
+                    uuid: value.uuid,
+                    origin: Some(MessageOrigin::System),
+                    ..MessageBase::default()
+                },
+                subtype: system_subtype_from_name(value.name.as_deref()),
                 text: value.text,
                 error: value.is_error.then_some("system_error".to_owned()),
             }),
@@ -502,6 +506,49 @@ impl From<ConversationEntry> for Message {
                 content_blocks: value.content_blocks,
             }),
         }
+    }
+}
+
+fn system_subtype_name(subtype: &SystemMessageSubtype) -> Option<&'static str> {
+    let name = match subtype {
+        SystemMessageSubtype::LocalCommand => "local_command",
+        SystemMessageSubtype::BridgeStatus => "bridge_status",
+        SystemMessageSubtype::TurnDuration => "turn_duration",
+        SystemMessageSubtype::Thinking => "thinking",
+        SystemMessageSubtype::MemorySaved => "memory_saved",
+        SystemMessageSubtype::StopHookSummary => "stop_hook_summary",
+        SystemMessageSubtype::Informational => return None,
+        SystemMessageSubtype::CompactBoundary => "compact_boundary",
+        SystemMessageSubtype::MicrocompactBoundary => "microcompact_boundary",
+        SystemMessageSubtype::PermissionRetry => "permission_retry",
+        SystemMessageSubtype::ScheduledTaskFire => "scheduled_task_fire",
+        SystemMessageSubtype::AwaySummary => "away_summary",
+        SystemMessageSubtype::AgentsKilled => "agents_killed",
+        SystemMessageSubtype::ApiMetrics => "api_metrics",
+        SystemMessageSubtype::ApiError => "api_error",
+        SystemMessageSubtype::FileSnapshot => "file_snapshot",
+    };
+    Some(name)
+}
+
+fn system_subtype_from_name(name: Option<&str>) -> SystemMessageSubtype {
+    match name {
+        Some("local_command") => SystemMessageSubtype::LocalCommand,
+        Some("bridge_status") => SystemMessageSubtype::BridgeStatus,
+        Some("turn_duration") => SystemMessageSubtype::TurnDuration,
+        Some("thinking") => SystemMessageSubtype::Thinking,
+        Some("memory_saved") => SystemMessageSubtype::MemorySaved,
+        Some("stop_hook_summary") => SystemMessageSubtype::StopHookSummary,
+        Some("compact_boundary") => SystemMessageSubtype::CompactBoundary,
+        Some("microcompact_boundary") => SystemMessageSubtype::MicrocompactBoundary,
+        Some("permission_retry") => SystemMessageSubtype::PermissionRetry,
+        Some("scheduled_task_fire") => SystemMessageSubtype::ScheduledTaskFire,
+        Some("away_summary") => SystemMessageSubtype::AwaySummary,
+        Some("agents_killed") => SystemMessageSubtype::AgentsKilled,
+        Some("api_metrics") => SystemMessageSubtype::ApiMetrics,
+        Some("api_error") => SystemMessageSubtype::ApiError,
+        Some("file_snapshot") => SystemMessageSubtype::FileSnapshot,
+        _ => SystemMessageSubtype::Informational,
     }
 }
 
@@ -537,6 +584,23 @@ mod tests {
             }
             other => panic!("unexpected message: {other:?}"),
         }
+    }
+
+    #[test]
+    fn system_memory_saved_conversation_entry_preserves_subtype() {
+        let mut entry = ConversationEntry::system(r#"{"writtenPaths":["C:/mem.md"]}"#);
+        entry.name = Some("memory_saved".to_owned());
+        let message = Message::from(entry.clone());
+        assert!(matches!(
+            message,
+            Message::System(ref system) if system.subtype == SystemMessageSubtype::MemorySaved
+        ));
+        let restored = message
+            .as_conversation_entry()
+            .expect("system message should down-convert");
+        assert_eq!(restored.uuid, entry.uuid);
+        assert_eq!(restored.name.as_deref(), Some("memory_saved"));
+        assert_eq!(restored.text, entry.text);
     }
 
     #[test]

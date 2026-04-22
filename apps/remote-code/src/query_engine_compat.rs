@@ -2094,10 +2094,8 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
     conversation: &mut Vec<ConversationEntry>,
     prompt: &str,
 ) -> Result<PromptRunOutcome> {
-    let query_source = if matches!(
-        config.input_format,
-        rc_core::InputFormat::StreamJson
-    ) || matches!(config.output_format, rc_core::OutputFormat::StreamJson)
+    let query_source = if matches!(config.input_format, rc_core::InputFormat::StreamJson)
+        || matches!(config.output_format, rc_core::OutputFormat::StreamJson)
     {
         QuerySource::Sdk
     } else {
@@ -2684,14 +2682,14 @@ mod tests {
     use super::{
         AGENT_LISTING_DELTA_MARKER, CompatExecutionOptions, CompatObserver, CompatRunOverrides,
         CompatSharedState, DEFERRED_TOOLS_DELTA_MARKER, ForkCacheSafeParams,
-        MCP_INSTRUCTIONS_DELTA_MARKER,
-        RuntimeAgentListingDeltaMarker, RuntimeDeferredToolsDeltaMarker,
-        RuntimeMcpInstructionsDeltaMarker, announced_agent_types, announced_deferred_tool_names,
-        announced_mcp_instruction_names, augment_post_compact_conversation_for_runtime,
-        build_agent_listing_delta_entry, build_mcp_instructions_delta_entry,
-        build_runtime_identity_context, refresh_runtime_system_prompt,
-        run_no_persist_forked_query, run_prompt_with_query_engine_compat,
-        run_prompt_with_query_engine_compat_overrides, runtime_delta_entry,
+        MCP_INSTRUCTIONS_DELTA_MARKER, RuntimeAgentListingDeltaMarker,
+        RuntimeDeferredToolsDeltaMarker, RuntimeMcpInstructionsDeltaMarker, announced_agent_types,
+        announced_deferred_tool_names, announced_mcp_instruction_names,
+        augment_post_compact_conversation_for_runtime, build_agent_listing_delta_entry,
+        build_mcp_instructions_delta_entry, build_runtime_identity_context,
+        refresh_runtime_system_prompt, run_no_persist_forked_query,
+        run_prompt_with_query_engine_compat, run_prompt_with_query_engine_compat_overrides,
+        runtime_delta_entry,
     };
     use crate::conversation::{PromptEventSink, PromptStreamEvent, initialize_conversation};
     use crate::hooks::{HookRunState, RuntimeHookDiscovery};
@@ -4375,10 +4373,7 @@ while True:
         let fork_snapshot = ForkCacheSafeParams {
             fork_context_messages: vec![Message::from(ConversationEntry::user("parent context"))],
             system_prompt: Some("Fork system prompt".to_owned()),
-            user_context: BTreeMap::from([(
-                "snapshotKey".to_owned(),
-                "snapshotValue".to_owned(),
-            )]),
+            user_context: BTreeMap::from([("snapshotKey".to_owned(), "snapshotValue".to_owned())]),
             system_context: BTreeMap::from([("cwd".to_owned(), config.cwd.display().to_string())]),
         };
 
@@ -4400,10 +4395,12 @@ while True:
         .await
         .expect("fork run");
 
-        assert!(outcome
-            .messages
-            .iter()
-            .any(|entry| entry.role == ConversationRole::Assistant && entry.text == "recorded"));
+        assert!(
+            outcome
+                .messages
+                .iter()
+                .any(|entry| entry.role == ConversationRole::Assistant && entry.text == "recorded")
+        );
         let calls = backend.conversations.lock().expect("recording lock");
         let first_call = calls.first().expect("provider call");
         let system_entry = first_call
@@ -4424,9 +4421,11 @@ while True:
         assert!(first_call.iter().any(|entry| {
             entry.role == ConversationRole::User && entry.text == "parent context"
         }));
-        assert!(first_call.iter().any(|entry| {
-            entry.role == ConversationRole::User && entry.text == "child task"
-        }));
+        assert!(
+            first_call.iter().any(|entry| {
+                entry.role == ConversationRole::User && entry.text == "child task"
+            })
+        );
     }
 
     #[tokio::test]

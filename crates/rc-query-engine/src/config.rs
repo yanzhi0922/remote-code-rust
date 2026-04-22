@@ -23,11 +23,8 @@ pub type PostCompactTransform = dyn Fn(
     + Send
     + Sync;
 
-pub type PostSamplingHook = dyn Fn(
-        ReplHookContext,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>
-    + Send
-    + Sync;
+pub type PostSamplingHook =
+    dyn Fn(ReplHookContext) -> Pin<Box<dyn Future<Output = Result<()>> + Send>> + Send + Sync;
 
 pub type StopHook = dyn Fn(
         ReplHookContext,

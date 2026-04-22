@@ -136,14 +136,30 @@ impl SessionTranscript {
 
     #[must_use]
     pub fn memory_saved_messages(&self) -> Vec<Message> {
-        self.runtime_messages()
-            .into_iter()
-            .filter(|message| {
-                matches!(
-                    message,
-                    Message::System(system)
-                        if system.subtype == SystemMessageSubtype::MemorySaved
-                )
+        self.events
+            .iter()
+            .filter_map(|event| {
+                if event.event_type == "conversation"
+                    && let Some(entry) = event.conversation.as_ref()
+                    && entry.role == rc_core::ConversationRole::System
+                    && entry.name.as_deref() == Some("memory_saved")
+                {
+                    return Some(Message::from(entry.clone()));
+                }
+
+                if event.event_type == "runtime_message"
+                    && let Some(payload) = event.payload.clone()
+                    && let Ok(message) = serde_json::from_value::<Message>(payload)
+                    && matches!(
+                        message,
+                        Message::System(ref system)
+                            if system.subtype == SystemMessageSubtype::MemorySaved
+                    )
+                {
+                    return Some(message);
+                }
+
+                None
             })
             .collect()
     }
@@ -488,7 +504,35 @@ mod tests {
     }
 
     #[test]
-    fn transcript_reads_runtime_memory_saved_messages() {
+    fn transcript_reads_conversation_memory_saved_messages() {
+        let session_id = Uuid::new_v4();
+        let mut entry =
+            rc_core::ConversationEntry::system(r#"{"writtenPaths":["C:/mem.md"],"teamCount":1}"#);
+        entry.name = Some("memory_saved".to_owned());
+        let transcript = SessionTranscript::new(
+            session_id,
+            vec![rc_core::StoredEvent {
+                timestamp: Utc::now(),
+                session_id,
+                event_type: "conversation".to_owned(),
+                conversation: Some(entry),
+                payload: None,
+            }],
+        );
+
+        let messages = transcript.memory_saved_messages();
+        assert_eq!(messages.len(), 1);
+        assert!(matches!(
+            &messages[0],
+            Message::System(SystemMessage {
+                subtype: SystemMessageSubtype::MemorySaved,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn transcript_keeps_legacy_runtime_memory_saved_messages() {
         let session_id = Uuid::new_v4();
         let transcript = SessionTranscript::new(
             session_id,
