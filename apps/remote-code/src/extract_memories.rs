@@ -8,11 +8,9 @@ use std::sync::{
 use std::time::Duration;
 
 use anyhow::Result;
-use chrono::Utc;
 use rc_config::RuntimeConfig;
 use rc_core::{
-    ConversationEntry, ConversationRole, Message, MessageBase, MessageOrigin, PermissionMode,
-    SystemMemorySavedMessage, SystemMessage, SystemMessageSubtype,
+    ConversationEntry, ConversationRole, PermissionMode,
 };
 use rc_permissions::{PermissionBroker, PermissionDecision, PermissionRequest};
 use rc_protocol::UsagePayload;
@@ -25,16 +23,13 @@ use rc_runtime_prompt::{
 };
 use rc_session::SessionStore;
 use rc_tools::shell::readonly::{ShellKind, is_read_only_command};
-use rc_transcript::TranscriptEntry;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::conversation::{PromptEventSink, PromptStreamEvent};
-use crate::hooks::{HookExecutionOptions, HookRunState};
+use crate::hooks::HookRunState;
 use crate::query_engine_compat::{
-    CompatExecutionOptions, CompatRunOverrides, ForkCacheSafeParams,
-    run_prompt_with_query_engine_compat_overrides,
+    CompatRunOverrides, ForkCacheSafeParams, run_no_persist_forked_query,
 };
 
 const EXTRACTION_MAX_TURNS: u32 = 5;
@@ -46,12 +41,14 @@ const TEAMMEM_FEATURE: &str = "TEAMMEM";
 const TEAMMEM_ENABLE_FEATURE: &str = "tengu_herring_clock";
 const ENTRYPOINT_NAME: &str = "MEMORY.md";
 
+pub(crate) type AppendMemorySavedFn = Arc<dyn Fn(Vec<String>, Option<usize>) + Send + Sync>;
+
 #[derive(Clone)]
 struct PendingExtractionContext {
     backend: Arc<dyn ConversationBackend>,
     discovered_tool_scope: DiscoveredToolScope,
     conversation: Vec<ConversationEntry>,
-    event_sink: Option<PromptEventSink>,
+    append_memory_saved: Option<AppendMemorySavedFn>,
     fork_snapshot: Option<ForkCacheSafeParams>,
 }
 
@@ -174,7 +171,7 @@ pub(crate) fn spawn_extract_memories_after_turn(
     backend: Arc<dyn ConversationBackend>,
     discovered_tool_scope: DiscoveredToolScope,
     conversation: &[ConversationEntry],
-    event_sink: Option<PromptEventSink>,
+    append_memory_saved: Option<AppendMemorySavedFn>,
     fork_snapshot: Option<ForkCacheSafeParams>,
 ) {
     let config = config.clone();
@@ -193,7 +190,7 @@ pub(crate) fn spawn_extract_memories_after_turn(
             backend,
             discovered_tool_scope,
             &conversation,
-            event_sink,
+            append_memory_saved,
             fork_snapshot,
         )
         .await;
@@ -207,7 +204,7 @@ async fn maybe_extract_memories_after_prompt_inner(
     backend: Arc<dyn ConversationBackend>,
     discovered_tool_scope: DiscoveredToolScope,
     conversation: &[ConversationEntry],
-    event_sink: Option<PromptEventSink>,
+    append_memory_saved: Option<AppendMemorySavedFn>,
     fork_snapshot: Option<ForkCacheSafeParams>,
 ) -> Result<()> {
     if !extract_memories_gate_enabled(config).await? {
@@ -224,7 +221,7 @@ async fn maybe_extract_memories_after_prompt_inner(
                 backend,
                 discovered_tool_scope,
                 conversation: conversation.to_vec(),
-                event_sink,
+                append_memory_saved,
                 fork_snapshot,
             });
             store.append_named_event(
@@ -241,7 +238,7 @@ async fn maybe_extract_memories_after_prompt_inner(
         backend,
         discovered_tool_scope,
         conversation: conversation.to_vec(),
-        event_sink,
+        append_memory_saved,
         fork_snapshot,
     };
     let mut is_trailing_run = false;
@@ -253,7 +250,7 @@ async fn maybe_extract_memories_after_prompt_inner(
             current.discovered_tool_scope.clone(),
             &current.conversation,
             session_id,
-            current.event_sink.clone(),
+            current.append_memory_saved.clone(),
             current.fork_snapshot.clone(),
             is_trailing_run,
         )
@@ -311,7 +308,7 @@ async fn run_extract_memories_once(
     discovered_tool_scope: DiscoveredToolScope,
     conversation: &[ConversationEntry],
     session_id: Uuid,
-    event_sink: Option<PromptEventSink>,
+    append_memory_saved: Option<AppendMemorySavedFn>,
     fork_snapshot: Option<ForkCacheSafeParams>,
     is_trailing_run: bool,
 ) -> Result<bool> {
@@ -426,27 +423,8 @@ async fn run_extract_memories_once(
         return Ok(false);
     }
 
-    let payload = SystemMemorySavedMessage {
-        id: Uuid::new_v4().to_string(),
-        written_paths: extraction.memory_paths.clone(),
-        team_count: extraction.team_count,
-        timestamp: Utc::now(),
-    };
-
-    store.append_transcript_entry(&TranscriptEntry::runtime_message_now(
-        config.session_id,
-        Message::System(SystemMessage {
-            base: MessageBase::with_origin(MessageOrigin::System),
-            subtype: SystemMessageSubtype::MemorySaved,
-            text: serde_json::to_string(&payload)?,
-            error: None,
-        }),
-    ))?;
-    if let Some(event_sink) = event_sink {
-        event_sink(PromptStreamEvent::MemorySaved {
-            written_paths: extraction.memory_paths,
-            team_count: extraction.team_count,
-        });
+    if let Some(append_memory_saved) = append_memory_saved {
+        append_memory_saved(extraction.memory_paths, extraction.team_count);
     }
 
     Ok(false)
@@ -479,39 +457,24 @@ async fn run_extraction_child(
         team_memory_dir.clone(),
     ));
     let mut hook_state = HookRunState::load(store, config.session_id)?;
-    let mut final_child_conversation = match fork_snapshot {
-        Some(snapshot) => snapshot
-            .fork_context_messages
-            .iter()
-            .filter_map(rc_core::Message::as_conversation_entry)
-            .collect::<Vec<_>>(),
-        None => conversation.to_vec(),
-    };
-    let outcome = run_prompt_with_query_engine_compat_overrides(
+    let outcome = run_no_persist_forked_query(
         &child_config,
         store,
         backend,
         discovered_tool_scope,
         broker,
-        None,
         &discovery,
         &mut hook_state,
-        &mut final_child_conversation,
+        fork_snapshot.unwrap_or_else(|| ForkCacheSafeParams::from_conversation(conversation)),
         extract_prompt,
         CompatRunOverrides::default(),
-        CompatExecutionOptions {
-            persist_session: false,
-            persist_transcript: false,
-            persist_runtime_context: false,
-            persist_tool_results_dir: Some(tool_results_dir),
-            hook_options: HookExecutionOptions::ephemeral(),
-            query_source: QuerySource::ExtractMemories,
-            agent_id: None,
-        },
+        QuerySource::ExtractMemories,
+        Some(EXTRACTION_MAX_TURNS),
+        tool_results_dir,
     )
     .await?;
 
-    let written_paths = extract_written_paths(&final_child_conversation);
+    let written_paths = extract_written_paths(&outcome.messages);
     let memory_paths = written_paths
         .iter()
         .filter(|path| {
@@ -532,7 +495,9 @@ async fn run_extraction_child(
         files_written: written_paths.len(),
         turn_count: outcome.num_turns,
         usage: outcome.usage,
-        duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        duration_ms: outcome.duration_ms.max(
+            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        ),
     })
 }
 

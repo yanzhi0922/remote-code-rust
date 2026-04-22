@@ -21,7 +21,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::query_engine_compat::{
-    CompatExecutionOptions, CompatRunOverrides, run_prompt_with_query_engine_compat_overrides,
+    CompatRunOverrides, ForkCacheSafeParams, run_no_persist_forked_query,
 };
 
 static SESSION_MEMORY_STATES: OnceLock<
@@ -289,6 +289,7 @@ pub(crate) async fn maybe_spawn_session_memory_update(
     backend: Arc<dyn ConversationBackend>,
     discovered_tool_scope: DiscoveredToolScope,
     conversation: &[ConversationEntry],
+    fork_snapshot: Option<ForkCacheSafeParams>,
 ) {
     if config.print_mode {
         return;
@@ -319,6 +320,8 @@ pub(crate) async fn maybe_spawn_session_memory_update(
     let paths = config.paths.clone();
     let state = state.clone();
     let backend = backend.clone();
+    let fork_snapshot =
+        fork_snapshot.unwrap_or_else(|| ForkCacheSafeParams::from_conversation(&conversation));
     tokio::spawn(async move {
         let store = match SessionStore::open(paths) {
             Ok(store) => store,
@@ -336,10 +339,45 @@ pub(crate) async fn maybe_spawn_session_memory_update(
             backend,
             discovered_tool_scope,
             &conversation,
+            fork_snapshot,
             state,
         )
         .await;
     });
+}
+
+struct SessionMemoryFileSetup {
+    summary_path: PathBuf,
+    current_memory: String,
+}
+
+fn fresh_read_session_memory_content(config: &RuntimeConfig) -> Result<String> {
+    Ok(load_session_memory_content(config)?.unwrap_or_default())
+}
+
+fn setup_session_memory_file(config: &RuntimeConfig) -> Result<SessionMemoryFileSetup> {
+    let summary_path = ensure_session_memory_file(config)?;
+    let current_memory = fresh_read_session_memory_content(config)?;
+    Ok(SessionMemoryFileSetup {
+        summary_path,
+        current_memory,
+    })
+}
+
+fn session_memory_tool_results_dir(config: &RuntimeConfig) -> PathBuf {
+    std::env::var_os("CLAUDE_CODE_TMPDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("remote-code-session-memory")
+        .join(config.session_id.to_string())
+}
+
+fn build_session_memory_extraction_prompt(
+    config: &RuntimeConfig,
+    current_memory: &str,
+    summary_path: &Path,
+) -> String {
+    build_session_memory_update_prompt(config, current_memory, summary_path)
 }
 
 async fn run_session_memory_update(
@@ -348,47 +386,37 @@ async fn run_session_memory_update(
     backend: Arc<dyn ConversationBackend>,
     discovered_tool_scope: DiscoveredToolScope,
     conversation: &[ConversationEntry],
+    fork_snapshot: ForkCacheSafeParams,
     state: Arc<std::sync::Mutex<SessionMemoryRuntimeState>>,
 ) -> Result<()> {
-    let summary_path = ensure_session_memory_file(config)?;
-    let current_memory = load_session_memory_content(config)?.unwrap_or_default();
-    let prompt = build_session_memory_update_prompt(config, &current_memory, &summary_path);
+    let file_setup = setup_session_memory_file(config)?;
+    let prompt = build_session_memory_extraction_prompt(
+        config,
+        &file_setup.current_memory,
+        &file_setup.summary_path,
+    );
     let broker: Arc<dyn PermissionBroker> =
-        Arc::new(SessionMemoryPermissionBroker::new(summary_path.clone()));
+        Arc::new(SessionMemoryPermissionBroker::new(file_setup.summary_path.clone()));
     let discovery = crate::hooks::discover_runtime_hooks(config, &[]);
     let mut hook_state = crate::hooks::HookRunState::load(store, config.session_id)?;
-    let mut child_conversation = conversation.to_vec();
 
-    let run_result = run_prompt_with_query_engine_compat_overrides(
+    let run_result = run_no_persist_forked_query(
         config,
         store,
         backend,
         discovered_tool_scope,
         broker,
-        None,
         &discovery,
         &mut hook_state,
-        &mut child_conversation,
+        fork_snapshot,
         &prompt,
         CompatRunOverrides {
             allowed_tools: Some(vec!["Edit".to_owned()]),
             ..CompatRunOverrides::default()
         },
-        CompatExecutionOptions {
-            persist_session: false,
-            persist_transcript: false,
-            persist_runtime_context: false,
-            persist_tool_results_dir: Some(
-                std::env::var_os("CLAUDE_CODE_TMPDIR")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(std::env::temp_dir)
-                    .join("remote-code-session-memory")
-                    .join(config.session_id.to_string()),
-            ),
-            hook_options: crate::hooks::HookExecutionOptions::ephemeral(),
-            query_source: QuerySource::SessionMemory,
-            agent_id: None,
-        },
+        QuerySource::SessionMemory,
+        None,
+        session_memory_tool_results_dir(config),
     )
     .await;
 

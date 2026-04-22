@@ -2,13 +2,18 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use rc_config::RuntimeConfig;
-use rc_core::{ConversationEntry, ConversationRole};
+use rc_core::{
+    ConversationEntry, ConversationRole, Message, MessageBase, MessageOrigin,
+    SystemMemorySavedMessage, SystemMessage, SystemMessageSubtype,
+};
 use rc_provider::{ConversationBackend, DiscoveredToolScope};
 use rc_query_engine::{ProcessUserInputContext, QueryEngineConfig, QuerySource};
 use rc_session::SessionStore;
+use rc_transcript::TranscriptEntry;
+use chrono::Utc;
 
 use crate::conversation::PromptEventSink;
-use crate::extract_memories::spawn_extract_memories_after_turn;
+use crate::extract_memories::{AppendMemorySavedFn, spawn_extract_memories_after_turn};
 use crate::session_memory_runtime::maybe_spawn_session_memory_update;
 use crate::query_engine_compat::ForkCacheSafeParams;
 
@@ -25,7 +30,20 @@ pub(crate) fn apply_runtime_hook_context(
     process_context: &mut ProcessUserInputContext,
     config: &RuntimeConfig,
     provider_conversation: &[ConversationEntry],
+    fork_snapshot: Option<&ForkCacheSafeParams>,
 ) {
+    if let Some(snapshot) = fork_snapshot {
+        process_context.system_prompt = snapshot.system_prompt.clone().or_else(|| {
+            provider_conversation
+                .iter()
+                .find(|entry| entry.role == ConversationRole::System)
+                .map(|entry| entry.text.clone())
+                .filter(|text| !text.trim().is_empty())
+        });
+        process_context.user_context = snapshot.user_context.clone();
+        process_context.system_context = snapshot.system_context.clone();
+        return;
+    }
     process_context.system_prompt = provider_conversation
         .iter()
         .find(|entry| entry.role == ConversationRole::System)
@@ -60,6 +78,7 @@ pub(crate) fn register_repl_runtime_hooks(
                     resources.backend.clone(),
                     resources.discovered_tool_scope.clone(),
                     &conversation,
+                    Some(ForkCacheSafeParams::from_repl_hook_context(&hook_context)),
                 )
                 .await;
                 Ok(())
@@ -80,6 +99,37 @@ pub(crate) fn register_repl_runtime_hooks(
                 if hook_context.query_source == QuerySource::ReplMainThread
                     && hook_context.agent_id.is_none()
                 {
+                    let append_memory_saved: AppendMemorySavedFn = {
+                        let store = resources.store.clone();
+                        let event_sink = resources.event_sink.clone();
+                        let session_id = resources.config.session_id;
+                        Arc::new(move |written_paths: Vec<String>, team_count: Option<usize>| {
+                            let payload = SystemMemorySavedMessage {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                written_paths: written_paths.clone(),
+                                team_count,
+                                timestamp: Utc::now(),
+                            };
+                            let _ = store.append_transcript_entry(
+                                &TranscriptEntry::runtime_message_now(
+                                    session_id,
+                                    Message::System(SystemMessage {
+                                        base: MessageBase::with_origin(MessageOrigin::System),
+                                        subtype: SystemMessageSubtype::MemorySaved,
+                                        text: serde_json::to_string(&payload)
+                                            .unwrap_or_else(|_| String::new()),
+                                        error: None,
+                                    }),
+                                ),
+                            );
+                            if let Some(event_sink) = event_sink.as_ref() {
+                                event_sink(crate::conversation::PromptStreamEvent::MemorySaved {
+                                    written_paths,
+                                    team_count,
+                                });
+                            }
+                        })
+                    };
                     let conversation = hook_context
                         .messages
                         .iter()
@@ -91,7 +141,7 @@ pub(crate) fn register_repl_runtime_hooks(
                         resources.backend.clone(),
                         resources.discovered_tool_scope.clone(),
                         &conversation,
-                        resources.event_sink.clone(),
+                        Some(append_memory_saved),
                         Some(ForkCacheSafeParams::from_repl_hook_context(&hook_context)),
                     );
                 }
