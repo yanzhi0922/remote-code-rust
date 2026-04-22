@@ -45,6 +45,7 @@ use crate::ResolvedPromptOverrides;
 use crate::agents::build_remote_code_sub_agent_runtime;
 use crate::cli::Cli;
 use crate::conversation_backend::ConversationBackend;
+use crate::extract_memories::maybe_extract_memories_after_prompt;
 use crate::hooks::{
     HookRunState, RuntimeHookDiscovery, apply_post_tool_hooks, apply_pre_tool_use_hooks,
     discover_runtime_hooks, ensure_session_start_hooks,
@@ -701,11 +702,11 @@ pub(crate) async fn run_prompt(
         replacement_state,
         skip_tool_names,
     );
-    if env::var_os("REMOTE_CODE_FORCE_LEGACY_PROMPT_LOOP").is_some() {
-        return run_prompt_legacy(
+    let outcome = if env::var_os("REMOTE_CODE_FORCE_LEGACY_PROMPT_LOOP").is_some() {
+        run_prompt_legacy(
             config,
             store,
-            backend,
+            backend.clone(),
             broker,
             event_sink,
             discovery,
@@ -713,21 +714,26 @@ pub(crate) async fn run_prompt(
             conversation,
             prompt,
         )
-        .await;
-    }
-    run_prompt_with_query_engine_compat(
-        config,
-        store,
-        backend,
-        discovered_tool_scope,
-        broker,
-        event_sink,
-        discovery,
-        hook_state,
-        conversation,
-        prompt,
-    )
-    .await
+        .await
+    } else {
+        run_prompt_with_query_engine_compat(
+            config,
+            store,
+            backend.clone(),
+            discovered_tool_scope,
+            broker,
+            event_sink,
+            discovery,
+            hook_state,
+            conversation,
+            prompt,
+        )
+        .await
+    }?;
+
+    maybe_extract_memories_after_prompt(config, store, backend, conversation, prompt).await?;
+
+    Ok(outcome)
 }
 
 #[allow(clippy::too_many_lines)]

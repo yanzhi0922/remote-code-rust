@@ -162,7 +162,8 @@ pub async fn session_memory_compact(
         .cloned()
         .collect::<Vec<_>>();
 
-    let result = create_compaction_result_from_session_memory(messages, &session_memory, messages_to_keep);
+    let result =
+        create_compaction_result_from_session_memory(messages, &session_memory, messages_to_keep);
 
     if let Some(sink) = progress {
         sink(CompactProgressEvent::Completed(result.clone()));

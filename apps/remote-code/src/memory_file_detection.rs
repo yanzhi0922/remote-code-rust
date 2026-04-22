@@ -91,7 +91,12 @@ fn agent_memory_dirs(config: &RuntimeConfig) -> Vec<PathBuf> {
         .map(|context| context.agent_memory_dirs)
         .unwrap_or_default();
     dirs.push(config.original_cwd.join(".claude").join("agent-memory"));
-    dirs.push(config.original_cwd.join(".claude").join("agent-memory-local"));
+    dirs.push(
+        config
+            .original_cwd
+            .join(".claude")
+            .join("agent-memory-local"),
+    );
     dirs.sort();
     dirs.dedup();
     dirs
@@ -231,10 +236,7 @@ fn shell_capture_to_path(cleaned: &str) -> PathBuf {
     PathBuf::from(cleaned)
 }
 
-pub(crate) fn is_shell_command_targeting_memory(
-    config: &RuntimeConfig,
-    command: &str,
-) -> bool {
+pub(crate) fn is_shell_command_targeting_memory(config: &RuntimeConfig, command: &str) -> bool {
     let command_cmp = comparable_str(command);
     let mut roots = vec![
         comparable_path(&claude_config_home_dir()),
@@ -298,8 +300,12 @@ mod tests {
 
     #[test]
     fn auto_managed_pattern_matches_agent_memory() {
-        assert!(is_auto_managed_memory_pattern(".claude/agent-memory/**/*.md"));
-        assert!(is_auto_managed_memory_pattern(".claude/agent-memory-local/**/*.md"));
+        assert!(is_auto_managed_memory_pattern(
+            ".claude/agent-memory/**/*.md"
+        ));
+        assert!(is_auto_managed_memory_pattern(
+            ".claude/agent-memory-local/**/*.md"
+        ));
     }
 
     #[test]

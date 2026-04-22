@@ -2,8 +2,8 @@ use std::path::Path;
 
 use directories::BaseDirs;
 use rc_config::RuntimeConfig;
-use rc_session::session_memory::session_memory_path;
 use rc_runtime_prompt::RuntimePromptSettings;
+use rc_session::session_memory::session_memory_path;
 
 pub fn render(config: &RuntimeConfig) {
     let prompt_settings = RuntimePromptSettings::from_config(config);
