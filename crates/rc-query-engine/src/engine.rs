@@ -533,6 +533,7 @@ mod tests {
                 content: format!("tool:{} ok", tool_call.name),
                 is_error: false,
                 content_blocks: Vec::new(),
+                follow_up_user_blocks: Vec::new(),
             }))
         }
     }

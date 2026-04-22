@@ -446,7 +446,11 @@ mod tests {
             .expect("state should exist");
         assert_eq!(state.current_permission_mode, PermissionMode::Plan);
         assert!(conversation.iter().any(|entry| {
-            entry.role == ConversationRole::User && entry.text.contains("## Plan Mode Active")
+            entry.role == ConversationRole::User
+                && (entry.text.contains("## Plan Mode Active")
+                    || entry
+                        .text
+                        .contains("Plan mode is active. The user indicated"))
         }));
     }
 

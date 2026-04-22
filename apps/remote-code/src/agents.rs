@@ -22,6 +22,7 @@ use rc_model::{
     ModelProvider, detect_provider, is_first_party_base_url, is_model_alias, provider_model_id,
 };
 use rc_provider::{ProviderClient, ProviderCompatBackend};
+use rc_query_engine::QuerySource;
 use rc_session::SessionStore;
 use rc_tools::{
     ToolSpec,
@@ -332,7 +333,10 @@ impl AgentExecutor for RemoteCodeAgentExecutor {
                 omit_git_status: request.omit_git_status,
                 ..CompatRunOverrides::default()
             },
-            CompatExecutionOptions::default(),
+            CompatExecutionOptions {
+                query_source: QuerySource::Agent,
+                ..CompatExecutionOptions::default()
+            },
         )
         .await?;
 
