@@ -607,6 +607,11 @@ fn render_transcript_display_events(
     let transcript = store.load_transcript(session_id)?;
     for event in transcript.iter_events() {
         if let Some(entry) = event.conversation.as_ref() {
+            if entry.role == rc_core::ConversationRole::System
+                && entry.name.as_deref() == Some("memory_saved")
+            {
+                continue;
+            }
             render_conversation_entry(app, entry);
         }
     }

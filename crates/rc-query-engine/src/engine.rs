@@ -1067,20 +1067,22 @@ mod tests {
                 Ok(())
             })
         }))
-        .with_stop_hook(Arc::new(move |context: ReplHookContext, request: StopHookRequest| {
-            let stop_hook_sequence = Arc::clone(&stop_hook_sequence);
-            Box::pin(async move {
-                stop_hook_sequence
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .push(format!(
-                        "stop_hook:{}:{}",
-                        request.stop_reason,
-                        context.messages.len()
-                    ));
-                Ok(StopHookOutcome::Allow)
-            })
-        }));
+        .with_stop_hook(Arc::new(
+            move |context: ReplHookContext, request: StopHookRequest| {
+                let stop_hook_sequence = Arc::clone(&stop_hook_sequence);
+                Box::pin(async move {
+                    stop_hook_sequence
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .push(format!(
+                            "stop_hook:{}:{}",
+                            request.stop_reason,
+                            context.messages.len()
+                        ));
+                    Ok(StopHookOutcome::Allow)
+                })
+            },
+        ));
         let mut engine = QueryEngine::new(
             config,
             vec![rc_core::Message::from(ConversationEntry::system("sys"))],
@@ -1159,21 +1161,23 @@ mod tests {
             Arc::new(MockToolRunner),
             rc_engine_events::EventStream::new(8),
         )
-        .with_stop_hook(Arc::new(move |_context: ReplHookContext, _request: StopHookRequest| {
-            let stop_count_for_hook = Arc::clone(&stop_count_for_hook);
-            Box::pin(async move {
-                let attempt = stop_count_for_hook.fetch_add(1, Ordering::SeqCst);
-                if attempt == 0 {
-                    Ok(StopHookOutcome::Retry {
-                        injected_messages: vec![rc_core::Message::from(
-                            ConversationEntry::user("retry please"),
-                        )],
-                    })
-                } else {
-                    Ok(StopHookOutcome::Allow)
-                }
-            })
-        }));
+        .with_stop_hook(Arc::new(
+            move |_context: ReplHookContext, _request: StopHookRequest| {
+                let stop_count_for_hook = Arc::clone(&stop_count_for_hook);
+                Box::pin(async move {
+                    let attempt = stop_count_for_hook.fetch_add(1, Ordering::SeqCst);
+                    if attempt == 0 {
+                        Ok(StopHookOutcome::Retry {
+                            injected_messages: vec![rc_core::Message::from(
+                                ConversationEntry::user("retry please"),
+                            )],
+                        })
+                    } else {
+                        Ok(StopHookOutcome::Allow)
+                    }
+                })
+            },
+        ));
         let mut engine = QueryEngine::new(
             config,
             vec![rc_core::Message::from(ConversationEntry::system("sys"))],

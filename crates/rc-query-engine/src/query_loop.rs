@@ -129,13 +129,8 @@ pub async fn run_query_loop(
             config.provider_invocation_mode,
             ProviderInvocationMode::Streaming
         ) {
-            complete_with_streaming_observer(
-                config,
-                context,
-                &legacy_conversation,
-                state.turn + 1,
-            )
-            .await
+            complete_with_streaming_observer(config, context, &legacy_conversation, state.turn + 1)
+                .await
         } else {
             let provider_context = provider_request_context(context);
             config

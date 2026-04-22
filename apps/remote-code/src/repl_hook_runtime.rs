@@ -2,20 +2,15 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use rc_config::RuntimeConfig;
-use rc_core::{
-    ConversationEntry, ConversationRole, Message, MessageBase, MessageOrigin,
-    SystemMemorySavedMessage, SystemMessage, SystemMessageSubtype,
-};
+use rc_core::{ConversationEntry, ConversationRole, SystemMemorySavedMessage};
 use rc_provider::{ConversationBackend, DiscoveredToolScope};
 use rc_query_engine::{ProcessUserInputContext, QueryEngineConfig, QuerySource};
 use rc_session::SessionStore;
-use rc_transcript::TranscriptEntry;
-use chrono::Utc;
 
 use crate::conversation::PromptEventSink;
-use crate::extract_memories::{AppendMemorySavedFn, spawn_extract_memories_after_turn};
-use crate::session_memory_runtime::maybe_spawn_session_memory_update;
+use crate::extract_memories::{AppendSystemMessageFn, spawn_extract_memories_after_turn};
 use crate::query_engine_compat::ForkCacheSafeParams;
+use crate::session_memory_runtime::maybe_spawn_session_memory_update;
 
 #[derive(Clone)]
 pub(crate) struct ReplHookRuntimeResources {
@@ -83,9 +78,7 @@ pub(crate) fn register_repl_runtime_hooks(
                 .await;
                 Ok(())
             })
-                as std::pin::Pin<
-                    Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>,
-                >
+                as std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>
         }
     });
     query_config = query_config.with_post_sampling_hook(post_sampling);
@@ -101,33 +94,27 @@ pub(crate) fn register_repl_runtime_hooks(
                     QuerySource::ReplMainThread | QuerySource::Sdk
                 ) && hook_context.agent_id.is_none()
                 {
-                    let append_memory_saved: AppendMemorySavedFn = {
+                    let append_system_message: AppendSystemMessageFn = {
                         let store = resources.store.clone();
                         let event_sink = resources.event_sink.clone();
                         let session_id = resources.config.session_id;
-                        Arc::new(move |written_paths: Vec<String>, team_count: Option<usize>| {
-                            let payload = SystemMemorySavedMessage {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                written_paths: written_paths.clone(),
-                                team_count,
-                                timestamp: Utc::now(),
-                            };
-                            let _ = store.append_transcript_entry(
-                                &TranscriptEntry::runtime_message_now(
-                                    session_id,
-                                    Message::System(SystemMessage {
-                                        base: MessageBase::with_origin(MessageOrigin::System),
-                                        subtype: SystemMessageSubtype::MemorySaved,
-                                        text: serde_json::to_string(&payload)
-                                            .unwrap_or_else(|_| String::new()),
-                                        error: None,
-                                    }),
-                                ),
-                            );
-                            if let Some(event_sink) = event_sink.as_ref() {
+                        Arc::new(move |entry: ConversationEntry| {
+                            let memory_saved = entry
+                                .name
+                                .as_deref()
+                                .is_some_and(|name| name == "memory_saved")
+                                .then(|| {
+                                    serde_json::from_str::<SystemMemorySavedMessage>(&entry.text)
+                                        .ok()
+                                })
+                                .flatten();
+                            let _ = store.append_conversation_entry(session_id, &entry);
+                            if let (Some(event_sink), Some(payload)) =
+                                (event_sink.as_ref(), memory_saved)
+                            {
                                 event_sink(crate::conversation::PromptStreamEvent::MemorySaved {
-                                    written_paths,
-                                    team_count,
+                                    written_paths: payload.written_paths,
+                                    team_count: payload.team_count,
                                 });
                             }
                         })
@@ -143,7 +130,7 @@ pub(crate) fn register_repl_runtime_hooks(
                         resources.backend.clone(),
                         resources.discovered_tool_scope.clone(),
                         &conversation,
-                        Some(append_memory_saved),
+                        Some(append_system_message),
                         Some(ForkCacheSafeParams::from_repl_hook_context(&hook_context)),
                     );
                 }
@@ -152,7 +139,9 @@ pub(crate) fn register_repl_runtime_hooks(
                 as std::pin::Pin<
                     Box<
                         dyn std::future::Future<
-                                Output = anyhow::Result<rc_query_engine::stop_hooks::StopHookOutcome>,
+                                Output = anyhow::Result<
+                                    rc_query_engine::stop_hooks::StopHookOutcome,
+                                >,
                             > + Send,
                     >,
                 >
@@ -251,10 +240,7 @@ mod tests {
         let parsed = parse_context_sections(
             "<system-reminder>\nAs you answer the user's questions, you can use the following context:\n# currentDate\nToday\n# workerToolsContext\nWorkers available\n\n      IMPORTANT: this context may or may not be relevant to your tasks.\n</system-reminder>\n",
         );
-        assert_eq!(
-            parsed.get("currentDate").map(String::as_str),
-            Some("Today")
-        );
+        assert_eq!(parsed.get("currentDate").map(String::as_str), Some("Today"));
         assert_eq!(
             parsed.get("workerToolsContext").map(String::as_str),
             Some("Workers available")
@@ -339,7 +325,9 @@ mod tests {
                 _tool_call: &rc_core::ToolCall,
                 _context: &rc_query_engine::ProcessUserInputContext,
             ) -> anyhow::Result<rc_query_engine::ToolRunResult> {
-                Ok(rc_query_engine::ToolRunResult::from(rc_core::ToolResult::default()))
+                Ok(rc_query_engine::ToolRunResult::from(
+                    rc_core::ToolResult::default(),
+                ))
             }
         }
 

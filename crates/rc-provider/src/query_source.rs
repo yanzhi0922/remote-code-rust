@@ -3,9 +3,9 @@
 //! Provides types and utilities for tagging queries with their origin,
 //! enabling the API to route and handle requests differently based on source.
 
+use rc_core::{AgentId, SessionId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use rc_core::{AgentId, SessionId};
 
 // ---------------------------------------------------------------------------
 // QuerySource enum

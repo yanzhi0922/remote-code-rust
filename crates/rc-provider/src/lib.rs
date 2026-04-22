@@ -950,8 +950,7 @@ fn build_headers(
         );
     }
 
-    if let Some(query_source_context) =
-        request_context.map(request_context_to_query_source_context)
+    if let Some(query_source_context) = request_context.map(request_context_to_query_source_context)
     {
         headers.insert(
             HeaderName::from_static(query_source::QUERY_SOURCE_HEADER),
@@ -1057,6 +1056,7 @@ fn merge_anthropic_beta_body_param(body: &mut Value, beta: &str) {
 fn to_openai_messages(conversation: &[ConversationEntry]) -> Vec<Value> {
     conversation
         .iter()
+        .filter(|entry| !is_client_only_system_message(entry))
         .map(|entry| match entry.role {
             ConversationRole::System => json!({
                 "role": role_name(&entry.role),
@@ -1185,6 +1185,7 @@ fn to_anthropic_messages(conversation: &[ConversationEntry]) -> (Vec<Value>, Vec
     for entry in conversation
         .iter()
         .filter(|entry| matches!(entry.role, ConversationRole::System))
+        .filter(|entry| !is_client_only_system_message(entry))
     {
         if entry.content_blocks.is_empty() {
             let text = entry.history_text();
@@ -1201,6 +1202,7 @@ fn to_anthropic_messages(conversation: &[ConversationEntry]) -> (Vec<Value>, Vec
     let non_system = conversation
         .iter()
         .filter(|entry| !matches!(entry.role, ConversationRole::System))
+        .filter(|entry| !is_client_only_system_message(entry))
         .collect::<Vec<_>>();
     let mut messages = Vec::new();
     let mut index = 0usize;
@@ -1269,6 +1271,21 @@ fn to_anthropic_messages(conversation: &[ConversationEntry]) -> (Vec<Value>, Vec
     }
 
     (system, messages)
+}
+
+fn is_client_only_system_message(entry: &ConversationEntry) -> bool {
+    matches!(entry.role, ConversationRole::System)
+        && matches!(
+            entry.name.as_deref(),
+            Some(
+                "memory_saved"
+                    | "turn_duration"
+                    | "bridge_status"
+                    | "api_metrics"
+                    | "api_error"
+                    | "agents_killed"
+            )
+        )
 }
 
 fn model_supports_tool_reference(model: Option<&str>) -> bool {
@@ -2669,6 +2686,24 @@ mod tests {
         assert_eq!(system_blocks.len(), 2);
         assert_eq!(system_blocks[0]["text"], "block 1");
         assert_eq!(system_blocks[1]["text"], "block 2");
+    }
+
+    #[test]
+    fn provider_messages_drop_client_only_memory_saved_system_entries() {
+        let mut memory_saved =
+            ConversationEntry::system(r#"{"writtenPaths":["C:/Users/example/.claude/memory.md"]}"#);
+        memory_saved.name = Some("memory_saved".to_owned());
+
+        let openai_messages =
+            to_openai_messages(&[ConversationEntry::system("sys"), memory_saved.clone()]);
+        assert_eq!(openai_messages.len(), 1);
+        assert_eq!(openai_messages[0]["content"], "sys");
+
+        let (system_blocks, anthropic_messages) =
+            to_anthropic_messages(&[ConversationEntry::system("sys"), memory_saved]);
+        assert_eq!(system_blocks.len(), 1);
+        assert_eq!(system_blocks[0]["text"], "sys");
+        assert!(anthropic_messages.is_empty());
     }
 
     #[test]
