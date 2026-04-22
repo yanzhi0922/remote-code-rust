@@ -293,7 +293,9 @@ pub async fn handle_runtime_mcp_list_changed(server_name: &str, surface: McpList
 mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
+    use std::sync::Mutex as StdMutex;
 
+    use once_cell::sync::Lazy;
     use rc_mcp::{
         McpCapabilityMatrix, McpListChangedSurface, McpPeerInfo, McpServerConfig,
         McpServerInspection, McpToolDescriptor, McpTransportConfig,
@@ -301,10 +303,13 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        CachedInspection, RUNTIME_MCP_INSPECTION_CACHE, handle_runtime_mcp_list_changed,
-        inspection_cache_key, invalidate_runtime_mcp_catalog_server,
+        CachedInspection, RUNTIME_MCP_INSPECTION_CACHE, clear_runtime_mcp_catalog_cache,
+        handle_runtime_mcp_list_changed, inspection_cache_key,
+        invalidate_runtime_mcp_catalog_server,
     };
     use crate::RuntimeMcpServerPolicyEntry;
+
+    static MCP_CATALOG_TEST_MUTEX: Lazy<StdMutex<()>> = Lazy::new(|| StdMutex::new(()));
 
     fn policy_entry(server_name: &str, config_path: &str) -> RuntimeMcpServerPolicyEntry {
         RuntimeMcpServerPolicyEntry {
@@ -354,32 +359,49 @@ mod tests {
 
     #[tokio::test]
     async fn invalidate_runtime_mcp_catalog_server_removes_only_matching_server() {
-        let first = policy_entry("alpha", "alpha.toml");
-        let second = policy_entry("beta", "beta.toml");
+        let _guard = MCP_CATALOG_TEST_MUTEX.lock().expect("test mutex");
+        let first = policy_entry("test-invalidate-alpha", "test-invalidate-alpha.toml");
+        let second = policy_entry("test-invalidate-beta", "test-invalidate-beta.toml");
         {
             let mut cache = RUNTIME_MCP_INSPECTION_CACHE.lock().await;
             cache.clear();
-            cache.insert(inspection_cache_key(&first), cached_inspection("alpha"));
-            cache.insert(inspection_cache_key(&second), cached_inspection("beta"));
+            cache.insert(
+                inspection_cache_key(&first),
+                cached_inspection("test-invalidate-alpha"),
+            );
+            cache.insert(
+                inspection_cache_key(&second),
+                cached_inspection("test-invalidate-beta"),
+            );
         }
 
-        invalidate_runtime_mcp_catalog_server("alpha").await;
+        invalidate_runtime_mcp_catalog_server("test-invalidate-alpha").await;
 
         let cache = RUNTIME_MCP_INSPECTION_CACHE.lock().await;
         assert!(!cache.contains_key(&inspection_cache_key(&first)));
         assert!(cache.contains_key(&inspection_cache_key(&second)));
+        drop(cache);
+        clear_runtime_mcp_catalog_cache().await;
     }
 
     #[tokio::test]
     async fn list_changed_invalidates_tools_and_prompts_but_not_resources() {
-        let entry = policy_entry("alpha", "alpha.toml");
+        let _guard = MCP_CATALOG_TEST_MUTEX.lock().expect("test mutex");
+        let entry = policy_entry("test-list-changed-alpha", "test-list-changed-alpha.toml");
         {
             let mut cache = RUNTIME_MCP_INSPECTION_CACHE.lock().await;
             cache.clear();
-            cache.insert(inspection_cache_key(&entry), cached_inspection("alpha"));
+            cache.insert(
+                inspection_cache_key(&entry),
+                cached_inspection("test-list-changed-alpha"),
+            );
         }
 
-        handle_runtime_mcp_list_changed("alpha", McpListChangedSurface::Resources).await;
+        handle_runtime_mcp_list_changed(
+            "test-list-changed-alpha",
+            McpListChangedSurface::Resources,
+        )
+        .await;
         assert!(
             RUNTIME_MCP_INSPECTION_CACHE
                 .lock()
@@ -387,12 +409,14 @@ mod tests {
                 .contains_key(&inspection_cache_key(&entry))
         );
 
-        handle_runtime_mcp_list_changed("alpha", McpListChangedSurface::Prompts).await;
+        handle_runtime_mcp_list_changed("test-list-changed-alpha", McpListChangedSurface::Prompts)
+            .await;
         assert!(
             !RUNTIME_MCP_INSPECTION_CACHE
                 .lock()
                 .await
                 .contains_key(&inspection_cache_key(&entry))
         );
+        clear_runtime_mcp_catalog_cache().await;
     }
 }

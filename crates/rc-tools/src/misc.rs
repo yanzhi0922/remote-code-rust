@@ -194,15 +194,22 @@ pub(crate) async fn lsp_tool(input: &Value, context: &ToolExecutionContext) -> R
 }
 
 pub(crate) fn notebook_edit(input: &Value, context: &ToolExecutionContext) -> Result<String> {
-    let path = input["path"]
-        .as_str()
-        .ok_or_else(|| anyhow!("path is required"))?;
-    let cell_index = input["cell_index"]
-        .as_u64()
-        .ok_or_else(|| anyhow!("cell_index is required"))? as usize;
+    let path = input
+        .get("notebook_path")
+        .or_else(|| input.get("file_path"))
+        .or_else(|| input.get("path"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("notebook_path is required"))?;
     let new_source = input["new_source"]
         .as_str()
         .ok_or_else(|| anyhow!("new_source is required"))?;
+    let edit_mode = input
+        .get("edit_mode")
+        .and_then(Value::as_str)
+        .unwrap_or("replace");
+    if !matches!(edit_mode, "replace" | "insert" | "delete") {
+        return Err(anyhow!("Edit mode must be replace, insert, or delete."));
+    }
 
     let target = super::file_ops::resolve_workspace_path_for_operation(
         context,
@@ -214,47 +221,172 @@ pub(crate) fn notebook_edit(input: &Value, context: &ToolExecutionContext) -> Re
     let mut notebook: Value = serde_json::from_str(&content)
         .with_context(|| format!("failed to parse notebook {}", target.display()))?;
 
+    let notebook_shape = NotebookShape::from_notebook(&notebook);
     let cells = notebook
         .get_mut("cells")
         .and_then(Value::as_array_mut)
         .ok_or_else(|| anyhow!("notebook has no cells array"))?;
 
-    if cell_index >= cells.len() {
+    let cell_index = notebook_cell_index(cells, input, edit_mode)?;
+
+    if edit_mode == "replace" && cell_index == cells.len() {
+        let cell_type = input
+            .get("cell_type")
+            .and_then(Value::as_str)
+            .unwrap_or("code");
+        cells.push(new_notebook_cell(&notebook_shape, new_source, cell_type)?);
+    } else if cell_index >= cells.len() && edit_mode != "insert" {
         return Err(anyhow!(
-            "cell_index {} out of range ({} cells)",
+            "cell index {} out of range ({} cells)",
             cell_index,
             cells.len()
         ));
     }
 
-    let cell = &mut cells[cell_index];
-
-    // Update cell_type if provided
-    if let Some(cell_type) = input["cell_type"].as_str() {
-        cell["cell_type"] = json!(cell_type);
-    }
-
-    // Update source – store as a single string (valid in nbformat)
-    cell["source"] = json!(new_source);
-
-    // Clear outputs for code cells
-    if cell
-        .get("cell_type")
-        .and_then(Value::as_str)
-        .is_some_and(|ct| ct == "code")
-    {
-        cell["outputs"] = json!([]);
-        cell["execution_count"] = Value::Null;
+    match edit_mode {
+        "delete" => {
+            cells.remove(cell_index);
+        }
+        "insert" => {
+            let cell_type = input
+                .get("cell_type")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("Cell type is required when using edit_mode=insert."))?;
+            let insert_index = cell_index.min(cells.len());
+            cells.insert(
+                insert_index,
+                new_notebook_cell(&notebook_shape, new_source, cell_type)?,
+            );
+        }
+        "replace" => {
+            let cell = &mut cells[cell_index];
+            cell["source"] = json!(new_source);
+            if let Some(cell_type) = input.get("cell_type").and_then(Value::as_str) {
+                cell["cell_type"] = json!(cell_type);
+            }
+            if cell
+                .get("cell_type")
+                .and_then(Value::as_str)
+                .is_some_and(|ct| ct == "code")
+            {
+                cell["outputs"] = json!([]);
+                cell["execution_count"] = Value::Null;
+            }
+        }
+        _ => unreachable!("validated edit_mode"),
     }
 
     let output = serde_json::to_string_pretty(&notebook)?;
     std::fs::write(&target, output)?;
 
     Ok(format!(
-        "Updated cell {} in {}",
-        cell_index,
+        "{edit_mode} cell {cell_index} in {}",
         target.display()
     ))
+}
+
+fn notebook_cell_index(cells: &[Value], input: &Value, edit_mode: &str) -> Result<usize> {
+    if let Some(index) = input.get("cell_index").and_then(Value::as_u64) {
+        return Ok(if edit_mode == "insert" {
+            index as usize + 1
+        } else {
+            index as usize
+        });
+    }
+
+    let Some(cell_id) = input.get("cell_id").and_then(Value::as_str) else {
+        if edit_mode == "insert" {
+            return Ok(0);
+        }
+        return Err(anyhow!(
+            "Cell ID must be specified when not inserting a new cell."
+        ));
+    };
+
+    if let Some(found) = cells
+        .iter()
+        .position(|cell| cell.get("id").and_then(Value::as_str) == Some(cell_id))
+    {
+        return Ok(if edit_mode == "insert" {
+            found + 1
+        } else {
+            found
+        });
+    }
+
+    if let Some(index) = parse_cell_id(cell_id) {
+        return Ok(if edit_mode == "insert" {
+            index + 1
+        } else {
+            index
+        });
+    }
+
+    Err(anyhow!(
+        "Cell with ID \"{}\" not found in notebook.",
+        cell_id
+    ))
+}
+
+fn parse_cell_id(cell_id: &str) -> Option<usize> {
+    let suffix = cell_id.strip_prefix("cell-")?;
+    suffix.parse::<usize>().ok()
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NotebookShape {
+    nbformat: u64,
+    nbformat_minor: u64,
+}
+
+impl NotebookShape {
+    fn from_notebook(notebook: &Value) -> Self {
+        Self {
+            nbformat: notebook
+                .get("nbformat")
+                .and_then(Value::as_u64)
+                .unwrap_or(4),
+            nbformat_minor: notebook
+                .get("nbformat_minor")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        }
+    }
+
+    fn includes_cell_ids(self) -> bool {
+        self.nbformat > 4 || (self.nbformat == 4 && self.nbformat_minor >= 5)
+    }
+}
+
+fn new_notebook_cell(shape: &NotebookShape, new_source: &str, cell_type: &str) -> Result<Value> {
+    if !matches!(cell_type, "code" | "markdown") {
+        return Err(anyhow!("cell_type must be code or markdown"));
+    }
+
+    let cell_id = shape
+        .includes_cell_ids()
+        .then(|| format!("cell-{}", uuid::Uuid::new_v4().simple()));
+
+    let mut cell = if cell_type == "markdown" {
+        json!({
+            "cell_type": "markdown",
+            "source": new_source,
+            "metadata": {},
+        })
+    } else {
+        json!({
+            "cell_type": "code",
+            "source": new_source,
+            "metadata": {},
+            "execution_count": null,
+            "outputs": [],
+        })
+    };
+
+    if let Some(cell_id) = cell_id {
+        cell["id"] = json!(cell_id);
+    }
+    Ok(cell)
 }
 
 pub(crate) fn skill_discover(input: &Value, context: &ToolExecutionContext) -> Result<String> {

@@ -66,7 +66,12 @@ pub fn analyse_dependencies(calls: &[OrchestratedToolCall]) -> Vec<ToolDependenc
     // Group by file_path input
     let mut file_groups: HashMap<String, Vec<usize>> = HashMap::new();
     for (i, call) in calls.iter().enumerate() {
-        if let Some(fp) = call.input.get("file_path").and_then(|v| v.as_str()) {
+        if let Some(fp) = call
+            .input
+            .get("file_path")
+            .or_else(|| call.input.get("notebook_path"))
+            .and_then(|v| v.as_str())
+        {
             file_groups.entry(fp.to_owned()).or_default().push(i);
         }
     }
@@ -107,6 +112,7 @@ fn is_write_like(name: &str) -> bool {
         "write_to_file"
             | "apply_diff"
             | "edit_file"
+            | "notebook_edit"
             | "create_file"
             | "file_edit"
             | "bash"

@@ -306,9 +306,12 @@ mod tests {
 
     #[test]
     fn team_delete_returns_noop_when_session_has_no_team() {
-        let input = json!({});
-        let context = test_context();
-        let result = team_delete(&input, &context).expect("team_delete should succeed");
+        let result = with_base_dir_override(PathBuf::from("/tmp"), || {
+            let input = json!({});
+            let context = test_context();
+            team_delete(&input, &context)
+        })
+        .expect("team_delete should succeed");
         let parsed: Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(parsed["success"], true);
         assert!(

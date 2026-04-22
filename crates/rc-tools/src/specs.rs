@@ -33,12 +33,11 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string"},
-                    "start_line": {"type": "integer", "minimum": 1},
-                    "end_line": {"type": "integer", "minimum": 1},
-                    "max_chars": {"type": "integer", "minimum": 1, "maximum": 50000}
+                    "file_path": {"type": "string", "description": "The absolute path to the file to read"},
+                    "offset": {"type": "integer", "minimum": 1, "description": "The line number to start reading from. Only provide if reading a specific range."},
+                    "limit": {"type": "integer", "minimum": 1, "description": "The number of lines to read. Only provide if reading a specific range."}
                 },
-                "required": ["path"],
+                "required": ["file_path"],
                 "additionalProperties": false,
             }),
         },
@@ -68,11 +67,10 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string"},
-                    "content": {"type": "string"},
-                    "append": {"type": "boolean"}
+                    "file_path": {"type": "string", "description": "The absolute path to the file to write (must be absolute, not relative)"},
+                    "content": {"type": "string", "description": "The content to write to the file"}
                 },
-                "required": ["path", "content"],
+                "required": ["file_path", "content"],
                 "additionalProperties": false,
             }),
         },
@@ -85,12 +83,12 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string"},
+                    "file_path": {"type": "string"},
                     "search": {"type": "string"},
                     "replace": {"type": "string"},
                     "all": {"type": "boolean"}
                 },
-                "required": ["path", "search", "replace"],
+                "required": ["file_path", "search", "replace"],
                 "additionalProperties": false,
             }),
         },
@@ -103,23 +101,12 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string"},
-                    "edits": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "search": {"type": "string"},
-                                "replace": {"type": "string"},
-                                "all": {"type": "boolean"}
-                            },
-                            "required": ["search", "replace"],
-                            "additionalProperties": false
-                        }
-                    },
-                    "create_if_missing": {"type": "boolean"}
+                    "file_path": {"type": "string", "description": "The absolute path to the file to modify"},
+                    "old_string": {"type": "string", "description": "The text to replace"},
+                    "new_string": {"type": "string", "description": "The text to replace it with (must be different from old_string)"},
+                    "replace_all": {"type": "boolean", "description": "Replace all occurrences of old_string (default false)"}
                 },
-                "required": ["path", "edits"],
+                "required": ["file_path", "old_string", "new_string"],
                 "additionalProperties": false,
             }),
         },
@@ -463,12 +450,13 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string"},
-                    "cell_index": {"type": "integer", "minimum": 0},
-                    "new_source": {"type": "string"},
-                    "cell_type": {"type": "string", "enum": ["code", "markdown"]}
+                    "notebook_path": {"type": "string", "description": "The absolute path to the Jupyter notebook file to edit (must be absolute, not relative)"},
+                    "cell_id": {"type": "string", "description": "The ID of the cell to edit. When inserting a new cell, the new cell will be inserted after the cell with this ID, or at the beginning if not specified."},
+                    "new_source": {"type": "string", "description": "The new source for the cell"},
+                    "cell_type": {"type": "string", "enum": ["code", "markdown"], "description": "The type of the cell (code or markdown). If not specified, it defaults to the current cell type. If using edit_mode=insert, this is required."},
+                    "edit_mode": {"type": "string", "enum": ["replace", "insert", "delete"], "description": "The type of edit to make (replace, insert, delete). Defaults to replace."}
                 },
-                "required": ["path", "cell_index", "new_source"],
+                "required": ["notebook_path", "new_source"],
                 "additionalProperties": false,
             }),
         },
@@ -1289,6 +1277,82 @@ mod tests {
                 spec.description, prompt,
                 "{tool_name} should use the dynamic parity prompt generator"
             );
+        }
+    }
+
+    #[test]
+    fn filesystem_tool_schemas_match_research_path_fields() {
+        let specs = builtin_tool_specs();
+        let spec_by_name = |name: &str| {
+            specs
+                .iter()
+                .find(|spec| spec.name == name)
+                .unwrap_or_else(|| panic!("missing tool spec for {name}"))
+        };
+        let properties_for = |name: &str| {
+            spec_by_name(name)
+                .input_schema
+                .get("properties")
+                .and_then(|value| value.as_object())
+                .unwrap_or_else(|| panic!("missing properties object for {name}"))
+        };
+        let required_for = |name: &str| {
+            spec_by_name(name)
+                .input_schema
+                .get("required")
+                .and_then(|value| value.as_array())
+                .expect("required array")
+                .iter()
+                .filter_map(|value| value.as_str())
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+
+        for name in ["read_file", "write_file", "replace_in_file", "edit_file"] {
+            let properties = properties_for(name);
+            assert!(properties.contains_key("file_path"), "{name}");
+            assert!(!properties.contains_key("path"), "{name}");
+            assert!(required_for(name).contains("file_path"), "{name}");
+        }
+
+        let read = properties_for("read_file");
+        assert!(read.contains_key("offset"));
+        assert!(read.contains_key("limit"));
+        assert!(!read.contains_key("start_line"));
+        assert!(!read.contains_key("end_line"));
+        assert!(!read.contains_key("max_chars"));
+
+        let write = properties_for("write_file");
+        assert!(!write.contains_key("append"));
+
+        let edit = properties_for("edit_file");
+        for field in ["old_string", "new_string", "replace_all"] {
+            assert!(edit.contains_key(field), "edit_file should expose {field}");
+        }
+        assert!(!edit.contains_key("edits"));
+        assert!(!edit.contains_key("create_if_missing"));
+
+        let notebook = properties_for("notebook_edit");
+        for field in [
+            "notebook_path",
+            "cell_id",
+            "new_source",
+            "cell_type",
+            "edit_mode",
+        ] {
+            assert!(
+                notebook.contains_key(field),
+                "notebook_edit should expose {field}"
+            );
+        }
+        assert!(!notebook.contains_key("path"));
+        assert!(!notebook.contains_key("file_path"));
+        assert!(!notebook.contains_key("cell_index"));
+        assert!(required_for("notebook_edit").contains("notebook_path"));
+
+        for name in ["glob", "grep", "list_directory"] {
+            let properties = properties_for(name);
+            assert!(properties.contains_key("path"), "{name}");
+            assert!(!properties.contains_key("file_path"), "{name}");
         }
     }
 
