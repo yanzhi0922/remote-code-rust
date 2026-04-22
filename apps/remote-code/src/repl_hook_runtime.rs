@@ -96,8 +96,10 @@ pub(crate) fn register_repl_runtime_hooks(
               _request: rc_query_engine::stop_hooks::StopHookRequest| {
             let resources = resources.clone();
             Box::pin(async move {
-                if hook_context.query_source == QuerySource::ReplMainThread
-                    && hook_context.agent_id.is_none()
+                if matches!(
+                    hook_context.query_source,
+                    QuerySource::ReplMainThread | QuerySource::Sdk
+                ) && hook_context.agent_id.is_none()
                 {
                     let append_memory_saved: AppendMemorySavedFn = {
                         let store = resources.store.clone();

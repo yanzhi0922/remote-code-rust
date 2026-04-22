@@ -149,7 +149,7 @@ impl Default for CompatExecutionOptions {
             persist_runtime_context: true,
             persist_tool_results_dir: None,
             hook_options: HookExecutionOptions::persistent(),
-            query_source: QuerySource::ReplMainThread,
+            query_source: QuerySource::User,
             agent_id: None,
             fork_snapshot: None,
         }
@@ -2092,6 +2092,15 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
     conversation: &mut Vec<ConversationEntry>,
     prompt: &str,
 ) -> Result<PromptRunOutcome> {
+    let query_source = if matches!(
+        config.input_format,
+        rc_core::InputFormat::StreamJson
+    ) || matches!(config.output_format, rc_core::OutputFormat::StreamJson)
+    {
+        QuerySource::Sdk
+    } else {
+        QuerySource::ReplMainThread
+    };
     run_prompt_with_query_engine_compat_overrides(
         config,
         store,
@@ -2104,7 +2113,10 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
         conversation,
         prompt,
         config_prompt_runtime_overrides(config),
-        CompatExecutionOptions::default(),
+        CompatExecutionOptions {
+            query_source,
+            ..CompatExecutionOptions::default()
+        },
     )
     .await
 }
