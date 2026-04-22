@@ -88,6 +88,7 @@ impl PermissionBroker for SessionMemoryPermissionBroker {
                 let candidate = request
                     .tool_input
                     .get("path")
+                    .or_else(|| request.tool_input.get("file_path"))
                     .and_then(Value::as_str)
                     .map(PathBuf::from);
                 if candidate
@@ -290,10 +291,6 @@ pub(crate) async fn maybe_spawn_session_memory_update(
     conversation: &[ConversationEntry],
     fork_snapshot: Option<ForkCacheSafeParams>,
 ) {
-    if config.print_mode {
-        return;
-    }
-
     let gate_enabled = match session_memory_gate_enabled(config) {
         Ok(enabled) => enabled,
         Err(_) => false,
@@ -354,9 +351,19 @@ fn fresh_read_session_memory_content(config: &RuntimeConfig) -> Result<String> {
     Ok(load_session_memory_content(config)?.unwrap_or_default())
 }
 
-fn setup_session_memory_file(config: &RuntimeConfig) -> Result<SessionMemoryFileSetup> {
+fn setup_session_memory_file(
+    config: &RuntimeConfig,
+    store: &SessionStore,
+) -> Result<SessionMemoryFileSetup> {
     let summary_path = ensure_session_memory_file(config)?;
     let current_memory = fresh_read_session_memory_content(config)?;
+    store.append_named_event(
+        config.session_id,
+        "tengu_session_memory_file_read",
+        json!({
+            "content_length": current_memory.len(),
+        }),
+    )?;
     Ok(SessionMemoryFileSetup {
         summary_path,
         current_memory,
@@ -388,7 +395,7 @@ async fn run_session_memory_update(
     fork_snapshot: ForkCacheSafeParams,
     state: Arc<std::sync::Mutex<SessionMemoryRuntimeState>>,
 ) -> Result<()> {
-    let file_setup = setup_session_memory_file(config)?;
+    let file_setup = setup_session_memory_file(config, store)?;
     let prompt = build_session_memory_extraction_prompt(
         config,
         &file_setup.current_memory,
@@ -439,6 +446,8 @@ async fn run_session_memory_update(
         json!({
             "input_tokens": outcome.usage.input_tokens,
             "output_tokens": outcome.usage.output_tokens,
+            "cache_read_input_tokens": outcome.cache_read_input_tokens,
+            "cache_creation_input_tokens": outcome.cache_creation_input_tokens,
             "config_min_message_tokens_to_init": guard.shared.config.minimum_message_tokens_to_init,
             "config_min_tokens_between_update": guard.shared.config.minimum_tokens_between_update,
             "config_tool_calls_between_updates": guard.shared.config.tool_calls_between_updates,
@@ -488,6 +497,24 @@ mod tests {
             })
             .await;
         assert!(allow.allowed);
+
+        let allow_file_path = broker
+            .decide(PermissionRequest {
+                tool_name: "edit_file".to_owned(),
+                permission_class: None,
+                tool_input: json!({
+                    "file_path": summary_path,
+                    "edits": [{"search": "# Session Title", "replace": "# Session Title"}]
+                }),
+                working_directory: None,
+                tool_use_id: None,
+                title: None,
+                description: None,
+                blocked_path: None,
+                permission_suggestions: Vec::new(),
+            })
+            .await;
+        assert!(allow_file_path.allowed);
     }
 
     #[tokio::test]

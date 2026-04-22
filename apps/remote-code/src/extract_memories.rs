@@ -91,6 +91,8 @@ struct ExtractionRunOutcome {
     files_written: usize,
     turn_count: u32,
     usage: UsagePayload,
+    cache_read_input_tokens: u64,
+    cache_creation_input_tokens: u64,
     duration_ms: u64,
 }
 
@@ -408,8 +410,8 @@ async fn run_extract_memories_once(
         json!({
             "input_tokens": extraction.usage.input_tokens,
             "output_tokens": extraction.usage.output_tokens,
-            "cache_read_input_tokens": 0,
-            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": extraction.cache_read_input_tokens,
+            "cache_creation_input_tokens": extraction.cache_creation_input_tokens,
             "message_count": new_message_count,
             "turn_count": extraction.turn_count,
             "files_written": extraction.files_written,
@@ -495,6 +497,8 @@ async fn run_extraction_child(
         files_written: written_paths.len(),
         turn_count: outcome.num_turns,
         usage: outcome.usage,
+        cache_read_input_tokens: outcome.cache_read_input_tokens,
+        cache_creation_input_tokens: outcome.cache_creation_input_tokens,
         duration_ms: outcome.duration_ms.max(
             u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         ),

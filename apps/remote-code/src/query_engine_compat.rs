@@ -160,6 +160,8 @@ impl Default for CompatExecutionOptions {
 pub(crate) struct ForkedPromptRunOutcome {
     pub(crate) messages: Vec<ConversationEntry>,
     pub(crate) usage: UsagePayload,
+    pub(crate) cache_read_input_tokens: u64,
+    pub(crate) cache_creation_input_tokens: u64,
     pub(crate) num_turns: u32,
     pub(crate) duration_ms: u64,
 }
@@ -2399,6 +2401,8 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         "protocol": config.provider.protocol.as_str(),
         "turns": engine.state().turn,
         "tool_calls": total_tool_calls,
+        "cache_read_input_tokens": engine.state().usage.cache_read_input_tokens,
+        "cache_creation_input_tokens": engine.state().usage.cache_creation_input_tokens,
         "request_id": latest_request_id,
     });
 
@@ -2625,6 +2629,16 @@ pub(crate) async fn run_no_persist_forked_query(
     Ok(ForkedPromptRunOutcome {
         messages: conversation,
         usage: outcome.usage,
+        cache_read_input_tokens: outcome
+            .model_usage
+            .get("cache_read_input_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_default(),
+        cache_creation_input_tokens: outcome
+            .model_usage
+            .get("cache_creation_input_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_default(),
         num_turns: outcome.num_turns,
         duration_ms: outcome.duration_ms,
     })
