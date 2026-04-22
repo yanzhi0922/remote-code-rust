@@ -16,6 +16,7 @@ mod review_cli;
 #[allow(dead_code)]
 mod runtime_hooks;
 mod session_file_access;
+mod session_memory_runtime;
 mod sessions;
 mod skills_cli;
 mod status;

@@ -73,6 +73,7 @@ pub struct ResolvedRuntimeSettings {
     pub fallback_model: Option<String>,
     pub output_style: Option<String>,
     pub language: Option<String>,
+    pub auto_compact_enabled: Option<bool>,
     pub auto_memory_enabled: Option<bool>,
     pub auto_memory_directory: Option<String>,
     pub setting_sources: Vec<String>,
@@ -113,6 +114,9 @@ struct SettingsDocument {
     output_style: Option<String>,
     #[serde(default)]
     language: Option<String>,
+    #[serde(default)]
+    #[serde(alias = "autoCompactEnabled")]
+    auto_compact_enabled: Option<bool>,
     #[serde(default)]
     #[serde(alias = "autoMemoryEnabled")]
     auto_memory_enabled: Option<bool>,
@@ -287,6 +291,9 @@ pub fn load_runtime_settings(paths: &[PathBuf]) -> Result<ResolvedRuntimeSetting
         }
         if let Some(language) = document.language {
             resolved.language = normalize_optional_string(Some(language));
+        }
+        if let Some(auto_compact_enabled) = document.auto_compact_enabled {
+            resolved.auto_compact_enabled = Some(auto_compact_enabled);
         }
         if let Some(auto_memory_enabled) = document.auto_memory_enabled {
             resolved.auto_memory_enabled = Some(auto_memory_enabled);

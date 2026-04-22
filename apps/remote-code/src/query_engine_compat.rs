@@ -35,7 +35,7 @@ use rc_provider::{
 };
 use rc_query_engine::{
     EffortLevel, ProcessUserInputContext, ProviderInvocationMode, QueryCheckpointKind, QueryEngine,
-    QueryEngineConfig, QueryObserver, QueryObserverEvent, ToolRunResult, ToolRunner,
+    QueryEngineConfig, QueryObserver, QueryObserverEvent, QuerySource, ToolRunResult, ToolRunner,
 };
 use rc_runtime_prompt::{
     PromptRuntimeOverrides, RuntimePromptSettings, clear_runtime_system_prompt_state,
@@ -80,6 +80,7 @@ use crate::hooks::{
     HookExecutionOptions, HookRunState, RuntimeHookDiscovery, apply_post_tool_hooks_with_options,
     apply_pre_tool_use_hooks_with_options,
 };
+use crate::session_memory_runtime::maybe_spawn_session_memory_update;
 
 struct CompatSharedState {
     config: Mutex<RuntimeConfig>,
@@ -101,6 +102,7 @@ pub(crate) struct CompatExecutionOptions {
     pub(crate) persist_tool_results_dir: Option<PathBuf>,
     pub(crate) hook_options: HookExecutionOptions,
     pub(crate) run_background_extract_memories: bool,
+    pub(crate) query_source: QuerySource,
 }
 
 impl Default for CompatExecutionOptions {
@@ -112,11 +114,14 @@ impl Default for CompatExecutionOptions {
             persist_tool_results_dir: None,
             hook_options: HookExecutionOptions::persistent(),
             run_background_extract_memories: false,
+            query_source: QuerySource::User,
         }
     }
 }
 
 struct CompatObserver {
+    config: RuntimeConfig,
+    backend: Arc<dyn ConversationBackend>,
     store: Arc<SessionStore>,
     shared: Arc<CompatSharedState>,
     event_sink: Option<PromptEventSink>,
@@ -1619,6 +1624,20 @@ impl QueryObserver for CompatObserver {
                         text: assistant_entry.text.clone(),
                     });
                 }
+                if self.execution.query_source == QuerySource::User {
+                    let conversation_snapshot = {
+                        let conversation = self.shared.conversation.lock().await;
+                        conversation.clone()
+                    };
+                    maybe_spawn_session_memory_update(
+                        &self.config,
+                        self.store.as_ref(),
+                        self.backend.clone(),
+                        self.shared.discovered_tool_scope.clone(),
+                        &conversation_snapshot,
+                    )
+                    .await;
+                }
                 if self.should_persist() {
                     if assistant_entry.tool_calls.is_empty() {
                         self.store.clear_resume_state(session_id)?;
@@ -2080,6 +2099,8 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         latest_request_id: Mutex::new(None),
     });
     let observer = Arc::new(CompatObserver {
+        config: config.clone(),
+        backend: backend.clone(),
         store: compat_store.clone(),
         shared: shared.clone(),
         event_sink: event_sink.clone(),
@@ -2130,6 +2151,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         &model_name,
     );
     process_context.effort = parse_effort(config.effort.as_deref());
+    process_context.query_source = execution.query_source;
     process_context.discovered_skills = runtime_extensions
         .skills
         .into_iter()
@@ -2436,7 +2458,7 @@ mod tests {
     use rc_provider::{
         ConversationBackend, DiscoveredToolScope, ProviderCompatBackend, StreamingCallbacks,
     };
-    use rc_query_engine::{QueryObserver, QueryObserverEvent};
+    use rc_query_engine::{QueryObserver, QueryObserverEvent, QuerySource};
     use rc_session::{SessionStore, plan_state::PlanModeState};
     use rc_tools::mcp_catalog::clear_runtime_mcp_catalog_cache;
     use rc_tools::{
@@ -3295,6 +3317,8 @@ mod tests {
             .expect("old entry");
 
         let observer = CompatObserver {
+            config: config.clone(),
+            backend: Arc::new(RecordingBackend::default()),
             store: Arc::new(SessionStore::open(config.paths.clone()).expect("observer store")),
             shared: Arc::new(CompatSharedState {
                 config: tokio::sync::Mutex::new(config.clone()),
@@ -4111,6 +4135,7 @@ while True:
                 persist_tool_results_dir: Some(tempdir.path().join("ephemeral-tool-results")),
                 hook_options: crate::hooks::HookExecutionOptions::ephemeral(),
                 run_background_extract_memories: false,
+                query_source: QuerySource::User,
             },
         )
         .await
@@ -4548,6 +4573,8 @@ while True:
                 .push(event);
         });
         let observer = CompatObserver {
+            config: config.clone(),
+            backend: Arc::new(RecordingBackend::default()),
             store: Arc::new(SessionStore::open(config.paths.clone()).expect("store")),
             shared: Arc::new(CompatSharedState {
                 config: tokio::sync::Mutex::new(config.clone()),

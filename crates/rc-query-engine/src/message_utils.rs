@@ -253,6 +253,7 @@ mod tests {
             content: "file1.txt".into(),
             is_error: false,
             content_blocks: Vec::new(),
+            follow_up_user_blocks: Vec::new(),
         };
         let msg = create_tool_use_summary(&tool_call, &result);
         assert!(matches!(
@@ -390,6 +391,7 @@ mod tests {
             content: "ok".into(),
             is_error: false,
             content_blocks: Vec::new(),
+            follow_up_user_blocks: Vec::new(),
         };
         let summary = create_tool_use_summary(&tool_call, &result);
         assert!(is_tool_summary(&summary));

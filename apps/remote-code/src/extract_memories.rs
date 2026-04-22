@@ -17,6 +17,7 @@ use rc_core::{
 use rc_permissions::{PermissionBroker, PermissionDecision, PermissionRequest};
 use rc_protocol::UsagePayload;
 use rc_provider::{ConversationBackend, DiscoveredToolScope};
+use rc_query_engine::QuerySource;
 use rc_runtime_prompt::{
     RuntimePromptSettings, build_extract_memory_auto_only_prompt,
     build_extract_memory_combined_prompt, format_auto_memory_manifest, runtime_env_defined_falsy,
@@ -487,6 +488,7 @@ async fn run_extraction_child(
             persist_tool_results_dir: Some(tool_results_dir),
             hook_options: HookExecutionOptions::ephemeral(),
             run_background_extract_memories: false,
+            query_source: QuerySource::Agent,
         },
     )
     .await?;
