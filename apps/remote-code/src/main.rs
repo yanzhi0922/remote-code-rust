@@ -25,8 +25,10 @@ mod worktree_cli;
 
 use std::{
     fs,
+    future::Future,
     io::{self, IsTerminal, Read},
     path::{Path, PathBuf},
+    pin::Pin,
 };
 
 use anyhow::{Result, anyhow};
@@ -66,8 +68,27 @@ pub(crate) struct ResolvedPromptOverrides {
     pub(crate) append_system_prompt: Option<String>,
 }
 
+type CommandFuture<'a> = Pin<Box<dyn Future<Output = Result<()>> + 'a>>;
+
+fn main() -> Result<()> {
+    std::thread::Builder::new()
+        .name("remote-code-main".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(run_app)?
+        .join()
+        .map_err(|panic| {
+            if let Some(message) = panic.downcast_ref::<&str>() {
+                anyhow!("remote-code main thread panicked: {message}")
+            } else if let Some(message) = panic.downcast_ref::<String>() {
+                anyhow!("remote-code main thread panicked: {message}")
+            } else {
+                anyhow!("remote-code main thread panicked")
+            }
+        })?
+}
+
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn run_app() -> Result<()> {
     install_tracing("remote_code_rust", false)?;
     let permission_mode_explicit = permission_mode_override_was_explicit();
     let cli = Cli::parse();
@@ -134,67 +155,87 @@ async fn main() -> Result<()> {
         run_first_run_wizard(&mut config)?;
     }
 
-    let result = match cli.command {
-        Some(Commands::Doctor(args)) => run_doctor(&config, args).await,
-        Some(Commands::Status(args)) => run_status(&config, &store, args),
-        Some(Commands::Hooks { command }) => run_hooks(&config, command).await,
-        Some(Commands::Remote { command }) => run_remote(command).await,
-        Some(Commands::Sessions { command }) => run_sessions(&store, command),
-        Some(Commands::Review(args)) => run_review(&config, args),
-        Some(Commands::Worktree { command }) => run_worktree(&config, command),
-        Some(Commands::Tasks { command }) => run_tasks(&config, command),
-        Some(Commands::Export(args)) => run_export(&store, args),
-        Some(Commands::Agents { command }) => run_agents(&config, command).await,
-        Some(Commands::Plugins { command }) => run_plugins(&config, command).await,
-        Some(Commands::Mcp { command }) => run_mcp(&config, command).await,
-        Some(Commands::Skills { command }) => run_skills(&config, command),
-        Some(Commands::Migrate { command }) => run_migrate(&config, command),
-        Some(Commands::Resume(args)) => {
-            let prompt = resolve_prompt_input(&config, args.prompt)?;
-            if should_run_headless(&config) {
-                run_headless(&config, prompt).await
-            } else if config.print_mode {
-                let prompt = prompt.ok_or_else(|| {
-                    anyhow!(
-                        "Input must be provided either through stdin or as a prompt argument when using --print"
-                    )
-                })?;
-                run_oneshot_text(&mut config, &store, prompt).await
-            } else if let Some(prompt) = prompt {
-                run_oneshot_text(&mut config, &store, prompt).await
-            } else {
-                run_interactive_shell(config.clone(), &store).await
-            }
+    let prompt_parts = cli.prompt;
+    let command = cli.command;
+    let result = dispatch_command(command, prompt_parts, &mut config, &store).await;
+    drain_pending_extractions(std::time::Duration::from_secs(60)).await;
+    result
+}
+
+fn dispatch_command<'a>(
+    command: Option<Commands>,
+    prompt_parts: Vec<String>,
+    config: &'a mut rc_config::RuntimeConfig,
+    store: &'a SessionStore,
+) -> CommandFuture<'a> {
+    match command {
+        Some(Commands::Doctor(args)) => Box::pin(async move { run_doctor(config, args).await }),
+        Some(Commands::Status(args)) => Box::pin(async move { run_status(config, store, args) }),
+        Some(Commands::Hooks { command }) => {
+            Box::pin(async move { run_hooks(config, command).await })
         }
-        Some(Commands::Tui) => rc_tui::run_tui_app(config.clone(), &store).await,
-        Some(Commands::Ssh(args)) => run_ssh(args).await,
-        Some(Commands::Update { command }) => {
+        Some(Commands::Remote { command }) => Box::pin(async move { run_remote(command).await }),
+        Some(Commands::Sessions { command }) => {
+            Box::pin(async move { run_sessions(store, command) })
+        }
+        Some(Commands::Review(args)) => Box::pin(async move { run_review(config, args) }),
+        Some(Commands::Worktree { command }) => {
+            Box::pin(async move { run_worktree(config, command) })
+        }
+        Some(Commands::Tasks { command }) => Box::pin(async move { run_tasks(config, command) }),
+        Some(Commands::Export(args)) => Box::pin(async move { run_export(store, args) }),
+        Some(Commands::Agents { command }) => {
+            Box::pin(async move { run_agents(config, command).await })
+        }
+        Some(Commands::Plugins { command }) => {
+            Box::pin(async move { run_plugins(config, command).await })
+        }
+        Some(Commands::Mcp { command }) => Box::pin(async move { run_mcp(config, command).await }),
+        Some(Commands::Skills { command }) => {
+            Box::pin(async move { run_skills(config, command) })
+        }
+        Some(Commands::Migrate { command }) => {
+            Box::pin(async move { run_migrate(config, command) })
+        }
+        Some(Commands::Resume(args)) => Box::pin(async move {
+            run_session_entry(config, store, resolve_prompt_input(config, args.prompt)?).await
+        }),
+        Some(Commands::Tui) => Box::pin(async move { rc_tui::run_tui_app(config.clone(), store).await }),
+        Some(Commands::Ssh(args)) => Box::pin(async move { run_ssh(args).await }),
+        Some(Commands::Update { command }) => Box::pin(async move {
             use cli::UpdateCommand;
             match command {
                 UpdateCommand::Check => updater::run_check().await,
                 UpdateCommand::Run => updater::run_update().await,
             }
-        }
-        None => {
-            let prompt = resolve_prompt_input(&config, cli.prompt)?;
-            if should_run_headless(&config) {
-                run_headless(&config, prompt).await
-            } else if config.print_mode {
-                let prompt = prompt.ok_or_else(|| {
-                    anyhow!(
-                        "Input must be provided either through stdin or as a prompt argument when using --print"
-                    )
-                })?;
-                run_oneshot_text(&mut config, &store, prompt).await
-            } else if let Some(prompt) = prompt {
-                run_oneshot_text(&mut config, &store, prompt).await
-            } else {
-                run_interactive_shell(config.clone(), &store).await
-            }
-        }
-    };
-    drain_pending_extractions(std::time::Duration::from_secs(60)).await;
-    result
+        }),
+        None => Box::pin(async move {
+            run_session_entry(config, store, resolve_prompt_input(config, prompt_parts)?).await
+        }),
+    }
+}
+
+async fn run_session_entry(
+    config: &mut rc_config::RuntimeConfig,
+    store: &SessionStore,
+    prompt: Option<String>,
+) -> Result<()> {
+    if should_run_headless(config) {
+        return run_headless(config, prompt).await;
+    }
+    if config.print_mode {
+        let prompt = prompt.ok_or_else(|| {
+            anyhow!(
+                "Input must be provided either through stdin or as a prompt argument when using --print"
+            )
+        })?;
+        return run_oneshot_text(config, store, prompt).await;
+    }
+    if let Some(prompt) = prompt {
+        run_oneshot_text(config, store, prompt).await
+    } else {
+        run_interactive_shell(config.clone(), store).await
+    }
 }
 
 fn resolve_resume_session(
