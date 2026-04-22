@@ -686,6 +686,21 @@ pub(crate) fn initialize_conversation(
     })
 }
 
+pub(crate) async fn prepare_prompt_runtime_state(
+    store: &SessionStore,
+    config: &RuntimeConfig,
+    discovered_tool_scope: &DiscoveredToolScope,
+    discovery: &RuntimeHookDiscovery,
+    title_hint: Option<&str>,
+) -> Result<(Vec<ConversationEntry>, HookRunState)> {
+    let mut conversation = initialize_conversation(store, config, title_hint)?;
+    restore_discovered_tool_scope(store, config.session_id, discovered_tool_scope)?;
+    let mut hook_state = HookRunState::load(store, config.session_id)?;
+    ensure_session_start_hooks(discovery, config, store, &mut conversation, &mut hook_state)
+        .await?;
+    Ok((conversation, hook_state))
+}
+
 pub(crate) fn has_unanswered_user_prompt(conversation: &[ConversationEntry], prompt: &str) -> bool {
     let normalized = prompt.trim();
     if normalized.is_empty() {
@@ -1198,15 +1213,12 @@ pub(crate) async fn run_oneshot_text(
     let (plan_mode_controller, broker) = build_runtime_plan_mode(config, store)?;
     let _plan_mode_runtime = install_plan_mode_runtime(plan_mode_controller)?;
     let discovery = discover_runtime_hooks(config, &[]);
-    let mut conversation = initialize_conversation(store, config, Some(&prompt))?;
-    restore_discovered_tool_scope(store, config.session_id, &discovered_tool_scope)?;
-    let mut hook_state = HookRunState::load(store, config.session_id)?;
-    ensure_session_start_hooks(
-        &discovery,
-        config,
+    let (mut conversation, mut hook_state) = prepare_prompt_runtime_state(
         store,
-        &mut conversation,
-        &mut hook_state,
+        config,
+        &discovered_tool_scope,
+        &discovery,
+        Some(&prompt),
     )
     .await?;
     let response = run_prompt(

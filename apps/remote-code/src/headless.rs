@@ -27,13 +27,11 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::conversation::{
-    PromptEventSink, PromptStreamEvent, discover_runtime_extensions, initialize_conversation,
-    restore_discovered_tool_scope, run_prompt,
+    PromptEventSink, PromptRunOutcome, PromptStreamEvent, discover_runtime_extensions,
+    prepare_prompt_runtime_state, run_prompt,
 };
 use crate::extract_memories::drain_pending_extractions;
-use crate::hooks::{
-    HookRunState, RuntimeHookDiscovery, discover_runtime_hooks, ensure_session_start_hooks,
-};
+use crate::hooks::{HookRunState, RuntimeHookDiscovery, discover_runtime_hooks};
 use crate::status::build_runtime_status_snapshot;
 
 #[allow(clippy::too_many_lines)]
@@ -107,19 +105,12 @@ pub(crate) async fn run_headless(
         );
         let discovered_tool_scope = backend.discovered_tool_scope();
         let discovery = discover_runtime_hooks(&processor_config, &[]);
-        let mut conversation = initialize_conversation(&processor_store, &processor_config, None)?;
-        restore_discovered_tool_scope(
+        let (mut conversation, mut hook_state) = prepare_prompt_runtime_state(
             &processor_store,
-            processor_config.session_id,
-            &discovered_tool_scope,
-        )?;
-        let mut hook_state = HookRunState::load(&processor_store, processor_config.session_id)?;
-        ensure_session_start_hooks(
-            &discovery,
             &processor_config,
-            &processor_store,
-            &mut conversation,
-            &mut hook_state,
+            &discovered_tool_scope,
+            &discovery,
+            None,
         )
         .await?;
         while let Some(prompt) = prompt_rx.recv().await {
@@ -198,6 +189,17 @@ pub(crate) async fn run_headless(
     }
     drop(prompt_tx);
     processor.await??;
+    Ok(())
+}
+
+pub(crate) async fn run_headless_text_print(
+    config: &mut RuntimeConfig,
+    store: &SessionStore,
+    prompt: String,
+) -> Result<()> {
+    let outcome = run_headless_text_prompt_once(config, store, &prompt).await?;
+    println!("{}", outcome.text);
+    drain_pending_extractions(std::time::Duration::from_secs(60)).await;
     Ok(())
 }
 
@@ -455,6 +457,44 @@ async fn run_headless_prompt_once<W: Write + Send + 'static>(
     Ok(())
 }
 
+async fn run_headless_text_prompt_once(
+    config: &mut RuntimeConfig,
+    store: &SessionStore,
+    prompt: &str,
+) -> Result<PromptRunOutcome> {
+    let backend = ProviderCompatBackend::new(
+        Arc::new(rc_provider::ProviderClient::new()?),
+        &config.provider,
+    );
+    let discovered_tool_scope = backend.discovered_tool_scope();
+    let discovery = discover_runtime_hooks(config, &[]);
+    let (plan_mode_controller, broker) =
+        rc_tools::runtime_plan_mode::build_runtime_plan_mode(config, store)?;
+    let _plan_mode_runtime = install_plan_mode_runtime(plan_mode_controller)?;
+    let (mut conversation, mut hook_state) = prepare_prompt_runtime_state(
+        store,
+        config,
+        &discovered_tool_scope,
+        &discovery,
+        Some(prompt),
+    )
+    .await?;
+
+    run_prompt(
+        config,
+        store,
+        Arc::new(backend),
+        discovered_tool_scope,
+        broker,
+        None,
+        &discovery,
+        &mut hook_state,
+        &mut conversation,
+        prompt,
+    )
+    .await
+}
+
 async fn resolve_pending_permission<W: Write + Send>(
     pending_permissions: &Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
     emitter: &Arc<Mutex<ProtocolEmitter<W>>>,
@@ -693,12 +733,13 @@ mod tests {
     };
     use rc_provider::{ConversationBackend, StreamingCallbacks};
     use rc_session::SessionStore;
+    use rc_tools::runtime_plan_mode::install_plan_mode_runtime;
     use serde_json::Value;
     use tempfile::{NamedTempFile, TempDir, tempdir};
     use tokio::sync::{Mutex, oneshot};
 
     use super::{HeadlessPermissionBroker, resolve_pending_permission, run_headless_prompt_once};
-    use crate::conversation::initialize_conversation;
+    use crate::conversation::{initialize_conversation, prepare_prompt_runtime_state, run_prompt};
     use crate::hooks::{HookRunState, RuntimeHookDiscovery};
     use rc_protocol::ProtocolEmitter;
     use rc_tools::runtime_plan_mode::RuntimePlanModeController;
@@ -1006,6 +1047,48 @@ mod tests {
         );
         assert_eq!(events[result_index]["usage"]["input_tokens"], 12);
         assert_eq!(events[result_index]["usage"]["output_tokens"], 3);
+    }
+
+    #[tokio::test]
+    async fn headless_text_prompt_once_uses_streaming_backend_for_print_mode() {
+        let (_tempdir, mut config, store) = mock_config_and_store();
+        config.print_mode = true;
+        let backend = Arc::new(RecordingStreamingBackend::default());
+        let discovered_tool_scope = rc_provider::DiscoveredToolScope::default();
+        let discovery = RuntimeHookDiscovery::default();
+        let (plan_mode_controller, broker) =
+            rc_tools::runtime_plan_mode::build_runtime_plan_mode(&config, &store)
+                .expect("plan mode");
+        let _plan_mode_runtime =
+            install_plan_mode_runtime(plan_mode_controller).expect("install plan mode");
+        let (mut conversation, mut hook_state) = prepare_prompt_runtime_state(
+            &store,
+            &config,
+            &discovered_tool_scope,
+            &discovery,
+            Some("print"),
+        )
+        .await
+        .expect("prepare prompt runtime");
+
+        let outcome = run_prompt(
+            &mut config,
+            &store,
+            backend.clone(),
+            discovered_tool_scope,
+            broker,
+            None,
+            &discovery,
+            &mut hook_state,
+            &mut conversation,
+            "print",
+        )
+        .await
+        .expect("text print prompt should succeed");
+
+        assert_eq!(outcome.text, "streaming-backend");
+        assert_eq!(backend.complete_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(backend.complete_streaming_calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
