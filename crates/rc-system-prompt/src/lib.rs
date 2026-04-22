@@ -40,7 +40,7 @@
 pub mod cache;
 pub mod sections;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -390,8 +390,8 @@ pub struct SystemPromptBuilder {
     use_global_cache_scope: bool,
 }
 
-static SESSION_PROMPT_BUILDERS: Lazy<Mutex<std::collections::HashMap<uuid::Uuid, SystemPromptBuilder>>> =
-    Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
+static SESSION_SECTION_CACHES: Lazy<Mutex<HashMap<uuid::Uuid, SectionCache>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 impl SystemPromptBuilder {
     /// Create a new builder with no sections.
@@ -575,24 +575,106 @@ impl Default for SystemPromptBuilder {
     }
 }
 
+fn resolve_sections(
+    cache: &mut SectionCache,
+    ctx: &PromptContext,
+    sections: &[&dyn SystemPromptSection],
+) -> Result<Vec<String>> {
+    let mut resolved = Vec::new();
+    for section in sections {
+        let name = section.name();
+        let content = if section.is_cacheable() {
+            if let Some(cached) = cache.get(name) {
+                cached.clone()
+            } else {
+                let computed = section.compute(ctx)?;
+                cache.set(name, computed.clone());
+                computed
+            }
+        } else {
+            section.compute(ctx)?
+        };
+
+        if let Some(text) = content {
+            resolved.push(text);
+        }
+    }
+    Ok(resolved)
+}
+
+fn resolve_default_prompt_blocks(
+    cache: &mut SectionCache,
+    ctx: &PromptContext,
+    use_global_cache_scope: bool,
+) -> Result<Vec<String>> {
+    if ctx.features.proactive_active {
+        let proactive_sections: [&dyn SystemPromptSection; 9] = [
+            &SystemRemindersSection,
+            &MemorySection,
+            &EnvInfoSection,
+            &LanguageSection,
+            &McpInstructionsSection,
+            &ScratchpadSection,
+            &FunctionResultClearingSection,
+            &ToolResultSection,
+            &ProactiveSection,
+        ];
+        let mut result = vec![format!(
+            "\nYou are an autonomous agent. Use the available tools to do useful work.\n\n{}",
+            sections::intro::CYBER_RISK_INSTRUCTION
+        )];
+        result.extend(resolve_sections(cache, ctx, &proactive_sections)?);
+        return Ok(result);
+    }
+
+    let static_sections: [&dyn SystemPromptSection; 7] = [
+        &IntroSection,
+        &SystemSection,
+        &DoingTasksSection,
+        &ActionsSection,
+        &UsingToolsSection,
+        &ToneStyleSection,
+        &OutputEfficiencySection,
+    ];
+    let dynamic_sections: [&dyn SystemPromptSection; 13] = [
+        &SessionGuidanceSection,
+        &MemorySection,
+        &AntModelOverrideSection,
+        &EnvInfoSection,
+        &LanguageSection,
+        &OutputStyleSection,
+        &McpInstructionsSection,
+        &ScratchpadSection,
+        &FunctionResultClearingSection,
+        &ToolResultSection,
+        &NumericLengthAnchorsSection,
+        &TokenBudgetSection,
+        &BriefSection,
+    ];
+
+    let mut result = resolve_sections(cache, ctx, &static_sections)?;
+    if use_global_cache_scope {
+        result.push(SYSTEM_PROMPT_DYNAMIC_BOUNDARY.to_owned());
+    }
+    result.extend(resolve_sections(cache, ctx, &dynamic_sections)?);
+    Ok(result)
+}
+
 pub fn build_default_system_prompt_for_session(
     session_id: uuid::Uuid,
     ctx: &PromptContext,
     use_global_cache_scope: bool,
 ) -> Result<Vec<String>> {
-    let mut builders = SESSION_PROMPT_BUILDERS
+    let mut caches = SESSION_SECTION_CACHES
         .lock()
-        .expect("system prompt builder cache poisoned");
-    let builder = builders
-        .entry(session_id)
-        .or_insert_with(SystemPromptBuilder::with_default_sections);
-    builder.set_global_cache_scope(use_global_cache_scope);
-    builder.build(ctx)
+        .expect("system prompt section cache poisoned");
+    let cache = caches.entry(session_id).or_insert_with(SectionCache::new);
+    resolve_default_prompt_blocks(cache, ctx, use_global_cache_scope)
 }
 
 pub fn clear_system_prompt_sections_for_session(session_id: uuid::Uuid) {
-    if let Ok(mut builders) = SESSION_PROMPT_BUILDERS.lock() {
-        builders.remove(&session_id);
+    if let Ok(mut caches) = SESSION_SECTION_CACHES.lock() {
+        caches.remove(&session_id);
     }
 }
 
