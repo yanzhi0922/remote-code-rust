@@ -1,42 +1,38 @@
-//! Session Memory Compact strategy.
+//! Session-memory compaction backed by the persisted `summary.md` file.
 //!
-//! Preserves key information (session memory) while compressing the rest of
-//! the conversation.  Mirrors `services/compact/sessionMemoryCompact.ts`.
+//! This follows the research implementation more closely than the previous
+//! placeholder path: compaction waits for session-memory extraction to settle,
+//! loads the persisted summary, calculates the preserved tail window from the
+//! last summarized message boundary, and directly emits a compact summary from
+//! `summary.md` instead of asking the model to summarize again.
 
-use rc_core::Message;
+use std::sync::{Arc, Mutex};
 
-use crate::engine::compact_conversation;
-use crate::prompt::rough_token_count;
-use crate::strategy::{
-    CompactOptions, CompactProgressEvent, CompactStrategy, CompactStrategyType, CompactionResult,
-    ProgressCallback, SummaryProvider,
+use anyhow::Result;
+use rc_config::RuntimeConfig;
+use rc_core::{
+    Message, MessageBase, MessageOrigin, SystemMessage, SystemMessageSubtype, UserMessage,
+};
+use rc_session::session_memory::{
+    SessionMemoryState, ensure_session_memory_file, is_session_memory_empty,
+    load_session_memory_content, session_memory_path, truncate_session_memory_for_compact,
 };
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
+use crate::engine::create_compact_boundary_message;
+use crate::prompt::{build_compact_user_summary_message, rough_token_count};
+use crate::strategy::{
+    CompactOptions, CompactProgressEvent, CompactStrategy, CompactStrategyType, CompactionResult,
+    PreservedSegment, ProgressCallback, SummaryProvider,
+};
 
-/// Default minimum tokens to preserve after session-memory compaction.
 pub const DEFAULT_SM_COMPACT_MIN_TOKENS: u64 = 10_000;
-
-/// Default minimum number of messages with text blocks to keep.
 pub const DEFAULT_SM_COMPACT_MIN_TEXT_BLOCK_MESSAGES: usize = 5;
-
-/// Default maximum tokens to preserve after session-memory compaction.
 pub const DEFAULT_SM_COMPACT_MAX_TOKENS: u64 = 40_000;
 
-// ---------------------------------------------------------------------------
-// Session memory compact config
-// ---------------------------------------------------------------------------
-
-/// Configuration for session-memory compaction thresholds.
 #[derive(Debug, Clone)]
 pub struct SessionMemoryCompactConfig {
-    /// Minimum tokens to preserve after compaction.
     pub min_tokens: u64,
-    /// Minimum number of messages with text blocks to keep.
     pub min_text_block_messages: usize,
-    /// Maximum tokens to preserve after compaction (hard cap).
     pub max_tokens: u64,
 }
 
@@ -50,31 +46,43 @@ impl Default for SessionMemoryCompactConfig {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Session memory compact strategy
-// ---------------------------------------------------------------------------
+#[derive(Clone)]
+pub struct SessionMemoryCompactFileContext {
+    pub runtime_config: RuntimeConfig,
+    pub state: Arc<Mutex<SessionMemoryState>>,
+}
 
-/// Session-memory compact strategy that preserves key facts while compressing.
-#[derive(Default)]
 pub struct SessionMemoryCompactStrategy {
-    /// Configuration for this strategy.
     pub config: SessionMemoryCompactConfig,
-    /// Optional session memory content to inject into the compact prompt.
-    pub session_memory_content: Option<String>,
+    pub file_context: Option<SessionMemoryCompactFileContext>,
+}
+
+impl Default for SessionMemoryCompactStrategy {
+    fn default() -> Self {
+        Self {
+            config: SessionMemoryCompactConfig::default(),
+            file_context: None,
+        }
+    }
 }
 
 impl SessionMemoryCompactStrategy {
-    /// Create a new session-memory compact strategy with custom config.
     pub fn new(config: SessionMemoryCompactConfig) -> Self {
         Self {
             config,
-            session_memory_content: None,
+            file_context: None,
         }
     }
 
-    /// Create with session memory content.
-    pub fn with_session_memory(mut self, content: String) -> Self {
-        self.session_memory_content = Some(content);
+    pub fn with_file_context(
+        mut self,
+        runtime_config: RuntimeConfig,
+        state: Arc<Mutex<SessionMemoryState>>,
+    ) -> Self {
+        self.file_context = Some(SessionMemoryCompactFileContext {
+            runtime_config,
+            state,
+        });
         self
     }
 }
@@ -92,39 +100,27 @@ impl CompactStrategy for SessionMemoryCompactStrategy {
         provider: &dyn SummaryProvider,
         progress: Option<&ProgressCallback>,
     ) -> Result<CompactionResult, anyhow::Error> {
-        session_memory_compact(
-            messages,
-            &self.config,
-            self.session_memory_content.as_deref(),
-            options,
-            provider,
-            progress,
-        )
-        .await
+        let _ = options;
+        let _ = provider;
+        session_memory_compact(messages, &self.config, self.file_context.as_ref(), progress).await
     }
 }
 
-// ---------------------------------------------------------------------------
-// Core session-memory compact implementation
-// ---------------------------------------------------------------------------
-
-/// Perform session-memory compaction.
-///
-/// This strategy finds the optimal split point in the conversation that
-/// preserves enough recent messages (per the config) while summarising the
-/// rest.  If session memory content is available, it's injected into the
-/// compact prompt as additional context.
 pub async fn session_memory_compact(
     messages: &[Message],
     config: &SessionMemoryCompactConfig,
-    session_memory_content: Option<&str>,
-    options: &CompactOptions,
-    provider: &dyn SummaryProvider,
+    file_context: Option<&SessionMemoryCompactFileContext>,
     progress: Option<&ProgressCallback>,
 ) -> Result<CompactionResult, anyhow::Error> {
     if messages.is_empty() {
         return Err(anyhow::anyhow!("Not enough messages to compact."));
     }
+
+    let Some(file_context) = file_context else {
+        return Err(anyhow::anyhow!(
+            "Session-memory compact requires a runtime file context."
+        ));
+    };
 
     if let Some(sink) = progress {
         sink(CompactProgressEvent::Started {
@@ -132,57 +128,41 @@ pub async fn session_memory_compact(
         });
     }
 
-    // Find the split point: keep enough recent messages to satisfy
-    // min_text_block_messages and stay within max_tokens
-    let split_index = find_split_point(messages, config);
-
-    if split_index == 0 {
-        // Nothing to summarize — all messages are kept
-        return Ok(CompactionResult {
-            summary: "Session-memory compact: no messages to summarize".into(),
-            messages_removed: 0,
-            tokens_saved: 0,
-            strategy_used: CompactStrategyType::SessionMemory,
-            preserved_segments: Vec::new(),
-            pre_compact_token_count: None,
-            post_compact_token_count: None,
-            messages_to_keep: messages.to_vec(),
-            attachments: Vec::new(),
-            hook_results: Vec::new(),
-            user_display_message: None,
-        });
-    }
-
-    let messages_to_summarize: Vec<Message> = messages.iter().take(split_index).cloned().collect();
-    let messages_to_keep: Vec<Message> = messages.iter().skip(split_index).cloned().collect();
-
-    // Build custom instructions including session memory
-    let custom_instructions = match (
-        options.custom_instructions.as_deref(),
-        session_memory_content,
-    ) {
-        (Some(ci), Some(sm)) => Some(format!("{ci}\n\nSession memory:\n{sm}")),
-        (Some(ci), None) => Some(ci.to_string()),
-        (None, Some(sm)) => Some(format!("Session memory:\n{sm}")),
-        (None, None) => None,
+    let Some(session_memory) = load_session_memory_for_compact(file_context) else {
+        return Err(anyhow::anyhow!(
+            "Session-memory compact unavailable because the session summary is missing or still empty."
+        ));
     };
 
-    let sm_options = CompactOptions {
-        custom_instructions,
-        preserve_recent_messages: config.min_text_block_messages,
-        ..options.clone()
+    let last_summarized_uuid = file_context
+        .state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .last_summarized_message_id
+        .as_deref()
+        .and_then(|value| uuid::Uuid::parse_str(value).ok());
+
+    let last_summarized_index = match last_summarized_uuid {
+        Some(target) => messages
+            .iter()
+            .position(|message| message.uuid() == target)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Session-memory compact could not locate the last summarized message boundary."
+                )
+            })?,
+        None => messages.len().saturating_sub(1),
     };
 
-    if let Some(sink) = progress {
-        sink(CompactProgressEvent::Summarizing {
-            messages_processed: messages_to_summarize.len(),
-        });
-    }
+    let start_index = calculate_messages_to_keep_index(messages, last_summarized_index, config);
+    let messages_to_keep = messages
+        .iter()
+        .skip(start_index)
+        .filter(|message| !is_compact_boundary_message(message))
+        .cloned()
+        .collect::<Vec<_>>();
 
-    let mut result =
-        compact_conversation(&messages_to_summarize, &sm_options, provider, None).await?;
-    result.strategy_used = CompactStrategyType::SessionMemory;
-    result.messages_to_keep = messages_to_keep;
+    let result = create_compaction_result_from_session_memory(messages, &session_memory, messages_to_keep);
 
     if let Some(sink) = progress {
         sink(CompactProgressEvent::Completed(result.clone()));
@@ -191,77 +171,250 @@ pub async fn session_memory_compact(
     Ok(result)
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+fn load_session_memory_for_compact(
+    file_context: &SessionMemoryCompactFileContext,
+) -> Option<String> {
+    let state = file_context
+        .state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    if !state.wait_budget_elapsed() {
+        return None;
+    }
 
-/// Find the split point in the message list.
-///
-/// Walks backward from the end of the messages, counting text-block messages
-/// and accumulated tokens, until both thresholds are satisfied.
-fn find_split_point(messages: &[Message], config: &SessionMemoryCompactConfig) -> usize {
-    let total = messages.len();
-    let mut text_block_count: usize = 0;
-    let mut accumulated_tokens: u64 = 0;
+    let runtime_config = &file_context.runtime_config;
+    let _ = ensure_session_memory_file(runtime_config);
+    let content = load_session_memory_content(runtime_config).ok().flatten()?;
+    if is_session_memory_empty(runtime_config, &content) {
+        return None;
+    }
 
-    for i in (0..total).rev() {
-        let msg = &messages[i];
-        if has_text_blocks(msg) {
-            text_block_count += 1;
+    let (truncated, was_truncated) = truncate_session_memory_for_compact(&content);
+    if was_truncated {
+        Some(format!(
+            "{truncated}\n\nSome session memory sections were truncated for length. The full session memory can be viewed at: {}",
+            session_memory_path(runtime_config).display()
+        ))
+    } else {
+        Some(truncated)
+    }
+}
+
+fn create_compaction_result_from_session_memory(
+    messages: &[Message],
+    session_memory: &str,
+    messages_to_keep: Vec<Message>,
+) -> CompactionResult {
+    let pre_compact_token_count = estimate_messages_tokens(messages);
+    let boundary_marker = create_compact_boundary_message(
+        "auto",
+        pre_compact_token_count,
+        messages.last().map(Message::uuid),
+    );
+    let summary_text = build_compact_user_summary_message(session_memory, true, None, true);
+    let summary_message = Message::User(UserMessage {
+        base: {
+            let mut base = MessageBase::with_origin(MessageOrigin::Compact);
+            base.is_compact_summary = true;
+            base
+        },
+        text: summary_text.clone(),
+        attachments: Vec::new(),
+        provider_content_blocks: Vec::new(),
+    });
+
+    let post_compact_token_count =
+        rough_token_count(&summary_text) + estimate_messages_tokens(&messages_to_keep);
+    let tokens_saved = pre_compact_token_count.saturating_sub(post_compact_token_count);
+    let messages_removed = messages.len().saturating_sub(messages_to_keep.len());
+
+    let preserved_segments = if messages_to_keep.is_empty() {
+        Vec::new()
+    } else {
+        vec![PreservedSegment {
+            head_uuid: messages_to_keep
+                .first()
+                .map(Message::uuid)
+                .unwrap_or_default(),
+            anchor_uuid: summary_message.uuid(),
+            tail_uuid: messages_to_keep
+                .last()
+                .map(Message::uuid)
+                .unwrap_or_default(),
+        }]
+    };
+
+    CompactionResult {
+        summary: session_memory.to_owned(),
+        messages_removed,
+        tokens_saved,
+        strategy_used: CompactStrategyType::SessionMemory,
+        preserved_segments,
+        pre_compact_token_count: Some(pre_compact_token_count),
+        post_compact_token_count: Some(post_compact_token_count),
+        messages_to_keep,
+        attachments: vec![boundary_marker, summary_message],
+        hook_results: Vec::new(),
+        user_display_message: None,
+    }
+}
+
+fn calculate_messages_to_keep_index(
+    messages: &[Message],
+    last_summarized_index: usize,
+    config: &SessionMemoryCompactConfig,
+) -> usize {
+    if messages.is_empty() {
+        return 0;
+    }
+
+    let mut start_index = last_summarized_index.saturating_add(1).min(messages.len());
+    let mut total_tokens = estimate_messages_tokens(&messages[start_index..]);
+    let mut text_block_message_count = messages[start_index..]
+        .iter()
+        .filter(|message| has_text_blocks(message))
+        .count();
+
+    if total_tokens >= config.max_tokens
+        || (total_tokens >= config.min_tokens
+            && text_block_message_count >= config.min_text_block_messages)
+    {
+        return start_index;
+    }
+
+    let floor = messages
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, message)| is_compact_boundary_message(message))
+        .map(|(index, _)| index + 1)
+        .unwrap_or(0);
+
+    while start_index > floor {
+        let previous_index = start_index - 1;
+        let message = &messages[previous_index];
+        total_tokens += estimate_single_message_tokens(message);
+        if has_text_blocks(message) {
+            text_block_message_count += 1;
         }
-        accumulated_tokens += estimate_single_message_tokens(msg);
+        start_index = previous_index;
 
-        // Stop when we have enough text-block messages AND tokens
-        if text_block_count >= config.min_text_block_messages
-            && accumulated_tokens >= config.min_tokens
+        if total_tokens >= config.max_tokens
+            || (total_tokens >= config.min_tokens
+                && text_block_message_count >= config.min_text_block_messages)
         {
-            // Don't exceed max_tokens — if we're over, move the split forward
-            if accumulated_tokens <= config.max_tokens {
-                return i;
-            }
-            // Otherwise keep going to find a smaller set
+            break;
         }
     }
 
-    // Always keep everything from the earliest possible point
-    0
+    start_index
 }
 
-/// Check if a message contains text blocks (user or assistant text content).
-pub fn has_text_blocks(msg: &Message) -> bool {
-    match msg {
-        Message::User(m) => !m.text.is_empty(),
-        Message::Assistant(m) => !m.text.is_empty(),
+pub fn has_text_blocks(message: &Message) -> bool {
+    match message {
+        Message::User(message) => !message.text.is_empty(),
+        Message::Assistant(message) => {
+            !message.text.is_empty()
+                || message.blocks.iter().any(|block| {
+                    matches!(block, rc_core::AssistantContentBlock::Text { text } if !text.is_empty())
+                })
+        }
         _ => false,
     }
 }
 
-/// Estimate tokens for a single message.
-fn estimate_single_message_tokens(msg: &Message) -> u64 {
-    match msg {
-        Message::User(m) => rough_token_count(&m.text),
-        Message::Assistant(m) => rough_token_count(&m.text),
-        Message::System(m) => rough_token_count(&m.text),
-        Message::Progress(m) => rough_token_count(&m.status),
-        Message::Attachment(m) => {
-            let mut t = m.label.as_deref().map_or(0, rough_token_count);
-            for att in &m.attachments {
-                t += rough_token_count(&att.data);
+fn is_compact_boundary_message(message: &Message) -> bool {
+    matches!(
+        message,
+        Message::System(SystemMessage {
+            subtype: SystemMessageSubtype::CompactBoundary,
+            ..
+        })
+    )
+}
+
+fn estimate_messages_tokens(messages: &[Message]) -> u64 {
+    messages.iter().map(estimate_single_message_tokens).sum()
+}
+
+fn estimate_single_message_tokens(message: &Message) -> u64 {
+    match message {
+        Message::User(message) => rough_token_count(&message.text),
+        Message::Assistant(message) => rough_token_count(&message.text),
+        Message::System(message) => rough_token_count(&message.text),
+        Message::Progress(message) => rough_token_count(&message.status),
+        Message::Attachment(message) => {
+            let mut tokens = message.label.as_deref().map_or(0, rough_token_count);
+            for attachment in &message.attachments {
+                tokens += rough_token_count(&attachment.data);
             }
-            t
+            tokens
         }
-        Message::HookResult(m) => rough_token_count(&m.output),
-        Message::ToolUseSummary(m) => rough_token_count(&m.summary),
-        Message::Tombstone(m) => rough_token_count(&m.summary),
-        Message::GroupedToolUse(m) => m.summary.as_deref().map_or(0, rough_token_count),
-        Message::CollapsedReadSearch(m) => rough_token_count(&m.summary),
+        Message::HookResult(message) => rough_token_count(&message.output),
+        Message::ToolUseSummary(message) => rough_token_count(&message.summary),
+        Message::Tombstone(message) => rough_token_count(&message.summary),
+        Message::GroupedToolUse(message) => message.summary.as_deref().map_or(0, rough_token_count),
+        Message::CollapsedReadSearch(message) => rough_token_count(&message.summary),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use rc_core::{MessageBase, UserMessage};
+    use std::sync::{Arc, Mutex};
+
+    use rc_config::settings_layers::RuntimeOverrides;
+    use rc_config::{ProviderOverrides, load_runtime_config};
+    use rc_core::{
+        AssistantContentBlock, InputFormat, Message, MessageBase, OutputFormat, PermissionMode,
+        UserMessage,
+    };
+    use tempfile::{TempDir, tempdir};
+
+    use super::{
+        DEFAULT_SM_COMPACT_MAX_TOKENS, DEFAULT_SM_COMPACT_MIN_TEXT_BLOCK_MESSAGES,
+        DEFAULT_SM_COMPACT_MIN_TOKENS, SessionMemoryCompactConfig, SessionMemoryCompactStrategy,
+        calculate_messages_to_keep_index, has_text_blocks, load_session_memory_for_compact,
+    };
+    use rc_session::session_memory::{
+        DEFAULT_SESSION_MEMORY_TEMPLATE, SessionMemoryState, ensure_session_memory_file,
+        session_memory_path,
+    };
+
+    struct TestRuntime {
+        _tempdir: TempDir,
+        config: rc_config::RuntimeConfig,
+    }
+
+    fn test_runtime() -> TestRuntime {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        std::fs::create_dir_all(&cwd).expect("cwd");
+        std::fs::create_dir_all(&profile).expect("profile");
+
+        let config = load_runtime_config(
+            Some(cwd),
+            Some(profile),
+            None,
+            PermissionMode::BypassPermissions,
+            InputFormat::Text,
+            OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            8,
+            ProviderOverrides::default(),
+            RuntimeOverrides::default(),
+        )
+        .expect("runtime config");
+
+        TestRuntime {
+            _tempdir: tempdir,
+            config,
+        }
+    }
 
     #[test]
     fn session_memory_config_default() {
@@ -276,38 +429,84 @@ mod tests {
 
     #[test]
     fn has_text_blocks_user() {
-        let msg = Message::User(UserMessage {
+        let message = Message::User(UserMessage {
             base: MessageBase::default(),
             text: "hello".into(),
             attachments: Vec::new(),
             provider_content_blocks: Vec::new(),
         });
-        assert!(has_text_blocks(&msg));
+        assert!(has_text_blocks(&message));
     }
 
     #[test]
-    fn has_text_blocks_empty() {
-        let msg = Message::User(UserMessage {
+    fn has_text_blocks_assistant_text_block() {
+        let message = Message::Assistant(rc_core::AssistantMessage {
             base: MessageBase::default(),
             text: String::new(),
-            attachments: Vec::new(),
+            blocks: vec![AssistantContentBlock::Text {
+                text: "hi".to_owned(),
+            }],
+            tool_calls: Vec::new(),
             provider_content_blocks: Vec::new(),
         });
-        assert!(!has_text_blocks(&msg));
+        assert!(has_text_blocks(&message));
     }
 
     #[test]
-    fn find_split_point_returns_zero_for_few_messages() {
-        let messages = vec![Message::User(UserMessage {
-            base: MessageBase::default(),
-            text: "hello".into(),
-            attachments: Vec::new(),
-            provider_content_blocks: Vec::new(),
-        })];
-        let config = SessionMemoryCompactConfig {
-            min_text_block_messages: 5,
-            ..SessionMemoryCompactConfig::default()
+    fn strategy_defaults_to_no_file_context() {
+        let strategy = SessionMemoryCompactStrategy::default();
+        assert!(strategy.file_context.is_none());
+    }
+
+    #[test]
+    fn load_session_memory_for_compact_returns_none_for_template_only() {
+        let runtime = test_runtime();
+        let memory_path = ensure_session_memory_file(&runtime.config).expect("memory path");
+        std::fs::write(&memory_path, DEFAULT_SESSION_MEMORY_TEMPLATE).expect("template write");
+        let context = super::SessionMemoryCompactFileContext {
+            runtime_config: runtime.config,
+            state: Arc::new(Mutex::new(SessionMemoryState::default())),
         };
-        assert_eq!(find_split_point(&messages, &config), 0);
+        let result = load_session_memory_for_compact(&context);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn load_session_memory_for_compact_appends_path_when_truncated() {
+        let runtime = test_runtime();
+        let memory_path = ensure_session_memory_file(&runtime.config).expect("memory path");
+        std::fs::write(
+            &memory_path,
+            format!("# Current State\n{}\n", "a".repeat(12_000)),
+        )
+        .expect("memory write");
+        let context = super::SessionMemoryCompactFileContext {
+            runtime_config: runtime.config.clone(),
+            state: Arc::new(Mutex::new(SessionMemoryState::default())),
+        };
+        let result = load_session_memory_for_compact(&context).expect("session memory");
+        assert!(result.contains("Some session memory sections were truncated"));
+        assert!(result.contains(&session_memory_path(&runtime.config).display().to_string()));
+    }
+
+    #[test]
+    fn calculate_messages_to_keep_expands_to_meet_minimum_context_thresholds() {
+        let messages = vec![
+            Message::User(UserMessage {
+                base: MessageBase::default(),
+                text: "a".repeat(100),
+                attachments: Vec::new(),
+                provider_content_blocks: Vec::new(),
+            }),
+            Message::User(UserMessage {
+                base: MessageBase::default(),
+                text: "b".repeat(100),
+                attachments: Vec::new(),
+                provider_content_blocks: Vec::new(),
+            }),
+        ];
+        let index =
+            calculate_messages_to_keep_index(&messages, 0, &SessionMemoryCompactConfig::default());
+        assert_eq!(index, 0);
     }
 }

@@ -44,6 +44,7 @@ use rc_runtime_prompt::{
     runtime_mcp_instructions_delta_enabled,
 };
 use rc_session::SessionStore;
+use rc_session::session_memory::session_memory_dir;
 use rc_session::resume_state::{PendingToolCall, ResumeState};
 use rc_tools::{
     RuntimeAgentPromptContext, ToolExecutionContext, ToolRuntimePolicyOverlay, ToolSpec,
@@ -451,10 +452,6 @@ fn spawn_runtime_agent_prompt_context_provider(
     }
     agent_memory_dirs.sort();
     agent_memory_dirs.dedup();
-    let session_dir = config
-        .paths
-        .sessions_dir
-        .join(config.session_id.to_string());
     let context = RuntimeAgentPromptContext {
         user_agents_dir: inherited_context
             .as_ref()
@@ -475,9 +472,15 @@ fn spawn_runtime_agent_prompt_context_provider(
         list_via_attachment: runtime_identity.features.agent_listing_delta_enabled,
         runtime_identity,
         scratchpad_dir: prompt_settings.scratchpad_dir.map(PathBuf::from),
-        session_memory_dir: Some(session_dir.join("session-memory")),
+        session_memory_dir: Some(session_memory_dir(config)),
         tasks_dir: Some(rc_swarm::team_helpers::claude_config_home_dir().join("tasks")),
-        tool_results_dir: Some(session_dir.join("tool-results")),
+        tool_results_dir: Some(
+            config
+                .paths
+                .sessions_dir
+                .join(config.session_id.to_string())
+                .join("tool-results"),
+        ),
         auto_memory_dir: prompt_settings
             .auto_memory_permission_dir
             .map(PathBuf::from),
