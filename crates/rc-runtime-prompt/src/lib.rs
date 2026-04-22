@@ -9,7 +9,7 @@ use anyhow::Result;
 use auto_memory::{
     default_memory_dir_for_permissions, has_valid_cowork_memory_path_override,
     load_cowork_memory_mechanics_prompt, load_default_memory_prompt,
-    memory_dir_for_read_permissions, sanitize_path_component,
+    memory_dir_for_read_permissions, sanitize_path_component, team_memory_dir_for_read_permissions,
 };
 use chrono::Local;
 use rc_agents::coordinator::{
@@ -106,6 +106,7 @@ pub struct RuntimePromptSettings {
     pub project_temp_dir: Option<String>,
     pub auto_memory_read_dir: Option<String>,
     pub auto_memory_permission_dir: Option<String>,
+    pub team_memory_read_dir: Option<String>,
     pub additional_working_directories: Vec<PathBuf>,
     pub runtime_identity: RuntimeIdentityContext,
 }
@@ -124,6 +125,10 @@ impl RuntimePromptSettings {
             .ok()
             .flatten()
             .map(|path| path.to_string_lossy().into_owned());
+        let team_memory_read_dir = team_memory_dir_for_read_permissions(config)
+            .ok()
+            .flatten()
+            .map(|path| path.to_string_lossy().into_owned());
         Self {
             language: config.language.clone(),
             output_style: config.output_style.clone(),
@@ -138,6 +143,7 @@ impl RuntimePromptSettings {
             project_temp_dir: Some(project_temp_dir.to_string_lossy().into_owned()),
             auto_memory_read_dir,
             auto_memory_permission_dir,
+            team_memory_read_dir,
             additional_working_directories: Vec::new(),
             runtime_identity: RuntimeIdentityContext::from_legacy_env(),
         }
@@ -1620,6 +1626,7 @@ mod tests {
             project_temp_dir: None,
             auto_memory_read_dir: None,
             auto_memory_permission_dir: None,
+            team_memory_read_dir: None,
             additional_working_directories: Vec::new(),
             runtime_identity: RuntimeIdentityContext::default(),
         }

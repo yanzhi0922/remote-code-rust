@@ -155,7 +155,7 @@ pub const SLASH_COMMANDS: &[SlashCommandSpec] = &[
     },
     SlashCommandSpec {
         name: "/memory",
-        summary: "Show global/project memory file status",
+        summary: "Show Claude memory surfaces and auto-memory paths",
         usage: "/memory",
     },
     SlashCommandSpec {

@@ -5,12 +5,10 @@
 //! metadata and an NDJSON file for the full event transcript.
 
 pub mod conversation;
-pub mod memory;
 pub mod plan_state;
 pub mod replay;
 pub mod resume_state;
 pub mod runtime_context;
-pub mod session_memory_service;
 pub mod transcript;
 
 use std::collections::{BTreeMap, BTreeSet};

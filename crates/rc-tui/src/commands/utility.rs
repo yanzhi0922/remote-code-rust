@@ -177,16 +177,16 @@ pub fn render_init(config: &RuntimeConfig) {
     println!("  cwd: {}", config.cwd.display());
 
     let config_dir = config.cwd.join(".remote-code-rust");
-    let rc_md = config.cwd.join(".remote-code-rust").join("RC.md");
+    let claude_md = config.cwd.join("CLAUDE.md");
 
     println!("  config dir: {}", config_dir.display());
-    println!("  memory file: {}", rc_md.display());
+    println!("  project instructions: {}", claude_md.display());
 
     if config_dir.exists() {
         println!("  status: project config directory exists");
     } else {
         println!("  status: project not yet initialized");
-        println!("  (use the Write tool to create .remote-code-rust/RC.md)");
+        println!("  (run /init to create CLAUDE.md and related project instructions)");
     }
 }
 

@@ -28,7 +28,6 @@ const PLAN_MODE_SAFE_TOOLS: &[&str] = &[
     "list_directory",
     "list_worktrees",
     "lsp",
-    "memory_read",
     "mcp_server_list",
     "mcp_list_resources",
     "mcp_resource_read",

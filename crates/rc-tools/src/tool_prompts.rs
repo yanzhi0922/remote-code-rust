@@ -1266,33 +1266,6 @@ Notes:
 - The suggestion is based on diff analysis — review and adjust as needed.
 - Use `bash_command` with `gh pr create` to actually create the PR.";
 
-/// Prompt for `memory_read`.
-pub const MEMORY_READ: &str = "\
-Read persistent memory (RC.md) from global and/or project scope.
-
-Usage:
-- `scope` selects the memory scope: 'global', 'project', or 'all' (default: all).
-- Returns the stored memory content for the selected scope.
-
-Notes:
-- Memory persists across sessions and is useful for storing project-specific knowledge.
-- Global memory is shared across all projects.
-- Project memory is specific to the current workspace.";
-
-/// Prompt for `memory_write`.
-pub const MEMORY_WRITE: &str = "\
-Write or append to persistent memory (RC.md) in global or project scope.
-
-Usage:
-- `scope` selects the target: 'global' or 'project'.
-- `content` is the text to write.
-- `mode` controls write behavior: 'append' (default) or 'overwrite'.
-
-Notes:
-- Use append mode to add new information without losing existing content.
-- Use overwrite mode to replace all memory content — be careful.
-- Memory is persisted to disk and survives session restarts.";
-
 /// Prompt for `list_peers`.
 pub const LIST_PEERS: &str = "\
 List all registered agents in the multi-agent system.
@@ -1966,8 +1939,6 @@ pub fn get_prompt(tool_name: &str) -> &'static str {
         "synthetic_output" => SYNTHETIC_OUTPUT,
         "voice_input" => VOICE_INPUT,
         "suggest_pr" => SUGGEST_PR,
-        "memory_read" => MEMORY_READ,
-        "memory_write" => MEMORY_WRITE,
         "list_peers" => LIST_PEERS,
         "discover_skills" => DISCOVER_SKILLS,
         "broadcast_message" => BROADCAST_MESSAGE,
@@ -2046,8 +2017,6 @@ mod tests {
             SYNTHETIC_OUTPUT,
             VOICE_INPUT,
             SUGGEST_PR,
-            MEMORY_READ,
-            MEMORY_WRITE,
             LIST_PEERS,
             DISCOVER_SKILLS,
             BROADCAST_MESSAGE,
@@ -2119,8 +2088,6 @@ mod tests {
             ("SYNTHETIC_OUTPUT", SYNTHETIC_OUTPUT),
             ("VOICE_INPUT", VOICE_INPUT),
             ("SUGGEST_PR", SUGGEST_PR),
-            ("MEMORY_READ", MEMORY_READ),
-            ("MEMORY_WRITE", MEMORY_WRITE),
             ("LIST_PEERS", LIST_PEERS),
             ("DISCOVER_SKILLS", DISCOVER_SKILLS),
             ("BROADCAST_MESSAGE", BROADCAST_MESSAGE),
@@ -2210,8 +2177,6 @@ mod tests {
             "synthetic_output",
             "voice_input",
             "suggest_pr",
-            "memory_read",
-            "memory_write",
             "list_peers",
             "discover_skills",
             "broadcast_message",
