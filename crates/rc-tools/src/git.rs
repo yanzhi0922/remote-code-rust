@@ -323,11 +323,10 @@ pub fn apply_worktree_tool_result_to_runtime(
         return Ok(false);
     }
 
-    let parsed: Value = serde_json::from_str(&tool_result.content)
-        .with_context(|| format!("failed to parse {tool_name} tool result"))?;
-
     match tool_name {
         "enter_worktree" => {
+            let parsed: Value = serde_json::from_str(&tool_result.content)
+                .with_context(|| format!("failed to parse {tool_name} tool result"))?;
             let worktree_path = parsed
                 .get("worktreePath")
                 .and_then(Value::as_str)
@@ -380,6 +379,8 @@ pub fn apply_worktree_tool_result_to_runtime(
             Ok(true)
         }
         "exit_worktree" => {
+            let parsed: Value = serde_json::from_str(&tool_result.content)
+                .with_context(|| format!("failed to parse {tool_name} tool result"))?;
             let original_cwd = parsed
                 .get("originalCwd")
                 .and_then(Value::as_str)
@@ -560,8 +561,12 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    use rc_config::{ProviderOverrides, load_runtime_config};
     use rc_core::task_stack::TaskStack;
+    use rc_core::{InputFormat, OutputFormat, PermissionMode, ProviderProtocol, ToolResult};
+    use rc_config::settings_layers::RuntimeOverrides;
     use serde_json::json;
+    use tempfile::{TempDir, tempdir};
 
     use super::*;
 
@@ -575,6 +580,37 @@ mod tests {
             progress_cb: None,
             task_stack: Arc::new(std::sync::Mutex::new(TaskStack::default())),
         }
+    }
+
+    fn test_runtime_config() -> (TempDir, RuntimeConfig) {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        std::fs::create_dir_all(&cwd).expect("cwd");
+        std::fs::create_dir_all(&profile).expect("profile");
+        let config = load_runtime_config(
+            Some(cwd),
+            Some(profile),
+            None,
+            PermissionMode::Default,
+            InputFormat::Text,
+            OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides {
+                provider: Some("mock".to_owned()),
+                base_url: Some("mock://provider".to_owned()),
+                api_key: Some("mock".to_owned()),
+                model: Some("mock-model".to_owned()),
+                protocol: Some(ProviderProtocol::Anthropic),
+            },
+            RuntimeOverrides::default(),
+        )
+        .expect("config");
+        (tempdir, config)
     }
 
     #[test]
@@ -607,5 +643,30 @@ mod tests {
         let parsed = parse_worktree_list(input);
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[1].branch, "worktree-w1");
+    }
+
+    #[test]
+    fn apply_worktree_tool_result_ignores_non_worktree_text_output() {
+        let (_tempdir, mut config) = test_runtime_config();
+        let original_cwd = config.cwd.clone();
+        let mut tool_context = ToolExecutionContext::from_runtime_config(&config);
+
+        let applied = apply_worktree_tool_result_to_runtime(
+            "bash_command",
+            &json!({"command": "cat Cargo.toml"}),
+            &ToolResult {
+                content: "remote-code-rust".to_owned(),
+                is_error: false,
+                content_blocks: Vec::new(),
+                follow_up_user_blocks: Vec::new(),
+            },
+            &mut config,
+            &mut tool_context,
+        )
+        .expect("non-worktree tool output should be ignored");
+
+        assert!(!applied);
+        assert_eq!(config.cwd, original_cwd);
+        assert_eq!(tool_context.cwd, original_cwd);
     }
 }
