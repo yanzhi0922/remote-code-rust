@@ -137,10 +137,7 @@ mod tests {
             detect_session_pattern_type("C:/x/projects/*.jsonl"),
             Some(SessionFileType::SessionTranscript)
         );
-        assert_eq!(
-            detect_session_pattern_type("C:/x/sessions/*.ndjson"),
-            None
-        );
+        assert_eq!(detect_session_pattern_type("C:/x/sessions/*.ndjson"), None);
     }
 
     #[test]
@@ -186,10 +183,9 @@ mod tests {
         if !features.team_memory_enabled {
             return;
         }
-        let team_dir =
-            rc_runtime_prompt::team_memory_path_with_features(&config, &features)
-                .expect("team path")
-                .expect("team enabled");
+        let team_dir = rc_runtime_prompt::team_memory_path_with_features(&config, &features)
+            .expect("team path")
+            .expect("team enabled");
         assert_eq!(
             memory_scope_for_path(&config, &team_dir.join("x.md")),
             Some(MemoryScope::Team)

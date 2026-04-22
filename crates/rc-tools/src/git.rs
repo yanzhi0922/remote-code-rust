@@ -561,10 +561,10 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    use rc_config::settings_layers::RuntimeOverrides;
     use rc_config::{ProviderOverrides, load_runtime_config};
     use rc_core::task_stack::TaskStack;
     use rc_core::{InputFormat, OutputFormat, PermissionMode, ProviderProtocol, ToolResult};
-    use rc_config::settings_layers::RuntimeOverrides;
     use serde_json::json;
     use tempfile::{TempDir, tempdir};
 

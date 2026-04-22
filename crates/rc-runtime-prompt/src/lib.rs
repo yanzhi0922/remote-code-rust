@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use auto_memory::{
-    default_memory_dir_for_permissions,
-    has_valid_cowork_memory_path_override, load_cowork_memory_mechanics_prompt,
-    load_default_memory_prompt_with_features, memory_dir_for_read_permissions,
-    sanitize_path_component, team_memory_dir_for_read_permissions_with_features,
+    default_memory_dir_for_permissions, has_valid_cowork_memory_path_override,
+    load_cowork_memory_mechanics_prompt, load_default_memory_prompt_with_features,
+    memory_dir_for_read_permissions, sanitize_path_component,
+    team_memory_dir_for_read_permissions_with_features,
 };
 use chrono::Local;
 use rc_agents::coordinator::{
@@ -36,19 +36,18 @@ const SCRATCHPAD_FEATURE_KEY: &str = "tengu_scratch";
 const SCRATCHPAD_DIRNAME: &str = "scratchpad";
 
 pub use auto_memory::{
-    MemoryHeader as AutoMemoryHeader, MemoryPromptFeatures,
-    MemoryScope as AutoMemoryScope, MemoryType as AutoMemoryType, SessionMemoryFileType,
-    agent_memory_dir, agent_memory_dirs, agent_memory_entrypoint, auto_memory_daily_log_path,
-    auto_memory_entrypoint,
-    build_extract_auto_only_prompt as build_extract_memory_auto_only_prompt, claude_config_home,
-    build_extract_combined_prompt as build_extract_memory_combined_prompt,
+    MemoryHeader as AutoMemoryHeader, MemoryPromptFeatures, MemoryScope as AutoMemoryScope,
+    MemoryType as AutoMemoryType, SessionMemoryFileType, agent_memory_dir, agent_memory_dirs,
+    agent_memory_entrypoint, auto_memory_daily_log_path, auto_memory_entrypoint,
+    build_extract_auto_only_prompt as build_extract_memory_auto_only_prompt,
+    build_extract_combined_prompt as build_extract_memory_combined_prompt, claude_config_home,
     detect_session_file_type as detect_memory_session_file_type,
     detect_session_pattern_type as detect_memory_session_pattern_type,
-    format_memory_manifest as format_auto_memory_manifest,
-    is_agent_memory_path, is_auto_managed_memory_file_with_features,
-    is_auto_managed_memory_pattern, is_auto_memory_enabled, is_auto_memory_path,
-    is_memory_directory_with_features, is_shell_command_targeting_memory_with_features,
-    is_team_memory_file_with_features, memory_base_dir, memory_scope_for_path_with_features,
+    format_memory_manifest as format_auto_memory_manifest, is_agent_memory_path,
+    is_auto_managed_memory_file_with_features, is_auto_managed_memory_pattern,
+    is_auto_memory_enabled, is_auto_memory_path, is_memory_directory_with_features,
+    is_shell_command_targeting_memory_with_features, is_team_memory_file_with_features,
+    memory_base_dir, memory_scope_for_path_with_features,
     parse_memory_type as parse_auto_memory_type, scan_memory_files as scan_auto_memory_files,
     team_memory_entrypoint_with_features, team_memory_path_with_features,
 };
