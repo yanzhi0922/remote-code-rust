@@ -2446,6 +2446,26 @@ mod tests {
 
     static RUNTIME_POLICY_TEST_MUTEX: OnceLock<AsyncMutex<()>> = OnceLock::new();
 
+    struct CoordinatorModeTestGuard(tokio::sync::MutexGuard<'static, ()>);
+
+    impl CoordinatorModeTestGuard {
+        async fn enter(mode: rc_agents::coordinator::CoordinatorMode) -> Self {
+            let guard = RUNTIME_POLICY_TEST_MUTEX
+                .get_or_init(|| AsyncMutex::new(()))
+                .lock()
+                .await;
+            rc_agents::coordinator::reset_coordinator_override();
+            let _ = rc_agents::coordinator::match_session_mode(Some(mode));
+            Self(guard)
+        }
+    }
+
+    impl Drop for CoordinatorModeTestGuard {
+        fn drop(&mut self) {
+            rc_agents::coordinator::reset_coordinator_override();
+        }
+    }
+
     fn mock_config_and_store() -> (TempDir, RuntimeConfig, SessionStore) {
         let tempdir = tempdir().expect("tempdir");
         let cwd = tempdir.path().join("workspace");
@@ -3938,14 +3958,10 @@ while True:
 
     #[tokio::test]
     async fn compat_run_includes_coordinator_worker_tools_context_in_user_reminder() {
-        let _guard = RUNTIME_POLICY_TEST_MUTEX
-            .get_or_init(|| AsyncMutex::new(()))
-            .lock()
-            .await;
-        rc_agents::coordinator::reset_coordinator_override();
-        rc_agents::coordinator::match_session_mode(Some(
+        let _coordinator_mode = CoordinatorModeTestGuard::enter(
             rc_agents::coordinator::CoordinatorMode::Coordinator,
-        ));
+        )
+        .await;
 
         let (_tempdir, config, store) = mock_config_and_store();
         let discovery = RuntimeHookDiscovery::default();
@@ -3988,8 +4004,6 @@ while True:
                 .text
                 .contains("Workers spawned via the Agent tool")
         );
-
-        rc_agents::coordinator::reset_coordinator_override();
     }
 
     #[tokio::test]
@@ -4095,6 +4109,9 @@ while True:
 
     #[tokio::test]
     async fn refresh_runtime_system_prompt_preserves_structured_blocks() {
+        let _coordinator_mode =
+            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal)
+                .await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4138,6 +4155,9 @@ while True:
 
     #[tokio::test]
     async fn agent_system_prompt_keeps_runtime_system_context() {
+        let _coordinator_mode =
+            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal)
+                .await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4176,6 +4196,9 @@ while True:
 
     #[tokio::test]
     async fn custom_system_prompt_skips_runtime_system_context() {
+        let _coordinator_mode =
+            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal)
+                .await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4214,6 +4237,9 @@ while True:
 
     #[tokio::test]
     async fn append_system_prompt_keeps_runtime_system_context() {
+        let _coordinator_mode =
+            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal)
+                .await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4252,6 +4278,9 @@ while True:
 
     #[tokio::test]
     async fn override_system_prompt_replaces_runtime_prompt_and_system_context() {
+        let _coordinator_mode =
+            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal)
+                .await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4297,6 +4326,9 @@ while True:
 
     #[tokio::test]
     async fn empty_custom_system_prompt_still_skips_default_prompt_and_system_context() {
+        let _coordinator_mode =
+            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal)
+                .await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4350,6 +4382,9 @@ while True:
 
     #[tokio::test]
     async fn whitespace_custom_system_prompt_skips_default_prompt_and_system_context() {
+        let _coordinator_mode =
+            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal)
+                .await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
