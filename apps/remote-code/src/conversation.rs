@@ -13,6 +13,7 @@ use rc_core::{ConversationEntry, ConversationRole};
 use rc_permissions::{PermissionBroker, load_layered_rules, rules::summarize_rule_sources};
 use rc_protocol::{MessageRole, RuntimeEventDetail, UsagePayload};
 use rc_provider::context::ContextWindowManager;
+use rc_provider::query_source::ProviderRequestContext;
 use rc_provider::{DiscoveredToolScope, ProviderCompatBackend, StreamingCallbacks};
 use rc_session::resume_state::{PendingToolCall, ResumeState};
 use rc_session::runtime_context::{
@@ -240,6 +241,17 @@ impl ConversationBackend for ContentReplacementBackend {
         self.inner.complete(&provider_conversation).await
     }
 
+    async fn complete_with_context(
+        &self,
+        conversation: &[ConversationEntry],
+        context: &ProviderRequestContext,
+    ) -> Result<rc_core::ProviderResponse> {
+        let provider_conversation = self.prepare_conversation(conversation).await?;
+        self.inner
+            .complete_with_context(&provider_conversation, context)
+            .await
+    }
+
     async fn complete_streaming(
         &self,
         conversation: &[ConversationEntry],
@@ -248,6 +260,18 @@ impl ConversationBackend for ContentReplacementBackend {
         let provider_conversation = self.prepare_conversation(conversation).await?;
         self.inner
             .complete_streaming(&provider_conversation, callbacks)
+            .await
+    }
+
+    async fn complete_streaming_with_context(
+        &self,
+        conversation: &[ConversationEntry],
+        callbacks: Option<StreamingCallbacks>,
+        context: &ProviderRequestContext,
+    ) -> Result<rc_core::ProviderResponse> {
+        let provider_conversation = self.prepare_conversation(conversation).await?;
+        self.inner
+            .complete_streaming_with_context(&provider_conversation, callbacks, context)
             .await
     }
 

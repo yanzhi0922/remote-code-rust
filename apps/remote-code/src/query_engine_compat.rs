@@ -32,6 +32,7 @@ use rc_permissions::PermissionBroker;
 use rc_protocol::UsagePayload;
 use rc_provider::{
     ConversationBackend, DiscoveredToolScope, provider_runtime_tool_specs_for_request,
+    query_source::ProviderRequestContext,
 };
 use rc_query_engine::{
     EffortLevel, ProcessUserInputContext, ProviderInvocationMode, QueryCheckpointKind, QueryEngine,
@@ -216,6 +217,15 @@ impl ConversationBackend for CriticalReminderBackend {
         self.inner.complete(&augmented).await
     }
 
+    async fn complete_with_context(
+        &self,
+        conversation: &[ConversationEntry],
+        context: &ProviderRequestContext,
+    ) -> Result<ProviderResponse> {
+        let augmented = augment_conversation_with_critical_reminder(conversation, &self.reminder);
+        self.inner.complete_with_context(&augmented, context).await
+    }
+
     async fn complete_streaming(
         &self,
         conversation: &[ConversationEntry],
@@ -223,6 +233,18 @@ impl ConversationBackend for CriticalReminderBackend {
     ) -> Result<ProviderResponse> {
         let augmented = augment_conversation_with_critical_reminder(conversation, &self.reminder);
         self.inner.complete_streaming(&augmented, callbacks).await
+    }
+
+    async fn complete_streaming_with_context(
+        &self,
+        conversation: &[ConversationEntry],
+        callbacks: Option<rc_provider::StreamingCallbacks>,
+        context: &ProviderRequestContext,
+    ) -> Result<ProviderResponse> {
+        let augmented = augment_conversation_with_critical_reminder(conversation, &self.reminder);
+        self.inner
+            .complete_streaming_with_context(&augmented, callbacks, context)
+            .await
     }
 
     fn sub_agent_completion(&self) -> Arc<dyn rc_core::SubAgentCompletion> {

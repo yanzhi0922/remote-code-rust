@@ -72,6 +72,7 @@ impl ProviderClient {
             conversation,
             None,
             &BTreeSet::new(),
+            None,
         )
         .await
     }
@@ -94,6 +95,7 @@ impl ProviderClient {
             conversation,
             callbacks,
             &BTreeSet::new(),
+            None,
         )
         .await
     }
@@ -108,6 +110,7 @@ impl ProviderClient {
         conversation: &[ConversationEntry],
         callbacks: Option<StreamingCallbacks>,
         carried_discovered_tools: &BTreeSet<String>,
+        request_context: Option<&crate::query_source::ProviderRequestContext>,
     ) -> Result<ProviderResponse> {
         if provider.name == "mock"
             || provider.api_key.as_deref() == Some("mock")
@@ -127,6 +130,7 @@ impl ProviderClient {
                     conversation,
                     Some(&tracked_callbacks),
                     carried_discovered_tools,
+                    request_context,
                 )
                 .await
             }
@@ -136,6 +140,7 @@ impl ProviderClient {
                     conversation,
                     Some(&tracked_callbacks),
                     carried_discovered_tools,
+                    request_context,
                 )
                 .await
             }
@@ -149,6 +154,7 @@ impl ProviderClient {
                         conversation,
                         Some(&tracked_callbacks),
                         carried_discovered_tools,
+                        request_context,
                     )
                     .await
                 } else {
@@ -157,6 +163,7 @@ impl ProviderClient {
                         provider,
                         conversation,
                         carried_discovered_tools,
+                        request_context,
                     )
                     .await
                 }
@@ -180,6 +187,7 @@ impl ProviderClient {
                         provider,
                         conversation,
                         carried_discovered_tools,
+                        request_context,
                     )
                     .await
                 } else {
@@ -201,6 +209,7 @@ impl ProviderClient {
         conversation: &[ConversationEntry],
         callbacks: Option<&StreamingCallbacks>,
         carried_discovered_tools: &BTreeSet<String>,
+        request_context: Option<&crate::query_source::ProviderRequestContext>,
     ) -> Result<ProviderResponse> {
         let tools =
             current_openai_tool_schemas(provider, conversation, carried_discovered_tools).await;
@@ -219,7 +228,13 @@ impl ProviderClient {
             .ok_or_else(|| anyhow!("provider is missing a normalized base URL"))?;
 
         let response = self
-            .send_streaming_request(provider, base_url, &body, "openai-compatible")
+            .send_streaming_request(
+                provider,
+                base_url,
+                &body,
+                "openai-compatible",
+                request_context,
+            )
             .await?;
 
         let mut text_parts: Vec<String> = Vec::new();
@@ -376,6 +391,7 @@ impl ProviderClient {
         conversation: &[ConversationEntry],
         callbacks: Option<&StreamingCallbacks>,
         carried_discovered_tools: &BTreeSet<String>,
+        request_context: Option<&crate::query_source::ProviderRequestContext>,
     ) -> Result<ProviderResponse> {
         let (system, messages, tools) =
             prepare_anthropic_request_surface(provider, conversation, carried_discovered_tools)
@@ -388,7 +404,7 @@ impl ProviderClient {
             "max_tokens": provider.max_output_tokens,
             "stream": true,
         });
-        crate::apply_anthropic_request_metadata(&mut body, provider);
+        crate::apply_anthropic_request_metadata(&mut body, provider, request_context);
         // Enable extended thinking if a budget is configured.
         if let Some(budget) = provider.thinking_budget {
             body["thinking"] = json!({
@@ -411,7 +427,13 @@ impl ProviderClient {
             .ok_or_else(|| anyhow!("provider is missing a normalized base URL"))?;
 
         let response = self
-            .send_streaming_request(provider, base_url, &body, "anthropic-compatible")
+            .send_streaming_request(
+                provider,
+                base_url,
+                &body,
+                "anthropic-compatible",
+                request_context,
+            )
             .await?;
 
         let mut content_block_accumulators: BTreeMap<usize, AnthropicContentAccumulator> =
@@ -662,6 +684,7 @@ impl ProviderClient {
         base_url: &str,
         body: &Value,
         label: &str,
+        request_context: Option<&crate::query_source::ProviderRequestContext>,
     ) -> Result<reqwest::Response> {
         let mut attempt = 0u32;
         loop {
@@ -669,7 +692,7 @@ impl ProviderClient {
             let response = self
                 .http
                 .post(base_url)
-                .headers(build_headers(provider, Some(body))?)
+                .headers(build_headers(provider, Some(body), request_context)?)
                 .timeout(Duration::from_millis(provider.timeout_ms))
                 .json(body)
                 .send()

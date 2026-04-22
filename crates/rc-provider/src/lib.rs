@@ -192,7 +192,7 @@ impl ProviderClient {
         provider: &ProviderConfig,
         conversation: &[ConversationEntry],
     ) -> Result<ProviderResponse> {
-        self.complete_with_discovered_tools(provider, conversation, &BTreeSet::new())
+        self.complete_with_discovered_tools(provider, conversation, &BTreeSet::new(), None)
             .await
     }
 
@@ -206,6 +206,7 @@ impl ProviderClient {
         provider: &ProviderConfig,
         conversation: &[ConversationEntry],
         carried_discovered_tools: &BTreeSet<String>,
+        request_context: Option<&query_source::ProviderRequestContext>,
     ) -> Result<ProviderResponse> {
         if provider.name == "mock"
             || provider.api_key.as_deref() == Some("mock")
@@ -228,20 +229,40 @@ impl ProviderClient {
 
         let result = match effective_provider.protocol {
             ProviderProtocol::OpenAi => {
-                self.complete_openai(&effective_provider, conversation, carried_discovered_tools)
-                    .await
+                self.complete_openai(
+                    &effective_provider,
+                    conversation,
+                    carried_discovered_tools,
+                    request_context,
+                )
+                .await
             }
             ProviderProtocol::Anthropic => {
-                self.complete_anthropic(&effective_provider, conversation, carried_discovered_tools)
-                    .await
+                self.complete_anthropic(
+                    &effective_provider,
+                    conversation,
+                    carried_discovered_tools,
+                    request_context,
+                )
+                .await
             }
             ProviderProtocol::Bedrock => {
-                self.complete_bedrock(&effective_provider, conversation, carried_discovered_tools)
-                    .await
+                self.complete_bedrock(
+                    &effective_provider,
+                    conversation,
+                    carried_discovered_tools,
+                    request_context,
+                )
+                .await
             }
             ProviderProtocol::Vertex => {
-                self.complete_vertex(&effective_provider, conversation, carried_discovered_tools)
-                    .await
+                self.complete_vertex(
+                    &effective_provider,
+                    conversation,
+                    carried_discovered_tools,
+                    request_context,
+                )
+                .await
             }
         };
 
@@ -303,6 +324,7 @@ impl ProviderClient {
         provider: &ProviderConfig,
         conversation: &[ConversationEntry],
         carried_discovered_tools: &BTreeSet<String>,
+        request_context: Option<&query_source::ProviderRequestContext>,
     ) -> Result<ProviderResponse> {
         let model_name = provider.model.as_deref().unwrap_or("");
         let is_reasoning_model = model_name.starts_with("o1")
@@ -351,7 +373,13 @@ impl ProviderClient {
             .as_ref()
             .ok_or_else(|| anyhow!("provider is missing a normalized base URL"))?;
         let response = self
-            .send_json_request(provider, base_url, &body, "openai-compatible")
+            .send_json_request(
+                provider,
+                base_url,
+                &body,
+                "openai-compatible",
+                request_context,
+            )
             .await?;
         parse_openai_response(response.0, response.1)
     }
@@ -361,6 +389,7 @@ impl ProviderClient {
         provider: &ProviderConfig,
         conversation: &[ConversationEntry],
         carried_discovered_tools: &BTreeSet<String>,
+        request_context: Option<&query_source::ProviderRequestContext>,
     ) -> Result<ProviderResponse> {
         let (system, messages, tools) =
             prepare_anthropic_request_surface(provider, conversation, carried_discovered_tools)
@@ -373,7 +402,7 @@ impl ProviderClient {
             "max_tokens": provider.max_output_tokens,
             "stream": false,
         });
-        apply_anthropic_request_metadata(&mut body, provider);
+        apply_anthropic_request_metadata(&mut body, provider, request_context);
         // Enable extended thinking if a budget is configured.
         if let Some(budget) = provider.thinking_budget {
             body["thinking"] = json!({
@@ -396,7 +425,13 @@ impl ProviderClient {
             .as_ref()
             .ok_or_else(|| anyhow!("provider is missing a normalized base URL"))?;
         let response = self
-            .send_json_request(provider, base_url, &body, "anthropic-compatible")
+            .send_json_request(
+                provider,
+                base_url,
+                &body,
+                "anthropic-compatible",
+                request_context,
+            )
             .await?;
         parse_anthropic_response(response.0, response.1)
     }
@@ -414,13 +449,19 @@ impl ProviderClient {
         provider: &ProviderConfig,
         conversation: &[ConversationEntry],
         carried_discovered_tools: &BTreeSet<String>,
+        request_context: Option<&query_source::ProviderRequestContext>,
     ) -> Result<ProviderResponse> {
         let credentials = match sigv4::load_aws_credentials() {
             Some(creds) => creds,
             None => {
                 // No AWS credentials — fall back to OpenAI-compatible proxy mode.
                 return self
-                    .complete_openai(provider, conversation, carried_discovered_tools)
+                    .complete_openai(
+                        provider,
+                        conversation,
+                        carried_discovered_tools,
+                        request_context,
+                    )
                     .await;
             }
         };
@@ -441,7 +482,7 @@ impl ProviderClient {
             "tools": tools,
             "max_tokens": provider.max_output_tokens,
         });
-        apply_anthropic_request_metadata(&mut body, provider);
+        apply_anthropic_request_metadata(&mut body, provider, request_context);
         if body_uses_tool_search_features(Some(&body)) {
             merge_anthropic_beta_body_param(&mut body, beta_headers::TOOL_SEARCH_BETA_3P);
         }
@@ -552,13 +593,19 @@ impl ProviderClient {
         provider: &ProviderConfig,
         conversation: &[ConversationEntry],
         carried_discovered_tools: &BTreeSet<String>,
+        request_context: Option<&query_source::ProviderRequestContext>,
     ) -> Result<ProviderResponse> {
         let access_token = match load_vertex_access_token() {
             Some(token) => token,
             None => {
                 // No Google credentials — fall back to OpenAI-compatible proxy mode.
                 return self
-                    .complete_openai(provider, conversation, carried_discovered_tools)
+                    .complete_openai(
+                        provider,
+                        conversation,
+                        carried_discovered_tools,
+                        request_context,
+                    )
                     .await;
             }
         };
@@ -588,7 +635,7 @@ impl ProviderClient {
             "tools": tools,
             "max_tokens": provider.max_output_tokens,
         });
-        apply_anthropic_request_metadata(&mut body, provider);
+        apply_anthropic_request_metadata(&mut body, provider, request_context);
         if body_uses_tool_search_features(Some(&body)) {
             merge_anthropic_beta_body_param(&mut body, beta_headers::TOOL_SEARCH_BETA_3P);
         }
@@ -671,6 +718,7 @@ impl ProviderClient {
         base_url: &str,
         body: &Value,
         label: &str,
+        request_context: Option<&query_source::ProviderRequestContext>,
     ) -> Result<(u16, String)> {
         let mut attempt = 0u32;
         loop {
@@ -678,7 +726,7 @@ impl ProviderClient {
             let response = self
                 .http
                 .post(base_url)
-                .headers(build_headers(provider, Some(body))?)
+                .headers(build_headers(provider, Some(body), request_context)?)
                 .timeout(Duration::from_millis(provider.timeout_ms))
                 .json(body)
                 .send()
@@ -806,18 +854,52 @@ fn load_vertex_access_token() -> Option<String> {
     None
 }
 
-pub(crate) fn apply_anthropic_request_metadata(body: &mut Value, provider: &ProviderConfig) {
-    if provider.request_metadata.is_empty() {
+fn apply_request_context_metadata(
+    metadata: &mut serde_json::Map<String, Value>,
+    request_context: Option<&query_source::ProviderRequestContext>,
+) {
+    let Some(request_context) = request_context else {
+        return;
+    };
+
+    metadata.insert(
+        "query_source".to_owned(),
+        json!(request_context.query_source.to_string()),
+    );
+    metadata
+        .entry("session_id".to_owned())
+        .or_insert_with(|| json!(request_context.session_id.as_str()));
+    if let Some(agent_id) = request_context.agent_id.as_ref() {
+        metadata
+            .entry("agent_id".to_owned())
+            .or_insert_with(|| json!(agent_id.to_string()));
+    }
+}
+
+pub(crate) fn apply_anthropic_request_metadata(
+    body: &mut Value,
+    provider: &ProviderConfig,
+    request_context: Option<&query_source::ProviderRequestContext>,
+) {
+    if provider.request_metadata.is_empty() && request_context.is_none() {
         return;
     }
-    let user_id =
-        serde_json::to_string(&provider.request_metadata).unwrap_or_else(|_| "{}".to_owned());
+    let mut metadata = serde_json::Map::new();
+    for (key, value) in &provider.request_metadata {
+        metadata.insert(key.clone(), json!(value));
+    }
+    apply_request_context_metadata(&mut metadata, request_context);
+    let user_id = serde_json::to_string(&metadata).unwrap_or_else(|_| "{}".to_owned());
     body["metadata"] = json!({
         "user_id": user_id,
     });
 }
 
-fn build_headers(provider: &ProviderConfig, body: Option<&Value>) -> Result<HeaderMap> {
+fn build_headers(
+    provider: &ProviderConfig,
+    body: Option<&Value>,
+    request_context: Option<&query_source::ProviderRequestContext>,
+) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
@@ -868,6 +950,15 @@ fn build_headers(provider: &ProviderConfig, body: Option<&Value>) -> Result<Head
         );
     }
 
+    if let Some(query_source_context) =
+        request_context.map(request_context_to_query_source_context)
+    {
+        headers.insert(
+            HeaderName::from_static(query_source::QUERY_SOURCE_HEADER),
+            HeaderValue::from_str(&query_source::query_source_header(&query_source_context))?,
+        );
+    }
+
     // Apply user-supplied header overrides last so they can override
     // any of the defaults above (including the Claude Code disguise).
     for (name, value) in &provider.request_header_overrides {
@@ -878,6 +969,17 @@ fn build_headers(provider: &ProviderConfig, body: Option<&Value>) -> Result<Head
         headers.insert(header_name, header_value);
     }
     Ok(headers)
+}
+
+fn request_context_to_query_source_context(
+    context: &query_source::ProviderRequestContext,
+) -> query_source::QuerySourceContext {
+    let mut query_source_context = query_source::QuerySourceContext::new(context.query_source)
+        .with_session_id(context.session_id.as_str().to_owned());
+    if let Some(agent_id) = context.agent_id.as_ref() {
+        query_source_context = query_source_context.with_agent_id(agent_id.as_str().to_owned());
+    }
+    query_source_context
 }
 
 fn body_uses_global_prompt_cache_scope(body: Option<&Value>) -> bool {
@@ -2373,7 +2475,7 @@ mod tests {
             ]
         });
 
-        let headers = build_headers(&provider, Some(&body)).expect("headers");
+        let headers = build_headers(&provider, Some(&body), None).expect("headers");
         let beta = headers
             .get("anthropic-beta")
             .expect("anthropic-beta header")
@@ -2393,13 +2495,34 @@ mod tests {
             ]
         });
 
-        let headers = build_headers(&provider, Some(&body)).expect("headers");
+        let headers = build_headers(&provider, Some(&body), None).expect("headers");
         let beta = headers
             .get("anthropic-beta")
             .expect("anthropic-beta header")
             .to_str()
             .expect("anthropic-beta header should be utf8");
         assert!(beta.contains(crate::beta_headers::TOOL_SEARCH_BETA_1P));
+    }
+
+    #[test]
+    fn request_context_is_serialized_into_query_source_header() {
+        let provider = test_provider_config("https://api.anthropic.com/v1/messages".to_owned());
+        let request_context = crate::query_source::ProviderRequestContext::new(
+            crate::query_source::QuerySource::SessionMemory,
+            rc_core::SessionId::from("session-123"),
+        )
+        .with_agent_id(rc_core::AgentId::from("agent-456"));
+
+        let headers = build_headers(&provider, None, Some(&request_context)).expect("headers");
+        let query_source = headers
+            .get(crate::query_source::QUERY_SOURCE_HEADER)
+            .expect("query source header")
+            .to_str()
+            .expect("query source header should be utf8");
+        assert_eq!(
+            query_source,
+            "source=session_memory;session_id=session-123;agent_id=agent-456"
+        );
     }
 
     #[test]
@@ -2740,7 +2863,13 @@ mod tests {
             "messages": [],
         });
 
-        apply_anthropic_request_metadata(&mut body, &provider);
+        let request_context = crate::query_source::ProviderRequestContext::new(
+            crate::query_source::QuerySource::Agent,
+            rc_core::SessionId::from("session-ctx"),
+        )
+        .with_agent_id(rc_core::AgentId::from("agent-ctx"));
+
+        apply_anthropic_request_metadata(&mut body, &provider, Some(&request_context));
 
         let metadata = body
             .get("metadata")
@@ -2751,6 +2880,8 @@ mod tests {
             .unwrap_or_else(|error| panic!("invalid metadata json: {error}"));
         assert_eq!(parsed["session_id"], "session-123");
         assert_eq!(parsed["client"], "remote-code-rust");
+        assert_eq!(parsed["query_source"], "agent");
+        assert_eq!(parsed["agent_id"], "agent-ctx");
     }
 
     #[tokio::test]

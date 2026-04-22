@@ -526,7 +526,7 @@ impl ApiClient {
         }
 
         // Apply provider-specific metadata.
-        crate::apply_anthropic_request_metadata(&mut body, provider);
+        crate::apply_anthropic_request_metadata(&mut body, provider, None);
 
         Ok(body)
     }

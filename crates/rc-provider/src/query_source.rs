@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use rc_core::{AgentId, SessionId};
 
 // ---------------------------------------------------------------------------
 // QuerySource enum
@@ -112,6 +113,32 @@ impl QuerySourceContext {
     #[must_use]
     pub fn with_parent_query_id(mut self, parent_query_id: String) -> Self {
         self.parent_query_id = Some(parent_query_id);
+        self
+    }
+}
+
+/// Minimal request context needed by provider request construction.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderRequestContext {
+    pub query_source: QuerySource,
+    pub session_id: SessionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<AgentId>,
+}
+
+impl ProviderRequestContext {
+    #[must_use]
+    pub fn new(query_source: QuerySource, session_id: SessionId) -> Self {
+        Self {
+            query_source,
+            session_id,
+            agent_id: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_agent_id(mut self, agent_id: AgentId) -> Self {
+        self.agent_id = Some(agent_id);
         self
     }
 }

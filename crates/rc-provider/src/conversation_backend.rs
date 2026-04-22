@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use rc_config::ProviderConfig;
 use rc_core::{ConversationEntry, ProviderResponse, SubAgentCompletion};
 
-use crate::{ProviderClient, StreamingCallbacks};
+use crate::{ProviderClient, StreamingCallbacks, query_source::ProviderRequestContext};
 
 #[derive(Clone, Default)]
 pub struct DiscoveredToolScope {
@@ -33,11 +33,28 @@ impl DiscoveredToolScope {
 pub trait ConversationBackend: Send + Sync {
     async fn complete(&self, conversation: &[ConversationEntry]) -> Result<ProviderResponse>;
 
+    async fn complete_with_context(
+        &self,
+        conversation: &[ConversationEntry],
+        _context: &ProviderRequestContext,
+    ) -> Result<ProviderResponse> {
+        self.complete(conversation).await
+    }
+
     async fn complete_streaming(
         &self,
         conversation: &[ConversationEntry],
         callbacks: Option<StreamingCallbacks>,
     ) -> Result<ProviderResponse>;
+
+    async fn complete_streaming_with_context(
+        &self,
+        conversation: &[ConversationEntry],
+        callbacks: Option<StreamingCallbacks>,
+        _context: &ProviderRequestContext,
+    ) -> Result<ProviderResponse> {
+        self.complete_streaming(conversation, callbacks).await
+    }
 
     fn sub_agent_completion(&self) -> Arc<dyn SubAgentCompletion>;
 }
@@ -96,6 +113,7 @@ impl SubAgentCompletion for ProviderSubAgentCompletion {
                 &self.provider,
                 conversation,
                 &self.discovered_tool_scope.snapshot(),
+                None,
             )
             .await
     }
@@ -109,6 +127,22 @@ impl ConversationBackend for ProviderCompatBackend {
                 &self.provider,
                 conversation,
                 &self.discovered_tool_scope.snapshot(),
+                None,
+            )
+            .await
+    }
+
+    async fn complete_with_context(
+        &self,
+        conversation: &[ConversationEntry],
+        context: &ProviderRequestContext,
+    ) -> Result<ProviderResponse> {
+        self.client
+            .complete_with_discovered_tools(
+                &self.provider,
+                conversation,
+                &self.discovered_tool_scope.snapshot(),
+                Some(context),
             )
             .await
     }
@@ -124,6 +158,24 @@ impl ConversationBackend for ProviderCompatBackend {
                 conversation,
                 callbacks,
                 &self.discovered_tool_scope.snapshot(),
+                None,
+            )
+            .await
+    }
+
+    async fn complete_streaming_with_context(
+        &self,
+        conversation: &[ConversationEntry],
+        callbacks: Option<StreamingCallbacks>,
+        context: &ProviderRequestContext,
+    ) -> Result<ProviderResponse> {
+        self.client
+            .complete_streaming_with_callbacks_and_discovered_tools(
+                &self.provider,
+                conversation,
+                callbacks,
+                &self.discovered_tool_scope.snapshot(),
+                Some(context),
             )
             .await
     }
