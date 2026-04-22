@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use auto_memory::{
-    default_memory_dir_for_permissions, has_valid_cowork_memory_path_override,
-    load_cowork_memory_mechanics_prompt, load_default_memory_prompt_with_features,
-    memory_dir_for_read_permissions, sanitize_path_component,
-    team_memory_dir_for_read_permissions_with_features, MemoryPromptFeatures,
+    MemoryPromptFeatures, default_memory_dir_for_permissions,
+    has_valid_cowork_memory_path_override, load_cowork_memory_mechanics_prompt,
+    load_default_memory_prompt_with_features, memory_dir_for_read_permissions,
+    sanitize_path_component, team_memory_dir_for_read_permissions_with_features,
 };
 use chrono::Local;
 use rc_agents::coordinator::{
@@ -23,16 +23,25 @@ use rc_core::{ConversationEntry, ConversationRole, ProviderProtocol};
 use rc_model::is_first_party_base_url;
 use rc_provider::{DiscoveredToolScope, provider_runtime_tool_specs_for_request};
 use rc_system_prompt::{
-    build_default_system_prompt_for_session, clear_system_prompt_sections_for_session,
     EffectiveSystemPromptOptions, McpClientInfo as PromptMcpClientInfo,
     OutputStyleConfig as PromptOutputStyleConfig, PromptContext, PromptFeatures,
-    SystemPromptSplitOptions, build_effective_system_prompt, render_system_prompt_for_api,
+    SystemPromptSplitOptions, build_default_system_prompt_for_session,
+    build_effective_system_prompt, clear_system_prompt_sections_for_session,
+    render_system_prompt_for_api,
 };
 use rc_tools::{ToolSpec, is_runtime_dynamic_mcp_tool_name};
 
 const MEMORY_INSTRUCTION_PROMPT: &str = "Codebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.";
 const SCRATCHPAD_FEATURE_KEY: &str = "tengu_scratch";
 const SCRATCHPAD_DIRNAME: &str = "scratchpad";
+
+pub use auto_memory::{
+    MemoryHeader as AutoMemoryHeader, MemoryType as AutoMemoryType,
+    build_extract_auto_only_prompt as build_extract_memory_auto_only_prompt,
+    build_extract_combined_prompt as build_extract_memory_combined_prompt,
+    format_memory_manifest as format_auto_memory_manifest,
+    parse_memory_type as parse_auto_memory_type, scan_memory_files as scan_auto_memory_files,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct PromptRuntimeOverrides {
@@ -129,13 +138,11 @@ impl RuntimePromptSettings {
             .ok()
             .flatten()
             .map(|path| path.to_string_lossy().into_owned());
-        let team_memory_read_dir = team_memory_dir_for_read_permissions_with_features(
-            config,
-            &memory_prompt_features,
-        )
-            .ok()
-            .flatten()
-            .map(|path| path.to_string_lossy().into_owned());
+        let team_memory_read_dir =
+            team_memory_dir_for_read_permissions_with_features(config, &memory_prompt_features)
+                .ok()
+                .flatten()
+                .map(|path| path.to_string_lossy().into_owned());
         Self {
             language: config.language.clone(),
             output_style: config.output_style.clone(),
@@ -530,7 +537,11 @@ pub async fn build_runtime_system_prompt(
     };
 
     let default_prompt_blocks = if use_default_system_prompt {
-        build_default_system_prompt_for_session(config.session_id, &prompt_ctx, use_global_prompt_cache)?
+        build_default_system_prompt_for_session(
+            config.session_id,
+            &prompt_ctx,
+            use_global_prompt_cache,
+        )?
     } else {
         Vec::new()
     };
@@ -1437,7 +1448,9 @@ fn runtime_feature_gate_enabled(feature_key: &str, default: bool) -> bool {
     default
 }
 
-fn runtime_memory_prompt_features(runtime_identity: &RuntimeIdentityContext) -> MemoryPromptFeatures {
+fn runtime_memory_prompt_features(
+    runtime_identity: &RuntimeIdentityContext,
+) -> MemoryPromptFeatures {
     MemoryPromptFeatures {
         team_memory_enabled: runtime_feature_gate_enabled("TEAMMEM", false)
             && runtime_feature_gate_enabled("tengu_herring_clock", false),
@@ -1584,9 +1597,9 @@ mod tests {
     use super::{
         ClaudeMemoryRoots, MemoryPromptFeatures, PromptRuntimeOverrides, RuntimePromptSettings,
         build_runtime_scratchpad_state_with, build_runtime_system_prompt,
-        clear_runtime_system_prompt_state,
-        collect_claude_md_context_with_roots, runtime_claude_temp_dir_name,
-        runtime_user_context_entries_with_settings, sanitize_path_component,
+        clear_runtime_system_prompt_state, collect_claude_md_context_with_roots,
+        runtime_claude_temp_dir_name, runtime_user_context_entries_with_settings,
+        sanitize_path_component,
     };
     use rc_config::settings_layers::RuntimeOverrides;
     use rc_config::{ProviderOverrides, SettingSource, load_runtime_config};

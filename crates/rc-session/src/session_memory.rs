@@ -131,7 +131,10 @@ impl SessionMemoryState {
 
 #[must_use]
 pub fn session_memory_dir_for_paths(paths: &AppPaths, session_id: uuid::Uuid) -> PathBuf {
-    paths.sessions_dir.join(session_id.to_string()).join(SESSION_MEMORY_DIRNAME)
+    paths
+        .sessions_dir
+        .join(session_id.to_string())
+        .join(SESSION_MEMORY_DIRNAME)
 }
 
 #[must_use]
@@ -296,7 +299,9 @@ fn generate_section_reminders(section_sizes: &[(String, usize)], total_tokens: u
     let oversized = section_sizes
         .iter()
         .filter(|(_, tokens)| *tokens > MAX_SECTION_LENGTH)
-        .map(|(section, tokens)| format!("- \"{section}\" is ~{tokens} tokens (limit: {MAX_SECTION_LENGTH})"))
+        .map(|(section, tokens)| {
+            format!("- \"{section}\" is ~{tokens} tokens (limit: {MAX_SECTION_LENGTH})")
+        })
         .collect::<Vec<_>>();
 
     if oversized.is_empty() && !over_budget {
@@ -457,9 +462,11 @@ mod tests {
     #[test]
     fn load_session_memory_content_returns_none_when_missing() {
         let runtime = test_runtime();
-        assert!(load_session_memory_content(&runtime.config)
-            .expect("content")
-            .is_none());
+        assert!(
+            load_session_memory_content(&runtime.config)
+                .expect("content")
+                .is_none()
+        );
     }
 
     #[test]

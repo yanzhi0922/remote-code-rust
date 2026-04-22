@@ -456,13 +456,15 @@ pub struct SystemPermissionRetryMessage {
 
 /// Memory saved notification — confirms that session memory was persisted.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SystemMemorySavedMessage {
     /// Unique message identifier.
     pub id: String,
-    /// Scope of the saved memory (e.g., "global", "project").
-    pub scope: String,
-    /// Number of bytes written.
-    pub bytes_written: u64,
+    /// Memory topic files written by the extraction agent.
+    pub written_paths: Vec<String>,
+    /// Number of saved paths that belong to shared team memory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_count: Option<usize>,
     /// When the message was created.
     pub timestamp: DateTime<Utc>,
 }
@@ -1331,13 +1333,28 @@ mod tests {
     fn system_memory_saved_message_serde_roundtrip() {
         let msg = SystemMemorySavedMessage {
             id: new_id(),
-            scope: "project".to_owned(),
-            bytes_written: 2048,
+            written_paths: vec!["user_role.md".to_owned(), "team/project.md".to_owned()],
+            team_count: Some(1),
             timestamp: Utc::now(),
         };
         let json = serde_json::to_string(&msg).expect("serialize");
+        assert!(json.contains("writtenPaths"));
+        assert!(json.contains("teamCount"));
         let parsed: SystemMemorySavedMessage = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(parsed.bytes_written, 2048);
+        assert_eq!(parsed.written_paths, msg.written_paths);
+        assert_eq!(parsed.team_count, Some(1));
+    }
+
+    #[test]
+    fn system_memory_saved_message_omits_absent_team_count() {
+        let msg = SystemMemorySavedMessage {
+            id: new_id(),
+            written_paths: vec!["feedback_testing.md".to_owned()],
+            team_count: None,
+            timestamp: Utc::now(),
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        assert!(!json.contains("teamCount"));
     }
 
     #[test]

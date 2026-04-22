@@ -179,17 +179,16 @@ pub fn get_agent_memory_dir(
     match scope {
         AgentMemoryScope::Project => base.join(".claude").join("agent-memory").join(dir_name),
         AgentMemoryScope::User => {
-            let memory_base =
-                std::env::var_os("CLAUDE_CODE_REMOTE_MEMORY_DIR").map_or_else(
-                    || {
-                        if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR") {
-                            PathBuf::from(dir)
-                        } else {
-                            config_home.to_path_buf()
-                        }
-                    },
-                    PathBuf::from,
-                );
+            let memory_base = std::env::var_os("CLAUDE_CODE_REMOTE_MEMORY_DIR").map_or_else(
+                || {
+                    if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR") {
+                        PathBuf::from(dir)
+                    } else {
+                        config_home.to_path_buf()
+                    }
+                },
+                PathBuf::from,
+            );
             memory_base.join("agent-memory").join(dir_name)
         }
         AgentMemoryScope::Local => {
@@ -286,7 +285,8 @@ pub fn build_memory_prompt(
         Some(extra_guidelines.join("\n")),
     );
 
-    let entrypoint_content = fs::read_to_string(memory_dir.join(ENTRYPOINT_NAME)).unwrap_or_default();
+    let entrypoint_content =
+        fs::read_to_string(memory_dir.join(ENTRYPOINT_NAME)).unwrap_or_default();
     lines.extend([format!("## {ENTRYPOINT_NAME}"), String::new()]);
     if entrypoint_content.trim().is_empty() {
         lines.push(format!(
@@ -304,7 +304,10 @@ pub fn build_memory_prompt(
 pub fn get_memory_scope_display(scope: &Option<AgentMemoryScope>, base: &Path) -> String {
     match scope {
         Some(AgentMemoryScope::User) => {
-            format!("User ({}/)", memory_base_dir().join("agent-memory").display())
+            format!(
+                "User ({}/)",
+                memory_base_dir().join("agent-memory").display()
+            )
         }
         Some(AgentMemoryScope::Project) => "Project (.claude/agent-memory/)".to_owned(),
         Some(AgentMemoryScope::Local) => format!(
@@ -362,7 +365,11 @@ fn build_memory_lines(
         "**Step 1** — write the memory to its own file (e.g., `user_role.md`, `feedback_testing.md`) using this frontmatter format:".to_owned(),
         String::new(),
     ];
-    how_to_save.extend(MEMORY_FRONTMATTER_EXAMPLE.iter().map(|line| (*line).to_owned()));
+    how_to_save.extend(
+        MEMORY_FRONTMATTER_EXAMPLE
+            .iter()
+            .map(|line| (*line).to_owned()),
+    );
     how_to_save.extend([
         String::new(),
         format!("**Step 2** — add a pointer to that file in `{ENTRYPOINT_NAME}`. `{ENTRYPOINT_NAME}` is an index, not a memory — each entry should be one line, under ~150 characters: `- [Title](file.md) — one-line hook`. It has no frontmatter. Never write memory content directly into `{ENTRYPOINT_NAME}`."),
@@ -384,14 +391,26 @@ fn build_memory_lines(
         "If the user explicitly asks you to remember something, save it immediately as whichever type fits best. If they ask you to forget something, find and remove the relevant entry.".to_owned(),
         String::new(),
     ];
-    lines.extend(TYPES_SECTION_INDIVIDUAL.iter().map(|line| (*line).to_owned()));
-    lines.extend(WHAT_NOT_TO_SAVE_SECTION.iter().map(|line| (*line).to_owned()));
+    lines.extend(
+        TYPES_SECTION_INDIVIDUAL
+            .iter()
+            .map(|line| (*line).to_owned()),
+    );
+    lines.extend(
+        WHAT_NOT_TO_SAVE_SECTION
+            .iter()
+            .map(|line| (*line).to_owned()),
+    );
     lines.push(String::new());
     lines.extend(how_to_save);
     lines.push(String::new());
     lines.extend(WHEN_TO_ACCESS_SECTION.iter().map(|line| (*line).to_owned()));
     lines.push(String::new());
-    lines.extend(TRUSTING_RECALL_SECTION.iter().map(|line| (*line).to_owned()));
+    lines.extend(
+        TRUSTING_RECALL_SECTION
+            .iter()
+            .map(|line| (*line).to_owned()),
+    );
     lines.extend([
         String::new(),
         "## Memory and other forms of persistence".to_owned(),
@@ -443,7 +462,9 @@ fn truncate_entrypoint_content(raw: &str) -> String {
         (false, false) => String::new(),
     };
 
-    format!("{truncated}\n\n> WARNING: {ENTRYPOINT_NAME} is {reason}. Only part of it was loaded. Keep index entries to one line under ~200 chars; move detail into topic files.")
+    format!(
+        "{truncated}\n\n> WARNING: {ENTRYPOINT_NAME} is {reason}. Only part of it was loaded. Keep index entries to one line under ~200 chars; move detail into topic files."
+    )
 }
 
 fn floor_char_boundary(text: &str, max_bytes: usize) -> usize {
@@ -545,7 +566,11 @@ fn sanitize_path_component(raw: &str) -> String {
     if sanitized.len() <= MAX_SANITIZED_LENGTH {
         return sanitized;
     }
-    format!("{}-{}", &sanitized[..MAX_SANITIZED_LENGTH], simple_hash(raw))
+    format!(
+        "{}-{}",
+        &sanitized[..MAX_SANITIZED_LENGTH],
+        simple_hash(raw)
+    )
 }
 
 fn simple_hash(raw: &str) -> String {

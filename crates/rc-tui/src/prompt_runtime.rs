@@ -5,8 +5,8 @@ use rc_provider::DiscoveredToolScope;
 use rc_runtime_prompt::RuntimePromptSettings;
 
 pub use rc_runtime_prompt::{
-    clear_runtime_system_prompt_state,
-    PromptRuntimeOverrides, conversation_with_runtime_user_context_with_settings,
+    PromptRuntimeOverrides, clear_runtime_system_prompt_state,
+    conversation_with_runtime_user_context_with_settings,
 };
 
 #[must_use]

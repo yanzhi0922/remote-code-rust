@@ -44,8 +44,8 @@ use rc_runtime_prompt::{
     runtime_mcp_instructions_delta_enabled,
 };
 use rc_session::SessionStore;
-use rc_session::session_memory::session_memory_dir;
 use rc_session::resume_state::{PendingToolCall, ResumeState};
+use rc_session::session_memory::session_memory_dir;
 use rc_tools::{
     RuntimeAgentPromptContext, ToolExecutionContext, ToolRuntimePolicyOverlay, ToolSpec,
     current_runtime_agent_prompt_context, current_tool_runtime_policy, execute_tool_call,
@@ -4017,7 +4017,11 @@ while True:
             .find(|entry| entry.role == ConversationRole::System)
             .expect("system entry");
         assert!(system_entry.text.contains("Specialized child agent"));
-        assert!(!system_entry.text.contains("This is the git status at the start"));
+        assert!(
+            !system_entry
+                .text
+                .contains("This is the git status at the start")
+        );
     }
 
     #[tokio::test]
@@ -4089,7 +4093,11 @@ while True:
             .expect("system entry");
         assert!(system_entry.text.contains("Append runtime prompt"));
         assert!(system_entry.text.contains("You are an interactive agent"));
-        assert!(!system_entry.text.contains("This is the git status at the start"));
+        assert!(
+            !system_entry
+                .text
+                .contains("This is the git status at the start")
+        );
     }
 
     #[tokio::test]

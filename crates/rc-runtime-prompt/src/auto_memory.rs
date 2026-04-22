@@ -1,9 +1,11 @@
 use std::fs;
 use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 use anyhow::Result;
 use rc_config::RuntimeConfig;
 use rc_config::settings_layers::load_runtime_settings;
+use walkdir::WalkDir;
 
 const AUTO_MEMORY_DIRNAME: &str = "memory";
 const AUTO_MEMORY_PROJECTS_DIRNAME: &str = "projects";
@@ -134,6 +136,9 @@ const MEMORY_FRONTMATTER_EXAMPLE: &[&str] = &[
     "```",
 ];
 
+const MAX_MEMORY_FILES: usize = 200;
+const FRONTMATTER_MAX_LINES: usize = 30;
+
 const TYPES_SECTION_COMBINED: &[&str] = &[
     "## Types of memory",
     "",
@@ -249,6 +254,46 @@ pub struct MemoryPromptFeatures {
     pub repl_mode_active: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryType {
+    User,
+    Feedback,
+    Project,
+    Reference,
+}
+
+impl MemoryType {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Feedback => "feedback",
+            Self::Project => "project",
+            Self::Reference => "reference",
+        }
+    }
+}
+
+#[must_use]
+pub fn parse_memory_type(raw: &str) -> Option<MemoryType> {
+    match raw {
+        "user" => Some(MemoryType::User),
+        "feedback" => Some(MemoryType::Feedback),
+        "project" => Some(MemoryType::Project),
+        "reference" => Some(MemoryType::Reference),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MemoryHeader {
+    pub filename: String,
+    pub file_path: PathBuf,
+    pub mtime_ms: f64,
+    pub description: Option<String>,
+    pub memory_type: Option<MemoryType>,
+}
+
 pub fn team_memory_dir_for_read_permissions_with_features(
     config: &RuntimeConfig,
     features: &MemoryPromptFeatures,
@@ -269,6 +314,290 @@ pub fn load_default_memory_prompt_with_features(
     let mut inputs = AutoMemoryInputs::from_process_env(config)?;
     inputs.team_memory_enabled = features.team_memory_enabled;
     load_default_memory_prompt_with(config, &inputs, features)
+}
+
+#[must_use]
+pub fn build_extract_auto_only_prompt(
+    new_message_count: usize,
+    existing_memories: &str,
+    skip_index: bool,
+) -> String {
+    let mut how_to_save = if skip_index {
+        vec![
+            "## How to save memories".to_owned(),
+            String::new(),
+            "Write each memory to its own file (e.g., `user_role.md`, `feedback_testing.md`) using this frontmatter format:".to_owned(),
+            String::new(),
+        ]
+    } else {
+        vec![
+            "## How to save memories".to_owned(),
+            String::new(),
+            "Saving a memory is a two-step process:".to_owned(),
+            String::new(),
+            "**Step 1** — write the memory to its own file (e.g., `user_role.md`, `feedback_testing.md`) using this frontmatter format:".to_owned(),
+            String::new(),
+        ]
+    };
+    how_to_save.extend(
+        MEMORY_FRONTMATTER_EXAMPLE
+            .iter()
+            .map(|line| (*line).to_owned()),
+    );
+    if skip_index {
+        how_to_save.extend([
+            String::new(),
+            "- Organize memory semantically by topic, not chronologically".to_owned(),
+            "- Update or remove memories that turn out to be wrong or outdated".to_owned(),
+            "- Do not write duplicate memories. First check if there is an existing memory you can update before writing a new one.".to_owned(),
+        ]);
+    } else {
+        how_to_save.extend([
+            String::new(),
+            format!(
+                "**Step 2** — add a pointer to that file in `{ENTRYPOINT_NAME}`. `{ENTRYPOINT_NAME}` is an index, not a memory — each entry should be one line, under ~150 characters: `- [Title](file.md) — one-line hook`. It has no frontmatter. Never write memory content directly into `{ENTRYPOINT_NAME}`."
+            ),
+            String::new(),
+            format!(
+                "- `{ENTRYPOINT_NAME}` is always loaded into your system prompt — lines after {MAX_ENTRYPOINT_LINES} will be truncated, so keep the index concise"
+            ),
+            "- Organize memory semantically by topic, not chronologically".to_owned(),
+            "- Update or remove memories that turn out to be wrong or outdated".to_owned(),
+            "- Do not write duplicate memories. First check if there is an existing memory you can update before writing a new one.".to_owned(),
+        ]);
+    }
+
+    let mut lines = vec![
+        extract_prompt_opener(new_message_count, existing_memories),
+        String::new(),
+        "If the user explicitly asks you to remember something, save it immediately as whichever type fits best. If they ask you to forget something, find and remove the relevant entry.".to_owned(),
+        String::new(),
+    ];
+    lines.extend(
+        TYPES_SECTION_INDIVIDUAL
+            .iter()
+            .map(|line| (*line).to_owned()),
+    );
+    lines.extend(
+        WHAT_NOT_TO_SAVE_SECTION
+            .iter()
+            .map(|line| (*line).to_owned()),
+    );
+    lines.push(String::new());
+    lines.extend(how_to_save);
+    lines.join("\n")
+}
+
+#[must_use]
+pub fn build_extract_combined_prompt(
+    new_message_count: usize,
+    existing_memories: &str,
+    skip_index: bool,
+) -> String {
+    let mut how_to_save = if skip_index {
+        vec![
+            "## How to save memories".to_owned(),
+            String::new(),
+            "Write each memory to its own file in the chosen directory (private or team, per the type's scope guidance) using this frontmatter format:".to_owned(),
+            String::new(),
+        ]
+    } else {
+        vec![
+            "## How to save memories".to_owned(),
+            String::new(),
+            "Saving a memory is a two-step process:".to_owned(),
+            String::new(),
+            "**Step 1** — write the memory to its own file in the chosen directory (private or team, per the type's scope guidance) using this frontmatter format:".to_owned(),
+            String::new(),
+        ]
+    };
+    how_to_save.extend(
+        MEMORY_FRONTMATTER_EXAMPLE
+            .iter()
+            .map(|line| (*line).to_owned()),
+    );
+    if skip_index {
+        how_to_save.extend([
+            String::new(),
+            "- Organize memory semantically by topic, not chronologically".to_owned(),
+            "- Update or remove memories that turn out to be wrong or outdated".to_owned(),
+            "- Do not write duplicate memories. First check if there is an existing memory you can update before writing a new one.".to_owned(),
+        ]);
+    } else {
+        how_to_save.extend([
+            String::new(),
+            format!(
+                "**Step 2** — add a pointer to that file in the same directory's `{ENTRYPOINT_NAME}`. Each directory (private and team) has its own `{ENTRYPOINT_NAME}` index — each entry should be one line, under ~150 characters: `- [Title](file.md) — one-line hook`. They have no frontmatter. Never write memory content directly into a `{ENTRYPOINT_NAME}`."
+            ),
+            String::new(),
+            format!(
+                "- Both `{ENTRYPOINT_NAME}` indexes are loaded into your system prompt — lines after {MAX_ENTRYPOINT_LINES} will be truncated, so keep them concise"
+            ),
+            "- Organize memory semantically by topic, not chronologically".to_owned(),
+            "- Update or remove memories that turn out to be wrong or outdated".to_owned(),
+            "- Do not write duplicate memories. First check if there is an existing memory you can update before writing a new one.".to_owned(),
+        ]);
+    }
+
+    let mut lines = vec![
+        extract_prompt_opener(new_message_count, existing_memories),
+        String::new(),
+        "If the user explicitly asks you to remember something, save it immediately as whichever type fits best. If they ask you to forget something, find and remove the relevant entry.".to_owned(),
+        String::new(),
+    ];
+    lines.extend(TYPES_SECTION_COMBINED.iter().map(|line| (*line).to_owned()));
+    lines.extend(
+        WHAT_NOT_TO_SAVE_SECTION
+            .iter()
+            .map(|line| (*line).to_owned()),
+    );
+    lines.extend([
+        "- You MUST avoid saving sensitive data within shared team memories. For example, never save API keys or user credentials.".to_owned(),
+        String::new(),
+    ]);
+    lines.extend(how_to_save);
+    lines.join("\n")
+}
+
+#[must_use]
+fn extract_prompt_opener(new_message_count: usize, existing_memories: &str) -> String {
+    let manifest = if existing_memories.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\n## Existing memory files\n\n{existing_memories}\n\nCheck this list before writing — update an existing file rather than creating a duplicate."
+        )
+    };
+
+    [
+        format!(
+            "You are now acting as the memory extraction subagent. Analyze the most recent ~{new_message_count} messages above and use them to update your persistent memory systems."
+        ),
+        String::new(),
+        "Available tools: Read, Grep, Glob, read-only Bash (ls/find/cat/stat/wc/head/tail and similar), and Edit/Write for paths inside the memory directory only. Bash rm is not permitted. All other tools — MCP, Agent, write-capable Bash, etc — will be denied.".to_owned(),
+        String::new(),
+        "You have a limited turn budget. Edit requires a prior Read of the same file, so the efficient strategy is: turn 1 — issue all Read calls in parallel for every file you might update; turn 2 — issue all Write/Edit calls in parallel. Do not interleave reads and writes across multiple turns.".to_owned(),
+        String::new(),
+        format!(
+            "You MUST only use content from the last ~{new_message_count} messages to update your persistent memories. Do not waste any turns attempting to investigate or verify that content further — no grepping source files, no reading code to confirm a pattern exists, no git commands.{manifest}"
+        ),
+    ]
+    .join("\n")
+}
+
+#[must_use]
+pub fn scan_memory_files(memory_dir: &Path) -> Vec<MemoryHeader> {
+    let mut headers = Vec::new();
+    for entry in WalkDir::new(memory_dir)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("md") {
+            continue;
+        }
+        if path.file_name().and_then(|value| value.to_str()) == Some(ENTRYPOINT_NAME) {
+            continue;
+        }
+        let Some(header) = read_memory_header(memory_dir, path) else {
+            continue;
+        };
+        headers.push(header);
+    }
+    headers.sort_by(|left, right| right.mtime_ms.total_cmp(&left.mtime_ms));
+    headers.truncate(MAX_MEMORY_FILES);
+    headers
+}
+
+#[must_use]
+pub fn format_memory_manifest(memories: &[MemoryHeader]) -> String {
+    memories
+        .iter()
+        .map(|memory| {
+            let tag = memory
+                .memory_type
+                .map(|kind| format!("[{}] ", kind.as_str()))
+                .unwrap_or_default();
+            let ts = iso_timestamp_from_mtime_ms(memory.mtime_ms);
+            match memory.description.as_deref() {
+                Some(description) if !description.is_empty() => {
+                    format!("- {tag}{} ({ts}): {description}", memory.filename)
+                }
+                _ => format!("- {tag}{} ({ts})", memory.filename),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn read_memory_header(memory_dir: &Path, file_path: &Path) -> Option<MemoryHeader> {
+    let metadata = fs::metadata(file_path).ok()?;
+    let mtime_ms = metadata
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_secs_f64()
+        * 1000.0;
+    let content = fs::read_to_string(file_path).ok()?;
+    let frontmatter = parse_frontmatter_fields(&first_lines(&content, FRONTMATTER_MAX_LINES));
+    let filename = file_path
+        .strip_prefix(memory_dir)
+        .ok()
+        .unwrap_or(file_path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    Some(MemoryHeader {
+        filename,
+        file_path: file_path.to_path_buf(),
+        mtime_ms,
+        description: frontmatter.get("description").cloned(),
+        memory_type: frontmatter
+            .get("type")
+            .and_then(|value| parse_memory_type(value)),
+    })
+}
+
+fn first_lines(content: &str, max_lines: usize) -> String {
+    content
+        .lines()
+        .take(max_lines)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn parse_frontmatter_fields(content: &str) -> std::collections::BTreeMap<String, String> {
+    let mut fields = std::collections::BTreeMap::new();
+    let mut lines = content.lines();
+    if lines.next() != Some("---") {
+        return fields;
+    }
+
+    for line in lines {
+        if line.trim() == "---" {
+            break;
+        }
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        fields.insert(
+            key.trim().to_owned(),
+            value.trim().trim_matches('"').trim_matches('\'').to_owned(),
+        );
+    }
+    fields
+}
+
+fn iso_timestamp_from_mtime_ms(mtime_ms: f64) -> String {
+    let secs = (mtime_ms / 1000.0).floor() as i64;
+    let millis = (mtime_ms.rem_euclid(1000.0).round() as u32).min(999);
+    let nanos = millis * 1_000_000;
+    chrono::DateTime::<chrono::Utc>::from_timestamp(secs, nanos)
+        .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH)
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 fn load_cowork_memory_mechanics_prompt_with(
@@ -371,15 +700,9 @@ impl AutoMemoryInputs {
                 .ok()
                 .filter(|value| !value.trim().is_empty()),
             remote_memory_dir,
-            team_memory_enabled: resolve_team_memory_enabled(),
+            team_memory_enabled: false,
         })
     }
-}
-
-fn resolve_team_memory_enabled() -> bool {
-    std::env::var("CLAUDE_CODE_TEAM_MEMORY")
-        .or_else(|_| std::env::var("TEAMMEM"))
-        .is_ok_and(|value| env_truthy(Some(value.as_str())))
 }
 
 fn is_team_memory_enabled(inputs: &AutoMemoryInputs) -> bool {
@@ -729,7 +1052,11 @@ fn build_memory_lines(
             String::new(),
         ]
     };
-    how_to_save.extend(MEMORY_FRONTMATTER_EXAMPLE.iter().map(|line| (*line).to_owned()));
+    how_to_save.extend(
+        MEMORY_FRONTMATTER_EXAMPLE
+            .iter()
+            .map(|line| (*line).to_owned()),
+    );
     if skip_index {
         how_to_save.extend([
             String::new(),
@@ -801,7 +1128,9 @@ fn build_memory_lines(
         lines.push(extra_guideline);
     }
     lines.push(String::new());
-    lines.extend(build_searching_past_context_section(config, memory_dir, features));
+    lines.extend(build_searching_past_context_section(
+        config, memory_dir, features,
+    ));
 
     lines
 }
@@ -831,7 +1160,11 @@ fn build_combined_memory_prompt(
             String::new(),
         ]
     };
-    how_to_save.extend(MEMORY_FRONTMATTER_EXAMPLE.iter().map(|line| (*line).to_owned()));
+    how_to_save.extend(
+        MEMORY_FRONTMATTER_EXAMPLE
+            .iter()
+            .map(|line| (*line).to_owned()),
+    );
     if skip_index {
         how_to_save.extend([
             String::new(),
@@ -953,7 +1286,11 @@ fn build_assistant_daily_log_prompt(
         "- Anything the user explicitly asks you to remember".to_owned(),
         String::new(),
     ];
-    lines.extend(WHAT_NOT_TO_SAVE_SECTION.iter().map(|line| (*line).to_owned()));
+    lines.extend(
+        WHAT_NOT_TO_SAVE_SECTION
+            .iter()
+            .map(|line| (*line).to_owned()),
+    );
     lines.push(String::new());
     if !skip_index {
         lines.extend([
@@ -964,7 +1301,9 @@ fn build_assistant_daily_log_prompt(
             String::new(),
         ]);
     }
-    lines.extend(build_searching_past_context_section(config, memory_dir, features));
+    lines.extend(build_searching_past_context_section(
+        config, memory_dir, features,
+    ));
     lines.join("\n")
 }
 
@@ -982,16 +1321,12 @@ fn build_searching_past_context_section(
     let memory_search = if use_shell_grep {
         format!("grep -rn \"<search term>\" {auto_memory_dir} --include=\"*.md\"")
     } else {
-        format!(
-            "Grep with pattern=\"<search term>\" path=\"{auto_memory_dir}\" glob=\"*.md\""
-        )
+        format!("Grep with pattern=\"<search term>\" path=\"{auto_memory_dir}\" glob=\"*.md\"")
     };
     let transcript_search = if use_shell_grep {
         format!("grep -rn \"<search term>\" {transcripts_dir} --include=\"*.jsonl\"")
     } else {
-        format!(
-            "Grep with pattern=\"<search term>\" path=\"{transcripts_dir}\" glob=\"*.jsonl\""
-        )
+        format!("Grep with pattern=\"<search term>\" path=\"{transcripts_dir}\" glob=\"*.jsonl\"")
     };
 
     vec![
@@ -1065,6 +1400,89 @@ mod tests {
         assert!(prompt.contains("## Before recommending from memory"));
         assert!(prompt.contains("type: {{user, feedback, project, reference}}"));
         assert!(prompt.contains("Custom extra guideline"));
+    }
+
+    #[test]
+    fn extract_auto_only_prompt_matches_research_opener_and_index_rules() {
+        let prompt = super::build_extract_auto_only_prompt(
+            7,
+            "- [user] user_role.md (2026-04-22T01:02:03.004Z): role",
+            false,
+        );
+
+        assert!(prompt.starts_with(
+            "You are now acting as the memory extraction subagent. Analyze the most recent ~7 messages above and use them to update your persistent memory systems."
+        ));
+        assert!(prompt.contains(
+            "Available tools: Read, Grep, Glob, read-only Bash (ls/find/cat/stat/wc/head/tail and similar), and Edit/Write for paths inside the memory directory only. Bash rm is not permitted. All other tools — MCP, Agent, write-capable Bash, etc — will be denied."
+        ));
+        assert!(prompt.contains(
+            "## Existing memory files\n\n- [user] user_role.md (2026-04-22T01:02:03.004Z): role\n\nCheck this list before writing — update an existing file rather than creating a duplicate."
+        ));
+        assert!(prompt.contains(
+            "**Step 2** — add a pointer to that file in `MEMORY.md`. `MEMORY.md` is an index, not a memory — each entry should be one line, under ~150 characters: `- [Title](file.md) — one-line hook`. It has no frontmatter. Never write memory content directly into `MEMORY.md`."
+        ));
+        assert!(prompt.contains(
+            "- `MEMORY.md` is always loaded into your system prompt — lines after 200 will be truncated, so keep the index concise"
+        ));
+        assert!(!prompt.contains(
+            "Keep the name, description, and type fields in memory files up-to-date with the content"
+        ));
+    }
+
+    #[test]
+    fn extract_skip_index_prompt_omits_memory_index_step() {
+        let prompt = super::build_extract_auto_only_prompt(3, "", true);
+
+        assert!(prompt.contains(
+            "Write each memory to its own file (e.g., `user_role.md`, `feedback_testing.md`) using this frontmatter format:"
+        ));
+        assert!(!prompt.contains("Saving a memory is a two-step process:"));
+        assert!(!prompt.contains("**Step 2**"));
+        assert!(!prompt.contains("## Existing memory files"));
+    }
+
+    #[test]
+    fn extract_combined_prompt_matches_team_specific_rules() {
+        let prompt = super::build_extract_combined_prompt(5, "", false);
+
+        assert!(prompt.contains(
+            "Each type below declares a <scope> of `private`, `team`, or guidance for choosing between the two."
+        ));
+        assert!(prompt.contains(
+            "- You MUST avoid saving sensitive data within shared team memories. For example, never save API keys or user credentials."
+        ));
+        assert!(prompt.contains(
+            "**Step 1** — write the memory to its own file in the chosen directory (private or team, per the type's scope guidance) using this frontmatter format:"
+        ));
+        assert!(prompt.contains(
+            "**Step 2** — add a pointer to that file in the same directory's `MEMORY.md`. Each directory (private and team) has its own `MEMORY.md` index — each entry should be one line, under ~150 characters: `- [Title](file.md) — one-line hook`. They have no frontmatter. Never write memory content directly into a `MEMORY.md`."
+        ));
+    }
+
+    #[test]
+    fn memory_manifest_formats_headers_like_research() {
+        let headers = vec![
+            super::MemoryHeader {
+                filename: "nested/project.md".to_owned(),
+                file_path: std::path::PathBuf::from("nested/project.md"),
+                mtime_ms: 1_776_819_723_004.0,
+                description: Some("project facts".to_owned()),
+                memory_type: Some(super::MemoryType::Project),
+            },
+            super::MemoryHeader {
+                filename: "legacy.md".to_owned(),
+                file_path: std::path::PathBuf::from("legacy.md"),
+                mtime_ms: 1_776_819_724_000.0,
+                description: None,
+                memory_type: None,
+            },
+        ];
+
+        assert_eq!(
+            super::format_memory_manifest(&headers),
+            "- [project] nested/project.md (2026-04-22T01:02:03.004Z): project facts\n- legacy.md (2026-04-22T01:02:04.000Z)"
+        );
     }
 
     #[test]

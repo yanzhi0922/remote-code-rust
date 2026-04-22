@@ -229,8 +229,14 @@ mod tests {
         let event = transcript
             .latest_named_event_payload("session_memory_accessed")
             .expect("event");
-        assert_eq!(event.get("tool_name").and_then(serde_json::Value::as_str), Some("read_file"));
-        assert_eq!(event.get("tool_use_id").and_then(serde_json::Value::as_str), Some("tool-1"));
+        assert_eq!(
+            event.get("tool_name").and_then(serde_json::Value::as_str),
+            Some("read_file")
+        );
+        assert_eq!(
+            event.get("tool_use_id").and_then(serde_json::Value::as_str),
+            Some("tool-1")
+        );
     }
 
     #[test]
@@ -261,8 +267,14 @@ mod tests {
         let event = transcript
             .latest_named_event_payload("session_transcript_accessed")
             .expect("event");
-        assert_eq!(event.get("tool_name").and_then(serde_json::Value::as_str), Some("read_file"));
-        assert_eq!(event.get("tool_use_id").and_then(serde_json::Value::as_str), Some("tool-2"));
+        assert_eq!(
+            event.get("tool_name").and_then(serde_json::Value::as_str),
+            Some("read_file")
+        );
+        assert_eq!(
+            event.get("tool_use_id").and_then(serde_json::Value::as_str),
+            Some("tool-2")
+        );
     }
 
     #[test]
@@ -330,12 +342,26 @@ mod tests {
         let transcript = store
             .load_transcript(config.session_id)
             .expect("load transcript");
-        assert!(transcript.latest_named_event_payload("auto_memory_accessed").is_some());
-        assert!(transcript.latest_named_event_payload("team_memory_accessed").is_some());
+        assert!(
+            transcript
+                .latest_named_event_payload("auto_memory_accessed")
+                .is_some()
+        );
+        assert!(
+            transcript
+                .latest_named_event_payload("team_memory_accessed")
+                .is_some()
+        );
         let shape = transcript
             .latest_named_event_payload("memory_write_shape")
             .expect("shape");
-        assert_eq!(shape.get("tool_name").and_then(serde_json::Value::as_str), Some("edit_file"));
-        assert_eq!(shape.get("scope").and_then(serde_json::Value::as_str), Some("team"));
+        assert_eq!(
+            shape.get("tool_name").and_then(serde_json::Value::as_str),
+            Some("edit_file")
+        );
+        assert_eq!(
+            shape.get("scope").and_then(serde_json::Value::as_str),
+            Some("team")
+        );
     }
 }

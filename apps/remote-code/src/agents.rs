@@ -349,7 +349,7 @@ impl AgentExecutor for RemoteCodeAgentExecutor {
     }
 }
 
-fn install_ephemeral_session_paths(config: &mut RuntimeConfig) -> Result<TempDir> {
+pub(crate) fn install_ephemeral_session_paths(config: &mut RuntimeConfig) -> Result<TempDir> {
     let mut builder = tempfile::Builder::new();
     builder.prefix("remote-code-agent-ephemeral-");
     let tempdir = match std::env::var_os("CLAUDE_CODE_TMPDIR") {
