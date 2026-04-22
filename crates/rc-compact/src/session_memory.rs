@@ -16,6 +16,7 @@ use rc_core::{
 use rc_session::session_memory::{
     SessionMemoryState, ensure_session_memory_file, is_session_memory_empty,
     load_session_memory_content, session_memory_path, truncate_session_memory_for_compact,
+    wait_for_session_memory_extraction,
 };
 
 use crate::engine::create_compact_boundary_message;
@@ -175,14 +176,7 @@ pub async fn session_memory_compact(
 fn load_session_memory_for_compact(
     file_context: &SessionMemoryCompactFileContext,
 ) -> Option<String> {
-    let state = file_context
-        .state
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone();
-    if !state.wait_budget_elapsed() {
-        return None;
-    }
+    wait_for_session_memory_extraction(&file_context.state);
 
     let runtime_config = &file_context.runtime_config;
     let _ = ensure_session_memory_file(runtime_config);
@@ -281,7 +275,7 @@ fn calculate_messages_to_keep_index(
         || (total_tokens >= config.min_tokens
             && text_block_message_count >= config.min_text_block_messages)
     {
-        return start_index;
+        return adjust_index_to_preserve_api_invariants(messages, start_index);
     }
 
     let floor = messages
@@ -309,7 +303,95 @@ fn calculate_messages_to_keep_index(
         }
     }
 
-    start_index
+    adjust_index_to_preserve_api_invariants(messages, start_index)
+}
+
+fn adjust_index_to_preserve_api_invariants(messages: &[Message], start_index: usize) -> usize {
+    if start_index == 0 || start_index >= messages.len() {
+        return start_index;
+    }
+
+    let mut adjusted_index = start_index;
+    let all_tool_result_ids = messages[start_index..]
+        .iter()
+        .flat_map(tool_result_ids)
+        .collect::<Vec<_>>();
+
+    if !all_tool_result_ids.is_empty() {
+        let tool_use_ids_in_kept_range = messages[adjusted_index..]
+            .iter()
+            .flat_map(tool_use_ids)
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut missing_tool_use_ids = all_tool_result_ids
+            .into_iter()
+            .filter(|id| !tool_use_ids_in_kept_range.contains(id))
+            .collect::<std::collections::BTreeSet<_>>();
+
+        for index in (0..adjusted_index).rev() {
+            if missing_tool_use_ids.is_empty() {
+                break;
+            }
+            let present_ids = tool_use_ids(&messages[index])
+                .into_iter()
+                .filter(|id| missing_tool_use_ids.contains(id))
+                .collect::<Vec<_>>();
+            if !present_ids.is_empty() {
+                adjusted_index = index;
+                for id in present_ids {
+                    missing_tool_use_ids.remove(&id);
+                }
+            }
+        }
+    }
+
+    adjusted_index
+}
+
+fn tool_result_ids(message: &Message) -> Vec<String> {
+    match message {
+        Message::User(message) => message
+            .provider_content_blocks
+            .iter()
+            .filter_map(|block| {
+                if block.get("type").and_then(serde_json::Value::as_str) == Some("tool_result") {
+                    block
+                        .get("tool_use_id")
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToOwned::to_owned)
+                } else {
+                    None
+                }
+            })
+            .collect(),
+        Message::ToolUseSummary(message) => {
+            if message.content_blocks.is_empty() {
+                Vec::new()
+            } else {
+                vec![message.tool_call_id.clone()]
+            }
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn tool_use_ids(message: &Message) -> Vec<String> {
+    match message {
+        Message::Assistant(message) => message
+            .provider_content_blocks()
+            .into_iter()
+            .filter_map(|block| {
+                if block.get("type").and_then(serde_json::Value::as_str) == Some("tool_use") {
+                    block
+                        .get("id")
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToOwned::to_owned)
+                } else {
+                    None
+                }
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 pub fn has_text_blocks(message: &Message) -> bool {
@@ -375,7 +457,8 @@ mod tests {
     use super::{
         DEFAULT_SM_COMPACT_MAX_TOKENS, DEFAULT_SM_COMPACT_MIN_TEXT_BLOCK_MESSAGES,
         DEFAULT_SM_COMPACT_MIN_TOKENS, SessionMemoryCompactConfig, SessionMemoryCompactStrategy,
-        calculate_messages_to_keep_index, has_text_blocks, load_session_memory_for_compact,
+        adjust_index_to_preserve_api_invariants, calculate_messages_to_keep_index, has_text_blocks,
+        load_session_memory_for_compact,
     };
     use rc_session::session_memory::{
         DEFAULT_SESSION_MEMORY_TEMPLATE, SessionMemoryState, ensure_session_memory_file,
@@ -509,5 +592,32 @@ mod tests {
         let index =
             calculate_messages_to_keep_index(&messages, 0, &SessionMemoryCompactConfig::default());
         assert_eq!(index, 0);
+    }
+
+    #[test]
+    fn preserve_api_invariants_pulls_in_missing_tool_use_messages() {
+        let assistant = Message::Assistant(rc_core::AssistantMessage {
+            base: MessageBase::default(),
+            text: String::new(),
+            blocks: Vec::new(),
+            tool_calls: Vec::new(),
+            provider_content_blocks: vec![serde_json::json!({
+                "type": "tool_use",
+                "id": "tool-1",
+                "name": "Read"
+            })],
+        });
+        let user = Message::User(UserMessage {
+            base: MessageBase::default(),
+            text: String::new(),
+            attachments: Vec::new(),
+            provider_content_blocks: vec![serde_json::json!({
+                "type": "tool_result",
+                "tool_use_id": "tool-1",
+                "content": "ok"
+            })],
+        });
+        let messages = vec![assistant, user];
+        assert_eq!(adjust_index_to_preserve_api_invariants(&messages, 1), 0);
     }
 }
