@@ -2,6 +2,7 @@ use std::path::Path;
 
 use directories::BaseDirs;
 use rc_config::RuntimeConfig;
+use rc_session::session_memory::session_memory_path;
 use rc_runtime_prompt::RuntimePromptSettings;
 
 pub fn render(config: &RuntimeConfig) {
@@ -19,12 +20,7 @@ pub fn render(config: &RuntimeConfig) {
         .team_memory_read_dir
         .as_deref()
         .map(std::path::PathBuf::from);
-    let session_summary = config
-        .paths
-        .sessions_dir
-        .join(config.session_id.to_string())
-        .join("session-memory")
-        .join("summary.md");
+    let session_summary = session_memory_path(config);
 
     println!("Memory surface:");
     print_file_entry("user", &user_claude);
