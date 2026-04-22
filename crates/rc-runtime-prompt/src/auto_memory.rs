@@ -5,6 +5,7 @@ use std::time::UNIX_EPOCH;
 use anyhow::Result;
 use rc_config::RuntimeConfig;
 use rc_config::settings_layers::load_runtime_settings;
+use regex::Regex;
 use walkdir::WalkDir;
 
 const AUTO_MEMORY_DIRNAME: &str = "memory";
@@ -139,6 +140,18 @@ const MEMORY_FRONTMATTER_EXAMPLE: &[&str] = &[
 const MAX_MEMORY_FILES: usize = 200;
 const FRONTMATTER_MAX_LINES: usize = 30;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionMemoryFileType {
+    SessionMemory,
+    SessionTranscript,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryScope {
+    Personal,
+    Team,
+}
+
 const TYPES_SECTION_COMBINED: &[&str] = &[
     "## Types of memory",
     "",
@@ -240,6 +253,294 @@ pub fn memory_dir_for_read_permissions(config: &RuntimeConfig) -> Result<Option<
     )?)))
 }
 
+pub fn memory_base_dir() -> PathBuf {
+    std::env::var_os("CLAUDE_CODE_REMOTE_MEMORY_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(claude_config_home_dir)
+}
+
+pub fn claude_config_home() -> PathBuf {
+    claude_config_home_dir()
+}
+
+pub fn auto_memory_path(config: &RuntimeConfig) -> Result<Option<PathBuf>> {
+    let inputs = AutoMemoryInputs::from_process_env(config)?;
+    if !inputs.auto_memory_enabled {
+        return Ok(None);
+    }
+    Ok(Some(PathBuf::from(resolve_default_memory_dir(
+        config, &inputs,
+    )?)))
+}
+
+pub fn auto_memory_entrypoint(config: &RuntimeConfig) -> Result<Option<PathBuf>> {
+    Ok(auto_memory_path(config)?.map(|path| path.join(ENTRYPOINT_NAME)))
+}
+
+pub fn auto_memory_daily_log_path(
+    config: &RuntimeConfig,
+    date: chrono::NaiveDate,
+) -> Result<Option<PathBuf>> {
+    Ok(auto_memory_path(config)?.map(|path| {
+        path.join("logs")
+            .join(date.format("%Y").to_string())
+            .join(date.format("%m").to_string())
+            .join(format!("{}.md", date.format("%Y-%m-%d")))
+    }))
+}
+
+pub fn team_memory_path_with_features(
+    config: &RuntimeConfig,
+    features: &MemoryPromptFeatures,
+) -> Result<Option<PathBuf>> {
+    team_memory_dir_for_read_permissions_with_features(config, features)
+}
+
+pub fn team_memory_entrypoint_with_features(
+    config: &RuntimeConfig,
+    features: &MemoryPromptFeatures,
+) -> Result<Option<PathBuf>> {
+    Ok(team_memory_path_with_features(config, features)?.map(|path| path.join(ENTRYPOINT_NAME)))
+}
+
+pub fn is_auto_memory_path(config: &RuntimeConfig, path: &Path) -> bool {
+    auto_memory_path(config)
+        .ok()
+        .flatten()
+        .is_some_and(|dir| path_starts_with_normalized(path, &dir))
+}
+
+pub fn is_team_memory_path_with_features(
+    config: &RuntimeConfig,
+    features: &MemoryPromptFeatures,
+    path: &Path,
+) -> bool {
+    team_memory_path_with_features(config, features)
+        .ok()
+        .flatten()
+        .is_some_and(|dir| path_starts_with_normalized(&absolute_normalized_path(path), &dir))
+}
+
+pub fn is_team_memory_file_with_features(
+    config: &RuntimeConfig,
+    features: &MemoryPromptFeatures,
+    path: &Path,
+) -> bool {
+    features.team_memory_enabled && is_team_memory_path_with_features(config, features, path)
+}
+
+pub fn memory_scope_for_path_with_features(
+    config: &RuntimeConfig,
+    features: &MemoryPromptFeatures,
+    path: &Path,
+) -> Option<MemoryScope> {
+    if is_team_memory_file_with_features(config, features, path) {
+        return Some(MemoryScope::Team);
+    }
+    if is_auto_memory_path(config, path) {
+        return Some(MemoryScope::Personal);
+    }
+    None
+}
+
+pub fn agent_memory_dir(
+    config: &RuntimeConfig,
+    agent_type: &str,
+    scope: rc_agents::definition::AgentMemoryScope,
+) -> PathBuf {
+    let dir_name = sanitize_agent_type_for_path(agent_type);
+    match scope {
+        rc_agents::definition::AgentMemoryScope::User => {
+            memory_base_dir().join("agent-memory").join(dir_name)
+        }
+        rc_agents::definition::AgentMemoryScope::Project => config
+            .original_cwd
+            .join(".claude")
+            .join("agent-memory")
+            .join(dir_name),
+        rc_agents::definition::AgentMemoryScope::Local => local_agent_memory_dir(config, &dir_name),
+    }
+}
+
+pub fn agent_memory_entrypoint(
+    config: &RuntimeConfig,
+    agent_type: &str,
+    scope: rc_agents::definition::AgentMemoryScope,
+) -> PathBuf {
+    agent_memory_dir(config, agent_type, scope).join(ENTRYPOINT_NAME)
+}
+
+pub fn agent_memory_dirs(config: &RuntimeConfig) -> Vec<PathBuf> {
+    let mut dirs = vec![
+        memory_base_dir().join("agent-memory"),
+        config.original_cwd.join(".claude").join("agent-memory"),
+    ];
+    if std::env::var_os("CLAUDE_CODE_REMOTE_MEMORY_DIR").is_some() {
+        dirs.push(memory_base_dir().join(AUTO_MEMORY_PROJECTS_DIRNAME));
+    } else {
+        dirs.push(
+            config
+                .original_cwd
+                .join(".claude")
+                .join("agent-memory-local"),
+        );
+    }
+    dirs.sort();
+    dirs.dedup();
+    dirs
+}
+
+pub fn is_agent_memory_path(config: &RuntimeConfig, path: &Path) -> bool {
+    if !is_auto_memory_enabled(config) {
+        return false;
+    }
+    let normalized = comparable_path(&absolute_normalized_path(path));
+    agent_memory_dirs(config).into_iter().any(|root| {
+        let root_cmp = comparable_path(&root);
+        if root
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value == AUTO_MEMORY_PROJECTS_DIRNAME)
+        {
+            return is_same_or_child_dir_cmp(&normalized, &root_cmp)
+                && normalized.contains("/agent-memory-local/");
+        }
+        is_same_or_child_dir_cmp(&normalized, &root_cmp)
+    })
+}
+
+pub fn detect_session_file_type(file_path: &Path) -> Option<SessionMemoryFileType> {
+    let normalized = comparable_path(file_path);
+    let config_dir = comparable_path(&claude_config_home_dir());
+    if !normalized.starts_with(&config_dir) {
+        return None;
+    }
+    if normalized.contains("/session-memory/") && normalized.ends_with(".md") {
+        return Some(SessionMemoryFileType::SessionMemory);
+    }
+    if normalized.contains("/projects/") && normalized.ends_with(".jsonl") {
+        return Some(SessionMemoryFileType::SessionTranscript);
+    }
+    None
+}
+
+pub fn detect_session_pattern_type(pattern: &str) -> Option<SessionMemoryFileType> {
+    let normalized = comparable_str(pattern);
+    if normalized.contains("session-memory")
+        && (normalized.contains(".md") || normalized.ends_with('*'))
+    {
+        return Some(SessionMemoryFileType::SessionMemory);
+    }
+    if normalized.contains(".jsonl")
+        || (normalized.contains("projects") && normalized.contains("*.jsonl"))
+    {
+        return Some(SessionMemoryFileType::SessionTranscript);
+    }
+    None
+}
+
+pub fn is_auto_managed_memory_file_with_features(
+    config: &RuntimeConfig,
+    features: &MemoryPromptFeatures,
+    file_path: &Path,
+) -> bool {
+    is_auto_memory_path(config, file_path)
+        || is_team_memory_file_with_features(config, features, file_path)
+        || detect_session_file_type(file_path).is_some()
+        || is_agent_memory_path(config, file_path)
+}
+
+pub fn is_memory_directory_with_features(
+    config: &RuntimeConfig,
+    features: &MemoryPromptFeatures,
+    dir_path: &Path,
+) -> bool {
+    let normalized_path = normalize_memory_pathbuf(dir_path);
+    let normalized_cmp = comparable_path(&normalized_path);
+
+    if is_auto_memory_enabled(config)
+        && (normalized_cmp.contains("/agent-memory/")
+            || normalized_cmp.contains("/agent-memory-local/"))
+    {
+        return true;
+    }
+
+    if features.team_memory_enabled
+        && is_team_memory_path_with_features(config, features, &normalized_path)
+    {
+        return true;
+    }
+
+    if is_auto_memory_enabled(config)
+        && let Ok(Some(auto_dir)) = auto_memory_path(config)
+    {
+        let auto_dir_cmp = comparable_path(&strip_trailing_separator(&auto_dir));
+        let auto_path_cmp = comparable_path(&auto_dir);
+        if normalized_cmp == auto_dir_cmp || normalized_cmp.starts_with(&auto_path_cmp) {
+            return true;
+        }
+    }
+
+    let config_dir_cmp = comparable_path(&claude_config_home_dir());
+    let memory_base_cmp = comparable_path(&memory_base_dir());
+    let under_config = normalized_cmp.starts_with(&config_dir_cmp);
+    let under_memory_base = normalized_cmp.starts_with(&memory_base_cmp);
+    if !under_config && !under_memory_base {
+        return false;
+    }
+    if normalized_cmp.contains("/session-memory/") {
+        return true;
+    }
+    if under_config && normalized_cmp.contains("/projects/") {
+        return true;
+    }
+    if is_auto_memory_enabled(config) && normalized_cmp.contains("/memory/") {
+        return true;
+    }
+    false
+}
+
+pub fn is_shell_command_targeting_memory_with_features(
+    config: &RuntimeConfig,
+    features: &MemoryPromptFeatures,
+    command: &str,
+) -> bool {
+    let command_cmp = comparable_str(command);
+    let mut dirs = vec![claude_config_home_dir(), memory_base_dir()];
+    if let Ok(Some(auto_dir)) = auto_memory_path(config) {
+        dirs.push(strip_trailing_separator(&auto_dir));
+    }
+    let matches_any_dir = dirs.iter().any(|dir| {
+        let comparable = comparable_path(dir);
+        command_cmp.contains(&comparable)
+            || (cfg!(windows)
+                && command_cmp.contains(&windows_path_to_posix_path(dir).to_ascii_lowercase()))
+    });
+    if !matches_any_dir {
+        return false;
+    }
+
+    let path_like_tokens =
+        Regex::new(r#"(?:[A-Za-z]:[/\\]|/)[^\s'"]+"#).expect("valid memory shell path regex");
+    path_like_tokens.find_iter(command).any(|capture| {
+        let cleaned = capture.as_str().trim_end_matches([',', ';', '|', '&', '>']);
+        let path = shell_capture_to_path(cleaned);
+        is_auto_managed_memory_file_with_features(config, features, &path)
+            || is_memory_directory_with_features(config, features, &path)
+    })
+}
+
+pub fn is_auto_managed_memory_pattern(config: &RuntimeConfig, pattern: &str) -> bool {
+    if detect_session_pattern_type(pattern).is_some() {
+        return true;
+    }
+    if !is_auto_memory_enabled(config) {
+        return false;
+    }
+    let comparable = comparable_str(pattern);
+    comparable.contains("agent-memory/") || comparable.contains("agent-memory-local/")
+}
+
 pub fn load_cowork_memory_mechanics_prompt(config: &RuntimeConfig) -> Result<Option<String>> {
     load_cowork_memory_mechanics_prompt_with(config, &AutoMemoryInputs::from_process_env(config)?)
 }
@@ -305,6 +606,12 @@ pub fn team_memory_dir_for_read_permissions_with_features(
     }
 
     Ok(Some(team_memory_dir(config, &inputs)?))
+}
+
+pub fn is_auto_memory_enabled(config: &RuntimeConfig) -> bool {
+    AutoMemoryInputs::from_process_env(config)
+        .map(|inputs| inputs.auto_memory_enabled)
+        .unwrap_or(false)
 }
 
 pub fn load_default_memory_prompt_with_features(
@@ -800,6 +1107,91 @@ fn normalize_memory_path(raw: &str) -> String {
     normalized.to_string_lossy().into_owned()
 }
 
+fn normalize_memory_pathbuf(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
+fn absolute_normalized_path(path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    };
+    normalize_memory_pathbuf(&absolute)
+}
+
+fn comparable_path(path: &Path) -> String {
+    let rendered = normalize_memory_pathbuf(path).to_string_lossy().replace('\\', "/");
+    if cfg!(windows) {
+        rendered.to_ascii_lowercase()
+    } else {
+        rendered
+    }
+}
+
+fn comparable_str(value: &str) -> String {
+    let rendered = value.replace('\\', "/");
+    if cfg!(windows) {
+        rendered.to_ascii_lowercase()
+    } else {
+        rendered
+    }
+}
+
+fn is_same_or_child_dir_cmp(path: &str, dir: &str) -> bool {
+    let dir = dir.trim_end_matches('/');
+    path == dir || path.starts_with(&format!("{dir}/"))
+}
+
+fn path_starts_with_normalized(path: &Path, dir: &Path) -> bool {
+    let path = comparable_path(&normalize_memory_pathbuf(path));
+    let dir = comparable_path(dir);
+    path.starts_with(&format!("{}/", dir.trim_end_matches('/')))
+}
+
+fn strip_trailing_separator(path: &Path) -> PathBuf {
+    let rendered = path.to_string_lossy();
+    PathBuf::from(rendered.trim_end_matches(['/', '\\']))
+}
+
+fn windows_path_to_posix_path(path: &Path) -> String {
+    let rendered = path.to_string_lossy().replace('\\', "/");
+    let bytes = rendered.as_bytes();
+    if bytes.len() >= 3 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+        format!(
+            "/{}/{}",
+            rendered[..1].to_ascii_lowercase(),
+            rendered[3..].trim_start_matches('/')
+        )
+    } else {
+        rendered
+    }
+}
+
+fn shell_capture_to_path(cleaned: &str) -> PathBuf {
+    if cfg!(windows)
+        && cleaned.starts_with('/')
+        && cleaned.len() > 3
+        && cleaned.as_bytes()[2] == b'/'
+        && cleaned.as_bytes()[1].is_ascii_alphabetic()
+    {
+        return PathBuf::from(format!("{}:/{}", &cleaned[1..2], &cleaned[3..]));
+    }
+    PathBuf::from(cleaned)
+}
+
 fn is_windows_drive_root(path: &str) -> bool {
     let bytes = path.as_bytes();
     bytes.len() == 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic()
@@ -852,6 +1244,27 @@ fn resolve_default_memory_dir(config: &RuntimeConfig, inputs: &AutoMemoryInputs)
 
 fn team_memory_dir(config: &RuntimeConfig, inputs: &AutoMemoryInputs) -> Result<PathBuf> {
     Ok(PathBuf::from(resolve_default_memory_dir(config, inputs)?).join("team"))
+}
+
+fn sanitize_agent_type_for_path(agent_type: &str) -> String {
+    agent_type.replace(':', "-")
+}
+
+fn local_agent_memory_dir(config: &RuntimeConfig, dir_name: &str) -> PathBuf {
+    if let Some(remote_memory_dir) = std::env::var_os("CLAUDE_CODE_REMOTE_MEMORY_DIR") {
+        return PathBuf::from(remote_memory_dir)
+            .join(AUTO_MEMORY_PROJECTS_DIRNAME)
+            .join(sanitize_path_component(
+                &canonical_project_root(&config.original_cwd).to_string_lossy(),
+            ))
+            .join("agent-memory-local")
+            .join(dir_name);
+    }
+    config
+        .original_cwd
+        .join(".claude")
+        .join("agent-memory-local")
+        .join(dir_name)
 }
 
 fn trusted_auto_memory_directory_from_config(config: &RuntimeConfig) -> Result<Option<String>> {
@@ -1349,9 +1762,9 @@ fn build_searching_past_context_section(
 #[cfg(test)]
 mod tests {
     use super::{
-        AutoMemoryInputs, MemoryPromptFeatures, build_memory_lines,
-        load_cowork_memory_mechanics_prompt_with, load_default_memory_prompt_with,
-        resolve_auto_memory_enabled, validate_memory_path,
+        AutoMemoryInputs, MemoryPromptFeatures, agent_memory_dirs, build_memory_lines,
+        is_auto_memory_path, load_cowork_memory_mechanics_prompt_with,
+        load_default_memory_prompt_with, resolve_auto_memory_enabled, validate_memory_path,
     };
     use rc_config::settings_layers::RuntimeOverrides;
     use rc_config::{ProviderOverrides, RuntimeConfig, load_runtime_config};
@@ -1639,6 +2052,49 @@ mod tests {
 
         assert!(prompt.contains(&format!("{}{}", trusted_dir.display(), MAIN_SEPARATOR)));
         assert!(trusted_dir.is_dir());
+    }
+
+    #[test]
+    fn memory_detection_rejects_prefix_sibling_paths() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = temp.path().join("workspace");
+        let settings_dir = temp.path().join("settings");
+        fs::create_dir_all(&cwd).expect("cwd");
+        fs::create_dir_all(&settings_dir).expect("settings");
+        let settings_file = settings_dir.join("settings.json");
+        let memory_dir = temp.path().join("memory");
+        fs::write(
+            &settings_file,
+            serde_json::json!({
+                "autoMemoryDirectory": memory_dir,
+            })
+            .to_string(),
+        )
+        .expect("settings");
+        let config = test_runtime_config(temp.path(), Some(settings_file));
+
+        assert!(is_auto_memory_path(&config, &memory_dir.join("topic.md")));
+        assert!(!is_auto_memory_path(
+            &config,
+            &temp.path().join("memoryevil").join("topic.md")
+        ));
+    }
+
+    #[test]
+    fn agent_memory_dirs_use_original_cwd_and_remote_local_root() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let original = temp.path().join("workspace");
+        let active = temp.path().join("workspace-active");
+        fs::create_dir_all(&original).expect("original");
+        fs::create_dir_all(&active).expect("active");
+        let mut config = test_runtime_config(temp.path(), None);
+        config.original_cwd = original.clone();
+        config.cwd = active.clone();
+
+        let dirs = agent_memory_dirs(&config);
+        assert!(dirs.contains(&original.join(".claude").join("agent-memory")));
+        assert!(dirs.contains(&original.join(".claude").join("agent-memory-local")));
+        assert!(!dirs.contains(&active.join(".claude").join("agent-memory")));
     }
 
     #[test]
