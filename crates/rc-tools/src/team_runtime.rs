@@ -295,8 +295,7 @@ pub(crate) async fn finish_live_teammate(handle: &LiveTeammateHandle) -> Result<
 }
 
 pub(crate) async fn create_team(input: &Value, cwd: &Path) -> Result<String> {
-    let requested = requested_team_name(input)
-        .ok_or_else(|| anyhow!("team_name is required"))?;
+    let requested = requested_team_name(input).ok_or_else(|| anyhow!("team_name is required"))?;
     let requested = sanitize_team_name(&requested);
     let description = requested_description(input);
     team_helpers::validate_team_name(&requested).map_err(anyhow::Error::from)?;

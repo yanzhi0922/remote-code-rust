@@ -3,11 +3,7 @@ use rc_tools::{ToolExecutionContext, git};
 use serde_json::Value;
 
 pub fn render(config: &RuntimeConfig) {
-    let context = ToolExecutionContext {
-        cwd: config.cwd.clone(),
-        timeout_ms: config.provider.timeout_ms,
-        ..ToolExecutionContext::default()
-    };
+    let context = ToolExecutionContext::from_runtime_config(config);
 
     match git::suggest_pr_tool(&context)
         .and_then(|payload| serde_json::from_str::<Value>(&payload).map_err(Into::into))

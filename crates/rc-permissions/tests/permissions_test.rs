@@ -1,5 +1,6 @@
-use rc_core::permission_types::PermissionBehavior;
 use rc_core::PermissionMode;
+use rc_core::permission_types::PermissionBehavior;
+use rc_permissions::mode::ExtendedPermissionMode;
 use rc_permissions::rule::PermissionRuleValue;
 use rc_permissions::{
     LayeredPermissionBroker, PermissionBroker, PermissionClass, PermissionDecision,
@@ -7,7 +8,6 @@ use rc_permissions::{
     classify_tool, rule_matches_pattern,
 };
 use rc_permissions::{PermissionUpdate, PermissionUpdateDestination};
-use rc_permissions::mode::ExtendedPermissionMode;
 use tempfile::tempdir;
 
 // ── classify_tool tests ───────────────────────────────────────
@@ -343,7 +343,10 @@ fn layered_broker_applies_session_mode_and_directory_updates() -> anyhow::Result
     ])?;
 
     assert_eq!(layered.mode(), Some(PermissionMode::AcceptEdits));
-    assert_eq!(layered.additional_working_directories(), vec![extra.clone()]);
+    assert_eq!(
+        layered.additional_working_directories(),
+        vec![extra.clone()]
+    );
 
     layered.apply_permission_updates(&[PermissionUpdate::RemoveDirectories {
         destination: PermissionUpdateDestination::Session,

@@ -40,11 +40,7 @@ pub(crate) fn run_review(config: &RuntimeConfig, args: ReviewArgs) -> Result<()>
 }
 
 fn build_review_output(config: &RuntimeConfig) -> Result<Value> {
-    let context = ToolExecutionContext {
-        cwd: config.cwd.clone(),
-        timeout_ms: config.provider.timeout_ms,
-        ..ToolExecutionContext::default()
-    };
+    let context = ToolExecutionContext::from_runtime_config(config);
     let payload = git::suggest_pr_tool(&context)?;
     Ok(serde_json::from_str(&payload)?)
 }

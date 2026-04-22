@@ -48,6 +48,7 @@ use rc_session::resume_state::{PendingToolCall, ResumeState};
 use rc_tools::{
     RuntimeAgentPromptContext, ToolExecutionContext, ToolRuntimePolicyOverlay, ToolSpec,
     current_runtime_agent_prompt_context, current_tool_runtime_policy, execute_tool_call,
+    git::{apply_worktree_tool_result_to_runtime, sync_tool_context_from_runtime},
     mcp_runtime::{
         RuntimeMcpObservation, RuntimeMcpServerObservation, discover_runtime_mcp_servers,
         observe_runtime_mcp_servers,
@@ -69,14 +70,15 @@ use uuid::Uuid;
 
 use crate::agents::build_remote_code_sub_agent_runtime;
 use crate::conversation::{
-    PromptEventSink, PromptRunOutcome, PromptStreamEvent, build_prompt_progress_callback,
-    discover_runtime_extensions, truncate_preview,
+    PromptEventSink, PromptRunOutcome, PromptStreamEvent, discover_runtime_extensions,
+    truncate_preview,
 };
 use crate::hooks::{
     HookRunState, RuntimeHookDiscovery, apply_post_tool_hooks, apply_pre_tool_use_hooks,
 };
 
 struct CompatSharedState {
+    config: Mutex<RuntimeConfig>,
     conversation: Mutex<Vec<ConversationEntry>>,
     discovered_tool_scope: DiscoveredToolScope,
     hook_state: Mutex<HookRunState>,
@@ -88,7 +90,6 @@ struct CompatSharedState {
 pub(crate) type CompatRunOverrides = PromptRuntimeOverrides;
 
 struct CompatObserver {
-    config: RuntimeConfig,
     store: Arc<SessionStore>,
     shared: Arc<CompatSharedState>,
     event_sink: Option<PromptEventSink>,
@@ -1379,6 +1380,7 @@ impl CompatObserver {
 #[async_trait]
 impl QueryObserver for CompatObserver {
     async fn on_event(&self, event: QueryObserverEvent) -> Result<()> {
+        let session_id = { self.shared.config.lock().await.session_id };
         match event {
             QueryObserverEvent::ContextBudgetEvaluated { turn, context, .. } => {
                 if let Some(event_sink) = self.event_sink.as_ref() {
@@ -1399,7 +1401,7 @@ impl QueryObserver for CompatObserver {
                 }
                 if context.needs_compaction {
                     self.store.append_named_event(
-                        self.config.session_id,
+                        session_id,
                         "context_overflow",
                         serde_json::json!({
                             "turn": turn,
@@ -1434,7 +1436,7 @@ impl QueryObserver for CompatObserver {
                 }
 
                 self.store.append_named_event(
-                    self.config.session_id,
+                    session_id,
                     "context_compacted",
                     serde_json::json!({
                         "turn": turn,
@@ -1458,14 +1460,10 @@ impl QueryObserver for CompatObserver {
                         discovered_before_compaction.iter().cloned().collect();
                 }
                 self.store.append_transcript_entry(
-                    &rc_transcript::TranscriptEntry::compact_boundary_now(
-                        self.config.session_id,
-                        boundary,
-                    ),
+                    &rc_transcript::TranscriptEntry::compact_boundary_now(session_id, boundary),
                 )?;
                 for entry in &compacted_conversation {
-                    self.store
-                        .append_conversation_entry(self.config.session_id, entry)?;
+                    self.store.append_conversation_entry(session_id, entry)?;
                 }
                 self.shared
                     .discovered_tool_scope
@@ -1536,7 +1534,7 @@ impl QueryObserver for CompatObserver {
                     *latest_usage = Some(usage.clone());
                 }
                 self.store.append_named_event(
-                    self.config.session_id,
+                    session_id,
                     "streaming_usage",
                     serde_json::json!({
                         "turn": turn,
@@ -1560,9 +1558,9 @@ impl QueryObserver for CompatObserver {
                 }
                 let assistant_entry = assistant_entry_from_message(&message)?;
                 self.store
-                    .append_conversation_entry(self.config.session_id, &assistant_entry)?;
+                    .append_conversation_entry(session_id, &assistant_entry)?;
                 self.store.append_named_event(
-                    self.config.session_id,
+                    session_id,
                     "assistant_turn",
                     serde_json::json!({
                         "turn": turn,
@@ -1588,7 +1586,7 @@ impl QueryObserver for CompatObserver {
                     });
                 }
                 if assistant_entry.tool_calls.is_empty() {
-                    self.store.clear_resume_state(self.config.session_id)?;
+                    self.store.clear_resume_state(session_id)?;
                 } else {
                     let pending_tool_calls = assistant_entry
                         .tool_calls
@@ -1600,7 +1598,7 @@ impl QueryObserver for CompatObserver {
                         })
                         .collect::<Vec<_>>();
                     self.store.save_resume_state(
-                        self.config.session_id,
+                        session_id,
                         &ResumeState::from_pending_calls(pending_tool_calls),
                     )?;
                 }
@@ -1631,7 +1629,7 @@ impl QueryObserver for CompatObserver {
             QueryObserverEvent::CheckpointCleared { checkpoint }
                 if checkpoint.kind == QueryCheckpointKind::ToolBatch =>
             {
-                self.store.clear_resume_state(self.config.session_id)?;
+                self.store.clear_resume_state(session_id)?;
             }
             QueryObserverEvent::BudgetEvaluated { .. }
             | QueryObserverEvent::BudgetExceeded { .. }
@@ -1647,13 +1645,12 @@ impl QueryObserver for CompatObserver {
 }
 
 struct CompatToolRunner {
-    config: RuntimeConfig,
     store: Arc<SessionStore>,
     discovery: RuntimeHookDiscovery,
     shared: Arc<CompatSharedState>,
     broker: Arc<dyn PermissionBroker>,
-    tool_context: ToolExecutionContext,
     allowed_tools: Option<HashSet<String>>,
+    sub_agent_completion: Arc<dyn rc_core::SubAgentCompletion>,
 }
 
 #[async_trait]
@@ -1663,6 +1660,7 @@ impl ToolRunner for CompatToolRunner {
         tool_call: &ToolCall,
         _context: &ProcessUserInputContext,
     ) -> Result<ToolRunResult> {
+        let current_config = self.shared.config.lock().await.clone();
         let original_tool_spec = runtime_provider_tool_spec(&tool_call.name)
             .await
             .ok_or_else(|| anyhow!("unknown tool {}", tool_call.name))?;
@@ -1673,7 +1671,7 @@ impl ToolRunner for CompatToolRunner {
             let before_messages = conversation.len();
             let prepared = apply_pre_tool_use_hooks(
                 &self.discovery,
-                &self.config,
+                &current_config,
                 self.store.as_ref(),
                 &mut conversation,
                 &mut hook_state,
@@ -1721,12 +1719,14 @@ impl ToolRunner for CompatToolRunner {
                 follow_up_user_blocks: Vec::new(),
             }
         } else {
-            match execute_tool_call(
-                &effective_tool_call,
-                &self.tool_context,
-                self.broker.as_ref(),
-            )
-            .await
+            let tool_context = ToolExecutionContext {
+                sub_agent: Some(build_remote_code_sub_agent_runtime(
+                    &current_config,
+                    self.sub_agent_completion.clone(),
+                )),
+                ..ToolExecutionContext::from_runtime_config(&current_config)
+            };
+            match execute_tool_call(&effective_tool_call, &tool_context, self.broker.as_ref()).await
             {
                 Ok(result) => result,
                 Err(error) => {
@@ -1735,7 +1735,7 @@ impl ToolRunner for CompatToolRunner {
                         effective_tool_call.name
                     );
                     self.store.append_named_event(
-                        self.config.session_id,
+                        current_config.session_id,
                         "tool_error",
                         serde_json::json!({
                             "tool_name": effective_tool_call.name,
@@ -1760,7 +1760,7 @@ impl ToolRunner for CompatToolRunner {
             .skip(audit_count_before)
         {
             self.store.append_named_event(
-                self.config.session_id,
+                current_config.session_id,
                 "permission_decision",
                 serde_json::to_value(&audit)?,
             )?;
@@ -1779,10 +1779,10 @@ impl ToolRunner for CompatToolRunner {
             });
 
         let tool_results_dir = Some(
-            self.config
+            current_config
                 .paths
                 .sessions_dir
-                .join(self.config.session_id.to_string())
+                .join(current_config.session_id.to_string())
                 .join("tool-results"),
         );
         let processed_result = process_tool_result_content(
@@ -1794,7 +1794,11 @@ impl ToolRunner for CompatToolRunner {
             effective_tool_spec.tool_result_size_policy(),
         )?;
         let tool_preview = truncate_preview(&processed_result.content, 160);
-        let model_name = self.config.provider.model.as_deref().unwrap_or("unknown");
+        let model_name = current_config
+            .provider
+            .model
+            .as_deref()
+            .unwrap_or("unknown");
         let truncated_content = rc_provider::context::ContextWindowManager::for_model(model_name)
             .truncate_tool_output_default(&processed_result.content);
         let result = ToolResult {
@@ -1803,6 +1807,27 @@ impl ToolRunner for CompatToolRunner {
             content_blocks: processed_result.content_blocks.clone(),
             follow_up_user_blocks: raw_result.follow_up_user_blocks.clone(),
         };
+
+        {
+            let mut config = self.shared.config.lock().await;
+            let mut tool_context = ToolExecutionContext {
+                sub_agent: Some(build_remote_code_sub_agent_runtime(
+                    &config,
+                    self.sub_agent_completion.clone(),
+                )),
+                ..ToolExecutionContext::from_runtime_config(&config)
+            };
+            if apply_worktree_tool_result_to_runtime(
+                &effective_tool_call.name,
+                &effective_tool_call.input,
+                &result,
+                &mut config,
+                &mut tool_context,
+            )? {
+                crate::conversation::persist_session_context(self.store.as_ref(), &config)?;
+                sync_tool_context_from_runtime(&config, &mut tool_context);
+            }
+        }
 
         let mut post_messages = Vec::new();
         {
@@ -1815,9 +1840,9 @@ impl ToolRunner for CompatToolRunner {
             );
             tool_entry.content_blocks = processed_result.content_blocks.clone();
             self.store
-                .append_conversation_entry(self.config.session_id, &tool_entry)?;
+                .append_conversation_entry(current_config.session_id, &tool_entry)?;
             self.store.append_named_event(
-                self.config.session_id,
+                current_config.session_id,
                 "tool_result",
                 serde_json::json!({
                     "tool_name": effective_tool_call.name,
@@ -1832,7 +1857,7 @@ impl ToolRunner for CompatToolRunner {
                     raw_result.follow_up_user_blocks.clone(),
                 );
                 self.store
-                    .append_conversation_entry(self.config.session_id, &follow_up_entry)?;
+                    .append_conversation_entry(current_config.session_id, &follow_up_entry)?;
                 post_messages.push(Message::from(follow_up_entry.clone()));
                 conversation.push(follow_up_entry);
             }
@@ -1844,7 +1869,7 @@ impl ToolRunner for CompatToolRunner {
             let before_messages = conversation.len();
             apply_post_tool_hooks(
                 &self.discovery,
-                &self.config,
+                &current_config,
                 self.store.as_ref(),
                 &mut conversation,
                 &mut hook_state,
@@ -1962,6 +1987,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
 
     let compat_store = Arc::new(SessionStore::open(config.paths.clone())?);
     let shared = Arc::new(CompatSharedState {
+        config: Mutex::new(config.clone()),
         conversation: Mutex::new(conversation.clone()),
         discovered_tool_scope: discovered_tool_scope.clone(),
         hook_state: Mutex::new(std::mem::take(hook_state)),
@@ -1970,7 +1996,6 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         latest_request_id: Mutex::new(None),
     });
     let observer = Arc::new(CompatObserver {
-        config: config.clone(),
         store: compat_store.clone(),
         shared: shared.clone(),
         event_sink: event_sink.clone(),
@@ -1984,26 +2009,12 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
     .await;
     let expanded_allowed_tools = effective_allowed_tool_names(&overrides, &visible_tool_specs);
     let tool_runner = Arc::new(CompatToolRunner {
-        config: config.clone(),
         store: compat_store.clone(),
         discovery: discovery.clone(),
         shared: shared.clone(),
         broker: broker.clone(),
         allowed_tools: expanded_allowed_tools.clone(),
-        tool_context: ToolExecutionContext {
-            cwd: config.cwd.clone(),
-            timeout_ms: config.provider.timeout_ms,
-            sub_agent: Some(build_remote_code_sub_agent_runtime(
-                config,
-                backend.sub_agent_completion(),
-            )),
-            progress_cb: event_sink
-                .as_ref()
-                .map(|event_sink| build_prompt_progress_callback(config, event_sink)),
-            task_stack: Arc::new(std::sync::Mutex::new(
-                rc_core::task_stack::TaskStack::default(),
-            )),
-        },
+        sub_agent_completion: backend.sub_agent_completion(),
     });
 
     let model_name = config
@@ -3152,9 +3163,9 @@ mod tests {
             .expect("old entry");
 
         let observer = CompatObserver {
-            config: config.clone(),
             store: Arc::new(SessionStore::open(config.paths.clone()).expect("observer store")),
             shared: Arc::new(CompatSharedState {
+                config: tokio::sync::Mutex::new(config.clone()),
                 conversation: tokio::sync::Mutex::new(vec![ConversationEntry::tool(
                     "tool-1",
                     "tool_search",
@@ -4305,9 +4316,9 @@ while True:
                 .push(event);
         });
         let observer = CompatObserver {
-            config: config.clone(),
             store: Arc::new(SessionStore::open(config.paths.clone()).expect("store")),
             shared: Arc::new(CompatSharedState {
+                config: tokio::sync::Mutex::new(config.clone()),
                 conversation: tokio::sync::Mutex::new(Vec::new()),
                 discovered_tool_scope: DiscoveredToolScope::default(),
                 hook_state: tokio::sync::Mutex::new(HookRunState::default()),

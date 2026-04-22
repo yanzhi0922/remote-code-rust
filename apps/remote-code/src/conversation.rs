@@ -25,6 +25,7 @@ use rc_tools::{
     ProgressCallback, ToolExecutionContext,
     agent::{DelegateProgressEvent, parse_delegate_progress_event},
     execute_tool_call,
+    git::{apply_worktree_tool_result_to_runtime, sync_tool_context_from_runtime},
     mcp_runtime::discover_runtime_mcp_servers,
     plan_mode::normalize_exit_plan_mode_tool_calls,
     runtime_plan_mode::{
@@ -678,7 +679,7 @@ pub(crate) fn has_unanswered_user_prompt(conversation: &[ConversationEntry], pro
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_prompt(
-    config: &RuntimeConfig,
+    config: &mut RuntimeConfig,
     store: &SessionStore,
     backend: Arc<dyn ConversationBackend>,
     discovered_tool_scope: DiscoveredToolScope,
@@ -732,7 +733,7 @@ pub(crate) async fn run_prompt(
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 async fn run_prompt_legacy(
-    config: &RuntimeConfig,
+    config: &mut RuntimeConfig,
     store: &SessionStore,
     backend: Arc<dyn ConversationBackend>,
     broker: Arc<dyn PermissionBroker>,
@@ -775,8 +776,10 @@ async fn run_prompt_legacy(
         .as_ref()
         .map(|event_sink| build_prompt_progress_callback(config, event_sink));
 
-    let tool_context = ToolExecutionContext {
+    let mut tool_context = ToolExecutionContext {
         cwd: config.cwd.clone(),
+        original_cwd: config.original_cwd.clone(),
+        active_worktree_session: config.active_worktree_session.clone(),
         timeout_ms: config.provider.timeout_ms,
         sub_agent: Some(build_remote_code_sub_agent_runtime(
             config,
@@ -1061,6 +1064,22 @@ async fn run_prompt_legacy(
                 effective_tool_spec.tool_result_size_policy(),
             )?;
             let tool_preview = truncate_preview(&processed_result.content, 160);
+            let processed_tool_result = rc_core::ToolResult {
+                content: processed_result.content.clone(),
+                is_error: tool_result.is_error,
+                content_blocks: processed_result.content_blocks.clone(),
+                follow_up_user_blocks: tool_result.follow_up_user_blocks.clone(),
+            };
+            if apply_worktree_tool_result_to_runtime(
+                &effective_tool_call.name,
+                &effective_tool_call.input,
+                &processed_tool_result,
+                config,
+                &mut tool_context,
+            )? {
+                persist_session_context(store, config)?;
+                sync_tool_context_from_runtime(config, &mut tool_context);
+            }
             if let Some(event_sink) = event_sink.as_ref() {
                 event_sink(PromptStreamEvent::ToolFinished {
                     tool_call_id: effective_tool_call.id.clone(),
@@ -1136,7 +1155,7 @@ async fn run_prompt_legacy(
 }
 
 pub(crate) async fn run_oneshot_text(
-    config: &RuntimeConfig,
+    config: &mut RuntimeConfig,
     store: &SessionStore,
     prompt: String,
 ) -> Result<()> {

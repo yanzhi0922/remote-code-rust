@@ -785,6 +785,8 @@ mod tests {
     fn tool_context() -> ToolExecutionContext {
         ToolExecutionContext {
             cwd: PathBuf::from("."),
+            original_cwd: PathBuf::from("."),
+            active_worktree_session: None,
             timeout_ms: 30_000,
             sub_agent: None,
             progress_cb: None,

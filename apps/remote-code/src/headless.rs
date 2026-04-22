@@ -94,7 +94,7 @@ pub(crate) async fn run_headless(
         prompt_tx.send(prompt).await?;
     }
 
-    let processor_config = config.clone();
+    let mut processor_config = config.clone();
     let processor_store = SessionStore::open(config.paths.clone())?;
     let processor_broker = broker.clone();
     let processor_emitter = emitter.clone();
@@ -128,7 +128,7 @@ pub(crate) async fn run_headless(
             }
             run_headless_prompt_once(
                 Arc::clone(&processor_emitter),
-                &processor_config,
+                &mut processor_config,
                 &processor_store,
                 Arc::new(backend.clone()),
                 discovered_tool_scope.clone(),
@@ -376,7 +376,7 @@ async fn forward_prompt_stream_events<W: Write + Send + 'static>(
 #[allow(clippy::too_many_arguments)]
 async fn run_headless_prompt_once<W: Write + Send + 'static>(
     emitter: Arc<Mutex<ProtocolEmitter<W>>>,
-    config: &RuntimeConfig,
+    config: &mut RuntimeConfig,
     store: &SessionStore,
     backend: Arc<dyn crate::conversation_backend::ConversationBackend>,
     discovered_tool_scope: rc_provider::DiscoveredToolScope,
@@ -932,6 +932,7 @@ mod tests {
         let mut hook_state = HookRunState::load(&store, config.session_id).expect("hook state");
         let backend = Arc::new(RecordingStreamingBackend::default());
         let output = NamedTempFile::new().expect("protocol output");
+        let broker = mock_broker(&config);
         let emitter = Arc::new(Mutex::new(ProtocolEmitter::new(
             output.reopen().expect("reopen output"),
             config.session_id,
@@ -939,11 +940,11 @@ mod tests {
 
         run_headless_prompt_once(
             Arc::clone(&emitter),
-            &config,
+            &mut config,
             &store,
             backend.clone(),
             rc_provider::DiscoveredToolScope::default(),
-            mock_broker(&config),
+            broker,
             &RuntimeHookDiscovery::default(),
             &mut hook_state,
             &mut conversation,
@@ -1009,6 +1010,7 @@ mod tests {
             initialize_conversation(&store, &config, Some("streaming")).expect("conversation");
         let mut hook_state = HookRunState::load(&store, config.session_id).expect("hook state");
         let output = NamedTempFile::new().expect("protocol output");
+        let broker = mock_broker(&config);
         let emitter = Arc::new(Mutex::new(ProtocolEmitter::new(
             output.reopen().expect("reopen output"),
             config.session_id,
@@ -1016,11 +1018,11 @@ mod tests {
 
         run_headless_prompt_once(
             Arc::clone(&emitter),
-            &config,
+            &mut config,
             &store,
             Arc::new(FailingStreamingBackend),
             rc_provider::DiscoveredToolScope::default(),
-            mock_broker(&config),
+            broker,
             &RuntimeHookDiscovery::default(),
             &mut hook_state,
             &mut conversation,
@@ -1113,7 +1115,7 @@ mod tests {
 
         run_headless_prompt_once(
             Arc::clone(&emitter),
-            &config,
+            &mut config,
             &store,
             Arc::new(ToolCallingBackend {
                 outside_path: outside.to_string_lossy().into_owned(),

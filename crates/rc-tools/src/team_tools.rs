@@ -160,7 +160,10 @@ fn load_team_from_path(team_name: &str, team_dir: &Path) -> Result<rc_swarm::Tea
 
 fn cleanup_team_resources(team: Option<&rc_swarm::TeamFile>, team_name: &str) -> Result<()> {
     if let Some(team) = team {
-        for worktree_path in team.members.iter().filter_map(|member| member.worktree_path.as_deref())
+        for worktree_path in team
+            .members
+            .iter()
+            .filter_map(|member| member.worktree_path.as_deref())
         {
             destroy_worktree(Path::new(worktree_path))?;
         }
@@ -276,6 +279,8 @@ mod tests {
     fn test_context() -> ToolExecutionContext {
         ToolExecutionContext {
             cwd: PathBuf::from("/tmp"),
+            original_cwd: PathBuf::from("/tmp"),
+            active_worktree_session: None,
             timeout_ms: 30_000,
             sub_agent: None,
             progress_cb: None,
@@ -401,7 +406,10 @@ mod tests {
                 .expect("message string")
                 .contains("active member")
         );
-        assert!(team_dir.exists(), "team should remain when members are active");
+        assert!(
+            team_dir.exists(),
+            "team should remain when members are active"
+        );
     }
 
     #[test]

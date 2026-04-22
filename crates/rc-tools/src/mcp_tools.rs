@@ -1033,6 +1033,8 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let context = ToolExecutionContext {
             cwd: temp.path().to_path_buf(),
+            original_cwd: temp.path().to_path_buf(),
+            active_worktree_session: None,
             timeout_ms: 1_000,
             sub_agent: None,
             progress_cb: None,

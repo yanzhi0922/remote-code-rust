@@ -44,8 +44,7 @@ fn run_worktree_add(config: &RuntimeConfig, args: WorktreeAddArgs) -> Result<()>
     let output = build_worktree_action_output(
         config,
         &json!({
-            "branch": args.branch,
-            "path": args.path,
+            "name": args.name,
         }),
         git::enter_worktree_tool,
     )?;
@@ -56,8 +55,8 @@ fn run_worktree_remove(config: &RuntimeConfig, args: WorktreeRemoveArgs) -> Resu
     let output = build_worktree_action_output(
         config,
         &json!({
-            "branch": args.branch,
-            "path": args.path,
+            "action": args.action,
+            "discard_changes": args.discard_changes,
         }),
         git::exit_worktree_tool,
     )?;
@@ -71,7 +70,16 @@ fn print_worktree_action_output(output: &Value, json_mode: bool, label: &str) ->
     }
 
     println!("Worktree {label}:");
-    for key in ["status", "branch", "path", "command", "note", "error"] {
+    for key in [
+        "action",
+        "worktreeBranch",
+        "worktreePath",
+        "originalCwd",
+        "discardedFiles",
+        "discardedCommits",
+        "message",
+        "error",
+    ] {
         if let Some(rendered) = render_scalar(output, key) {
             println!("  {key}: {rendered}");
         }
@@ -96,11 +104,7 @@ fn build_worktree_action_output(
 }
 
 fn tool_context(config: &RuntimeConfig) -> ToolExecutionContext {
-    ToolExecutionContext {
-        cwd: config.cwd.clone(),
-        timeout_ms: config.provider.timeout_ms,
-        ..ToolExecutionContext::default()
-    }
+    ToolExecutionContext::from_runtime_config(config)
 }
 
 fn render_scalar(value: &Value, key: &str) -> Option<String> {

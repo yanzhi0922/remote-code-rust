@@ -28,12 +28,16 @@ use rc_provider::context::ContextWindowManager;
 use rc_provider::model_info::{get_model_info, ModelCapability};
 use rc_provider::streaming::StreamingCallbacks;
 use rc_provider::{ConversationBackend, ProviderClient, ProviderCompatBackend};
+use rc_session::runtime_context::{
+    persist_runtime_config_session_context, restore_runtime_config_session_context,
+};
 use rc_session::{conversation::ensure_conversation_initialized, SessionStore, SessionSummary};
 use rc_skills::discover_skills;
 use rc_tools::shell::ShellExecutionPolicy;
 use rc_tools::{
     agent::{parse_delegate_progress_event, DelegateProgressEvent},
     configure_tool_runtime_policy, execute_tool_call,
+    git::{apply_worktree_tool_result_to_runtime, sync_tool_context_from_runtime},
     mcp_runtime::{
         observe_runtime_mcp_servers, runtime_mcp_inventory_summary, runtime_mcp_policy_entries,
         RuntimeMcpServerObservation,
@@ -731,23 +735,6 @@ struct McpMutationResultDto {
     config_path: String,
     name: Option<String>,
     enabled: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PersistedProviderContext {
-    name: String,
-    base_url: Option<String>,
-    model: Option<String>,
-    protocol: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PersistedSessionContext {
-    cwd: PathBuf,
-    #[serde(default)]
-    original_cwd: Option<PathBuf>,
-    permission_mode: String,
-    provider: PersistedProviderContext,
 }
 
 struct RuntimeState {
@@ -2308,50 +2295,11 @@ fn persist_runtime_files(state: &RuntimeState) -> Result<()> {
 }
 
 fn persist_session_context(store: &SessionStore, config: &RuntimeConfig) -> Result<()> {
-    store.append_named_event(
-        config.session_id,
-        "session_context",
-        serde_json::to_value(PersistedSessionContext {
-            cwd: config.cwd.clone(),
-            original_cwd: Some(config.original_cwd.clone()),
-            permission_mode: config.permission_mode.as_legacy_str().to_owned(),
-            provider: PersistedProviderContext {
-                name: config.provider.name.clone(),
-                base_url: config.provider.base_url.clone(),
-                model: config.provider.model.clone(),
-                protocol: config.provider.protocol.as_str().to_owned(),
-            },
-        })?,
-    )
+    persist_runtime_config_session_context(store, config)
 }
 
 fn restore_session_context(store: &SessionStore, config: &mut RuntimeConfig) -> Result<()> {
-    if let Ok(summary) = store.get_session_summary(config.session_id) {
-        config.cwd = summary.cwd;
-        config.original_cwd = config.cwd.clone();
-        config.provider.name = summary.provider_name;
-        config.provider.model = summary.model;
-    }
-    let transcript = store.load_transcript(config.session_id)?;
-    let Some(persisted) =
-        transcript.latest_named_event_as::<PersistedSessionContext>("session_context")?
-    else {
-        return Ok(());
-    };
-    config.cwd = persisted.cwd;
-    config.original_cwd = persisted.original_cwd.unwrap_or_else(|| config.cwd.clone());
-    config.provider.name = persisted.provider.name;
-    config.provider.base_url = persisted.provider.base_url;
-    config.provider.model = persisted.provider.model;
-    if let Some(protocol) = parse_protocol(Some(&persisted.provider.protocol)) {
-        config.provider.protocol = protocol;
-        config.provider.base_url =
-            normalize_base_url(config.provider.base_url.clone(), config.provider.protocol);
-    }
-    if let Some(permission_mode) = parse_permission_mode(Some(&persisted.permission_mode)) {
-        config.permission_mode = permission_mode;
-    }
-    Ok(())
+    restore_runtime_config_session_context(store, config)
 }
 
 fn initialize_session_conversation(
@@ -2667,7 +2615,7 @@ struct PromptRunOutcome {
 
 async fn run_gui_prompt(
     app: AppHandle,
-    config: RuntimeConfig,
+    mut config: RuntimeConfig,
     backend: &dyn ConversationBackend,
     store: Arc<SessionStore>,
     pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
@@ -2698,8 +2646,10 @@ async fn run_gui_prompt(
     let session_id = config.session_id;
     let session_id_string = session_id.to_string();
 
-    let tool_context = ToolExecutionContext {
+    let mut tool_context = ToolExecutionContext {
         cwd: config.cwd.clone(),
+        original_cwd: config.original_cwd.clone(),
+        active_worktree_session: config.active_worktree_session.clone(),
         timeout_ms: config.provider.timeout_ms,
         sub_agent: Some(backend.sub_agent_completion()),
         progress_cb: Some(Arc::new({
@@ -3003,6 +2953,18 @@ async fn run_gui_prompt(
                 tool_result.is_error,
             );
             tool_entry.content_blocks = tool_result.content_blocks.clone();
+
+            if apply_worktree_tool_result_to_runtime(
+                &tool_call.name,
+                &tool_call.input,
+                &tool_result,
+                &mut config,
+                &mut tool_context,
+            )? {
+                persist_session_context(store.as_ref(), &config)?;
+                sync_tool_context_from_runtime(&config, &mut tool_context);
+            }
+
             store.append_conversation_entry(config.session_id, &tool_entry)?;
             conversation.push(tool_entry.clone());
             if !tool_result.follow_up_user_blocks.is_empty() {
