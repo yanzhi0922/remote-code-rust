@@ -485,6 +485,7 @@ fn spawn_runtime_agent_prompt_context_provider(
             .auto_memory_permission_dir
             .map(PathBuf::from),
         auto_memory_read_dir: prompt_settings.auto_memory_read_dir.map(PathBuf::from),
+        team_memory_read_dir: prompt_settings.team_memory_read_dir.map(PathBuf::from),
         project_temp_dir: prompt_settings.project_temp_dir.map(PathBuf::from),
         preview_launch_config_path: Some(config.original_cwd.join(".claude").join("launch.json")),
         teams_dir: Some(rc_swarm::team_helpers::teams_base_dir()),
@@ -2798,6 +2799,7 @@ mod tests {
             tool_results_dir: None,
             auto_memory_dir: None,
             auto_memory_read_dir: None,
+            team_memory_read_dir: None,
             project_temp_dir: None,
             preview_launch_config_path: None,
             teams_dir: None,

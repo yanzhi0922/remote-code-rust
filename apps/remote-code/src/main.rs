@@ -6,11 +6,13 @@ mod doctor;
 mod headless;
 mod hooks;
 mod interactive;
+mod memory_file_detection;
 mod mcp_cli;
 mod plugins;
 mod query_engine_compat;
 mod remote;
 mod review_cli;
+mod session_file_access;
 #[allow(dead_code)]
 mod runtime_hooks;
 mod sessions;
