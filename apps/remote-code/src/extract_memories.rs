@@ -1,6 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{
+    Arc, OnceLock,
+    atomic::{AtomicUsize, Ordering},
+};
+use std::time::Duration;
 
 use anyhow::Result;
 use chrono::Utc;
@@ -72,9 +76,14 @@ impl Default for ExtractMemoriesState {
 }
 
 static EXTRACT_MEMORY_STATE: OnceLock<Mutex<HashMap<Uuid, ExtractMemoriesState>>> = OnceLock::new();
+static IN_FLIGHT_EXTRACTIONS: OnceLock<AtomicUsize> = OnceLock::new();
 
 fn extraction_state_map() -> &'static Mutex<HashMap<Uuid, ExtractMemoriesState>> {
     EXTRACT_MEMORY_STATE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn in_flight_extractions() -> &'static AtomicUsize {
+    IN_FLIGHT_EXTRACTIONS.get_or_init(|| AtomicUsize::new(0))
 }
 
 #[derive(Debug, Clone)]
@@ -158,7 +167,38 @@ impl PermissionBroker for ExtractMemoriesPermissionBroker {
     }
 }
 
-pub(crate) async fn maybe_extract_memories_after_prompt(
+pub(crate) fn maybe_extract_memories_after_prompt(
+    config: &RuntimeConfig,
+    _store: &SessionStore,
+    backend: Arc<dyn ConversationBackend>,
+    conversation: &[ConversationEntry],
+    prompt: &str,
+    event_sink: Option<PromptEventSink>,
+) {
+    let config = config.clone();
+    let conversation = conversation.to_vec();
+    let prompt = prompt.to_owned();
+    let in_flight = in_flight_extractions();
+    in_flight.fetch_add(1, Ordering::SeqCst);
+    tokio::spawn(async move {
+        let Ok(store) = SessionStore::open(config.paths.clone()) else {
+            in_flight.fetch_sub(1, Ordering::SeqCst);
+            return;
+        };
+        let _ = maybe_extract_memories_after_prompt_inner(
+            &config,
+            &store,
+            backend,
+            &conversation,
+            &prompt,
+            event_sink,
+        )
+        .await;
+        in_flight.fetch_sub(1, Ordering::SeqCst);
+    });
+}
+
+async fn maybe_extract_memories_after_prompt_inner(
     config: &RuntimeConfig,
     store: &SessionStore,
     backend: Arc<dyn ConversationBackend>,
@@ -240,6 +280,19 @@ pub(crate) async fn maybe_extract_memories_after_prompt(
     }
 
     Ok(())
+}
+
+pub(crate) async fn drain_pending_extractions(timeout: Duration) {
+    let started = tokio::time::Instant::now();
+    loop {
+        if in_flight_extractions().load(Ordering::SeqCst) == 0 {
+            break;
+        }
+        if started.elapsed() >= timeout {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 async fn run_extract_memories_once(

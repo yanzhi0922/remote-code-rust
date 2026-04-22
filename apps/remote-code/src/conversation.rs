@@ -744,8 +744,7 @@ pub(crate) async fn run_prompt(
         conversation,
         prompt,
         extraction_event_sink,
-    )
-    .await?;
+    );
 
     Ok(outcome)
 }
