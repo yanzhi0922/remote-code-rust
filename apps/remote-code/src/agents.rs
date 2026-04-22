@@ -335,6 +335,11 @@ impl AgentExecutor for RemoteCodeAgentExecutor {
             },
             CompatExecutionOptions {
                 query_source: QuerySource::Agent,
+                agent_id: request
+                    .agent_name
+                    .as_deref()
+                    .or(Some(request.agent_type.as_str()))
+                    .map(rc_core::AgentId::from),
                 ..CompatExecutionOptions::default()
             },
         )

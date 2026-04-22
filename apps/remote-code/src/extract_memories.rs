@@ -487,8 +487,8 @@ async fn run_extraction_child(
             persist_runtime_context: false,
             persist_tool_results_dir: Some(tool_results_dir),
             hook_options: HookExecutionOptions::ephemeral(),
-            run_background_extract_memories: false,
-            query_source: QuerySource::Agent,
+            query_source: QuerySource::BackgroundTask,
+            agent_id: None,
         },
     )
     .await?;

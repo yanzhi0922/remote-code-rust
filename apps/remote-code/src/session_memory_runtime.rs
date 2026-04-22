@@ -7,6 +7,7 @@ use rc_config::RuntimeConfig;
 use rc_core::{ConversationEntry, ConversationRole, PermissionMode};
 use rc_permissions::{PermissionBroker, PermissionDecision, PermissionRequest};
 use rc_provider::{ConversationBackend, DiscoveredToolScope};
+use rc_provider::context::TokenEstimator;
 use rc_query_engine::QuerySource;
 use rc_runtime_prompt::{runtime_env_defined_falsy, runtime_env_truthy};
 use rc_session::SessionStore;
@@ -24,12 +25,18 @@ use crate::query_engine_compat::{
 };
 
 static SESSION_MEMORY_STATES: OnceLock<
-    Mutex<HashMap<Uuid, Arc<std::sync::Mutex<SessionMemoryState>>>>,
+    Mutex<HashMap<Uuid, Arc<std::sync::Mutex<SessionMemoryRuntimeState>>>>,
 > = OnceLock::new();
 static SESSION_MEMORY_GROWTHBOOK: OnceLock<GrowthBookClient> = OnceLock::new();
 
+#[derive(Debug, Default)]
+pub(crate) struct SessionMemoryRuntimeState {
+    pub(crate) shared: SessionMemoryState,
+    pub(crate) last_memory_message_id: Option<String>,
+}
+
 fn session_memory_states()
--> &'static Mutex<HashMap<Uuid, Arc<std::sync::Mutex<SessionMemoryState>>>> {
+-> &'static Mutex<HashMap<Uuid, Arc<std::sync::Mutex<SessionMemoryRuntimeState>>>> {
     SESSION_MEMORY_STATES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -39,11 +46,11 @@ fn growthbook_client() -> &'static GrowthBookClient {
 
 pub(crate) async fn session_memory_state_for_session(
     session_id: Uuid,
-) -> Arc<std::sync::Mutex<SessionMemoryState>> {
+) -> Arc<std::sync::Mutex<SessionMemoryRuntimeState>> {
     let mut states = session_memory_states().lock().await;
     states
         .entry(session_id)
-        .or_insert_with(|| Arc::new(std::sync::Mutex::new(SessionMemoryState::default())))
+        .or_insert_with(|| Arc::new(std::sync::Mutex::new(SessionMemoryRuntimeState::default())))
         .clone()
 }
 
@@ -167,6 +174,13 @@ fn session_memory_dynamic_config() -> SessionMemoryConfig {
     }
 }
 
+fn init_session_memory_config_if_needed(state: &mut SessionMemoryRuntimeState) {
+    if state.shared.initialized {
+        return;
+    }
+    state.shared.config = session_memory_dynamic_config();
+}
+
 fn has_tool_calls_in_last_assistant_turn(conversation: &[ConversationEntry]) -> bool {
     conversation
         .iter()
@@ -197,26 +211,26 @@ fn count_tool_calls_since(conversation: &[ConversationEntry], since_uuid: Option
 
 fn update_last_memory_message_id(
     conversation: &[ConversationEntry],
-    state: &mut SessionMemoryState,
+    state: &mut SessionMemoryRuntimeState,
 ) {
     if let Some(last_message) = conversation.last() {
-        state.set_last_memory_message_id(Some(last_message.uuid.to_string()));
+        state.last_memory_message_id = Some(last_message.uuid.to_string());
     }
 }
 
 fn count_conversation_tokens(conversation: &[ConversationEntry]) -> u64 {
+    let estimator = TokenEstimator::new();
     conversation
         .iter()
         .map(|entry| {
-            let text_tokens =
-                u64::try_from((entry.text.encode_utf16().count() + 2) / 4).unwrap_or(u64::MAX);
+            let text_tokens = estimator.estimate(&entry.text);
             let tool_tokens = entry
                 .tool_calls
                 .iter()
                 .map(|tool_call| {
-                    let input_len = tool_call.input.to_string().encode_utf16().count();
-                    u64::try_from((tool_call.name.encode_utf16().count() + input_len + 2) / 4)
-                        .unwrap_or(u64::MAX)
+                    estimator
+                        .estimate(&tool_call.name)
+                        .saturating_add(estimator.estimate(&tool_call.input.to_string()))
                 })
                 .sum::<u64>();
             text_tokens.saturating_add(tool_tokens)
@@ -226,24 +240,24 @@ fn count_conversation_tokens(conversation: &[ConversationEntry]) -> u64 {
 
 fn should_extract_memory(
     conversation: &[ConversationEntry],
-    state: &mut SessionMemoryState,
+    state: &mut SessionMemoryRuntimeState,
 ) -> bool {
     let current_token_count = count_conversation_tokens(conversation);
 
-    if !state.initialized {
-        if !state.has_met_initialization_threshold(current_token_count) {
+    if !state.shared.initialized {
+        if !state.shared.has_met_initialization_threshold(current_token_count) {
             return false;
         }
-        state.mark_initialized();
+        state.shared.mark_initialized();
     }
 
-    let has_met_token_threshold = state.has_met_update_threshold(current_token_count);
+    let has_met_token_threshold = state.shared.has_met_update_threshold(current_token_count);
     let last_memory_uuid = state
         .last_memory_message_id
         .as_deref()
         .and_then(|value| Uuid::parse_str(value).ok());
     let has_met_tool_call_threshold = count_tool_calls_since(conversation, last_memory_uuid)
-        >= state.config.tool_calls_between_updates;
+        >= state.shared.config.tool_calls_between_updates;
     let has_tool_calls_in_last_turn = has_tool_calls_in_last_assistant_turn(conversation);
 
     let should_extract = (has_met_token_threshold && has_met_tool_call_threshold)
@@ -258,13 +272,14 @@ fn should_extract_memory(
 
 fn update_last_summarized_message_id_if_safe(
     conversation: &[ConversationEntry],
-    state: &mut SessionMemoryState,
+    state: &mut SessionMemoryRuntimeState,
 ) {
     if has_tool_calls_in_last_assistant_turn(conversation) {
         return;
     }
     if let Some(last_message) = conversation.last() {
-        state.set_last_summarized_message_id(Some(last_message.uuid.to_string()));
+        state.shared
+            .set_last_summarized_message_id(Some(last_message.uuid.to_string()));
     }
 }
 
@@ -291,11 +306,11 @@ pub(crate) async fn maybe_spawn_session_memory_update(
     let mut guard = state
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    guard.config = session_memory_dynamic_config();
+    init_session_memory_config_if_needed(&mut guard);
     if !should_extract_memory(conversation, &mut guard) {
         return;
     }
-    guard.mark_extraction_started();
+    guard.shared.mark_extraction_started();
     drop(guard);
 
     let child_config = config.clone();
@@ -311,7 +326,7 @@ pub(crate) async fn maybe_spawn_session_memory_update(
                 let mut state = state
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
-                state.mark_extraction_completed();
+                state.shared.mark_extraction_completed();
                 return;
             }
         };
@@ -333,7 +348,7 @@ async fn run_session_memory_update(
     backend: Arc<dyn ConversationBackend>,
     discovered_tool_scope: DiscoveredToolScope,
     conversation: &[ConversationEntry],
-    state: Arc<std::sync::Mutex<SessionMemoryState>>,
+    state: Arc<std::sync::Mutex<SessionMemoryRuntimeState>>,
 ) -> Result<()> {
     let summary_path = ensure_session_memory_file(config)?;
     let current_memory = load_session_memory_content(config)?.unwrap_or_default();
@@ -371,8 +386,8 @@ async fn run_session_memory_update(
                     .join(config.session_id.to_string()),
             ),
             hook_options: crate::hooks::HookExecutionOptions::ephemeral(),
-            run_background_extract_memories: false,
             query_source: QuerySource::SessionMemory,
+            agent_id: None,
         },
     )
     .await;
@@ -383,28 +398,34 @@ async fn run_session_memory_update(
             let mut state = state
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            state.mark_extraction_completed();
+            state.shared.mark_extraction_completed();
             return Err(error);
         }
     };
 
+    let guard = state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     store.append_named_event(
         config.session_id,
         "tengu_session_memory_extraction",
         json!({
             "input_tokens": outcome.usage.input_tokens,
             "output_tokens": outcome.usage.output_tokens,
-            "config_min_message_tokens_to_init": state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).config.minimum_message_tokens_to_init,
-            "config_min_tokens_between_update": state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).config.minimum_tokens_between_update,
-            "config_tool_calls_between_updates": state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).config.tool_calls_between_updates,
+            "config_min_message_tokens_to_init": guard.shared.config.minimum_message_tokens_to_init,
+            "config_min_tokens_between_update": guard.shared.config.minimum_tokens_between_update,
+            "config_tool_calls_between_updates": guard.shared.config.tool_calls_between_updates,
         }),
     )?;
+    drop(guard);
 
     let mut state = state
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    state.record_extraction_token_count(count_conversation_tokens(conversation));
+    state
+        .shared
+        .record_extraction_token_count(count_conversation_tokens(conversation));
     update_last_summarized_message_id_if_safe(conversation, &mut state);
-    state.mark_extraction_completed();
+    state.shared.mark_extraction_completed();
     Ok(())
 }
