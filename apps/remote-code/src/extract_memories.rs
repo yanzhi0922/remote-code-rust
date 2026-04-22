@@ -5,7 +5,10 @@ use std::sync::{Arc, OnceLock};
 use anyhow::Result;
 use chrono::Utc;
 use rc_config::{RuntimeConfig, restamp_runtime_session};
-use rc_core::{ConversationEntry, ConversationRole, PermissionMode, SystemMemorySavedMessage};
+use rc_core::{
+    ConversationEntry, ConversationRole, Message, MessageBase, MessageOrigin, PermissionMode,
+    SystemMemorySavedMessage, SystemMessage, SystemMessageSubtype,
+};
 use rc_permissions::{PermissionBroker, PermissionDecision, PermissionRequest};
 use rc_protocol::UsagePayload;
 use rc_provider::{ConversationBackend, ProviderCompatBackend};
@@ -15,6 +18,7 @@ use rc_runtime_prompt::{
     runtime_env_truthy, scan_auto_memory_files,
 };
 use rc_session::SessionStore;
+use rc_transcript::TranscriptEntry;
 use rc_tools::shell::readonly::{ShellKind, is_read_only_command};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -48,7 +52,7 @@ struct PendingExtractionContext {
 
 #[derive(Clone)]
 struct ExtractMemoriesState {
-    last_visible_message_index: Option<usize>,
+    last_memory_message_uuid: Option<Uuid>,
     has_logged_gate_failure: bool,
     in_progress: bool,
     turns_since_last_extraction: usize,
@@ -58,7 +62,7 @@ struct ExtractMemoriesState {
 impl Default for ExtractMemoriesState {
     fn default() -> Self {
         Self {
-            last_visible_message_index: None,
+            last_memory_message_uuid: None,
             has_logged_gate_failure: false,
             in_progress: false,
             turns_since_last_extraction: 0,
@@ -270,25 +274,26 @@ async fn run_extract_memories_once(
     };
 
     let visible_messages = model_visible_messages(conversation);
-    let last_visible_index = {
+    let last_memory_message_uuid = {
         let mut states = extraction_state_map().lock().await;
         states
             .entry(session_id)
             .or_default()
-            .last_visible_message_index
+            .last_memory_message_uuid
     };
-    let new_message_count = count_visible_messages_since(&visible_messages, last_visible_index);
+    let new_message_count =
+        count_visible_messages_since(&visible_messages, last_memory_message_uuid.as_ref());
     if new_message_count == 0 {
         return Ok(false);
     }
 
     if has_memory_writes_since(
         conversation,
-        last_visible_index,
+        last_memory_message_uuid.as_ref(),
         &memory_dir,
         team_memory_dir.as_deref(),
     ) {
-        update_last_visible_cursor(session_id, visible_messages.len()).await;
+        update_last_visible_cursor(session_id, conversation.last().map(|entry| entry.uuid)).await;
         store.append_named_event(
             config.session_id,
             "tengu_extract_memories_skipped_direct_write",
@@ -334,7 +339,7 @@ async fn run_extract_memories_once(
     )
     .await?;
 
-    update_last_visible_cursor(session_id, visible_messages.len()).await;
+    update_last_visible_cursor(session_id, conversation.last().map(|entry| entry.uuid)).await;
 
     store.append_named_event(
         config.session_id,
@@ -364,11 +369,15 @@ async fn run_extract_memories_once(
         timestamp: Utc::now(),
     };
 
-    store.append_named_event(
+    store.append_transcript_entry(&TranscriptEntry::runtime_message_now(
         config.session_id,
-        "memory_saved",
-        serde_json::to_value(&payload)?,
-    )?;
+        Message::System(SystemMessage {
+            base: MessageBase::with_origin(MessageOrigin::System),
+            subtype: SystemMessageSubtype::MemorySaved,
+            text: serde_json::to_string(&payload)?,
+            error: None,
+        }),
+    ))?;
     if let Some(event_sink) = event_sink {
         event_sink(PromptStreamEvent::MemorySaved {
             written_paths: extraction.memory_paths,
@@ -541,31 +550,43 @@ fn model_visible_messages(conversation: &[ConversationEntry]) -> Vec<&Conversati
 
 fn count_visible_messages_since(
     visible_messages: &[&ConversationEntry],
-    last_visible_index: Option<usize>,
+    since_uuid: Option<&Uuid>,
 ) -> usize {
-    match last_visible_index {
-        Some(index) if index <= visible_messages.len() => {
-            visible_messages.len().saturating_sub(index)
+    match since_uuid {
+        Some(since_uuid) => {
+            let mut found_start = false;
+            let mut count = 0usize;
+            for entry in visible_messages {
+                if !found_start {
+                    if &entry.uuid == since_uuid {
+                        found_start = true;
+                    }
+                    continue;
+                }
+                count += 1;
+            }
+            if found_start {
+                count
+            } else {
+                visible_messages.len()
+            }
         }
-        _ => visible_messages.len(),
+        None => visible_messages.len(),
     }
 }
 
 fn has_memory_writes_since(
     conversation: &[ConversationEntry],
-    last_visible_index: Option<usize>,
+    since_uuid: Option<&Uuid>,
     memory_dir: &Path,
     team_memory_dir: Option<&Path>,
 ) -> bool {
-    let mut visible_seen = 0usize;
+    let mut found_start = since_uuid.is_none();
     for entry in conversation {
-        if matches!(
-            entry.role,
-            ConversationRole::User | ConversationRole::Assistant
-        ) {
-            visible_seen += 1;
-        }
-        if last_visible_index.is_some_and(|index| visible_seen <= index) {
+        if !found_start {
+            if Some(&entry.uuid) == since_uuid {
+                found_start = true;
+            }
             continue;
         }
         if entry.role != ConversationRole::Assistant {
@@ -608,12 +629,12 @@ fn path_within(candidate: &Path, root: &Path) -> bool {
     candidate == root || candidate.starts_with(root)
 }
 
-async fn update_last_visible_cursor(session_id: Uuid, len: usize) {
+async fn update_last_visible_cursor(session_id: Uuid, message_uuid: Option<Uuid>) {
     let mut states = extraction_state_map().lock().await;
     states
         .entry(session_id)
         .or_default()
-        .last_visible_message_index = Some(len);
+        .last_memory_message_uuid = message_uuid;
 }
 
 async fn extract_memories_gate_enabled(config: &RuntimeConfig) -> Result<bool> {
@@ -722,10 +743,12 @@ mod tests {
     use rc_permissions::{PermissionBroker, PermissionRequest};
     use serde_json::json;
     use std::path::PathBuf;
+    use uuid::Uuid;
 
     #[test]
     fn extract_written_paths_accepts_path_and_file_path_and_dedups() {
         let conversation = vec![ConversationEntry {
+            uuid: uuid::Uuid::new_v4(),
             role: ConversationRole::Assistant,
             text: String::new(),
             history_text: None,
@@ -767,6 +790,7 @@ mod tests {
         let conversation = vec![
             ConversationEntry::user("hello"),
             ConversationEntry {
+                uuid: uuid::Uuid::new_v4(),
                 role: ConversationRole::Assistant,
                 text: String::new(),
                 history_text: None,
@@ -785,7 +809,7 @@ mod tests {
 
         assert!(has_memory_writes_since(
             &conversation,
-            Some(0),
+            Some(&conversation[0].uuid),
             &PathBuf::from("C:/mem"),
             None,
         ));
@@ -797,9 +821,12 @@ mod tests {
         let assistant = ConversationEntry::assistant("a");
         let visible = vec![&user, &assistant];
 
-        assert_eq!(count_visible_messages_since(&visible, Some(9)), 2);
+        assert_eq!(
+            count_visible_messages_since(&visible, Some(&Uuid::new_v4())),
+            2
+        );
         assert_eq!(count_visible_messages_since(&visible, None), 2);
-        assert_eq!(count_visible_messages_since(&visible, Some(1)), 1);
+        assert_eq!(count_visible_messages_since(&visible, Some(&user.uuid)), 1);
     }
 
     #[tokio::test]

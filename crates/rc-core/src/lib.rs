@@ -410,6 +410,9 @@ pub struct UsageSummary {
 /// A single entry in the conversation history.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationEntry {
+    /// Stable message identifier used for transcript-aware features.
+    #[serde(default = "Uuid::new_v4")]
+    pub uuid: Uuid,
     /// Who produced this entry.
     pub role: ConversationRole,
     /// Primary text content.
@@ -442,6 +445,7 @@ impl ConversationEntry {
     /// Create a system-role entry.
     pub fn system(text: impl Into<String>) -> Self {
         Self {
+            uuid: Uuid::new_v4(),
             role: ConversationRole::System,
             text: text.into(),
             history_text: None,
@@ -457,6 +461,7 @@ impl ConversationEntry {
     /// Create a user-role entry.
     pub fn user(text: impl Into<String>) -> Self {
         Self {
+            uuid: Uuid::new_v4(),
             role: ConversationRole::User,
             text: text.into(),
             history_text: None,
@@ -472,6 +477,7 @@ impl ConversationEntry {
     /// Create a user-role entry backed entirely by provider content blocks.
     pub fn user_with_content_blocks(content_blocks: Vec<Value>) -> Self {
         Self {
+            uuid: Uuid::new_v4(),
             role: ConversationRole::User,
             text: String::new(),
             history_text: None,
@@ -487,6 +493,7 @@ impl ConversationEntry {
     /// Create a user-role entry with multimodal attachments.
     pub fn user_with_attachments(text: impl Into<String>, attachments: Vec<Attachment>) -> Self {
         Self {
+            uuid: Uuid::new_v4(),
             role: ConversationRole::User,
             text: text.into(),
             history_text: None,
@@ -502,6 +509,7 @@ impl ConversationEntry {
     /// Create an assistant-role entry.
     pub fn assistant(text: impl Into<String>) -> Self {
         Self {
+            uuid: Uuid::new_v4(),
             role: ConversationRole::Assistant,
             text: text.into(),
             history_text: None,
@@ -522,6 +530,7 @@ impl ConversationEntry {
         is_error: bool,
     ) -> Self {
         Self {
+            uuid: Uuid::new_v4(),
             role: ConversationRole::Tool,
             text: text.into(),
             history_text: None,

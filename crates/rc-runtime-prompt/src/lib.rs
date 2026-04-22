@@ -631,6 +631,7 @@ pub fn apply_runtime_system_prompt(
     conversation.insert(
         0,
         ConversationEntry {
+            uuid: uuid::Uuid::new_v4(),
             role: ConversationRole::System,
             text: prompt.text,
             history_text: None,

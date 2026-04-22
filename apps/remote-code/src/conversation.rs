@@ -902,6 +902,7 @@ async fn run_prompt_legacy(
         usage.output_tokens += response.usage.output_tokens;
         total_tool_calls += response.tool_calls.len();
         let assistant_entry = ConversationEntry {
+            uuid: uuid::Uuid::new_v4(),
             role: ConversationRole::Assistant,
             text: response.text.clone(),
             history_text: response.history_text.clone(),

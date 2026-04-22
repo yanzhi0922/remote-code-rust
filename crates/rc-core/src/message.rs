@@ -405,6 +405,7 @@ impl Message {
     pub fn as_conversation_entry(&self) -> Option<ConversationEntry> {
         match self {
             Self::User(message) => Some(ConversationEntry {
+                uuid: message.base.uuid,
                 role: ConversationRole::User,
                 text: message.text.clone(),
                 history_text: None,
@@ -416,6 +417,7 @@ impl Message {
                 is_error: false,
             }),
             Self::Assistant(message) => Some(ConversationEntry {
+                uuid: message.base.uuid,
                 role: ConversationRole::Assistant,
                 text: message.text.clone(),
                 history_text: None,
@@ -427,6 +429,7 @@ impl Message {
                 is_error: false,
             }),
             Self::System(message) => Some(ConversationEntry {
+                uuid: message.base.uuid,
                 role: ConversationRole::System,
                 text: message.text.clone(),
                 history_text: None,
@@ -438,6 +441,7 @@ impl Message {
                 is_error: matches!(message.subtype, SystemMessageSubtype::ApiError),
             }),
             Self::ToolUseSummary(message) => Some(ConversationEntry {
+                uuid: message.base.uuid,
                 role: ConversationRole::Tool,
                 text: message.summary.clone(),
                 history_text: None,
@@ -552,6 +556,7 @@ mod tests {
     #[test]
     fn assistant_conversation_entry_round_trips_provider_content_blocks() {
         let entry = ConversationEntry {
+            uuid: uuid::Uuid::new_v4(),
             role: ConversationRole::Assistant,
             text: String::new(),
             history_text: None,
@@ -585,6 +590,7 @@ mod tests {
     #[test]
     fn user_conversation_entry_round_trips_provider_content_blocks() {
         let entry = ConversationEntry {
+            uuid: uuid::Uuid::new_v4(),
             role: ConversationRole::User,
             text: String::new(),
             history_text: Some("meta".to_owned()),
@@ -614,6 +620,7 @@ mod tests {
     #[test]
     fn tool_conversation_entry_round_trips_provider_content_blocks() {
         let entry = ConversationEntry {
+            uuid: uuid::Uuid::new_v4(),
             role: ConversationRole::Tool,
             text: "tool-search".to_owned(),
             history_text: None,
