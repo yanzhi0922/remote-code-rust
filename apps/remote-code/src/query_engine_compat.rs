@@ -79,9 +79,9 @@ use crate::hooks::{
     HookExecutionOptions, HookRunState, RuntimeHookDiscovery, apply_post_tool_hooks_with_options,
     apply_pre_tool_use_hooks_with_options,
 };
-use crate::post_turn_runtime::handle_query_finished_runtime_tasks;
-use crate::session_memory_runtime::maybe_spawn_session_memory_update;
-
+use crate::repl_hook_runtime::{
+    ReplHookRuntimeResources, apply_runtime_hook_context, register_repl_runtime_hooks,
+};
 struct CompatSharedState {
     config: Mutex<RuntimeConfig>,
     conversation: Mutex<Vec<ConversationEntry>>,
@@ -101,8 +101,8 @@ pub(crate) struct CompatExecutionOptions {
     pub(crate) persist_runtime_context: bool,
     pub(crate) persist_tool_results_dir: Option<PathBuf>,
     pub(crate) hook_options: HookExecutionOptions,
-    pub(crate) run_background_extract_memories: bool,
     pub(crate) query_source: QuerySource,
+    pub(crate) agent_id: Option<rc_core::AgentId>,
 }
 
 impl Default for CompatExecutionOptions {
@@ -113,15 +113,13 @@ impl Default for CompatExecutionOptions {
             persist_runtime_context: true,
             persist_tool_results_dir: None,
             hook_options: HookExecutionOptions::persistent(),
-            run_background_extract_memories: false,
             query_source: QuerySource::User,
+            agent_id: None,
         }
     }
 }
 
 struct CompatObserver {
-    config: RuntimeConfig,
-    backend: Arc<dyn ConversationBackend>,
     store: Arc<SessionStore>,
     shared: Arc<CompatSharedState>,
     event_sink: Option<PromptEventSink>,
@@ -1624,20 +1622,6 @@ impl QueryObserver for CompatObserver {
                         text: assistant_entry.text.clone(),
                     });
                 }
-                if self.execution.query_source == QuerySource::User {
-                    let conversation_snapshot = {
-                        let conversation = self.shared.conversation.lock().await;
-                        conversation.clone()
-                    };
-                    maybe_spawn_session_memory_update(
-                        &self.config,
-                        self.store.as_ref(),
-                        self.backend.clone(),
-                        self.shared.discovered_tool_scope.clone(),
-                        &conversation_snapshot,
-                    )
-                    .await;
-                }
                 if self.should_persist() {
                     if assistant_entry.tool_calls.is_empty() {
                         self.store.clear_resume_state(session_id)?;
@@ -1694,22 +1678,7 @@ impl QueryObserver for CompatObserver {
             | QueryObserverEvent::MessagesAppended { .. }
             | QueryObserverEvent::QueryFailed { .. }
             | QueryObserverEvent::QueryStarted { .. } => {}
-            QueryObserverEvent::QueryFinished { .. } => {
-                let conversation_snapshot = {
-                    let conversation = self.shared.conversation.lock().await;
-                    conversation.clone()
-                };
-                handle_query_finished_runtime_tasks(
-                    &self.config,
-                    self.store.as_ref(),
-                    self.backend.clone(),
-                    self.shared.discovered_tool_scope.clone(),
-                    &conversation_snapshot,
-                    self.event_sink.clone(),
-                    self.execution.run_background_extract_memories,
-                    self.execution.query_source,
-                );
-            }
+            QueryObserverEvent::QueryFinished { .. } => {}
             QueryObserverEvent::CheckpointCleared { .. } => {}
         }
         Ok(())
@@ -2009,10 +1978,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
         conversation,
         prompt,
         config_prompt_runtime_overrides(config),
-        CompatExecutionOptions {
-            run_background_extract_memories: true,
-            ..CompatExecutionOptions::default()
-        },
+        CompatExecutionOptions::default(),
     )
     .await
 }
@@ -2114,8 +2080,6 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         latest_request_id: Mutex::new(None),
     });
     let observer = Arc::new(CompatObserver {
-        config: config.clone(),
-        backend: backend.clone(),
         store: compat_store.clone(),
         shared: shared.clone(),
         event_sink: event_sink.clone(),
@@ -2164,15 +2128,17 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
     );
     process_context.effort = parse_effort(config.effort.as_deref());
     process_context.query_source = execution.query_source;
+    process_context.agent_id = execution.agent_id.clone();
     process_context.discovered_skills = runtime_extensions
         .skills
         .into_iter()
         .collect::<HashSet<_>>();
+    apply_runtime_hook_context(&mut process_context, config, &provider_conversation);
 
     let mut query_config = QueryEngineConfig::new(
         config.session_id.into(),
         &model_name,
-        backend,
+        backend.clone(),
         tool_runner,
         rc_engine_events::EventStream::new(64),
     )
@@ -2200,6 +2166,16 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         query_config =
             query_config.with_provider_invocation_mode(ProviderInvocationMode::Streaming);
     }
+    query_config = register_repl_runtime_hooks(
+        query_config,
+        ReplHookRuntimeResources {
+            config: config.clone(),
+            store: compat_store.clone(),
+            backend: backend.clone(),
+            discovered_tool_scope: discovered_tool_scope.clone(),
+            event_sink: event_sink.clone(),
+        },
+    );
     query_config.max_turns = u32::try_from(config.max_turns).unwrap_or(u32::MAX);
 
     let mut engine = QueryEngine::new(query_config, existing_messages);
@@ -3319,8 +3295,6 @@ mod tests {
             .expect("old entry");
 
         let observer = CompatObserver {
-            config: config.clone(),
-            backend: Arc::new(RecordingBackend::default()),
             store: Arc::new(SessionStore::open(config.paths.clone()).expect("observer store")),
             shared: Arc::new(CompatSharedState {
                 config: tokio::sync::Mutex::new(config.clone()),
@@ -4136,8 +4110,8 @@ while True:
                 persist_runtime_context: false,
                 persist_tool_results_dir: Some(tempdir.path().join("ephemeral-tool-results")),
                 hook_options: crate::hooks::HookExecutionOptions::ephemeral(),
-                run_background_extract_memories: false,
                 query_source: QuerySource::User,
+                agent_id: None,
             },
         )
         .await
@@ -4156,28 +4130,6 @@ while True:
             .expect("conversation after");
         assert_eq!(after_events.len(), before_events.len());
         assert_eq!(after_conversation.len(), before_conversation.len());
-    }
-
-    #[test]
-    fn query_finished_background_runtime_tasks_only_run_for_user_queries() {
-        assert!(
-            crate::post_turn_runtime::should_run_background_extract_memories(
-                true,
-                QuerySource::User,
-            )
-        );
-        assert!(
-            !crate::post_turn_runtime::should_run_background_extract_memories(
-                true,
-                QuerySource::Agent,
-            )
-        );
-        assert!(
-            !crate::post_turn_runtime::should_run_background_extract_memories(
-                true,
-                QuerySource::SessionMemory,
-            )
-        );
     }
 
     #[tokio::test]
@@ -4597,8 +4549,6 @@ while True:
                 .push(event);
         });
         let observer = CompatObserver {
-            config: config.clone(),
-            backend: Arc::new(RecordingBackend::default()),
             store: Arc::new(SessionStore::open(config.paths.clone()).expect("store")),
             shared: Arc::new(CompatSharedState {
                 config: tokio::sync::Mutex::new(config.clone()),

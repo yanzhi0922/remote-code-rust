@@ -374,6 +374,7 @@ mod tests {
         ToolRunner,
     };
     use crate::observer::{QueryCheckpointKind, QueryObserver, QueryObserverEvent};
+    use crate::stop_hooks::{ReplHookContext, StopHookOutcome, StopHookRequest};
 
     struct DummyCompletion;
 
@@ -1024,6 +1025,180 @@ mod tests {
                 .iter()
                 .any(|entry| entry.role == rc_core::ConversationRole::User
                     && entry.text == "post-compact marker")
+        );
+    }
+
+    #[tokio::test]
+    async fn query_engine_runs_post_sampling_before_stop_hook_on_terminal_turn() {
+        let session_id = SessionId::new();
+        let backend = Arc::new(MockBackend::new(vec![ProviderResponse {
+            text: "done".to_owned(),
+            history_text: None,
+            thinking: None,
+            content_blocks: Vec::new(),
+            tool_calls: Vec::new(),
+            request_id: None,
+            usage: UsageSummary {
+                input_tokens: 1,
+                output_tokens: 1,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 0,
+            },
+            stop_reason: "end_turn".to_owned(),
+        }]));
+        let sequence = Arc::new(Mutex::new(Vec::<String>::new()));
+        let post_sampling_sequence = Arc::clone(&sequence);
+        let stop_hook_sequence = Arc::clone(&sequence);
+
+        let config = QueryEngineConfig::new(
+            session_id.clone(),
+            "mock-model",
+            backend,
+            Arc::new(MockToolRunner),
+            rc_engine_events::EventStream::new(8),
+        )
+        .with_post_sampling_hook(Arc::new(move |context: ReplHookContext| {
+            let post_sampling_sequence = Arc::clone(&post_sampling_sequence);
+            Box::pin(async move {
+                post_sampling_sequence
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(format!("post_sampling:{}", context.messages.len()));
+                Ok(())
+            })
+        }))
+        .with_stop_hook(Arc::new(move |context: ReplHookContext, request: StopHookRequest| {
+            let stop_hook_sequence = Arc::clone(&stop_hook_sequence);
+            Box::pin(async move {
+                stop_hook_sequence
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(format!(
+                        "stop_hook:{}:{}",
+                        request.stop_reason,
+                        context.messages.len()
+                    ));
+                Ok(StopHookOutcome::Allow)
+            })
+        }));
+        let mut engine = QueryEngine::new(
+            config,
+            vec![rc_core::Message::from(ConversationEntry::system("sys"))],
+        );
+        let mut context =
+            ProcessUserInputContext::new(session_id, PermissionMode::Default, "mock-model");
+        context.system_prompt = Some("system".to_owned());
+        context
+            .user_context
+            .insert("currentDate".to_owned(), "Today".to_owned());
+
+        let result = engine
+            .submit_message(
+                vec![rc_core::Message::from(ConversationEntry::user("hello"))],
+                context,
+            )
+            .await
+            .expect("terminal query should succeed");
+
+        assert_eq!(result.final_text.as_deref(), Some("done"));
+        let sequence = sequence
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        assert_eq!(
+            sequence,
+            vec![
+                "post_sampling:3".to_owned(),
+                "stop_hook:end_turn:3".to_owned()
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn query_engine_stop_hook_retry_appends_messages_and_continues() {
+        let session_id = SessionId::new();
+        let backend = Arc::new(MockBackend::new(vec![
+            ProviderResponse {
+                text: "first".to_owned(),
+                history_text: None,
+                thinking: None,
+                content_blocks: Vec::new(),
+                tool_calls: Vec::new(),
+                request_id: None,
+                usage: UsageSummary {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                },
+                stop_reason: "end_turn".to_owned(),
+            },
+            ProviderResponse {
+                text: "second".to_owned(),
+                history_text: None,
+                thinking: None,
+                content_blocks: Vec::new(),
+                tool_calls: Vec::new(),
+                request_id: None,
+                usage: UsageSummary {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                },
+                stop_reason: "end_turn".to_owned(),
+            },
+        ]));
+        let stop_count = Arc::new(AtomicUsize::new(0));
+        let stop_count_for_hook = Arc::clone(&stop_count);
+
+        let config = QueryEngineConfig::new(
+            session_id.clone(),
+            "mock-model",
+            backend,
+            Arc::new(MockToolRunner),
+            rc_engine_events::EventStream::new(8),
+        )
+        .with_stop_hook(Arc::new(move |_context: ReplHookContext, _request: StopHookRequest| {
+            let stop_count_for_hook = Arc::clone(&stop_count_for_hook);
+            Box::pin(async move {
+                let attempt = stop_count_for_hook.fetch_add(1, Ordering::SeqCst);
+                if attempt == 0 {
+                    Ok(StopHookOutcome::Retry {
+                        injected_messages: vec![rc_core::Message::from(
+                            ConversationEntry::user("retry please"),
+                        )],
+                    })
+                } else {
+                    Ok(StopHookOutcome::Allow)
+                }
+            })
+        }));
+        let mut engine = QueryEngine::new(
+            config,
+            vec![rc_core::Message::from(ConversationEntry::system("sys"))],
+        );
+        let context =
+            ProcessUserInputContext::new(session_id, PermissionMode::Default, "mock-model");
+
+        let result = engine
+            .submit_message(
+                vec![rc_core::Message::from(ConversationEntry::user("hello"))],
+                context,
+            )
+            .await
+            .expect("retrying stop-hook query should succeed");
+
+        assert_eq!(result.final_text.as_deref(), Some("second"));
+        assert_eq!(stop_count.load(Ordering::SeqCst), 2);
+        assert!(
+            result
+                .state
+                .messages
+                .iter()
+                .filter_map(rc_core::Message::as_conversation_entry)
+                .any(|entry| entry.role == rc_core::ConversationRole::User
+                    && entry.text == "retry please")
         );
     }
 }

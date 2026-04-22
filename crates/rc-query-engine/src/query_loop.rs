@@ -26,6 +26,7 @@ use crate::observer::{
 use crate::preprocessing::PreprocessingPipeline;
 use crate::reactive_compact::ReactiveCompactHandler;
 use crate::state_machine::EnginePhase;
+use crate::stop_hooks::{ReplHookContext, StopHookOutcome, StopHookRequest, StopHookResult};
 use crate::token_budget::TokenBudgetDecision;
 
 /// Execute the Phase 2 compat query loop in-memory.
@@ -281,7 +282,68 @@ pub async fn run_query_loop(
             state_snapshot: state_snapshot(state, response.tool_calls.len()),
         });
 
+        if !config.post_sampling_hooks.is_empty() {
+            let hook_context = ReplHookContext {
+                session_id: context.session_id.clone(),
+                turn: state.turn,
+                messages: state.messages.clone(),
+                query_source: context.query_source,
+                agent_id: context.agent_id.clone(),
+                system_prompt: context.system_prompt.clone(),
+                user_context: context.user_context.clone(),
+                system_context: context.system_context.clone(),
+            };
+            for hook in &config.post_sampling_hooks {
+                let _ = hook(hook_context.clone()).await;
+            }
+        }
+
         if response.tool_calls.is_empty() {
+            if let Some(stop_hook) = config.stop_hook.as_ref() {
+                state
+                    .stop_hook_manager
+                    .request_stop(response.stop_reason.clone());
+                let hook_context = ReplHookContext {
+                    session_id: context.session_id.clone(),
+                    turn: state.turn,
+                    messages: state.messages.clone(),
+                    query_source: context.query_source,
+                    agent_id: context.agent_id.clone(),
+                    system_prompt: context.system_prompt.clone(),
+                    user_context: context.user_context.clone(),
+                    system_context: context.system_context.clone(),
+                };
+                let hook_request = StopHookRequest {
+                    stop_reason: response.stop_reason.clone(),
+                    final_text: (!response.text.trim().is_empty()).then_some(response.text.clone()),
+                };
+                let hook_outcome = match stop_hook(hook_context, hook_request).await {
+                    Ok(outcome) => outcome,
+                    Err(_) => StopHookOutcome::Allow,
+                };
+                let retry_result = StopHookResult::from(&hook_outcome);
+                let should_stop = state.stop_hook_manager.evaluate(retry_result);
+                match hook_outcome {
+                    StopHookOutcome::Retry { injected_messages } if !should_stop => {
+                        if !injected_messages.is_empty() {
+                            state.messages.extend(injected_messages.clone());
+                            let _ = config
+                                .observer
+                                .on_event(QueryObserverEvent::MessagesAppended {
+                                    session_id: context.session_id.clone(),
+                                    appended: injected_messages,
+                                    total_messages: state.messages.len(),
+                                })
+                                .await;
+                        }
+                        continue;
+                    }
+                    StopHookOutcome::Deny if !should_stop => {
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
             // Transition: ProcessingResponse -> Finalizing (handled by caller)
             let _ = state.state_machine.transition(EnginePhase::Finalizing);
             return Ok(QueryResult {

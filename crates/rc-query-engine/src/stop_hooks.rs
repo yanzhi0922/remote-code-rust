@@ -1,9 +1,51 @@
-//! Stop hook retry logic for graceful query termination.
+//! Runtime stop-hook types plus retry logic for graceful query termination.
 //!
-//! When a stop hook rejects a termination attempt, the engine can retry
-//! the stop after a configurable number of attempts.
+//! The compat query engine uses these types to expose a real terminal
+//! assistant-response hook seam to the host runtime. This is the engine-side
+//! equivalent of Claude Code's stop-hook stage.
 
+use std::collections::BTreeMap;
+
+use rc_core::{AgentId, Message, SessionId};
 use serde::{Deserialize, Serialize};
+
+use crate::config::QuerySource;
+
+/// Generic hook context shared by post-sampling and stop-hook callbacks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplHookContext {
+    pub session_id: SessionId,
+    pub turn: u32,
+    pub messages: Vec<Message>,
+    pub query_source: QuerySource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<AgentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+    #[serde(default)]
+    pub user_context: BTreeMap<String, String>,
+    #[serde(default)]
+    pub system_context: BTreeMap<String, String>,
+}
+
+/// Terminal metadata for a stop-hook invocation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StopHookRequest {
+    pub stop_reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_text: Option<String>,
+}
+
+/// Host-directed outcome of a stop-hook callback.
+#[derive(Debug, Clone)]
+pub enum StopHookOutcome {
+    /// The stop is allowed to proceed immediately.
+    Allow,
+    /// The engine should append the supplied messages and continue the loop.
+    Retry { injected_messages: Vec<Message> },
+    /// The current stop attempt should be denied.
+    Deny,
+}
 
 /// Manages stop hook retry behavior for query termination.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,6 +69,16 @@ pub enum StopHookResult {
     Retry,
     /// The stop is denied; the query should continue.
     Deny,
+}
+
+impl From<&StopHookOutcome> for StopHookResult {
+    fn from(value: &StopHookOutcome) -> Self {
+        match value {
+            StopHookOutcome::Allow => Self::Allow,
+            StopHookOutcome::Retry { .. } => Self::Retry,
+            StopHookOutcome::Deny => Self::Deny,
+        }
+    }
 }
 
 impl StopHookManager {
@@ -124,7 +176,13 @@ impl Default for StopHookManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{StopHookManager, StopHookResult};
+    use rc_core::{ConversationEntry, Message, PermissionMode, SessionId};
+
+    use crate::config::ProcessUserInputContext;
+
+    use super::{
+        ReplHookContext, StopHookManager, StopHookOutcome, StopHookRequest, StopHookResult,
+    };
 
     #[test]
     fn stop_hook_allows_immediate_stop() {
@@ -187,5 +245,70 @@ mod tests {
     fn stop_hook_default_is_3_retries() {
         let mgr = StopHookManager::default();
         assert_eq!(mgr.max_retries(), 3);
+    }
+
+    #[test]
+    fn stop_hook_outcome_maps_to_retry_result() {
+        assert_eq!(
+            StopHookResult::from(&StopHookOutcome::Allow),
+            StopHookResult::Allow
+        );
+        assert_eq!(
+            StopHookResult::from(&StopHookOutcome::Retry {
+                injected_messages: vec![Message::from(ConversationEntry::user("retry"))],
+            }),
+            StopHookResult::Retry
+        );
+        assert_eq!(
+            StopHookResult::from(&StopHookOutcome::Deny),
+            StopHookResult::Deny
+        );
+    }
+
+    #[test]
+    fn repl_hook_context_carries_prompt_and_context_maps() {
+        let session_id = SessionId::new();
+        let mut process =
+            ProcessUserInputContext::new(session_id.clone(), PermissionMode::Default, "mock");
+        process.system_prompt = Some("system".to_owned());
+        process
+            .user_context
+            .insert("currentDate".to_owned(), "Today".to_owned());
+        process
+            .system_context
+            .insert("gitStatus".to_owned(), "clean".to_owned());
+
+        let context = ReplHookContext {
+            session_id,
+            turn: 2,
+            messages: vec![Message::from(ConversationEntry::user("hello"))],
+            query_source: process.query_source,
+            agent_id: process.agent_id.clone(),
+            system_prompt: process.system_prompt.clone(),
+            user_context: process.user_context.clone(),
+            system_context: process.system_context.clone(),
+        };
+
+        assert_eq!(context.turn, 2);
+        assert_eq!(context.system_prompt.as_deref(), Some("system"));
+        assert_eq!(
+            context.user_context.get("currentDate").map(String::as_str),
+            Some("Today")
+        );
+        assert_eq!(
+            context.system_context.get("gitStatus").map(String::as_str),
+            Some("clean")
+        );
+    }
+
+    #[test]
+    fn stop_hook_request_carries_terminal_metadata() {
+        let request = StopHookRequest {
+            stop_reason: "end_turn".to_owned(),
+            final_text: Some("done".to_owned()),
+        };
+
+        assert_eq!(request.stop_reason, "end_turn");
+        assert_eq!(request.final_text.as_deref(), Some("done"));
     }
 }

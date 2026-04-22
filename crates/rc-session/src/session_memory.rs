@@ -84,7 +84,6 @@ impl Default for SessionMemoryPromptConfig {
 #[derive(Debug, Clone, Default)]
 pub struct SessionMemoryState {
     pub config: SessionMemoryConfig,
-    pub last_memory_message_id: Option<String>,
     pub last_summarized_message_id: Option<String>,
     pub extraction_started_at: Option<Instant>,
     pub tokens_at_last_extraction: u64,
@@ -121,10 +120,6 @@ impl SessionMemoryState {
 
     pub fn set_last_summarized_message_id(&mut self, message_id: Option<String>) {
         self.last_summarized_message_id = message_id;
-    }
-
-    pub fn set_last_memory_message_id(&mut self, message_id: Option<String>) {
-        self.last_memory_message_id = message_id;
     }
 }
 

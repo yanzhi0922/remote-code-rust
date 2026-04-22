@@ -10,8 +10,8 @@ mod interactive;
 mod mcp_cli;
 mod memory_file_detection;
 mod plugins;
-mod post_turn_runtime;
 mod query_engine_compat;
+mod repl_hook_runtime;
 mod remote;
 mod review_cli;
 #[allow(dead_code)]

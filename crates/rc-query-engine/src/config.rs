@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -15,10 +15,24 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::observer::{NoopQueryObserver, QueryObserver};
+use crate::stop_hooks::{ReplHookContext, StopHookOutcome, StopHookRequest};
 
 pub type PostCompactTransform = dyn Fn(
         Vec<rc_core::ConversationEntry>,
     ) -> Pin<Box<dyn Future<Output = Vec<rc_core::ConversationEntry>> + Send>>
+    + Send
+    + Sync;
+
+pub type PostSamplingHook = dyn Fn(
+        ReplHookContext,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>
+    + Send
+    + Sync;
+
+pub type StopHook = dyn Fn(
+        ReplHookContext,
+        StopHookRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<StopHookOutcome>> + Send>>
     + Send
     + Sync;
 
@@ -41,6 +55,7 @@ pub enum QuerySource {
     Compact,
     SessionMemory,
     Agent,
+    BackgroundTask,
 }
 
 /// Provider invocation mode for a compat query run.
@@ -101,6 +116,12 @@ pub struct ProcessUserInputContext {
     pub mcp_instructions: Option<String>,
     #[serde(default)]
     pub discovered_skills: HashSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+    #[serde(default)]
+    pub user_context: BTreeMap<String, String>,
+    #[serde(default)]
+    pub system_context: BTreeMap<String, String>,
 }
 
 impl ProcessUserInputContext {
@@ -125,6 +146,9 @@ impl ProcessUserInputContext {
             memory_content: None,
             mcp_instructions: None,
             discovered_skills: HashSet::new(),
+            system_prompt: None,
+            user_context: BTreeMap::new(),
+            system_context: BTreeMap::new(),
         }
     }
 }
@@ -186,6 +210,8 @@ pub struct QueryEngineConfig {
     /// Maximum chain nesting depth for sub-queries.
     pub max_chain_depth: u32,
     pub post_compact_transform: Option<Arc<PostCompactTransform>>,
+    pub post_sampling_hooks: Vec<Arc<PostSamplingHook>>,
+    pub stop_hook: Option<Arc<StopHook>>,
     #[allow(dead_code)]
     pub metadata: Value,
 }
@@ -219,6 +245,8 @@ impl QueryEngineConfig {
             tool_result_max_length: 10_000,
             max_chain_depth: 4,
             post_compact_transform: None,
+            post_sampling_hooks: Vec::new(),
+            stop_hook: None,
             metadata: Value::Null,
         }
     }
@@ -256,6 +284,18 @@ impl QueryEngineConfig {
     #[must_use]
     pub fn with_post_compact_transform(mut self, transform: Arc<PostCompactTransform>) -> Self {
         self.post_compact_transform = Some(transform);
+        self
+    }
+
+    #[must_use]
+    pub fn with_post_sampling_hook(mut self, hook: Arc<PostSamplingHook>) -> Self {
+        self.post_sampling_hooks.push(hook);
+        self
+    }
+
+    #[must_use]
+    pub fn with_stop_hook(mut self, hook: Arc<StopHook>) -> Self {
+        self.stop_hook = Some(hook);
         self
     }
 }
