@@ -1133,7 +1133,9 @@ fn absolute_normalized_path(path: &Path) -> PathBuf {
 }
 
 fn comparable_path(path: &Path) -> String {
-    let rendered = normalize_memory_pathbuf(path).to_string_lossy().replace('\\', "/");
+    let rendered = normalize_memory_pathbuf(path)
+        .to_string_lossy()
+        .replace('\\', "/");
     if cfg!(windows) {
         rendered.to_ascii_lowercase()
     } else {

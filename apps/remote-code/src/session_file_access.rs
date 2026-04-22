@@ -292,9 +292,8 @@ mod tests {
         else {
             return;
         };
-        let Some(team_dir) =
-            rc_runtime_prompt::team_memory_path_with_features(&config, &features)
-                .expect("team memory")
+        let Some(team_dir) = rc_runtime_prompt::team_memory_path_with_features(&config, &features)
+            .expect("team memory")
         else {
             return;
         };

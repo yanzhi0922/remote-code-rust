@@ -23,8 +23,8 @@ use rc_runtime_prompt::{
     runtime_env_truthy, scan_auto_memory_files,
 };
 use rc_session::SessionStore;
-use rc_transcript::TranscriptEntry;
 use rc_tools::shell::readonly::{ShellKind, is_read_only_command};
+use rc_transcript::TranscriptEntry;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use uuid::Uuid;

@@ -202,9 +202,9 @@ impl TranscriptEntry {
     pub fn as_compact_boundary(&self) -> Option<&CompactBoundary> {
         match self {
             Self::CompactBoundary { boundary, .. } => Some(boundary),
-            Self::Conversation { .. }
-            | Self::NamedEvent { .. }
-            | Self::RuntimeMessage { .. } => None,
+            Self::Conversation { .. } | Self::NamedEvent { .. } | Self::RuntimeMessage { .. } => {
+                None
+            }
         }
     }
 
@@ -212,9 +212,9 @@ impl TranscriptEntry {
     pub fn as_runtime_message(&self) -> Option<&Message> {
         match self {
             Self::RuntimeMessage { message, .. } => Some(message),
-            Self::Conversation { .. }
-            | Self::NamedEvent { .. }
-            | Self::CompactBoundary { .. } => None,
+            Self::Conversation { .. } | Self::NamedEvent { .. } | Self::CompactBoundary { .. } => {
+                None
+            }
         }
     }
 }
@@ -300,7 +300,11 @@ impl TryFrom<StoredEvent> for TranscriptEntry {
                 .ok_or(TranscriptEntryConversionError::MissingPayload)?;
             let message = serde_json::from_value(payload)
                 .map_err(TranscriptEntryConversionError::InvalidRuntimeMessage)?;
-            return Ok(Self::runtime_message(value.session_id, value.timestamp, message));
+            return Ok(Self::runtime_message(
+                value.session_id,
+                value.timestamp,
+                message,
+            ));
         }
 
         if value.conversation.is_some() {

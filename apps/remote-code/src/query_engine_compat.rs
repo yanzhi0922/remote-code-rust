@@ -72,8 +72,8 @@ use uuid::Uuid;
 use crate::agents::build_remote_code_sub_agent_runtime;
 use crate::conversation::{
     ContentReplacementBackend, PromptEventSink, PromptRunOutcome, PromptStreamEvent,
-    discover_runtime_extensions, provision_content_replacement_state,
-    session_tool_results_dir, truncate_preview,
+    discover_runtime_extensions, provision_content_replacement_state, session_tool_results_dir,
+    truncate_preview,
 };
 use crate::extract_memories::spawn_extract_memories_after_turn;
 use crate::hooks::{
@@ -2176,8 +2176,11 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
     };
     let (runtime_mcp_state_provider, runtime_mcp_observation_provider) =
         spawn_runtime_mcp_providers(config);
-    let runtime_agent_prompt_context_provider =
-        spawn_runtime_agent_prompt_context_provider(config, broker.as_ref(), Some(tool_results_dir));
+    let runtime_agent_prompt_context_provider = spawn_runtime_agent_prompt_context_provider(
+        config,
+        broker.as_ref(),
+        Some(tool_results_dir),
+    );
     let result =
         with_runtime_agent_prompt_context_provider(runtime_agent_prompt_context_provider, async {
             with_runtime_mcp_observation_provider(runtime_mcp_observation_provider, async {
@@ -2452,12 +2455,12 @@ mod tests {
         AGENT_LISTING_DELTA_MARKER, CompatExecutionOptions, CompatObserver, CompatRunOverrides,
         CompatSharedState, DEFERRED_TOOLS_DELTA_MARKER, MCP_INSTRUCTIONS_DELTA_MARKER,
         RuntimeAgentListingDeltaMarker, RuntimeDeferredToolsDeltaMarker,
-        RuntimeMcpInstructionsDeltaMarker, announced_agent_types,
-        announced_deferred_tool_names, announced_mcp_instruction_names,
-        augment_post_compact_conversation_for_runtime, build_agent_listing_delta_entry,
-        build_mcp_instructions_delta_entry, build_runtime_identity_context,
-        refresh_runtime_system_prompt, run_prompt_with_query_engine_compat,
-        run_prompt_with_query_engine_compat_overrides, runtime_delta_entry,
+        RuntimeMcpInstructionsDeltaMarker, announced_agent_types, announced_deferred_tool_names,
+        announced_mcp_instruction_names, augment_post_compact_conversation_for_runtime,
+        build_agent_listing_delta_entry, build_mcp_instructions_delta_entry,
+        build_runtime_identity_context, refresh_runtime_system_prompt,
+        run_prompt_with_query_engine_compat, run_prompt_with_query_engine_compat_overrides,
+        runtime_delta_entry,
     };
     use crate::conversation::{PromptEventSink, PromptStreamEvent, initialize_conversation};
     use crate::hooks::{HookRunState, RuntimeHookDiscovery};
@@ -3979,10 +3982,9 @@ while True:
 
     #[tokio::test]
     async fn compat_run_includes_coordinator_worker_tools_context_in_user_reminder() {
-        let _coordinator_mode = CoordinatorModeTestGuard::enter(
-            rc_agents::coordinator::CoordinatorMode::Coordinator,
-        )
-        .await;
+        let _coordinator_mode =
+            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Coordinator)
+                .await;
 
         let (_tempdir, config, store) = mock_config_and_store();
         let discovery = RuntimeHookDiscovery::default();
@@ -4132,8 +4134,7 @@ while True:
     #[tokio::test]
     async fn refresh_runtime_system_prompt_preserves_structured_blocks() {
         let _coordinator_mode =
-            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal)
-                .await;
+            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal).await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4178,8 +4179,7 @@ while True:
     #[tokio::test]
     async fn agent_system_prompt_keeps_runtime_system_context() {
         let _coordinator_mode =
-            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal)
-                .await;
+            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal).await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4219,8 +4219,7 @@ while True:
     #[tokio::test]
     async fn custom_system_prompt_skips_runtime_system_context() {
         let _coordinator_mode =
-            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal)
-                .await;
+            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal).await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4260,8 +4259,7 @@ while True:
     #[tokio::test]
     async fn append_system_prompt_keeps_runtime_system_context() {
         let _coordinator_mode =
-            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal)
-                .await;
+            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal).await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4301,8 +4299,7 @@ while True:
     #[tokio::test]
     async fn override_system_prompt_replaces_runtime_prompt_and_system_context() {
         let _coordinator_mode =
-            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal)
-                .await;
+            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal).await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4349,8 +4346,7 @@ while True:
     #[tokio::test]
     async fn empty_custom_system_prompt_still_skips_default_prompt_and_system_context() {
         let _coordinator_mode =
-            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal)
-                .await;
+            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal).await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4387,10 +4383,10 @@ while True:
         );
         assert!(
             system_entry.content_blocks.is_empty()
-                || system_entry
-                    .content_blocks
-                    .iter()
-                    .all(|block| block.get("text").and_then(serde_json::Value::as_str).is_some_and(|text| text.trim().is_empty())),
+                || system_entry.content_blocks.iter().all(|block| block
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|text| text.trim().is_empty())),
             "content blocks: {:?}",
             system_entry.content_blocks
         );
@@ -4405,8 +4401,7 @@ while True:
     #[tokio::test]
     async fn whitespace_custom_system_prompt_skips_default_prompt_and_system_context() {
         let _coordinator_mode =
-            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal)
-                .await;
+            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal).await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4443,10 +4438,10 @@ while True:
         );
         assert!(
             system_entry.content_blocks.is_empty()
-                || system_entry
-                    .content_blocks
-                    .iter()
-                    .all(|block| block.get("text").and_then(serde_json::Value::as_str).is_some_and(|text| text.trim().is_empty())),
+                || system_entry.content_blocks.iter().all(|block| block
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|text| text.trim().is_empty())),
             "content blocks: {:?}",
             system_entry.content_blocks
         );

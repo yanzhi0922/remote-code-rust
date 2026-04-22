@@ -439,16 +439,12 @@ fn build_searching_past_context_section(auto_mem_dir: &str, base: &Path) -> Vec<
     let mem_search = if embedded {
         format!(r#"grep -rn "<search term>" {auto_mem_dir} --include="*.md""#)
     } else {
-        format!(
-            r#"Grep with pattern="<search term>" path="{auto_mem_dir}" glob="*.md""#
-        )
+        format!(r#"Grep with pattern="<search term>" path="{auto_mem_dir}" glob="*.md""#)
     };
     let transcript_search = if embedded {
         format!(r#"grep -rn "<search term>" {project_dir}/ --include="*.jsonl""#)
     } else {
-        format!(
-            r#"Grep with pattern="<search term>" path="{project_dir}/" glob="*.jsonl""#
-        )
+        format!(r#"Grep with pattern="<search term>" path="{project_dir}/" glob="*.jsonl""#)
     };
     vec![
         "## Searching past context".to_owned(),
