@@ -75,11 +75,11 @@ use crate::conversation::{
     discover_runtime_extensions, provision_content_replacement_state, session_tool_results_dir,
     truncate_preview,
 };
-use crate::extract_memories::spawn_extract_memories_after_turn;
 use crate::hooks::{
     HookExecutionOptions, HookRunState, RuntimeHookDiscovery, apply_post_tool_hooks_with_options,
     apply_pre_tool_use_hooks_with_options,
 };
+use crate::post_turn_runtime::handle_query_finished_runtime_tasks;
 use crate::session_memory_runtime::maybe_spawn_session_memory_update;
 
 struct CompatSharedState {
@@ -1693,8 +1693,23 @@ impl QueryObserver for CompatObserver {
             | QueryObserverEvent::CheckpointCreated { .. }
             | QueryObserverEvent::MessagesAppended { .. }
             | QueryObserverEvent::QueryFailed { .. }
-            | QueryObserverEvent::QueryFinished { .. }
             | QueryObserverEvent::QueryStarted { .. } => {}
+            QueryObserverEvent::QueryFinished { .. } => {
+                let conversation_snapshot = {
+                    let conversation = self.shared.conversation.lock().await;
+                    conversation.clone()
+                };
+                handle_query_finished_runtime_tasks(
+                    &self.config,
+                    self.store.as_ref(),
+                    self.backend.clone(),
+                    self.shared.discovered_tool_scope.clone(),
+                    &conversation_snapshot,
+                    self.event_sink.clone(),
+                    self.execution.run_background_extract_memories,
+                    self.execution.query_source,
+                );
+            }
             QueryObserverEvent::CheckpointCleared { .. } => {}
         }
         Ok(())
@@ -2141,9 +2156,6 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         }),
         None => backend,
     };
-    let background_extract_backend = execution
-        .run_background_extract_memories
-        .then(|| backend.clone());
     let runtime_extensions = discover_runtime_extensions(config);
     let mut process_context = ProcessUserInputContext::new(
         config.session_id.into(),
@@ -2267,16 +2279,6 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
 
     match result {
         Ok(query_result) => {
-            if let Some(background_extract_backend) = background_extract_backend {
-                spawn_extract_memories_after_turn(
-                    config,
-                    store,
-                    background_extract_backend,
-                    discovered_tool_scope.clone(),
-                    conversation,
-                    event_sink.clone(),
-                );
-            }
             let outcome = PromptRunOutcome {
                 text: query_result.final_text.unwrap_or_default(),
                 duration_ms,
@@ -4154,6 +4156,28 @@ while True:
             .expect("conversation after");
         assert_eq!(after_events.len(), before_events.len());
         assert_eq!(after_conversation.len(), before_conversation.len());
+    }
+
+    #[test]
+    fn query_finished_background_runtime_tasks_only_run_for_user_queries() {
+        assert!(
+            crate::post_turn_runtime::should_run_background_extract_memories(
+                true,
+                QuerySource::User,
+            )
+        );
+        assert!(
+            !crate::post_turn_runtime::should_run_background_extract_memories(
+                true,
+                QuerySource::Agent,
+            )
+        );
+        assert!(
+            !crate::post_turn_runtime::should_run_background_extract_memories(
+                true,
+                QuerySource::SessionMemory,
+            )
+        );
     }
 
     #[tokio::test]
