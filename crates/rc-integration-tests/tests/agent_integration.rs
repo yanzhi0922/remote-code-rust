@@ -261,6 +261,7 @@ async fn runner_executes_via_mock_executor_with_resolved_request() {
     assert_eq!(request.context.len(), 1);
     assert_eq!(request.max_turns, 200);
     assert_eq!(request.model, "haiku");
+    assert!(!request.skip_transcript);
     assert!(request.tools.contains(&"Read".to_owned()));
     assert!(request.tools.contains(&"Glob".to_owned()));
     assert!(!request.tools.contains(&"Write".to_owned()));

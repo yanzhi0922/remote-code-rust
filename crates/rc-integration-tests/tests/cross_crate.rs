@@ -84,6 +84,7 @@ fn tool_result_round_trips_via_json() {
         content: "file contents here".to_owned(),
         is_error: false,
         content_blocks: Vec::new(),
+        follow_up_user_blocks: Vec::new(),
     };
     let json = serde_json::to_string(&result).expect("serialize tool result");
     let decoded: rc_core::ToolResult =

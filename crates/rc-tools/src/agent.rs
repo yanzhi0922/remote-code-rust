@@ -297,6 +297,7 @@ async fn run_resolved_agent_execution(
             permission_mode,
             working_dir,
             additional_working_directories: inherited_additional_working_directories(),
+            skip_transcript: false,
         })
         .await;
 
@@ -411,6 +412,7 @@ async fn run_background_agent_execution(
                 permission_mode,
                 working_dir,
                 additional_working_directories,
+                skip_transcript: false,
             })
             .await;
 
@@ -1395,6 +1397,7 @@ mod tests {
         let request = &requests[0];
         assert_eq!(request.agent_type, "verification");
         assert_eq!(request.max_turns, 200);
+        assert!(!request.skip_transcript);
         assert!(
             request
                 .system_prompt
@@ -1442,6 +1445,7 @@ mod tests {
         let request = &requests[0];
         assert_eq!(request.agent_type, "general-purpose");
         assert_eq!(request.max_turns, 200);
+        assert!(!request.skip_transcript);
         assert_eq!(request.permission_mode, Some(PermissionMode::AcceptEdits));
         assert!(
             request
@@ -1924,6 +1928,7 @@ mod tests {
         let requests = requests.lock().expect("requests lock");
         assert_eq!(requests.len(), 1);
         let request = &requests[0];
+        assert!(!request.skip_transcript);
         assert_eq!(request.additional_working_directories, vec![extra_dir]);
         let system_prompt = request.system_prompt.as_deref().unwrap_or_default();
         assert!(system_prompt.contains("project reviewer prompt"));

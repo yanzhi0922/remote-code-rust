@@ -3884,6 +3884,7 @@ while True:
         let request = &requests[0];
         assert_eq!(request.agent_type, "general-purpose");
         assert_eq!(request.max_turns, 200);
+        assert!(!request.skip_transcript);
         assert!(request.allowed_tools.contains(&"read_file".to_owned()));
         assert!(request.allowed_tools.contains(&"write_file".to_owned()));
         assert!(request.allowed_tools.contains(&"edit_file".to_owned()));

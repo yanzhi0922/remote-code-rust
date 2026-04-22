@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use rc_agents::builtins::{explore_agent, general_purpose_agent, plan_agent, verification_agent};
 use rc_agents::constants::FORK_SUBAGENT_TYPE;
@@ -29,6 +30,7 @@ use rc_tools::{
     },
     runtime_provider_tool_specs,
 };
+use tempfile::TempDir;
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
@@ -219,6 +221,7 @@ impl SubAgentCompletion for RemoteCodeSubAgentRuntime {
                 permission_mode: request.permission_mode,
                 working_dir: request.working_dir,
                 additional_working_directories: request.additional_working_directories,
+                skip_transcript: request.skip_transcript,
             })
             .await?;
         Ok(SubAgentExecutionResult {
@@ -249,6 +252,11 @@ impl AgentExecutor for RemoteCodeAgentExecutor {
         config.cwd = request.working_dir.clone();
         let parent_session_id = self.base_config.session_id;
         restamp_runtime_session(&mut config, Uuid::new_v4());
+        let _ephemeral_session = if request.skip_transcript {
+            Some(install_ephemeral_session_paths(&mut config)?)
+        } else {
+            None
+        };
         config.max_turns = usize::try_from(request.max_turns).unwrap_or(usize::MAX);
         if let Some(mode) = request.permission_mode {
             config.permission_mode = mode;
@@ -277,7 +285,7 @@ impl AgentExecutor for RemoteCodeAgentExecutor {
         let should_copy_plan_state = request.agent_type.eq_ignore_ascii_case(FORK_SUBAGENT_TYPE)
             || request.permission_mode == Some(rc_core::PermissionMode::Plan)
             || self.base_config.permission_mode == rc_core::PermissionMode::Plan;
-        if should_copy_plan_state {
+        if should_copy_plan_state && !request.skip_transcript {
             let _copied = copy_plan_mode_state_for_fork(
                 &store,
                 &config.paths,
@@ -339,6 +347,29 @@ impl AgentExecutor for RemoteCodeAgentExecutor {
             },
         })
     }
+}
+
+fn install_ephemeral_session_paths(config: &mut RuntimeConfig) -> Result<TempDir> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("remote-code-agent-ephemeral-");
+    let tempdir = match std::env::var_os("CLAUDE_CODE_TMPDIR") {
+        Some(tmpdir) => {
+            let tmpdir = PathBuf::from(tmpdir);
+            fs::create_dir_all(&tmpdir)
+                .with_context(|| format!("failed to create {}", tmpdir.display()))?;
+            builder
+                .tempdir_in(tmpdir)
+                .context("failed to create ephemeral agent session directory")?
+        }
+        None => builder
+            .tempdir()
+            .context("failed to create ephemeral agent session directory")?,
+    };
+    let profile_dir = tempdir.path().join("profile");
+    config.paths.state_db_path = profile_dir.join("state.db");
+    config.paths.sessions_dir = profile_dir.join("sessions");
+    config.paths.artifacts_dir = profile_dir.join("artifacts");
+    Ok(tempdir)
 }
 
 fn resolve_requested_agent_model(
@@ -1277,5 +1308,56 @@ args = ["server.py"]"#,
             build_claude_code_guide_runtime_prompt(&config, base_prompt),
             base_prompt
         );
+    }
+
+    #[test]
+    fn ephemeral_session_paths_isolate_transcript_state() {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        fs::create_dir_all(&cwd).expect("workspace");
+        let mut config = load_runtime_config(
+            Some(cwd.clone()),
+            Some(profile.clone()),
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+            RuntimeOverrides::default(),
+        )
+        .expect("config");
+        let original_paths = config.paths.clone();
+        let original_transcript_path = SessionStore::open(original_paths.clone())
+            .expect("original store")
+            .session_transcript_path(config.session_id);
+
+        let ephemeral = install_ephemeral_session_paths(&mut config).expect("ephemeral paths");
+        assert_ne!(config.paths.state_db_path, original_paths.state_db_path);
+        assert_ne!(config.paths.sessions_dir, original_paths.sessions_dir);
+        assert_ne!(config.paths.artifacts_dir, original_paths.artifacts_dir);
+        assert_eq!(config.paths.profile_dir, original_paths.profile_dir);
+        assert!(config.paths.state_db_path.starts_with(ephemeral.path()));
+        assert!(config.paths.sessions_dir.starts_with(ephemeral.path()));
+        assert!(config.paths.artifacts_dir.starts_with(ephemeral.path()));
+
+        let store = SessionStore::open(config.paths.clone()).expect("ephemeral store");
+        store
+            .ensure_session(
+                config.session_id,
+                &cwd,
+                &config.provider.name,
+                config.provider.model.as_deref(),
+                Some("ephemeral"),
+            )
+            .expect("ensure ephemeral session");
+        assert!(config.paths.state_db_path.exists());
+        assert!(store.session_transcript_path(config.session_id).exists());
+        assert!(!original_transcript_path.exists());
     }
 }
