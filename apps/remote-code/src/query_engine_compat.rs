@@ -2446,7 +2446,9 @@ mod tests {
 
     static RUNTIME_POLICY_TEST_MUTEX: OnceLock<AsyncMutex<()>> = OnceLock::new();
 
-    struct CoordinatorModeTestGuard(tokio::sync::MutexGuard<'static, ()>);
+    struct CoordinatorModeTestGuard {
+        _guard: tokio::sync::MutexGuard<'static, ()>,
+    }
 
     impl CoordinatorModeTestGuard {
         async fn enter(mode: rc_agents::coordinator::CoordinatorMode) -> Self {
@@ -2456,7 +2458,7 @@ mod tests {
                 .await;
             rc_agents::coordinator::reset_coordinator_override();
             let _ = rc_agents::coordinator::match_session_mode(Some(mode));
-            Self(guard)
+            Self { _guard: guard }
         }
     }
 
