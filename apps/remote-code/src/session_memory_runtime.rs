@@ -84,11 +84,10 @@ impl PermissionBroker for SessionMemoryPermissionBroker {
 
     async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
         match request.tool_name.as_str() {
-            "edit_file" | "replace_in_file" => {
+            "edit_file" => {
                 let candidate = request
                     .tool_input
                     .get("path")
-                    .or_else(|| request.tool_input.get("file_path"))
                     .and_then(Value::as_str)
                     .map(PathBuf::from);
                 if candidate
@@ -456,4 +455,85 @@ async fn run_session_memory_update(
     update_last_summarized_message_id_if_safe(conversation, &mut state);
     state.shared.mark_extraction_completed();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SessionMemoryPermissionBroker;
+    use rc_permissions::{PermissionBroker, PermissionRequest};
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn session_memory_broker_allows_exact_edit_file_path_only() {
+        let tempdir = tempdir().expect("tempdir");
+        let summary_path = tempdir.path().join("summary.md");
+        std::fs::write(&summary_path, "# Session Title\n").expect("write summary");
+        let broker = SessionMemoryPermissionBroker::new(summary_path.clone());
+
+        let allow = broker
+            .decide(PermissionRequest {
+                tool_name: "edit_file".to_owned(),
+                permission_class: None,
+                tool_input: json!({
+                    "path": summary_path,
+                    "edits": [{"search": "# Session Title", "replace": "# Session Title"}]
+                }),
+                working_directory: None,
+                tool_use_id: None,
+                title: None,
+                description: None,
+                blocked_path: None,
+                permission_suggestions: Vec::new(),
+            })
+            .await;
+        assert!(allow.allowed);
+    }
+
+    #[tokio::test]
+    async fn session_memory_broker_denies_replace_in_file_and_wrong_path() {
+        let tempdir = tempdir().expect("tempdir");
+        let summary_path = tempdir.path().join("summary.md");
+        let other_path = tempdir.path().join("other.md");
+        std::fs::write(&summary_path, "# Session Title\n").expect("write summary");
+        std::fs::write(&other_path, "# Other\n").expect("write other");
+        let broker = SessionMemoryPermissionBroker::new(summary_path.clone());
+
+        let deny_replace = broker
+            .decide(PermissionRequest {
+                tool_name: "replace_in_file".to_owned(),
+                permission_class: None,
+                tool_input: json!({
+                    "path": summary_path,
+                    "search": "a",
+                    "replace": "b"
+                }),
+                working_directory: None,
+                tool_use_id: None,
+                title: None,
+                description: None,
+                blocked_path: None,
+                permission_suggestions: Vec::new(),
+            })
+            .await;
+        assert!(!deny_replace.allowed);
+
+        let deny_other_path = broker
+            .decide(PermissionRequest {
+                tool_name: "edit_file".to_owned(),
+                permission_class: None,
+                tool_input: json!({
+                    "path": other_path,
+                    "edits": [{"search": "# Other", "replace": "# Other"}]
+                }),
+                working_directory: None,
+                tool_use_id: None,
+                title: None,
+                description: None,
+                blocked_path: None,
+                permission_suggestions: Vec::new(),
+            })
+            .await;
+        assert!(!deny_other_path.allowed);
+    }
 }
