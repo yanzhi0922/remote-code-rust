@@ -49,7 +49,7 @@ use conversation::{
 };
 use doctor::run_doctor;
 use extract_memories::drain_pending_extractions;
-use headless::{run_headless, should_run_headless};
+use headless::{run_headless, run_headless_text_print, should_run_headless};
 use hooks::run_hooks;
 use interactive::run_interactive_shell;
 use mcp_cli::run_mcp;
@@ -191,16 +191,16 @@ fn dispatch_command<'a>(
             Box::pin(async move { run_plugins(config, command).await })
         }
         Some(Commands::Mcp { command }) => Box::pin(async move { run_mcp(config, command).await }),
-        Some(Commands::Skills { command }) => {
-            Box::pin(async move { run_skills(config, command) })
-        }
+        Some(Commands::Skills { command }) => Box::pin(async move { run_skills(config, command) }),
         Some(Commands::Migrate { command }) => {
             Box::pin(async move { run_migrate(config, command) })
         }
         Some(Commands::Resume(args)) => Box::pin(async move {
             run_session_entry(config, store, resolve_prompt_input(config, args.prompt)?).await
         }),
-        Some(Commands::Tui) => Box::pin(async move { rc_tui::run_tui_app(config.clone(), store).await }),
+        Some(Commands::Tui) => {
+            Box::pin(async move { rc_tui::run_tui_app(config.clone(), store).await })
+        }
         Some(Commands::Ssh(args)) => Box::pin(async move { run_ssh(args).await }),
         Some(Commands::Update { command }) => Box::pin(async move {
             use cli::UpdateCommand;
@@ -229,7 +229,7 @@ async fn run_session_entry(
                 "Input must be provided either through stdin or as a prompt argument when using --print"
             )
         })?;
-        return run_oneshot_text(config, store, prompt).await;
+        return run_headless_text_print(config, store, prompt).await;
     }
     if let Some(prompt) = prompt {
         run_oneshot_text(config, store, prompt).await
