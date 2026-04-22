@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use auto_memory::{
     default_memory_dir_for_permissions, has_valid_cowork_memory_path_override,
-    load_cowork_memory_mechanics_prompt, load_default_memory_prompt,
-    memory_dir_for_read_permissions, sanitize_path_component, team_memory_dir_for_read_permissions,
+    load_cowork_memory_mechanics_prompt, load_default_memory_prompt_with_features,
+    memory_dir_for_read_permissions, sanitize_path_component,
+    team_memory_dir_for_read_permissions_with_features, MemoryPromptFeatures,
 };
 use chrono::Local;
 use rc_agents::coordinator::{
@@ -107,6 +108,7 @@ pub struct RuntimePromptSettings {
     pub auto_memory_read_dir: Option<String>,
     pub auto_memory_permission_dir: Option<String>,
     pub team_memory_read_dir: Option<String>,
+    pub memory_prompt_features: MemoryPromptFeatures,
     pub additional_working_directories: Vec<PathBuf>,
     pub runtime_identity: RuntimeIdentityContext,
 }
@@ -114,6 +116,8 @@ pub struct RuntimePromptSettings {
 impl RuntimePromptSettings {
     #[must_use]
     pub fn from_config(config: &RuntimeConfig) -> Self {
+        let runtime_identity = RuntimeIdentityContext::from_legacy_env();
+        let memory_prompt_features = runtime_memory_prompt_features(&runtime_identity);
         let scratchpad = build_runtime_scratchpad_state(config);
         let tmp_root_override = env::var_os("CLAUDE_CODE_TMPDIR").map(PathBuf::from);
         let project_temp_dir = runtime_project_temp_dir(config, tmp_root_override.as_deref());
@@ -125,7 +129,10 @@ impl RuntimePromptSettings {
             .ok()
             .flatten()
             .map(|path| path.to_string_lossy().into_owned());
-        let team_memory_read_dir = team_memory_dir_for_read_permissions(config)
+        let team_memory_read_dir = team_memory_dir_for_read_permissions_with_features(
+            config,
+            &memory_prompt_features,
+        )
             .ok()
             .flatten()
             .map(|path| path.to_string_lossy().into_owned());
@@ -144,8 +151,9 @@ impl RuntimePromptSettings {
             auto_memory_read_dir,
             auto_memory_permission_dir,
             team_memory_read_dir,
+            memory_prompt_features,
             additional_working_directories: Vec::new(),
-            runtime_identity: RuntimeIdentityContext::from_legacy_env(),
+            runtime_identity,
         }
     }
 }
@@ -510,7 +518,7 @@ pub async fn build_runtime_system_prompt(
                 .features
                 .verification_agent_enabled,
             memory_prompt: if use_default_system_prompt {
-                load_default_memory_prompt(config)?
+                load_default_memory_prompt_with_features(config, &settings.memory_prompt_features)?
             } else {
                 None
             },
@@ -1429,6 +1437,18 @@ fn runtime_feature_gate_enabled(feature_key: &str, default: bool) -> bool {
     default
 }
 
+fn runtime_memory_prompt_features(runtime_identity: &RuntimeIdentityContext) -> MemoryPromptFeatures {
+    MemoryPromptFeatures {
+        team_memory_enabled: runtime_feature_gate_enabled("TEAMMEM", false)
+            && runtime_feature_gate_enabled("tengu_herring_clock", false),
+        skip_index: runtime_feature_gate_enabled("tengu_moth_copse", false),
+        searching_past_context_enabled: runtime_feature_gate_enabled("tengu_coral_fern", false),
+        kairos_active: runtime_identity.kairos_active,
+        embedded_search_tools: runtime_identity.features.embedded_search_tools,
+        repl_mode_active: false,
+    }
+}
+
 fn runtime_scratchpad_enabled() -> bool {
     runtime_feature_gate_enabled(SCRATCHPAD_FEATURE_KEY, false)
 }
@@ -1562,7 +1582,7 @@ fn should_use_global_prompt_cache_scope(config: &RuntimeConfig) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        ClaudeMemoryRoots, PromptRuntimeOverrides, RuntimePromptSettings,
+        ClaudeMemoryRoots, MemoryPromptFeatures, PromptRuntimeOverrides, RuntimePromptSettings,
         build_runtime_scratchpad_state_with, build_runtime_system_prompt,
         clear_runtime_system_prompt_state,
         collect_claude_md_context_with_roots, runtime_claude_temp_dir_name,
@@ -1627,6 +1647,7 @@ mod tests {
             auto_memory_read_dir: None,
             auto_memory_permission_dir: None,
             team_memory_read_dir: None,
+            memory_prompt_features: MemoryPromptFeatures::default(),
             additional_working_directories: Vec::new(),
             runtime_identity: RuntimeIdentityContext::default(),
         }
