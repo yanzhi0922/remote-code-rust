@@ -636,12 +636,16 @@ async fn complete_with_streaming_observer(
 fn provider_request_context(context: &ProcessUserInputContext) -> ProviderRequestContext {
     let query_source = match context.query_source {
         crate::QuerySource::User => rc_provider::query_source::QuerySource::User,
-        crate::QuerySource::ReplMainThread => rc_provider::query_source::QuerySource::User,
-        crate::QuerySource::Sdk => rc_provider::query_source::QuerySource::User,
+        crate::QuerySource::ReplMainThread => {
+            rc_provider::query_source::QuerySource::ReplMainThread
+        }
+        crate::QuerySource::Sdk => rc_provider::query_source::QuerySource::Sdk,
         crate::QuerySource::Compact => rc_provider::query_source::QuerySource::Compact,
         crate::QuerySource::SessionMemory => rc_provider::query_source::QuerySource::SessionMemory,
         crate::QuerySource::Agent => rc_provider::query_source::QuerySource::Agent,
-        crate::QuerySource::ExtractMemories => rc_provider::query_source::QuerySource::BackgroundTask,
+        crate::QuerySource::ExtractMemories => {
+            rc_provider::query_source::QuerySource::ExtractMemories
+        }
         crate::QuerySource::BackgroundTask => {
             rc_provider::query_source::QuerySource::BackgroundTask
         }

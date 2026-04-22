@@ -17,12 +17,18 @@ use rc_core::{AgentId, SessionId};
 pub enum QuerySource {
     /// Direct user input from the CLI or UI.
     User,
+    /// Main interactive REPL thread.
+    ReplMainThread,
+    /// SDK / headless entrypoint.
+    Sdk,
     /// Generated during conversation compaction.
     Compact,
     /// Restored from session memory.
     SessionMemory,
     /// Issued by a sub-agent or forked agent.
     Agent,
+    /// Issued by extract-memories background fork.
+    ExtractMemories,
     /// Issued by the advisor system.
     Advisor,
     /// Issued by a background task.
@@ -35,9 +41,12 @@ impl QuerySource {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::User => "user",
+            Self::ReplMainThread => "repl_main_thread",
+            Self::Sdk => "sdk",
             Self::Compact => "compact",
             Self::SessionMemory => "session_memory",
             Self::Agent => "agent",
+            Self::ExtractMemories => "extract_memories",
             Self::Advisor => "advisor",
             Self::BackgroundTask => "background_task",
         }
@@ -48,9 +57,12 @@ impl QuerySource {
     pub fn all_values() -> &'static [QuerySource] {
         &[
             QuerySource::User,
+            QuerySource::ReplMainThread,
+            QuerySource::Sdk,
             QuerySource::Compact,
             QuerySource::SessionMemory,
             QuerySource::Agent,
+            QuerySource::ExtractMemories,
             QuerySource::Advisor,
             QuerySource::BackgroundTask,
         ]
@@ -202,9 +214,12 @@ pub fn parse_query_source_header(header: &str) -> Option<QuerySourceContext> {
                 "source" => {
                     source = match value {
                         "user" => Some(QuerySource::User),
+                        "repl_main_thread" => Some(QuerySource::ReplMainThread),
+                        "sdk" => Some(QuerySource::Sdk),
                         "compact" => Some(QuerySource::Compact),
                         "session_memory" => Some(QuerySource::SessionMemory),
                         "agent" => Some(QuerySource::Agent),
+                        "extract_memories" => Some(QuerySource::ExtractMemories),
                         "advisor" => Some(QuerySource::Advisor),
                         "background_task" => Some(QuerySource::BackgroundTask),
                         _ => None,
@@ -265,9 +280,12 @@ mod tests {
     #[test]
     fn query_source_as_str() {
         assert_eq!(QuerySource::User.as_str(), "user");
+        assert_eq!(QuerySource::ReplMainThread.as_str(), "repl_main_thread");
+        assert_eq!(QuerySource::Sdk.as_str(), "sdk");
         assert_eq!(QuerySource::Compact.as_str(), "compact");
         assert_eq!(QuerySource::SessionMemory.as_str(), "session_memory");
         assert_eq!(QuerySource::Agent.as_str(), "agent");
+        assert_eq!(QuerySource::ExtractMemories.as_str(), "extract_memories");
         assert_eq!(QuerySource::Advisor.as_str(), "advisor");
         assert_eq!(QuerySource::BackgroundTask.as_str(), "background_task");
     }
@@ -275,13 +293,17 @@ mod tests {
     #[test]
     fn query_source_display() {
         assert_eq!(QuerySource::User.to_string(), "user");
+        assert_eq!(QuerySource::ReplMainThread.to_string(), "repl_main_thread");
         assert_eq!(QuerySource::Agent.to_string(), "agent");
     }
 
     #[test]
     fn query_source_all_values() {
         let values = QuerySource::all_values();
-        assert_eq!(values.len(), 6);
+        assert_eq!(values.len(), 9);
+        assert!(values.contains(&QuerySource::ReplMainThread));
+        assert!(values.contains(&QuerySource::Sdk));
+        assert!(values.contains(&QuerySource::ExtractMemories));
     }
 
     #[test]
@@ -372,6 +394,17 @@ mod tests {
         assert_eq!(ctx.source, QuerySource::Agent);
         assert_eq!(ctx.session_id.as_ref().expect("session_id"), "s1");
         assert_eq!(ctx.agent_id.as_ref().expect("agent_id"), "a1");
+    }
+
+    #[test]
+    fn parse_header_accepts_repl_and_sdk_sources() {
+        let repl =
+            parse_query_source_header("source=repl_main_thread;session_id=s1").expect("repl");
+        assert_eq!(repl.source, QuerySource::ReplMainThread);
+        assert_eq!(repl.session_id.as_deref(), Some("s1"));
+
+        let sdk = parse_query_source_header("source=sdk").expect("sdk");
+        assert_eq!(sdk.source, QuerySource::Sdk);
     }
 
     #[test]
