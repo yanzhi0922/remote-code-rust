@@ -235,8 +235,26 @@ pub fn memory_dir_for_read_permissions(config: &RuntimeConfig) -> Result<Option<
     )?)))
 }
 
-pub fn team_memory_dir_for_read_permissions(config: &RuntimeConfig) -> Result<Option<PathBuf>> {
-    let inputs = AutoMemoryInputs::from_process_env(config)?;
+pub fn load_cowork_memory_mechanics_prompt(config: &RuntimeConfig) -> Result<Option<String>> {
+    load_cowork_memory_mechanics_prompt_with(config, &AutoMemoryInputs::from_process_env(config)?)
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MemoryPromptFeatures {
+    pub team_memory_enabled: bool,
+    pub skip_index: bool,
+    pub searching_past_context_enabled: bool,
+    pub kairos_active: bool,
+    pub embedded_search_tools: bool,
+    pub repl_mode_active: bool,
+}
+
+pub fn team_memory_dir_for_read_permissions_with_features(
+    config: &RuntimeConfig,
+    features: &MemoryPromptFeatures,
+) -> Result<Option<PathBuf>> {
+    let mut inputs = AutoMemoryInputs::from_process_env(config)?;
+    inputs.team_memory_enabled = features.team_memory_enabled;
     if !is_team_memory_enabled(&inputs) {
         return Ok(None);
     }
@@ -244,16 +262,17 @@ pub fn team_memory_dir_for_read_permissions(config: &RuntimeConfig) -> Result<Op
     Ok(Some(team_memory_dir(config, &inputs)?))
 }
 
-pub fn load_cowork_memory_mechanics_prompt(config: &RuntimeConfig) -> Result<Option<String>> {
-    load_cowork_memory_mechanics_prompt_with(config, &AutoMemoryInputs::from_process_env(config)?)
-}
-
-pub fn load_default_memory_prompt(config: &RuntimeConfig) -> Result<Option<String>> {
-    load_default_memory_prompt_with(config, &AutoMemoryInputs::from_process_env(config)?)
+pub fn load_default_memory_prompt_with_features(
+    config: &RuntimeConfig,
+    features: &MemoryPromptFeatures,
+) -> Result<Option<String>> {
+    let mut inputs = AutoMemoryInputs::from_process_env(config)?;
+    inputs.team_memory_enabled = features.team_memory_enabled;
+    load_default_memory_prompt_with(config, &inputs, features)
 }
 
 fn load_cowork_memory_mechanics_prompt_with(
-    _config: &RuntimeConfig,
+    config: &RuntimeConfig,
     inputs: &AutoMemoryInputs,
 ) -> Result<Option<String>> {
     if !inputs.auto_memory_enabled {
@@ -268,9 +287,12 @@ fn load_cowork_memory_mechanics_prompt_with(
 
     Ok(Some(
         build_memory_lines(
+            config,
             "auto memory",
             &memory_dir,
             inputs.cowork_memory_extra_guidelines.clone(),
+            false,
+            &MemoryPromptFeatures::default(),
         )
         .join("\n"),
     ))
@@ -279,9 +301,21 @@ fn load_cowork_memory_mechanics_prompt_with(
 fn load_default_memory_prompt_with(
     config: &RuntimeConfig,
     inputs: &AutoMemoryInputs,
+    features: &MemoryPromptFeatures,
 ) -> Result<Option<String>> {
     if !inputs.auto_memory_enabled {
         return Ok(None);
+    }
+
+    if features.kairos_active {
+        let memory_dir = resolve_default_memory_dir(config, inputs)?;
+        let _ = fs::create_dir_all(Path::new(&memory_dir));
+        return Ok(Some(build_assistant_daily_log_prompt(
+            config,
+            &memory_dir,
+            features.skip_index,
+            features,
+        )));
     }
 
     let memory_dir = resolve_default_memory_dir(config, inputs)?;
@@ -289,18 +323,24 @@ fn load_default_memory_prompt_with(
         let team_dir = team_memory_dir(config, inputs)?;
         let _ = fs::create_dir_all(&team_dir);
         return Ok(Some(build_combined_memory_prompt(
+            config,
             &memory_dir,
             &with_trailing_separator(team_dir),
             inputs.cowork_memory_extra_guidelines.clone(),
+            features.skip_index,
+            features,
         )));
     }
     let _ = fs::create_dir_all(Path::new(&memory_dir));
 
     Ok(Some(
         build_memory_lines(
+            config,
             "auto memory",
             &memory_dir,
             inputs.cowork_memory_extra_guidelines.clone(),
+            features.skip_index,
+            features,
         )
         .join("\n"),
     ))
@@ -665,38 +705,57 @@ fn with_trailing_separator(path: PathBuf) -> String {
 }
 
 fn build_memory_lines(
+    config: &RuntimeConfig,
     display_name: &str,
     memory_dir: &str,
     extra_guideline: Option<String>,
+    skip_index: bool,
+    features: &MemoryPromptFeatures,
 ) -> Vec<String> {
-    let mut how_to_save = vec![
-        "## How to save memories".to_owned(),
-        String::new(),
-        "Saving a memory is a two-step process:".to_owned(),
-        String::new(),
-        "**Step 1** — write the memory to its own file (e.g., `user_role.md`, `feedback_testing.md`) using this frontmatter format:".to_owned(),
-        String::new(),
-    ];
-    how_to_save.extend(
-        MEMORY_FRONTMATTER_EXAMPLE
-            .iter()
-            .map(|line| (*line).to_owned()),
-    );
-    how_to_save.extend([
-        String::new(),
-        format!(
-            "**Step 2** — add a pointer to that file in `{ENTRYPOINT_NAME}`. `{ENTRYPOINT_NAME}` is an index, not a memory — each entry should be one line, under ~150 characters: `- [Title](file.md) — one-line hook`. It has no frontmatter. Never write memory content directly into `{ENTRYPOINT_NAME}`."
-        ),
-        String::new(),
-        format!(
-            "- `{ENTRYPOINT_NAME}` is always loaded into your conversation context — lines after {MAX_ENTRYPOINT_LINES} will be truncated, so keep the index concise"
-        ),
-        "- Keep the name, description, and type fields in memory files up-to-date with the content"
-            .to_owned(),
-        "- Organize memory semantically by topic, not chronologically".to_owned(),
-        "- Update or remove memories that turn out to be wrong or outdated".to_owned(),
-        "- Do not write duplicate memories. First check if there is an existing memory you can update before writing a new one.".to_owned(),
-    ]);
+    let mut how_to_save = if skip_index {
+        vec![
+            "## How to save memories".to_owned(),
+            String::new(),
+            "Write each memory to its own file (e.g., `user_role.md`, `feedback_testing.md`) using this frontmatter format:".to_owned(),
+            String::new(),
+        ]
+    } else {
+        vec![
+            "## How to save memories".to_owned(),
+            String::new(),
+            "Saving a memory is a two-step process:".to_owned(),
+            String::new(),
+            "**Step 1** — write the memory to its own file (e.g., `user_role.md`, `feedback_testing.md`) using this frontmatter format:".to_owned(),
+            String::new(),
+        ]
+    };
+    how_to_save.extend(MEMORY_FRONTMATTER_EXAMPLE.iter().map(|line| (*line).to_owned()));
+    if skip_index {
+        how_to_save.extend([
+            String::new(),
+            "- Keep the name, description, and type fields in memory files up-to-date with the content"
+                .to_owned(),
+            "- Organize memory semantically by topic, not chronologically".to_owned(),
+            "- Update or remove memories that turn out to be wrong or outdated".to_owned(),
+            "- Do not write duplicate memories. First check if there is an existing memory you can update before writing a new one.".to_owned(),
+        ]);
+    } else {
+        how_to_save.extend([
+            String::new(),
+            format!(
+                "**Step 2** — add a pointer to that file in `{ENTRYPOINT_NAME}`. `{ENTRYPOINT_NAME}` is an index, not a memory — each entry should be one line, under ~150 characters: `- [Title](file.md) — one-line hook`. It has no frontmatter. Never write memory content directly into `{ENTRYPOINT_NAME}`."
+            ),
+            String::new(),
+            format!(
+                "- `{ENTRYPOINT_NAME}` is always loaded into your conversation context — lines after {MAX_ENTRYPOINT_LINES} will be truncated, so keep the index concise"
+            ),
+            "- Keep the name, description, and type fields in memory files up-to-date with the content"
+                .to_owned(),
+            "- Organize memory semantically by topic, not chronologically".to_owned(),
+            "- Update or remove memories that turn out to be wrong or outdated".to_owned(),
+            "- Do not write duplicate memories. First check if there is an existing memory you can update before writing a new one.".to_owned(),
+        ]);
+    }
 
     let mut lines = vec![
         format!("# {display_name}"),
@@ -742,43 +801,63 @@ fn build_memory_lines(
         lines.push(extra_guideline);
     }
     lines.push(String::new());
+    lines.extend(build_searching_past_context_section(config, memory_dir, features));
 
     lines
 }
 
 fn build_combined_memory_prompt(
+    config: &RuntimeConfig,
     auto_dir: &str,
     team_dir: &str,
     extra_guideline: Option<String>,
+    skip_index: bool,
+    features: &MemoryPromptFeatures,
 ) -> String {
-    let mut how_to_save = vec![
-        "## How to save memories".to_owned(),
-        String::new(),
-        "Saving a memory is a two-step process:".to_owned(),
-        String::new(),
-        "**Step 1** — write the memory to its own file in the chosen directory (private or team, per the type's scope guidance) using this frontmatter format:".to_owned(),
-        String::new(),
-    ];
-    how_to_save.extend(
-        MEMORY_FRONTMATTER_EXAMPLE
-            .iter()
-            .map(|line| (*line).to_owned()),
-    );
-    how_to_save.extend([
-        String::new(),
-        format!(
-            "**Step 2** — add a pointer to that file in the same directory's `{ENTRYPOINT_NAME}`. Each directory (private and team) has its own `{ENTRYPOINT_NAME}` index — each entry should be one line, under ~150 characters: `- [Title](file.md) — one-line hook`. They have no frontmatter. Never write memory content directly into a `{ENTRYPOINT_NAME}`."
-        ),
-        String::new(),
-        format!(
-            "- Both `{ENTRYPOINT_NAME}` indexes are loaded into your conversation context — lines after {MAX_ENTRYPOINT_LINES} will be truncated, so keep them concise"
-        ),
-        "- Keep the name, description, and type fields in memory files up-to-date with the content"
-            .to_owned(),
-        "- Organize memory semantically by topic, not chronologically".to_owned(),
-        "- Update or remove memories that turn out to be wrong or outdated".to_owned(),
-        "- Do not write duplicate memories. First check if there is an existing memory you can update before writing a new one.".to_owned(),
-    ]);
+    let mut how_to_save = if skip_index {
+        vec![
+            "## How to save memories".to_owned(),
+            String::new(),
+            "Write each memory to its own file in the chosen directory (private or team, per the type's scope guidance) using this frontmatter format:".to_owned(),
+            String::new(),
+        ]
+    } else {
+        vec![
+            "## How to save memories".to_owned(),
+            String::new(),
+            "Saving a memory is a two-step process:".to_owned(),
+            String::new(),
+            "**Step 1** — write the memory to its own file in the chosen directory (private or team, per the type's scope guidance) using this frontmatter format:".to_owned(),
+            String::new(),
+        ]
+    };
+    how_to_save.extend(MEMORY_FRONTMATTER_EXAMPLE.iter().map(|line| (*line).to_owned()));
+    if skip_index {
+        how_to_save.extend([
+            String::new(),
+            "- Keep the name, description, and type fields in memory files up-to-date with the content"
+                .to_owned(),
+            "- Organize memory semantically by topic, not chronologically".to_owned(),
+            "- Update or remove memories that turn out to be wrong or outdated".to_owned(),
+            "- Do not write duplicate memories. First check if there is an existing memory you can update before writing a new one.".to_owned(),
+        ]);
+    } else {
+        how_to_save.extend([
+            String::new(),
+            format!(
+                "**Step 2** — add a pointer to that file in the same directory's `{ENTRYPOINT_NAME}`. Each directory (private and team) has its own `{ENTRYPOINT_NAME}` index — each entry should be one line, under ~150 characters: `- [Title](file.md) — one-line hook`. They have no frontmatter. Never write memory content directly into a `{ENTRYPOINT_NAME}`."
+            ),
+            String::new(),
+            format!(
+                "- Both `{ENTRYPOINT_NAME}` indexes are loaded into your conversation context — lines after {MAX_ENTRYPOINT_LINES} will be truncated, so keep them concise"
+            ),
+            "- Keep the name, description, and type fields in memory files up-to-date with the content"
+                .to_owned(),
+            "- Organize memory semantically by topic, not chronologically".to_owned(),
+            "- Update or remove memories that turn out to be wrong or outdated".to_owned(),
+            "- Do not write duplicate memories. First check if there is an existing memory you can update before writing a new one.".to_owned(),
+        ]);
+    }
 
     let mut lines = vec![
         "# Memory".to_owned(),
@@ -832,15 +911,112 @@ fn build_combined_memory_prompt(
     if let Some(extra_guideline) = extra_guideline {
         lines.push(extra_guideline);
     }
+    lines.push(String::new());
+    lines.extend(build_searching_past_context_section(
+        config, auto_dir, features,
+    ));
 
     lines.join("\n")
+}
+
+fn build_assistant_daily_log_prompt(
+    config: &RuntimeConfig,
+    memory_dir: &str,
+    skip_index: bool,
+    features: &MemoryPromptFeatures,
+) -> String {
+    let log_path_pattern = PathBuf::from(memory_dir)
+        .join("logs")
+        .join("YYYY")
+        .join("MM")
+        .join("YYYY-MM-DD.md")
+        .to_string_lossy()
+        .into_owned();
+    let mut lines = vec![
+        "# auto memory".to_owned(),
+        String::new(),
+        format!("You have a persistent, file-based memory system found at: `{memory_dir}`"),
+        String::new(),
+        "This session is long-lived. As you work, record anything worth remembering by **appending** to today's daily log file:".to_owned(),
+        String::new(),
+        format!("`{log_path_pattern}`"),
+        String::new(),
+        "Substitute today's date (from `currentDate` in your context) for `YYYY-MM-DD`. When the date rolls over mid-session, start appending to the new day's file.".to_owned(),
+        String::new(),
+        "Write each entry as a short timestamped bullet. Create the file (and parent directories) on first write if it does not exist. Do not rewrite or reorganize the log — it is append-only. A separate nightly process distills these logs into `MEMORY.md` and topic files.".to_owned(),
+        String::new(),
+        "## What to log".to_owned(),
+        "- User corrections and preferences (\"use bun, not npm\"; \"stop summarizing diffs\")".to_owned(),
+        "- Facts about the user, their role, or their goals".to_owned(),
+        "- Project context that is not derivable from the code (deadlines, incidents, decisions and their rationale)".to_owned(),
+        "- Pointers to external systems (dashboards, Linear projects, Slack channels)".to_owned(),
+        "- Anything the user explicitly asks you to remember".to_owned(),
+        String::new(),
+    ];
+    lines.extend(WHAT_NOT_TO_SAVE_SECTION.iter().map(|line| (*line).to_owned()));
+    lines.push(String::new());
+    if !skip_index {
+        lines.extend([
+            format!("## {ENTRYPOINT_NAME}"),
+            format!(
+                "`{ENTRYPOINT_NAME}` is the distilled index (maintained nightly from your logs) and is loaded into your context automatically. Read it for orientation, but do not edit it directly — record new information in today's log instead."
+            ),
+            String::new(),
+        ]);
+    }
+    lines.extend(build_searching_past_context_section(config, memory_dir, features));
+    lines.join("\n")
+}
+
+fn build_searching_past_context_section(
+    config: &RuntimeConfig,
+    auto_memory_dir: &str,
+    features: &MemoryPromptFeatures,
+) -> Vec<String> {
+    if !features.searching_past_context_enabled {
+        return Vec::new();
+    }
+
+    let transcripts_dir = config.paths.sessions_dir.to_string_lossy().into_owned();
+    let use_shell_grep = features.embedded_search_tools || features.repl_mode_active;
+    let memory_search = if use_shell_grep {
+        format!("grep -rn \"<search term>\" {auto_memory_dir} --include=\"*.md\"")
+    } else {
+        format!(
+            "Grep with pattern=\"<search term>\" path=\"{auto_memory_dir}\" glob=\"*.md\""
+        )
+    };
+    let transcript_search = if use_shell_grep {
+        format!("grep -rn \"<search term>\" {transcripts_dir} --include=\"*.jsonl\"")
+    } else {
+        format!(
+            "Grep with pattern=\"<search term>\" path=\"{transcripts_dir}\" glob=\"*.jsonl\""
+        )
+    };
+
+    vec![
+        "## Searching past context".to_owned(),
+        String::new(),
+        "When looking for past context:".to_owned(),
+        "1. Search topic files in your memory directory:".to_owned(),
+        "```".to_owned(),
+        memory_search,
+        "```".to_owned(),
+        "2. Session transcript logs (last resort — large files, slow):".to_owned(),
+        "```".to_owned(),
+        transcript_search,
+        "```".to_owned(),
+        "Use narrow search terms (error messages, file paths, function names) rather than broad keywords.".to_owned(),
+        String::new(),
+    ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        AutoMemoryInputs, build_memory_lines, load_cowork_memory_mechanics_prompt_with,
-        load_default_memory_prompt_with, resolve_auto_memory_enabled, validate_memory_path,
+        AutoMemoryInputs, MemoryPromptFeatures, build_memory_lines,
+        load_cowork_memory_mechanics_prompt_with, load_default_memory_prompt_with,
+        resolve_auto_memory_enabled, validate_memory_path,
     };
     use rc_config::settings_layers::RuntimeOverrides;
     use rc_config::{ProviderOverrides, RuntimeConfig, load_runtime_config};
@@ -875,9 +1051,12 @@ mod tests {
     #[test]
     fn build_memory_lines_preserves_source_sections() {
         let prompt = build_memory_lines(
+            &test_runtime_config(tempdir().expect("tempdir").path(), None),
             "auto memory",
             "/tmp/auto-memory/",
             Some("Custom extra guideline".to_owned()),
+            false,
+            &MemoryPromptFeatures::default(),
         )
         .join("\n");
 
@@ -900,6 +1079,7 @@ mod tests {
                 cowork_memory_path_override: Some(memory_dir.display().to_string()),
                 cowork_memory_extra_guidelines: Some("Cowork extra guideline".to_owned()),
                 remote_memory_dir: None,
+                team_memory_enabled: false,
             },
         )
         .expect("prompt")
@@ -926,6 +1106,7 @@ mod tests {
                 ),
                 cowork_memory_extra_guidelines: None,
                 remote_memory_dir: None,
+                team_memory_enabled: false,
             },
         )
         .expect("prompt");
@@ -996,7 +1177,9 @@ mod tests {
                 cowork_memory_path_override: None,
                 cowork_memory_extra_guidelines: Some("Cowork extra guideline".to_owned()),
                 remote_memory_dir: None,
+                team_memory_enabled: false,
             },
+            &MemoryPromptFeatures::default(),
         )
         .expect("prompt")
         .expect("default memory prompt");
@@ -1029,7 +1212,9 @@ mod tests {
                 cowork_memory_path_override: None,
                 cowork_memory_extra_guidelines: None,
                 remote_memory_dir: None,
+                team_memory_enabled: false,
             },
+            &MemoryPromptFeatures::default(),
         )
         .expect("prompt")
         .expect("default memory prompt");
@@ -1070,7 +1255,9 @@ mod tests {
                 cowork_memory_path_override: None,
                 cowork_memory_extra_guidelines: None,
                 remote_memory_dir: None,
+                team_memory_enabled: false,
             },
+            &MemoryPromptFeatures::default(),
         )
         .expect("prompt")
         .expect("default memory prompt");
