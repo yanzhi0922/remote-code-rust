@@ -2629,7 +2629,7 @@ mod tests {
     use rc_config::{ProviderOverrides, RuntimeConfig, RuntimeOverrides, load_runtime_config};
     use rc_context::{RuntimeIdentityContext, RuntimeUserType};
     use rc_core::{
-        ConversationEntry, ConversationRole, InputFormat, OutputFormat, PermissionMode,
+        ConversationEntry, ConversationRole, InputFormat, Message, OutputFormat, PermissionMode,
         ProviderProtocol, ProviderResponse, SubAgentCompletion, ToolCall, UsageSummary,
     };
     use rc_mcp::{McpCapabilityMatrix, McpServerConfig, McpServerInspection, McpTransportConfig};
@@ -2657,14 +2657,15 @@ mod tests {
 
     use super::{
         AGENT_LISTING_DELTA_MARKER, CompatExecutionOptions, CompatObserver, CompatRunOverrides,
-        CompatSharedState, DEFERRED_TOOLS_DELTA_MARKER, MCP_INSTRUCTIONS_DELTA_MARKER,
+        CompatSharedState, DEFERRED_TOOLS_DELTA_MARKER, ForkCacheSafeParams,
+        MCP_INSTRUCTIONS_DELTA_MARKER,
         RuntimeAgentListingDeltaMarker, RuntimeDeferredToolsDeltaMarker,
         RuntimeMcpInstructionsDeltaMarker, announced_agent_types, announced_deferred_tool_names,
         announced_mcp_instruction_names, augment_post_compact_conversation_for_runtime,
         build_agent_listing_delta_entry, build_mcp_instructions_delta_entry,
         build_runtime_identity_context, refresh_runtime_system_prompt,
-        run_prompt_with_query_engine_compat, run_prompt_with_query_engine_compat_overrides,
-        runtime_delta_entry,
+        run_no_persist_forked_query, run_prompt_with_query_engine_compat,
+        run_prompt_with_query_engine_compat_overrides, runtime_delta_entry,
     };
     use crate::conversation::{PromptEventSink, PromptStreamEvent, initialize_conversation};
     use crate::hooks::{HookRunState, RuntimeHookDiscovery};
@@ -4335,6 +4336,71 @@ while True:
             .expect("conversation after");
         assert_eq!(after_events.len(), before_events.len());
         assert_eq!(after_conversation.len(), before_conversation.len());
+    }
+
+    #[tokio::test]
+    async fn no_persist_forked_query_uses_snapshot_prompt_and_user_context() {
+        let (tempdir, config, store) = mock_config_and_store();
+        let discovery = RuntimeHookDiscovery::default();
+        let _conversation =
+            initialize_conversation(&store, &config, Some("fork parent")).expect("conversation");
+        let mut hook_state = HookRunState::load(&store, config.session_id).expect("hook state");
+        let backend = Arc::new(RecordingBackend::default());
+        let fork_snapshot = ForkCacheSafeParams {
+            fork_context_messages: vec![Message::from(ConversationEntry::user("parent context"))],
+            system_prompt: Some("Fork system prompt".to_owned()),
+            user_context: BTreeMap::from([(
+                "snapshotKey".to_owned(),
+                "snapshotValue".to_owned(),
+            )]),
+            system_context: BTreeMap::from([("cwd".to_owned(), config.cwd.display().to_string())]),
+        };
+
+        let outcome = run_no_persist_forked_query(
+            &config,
+            &store,
+            backend.clone(),
+            DiscoveredToolScope::default(),
+            mock_broker(&config),
+            &discovery,
+            &mut hook_state,
+            fork_snapshot,
+            "child task",
+            CompatRunOverrides::default(),
+            QuerySource::ExtractMemories,
+            Some(2),
+            tempdir.path().join("fork-tool-results"),
+        )
+        .await
+        .expect("fork run");
+
+        assert!(outcome
+            .messages
+            .iter()
+            .any(|entry| entry.role == ConversationRole::Assistant && entry.text == "recorded"));
+        let calls = backend.conversations.lock().expect("recording lock");
+        let first_call = calls.first().expect("provider call");
+        let system_entry = first_call
+            .iter()
+            .find(|entry| entry.role == ConversationRole::System)
+            .expect("system entry");
+        assert!(system_entry.text.contains("Fork system prompt"));
+        let user_context = first_call
+            .iter()
+            .find(|entry| {
+                entry.role == ConversationRole::User
+                    && entry.text.contains(
+                        "As you answer the user's questions, you can use the following context:",
+                    )
+            })
+            .expect("runtime user context");
+        assert!(user_context.text.contains("# snapshotKey\nsnapshotValue"));
+        assert!(first_call.iter().any(|entry| {
+            entry.role == ConversationRole::User && entry.text == "parent context"
+        }));
+        assert!(first_call.iter().any(|entry| {
+            entry.role == ConversationRole::User && entry.text == "child task"
+        }));
     }
 
     #[tokio::test]
