@@ -283,6 +283,7 @@ pub fn build_memory_prompt(
         "Persistent Agent Memory",
         &memory_dir_str,
         Some(extra_guidelines.join("\n")),
+        base,
     );
 
     let entrypoint_content =
@@ -356,6 +357,7 @@ fn build_memory_lines(
     display_name: &str,
     memory_dir: &str,
     extra_guideline: Option<String>,
+    base: &Path,
 ) -> Vec<String> {
     let mut how_to_save = vec![
         "## How to save memories".to_owned(),
@@ -423,7 +425,59 @@ fn build_memory_lines(
         lines.push(extra_guideline);
         lines.push(String::new());
     }
+    lines.extend(build_searching_past_context_section(memory_dir, base));
     lines
+}
+
+fn build_searching_past_context_section(auto_mem_dir: &str, base: &Path) -> Vec<String> {
+    if !runtime_feature_gate_enabled("tengu_coral_fern", false) {
+        return Vec::new();
+    }
+    let project_dir = canonical_project_root(base).to_string_lossy().into_owned();
+    let embedded = runtime_feature_gate_enabled("CLAUDE_CODE_EMBEDDED_SEARCH_TOOLS", false)
+        || runtime_feature_gate_enabled("CLAUDE_CODE_REPL_MODE", false);
+    let mem_search = if embedded {
+        format!(r#"grep -rn "<search term>" {auto_mem_dir} --include="*.md""#)
+    } else {
+        format!(
+            r#"Grep with pattern="<search term>" path="{auto_mem_dir}" glob="*.md""#
+        )
+    };
+    let transcript_search = if embedded {
+        format!(r#"grep -rn "<search term>" {project_dir}/ --include="*.jsonl""#)
+    } else {
+        format!(
+            r#"Grep with pattern="<search term>" path="{project_dir}/" glob="*.jsonl""#
+        )
+    };
+    vec![
+        "## Searching past context".to_owned(),
+        String::new(),
+        "When looking for past context:".to_owned(),
+        "1. Search topic files in your memory directory:".to_owned(),
+        "```".to_owned(),
+        mem_search,
+        "```".to_owned(),
+        "2. Session transcript logs (last resort — large files, slow):".to_owned(),
+        "```".to_owned(),
+        transcript_search,
+        "```".to_owned(),
+        "Use narrow search terms (error messages, file paths, function names) rather than broad keywords.".to_owned(),
+        String::new(),
+    ]
+}
+
+fn runtime_feature_gate_enabled(name: &str, default: bool) -> bool {
+    if let Ok(value) = std::env::var(name) {
+        let lowered = value.trim().to_ascii_lowercase();
+        if matches!(lowered.as_str(), "1" | "true" | "yes" | "on") {
+            return true;
+        }
+        if matches!(lowered.as_str(), "" | "0" | "false" | "no" | "off") {
+            return false;
+        }
+    }
+    default
 }
 
 fn truncate_entrypoint_content(raw: &str) -> String {
