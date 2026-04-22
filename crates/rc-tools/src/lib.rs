@@ -16,7 +16,6 @@ pub mod mcp_catalog;
 pub mod mcp_output_storage;
 pub mod mcp_runtime;
 pub mod mcp_tools;
-pub mod memory_tools;
 pub mod misc;
 pub mod plan_mode;
 pub mod review_artifact;
@@ -1523,8 +1522,6 @@ pub async fn execute_tool_call(
             "sleep" => system::sleep_tool(&effective_call.input).await,
             "snip" => system::snip_tool(&effective_call.input, context),
             // ── Phase 3 tools ──────────────────────────────────────────────
-            "memory_read" => memory_tools::memory_read_tool(&effective_call.input, context),
-            "memory_write" => memory_tools::memory_write_tool(&effective_call.input, context),
             "team_create" => misc::team_create_tool(&effective_call.input, context).await,
             "team_status" => misc::team_status_tool(&effective_call.input).await,
             "web_browser" => web::web_browser_tool(&effective_call.input, context).await,

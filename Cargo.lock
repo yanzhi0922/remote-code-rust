@@ -4457,19 +4457,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rc-team-memory"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "regex",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "rc-telemetry"
 version = "0.1.0"
 dependencies = [

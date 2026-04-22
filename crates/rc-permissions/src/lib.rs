@@ -738,8 +738,8 @@ pub fn classify_tool(name: &str) -> PermissionClass {
         "bash_command" | "powershell" | "repl" | "tungsten" | "web_fetch" | "web_search"
         | "web_browser" | "terminal_capture" | "remote_trigger" | "daemon" => PermissionClass::Bash,
         // snake_case — Edit
-        "write_file" | "replace_in_file" | "edit_file" | "notebook_edit" | "memory_write"
-        | "schedule_cron" | "enter_worktree" | "exit_worktree" => PermissionClass::Edit,
+        "write_file" | "replace_in_file" | "edit_file" | "notebook_edit" | "schedule_cron"
+        | "enter_worktree" | "exit_worktree" => PermissionClass::Edit,
         // snake_case — Agent
         "agent" | "team_delete" => PermissionClass::Agent,
         // snake_case — Mcp

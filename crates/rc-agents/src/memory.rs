@@ -1,16 +1,13 @@
-//! Agent memory management matching Claude Code's `AgentTool/agentMemory.ts`.
+//! Agent memory pathing and prompt injection matching `AgentTool/agentMemory.ts`.
 //!
-//! Persistent agent memory allows agents to store facts and learnings across
-//! sessions. Memory is scoped to user, project, or local contexts and stored
-//! as markdown files in the agent memory directory.
+//! The research runtime treats `MEMORY.md` as an index to topic files. This
+//! module only resolves memory directories and builds the prompt surface; it
+//! intentionally does not parse `MEMORY.md` into an in-memory facts database.
 
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use anyhow::Result;
-use chrono::{DateTime, Utc};
 use directories::BaseDirs;
-use serde::{Deserialize, Serialize};
 
 use crate::definition::AgentMemoryScope;
 
@@ -18,9 +15,9 @@ const ENTRYPOINT_NAME: &str = "MEMORY.md";
 const MAX_ENTRYPOINT_LINES: usize = 200;
 const MAX_ENTRYPOINT_BYTES: usize = 25_000;
 const MAX_SANITIZED_LENGTH: usize = 200;
+const REMOTE_MEMORY_PROJECTS_DIRNAME: &str = "projects";
 const DIR_EXISTS_GUIDANCE: &str = "This directory already exists — write to it directly with the Write tool (do not run mkdir or check for its existence).";
 const MEMORY_DRIFT_CAVEAT: &str = "- Memory records can become stale over time. Use memory as context for what was true at a given point in time. Before answering the user or building assumptions based solely on information in memory records, verify that the memory is still correct and up-to-date by reading the current state of the files or resources. If a recalled memory conflicts with current information, trust what you observe now — and update or remove the stale memory rather than acting on it.";
-const REMOTE_MEMORY_PROJECTS_DIRNAME: &str = "projects";
 
 const TYPES_SECTION_INDIVIDUAL: &[&str] = &[
     "## Types of memory",
@@ -135,162 +132,69 @@ const MEMORY_FRONTMATTER_EXAMPLE: &[&str] = &[
     "```",
 ];
 
-/// In-memory representation of an agent's persistent memory.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentMemory {
-    /// The agent type this memory belongs to.
-    pub agent_type: String,
-    /// Collected facts/learnings.
-    pub facts: Vec<String>,
-    /// When this memory was last updated.
-    pub last_updated: DateTime<Utc>,
-}
-
-impl AgentMemory {
-    /// Create a new empty memory for the given agent type.
-    #[must_use]
-    pub fn new(agent_type: impl Into<String>) -> Self {
-        Self {
-            agent_type: agent_type.into(),
-            facts: Vec::new(),
-            last_updated: Utc::now(),
-        }
-    }
-
-    /// Load agent memory from the given directory.
-    ///
-    /// Looks for a `MEMORY.md` file in the directory. Returns `Ok(None)` if
-    /// no memory file exists.
-    pub fn load(agent_type: &str, dir: &Path) -> Result<Option<Self>> {
-        let memory_file = dir.join("MEMORY.md");
-        if !memory_file.exists() {
-            return Ok(None);
-        }
-        let content = fs::read_to_string(&memory_file)?;
-        let facts = parse_memory_content(&content);
-        Ok(Some(Self {
-            agent_type: agent_type.to_owned(),
-            facts,
-            last_updated: fs::metadata(&memory_file)
-                .and_then(|m| m.modified())
-                .map(|t| {
-                    t.duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| DateTime::from_timestamp(d.as_secs() as i64, 0))
-                        .ok()
-                        .flatten()
-                })
-                .ok()
-                .flatten()
-                .unwrap_or_else(Utc::now),
-        }))
-    }
-
-    /// Save agent memory to the given directory.
-    ///
-    /// Creates the directory if it doesn't exist. Writes a `MEMORY.md` file
-    /// with the current facts.
-    pub fn save(&self, dir: &Path) -> Result<()> {
-        fs::create_dir_all(dir)?;
-        let content = self.render_markdown();
-        fs::write(dir.join("MEMORY.md"), content)?;
-        Ok(())
-    }
-
-    /// Add a new fact, deduplicating against existing entries.
-    pub fn add_fact(&mut self, fact: impl Into<String>) {
-        let fact = fact.into();
-        if !self.facts.contains(&fact) {
-            self.facts.push(fact);
-            self.last_updated = Utc::now();
-        }
-    }
-
-    /// Remove facts matching a predicate.
-    pub fn remove_facts(&mut self, predicate: impl Fn(&str) -> bool) {
-        let before = self.facts.len();
-        self.facts.retain(|f| !predicate(f));
-        if self.facts.len() != before {
-            self.last_updated = Utc::now();
-        }
-    }
-
-    /// Render the memory as a prompt section for injection into agent context.
-    pub fn to_prompt_section(&self) -> String {
-        if self.facts.is_empty() {
-            return String::new();
-        }
-        let mut out = String::from("# Persistent Agent Memory\n\n");
-        out.push_str("The following facts were learned in previous sessions:\n\n");
-        for fact in &self.facts {
-            out.push_str("- ");
-            out.push_str(fact);
-            out.push('\n');
-        }
-        out
-    }
-
-    /// Render the memory as a markdown document.
-    fn render_markdown(&self) -> String {
-        let mut out = String::from("# Agent Memory\n\n");
-        out.push_str(&format!(
-            "_Last updated: {}_\n\n",
-            self.last_updated.format("%Y-%m-%d %H:%M:%S UTC")
-        ));
-        for fact in &self.facts {
-            out.push_str("- ");
-            out.push_str(fact);
-            out.push('\n');
-        }
-        out
-    }
-}
-
-/// Parse facts from a markdown memory file.
-fn parse_memory_content(content: &str) -> Vec<String> {
-    content
-        .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            trimmed.strip_prefix("- ").map(|s| s.to_owned())
-        })
-        .collect()
-}
-
 /// Sanitize an agent type name for use as a directory name.
-/// Replaces colons (invalid on Windows) with dashes.
+///
+/// Mirrors the research implementation: only plugin namespace colons are
+/// replaced, rather than normalizing arbitrary characters.
+#[must_use]
 pub fn sanitize_agent_type_for_path(agent_type: &str) -> String {
     agent_type.replace(':', "-")
 }
 
+/// Return Claude's memory base directory.
+///
+/// `CLAUDE_CODE_REMOTE_MEMORY_DIR` wins, otherwise `CLAUDE_CONFIG_DIR`, then
+/// `$HOME/.claude` / `%USERPROFILE%/.claude`.
+#[must_use]
+pub fn memory_base_dir() -> PathBuf {
+    std::env::var_os("CLAUDE_CODE_REMOTE_MEMORY_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(default_claude_config_home)
+}
+
 fn default_claude_config_home() -> PathBuf {
+    if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR") {
+        return PathBuf::from(dir);
+    }
     BaseDirs::new()
         .map(|base| base.home_dir().join(".claude"))
         .unwrap_or_else(|| PathBuf::from(".claude"))
 }
 
-fn remote_memory_base_dir() -> Option<PathBuf> {
-    std::env::var_os("CLAUDE_CODE_REMOTE_MEMORY_DIR").map(PathBuf::from)
-}
-
 /// Get the agent memory directory for a given agent type and scope.
 ///
-/// - `Project` scope: `<base>/.claude/agent-memory/<agent_type>/`
-/// - `User` scope: `<config_home>/agent-memory/<agent_type>/`
-/// - `Local` scope: `<base>/.claude/agent-memory-local/<agent_type>/`
+/// - `User`: `<memoryBase>/agent-memory/<agentType>/`
+/// - `Project`: `<cwd>/.claude/agent-memory/<agentType>/`
+/// - `Local`: `<cwd>/.claude/agent-memory-local/<agentType>/`, or
+///   `<remote>/projects/<sanitized-project-root>/agent-memory-local/<agentType>/`
+///   when `CLAUDE_CODE_REMOTE_MEMORY_DIR` is set.
+#[must_use]
 pub fn get_agent_memory_dir(
     agent_type: &str,
     scope: AgentMemoryScope,
     base: &Path,
     config_home: &Path,
-) -> std::path::PathBuf {
+) -> PathBuf {
     let dir_name = sanitize_agent_type_for_path(agent_type);
-    let memory_base = remote_memory_base_dir().unwrap_or_else(|| config_home.to_path_buf());
     match scope {
         AgentMemoryScope::Project => base.join(".claude").join("agent-memory").join(dir_name),
-        AgentMemoryScope::User => memory_base.join("agent-memory").join(dir_name),
+        AgentMemoryScope::User => {
+            let memory_base =
+                std::env::var_os("CLAUDE_CODE_REMOTE_MEMORY_DIR").map_or_else(
+                    || {
+                        if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR") {
+                            PathBuf::from(dir)
+                        } else {
+                            config_home.to_path_buf()
+                        }
+                    },
+                    PathBuf::from,
+                );
+            memory_base.join("agent-memory").join(dir_name)
+        }
         AgentMemoryScope::Local => {
-            if let Some(remote_base) = remote_memory_base_dir() {
-                remote_base
+            if let Some(remote_base) = std::env::var_os("CLAUDE_CODE_REMOTE_MEMORY_DIR") {
+                PathBuf::from(remote_base)
                     .join(REMOTE_MEMORY_PROJECTS_DIRNAME)
                     .join(sanitize_path_component(
                         &canonical_project_root(base).to_string_lossy(),
@@ -306,43 +210,48 @@ pub fn get_agent_memory_dir(
     }
 }
 
-/// Check if a path is within an agent memory directory (any scope).
-///
-/// The path should be absolute or relative to the current working directory.
-/// Does not resolve symlinks or canonicalize the path.
+/// Return the `MEMORY.md` path for an agent memory directory.
+#[must_use]
+pub fn get_agent_memory_entrypoint(
+    agent_type: &str,
+    scope: AgentMemoryScope,
+    base: &Path,
+    config_home: &Path,
+) -> PathBuf {
+    get_agent_memory_dir(agent_type, scope, base, config_home).join(ENTRYPOINT_NAME)
+}
+
+/// Check if a path is within an agent memory directory for any scope.
+#[must_use]
 pub fn is_agent_memory_path(path: &Path, base: &Path, config_home: &Path) -> bool {
     let normalized = normalize_path(path);
+    let memory_base = std::env::var_os("CLAUDE_CODE_REMOTE_MEMORY_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var_os("CLAUDE_CONFIG_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| config_home.to_path_buf())
+        });
 
-    // User scope
-    let user_memory = remote_memory_base_dir()
-        .unwrap_or_else(|| config_home.to_path_buf())
-        .join("agent-memory");
-    if normalized.starts_with(&user_memory) {
+    if normalized.starts_with(memory_base.join("agent-memory")) {
         return true;
     }
-
-    // Project scope
-    let project_memory = base.join(".claude").join("agent-memory");
-    if normalized.starts_with(&project_memory) {
+    if normalized.starts_with(base.join(".claude").join("agent-memory")) {
         return true;
     }
-
-    // Local scope
-    let local_memory = get_agent_memory_dir("...", AgentMemoryScope::Local, base, config_home)
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| base.join(".claude").join("agent-memory-local"));
-    if normalized.starts_with(&local_memory) {
-        return true;
+    if let Some(remote_base) = std::env::var_os("CLAUDE_CODE_REMOTE_MEMORY_DIR") {
+        let remote_projects = PathBuf::from(remote_base).join(REMOTE_MEMORY_PROJECTS_DIRNAME);
+        let has_local_segment = normalized
+            .components()
+            .any(|component| component.as_os_str() == "agent-memory-local");
+        return has_local_segment && normalized.starts_with(remote_projects);
     }
 
-    false
+    normalized.starts_with(base.join(".claude").join("agent-memory-local"))
 }
 
 /// Build the memory prompt for an agent with memory enabled.
-///
-/// Creates the memory directory if needed and returns a prompt section
-/// describing how to use persistent memory.
+#[must_use]
 pub fn build_memory_prompt(
     agent_type: &str,
     scope: AgentMemoryScope,
@@ -351,53 +260,58 @@ pub fn build_memory_prompt(
 ) -> String {
     let scope_note = match scope {
         AgentMemoryScope::User => {
-            "Since this memory is user-scope, keep learnings general since they apply across all projects"
+            "- Since this memory is user-scope, keep learnings general since they apply across all projects"
         }
         AgentMemoryScope::Project => {
-            "Since this memory is project-scope and shared with your team via version control, tailor your memories to this project"
+            "- Since this memory is project-scope and shared with your team via version control, tailor your memories to this project"
         }
         AgentMemoryScope::Local => {
-            "Since this memory is local-scope (not checked into version control), tailor your memories to this project and machine"
+            "- Since this memory is local-scope (not checked into version control), tailor your memories to this project and machine"
         }
     };
 
     let memory_dir = get_agent_memory_dir(agent_type, scope, base, config_home);
     let _ = fs::create_dir_all(&memory_dir);
     let memory_dir_str = with_trailing_separator(memory_dir.clone());
+    let mut extra_guidelines = vec![scope_note.to_owned()];
+    if let Some(extra) = std::env::var("CLAUDE_COWORK_MEMORY_EXTRA_GUIDELINES")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    {
+        extra_guidelines.push(extra);
+    }
     let mut lines = build_memory_lines(
         "Persistent Agent Memory",
         &memory_dir_str,
-        cowork_memory_extra_guideline(scope_note),
+        Some(extra_guidelines.join("\n")),
     );
 
-    let entrypoint = memory_dir.join(ENTRYPOINT_NAME);
-    let entrypoint_content = fs::read_to_string(entrypoint).unwrap_or_default();
+    let entrypoint_content = fs::read_to_string(memory_dir.join(ENTRYPOINT_NAME)).unwrap_or_default();
+    lines.extend([format!("## {ENTRYPOINT_NAME}"), String::new()]);
     if entrypoint_content.trim().is_empty() {
-        lines.extend([
-            format!("## {ENTRYPOINT_NAME}"),
-            String::new(),
-            format!(
-                "Your {ENTRYPOINT_NAME} is currently empty. When you save new memories, they will appear here."
-            ),
-        ]);
+        lines.push(format!(
+            "Your {ENTRYPOINT_NAME} is currently empty. When you save new memories, they will appear here."
+        ));
     } else {
-        lines.extend([
-            format!("## {ENTRYPOINT_NAME}"),
-            String::new(),
-            truncate_entrypoint_content(&entrypoint_content),
-        ]);
+        lines.push(truncate_entrypoint_content(&entrypoint_content));
     }
 
     lines.join("\n")
 }
 
 /// Get a display string for the memory scope.
-pub fn get_memory_scope_display(scope: &Option<AgentMemoryScope>, _base: &Path) -> &'static str {
+#[must_use]
+pub fn get_memory_scope_display(scope: &Option<AgentMemoryScope>, base: &Path) -> String {
     match scope {
-        Some(AgentMemoryScope::User) => "User (~/.claude/agent-memory/)",
-        Some(AgentMemoryScope::Project) => "Project (.claude/agent-memory/)",
-        Some(AgentMemoryScope::Local) => "Local (.claude/agent-memory-local/)",
-        None => "None",
+        Some(AgentMemoryScope::User) => {
+            format!("User ({}/)", memory_base_dir().join("agent-memory").display())
+        }
+        Some(AgentMemoryScope::Project) => "Project (.claude/agent-memory/)".to_owned(),
+        Some(AgentMemoryScope::Local) => format!(
+            "Local ({})",
+            with_trailing_separator(local_agent_memory_base(base))
+        ),
+        None => "None".to_owned(),
     }
 }
 
@@ -422,15 +336,17 @@ pub fn append_memory_prompt_to_system_prompt(
     )
 }
 
-fn cowork_memory_extra_guideline(scope_note: &str) -> Option<String> {
-    let extra = std::env::var("CLAUDE_COWORK_MEMORY_EXTRA_GUIDELINES")
-        .ok()
-        .filter(|value| !value.trim().is_empty());
-    let mut guidelines = vec![format!("- {scope_note}")];
-    if let Some(extra) = extra {
-        guidelines.push(extra);
+fn local_agent_memory_base(base: &Path) -> PathBuf {
+    if let Some(remote_base) = std::env::var_os("CLAUDE_CODE_REMOTE_MEMORY_DIR") {
+        PathBuf::from(remote_base)
+            .join(REMOTE_MEMORY_PROJECTS_DIRNAME)
+            .join(sanitize_path_component(
+                &canonical_project_root(base).to_string_lossy(),
+            ))
+            .join("agent-memory-local")
+    } else {
+        base.join(".claude").join("agent-memory-local")
     }
-    Some(guidelines.join("\n"))
 }
 
 fn build_memory_lines(
@@ -446,22 +362,13 @@ fn build_memory_lines(
         "**Step 1** — write the memory to its own file (e.g., `user_role.md`, `feedback_testing.md`) using this frontmatter format:".to_owned(),
         String::new(),
     ];
-    how_to_save.extend(
-        MEMORY_FRONTMATTER_EXAMPLE
-            .iter()
-            .map(|line| (*line).to_owned()),
-    );
+    how_to_save.extend(MEMORY_FRONTMATTER_EXAMPLE.iter().map(|line| (*line).to_owned()));
     how_to_save.extend([
         String::new(),
-        format!(
-            "**Step 2** — add a pointer to that file in `{ENTRYPOINT_NAME}`. `{ENTRYPOINT_NAME}` is an index, not a memory — each entry should be one line, under ~150 characters: `- [Title](file.md) — one-line hook`. It has no frontmatter. Never write memory content directly into `{ENTRYPOINT_NAME}`."
-        ),
+        format!("**Step 2** — add a pointer to that file in `{ENTRYPOINT_NAME}`. `{ENTRYPOINT_NAME}` is an index, not a memory — each entry should be one line, under ~150 characters: `- [Title](file.md) — one-line hook`. It has no frontmatter. Never write memory content directly into `{ENTRYPOINT_NAME}`."),
         String::new(),
-        format!(
-            "- `{ENTRYPOINT_NAME}` is always loaded into your conversation context — lines after {MAX_ENTRYPOINT_LINES} will be truncated, so keep the index concise"
-        ),
-        "- Keep the name, description, and type fields in memory files up-to-date with the content"
-            .to_owned(),
+        format!("- `{ENTRYPOINT_NAME}` is always loaded into your conversation context — lines after {MAX_ENTRYPOINT_LINES} will be truncated, so keep the index concise"),
+        "- Keep the name, description, and type fields in memory files up-to-date with the content".to_owned(),
         "- Organize memory semantically by topic, not chronologically".to_owned(),
         "- Update or remove memories that turn out to be wrong or outdated".to_owned(),
         "- Do not write duplicate memories. First check if there is an existing memory you can update before writing a new one.".to_owned(),
@@ -470,35 +377,21 @@ fn build_memory_lines(
     let mut lines = vec![
         format!("# {display_name}"),
         String::new(),
-        format!(
-            "You have a persistent, file-based memory system at `{memory_dir}`. {DIR_EXISTS_GUIDANCE}"
-        ),
+        format!("You have a persistent, file-based memory system at `{memory_dir}`. {DIR_EXISTS_GUIDANCE}"),
         String::new(),
         "You should build up this memory system over time so that future conversations can have a complete picture of who the user is, how they'd like to collaborate with you, what behaviors to avoid or repeat, and the context behind the work the user gives you.".to_owned(),
         String::new(),
         "If the user explicitly asks you to remember something, save it immediately as whichever type fits best. If they ask you to forget something, find and remove the relevant entry.".to_owned(),
         String::new(),
     ];
-    lines.extend(
-        TYPES_SECTION_INDIVIDUAL
-            .iter()
-            .map(|line| (*line).to_owned()),
-    );
-    lines.extend(
-        WHAT_NOT_TO_SAVE_SECTION
-            .iter()
-            .map(|line| (*line).to_owned()),
-    );
+    lines.extend(TYPES_SECTION_INDIVIDUAL.iter().map(|line| (*line).to_owned()));
+    lines.extend(WHAT_NOT_TO_SAVE_SECTION.iter().map(|line| (*line).to_owned()));
     lines.push(String::new());
     lines.extend(how_to_save);
     lines.push(String::new());
     lines.extend(WHEN_TO_ACCESS_SECTION.iter().map(|line| (*line).to_owned()));
     lines.push(String::new());
-    lines.extend(
-        TRUSTING_RECALL_SECTION
-            .iter()
-            .map(|line| (*line).to_owned()),
-    );
+    lines.extend(TRUSTING_RECALL_SECTION.iter().map(|line| (*line).to_owned()));
     lines.extend([
         String::new(),
         "## Memory and other forms of persistence".to_owned(),
@@ -550,9 +443,7 @@ fn truncate_entrypoint_content(raw: &str) -> String {
         (false, false) => String::new(),
     };
 
-    format!(
-        "{truncated}\n\n> WARNING: {ENTRYPOINT_NAME} is {reason}. Only part of it was loaded. Keep index entries to one line under ~200 chars; move detail into topic files."
-    )
+    format!("{truncated}\n\n> WARNING: {ENTRYPOINT_NAME} is {reason}. Only part of it was loaded. Keep index entries to one line under ~200 chars; move detail into topic files.")
 }
 
 fn floor_char_boundary(text: &str, max_bytes: usize) -> usize {
@@ -654,11 +545,7 @@ fn sanitize_path_component(raw: &str) -> String {
     if sanitized.len() <= MAX_SANITIZED_LENGTH {
         return sanitized;
     }
-    format!(
-        "{}-{}",
-        &sanitized[..MAX_SANITIZED_LENGTH],
-        simple_hash(raw)
-    )
+    format!("{}-{}", &sanitized[..MAX_SANITIZED_LENGTH], simple_hash(raw))
 }
 
 fn simple_hash(raw: &str) -> String {
@@ -689,253 +576,24 @@ fn to_base36(mut value: u64) -> String {
     digits.into_iter().rev().collect()
 }
 
-// ── Memory snapshot support ───────────────────────────────────────────────
-
-/// Base directory name for agent memory snapshots.
-const SNAPSHOT_BASE: &str = "agent-memory-snapshots";
-
-/// File name for the snapshot metadata.
-const SNAPSHOT_JSON: &str = "snapshot.json";
-
-/// A snapshot of an agent's memory at a point in time.
-///
-/// Snapshots allow agent memory to be saved, shared, and restored across
-/// sessions and team members. They capture the full set of facts along
-/// with metadata about when the snapshot was taken.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentMemorySnapshot {
-    /// The agent type this snapshot belongs to.
-    pub agent_type: String,
-    /// Facts captured in the snapshot.
-    pub facts: Vec<String>,
-    /// When the snapshot was created.
-    pub created_at: DateTime<Utc>,
-    /// When the snapshot was last updated.
-    pub updated_at: DateTime<Utc>,
-}
-
-impl AgentMemorySnapshot {
-    /// Create a new empty snapshot for the given agent type.
-    #[must_use]
-    pub fn new(agent_type: impl Into<String>) -> Self {
-        let now = Utc::now();
-        Self {
-            agent_type: agent_type.into(),
-            facts: Vec::new(),
-            created_at: now,
-            updated_at: now,
-        }
-    }
-
-    /// Create a snapshot from an existing [`AgentMemory`].
-    pub fn from_memory(memory: &AgentMemory) -> Self {
-        Self {
-            agent_type: memory.agent_type.clone(),
-            facts: memory.facts.clone(),
-            created_at: memory.last_updated,
-            updated_at: Utc::now(),
-        }
-    }
-
-    /// Number of facts in the snapshot.
-    pub fn fact_count(&self) -> usize {
-        self.facts.len()
-    }
-
-    /// Check if the snapshot is empty.
-    pub fn is_empty(&self) -> bool {
-        self.facts.is_empty()
-    }
-}
-
-/// Diff between two memory snapshots.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemorySnapshotDiff {
-    /// Facts added in the new snapshot.
-    pub added: Vec<String>,
-    /// Facts removed from the old snapshot.
-    pub removed: Vec<String>,
-    /// Facts present in both snapshots.
-    pub unchanged: Vec<String>,
-}
-
-/// Get the snapshot directory for an agent type within a project.
-///
-/// Returns `<base>/.claude/agent-memory-snapshots/<agent_type>/`.
-pub fn get_snapshot_dir(base: &Path, agent_type: &str) -> std::path::PathBuf {
-    let dir_name = sanitize_agent_type_for_path(agent_type);
-    base.join(".claude").join(SNAPSHOT_BASE).join(dir_name)
-}
-
-/// Get the snapshot file path.
-pub fn get_snapshot_path(base: &Path, agent_type: &str) -> std::path::PathBuf {
-    get_snapshot_dir(base, agent_type).join(SNAPSHOT_JSON)
-}
-
-/// Take a memory snapshot and save it to disk.
-///
-/// Creates the snapshot directory if it doesn't exist.
-pub fn take_memory_snapshot(base: &Path, memory: &AgentMemory) -> Result<()> {
-    let snapshot = AgentMemorySnapshot::from_memory(memory);
-    let dir = get_snapshot_dir(base, &memory.agent_type);
-    fs::create_dir_all(&dir)?;
-
-    let path = dir.join(SNAPSHOT_JSON);
-    let json = serde_json::to_string_pretty(&snapshot)?;
-    fs::write(path, json)?;
-
-    Ok(())
-}
-
-/// Load a memory snapshot from disk.
-///
-/// Returns `Ok(None)` if no snapshot exists for the given agent type.
-pub fn load_memory_snapshot(base: &Path, agent_type: &str) -> Result<Option<AgentMemorySnapshot>> {
-    let path = get_snapshot_path(base, agent_type);
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    let content = fs::read_to_string(&path)?;
-    let snapshot: AgentMemorySnapshot = serde_json::from_str(&content)?;
-    Ok(Some(snapshot))
-}
-
-/// Restore agent memory from a snapshot.
-///
-/// Creates a new [`AgentMemory`] populated with the snapshot's facts.
-pub fn restore_from_snapshot(snapshot: &AgentMemorySnapshot) -> AgentMemory {
-    let mut memory = AgentMemory::new(&snapshot.agent_type);
-    for fact in &snapshot.facts {
-        memory.add_fact(fact);
-    }
-    memory
-}
-
-/// Compute the diff between two memory snapshots.
-///
-/// Returns the facts added, removed, and unchanged.
-pub fn diff_snapshots(old: &AgentMemorySnapshot, new: &AgentMemorySnapshot) -> MemorySnapshotDiff {
-    use std::collections::BTreeSet;
-
-    let old_set: BTreeSet<&str> = old.facts.iter().map(|s| s.as_str()).collect();
-    let new_set: BTreeSet<&str> = new.facts.iter().map(|s| s.as_str()).collect();
-
-    let added: Vec<String> = new_set
-        .difference(&old_set)
-        .map(|s| (*s).to_owned())
-        .collect();
-    let removed: Vec<String> = old_set
-        .difference(&new_set)
-        .map(|s| (*s).to_owned())
-        .collect();
-    let unchanged: Vec<String> = old_set
-        .intersection(&new_set)
-        .map(|s| (*s).to_owned())
-        .collect();
-
-    MemorySnapshotDiff {
-        added,
-        removed,
-        unchanged,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
     use std::path::PathBuf;
 
     #[test]
-    fn new_memory_is_empty() {
-        let mem = AgentMemory::new("test-agent");
-        assert_eq!(mem.agent_type, "test-agent");
-        assert!(mem.facts.is_empty());
-    }
-
-    #[test]
-    fn add_fact_deduplicates() {
-        let mut mem = AgentMemory::new("test");
-        mem.add_fact("The project uses Rust");
-        mem.add_fact("The project uses Rust");
-        assert_eq!(mem.facts.len(), 1);
-    }
-
-    #[test]
-    fn add_fact_different_entries() {
-        let mut mem = AgentMemory::new("test");
-        mem.add_fact("Uses Rust");
-        mem.add_fact("Uses Tokio");
-        assert_eq!(mem.facts.len(), 2);
-    }
-
-    #[test]
-    fn remove_facts_by_predicate() {
-        let mut mem = AgentMemory::new("test");
-        mem.add_fact("keep this");
-        mem.add_fact("remove this");
-        mem.add_fact("also keep");
-        mem.remove_facts(|f| f.contains("remove"));
-        assert_eq!(mem.facts.len(), 2);
-        assert!(mem.facts.contains(&"keep this".to_owned()));
-        assert!(mem.facts.contains(&"also keep".to_owned()));
-    }
-
-    #[test]
-    fn prompt_section_empty() {
-        let mem = AgentMemory::new("test");
-        assert!(mem.to_prompt_section().is_empty());
-    }
-
-    #[test]
-    fn prompt_section_with_facts() {
-        let mut mem = AgentMemory::new("test");
-        mem.add_fact("fact one");
-        let section = mem.to_prompt_section();
-        assert!(section.contains("# Persistent Agent Memory"));
-        assert!(section.contains("fact one"));
-    }
-
-    #[test]
-    fn save_and_load_roundtrip() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let mut mem = AgentMemory::new("test-agent");
-        mem.add_fact("fact 1");
-        mem.add_fact("fact 2");
-
-        mem.save(dir.path()).expect("save");
-        let loaded = AgentMemory::load("test-agent", dir.path())
-            .expect("load")
-            .expect("some");
-
-        let loaded_facts: HashSet<_> = loaded.facts.into_iter().collect();
-        let expected_facts: HashSet<_> = vec!["fact 1".to_owned(), "fact 2".to_owned()]
-            .into_iter()
-            .collect();
-        assert_eq!(loaded_facts, expected_facts);
-    }
-
-    #[test]
-    fn load_nonexistent_returns_none() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let result = AgentMemory::load("nonexistent", dir.path()).expect("load");
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn sanitize_agent_type() {
+    fn sanitize_agent_type_replaces_colons_only() {
         assert_eq!(
             sanitize_agent_type_for_path("my-plugin:my-agent"),
             "my-plugin-my-agent"
         );
-        assert_eq!(sanitize_agent_type_for_path("simple"), "simple");
+        assert_eq!(sanitize_agent_type_for_path("agent/name"), "agent/name");
     }
 
     #[test]
     fn memory_dir_project_scope() {
         let base = PathBuf::from("/project");
-        let config = PathBuf::from("/home/.config");
+        let config = PathBuf::from("/home/.claude");
         let dir = get_agent_memory_dir("test", AgentMemoryScope::Project, &base, &config);
         assert_eq!(dir, PathBuf::from("/project/.claude/agent-memory/test"));
     }
@@ -943,19 +601,19 @@ mod tests {
     #[test]
     fn memory_dir_user_scope() {
         let base = PathBuf::from("/project");
-        let config = PathBuf::from("/home/.config");
+        let config = PathBuf::from("/home/.claude");
         let dir = get_agent_memory_dir("test", AgentMemoryScope::User, &base, &config);
-        assert_eq!(dir, PathBuf::from("/home/.config/agent-memory/test"));
+        assert_eq!(dir, PathBuf::from("/home/.claude/agent-memory/test"));
     }
 
     #[test]
     fn is_agent_memory_path_check() {
         let base = PathBuf::from("/project");
-        let config = PathBuf::from("/home/.config");
+        let config = PathBuf::from("/home/.claude");
         let project_mem = PathBuf::from("/project/.claude/agent-memory/test/MEMORY.md");
         assert!(is_agent_memory_path(&project_mem, &base, &config));
 
-        let user_mem = PathBuf::from("/home/.config/agent-memory/test/MEMORY.md");
+        let user_mem = PathBuf::from("/home/.claude/agent-memory/test/MEMORY.md");
         assert!(is_agent_memory_path(&user_mem, &base, &config));
 
         let random = PathBuf::from("/tmp/other.md");
@@ -1013,151 +671,5 @@ mod tests {
         );
 
         assert!(prompt.starts_with("Base prompt\n\n# Persistent Agent Memory"));
-    }
-
-    #[test]
-    fn parse_memory_content_extracts_facts() {
-        let content = "# Agent Memory\n\n- fact one\n- fact two\n\nSome other text\n";
-        let facts = parse_memory_content(content);
-        assert_eq!(facts, vec!["fact one", "fact two"]);
-    }
-
-    // ── Snapshot tests ──────────────────────────────────────────────────
-
-    #[test]
-    fn snapshot_new_is_empty() {
-        let snap = AgentMemorySnapshot::new("test-agent");
-        assert_eq!(snap.agent_type, "test-agent");
-        assert!(snap.facts.is_empty());
-        assert!(snap.is_empty());
-        assert_eq!(snap.fact_count(), 0);
-    }
-
-    #[test]
-    fn snapshot_from_memory() {
-        let mut mem = AgentMemory::new("test-agent");
-        mem.add_fact("fact 1");
-        mem.add_fact("fact 2");
-        let snap = AgentMemorySnapshot::from_memory(&mem);
-        assert_eq!(snap.agent_type, "test-agent");
-        assert_eq!(snap.facts, vec!["fact 1", "fact 2"]);
-        assert_eq!(snap.fact_count(), 2);
-    }
-
-    #[test]
-    fn snapshot_serde_roundtrip() {
-        let mut mem = AgentMemory::new("serde-test");
-        mem.add_fact("fact");
-        let snap = AgentMemorySnapshot::from_memory(&mem);
-        let json = serde_json::to_string_pretty(&snap).expect("serialize");
-        let parsed: AgentMemorySnapshot = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(parsed.agent_type, "serde-test");
-        assert_eq!(parsed.facts, vec!["fact"]);
-    }
-
-    #[test]
-    fn get_snapshot_dir_path() {
-        let base = PathBuf::from("/project");
-        let dir = get_snapshot_dir(&base, "test-agent");
-        assert_eq!(
-            dir,
-            PathBuf::from("/project/.claude/agent-memory-snapshots/test-agent")
-        );
-    }
-
-    #[test]
-    fn get_snapshot_dir_sanitizes_colons() {
-        let base = PathBuf::from("/project");
-        let dir = get_snapshot_dir(&base, "plugin:agent");
-        assert_eq!(
-            dir,
-            PathBuf::from("/project/.claude/agent-memory-snapshots/plugin-agent")
-        );
-    }
-
-    #[test]
-    fn take_and_load_snapshot() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let mut mem = AgentMemory::new("snap-test");
-        mem.add_fact("fact 1");
-        mem.add_fact("fact 2");
-
-        take_memory_snapshot(dir.path(), &mem).expect("take snapshot");
-        let loaded = load_memory_snapshot(dir.path(), "snap-test")
-            .expect("load snapshot")
-            .expect("some");
-
-        assert_eq!(loaded.agent_type, "snap-test");
-        let facts: HashSet<_> = loaded.facts.into_iter().collect();
-        assert!(facts.contains("fact 1"));
-        assert!(facts.contains("fact 2"));
-    }
-
-    #[test]
-    fn load_snapshot_nonexistent() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let result = load_memory_snapshot(dir.path(), "nonexistent").expect("load");
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn restore_from_snapshot_creates_memory() {
-        let snap = AgentMemorySnapshot {
-            agent_type: "test".to_owned(),
-            facts: vec!["a".to_owned(), "b".to_owned()],
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        };
-        let mem = restore_from_snapshot(&snap);
-        assert_eq!(mem.agent_type, "test");
-        assert_eq!(mem.facts.len(), 2);
-        assert!(mem.facts.contains(&"a".to_owned()));
-        assert!(mem.facts.contains(&"b".to_owned()));
-    }
-
-    #[test]
-    fn diff_snapshots_added() {
-        let old = AgentMemorySnapshot::new("test");
-        let mut new = AgentMemorySnapshot::new("test");
-        new.facts.push("new fact".to_owned());
-        let diff = diff_snapshots(&old, &new);
-        assert_eq!(diff.added, vec!["new fact"]);
-        assert!(diff.removed.is_empty());
-        assert!(diff.unchanged.is_empty());
-    }
-
-    #[test]
-    fn diff_snapshots_removed() {
-        let mut old = AgentMemorySnapshot::new("test");
-        old.facts.push("old fact".to_owned());
-        let new = AgentMemorySnapshot::new("test");
-        let diff = diff_snapshots(&old, &new);
-        assert!(diff.added.is_empty());
-        assert_eq!(diff.removed, vec!["old fact"]);
-        assert!(diff.unchanged.is_empty());
-    }
-
-    #[test]
-    fn diff_snapshots_unchanged() {
-        let mut old = AgentMemorySnapshot::new("test");
-        old.facts.push("shared".to_owned());
-        let mut new = AgentMemorySnapshot::new("test");
-        new.facts.push("shared".to_owned());
-        let diff = diff_snapshots(&old, &new);
-        assert!(diff.added.is_empty());
-        assert!(diff.removed.is_empty());
-        assert_eq!(diff.unchanged, vec!["shared"]);
-    }
-
-    #[test]
-    fn diff_snapshots_complex() {
-        let mut old = AgentMemorySnapshot::new("test");
-        old.facts = vec!["kept".to_owned(), "removed".to_owned()];
-        let mut new = AgentMemorySnapshot::new("test");
-        new.facts = vec!["kept".to_owned(), "added".to_owned()];
-        let diff = diff_snapshots(&old, &new);
-        assert_eq!(diff.added, vec!["added"]);
-        assert_eq!(diff.removed, vec!["removed"]);
-        assert_eq!(diff.unchanged, vec!["kept"]);
     }
 }

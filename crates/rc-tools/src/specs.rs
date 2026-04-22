@@ -645,37 +645,6 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
         },
         // ── Phase 3 tools ──────────────────────────────────────────────────
         ToolSpec {
-            name: "memory_read".to_owned(),
-            protocol_name: "MemoryRead".to_owned(),
-            permission_tool_name: "Read".to_owned(),
-            description: tool_prompts::MEMORY_READ.to_owned(),
-            requires_permission: false,
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "scope": {"type": "string", "enum": ["global", "project", "all"], "description": "Which memory scope to read (default: all)"}
-                },
-                "additionalProperties": false,
-            }),
-        },
-        ToolSpec {
-            name: "memory_write".to_owned(),
-            protocol_name: "MemoryWrite".to_owned(),
-            permission_tool_name: "Edit".to_owned(),
-            description: tool_prompts::MEMORY_WRITE.to_owned(),
-            requires_permission: true,
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "scope": {"type": "string", "enum": ["global", "project"]},
-                    "content": {"type": "string"},
-                    "mode": {"type": "string", "enum": ["append", "overwrite"], "description": "Write mode (default: append)"}
-                },
-                "required": ["scope", "content"],
-                "additionalProperties": false,
-            }),
-        },
-        ToolSpec {
             name: "team_create".to_owned(),
             protocol_name: "TeamCreate".to_owned(),
             permission_tool_name: "TeamCreate".to_owned(),
