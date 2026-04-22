@@ -93,8 +93,9 @@ use rc_tools::{
 use app::{App, AppAction};
 use event::{convert_event, handle_event};
 use prompt_runtime::{
-    PromptRuntimeOverrides, conversation_with_runtime_user_context_with_settings,
-    refresh_runtime_system_prompt, runtime_prompt_settings,
+    PromptRuntimeOverrides, clear_runtime_system_prompt_state,
+    conversation_with_runtime_user_context_with_settings, refresh_runtime_system_prompt,
+    runtime_prompt_settings,
 };
 use runtime_hooks::{
     PreparedToolCall, SessionHookRunOutcome, ToolHookRunOutcome, apply_post_tool_hooks,
@@ -384,6 +385,7 @@ pub async fn run_tui_app(mut config: RuntimeConfig, store: &SessionStore) -> Res
                             &session_dir,
                             std::time::SystemTime::now(),
                         );
+                        clear_runtime_system_prompt_state(config.session_id);
                     }
                     clear_runtime_mcp_catalog_cache().await;
                     restamp_runtime_session(&mut config, next_session_id);

@@ -23,6 +23,7 @@ rc-provider = { path = "../rc-provider" }
 rc-skills = { path = "../rc-skills" }
 rc-system-prompt = { path = "../rc-system-prompt" }
 rc-tools = { path = "../rc-tools" }
+uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
