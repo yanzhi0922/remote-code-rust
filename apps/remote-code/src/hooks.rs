@@ -21,6 +21,8 @@ use tokio::{
 };
 use uuid::Uuid;
 
+use crate::session_file_access::handle_session_file_access_post_tool;
+
 const DEFAULT_HOOK_TIMEOUT_SECS: u64 = 30;
 
 #[derive(Subcommand, Debug)]
@@ -691,6 +693,9 @@ pub async fn apply_post_tool_hooks(
         event,
         &effects.additional_contexts,
     )?;
+    if !tool_result.is_error {
+        handle_session_file_access_post_tool(config, store, tool_call)?;
+    }
     Ok(())
 }
 

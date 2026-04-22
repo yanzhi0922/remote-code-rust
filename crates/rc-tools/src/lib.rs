@@ -136,6 +136,8 @@ pub struct RuntimeAgentPromptContext {
     #[serde(default)]
     pub auto_memory_read_dir: Option<PathBuf>,
     #[serde(default)]
+    pub team_memory_read_dir: Option<PathBuf>,
+    #[serde(default)]
     pub project_temp_dir: Option<PathBuf>,
     #[serde(default)]
     pub preview_launch_config_path: Option<PathBuf>,
@@ -1088,6 +1090,10 @@ pub(crate) fn filesystem_access_options() -> rc_permissions::FilesystemAccessOpt
             internal_read_dirs.push(auto_memory_read_dir.clone());
         } else if let Some(auto_memory_dir) = &context.auto_memory_dir {
             internal_read_dirs.push(auto_memory_dir.clone());
+        }
+        if let Some(team_memory_read_dir) = &context.team_memory_read_dir {
+            internal_read_dirs.push(team_memory_read_dir.clone());
+            internal_write_dirs.push(team_memory_read_dir.clone());
         }
         if let Some(project_temp_dir) = &context.project_temp_dir {
             internal_read_dirs.push(project_temp_dir.clone());
