@@ -1,8 +1,7 @@
-//! Detection of destructive PowerShell commands.
+﻿//! Detection of destructive PowerShell commands.
 //!
 //! Identifies potentially destructive commands and returns a warning string
-//! for display in the permission dialog. This is purely informational —
-//! it doesn't affect permission logic or auto-approval.
+//! for display in the permission dialog. This is purely informational 鈥?//! it doesn't affect permission logic or auto-approval.
 
 use once_cell::sync::Lazy;
 use regex::Regex;
