@@ -251,11 +251,8 @@ fn sanitize_team_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use once_cell::sync::Lazy;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
     use tempfile::TempDir;
-
-    static BASE_DIR_TEST_MUTEX: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
     struct ResetBaseDirOverride;
 
@@ -268,9 +265,7 @@ mod tests {
     }
 
     fn with_base_dir_override<T>(dir: PathBuf, f: impl FnOnce() -> T) -> T {
-        let _test_guard = BASE_DIR_TEST_MUTEX
-            .lock()
-            .expect("BASE_DIR_TEST_MUTEX lock poisoned");
+        let _test_guard = tasks::test_guard_for_tests();
         set_base_dir_override(Some(dir));
         let _reset = ResetBaseDirOverride;
         f()
@@ -287,6 +282,7 @@ mod tests {
             task_stack: Arc::new(std::sync::Mutex::new(
                 rc_core::task_stack::TaskStack::default(),
             )),
+            read_file_state: crate::FileStateCache::new(),
         }
     }
 

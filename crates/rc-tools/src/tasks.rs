@@ -23,6 +23,9 @@ static TASK_LIST_ID: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None)
 static TASK_LIST_BASE_DIR: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
 static LEADER_TEAM_NAME: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
 
+#[cfg(test)]
+static TASK_TEST_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
 const TASK_LIST_HIGH_WATER_MARK_FILE: &str = ".highwatermark";
 const TASK_LIST_LOCK_FILE: &str = ".lock";
 
@@ -213,6 +216,47 @@ fn now_timestamp() -> String {
 #[must_use]
 pub fn allocate_task_id() -> String {
     generate_id()
+}
+
+#[cfg(test)]
+pub(crate) struct TaskTestGuard {
+    _guard: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl Drop for TaskTestGuard {
+    fn drop(&mut self) {
+        reset_task_test_state();
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_guard_for_tests() -> TaskTestGuard {
+    let guard = TASK_TEST_GUARD
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    reset_task_test_state();
+    TaskTestGuard { _guard: guard }
+}
+
+#[cfg(test)]
+fn reset_task_test_state() {
+    TASK_STORE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clear();
+    *TASK_OUTPUT_DIR
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    *TASK_LIST_ID
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    *TASK_LIST_BASE_DIR
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    *LEADER_TEAM_NAME
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
 }
 
 pub fn configure_task_output_dir(path: Option<PathBuf>) -> Result<()> {
@@ -1114,38 +1158,11 @@ fn delete_shared_task(task_list_id: &str, task_id: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use once_cell::sync::Lazy;
     use serde_json::json;
-    use std::sync::{Mutex, MutexGuard};
     use tempfile::TempDir;
 
-    static TEST_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-
-    fn reset_test_state() {
-        TASK_STORE
-            .lock()
-            .expect("task store lock should work in tests")
-            .clear();
-        *TASK_OUTPUT_DIR
-            .lock()
-            .expect("task output dir lock should work in tests") = None;
-        *TASK_LIST_ID
-            .lock()
-            .expect("task list id lock should work in tests") = None;
-        *TASK_LIST_BASE_DIR
-            .lock()
-            .expect("task list base dir lock should work in tests") = None;
-        *LEADER_TEAM_NAME
-            .lock()
-            .expect("leader team name lock should work in tests") = None;
-    }
-
-    fn test_guard() -> MutexGuard<'static, ()> {
-        let guard = TEST_GUARD
-            .lock()
-            .expect("test guard lock should work in tests");
-        reset_test_state();
-        guard
+    fn test_guard() -> super::TaskTestGuard {
+        super::test_guard_for_tests()
     }
 
     fn configure_shared_task_list(task_list_id: &str) -> TempDir {

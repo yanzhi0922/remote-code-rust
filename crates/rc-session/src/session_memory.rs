@@ -197,6 +197,11 @@ pub fn session_memory_path(config: &RuntimeConfig) -> PathBuf {
 pub fn ensure_session_memory_file(config: &RuntimeConfig) -> Result<PathBuf> {
     let memory_dir = session_memory_dir(config);
     fs::create_dir_all(&memory_dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&memory_dir, fs::Permissions::from_mode(0o700))?;
+    }
     let memory_path = memory_dir.join(SESSION_MEMORY_FILENAME);
 
     if !memory_path.exists() {
@@ -206,6 +211,11 @@ pub fn ensure_session_memory_file(config: &RuntimeConfig) -> Result<PathBuf> {
             .open(&memory_path)
         {
             Ok(mut file) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+                }
                 file.write_all(load_session_memory_template(config).as_bytes())?;
                 file.flush()?;
             }

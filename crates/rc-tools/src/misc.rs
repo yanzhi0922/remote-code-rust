@@ -4,12 +4,14 @@
 
 use std::process::Stdio;
 
+use std::time::UNIX_EPOCH;
+
 use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
-use super::ToolExecutionContext;
+use super::{FileState, ToolExecutionContext};
 
 pub(crate) fn ask_user(input: &Value, _context: &ToolExecutionContext) -> Result<String> {
     let questions = normalize_ask_user_questions(input)?;
@@ -216,8 +218,29 @@ pub(crate) fn notebook_edit(input: &Value, context: &ToolExecutionContext) -> Re
         Some(path),
         rc_permissions::FilesystemOperation::Write,
     )?;
+    if target.extension().and_then(|ext| ext.to_str()) != Some("ipynb") {
+        return Err(anyhow!(
+            "File must be a Jupyter notebook (.ipynb file). For editing other file types, use the FileEdit tool."
+        ));
+    }
     let content = std::fs::read_to_string(&target)
         .with_context(|| format!("failed to read notebook {}", target.display()))?;
+    let Some(read_state) = context.read_file_state.get(&target) else {
+        return Err(anyhow!(
+            "File has not been read yet. Read it first before writing to it."
+        ));
+    };
+    if read_state.is_partial_view {
+        return Err(anyhow!(
+            "File has not been read yet. Read it first before writing to it."
+        ));
+    }
+    let current_mtime = notebook_mtime_ms(&target)?;
+    if current_mtime > read_state.timestamp {
+        return Err(anyhow!(
+            "File has been modified since read, either by the user or by a linter. Read it again before attempting to write it."
+        ));
+    }
     let mut notebook: Value = serde_json::from_str(&content)
         .with_context(|| format!("failed to parse notebook {}", target.display()))?;
 
@@ -276,13 +299,31 @@ pub(crate) fn notebook_edit(input: &Value, context: &ToolExecutionContext) -> Re
         _ => unreachable!("validated edit_mode"),
     }
 
+    if notebook_mtime_ms(&target)? > read_state.timestamp {
+        return Err(anyhow!(
+            "File has been unexpectedly modified. Read it again before attempting to write it."
+        ));
+    }
     let output = serde_json::to_string_pretty(&notebook)?;
     std::fs::write(&target, output)?;
+    let updated = std::fs::read_to_string(&target).unwrap_or_default();
+    context.read_file_state.set(
+        &target,
+        FileState::post_write(updated, notebook_mtime_ms(&target)?),
+    );
 
     Ok(format!(
         "{edit_mode} cell {cell_index} in {}",
         target.display()
     ))
+}
+
+fn notebook_mtime_ms(path: &std::path::Path) -> Result<u128> {
+    Ok(std::fs::metadata(path)?
+        .modified()?
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis())
 }
 
 fn notebook_cell_index(cells: &[Value], input: &Value, edit_mode: &str) -> Result<usize> {

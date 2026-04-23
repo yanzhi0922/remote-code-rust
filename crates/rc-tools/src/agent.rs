@@ -1280,6 +1280,7 @@ mod tests {
             sub_agent,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         }
     }
 
