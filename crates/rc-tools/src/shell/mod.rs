@@ -1,7 +1,11 @@
 pub mod backgrounding;
+pub mod destructive_warning;
 pub mod git_safety;
 pub mod output;
 pub mod path_validation;
+pub mod powershell_git_safety;
+pub mod powershell_security;
+pub mod powershell_semantics;
 pub mod readonly;
 pub mod semantics;
 
