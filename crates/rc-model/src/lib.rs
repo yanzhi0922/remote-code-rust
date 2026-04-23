@@ -15,13 +15,29 @@
 //!   access control.
 //! - **1M context access** ([`check_1m::has_1m_access`]) checks based on
 //!   subscription tier.
+//! - **Agent model** ([`agent::get_agent_model`]) for sub-agent model selection.
+//! - **Bedrock** ([`bedrock`]) utilities for AWS Bedrock model IDs.
+//! - **Configs** ([`configs`]) per-provider model ID definitions.
+//! - **Context window** ([`context_window`]) upgrade suggestions.
+//! - **Deprecation** ([`deprecation`]) warnings for retired models.
+//! - **Options** ([`options`]) for the model picker UI.
+//! - **Strings** ([`strings`]) provider-specific model ID resolution.
+//! - **Support overrides** ([`support_overrides`]) for 3P capability overrides.
 
+pub mod agent;
 pub mod aliases;
 pub mod allowlist;
+pub mod bedrock;
 pub mod capabilities;
 pub mod check_1m;
+pub mod configs;
+pub mod context_window;
+pub mod deprecation;
 pub mod model;
+pub mod options;
 pub mod providers;
+pub mod strings;
+pub mod support_overrides;
 pub mod validate;
 
 // Re-export the most commonly used types at the crate root.
