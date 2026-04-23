@@ -8,6 +8,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
+use rc_agents::fork::{
+    ForkContentBlock, ForkMessage, fork_agent_definition, is_fork_subagent_enabled,
+    is_in_fork_child,
+};
 use rc_agents::loader::load_all_agents_with_context;
 use rc_agents::{AgentDefinition, AgentIsolation, AgentSource, compose_agent_system_prompt};
 use rc_context::RuntimeIdentityContext;
@@ -28,8 +32,8 @@ use crate::tasks::{
 };
 use crate::team_runtime::{LiveTeammateRegistration, finish_live_teammate, start_live_teammate};
 use crate::{
-    ToolSpec, current_runtime_agent_prompt_context, current_runtime_mcp_cli_state,
-    runtime_provider_tool_specs,
+    RuntimeAgentPromptContext, ToolSpec, current_runtime_agent_prompt_context,
+    current_runtime_fork_snapshot, current_runtime_mcp_cli_state, runtime_provider_tool_specs,
 };
 
 const ALL_AGENT_DISALLOWED_TOOLS: &[&str] = &[
@@ -194,8 +198,11 @@ async fn agent_tool_inner(input: &Value, context: &ToolExecutionContext) -> Resu
         }
     };
 
+    let fork_snapshot = implicit_fork_snapshot(&parsed);
     let resolved_definition = if mode == "batch" || !sub_agent.supports_agent_execution() {
         None
+    } else if fork_snapshot.is_some() {
+        Some(fork_agent_definition())
     } else {
         Some(resolve_agent_definition(
             parsed.subagent_type.as_deref(),
@@ -206,7 +213,8 @@ async fn agent_tool_inner(input: &Value, context: &ToolExecutionContext) -> Resu
     match mode {
         "batch" => run_batch_delegation(input, context, sub_agent, &parsed.tools).await,
         _ if sub_agent.supports_agent_execution()
-            && (parsed.run_in_background == Some(true)
+            && ((fork_snapshot.is_some() && parsed.subagent_type.is_none())
+                || parsed.run_in_background == Some(true)
                 || resolved_definition
                     .as_ref()
                     .is_some_and(|definition| definition.background)) =>
@@ -216,6 +224,7 @@ async fn agent_tool_inner(input: &Value, context: &ToolExecutionContext) -> Resu
                 context,
                 sub_agent,
                 resolved_definition.expect("resolved definition"),
+                fork_snapshot,
             )
             .await
         }
@@ -225,6 +234,7 @@ async fn agent_tool_inner(input: &Value, context: &ToolExecutionContext) -> Resu
                 context,
                 sub_agent,
                 resolved_definition.expect("resolved definition"),
+                fork_snapshot,
             )
             .await
         }
@@ -232,12 +242,76 @@ async fn agent_tool_inner(input: &Value, context: &ToolExecutionContext) -> Resu
     }
 }
 
+fn implicit_fork_snapshot(input: &AgentToolInput) -> Option<rc_core::SubAgentForkSnapshot> {
+    if input
+        .subagent_type
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return None;
+    }
+    let runtime_context =
+        current_runtime_agent_prompt_context().unwrap_or_else(RuntimeAgentPromptContext::default);
+    if !is_fork_subagent_enabled(
+        runtime_context.is_coordinator,
+        runtime_context.is_non_interactive,
+    ) {
+        return None;
+    }
+    current_runtime_fork_snapshot()
+}
+
+fn snapshot_is_fork_child(snapshot: &rc_core::SubAgentForkSnapshot) -> bool {
+    let messages = snapshot
+        .fork_context_messages
+        .iter()
+        .filter_map(|message| match message {
+            rc_core::Message::User(user) => Some(ForkMessage {
+                role: "user".to_owned(),
+                content: user
+                    .provider_content_blocks()
+                    .into_iter()
+                    .filter_map(|block| {
+                        let block_type = block.get("type").and_then(Value::as_str)?;
+                        match block_type {
+                            "text" => Some(ForkContentBlock::Text {
+                                text: block.get("text").and_then(Value::as_str)?.to_owned(),
+                            }),
+                            "tool_result" => Some(ForkContentBlock::ToolResult {
+                                tool_use_id: block
+                                    .get("tool_use_id")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_owned(),
+                                content: block
+                                    .get("content")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_owned(),
+                            }),
+                            _ => None,
+                        }
+                    })
+                    .collect(),
+            }),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    is_in_fork_child(&messages)
+}
+
 async fn run_resolved_agent_execution(
     input: &AgentToolInput,
     context: &ToolExecutionContext,
     sub_agent: Arc<dyn SubAgentCompletion>,
     definition: AgentDefinition,
+    fork_snapshot: Option<rc_core::SubAgentForkSnapshot>,
 ) -> Result<String> {
+    if fork_snapshot.as_ref().is_some_and(snapshot_is_fork_child) {
+        return Err(anyhow!(
+            "Fork is not available inside a forked worker. Complete your task directly using your tools."
+        ));
+    }
     ensure_agent_required_mcp_servers(&definition).await?;
     let working_dir = resolve_agent_working_dir(input, context, &definition)?;
     let permission_mode = resolve_agent_permission_mode(input.mode.as_deref(), &definition)?;
@@ -291,13 +365,18 @@ async fn run_resolved_agent_execution(
             critical_system_reminder: definition.critical_system_reminder_experimental.clone(),
             omit_claude_md: definition.omit_claude_md,
             omit_git_status: matches!(definition.agent_type.as_str(), "Explore" | "Plan"),
-            model: input.model.clone().or_else(|| definition.model.clone()),
+            model: if fork_snapshot.is_some() {
+                definition.model.clone()
+            } else {
+                input.model.clone().or_else(|| definition.model.clone())
+            },
             max_turns: definition.max_turns,
             allowed_tools,
             permission_mode,
             working_dir,
             additional_working_directories: inherited_additional_working_directories(),
             skip_transcript: false,
+            fork_snapshot,
         })
         .await;
 
@@ -365,10 +444,16 @@ async fn run_background_agent_execution(
     context: &ToolExecutionContext,
     sub_agent: Arc<dyn SubAgentCompletion>,
     definition: AgentDefinition,
+    fork_snapshot: Option<rc_core::SubAgentForkSnapshot>,
 ) -> Result<String> {
     if requested_teammate(input).is_some() {
         return Err(anyhow!(
             "run_in_background is not supported together with name/team_name in this runtime"
+        ));
+    }
+    if fork_snapshot.as_ref().is_some_and(snapshot_is_fork_child) {
+        return Err(anyhow!(
+            "Fork is not available inside a forked worker. Complete your task directly using your tools."
         ));
     }
     ensure_agent_required_mcp_servers(&definition).await?;
@@ -388,11 +473,16 @@ async fn run_background_agent_execution(
     let task_id_for_spawn = task_id.clone();
     let prompt = input.prompt.clone();
     let description = input.description.clone();
-    let model = input.model.clone().or_else(|| definition.model.clone());
+    let model = if fork_snapshot.is_some() {
+        definition.model.clone()
+    } else {
+        input.model.clone().or_else(|| definition.model.clone())
+    };
     let agent_type = definition.agent_type.clone();
     let additional_working_directories = inherited_additional_working_directories();
     let critical_system_reminder = definition.critical_system_reminder_experimental.clone();
     let max_turns = definition.max_turns;
+    let system_prompt = compose_agent_system_prompt(&definition, None, &working_dir);
     tokio::spawn(async move {
         let result = sub_agent
             .execute_agent(SubAgentExecutionRequest {
@@ -402,7 +492,7 @@ async fn run_background_agent_execution(
                 task: prompt,
                 description: Some(description),
                 context: Vec::new(),
-                system_prompt: Some(compose_agent_system_prompt(&definition, None, &working_dir)),
+                system_prompt: Some(system_prompt),
                 critical_system_reminder,
                 omit_claude_md: definition.omit_claude_md,
                 omit_git_status: matches!(definition.agent_type.as_str(), "Explore" | "Plan"),
@@ -413,6 +503,7 @@ async fn run_background_agent_execution(
                 working_dir,
                 additional_working_directories,
                 skip_transcript: false,
+                fork_snapshot,
             })
             .await;
 
@@ -512,6 +603,14 @@ fn resolve_agent_permission_mode(
     definition: &AgentDefinition,
 ) -> Result<Option<PermissionMode>> {
     match mode.unwrap_or("single") {
+        "single" | "batch"
+            if definition
+                .permission_mode
+                .as_deref()
+                .is_some_and(|raw_mode| raw_mode.trim().eq_ignore_ascii_case("bubble")) =>
+        {
+            Ok(None)
+        }
         "single" | "batch" => Ok(Some(agent_definition_permission_mode(definition)?)),
         "default" => Ok(Some(PermissionMode::Default)),
         "plan" => Ok(Some(PermissionMode::Plan)),
@@ -1418,7 +1517,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolved_agent_execution_defaults_to_general_purpose_agent() {
+    async fn resolved_agent_execution_defaults_to_general_purpose_when_fork_disabled() {
         let requests = Arc::new(StdMutex::new(Vec::new()));
         let runtime: Arc<dyn SubAgentCompletion> = Arc::new(RecordingAgentRuntime {
             requests: Arc::clone(&requests),
@@ -1430,19 +1529,30 @@ mod tests {
             },
         });
         let context = test_context(Some(runtime));
+        let runtime_context = crate::RuntimeAgentPromptContext {
+            is_non_interactive: true,
+            ..crate::RuntimeAgentPromptContext::default()
+        };
 
-        let result = agent_tool_inner(
-            &json!({
-                "prompt": "Investigate the code path and make the required change.",
-                "description": "Implement fix"
-            }),
-            &context,
+        let result = crate::with_runtime_agent_prompt_context_provider(
+            Arc::new(move || runtime_context.clone()),
+            async {
+                agent_tool_inner(
+                    &json!({
+                        "prompt": "Investigate the code path and make the required change.",
+                        "description": "Implement fix"
+                    }),
+                    &context,
+                )
+                .await
+            },
         )
         .await
         .expect("agent tool should succeed");
 
         assert_eq!(result, "implemented");
         let requests = requests.lock().expect("requests lock");
+        assert_eq!(requests.len(), 1);
         let request = &requests[0];
         assert_eq!(request.agent_type, "general-purpose");
         assert_eq!(request.max_turns, 200);
@@ -1457,6 +1567,182 @@ mod tests {
         );
         assert!(!request.allowed_tools.contains(&"agent".to_owned()));
         assert!(request.allowed_tools.contains(&"write_file".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn resolved_agent_execution_omits_subagent_type_to_fork_when_enabled() {
+        let requests = Arc::new(StdMutex::new(Vec::new()));
+        let runtime: Arc<dyn SubAgentCompletion> = Arc::new(RecordingAgentRuntime {
+            requests: Arc::clone(&requests),
+            result: rc_core::SubAgentExecutionResult {
+                output: "implemented".to_owned(),
+                success: true,
+                turns: 2,
+                usage: UsageSummary::default(),
+            },
+        });
+        let context = test_context(Some(runtime));
+        let runtime_context = crate::RuntimeAgentPromptContext::default();
+        let fork_snapshot = rc_core::SubAgentForkSnapshot {
+            fork_context_messages: vec![
+                rc_core::Message::from(rc_core::ConversationEntry::system("Parent system prompt.")),
+                rc_core::Message::from(rc_core::ConversationEntry::user(
+                    "Investigate the code path and make the required change.",
+                )),
+            ],
+            system_prompt: Some("Parent system prompt.".to_owned()),
+            user_context: std::collections::BTreeMap::new(),
+            system_context: std::collections::BTreeMap::new(),
+        };
+
+        let result = crate::with_runtime_agent_prompt_context_provider(
+            Arc::new(move || runtime_context.clone()),
+            async {
+                crate::with_runtime_fork_snapshot_provider(
+                    Arc::new(move || fork_snapshot.clone()),
+                    async {
+                        agent_tool_inner(
+                            &json!({
+                                "prompt": "Implement the change directly.",
+                                "description": "Implement fix"
+                            }),
+                            &context,
+                        )
+                        .await
+                    },
+                )
+                .await
+            },
+        )
+        .await
+        .expect("agent tool should succeed");
+
+        let payload: Value = serde_json::from_str(&result).expect("background payload");
+        assert_eq!(payload["status"], "async_launched");
+        for _ in 0..20 {
+            if requests.lock().expect("requests lock").len() == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let requests = requests.lock().expect("requests lock");
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        assert_eq!(request.agent_type, "fork");
+        assert!(request.fork_snapshot.is_some());
+        assert_eq!(request.model.as_deref(), Some("inherit"));
+        assert_eq!(request.permission_mode, None);
+    }
+
+    #[tokio::test]
+    async fn implicit_fork_ignores_model_override_and_inherits_parent_model() {
+        let requests = Arc::new(StdMutex::new(Vec::new()));
+        let runtime: Arc<dyn SubAgentCompletion> = Arc::new(RecordingAgentRuntime {
+            requests: Arc::clone(&requests),
+            result: rc_core::SubAgentExecutionResult {
+                output: "forked".to_owned(),
+                success: true,
+                turns: 1,
+                usage: UsageSummary::default(),
+            },
+        });
+        let context = test_context(Some(runtime));
+        let fork_snapshot = rc_core::SubAgentForkSnapshot {
+            fork_context_messages: vec![rc_core::Message::from(rc_core::ConversationEntry::user(
+                "Parent prompt.",
+            ))],
+            system_prompt: Some("Parent system prompt.".to_owned()),
+            user_context: std::collections::BTreeMap::new(),
+            system_context: std::collections::BTreeMap::new(),
+        };
+
+        let result = crate::with_runtime_fork_snapshot_provider(
+            Arc::new(move || fork_snapshot.clone()),
+            async {
+                agent_tool_inner(
+                    &json!({
+                        "prompt": "Implement the change directly.",
+                        "description": "Implement fix",
+                        "model": "sonnet"
+                    }),
+                    &context,
+                )
+                .await
+            },
+        )
+        .await
+        .expect("implicit fork should ignore model override");
+
+        let payload: Value = serde_json::from_str(&result).expect("background payload");
+        assert_eq!(payload["status"], "async_launched");
+        for _ in 0..20 {
+            if requests.lock().expect("requests lock").len() == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let requests = requests.lock().expect("requests lock");
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        assert_eq!(request.agent_type, "fork");
+        assert_eq!(request.model.as_deref(), Some("inherit"));
+    }
+
+    #[tokio::test]
+    async fn implicit_fork_rejects_recursive_forking_inside_fork_child() {
+        let requests = Arc::new(StdMutex::new(Vec::new()));
+        let runtime: Arc<dyn SubAgentCompletion> = Arc::new(RecordingAgentRuntime {
+            requests,
+            result: rc_core::SubAgentExecutionResult {
+                output: String::new(),
+                success: true,
+                turns: 1,
+                usage: UsageSummary::default(),
+            },
+        });
+        let context = test_context(Some(runtime));
+        let fork_snapshot = rc_core::SubAgentForkSnapshot {
+            fork_context_messages: vec![rc_core::Message::from(rc_core::ConversationEntry {
+                uuid: uuid::Uuid::new_v4(),
+                role: rc_core::ConversationRole::User,
+                text: String::new(),
+                history_text: None,
+                content_blocks: vec![json!({
+                    "type": "text",
+                    "text": "<fork-boilerplate>already a fork</fork-boilerplate>\n\nYour directive: stay focused"
+                })],
+                tool_calls: Vec::new(),
+                attachments: Vec::new(),
+                tool_call_id: None,
+                name: None,
+                is_error: false,
+            })],
+            system_prompt: Some("Parent system prompt.".to_owned()),
+            user_context: std::collections::BTreeMap::new(),
+            system_context: std::collections::BTreeMap::new(),
+        };
+
+        let error = crate::with_runtime_fork_snapshot_provider(
+            Arc::new(move || fork_snapshot.clone()),
+            async {
+                agent_tool_inner(
+                    &json!({
+                        "prompt": "Try to fork again.",
+                        "description": "Recursive fork"
+                    }),
+                    &context,
+                )
+                .await
+            },
+        )
+        .await
+        .expect_err("recursive implicit fork should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("Fork is not available inside a forked worker")
+        );
     }
 
     #[tokio::test]

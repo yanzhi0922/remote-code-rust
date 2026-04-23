@@ -322,9 +322,9 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                 "properties": {
                     "description": {"type": "string", "description": "A short (3-5 word) description of the task."},
                     "prompt": {"type": "string", "description": "The task for the agent to perform."},
-                    "subagent_type": {"type": "string", "description": "The type of specialized agent to use for this task."},
-                    "model": {"type": "string", "description": "Optional model override for this agent. Omit it or use inherit to reuse the parent model."},
-                    "run_in_background": {"type": "boolean", "description": "Set to true to run this agent in the background."},
+                    "subagent_type": {"type": "string", "description": "The type of specialized agent to use for this task. If omitted and fork mode is enabled, this forks the current agent and inherits conversation context."},
+                    "model": {"type": "string", "description": "Optional model override for this agent. Omit it or use inherit to reuse the parent model. Implicit forks inherit the parent model."},
+                    "run_in_background": {"type": "boolean", "description": "Set to true to run this agent in the background. Fork mode may force background execution automatically."},
                     "name": {"type": "string", "description": "Name for the spawned agent. Makes it addressable via SendMessage({to: name}) while running."},
                     "team_name": {"type": "string", "description": "Team name for spawning. Uses the current team context if omitted."},
                     "mode": {"type": "string", "enum": ["default", "plan"], "description": "Permission mode for the spawned teammate."},
