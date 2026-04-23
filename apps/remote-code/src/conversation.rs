@@ -845,6 +845,7 @@ async fn run_prompt_legacy(
         .as_ref()
         .map(|event_sink| build_prompt_progress_callback(config, event_sink));
 
+    let read_file_state = rc_tools::FileStateCache::new();
     let mut tool_context = ToolExecutionContext {
         cwd: config.cwd.clone(),
         original_cwd: config.original_cwd.clone(),
@@ -853,12 +854,13 @@ async fn run_prompt_legacy(
         sub_agent: Some(build_remote_code_sub_agent_runtime(
             config,
             backend.sub_agent_completion(),
+            read_file_state.clone(),
         )),
         progress_cb,
         task_stack: std::sync::Arc::new(std::sync::Mutex::new(
             rc_core::task_stack::TaskStack::default(),
         )),
-        read_file_state: rc_tools::FileStateCache::new(),
+        read_file_state,
     };
     let mut usage = UsagePayload::default();
     let mut num_turns = 0u32;
@@ -1071,10 +1073,29 @@ async fn run_prompt_legacy(
                     follow_up_user_blocks: Vec::new(),
                 }
             } else {
+                let fork_snapshot = rc_core::SubAgentForkSnapshot {
+                    fork_context_messages: conversation
+                        .iter()
+                        .cloned()
+                        .map(rc_core::Message::from)
+                        .collect(),
+                    system_prompt: conversation
+                        .iter()
+                        .find(|entry| entry.role == ConversationRole::System)
+                        .map(|entry| entry.text.clone())
+                        .filter(|text| !text.trim().is_empty()),
+                    user_context: std::collections::BTreeMap::new(),
+                    system_context: std::collections::BTreeMap::new(),
+                };
+                let fork_snapshot_provider: Arc<rc_tools::RuntimeForkSnapshotProvider> =
+                    Arc::new(move || fork_snapshot.clone());
                 // Capture tool execution errors as error tool results instead of
                 // propagating, to keep conversation state consistent for the next
                 // provider call.  This matches the TUI error-recovery pattern.
-                match execute_tool_call(&effective_tool_call, &tool_context, broker.as_ref()).await
+                match rc_tools::with_runtime_fork_snapshot_provider(fork_snapshot_provider, async {
+                    execute_tool_call(&effective_tool_call, &tool_context, broker.as_ref()).await
+                })
+                .await
                 {
                     Ok(result) => result,
                     Err(error) => {

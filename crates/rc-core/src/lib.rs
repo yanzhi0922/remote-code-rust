@@ -601,6 +601,23 @@ pub struct ToolResult {
 
 /// Fully-resolved execution request for a concrete sub-agent runtime.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubAgentForkSnapshot {
+    /// Parent context messages for cache-safe fork execution.
+    #[serde(default)]
+    pub fork_context_messages: Vec<Message>,
+    /// Parent system prompt, if explicitly captured.
+    #[serde(default)]
+    pub system_prompt: Option<String>,
+    /// Parent user context.
+    #[serde(default)]
+    pub user_context: std::collections::BTreeMap<String, String>,
+    /// Parent system context.
+    #[serde(default)]
+    pub system_context: std::collections::BTreeMap<String, String>,
+}
+
+/// Fully-resolved execution request for a concrete sub-agent runtime.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubAgentExecutionRequest {
     /// Agent type identifier.
     pub agent_type: String,
@@ -649,6 +666,9 @@ pub struct SubAgentExecutionRequest {
     /// Run the child without writing transcript/session artifacts to the parent profile.
     #[serde(default)]
     pub skip_transcript: bool,
+    /// Cache-safe fork snapshot for implicit fork runs.
+    #[serde(default)]
+    pub fork_snapshot: Option<SubAgentForkSnapshot>,
 }
 
 /// Result returned by a concrete sub-agent runtime.

@@ -100,10 +100,15 @@ tokio::task_local! {
     static TOOL_RUNTIME_AGENT_PROMPT_CONTEXT_PROVIDER: Arc<RuntimeAgentPromptContextProvider>;
 }
 
+tokio::task_local! {
+    static TOOL_RUNTIME_FORK_SNAPSHOT_PROVIDER: Arc<RuntimeForkSnapshotProvider>;
+}
+
 pub type RuntimeMcpStateProvider = dyn Fn() -> rc_mcp::McpCliState + Send + Sync;
 pub type RuntimeMcpObservationProvider =
     dyn Fn() -> mcp_runtime::RuntimeMcpObservation + Send + Sync;
 pub type RuntimeAgentPromptContextProvider = dyn Fn() -> RuntimeAgentPromptContext + Send + Sync;
+pub type RuntimeForkSnapshotProvider = dyn Fn() -> rc_core::SubAgentForkSnapshot + Send + Sync;
 
 /// Task-local context used to build the dynamic Agent tool prompt.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -261,6 +266,18 @@ where
         .await
 }
 
+pub async fn with_runtime_fork_snapshot_provider<F, T>(
+    provider: Arc<RuntimeForkSnapshotProvider>,
+    future: F,
+) -> T
+where
+    F: Future<Output = T>,
+{
+    TOOL_RUNTIME_FORK_SNAPSHOT_PROVIDER
+        .scope(provider, future)
+        .await
+}
+
 #[must_use]
 pub fn current_runtime_mcp_cli_state() -> Option<rc_mcp::McpCliState> {
     TOOL_RUNTIME_MCP_STATE_PROVIDER
@@ -278,6 +295,13 @@ pub fn current_runtime_mcp_observation() -> Option<mcp_runtime::RuntimeMcpObserv
 #[must_use]
 pub fn current_runtime_agent_prompt_context() -> Option<RuntimeAgentPromptContext> {
     TOOL_RUNTIME_AGENT_PROMPT_CONTEXT_PROVIDER
+        .try_with(|provider| provider())
+        .ok()
+}
+
+#[must_use]
+pub fn current_runtime_fork_snapshot() -> Option<rc_core::SubAgentForkSnapshot> {
+    TOOL_RUNTIME_FORK_SNAPSHOT_PROVIDER
         .try_with(|provider| provider())
         .ok()
 }

@@ -20,10 +20,10 @@ pub const MAX_AGENT_TURNS: u32 = 200;
 pub const FORK_PLACEHOLDER_RESULT: &str = "Fork started — processing in background";
 
 /// XML tag used to mark fork boilerplate in messages.
-pub const FORK_BOILERPLATE_TAG: &str = "fork_boilerplate";
+pub const FORK_BOILERPLATE_TAG: &str = "fork-boilerplate";
 
 /// Prefix for fork directive messages.
-pub const FORK_DIRECTIVE_PREFIX: &str = "Directive: ";
+pub const FORK_DIRECTIVE_PREFIX: &str = "Your directive: ";
 
 /// Built-in agent types that run once and return a report.
 /// The parent never sends messages back to continue them.
@@ -46,6 +46,12 @@ mod tests {
     #[test]
     fn fork_subagent_type_constant() {
         assert_eq!(FORK_SUBAGENT_TYPE, "fork");
+    }
+
+    #[test]
+    fn fork_boilerplate_tag_matches_research() {
+        assert_eq!(FORK_BOILERPLATE_TAG, "fork-boilerplate");
+        assert_eq!(FORK_DIRECTIVE_PREFIX, "Your directive: ");
     }
 
     #[test]

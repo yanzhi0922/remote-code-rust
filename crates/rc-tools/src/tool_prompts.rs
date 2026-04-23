@@ -210,13 +210,13 @@ Spawn a sub-agent to complete a task. The sub-agent runs in its own context and 
 Usage:
 - Write a detailed `prompt` describing what the sub-agent should accomplish and why.
 - Use `subagent_type` to choose a specialized built-in agent. Current built-ins are `general-purpose`, `Explore`, `Plan`, and `verification`.
-- If you omit `subagent_type`, the default `general-purpose` agent is used.
+- If runtime fork mode is enabled, omitting `subagent_type` forks yourself and inherits your conversation context. Otherwise the default `general-purpose` agent is used.
 - Optionally provide a short `description` to summarize the assignment.
 - Optionally provide `name` together with `team_name` to register a live teammate identity for this run.
 - Optionally set `mode` to control the child runtime. Use `default` for normal execution or `plan` when the teammate must enter plan mode before implementation.
-- Optionally override the sub-agent model with `model`. Omit it or use `inherit` to reuse the parent model.
+- Optionally override the sub-agent model with `model`. Omit it or use `inherit` to reuse the parent model. Do not set `model` on an implicit fork.
 - Optionally restrict available tools via the `tools` array.
-- The sub-agent starts with zero context — brief it like a smart colleague who just walked in.
+- Fresh agents start with zero context — brief them like a smart colleague who just walked in. Forks inherit your context and should receive a directive, not a full restatement.
 - Explain what you're trying to accomplish, what you've already learned, and what the agent should do.
 - If you need a short response, say so ('report in under 200 words').
 
@@ -231,7 +231,7 @@ Notes:
 - Never delegate understanding. Don't write 'based on your findings, fix the bug'.
 - Include file paths, line numbers, and what specifically to change.
 - To continue a previously spawned agent or teammate, use `send_message` with the agent ID or name.
-- The sub-agent cannot see this conversation — provide all necessary context in the prompt.
+- Fresh agents cannot see this conversation — provide all necessary context in the prompt. Forks can.
 - Teammates cannot spawn other teammates. Omit `name`, `team_name`, and `mode` when you only need a normal sub-agent.";
 
 // ── System tools (P1) ────────────────────────────────────────────────────────
@@ -1826,13 +1826,48 @@ fn runtime_mcp_servers_with_tools() -> Option<Vec<String>> {
 
 #[allow(dead_code)]
 fn legacy_agent_tool_prompt() -> String {
-    "Launch a new agent to handle complex, multi-step tasks autonomously.\n\n\
+    let runtime_context = crate::current_runtime_agent_prompt_context()
+        .unwrap_or_else(default_runtime_agent_prompt_context);
+    let fork_enabled = is_fork_subagent_enabled(
+        runtime_context.is_coordinator,
+        runtime_context.is_non_interactive,
+    );
+    format!(
+        "Launch a new agent to handle complex, multi-step tasks autonomously.\n\n\
     The Agent tool launches specialized agents (subprocesses) that autonomously handle complex \
     tasks. Each agent type has specific capabilities and tools available to it.\n\n\
     Available agent types are provided separately for the current session.\n\n\
-    When using the Agent tool, specify a subagent_type parameter to select which agent type to \
-    use. If omitted, the general-purpose agent is used.\n\n\
-    When NOT to use the Agent tool:\n\
+    {}\n\n\
+    {}\
+    Usage notes:\n\
+    - Always include a short description (3-5 words) summarizing what the agent will do.\n\
+    - When the agent is done, it will return a single message back to you. The result returned by \
+    the agent is not visible to the user. To show the user the result, you should send a text \
+    message back to the user with a concise summary of the result.\n\
+    {}\
+    - To continue a previously spawned agent, use SendMessage with the agent's ID or name as the \
+    `to` field. {}\
+    - The agent's outputs should generally be trusted.\n\
+    - Clearly tell the agent whether you expect it to write code or just to do research{}.\n\
+    - If the user specifies that they want you to run agents in parallel, you MUST send a single \
+    message with multiple Agent tool use content blocks.\n\
+    - You can optionally set `isolation: \"worktree\"` to request an isolated git worktree for the \
+    agent.\n\
+    - You can optionally set `cwd` to run the agent in a specific working directory.\n\n\
+    {}\n\
+    Terse command-style prompts produce shallow, generic work.\n\n\
+    Never delegate understanding. Don't write \"based on your findings, fix the bug\" or \
+    \"based on the research, implement it.\" Write prompts that prove you understood: include file \
+    paths, line numbers, and what specifically to change.",
+        if fork_enabled {
+            "When using the Agent tool, specify a subagent_type to use a specialized agent, or omit it to fork yourself — a fork inherits your full conversation context."
+        } else {
+            "When using the Agent tool, specify a subagent_type parameter to select which agent type to use. If omitted, the general-purpose agent is used."
+        },
+        if fork_enabled {
+            String::new()
+        } else {
+            "When NOT to use the Agent tool:\n\
     - If you want to read a specific file path, use the ReadFile tool or the Glob tool instead of \
     the Agent tool, to find the match more quickly.\n\
     - If you are searching for a specific class definition like \"class Foo\", use the Glob tool \
@@ -1840,40 +1875,54 @@ fn legacy_agent_tool_prompt() -> String {
     - If you are searching for code within a specific file or set of 2-3 files, use the ReadFile \
     tool instead of the Agent tool, to find the match more quickly.\n\
     - Other tasks that are not related to the agent descriptions above.\n\n\
-    Usage notes:\n\
-    - Always include a short description (3-5 words) summarizing what the agent will do.\n\
-    - When the agent is done, it will return a single message back to you. The result returned by \
-    the agent is not visible to the user. To show the user the result, you should send a text \
-    message back to the user with a concise summary of the result.\n\
-    - You can optionally run agents in the background using the run_in_background parameter. When \
-    an agent runs in the background, you will be automatically notified when it completes. Do NOT \
-    sleep, poll, or proactively check on its progress.\n\
-    - Foreground vs background: use foreground when you need the agent's results before you can \
-    proceed. Use background when you have genuinely independent work to do in parallel.\n\
-    - To continue a previously spawned agent, use SendMessage with the agent's ID or name as the \
-    `to` field. Each Agent invocation starts fresh, so provide a complete task description.\n\
-    - The agent's outputs should generally be trusted.\n\
-    - Clearly tell the agent whether you expect it to write code or just to do research.\n\
-    - If the user specifies that they want you to run agents in parallel, you MUST send a single \
-    message with multiple Agent tool use content blocks.\n\
-    - You can optionally set `isolation: \"worktree\"` to request an isolated git worktree for the \
-    agent.\n\
-    - You can optionally set `cwd` to run the agent in a specific working directory.\n\n\
+    "
+            .to_owned()
+        },
+        if fork_enabled {
+            String::new()
+        } else {
+            "- You can optionally run agents in the background using the run_in_background parameter. When an agent runs in the background, you will be automatically notified when it completes. Do NOT sleep, poll, or proactively check on its progress.\n\
+    - Foreground vs background: use foreground when you need the agent's results before you can proceed. Use background when you have genuinely independent work to do in parallel.\n\
+    "
+            .to_owned()
+        },
+        if fork_enabled {
+            "The agent resumes with its full context preserved. Each fresh Agent invocation with a subagent_type starts without context — provide a complete task description.\n"
+        } else {
+            "Each Agent invocation starts fresh, so provide a complete task description.\n"
+        },
+        if fork_enabled {
+            ""
+        } else {
+            ", since it is not aware of the user's intent"
+        },
+        if fork_enabled {
+            "## When to fork\n\n\
+    Fork yourself (omit `subagent_type`) when the intermediate tool output isn't worth keeping in your context. The criterion is qualitative — \"will I need this output again\" — not task size.\n\
+    - Research: fork open-ended questions. If research can be broken into independent questions, launch parallel forks in one message. A fork beats a fresh subagent for this — it inherits context and shares your cache.\n\
+    - Implementation: prefer to fork implementation work that requires more than a couple of edits. Do research before jumping to implementation.\n\n\
+    Forks are cheap because they share your prompt cache. Don't set `model` on a fork — a different model can't reuse the parent's cache. Pass a short `name` so the user can see the fork in the teams panel and steer it mid-run.\n\n\
     ## Writing the prompt\n\n\
-    When spawning a fresh agent, it starts with zero context. Brief the agent like a smart \
-    colleague who just walked into the room — it hasn't seen this conversation, doesn't know what \
-    you've tried, and doesn't understand why this task matters.\n\
+    When spawning a fresh agent (with a `subagent_type`), it starts with zero context. Brief the agent like a smart colleague who just walked into the room — it hasn't seen this conversation, doesn't know what you've tried, and doesn't understand why this task matters.\n\
+    - Explain what you're trying to accomplish and why.\n\
+    - Describe what you've already learned or ruled out.\n\
+    - Give enough context about the surrounding problem that the agent can make judgment calls rather than just following a narrow instruction.\n\
+    - If you need a short response, say so (\"report in under 200 words\").\n\
+    - Lookups: hand over the exact command. Investigations: hand over the question.\n\n\
+    For fresh agents, terse command-style prompts produce shallow, generic work.\n"
+                .to_owned()
+        } else {
+            "## Writing the prompt\n\n\
+    When spawning a fresh agent, it starts with zero context. Brief the agent like a smart colleague who just walked into the room — it hasn't seen this conversation, doesn't know what you've tried, and doesn't understand why this task matters.\n\
     - Explain what you're trying to accomplish and why.\n\
     - Describe what you've already learned or ruled out.\n\
     - Give enough context about the surrounding problem that the agent can make judgment calls \
     rather than just following a narrow instruction.\n\
     - If you need a short response, say so (\"report in under 200 words\").\n\
-    - Lookups: hand over the exact command. Investigations: hand over the question.\n\n\
-    Terse command-style prompts produce shallow, generic work.\n\n\
-    Never delegate understanding. Don't write \"based on your findings, fix the bug\" or \
-    \"based on the research, implement it.\" Write prompts that prove you understood: include file \
-    paths, line numbers, and what specifically to change."
-        .to_owned()
+    - Lookups: hand over the exact command. Investigations: hand over the question.\n"
+                .to_owned()
+        }
+    )
 }
 
 /// Lookup table: returns the detailed prompt for a tool by its internal name.

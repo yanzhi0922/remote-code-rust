@@ -62,8 +62,9 @@ use rc_tools::{
     },
     runtime_provider_tool_spec, runtime_provider_tool_specs,
     tool_result_storage::process_tool_result_content,
-    with_runtime_agent_prompt_context_provider, with_runtime_mcp_observation_provider,
-    with_runtime_mcp_state_provider, with_tool_runtime_policy_overlay,
+    with_runtime_agent_prompt_context_provider, with_runtime_fork_snapshot_provider,
+    with_runtime_mcp_observation_provider, with_runtime_mcp_state_provider,
+    with_tool_runtime_policy_overlay,
 };
 use rc_ui_bridge::UiRuntimeMcpServerStatus;
 use serde::{Deserialize, Serialize};
@@ -94,6 +95,21 @@ struct CompatSharedState {
     read_file_state: FileStateCache,
 }
 
+fn fork_snapshot_from_conversation(
+    conversation: &[ConversationEntry],
+) -> rc_core::SubAgentForkSnapshot {
+    rc_core::SubAgentForkSnapshot {
+        fork_context_messages: conversation.iter().cloned().map(Message::from).collect(),
+        system_prompt: conversation
+            .iter()
+            .find(|entry| entry.role == ConversationRole::System)
+            .map(|entry| entry.text.clone())
+            .filter(|text| !text.trim().is_empty()),
+        user_context: BTreeMap::new(),
+        system_context: BTreeMap::new(),
+    }
+}
+
 pub(crate) type CompatRunOverrides = PromptRuntimeOverrides;
 
 #[derive(Debug, Clone)]
@@ -119,15 +135,12 @@ impl ForkCacheSafeParams {
     }
 
     pub(crate) fn from_conversation(conversation: &[ConversationEntry]) -> Self {
+        let snapshot = fork_snapshot_from_conversation(conversation);
         Self {
-            fork_context_messages: conversation.iter().cloned().map(Message::from).collect(),
-            system_prompt: conversation
-                .iter()
-                .find(|entry| entry.role == ConversationRole::System)
-                .map(|entry| entry.text.clone())
-                .filter(|text| !text.trim().is_empty()),
-            user_context: BTreeMap::new(),
-            system_context: BTreeMap::new(),
+            fork_context_messages: snapshot.fork_context_messages,
+            system_prompt: snapshot.system_prompt,
+            user_context: snapshot.user_context,
+            system_context: snapshot.system_context,
             read_file_state: None,
         }
     }
@@ -1899,15 +1912,25 @@ impl ToolRunner for CompatToolRunner {
                 follow_up_user_blocks: Vec::new(),
             }
         } else {
+            let fork_snapshot = {
+                let conversation = self.shared.conversation.lock().await;
+                fork_snapshot_from_conversation(&conversation)
+            };
+            let fork_snapshot_provider: Arc<rc_tools::RuntimeForkSnapshotProvider> =
+                Arc::new(move || fork_snapshot.clone());
             let tool_context = ToolExecutionContext {
                 sub_agent: Some(build_remote_code_sub_agent_runtime(
                     &current_config,
                     self.sub_agent_completion.clone(),
+                    self.shared.read_file_state.clone(),
                 )),
                 read_file_state: self.shared.read_file_state.clone(),
                 ..ToolExecutionContext::from_runtime_config(&current_config)
             };
-            match execute_tool_call(&effective_tool_call, &tool_context, self.broker.as_ref()).await
+            match with_runtime_fork_snapshot_provider(fork_snapshot_provider, async {
+                execute_tool_call(&effective_tool_call, &tool_context, self.broker.as_ref()).await
+            })
+            .await
             {
                 Ok(result) => result,
                 Err(error) => {
@@ -2004,6 +2027,7 @@ impl ToolRunner for CompatToolRunner {
                 sub_agent: Some(build_remote_code_sub_agent_runtime(
                     &config,
                     self.sub_agent_completion.clone(),
+                    self.shared.read_file_state.clone(),
                 )),
                 read_file_state: self.shared.read_file_state.clone(),
                 ..ToolExecutionContext::from_runtime_config(&config)

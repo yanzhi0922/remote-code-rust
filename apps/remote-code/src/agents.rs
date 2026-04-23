@@ -41,7 +41,8 @@ use crate::conversation::{
 };
 use crate::hooks::{HookRunState, discover_runtime_hooks, ensure_session_start_hooks};
 use crate::query_engine_compat::{
-    CompatExecutionOptions, CompatRunOverrides, run_prompt_with_query_engine_compat_overrides,
+    CompatExecutionOptions, CompatRunOverrides, ForkCacheSafeParams, run_no_persist_forked_query,
+    run_prompt_with_query_engine_compat_overrides,
 };
 
 pub(crate) fn parse_agent_spec(spec: &str) -> Result<AgentIdentity> {
@@ -173,13 +174,19 @@ impl RemoteCodeAgentExecutor {
 struct RemoteCodeSubAgentRuntime {
     completion: Arc<dyn SubAgentCompletion>,
     executor: RemoteCodeAgentExecutor,
+    read_file_state: rc_tools::FileStateCache,
 }
 
 impl RemoteCodeSubAgentRuntime {
-    fn new(config: &RuntimeConfig, completion: Arc<dyn SubAgentCompletion>) -> Self {
+    fn new(
+        config: &RuntimeConfig,
+        completion: Arc<dyn SubAgentCompletion>,
+        read_file_state: rc_tools::FileStateCache,
+    ) -> Self {
         Self {
             completion,
             executor: RemoteCodeAgentExecutor::new(config),
+            read_file_state,
         }
     }
 }
@@ -198,6 +205,12 @@ impl SubAgentCompletion for RemoteCodeSubAgentRuntime {
         &self,
         request: SubAgentExecutionRequest,
     ) -> Result<SubAgentExecutionResult> {
+        if request.fork_snapshot.is_some() {
+            return self
+                .executor
+                .execute_fork(request, self.read_file_state.clone_isolated())
+                .await;
+        }
         let provider_model =
             resolve_requested_agent_model(&self.executor.base_config, request.model.as_deref());
         let result = self
@@ -242,8 +255,13 @@ impl SubAgentCompletion for RemoteCodeSubAgentRuntime {
 pub(crate) fn build_remote_code_sub_agent_runtime(
     config: &RuntimeConfig,
     completion: Arc<dyn SubAgentCompletion>,
+    read_file_state: rc_tools::FileStateCache,
 ) -> Arc<dyn SubAgentCompletion> {
-    Arc::new(RemoteCodeSubAgentRuntime::new(config, completion))
+    Arc::new(RemoteCodeSubAgentRuntime::new(
+        config,
+        completion,
+        read_file_state,
+    ))
 }
 
 #[async_trait]
@@ -355,6 +373,94 @@ impl AgentExecutor for RemoteCodeAgentExecutor {
                 output_tokens: outcome.usage.output_tokens,
                 cache_creation_tokens: 0,
                 cache_read_tokens: 0,
+            },
+        })
+    }
+}
+
+impl RemoteCodeAgentExecutor {
+    async fn execute_fork(
+        &self,
+        request: SubAgentExecutionRequest,
+        read_file_state: rc_tools::FileStateCache,
+    ) -> Result<SubAgentExecutionResult> {
+        let fork_snapshot = request
+            .fork_snapshot
+            .ok_or_else(|| anyhow!("fork execution requires a fork snapshot"))?;
+        let mut config = self.base_config.clone();
+        config.cwd = request.working_dir.clone();
+        config.max_turns = usize::try_from(request.max_turns).unwrap_or(usize::MAX);
+        if let Some(mode) = request.permission_mode {
+            config.permission_mode = mode;
+        }
+        if let Some(model) =
+            resolve_requested_agent_model(&self.base_config, request.model.as_deref())
+        {
+            config.provider.model = Some(model);
+        }
+
+        let store = SessionStore::open(config.paths.clone())?;
+        let backend =
+            ProviderCompatBackend::new(Arc::new(ProviderClient::new()?), &config.provider);
+        let discovered_tool_scope = backend.discovered_tool_scope();
+        restore_discovered_tool_scope(&store, self.base_config.session_id, &discovered_tool_scope)?;
+        let (plan_mode_controller, broker) = build_runtime_plan_mode(&config, &store)?;
+        let _plan_mode_runtime = install_plan_mode_runtime(plan_mode_controller)?;
+        let discovery = discover_runtime_hooks(&config, &[]);
+        let mut hook_state = HookRunState::load(&store, self.base_config.session_id)?;
+        let fork_cache = ForkCacheSafeParams {
+            fork_context_messages: fork_snapshot.fork_context_messages,
+            system_prompt: fork_snapshot.system_prompt,
+            user_context: fork_snapshot.user_context,
+            system_context: fork_snapshot.system_context,
+            read_file_state: Some(read_file_state),
+        };
+        let tool_results_dir = config
+            .paths
+            .sessions_dir
+            .join(self.base_config.session_id.to_string())
+            .join("fork-tool-results");
+        let outcome = run_no_persist_forked_query(
+            &config,
+            &store,
+            Arc::new(backend),
+            discovered_tool_scope,
+            broker,
+            &discovery,
+            &mut hook_state,
+            fork_cache,
+            &request.task,
+            CompatRunOverrides {
+                allowed_tools: (!request.allowed_tools.is_empty()).then_some(request.allowed_tools),
+                critical_system_reminder: request.critical_system_reminder,
+                omit_claude_md: request.omit_claude_md,
+                omit_git_status: request.omit_git_status,
+                ..CompatRunOverrides::default()
+            },
+            QuerySource::Agent,
+            Some(request.max_turns),
+            tool_results_dir,
+        )
+        .await?;
+
+        let output = outcome
+            .messages
+            .iter()
+            .rev()
+            .find(|entry| {
+                entry.role == ConversationRole::Assistant && !entry.text.trim().is_empty()
+            })
+            .map(|entry| entry.text.clone())
+            .unwrap_or_default();
+        Ok(SubAgentExecutionResult {
+            output,
+            success: true,
+            turns: outcome.num_turns,
+            usage: rc_core::UsageSummary {
+                input_tokens: outcome.usage.input_tokens,
+                output_tokens: outcome.usage.output_tokens,
+                cache_read_input_tokens: outcome.cache_read_input_tokens,
+                cache_creation_input_tokens: outcome.cache_creation_input_tokens,
             },
         })
     }
