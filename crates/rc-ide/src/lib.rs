@@ -23,11 +23,19 @@
 //! ```
 
 pub mod bridge;
+pub mod bridge_config;
+pub mod bridge_messaging;
+pub mod bridge_status;
 pub mod config;
 pub mod connection;
 pub mod messaging;
 pub mod path_conversion;
 
 pub use bridge::{IdeAction, IdeBridge, IdeNotification, IdeResponse};
+pub use bridge_config::{BridgeConfig, BridgeTransport, load_bridge_config, default_bridge_config};
+pub use bridge_messaging::{
+    BridgeMessage, BridgeMessageType, serialize_bridge_message, deserialize_bridge_message,
+};
+pub use bridge_status::{BridgeConnectionInfo, BridgeStatus, format_bridge_status};
 pub use config::{ConnectionMode, IdeConfig, IdeType, detect_ide};
 pub use connection::{HttpConnection, IdeConnection, IdeStatus, StdioConnection};

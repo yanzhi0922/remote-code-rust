@@ -14,8 +14,10 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
+rc-core = { path = "../rc-core" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+uuid = { workspace = true, features = ["serde", "v4"] }
