@@ -1029,6 +1029,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn query_engine_uses_custom_compact_handler_when_provided() {
+        let session_id = SessionId::new();
+        let backend = Arc::new(MockBackend::new(vec![ProviderResponse {
+            text: "done".to_owned(),
+            history_text: None,
+            thinking: None,
+            content_blocks: Vec::new(),
+            tool_calls: Vec::new(),
+            request_id: None,
+            usage: UsageSummary {
+                input_tokens: 1,
+                output_tokens: 1,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 0,
+            },
+            stop_reason: "end_turn".to_owned(),
+        }]));
+        let mut config = QueryEngineConfig::new(
+            session_id.clone(),
+            "mock-model",
+            backend,
+            Arc::new(MockToolRunner),
+            rc_engine_events::EventStream::new(8),
+        );
+        config.context_manager = ContextWindowManager::new(100, 20);
+        config = config.with_compact_conversation_handler(Arc::new(|conversation, _manager| {
+            Box::pin(async move {
+                let retained = conversation
+                    .into_iter()
+                    .take(2)
+                    .chain(std::iter::once(ConversationEntry::user("handler-marker")))
+                    .collect::<Vec<_>>();
+                Some((retained, "session_memory".to_owned()))
+            })
+        }));
+        let mut engine_events = config.event_stream.subscribe();
+
+        let mut existing_messages = vec![rc_core::Message::from(ConversationEntry::system("sys"))];
+        for index in 0..5 {
+            existing_messages.push(rc_core::Message::from(ConversationEntry::user(format!(
+                "user-{index}-{}",
+                "a".repeat(200)
+            ))));
+            existing_messages.push(rc_core::Message::from(ConversationEntry::assistant(
+                format!("assistant-{index}-{}", "b".repeat(200)),
+            )));
+        }
+
+        let mut engine = QueryEngine::new(config, existing_messages);
+        let context =
+            ProcessUserInputContext::new(session_id, PermissionMode::Default, "mock-model");
+        let result = engine
+            .submit_message(
+                vec![rc_core::Message::from(ConversationEntry::user(format!(
+                    "latest-{}",
+                    "c".repeat(200)
+                )))],
+                context,
+            )
+            .await
+            .expect("query engine should succeed with custom compact handler");
+
+        assert_eq!(result.final_text.as_deref(), Some("done"));
+        assert!(
+            result
+                .state
+                .legacy_conversation()
+                .iter()
+                .any(|entry| entry.text == "handler-marker")
+        );
+
+        let engine_events = drain_engine_events(&mut engine_events);
+        assert!(engine_events.iter().any(|event| matches!(
+            event,
+            EngineEvent::CompactCompleted { result } if result.strategy == "session_memory"
+        )));
+    }
+
+    #[tokio::test]
     async fn query_engine_runs_post_sampling_before_stop_hook_on_terminal_turn() {
         let session_id = SessionId::new();
         let backend = Arc::new(MockBackend::new(vec![ProviderResponse {

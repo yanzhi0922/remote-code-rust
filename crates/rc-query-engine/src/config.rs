@@ -23,6 +23,14 @@ pub type PostCompactTransform = dyn Fn(
     + Send
     + Sync;
 
+pub type CompactConversationHandler = dyn Fn(
+        Vec<rc_core::ConversationEntry>,
+        ContextWindowManager,
+    )
+        -> Pin<Box<dyn Future<Output = Option<(Vec<rc_core::ConversationEntry>, String)>> + Send>>
+    + Send
+    + Sync;
+
 pub type PostSamplingHook =
     dyn Fn(ReplHookContext) -> Pin<Box<dyn Future<Output = Result<()>> + Send>> + Send + Sync;
 
@@ -209,6 +217,7 @@ pub struct QueryEngineConfig {
     pub tool_result_max_length: usize,
     /// Maximum chain nesting depth for sub-queries.
     pub max_chain_depth: u32,
+    pub compact_conversation_handler: Option<Arc<CompactConversationHandler>>,
     pub post_compact_transform: Option<Arc<PostCompactTransform>>,
     pub post_sampling_hooks: Vec<Arc<PostSamplingHook>>,
     pub stop_hook: Option<Arc<StopHook>>,
@@ -244,6 +253,7 @@ impl QueryEngineConfig {
             enable_tool_summarization: true,
             tool_result_max_length: 10_000,
             max_chain_depth: 4,
+            compact_conversation_handler: None,
             post_compact_transform: None,
             post_sampling_hooks: Vec::new(),
             stop_hook: None,
@@ -284,6 +294,15 @@ impl QueryEngineConfig {
     #[must_use]
     pub fn with_post_compact_transform(mut self, transform: Arc<PostCompactTransform>) -> Self {
         self.post_compact_transform = Some(transform);
+        self
+    }
+
+    #[must_use]
+    pub fn with_compact_conversation_handler(
+        mut self,
+        handler: Arc<CompactConversationHandler>,
+    ) -> Self {
+        self.compact_conversation_handler = Some(handler);
         self
     }
 

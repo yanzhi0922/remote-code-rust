@@ -28,6 +28,7 @@ uuid.workspace = true
 directories.workspace = true
 tempfile.workspace = true
 rc-config = { path = "../../crates/rc-config" }
+rc-compact = { path = "../../crates/rc-compact" }
 rc-context = { path = "../../crates/rc-context" }
 rc-control-plane = { path = "../../crates/rc-control-plane" }
 rc-core = { path = "../../crates/rc-core" }
