@@ -4361,6 +4361,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "globset",
  "rc-agents",
  "rc-config",
  "rc-context",
@@ -4371,6 +4372,7 @@ dependencies = [
  "rc-system-prompt",
  "rc-tools",
  "regex",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

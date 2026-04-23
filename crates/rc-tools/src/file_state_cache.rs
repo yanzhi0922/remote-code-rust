@@ -42,6 +42,17 @@ impl FileState {
             is_partial_view: false,
         }
     }
+
+    #[must_use]
+    pub fn partial(content: String, timestamp: u128, limit: Option<usize>) -> Self {
+        Self {
+            content,
+            timestamp,
+            offset: None,
+            limit,
+            is_partial_view: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

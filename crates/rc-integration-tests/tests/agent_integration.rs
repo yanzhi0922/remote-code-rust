@@ -308,7 +308,7 @@ fn is_fork_child_detects_boilerplate_tag() {
     let messages = [rc_agents::fork::ForkMessage {
         role: "user".to_owned(),
         content: vec![rc_agents::fork::ForkContentBlock::Text {
-            text: "<fork_boilerplate>some content</fork_boilerplate>".to_string(),
+            text: "<fork-boilerplate>some content</fork-boilerplate>".to_string(),
         }],
     }];
     assert!(rc_agents::fork::is_fork_child(&messages));

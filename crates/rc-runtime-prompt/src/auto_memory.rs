@@ -6,6 +6,7 @@ use anyhow::Result;
 use rc_config::RuntimeConfig;
 use rc_config::settings_layers::load_runtime_settings;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 const AUTO_MEMORY_DIRNAME: &str = "memory";
@@ -595,6 +596,14 @@ pub struct MemoryHeader {
     pub memory_type: Option<MemoryType>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SurfacedMemoryContent {
+    pub path: PathBuf,
+    pub content: String,
+    pub mtime_ms: f64,
+    pub line_limit: Option<usize>,
+}
+
 pub fn team_memory_dir_for_read_permissions_with_features(
     config: &RuntimeConfig,
     features: &MemoryPromptFeatures,
@@ -838,6 +847,77 @@ pub fn format_memory_manifest(memories: &[MemoryHeader]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+pub fn collect_surfaced_memory_bytes(
+    conversation: &[rc_core::ConversationEntry],
+    marker_prefix: &str,
+) -> (std::collections::BTreeSet<String>, usize) {
+    let mut paths = std::collections::BTreeSet::new();
+    let mut total_bytes = 0usize;
+    for entry in conversation {
+        let Some(history_text) = entry.history_text.as_deref() else {
+            continue;
+        };
+        let Some(payload) = history_text.strip_prefix(marker_prefix) else {
+            continue;
+        };
+        let Ok(memories) = serde_json::from_str::<Vec<SurfacedMemoryContent>>(payload) else {
+            continue;
+        };
+        for memory in memories {
+            paths.insert(memory.path.display().to_string());
+            total_bytes = total_bytes.saturating_add(memory.content.len());
+        }
+    }
+    (paths, total_bytes)
+}
+
+pub fn read_memories_for_surfacing(
+    memories: &[MemoryHeader],
+    max_lines: usize,
+    max_bytes: usize,
+) -> Vec<SurfacedMemoryContent> {
+    memories
+        .iter()
+        .filter_map(|memory| {
+            let raw = fs::read_to_string(&memory.file_path).ok()?;
+            let mut selected = Vec::new();
+            let mut bytes = 0usize;
+            let mut truncated = false;
+
+            for (index, line) in raw.lines().enumerate() {
+                if index >= max_lines {
+                    truncated = true;
+                    break;
+                }
+                let line_bytes = line.len() + 1;
+                if bytes + line_bytes > max_bytes {
+                    truncated = true;
+                    break;
+                }
+                selected.push(line.to_owned());
+                bytes += line_bytes;
+            }
+
+            let mut content = selected.join("\n").trim_end().to_owned();
+            if truncated {
+                if !content.is_empty() {
+                    content.push_str("\n\n");
+                }
+                content.push_str(
+                    "[truncated memory; use the Read tool on this file if you need the full contents]",
+                );
+            }
+
+            Some(SurfacedMemoryContent {
+                path: memory.file_path.clone(),
+                content,
+                mtime_ms: memory.mtime_ms,
+                line_limit: truncated.then_some(max_lines),
+            })
+        })
+        .collect()
 }
 
 fn read_memory_header(memory_dir: &Path, file_path: &Path) -> Option<MemoryHeader> {
