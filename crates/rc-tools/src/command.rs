@@ -7,6 +7,7 @@ use serde_json::Value;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
+use super::shell::powershell_security::{PowerShellSecurityResult, powershell_command_is_safe};
 use super::shell::readonly::ShellKind;
 use super::{ToolExecutionContext, current_tool_runtime_policy};
 
@@ -22,6 +23,19 @@ pub(crate) async fn powershell_tool(
     if !cfg!(windows) {
         return Ok("PowerShell is only available on Windows. Use bash_command instead.".to_owned());
     }
+
+    // Run PowerShell-specific security analysis
+    if let Some(command) = input.get("command").and_then(Value::as_str) {
+        match powershell_command_is_safe(command) {
+            PowerShellSecurityResult::Ask(reason) => {
+                return Err(anyhow!(
+                    "PowerShell command blocked by security policy: {reason}"
+                ));
+            }
+            PowerShellSecurityResult::Passthrough | PowerShellSecurityResult::Allow => {}
+        }
+    }
+
     let policy = current_tool_runtime_policy().shell_policy;
     super::shell::execute_shell_command(ShellKind::PowerShell, input, context, &policy).await
 }
