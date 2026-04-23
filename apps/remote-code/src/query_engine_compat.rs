@@ -48,8 +48,8 @@ use rc_session::SessionStore;
 use rc_session::resume_state::{PendingToolCall, ResumeState};
 use rc_session::session_memory::session_memory_dir;
 use rc_tools::{
-    RuntimeAgentPromptContext, ToolExecutionContext, ToolRuntimePolicyOverlay, ToolSpec,
-    current_runtime_agent_prompt_context, current_tool_runtime_policy, execute_tool_call,
+    FileStateCache, RuntimeAgentPromptContext, ToolExecutionContext, ToolRuntimePolicyOverlay,
+    ToolSpec, current_runtime_agent_prompt_context, current_tool_runtime_policy, execute_tool_call,
     git::{apply_worktree_tool_result_to_runtime, sync_tool_context_from_runtime},
     mcp_runtime::{
         RuntimeMcpObservation, RuntimeMcpServerObservation, discover_runtime_mcp_servers,
@@ -91,6 +91,7 @@ struct CompatSharedState {
     streamed_tool_calls: Mutex<HashSet<String>>,
     latest_streaming_usage: Mutex<Option<UsagePayload>>,
     latest_request_id: Mutex<Option<String>>,
+    read_file_state: FileStateCache,
 }
 
 pub(crate) type CompatRunOverrides = PromptRuntimeOverrides;
@@ -101,6 +102,7 @@ pub(crate) struct ForkCacheSafeParams {
     pub(crate) system_prompt: Option<String>,
     pub(crate) user_context: std::collections::BTreeMap<String, String>,
     pub(crate) system_context: std::collections::BTreeMap<String, String>,
+    pub(crate) read_file_state: Option<FileStateCache>,
 }
 
 impl ForkCacheSafeParams {
@@ -112,6 +114,7 @@ impl ForkCacheSafeParams {
             system_prompt: context.system_prompt.clone(),
             user_context: context.user_context.clone(),
             system_context: context.system_context.clone(),
+            read_file_state: None,
         }
     }
 
@@ -125,7 +128,13 @@ impl ForkCacheSafeParams {
                 .filter(|text| !text.trim().is_empty()),
             user_context: BTreeMap::new(),
             system_context: BTreeMap::new(),
+            read_file_state: None,
         }
+    }
+
+    pub(crate) fn with_read_file_state(mut self, read_file_state: FileStateCache) -> Self {
+        self.read_file_state = Some(read_file_state);
+        self
     }
 }
 
@@ -1895,6 +1904,7 @@ impl ToolRunner for CompatToolRunner {
                     &current_config,
                     self.sub_agent_completion.clone(),
                 )),
+                read_file_state: self.shared.read_file_state.clone(),
                 ..ToolExecutionContext::from_runtime_config(&current_config)
             };
             match execute_tool_call(&effective_tool_call, &tool_context, self.broker.as_ref()).await
@@ -1995,6 +2005,7 @@ impl ToolRunner for CompatToolRunner {
                     &config,
                     self.sub_agent_completion.clone(),
                 )),
+                read_file_state: self.shared.read_file_state.clone(),
                 ..ToolExecutionContext::from_runtime_config(&config)
             };
             if apply_worktree_tool_result_to_runtime(
@@ -2214,6 +2225,11 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
     }
 
     let compat_store = Arc::new(SessionStore::open(config.paths.clone())?);
+    let read_file_state = execution
+        .fork_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.read_file_state.clone())
+        .unwrap_or_else(FileStateCache::new);
     let shared = Arc::new(CompatSharedState {
         config: Mutex::new(config.clone()),
         conversation: Mutex::new(conversation.clone()),
@@ -2222,6 +2238,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         streamed_tool_calls: Mutex::new(HashSet::new()),
         latest_streaming_usage: Mutex::new(None),
         latest_request_id: Mutex::new(None),
+        read_file_state,
     });
     let observer = Arc::new(CompatObserver {
         store: compat_store.clone(),
@@ -3538,6 +3555,7 @@ mod tests {
                 streamed_tool_calls: tokio::sync::Mutex::new(std::collections::HashSet::new()),
                 latest_streaming_usage: tokio::sync::Mutex::new(None),
                 latest_request_id: tokio::sync::Mutex::new(None),
+                read_file_state: rc_tools::FileStateCache::new(),
             }),
             event_sink: None,
             include_partial_messages: false,
@@ -4375,6 +4393,7 @@ while True:
             system_prompt: Some("Fork system prompt".to_owned()),
             user_context: BTreeMap::from([("snapshotKey".to_owned(), "snapshotValue".to_owned())]),
             system_context: BTreeMap::from([("cwd".to_owned(), config.cwd.display().to_string())]),
+            read_file_state: None,
         };
 
         let outcome = run_no_persist_forked_query(
@@ -4854,6 +4873,7 @@ while True:
                 streamed_tool_calls: tokio::sync::Mutex::new(std::collections::HashSet::new()),
                 latest_streaming_usage: tokio::sync::Mutex::new(None),
                 latest_request_id: tokio::sync::Mutex::new(None),
+                read_file_state: rc_tools::FileStateCache::new(),
             }),
             event_sink: Some(event_sink),
             include_partial_messages: true,

@@ -13,9 +13,10 @@ use rc_runtime_prompt::{runtime_env_defined_falsy, runtime_env_truthy};
 use rc_session::SessionStore;
 use rc_session::session_memory::{
     SessionMemoryConfig, SessionMemoryState, build_session_memory_update_prompt,
-    ensure_session_memory_file, load_session_memory_content,
+    ensure_session_memory_file,
 };
 use rc_telemetry::growthbook::{FeatureGate, FeatureValue, GrowthBookClient};
+use rc_tools::ToolExecutionContext;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -349,10 +350,24 @@ pub(crate) async fn maybe_spawn_session_memory_update(
 struct SessionMemoryFileSetup {
     summary_path: PathBuf,
     current_memory: String,
+    read_file_state: rc_tools::FileStateCache,
 }
 
-fn fresh_read_session_memory_content(config: &RuntimeConfig) -> Result<String> {
-    Ok(load_session_memory_content(config)?.unwrap_or_default())
+fn parse_numbered_read_file_output(output: &str) -> String {
+    output
+        .lines()
+        .map(|line| {
+            let Some(prefix) = line.as_bytes().get(0..4) else {
+                return line;
+            };
+            if prefix.iter().all(u8::is_ascii_digit) && line.as_bytes().get(4) == Some(&b' ') {
+                line.get(5..).unwrap_or_default()
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn setup_session_memory_file(
@@ -360,7 +375,15 @@ fn setup_session_memory_file(
     store: &SessionStore,
 ) -> Result<SessionMemoryFileSetup> {
     let summary_path = ensure_session_memory_file(config)?;
-    let current_memory = fresh_read_session_memory_content(config)?;
+    let setup_context = ToolExecutionContext::from_runtime_config(config);
+    setup_context.read_file_state.delete(&summary_path);
+    let current_memory = rc_tools::file_ops::read_file(
+        &json!({
+            "file_path": summary_path.to_string_lossy().to_string()
+        }),
+        &setup_context,
+    )
+    .map(|output| parse_numbered_read_file_output(&output))?;
     store.append_named_event(
         config.session_id,
         "tengu_session_memory_file_read",
@@ -371,6 +394,7 @@ fn setup_session_memory_file(
     Ok(SessionMemoryFileSetup {
         summary_path,
         current_memory,
+        read_file_state: setup_context.read_file_state.clone_isolated(),
     })
 }
 
@@ -419,7 +443,7 @@ async fn run_session_memory_update(
         broker,
         &discovery,
         &mut hook_state,
-        fork_snapshot,
+        fork_snapshot.with_read_file_state(file_setup.read_file_state.clone()),
         &prompt,
         CompatRunOverrides {
             allowed_tools: Some(vec!["Edit".to_owned()]),

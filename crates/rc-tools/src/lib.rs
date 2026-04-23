@@ -9,6 +9,7 @@ pub mod command;
 pub mod delegate;
 pub mod discover_skills;
 pub mod file_ops;
+pub mod file_state_cache;
 pub mod git;
 pub mod hooks;
 pub mod lsp;
@@ -61,6 +62,8 @@ use rc_permissions::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+pub use file_state_cache::{FileState, FileStateCache};
 
 // Re-export specs::builtin_tool_specs at crate root for backward compatibility.
 pub use specs::builtin_tool_specs;
@@ -798,6 +801,11 @@ pub struct ToolExecutionContext {
     /// Task stack for tracking nested subtask delegation depth.
     /// Shared across tool executions within the same conversation loop.
     pub task_stack: Arc<std::sync::Mutex<TaskStack>>,
+    /// Read-file state cache shared by tools in a single query loop.
+    ///
+    /// Fork/subagent contexts should use [`FileStateCache::clone_isolated`]
+    /// unless a caller explicitly wants to pass a setup cache into the child.
+    pub read_file_state: FileStateCache,
 }
 
 impl Default for ToolExecutionContext {
@@ -810,6 +818,7 @@ impl Default for ToolExecutionContext {
             sub_agent: None,
             progress_cb: None,
             task_stack: Arc::new(std::sync::Mutex::new(TaskStack::default())),
+            read_file_state: crate::FileStateCache::new(),
         }
     }
 }
@@ -833,6 +842,32 @@ impl ToolExecutionContext {
             cwd,
             ..Self::default()
         }
+    }
+
+    /// Create an isolated subagent/fork context from this context.
+    ///
+    /// Mutable read-file state is cloned by value so child reads and writes do
+    /// not leak back into the parent unless the caller passes an explicit
+    /// override.
+    #[must_use]
+    pub fn create_subagent_context(&self) -> Self {
+        Self {
+            cwd: self.cwd.clone(),
+            original_cwd: self.original_cwd.clone(),
+            active_worktree_session: self.active_worktree_session.clone(),
+            timeout_ms: self.timeout_ms,
+            sub_agent: self.sub_agent.clone(),
+            progress_cb: None,
+            task_stack: Arc::new(std::sync::Mutex::new(TaskStack::default())),
+            read_file_state: self.read_file_state.clone_isolated(),
+        }
+    }
+
+    /// Return a copy that uses a specific read-file state cache.
+    #[must_use]
+    pub fn with_read_file_state(mut self, read_file_state: FileStateCache) -> Self {
+        self.read_file_state = read_file_state;
+        self
     }
 }
 
@@ -1955,11 +1990,8 @@ while True:
         std::os::windows::fs::symlink_dir(target, link)
     }
 
-    static RC_TOOLS_TASK_LIST_TEST_MUTEX: Lazy<tokio::sync::Mutex<()>> =
-        Lazy::new(|| tokio::sync::Mutex::new(()));
-
     struct TaskListDirGuard {
-        _guard: tokio::sync::MutexGuard<'static, ()>,
+        _guard: crate::tasks::TaskTestGuard,
     }
 
     impl Drop for TaskListDirGuard {
@@ -1973,7 +2005,7 @@ while True:
         base: &std::path::Path,
         task_list_id: Option<&str>,
     ) -> TaskListDirGuard {
-        let guard = RC_TOOLS_TASK_LIST_TEST_MUTEX.lock().await;
+        let guard = crate::tasks::test_guard_for_tests();
         crate::tasks::configure_task_list_context(
             task_list_id.map(ToOwned::to_owned),
             Some(base.join("tasks")),
@@ -2136,6 +2168,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -2189,6 +2222,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let requests = Arc::new(Mutex::new(Vec::new()));
         let broker = RecordingPermissionBroker {
@@ -2240,6 +2274,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let requests = Arc::new(Mutex::new(Vec::new()));
         let deny_blocks = vec![json!({
@@ -2285,6 +2320,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let requests = Arc::new(Mutex::new(Vec::new()));
         let extra_blocks = vec![json!({
@@ -2342,6 +2378,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let requests = Arc::new(Mutex::new(Vec::new()));
         let broker = RecordingPermissionBroker {
@@ -2396,6 +2433,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(false);
         let runtime_context = crate::RuntimeAgentPromptContext {
@@ -2443,6 +2481,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(false);
         let runtime_context = crate::RuntimeAgentPromptContext {
@@ -2489,6 +2528,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(false);
         let runtime_context = crate::RuntimeAgentPromptContext {
@@ -2535,6 +2575,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(false);
         let runtime_context = crate::RuntimeAgentPromptContext {
@@ -2576,6 +2617,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let requests = Arc::new(Mutex::new(Vec::new()));
         let forced_requests = Arc::new(Mutex::new(Vec::new()));
@@ -2620,6 +2662,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let forced_requests = Arc::new(Mutex::new(Vec::new()));
         let broker = RuleAwareBroker {
@@ -2663,6 +2706,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let requests = Arc::new(Mutex::new(Vec::new()));
         let broker = RecordingPermissionBroker {
@@ -2705,6 +2749,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let forced_requests = Arc::new(Mutex::new(Vec::new()));
         let broker = RuleAwareBroker {
@@ -2752,6 +2797,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let forced_requests = Arc::new(Mutex::new(Vec::new()));
         let broker = RuleAwareBroker {
@@ -2766,6 +2812,19 @@ while True:
             requests: Arc::new(Mutex::new(Vec::new())),
             forced_requests: forced_requests.clone(),
         };
+
+        let read = execute_tool_call(
+            &ToolCall {
+                id: "claude-read".to_owned(),
+                name: "read_file".to_owned(),
+                input: json!({"file_path": target.to_string_lossy().to_string()}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("read before write should return result");
+        assert!(!read.is_error, "{}", read.content);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -2802,6 +2861,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let requests = Arc::new(Mutex::new(Vec::new()));
         let broker = RecordingPermissionBroker {
@@ -2884,6 +2944,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -2930,6 +2991,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -2975,6 +3037,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -3007,6 +3070,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -3059,6 +3123,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -3098,6 +3163,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -3149,6 +3215,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -3223,6 +3290,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -3269,6 +3337,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -3315,6 +3384,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -3355,6 +3425,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -3397,6 +3468,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -3535,8 +3607,22 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
+
+        let read = execute_tool_call(
+            &ToolCall {
+                id: "read-notebook".to_owned(),
+                name: "read_file".to_owned(),
+                input: json!({"file_path": "test.ipynb"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("read notebook before edit");
+        assert!(!read.is_error, "{}", read.content);
 
         let result = execute_tool_call(
             &ToolCall {
@@ -3596,8 +3682,22 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
+
+        let read = execute_tool_call(
+            &ToolCall {
+                id: "read-notebook".to_owned(),
+                name: "read_file".to_owned(),
+                input: json!({"file_path": "test.ipynb"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("read notebook before edit");
+        assert!(!read.is_error, "{}", read.content);
 
         let insert = execute_tool_call(
             &ToolCall {
@@ -3662,6 +3762,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -3709,6 +3810,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -3844,6 +3946,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let allow_broker = StaticPermissionBroker::new(true);
         create_team_via_tool(&context, &allow_broker, "cleanup-team").await;
@@ -3946,6 +4049,7 @@ while True:
             sub_agent: Some(runtime),
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -3990,6 +4094,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4050,6 +4155,7 @@ while True:
             sub_agent: Some(runtime),
             progress_cb: Some(progress_cb),
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4134,6 +4240,7 @@ while True:
             sub_agent: Some(runtime),
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4179,6 +4286,7 @@ while True:
             sub_agent: Some(runtime),
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(false);
 
@@ -4213,6 +4321,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4273,6 +4382,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let enter_calls = Arc::new(Mutex::new(Vec::new()));
         let exit_calls = Arc::new(Mutex::new(Vec::new()));
@@ -4321,6 +4431,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let enter_calls = Arc::new(Mutex::new(Vec::new()));
         let exit_calls = Arc::new(Mutex::new(Vec::new()));
@@ -4371,6 +4482,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4407,6 +4519,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4462,6 +4575,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4545,6 +4659,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4592,6 +4707,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4626,6 +4742,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4661,6 +4778,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4699,6 +4817,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4735,6 +4854,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4797,6 +4917,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
 
         let allow_broker = StaticPermissionBroker::new(true);
@@ -4878,6 +4999,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4914,6 +5036,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4971,6 +5094,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5011,6 +5135,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5047,6 +5172,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5095,6 +5221,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5128,6 +5255,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5163,6 +5291,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5204,6 +5333,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5259,6 +5389,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5331,6 +5462,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5406,6 +5538,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5484,6 +5617,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
         let original_policy = super::current_tool_runtime_policy();
@@ -5565,6 +5699,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
         let original_policy = super::current_tool_runtime_policy();
@@ -5632,6 +5767,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
         let original_policy = super::current_tool_runtime_policy();
@@ -5708,6 +5844,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
         let original_policy = super::current_tool_runtime_policy();
@@ -5783,6 +5920,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5819,6 +5957,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -6263,6 +6402,7 @@ while True:
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
 
         let precheck = super::precheck_filesystem_permission(&spec, &call, &context, &layered);

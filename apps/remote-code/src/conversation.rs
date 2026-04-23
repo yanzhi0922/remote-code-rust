@@ -858,6 +858,7 @@ async fn run_prompt_legacy(
         task_stack: std::sync::Arc::new(std::sync::Mutex::new(
             rc_core::task_stack::TaskStack::default(),
         )),
+        read_file_state: rc_tools::FileStateCache::new(),
     };
     let mut usage = UsagePayload::default();
     let mut num_turns = 0u32;

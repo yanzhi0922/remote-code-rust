@@ -2,6 +2,7 @@
 //! replace_in_file, edit_file, glob_files, grep_files.
 
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 use anyhow::{Context, Result, anyhow};
 use globset::GlobBuilder;
@@ -11,7 +12,11 @@ use regex::Regex;
 use serde_json::Value;
 use walkdir::WalkDir;
 
-use super::{IGNORED_DIRS, ToolExecutionContext};
+use super::{FileState, IGNORED_DIRS, ToolExecutionContext};
+
+const FILE_UNCHANGED_STUB: &str = "File unchanged since last read. The content from the earlier Read tool_result in this conversation is still current — refer to that instead of re-reading.";
+const FILE_UNEXPECTEDLY_MODIFIED_ERROR: &str =
+    "File has been unexpectedly modified. Read it again before attempting to write it.";
 
 tokio::task_local! {
     static TOOL_FILESYSTEM_PERMISSION_CONFIRMED: bool;
@@ -38,6 +43,72 @@ fn normalize_for_comparison(path: PathBuf) -> PathBuf {
         PathBuf::from(stripped)
     } else {
         path
+    }
+}
+
+fn file_mtime_ms(path: &Path) -> Result<u128> {
+    let modified = std::fs::metadata(path)?.modified()?;
+    Ok(modified
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis())
+}
+
+fn ensure_current_read_state(
+    context: &ToolExecutionContext,
+    target: &Path,
+    current_content: &str,
+) -> Result<()> {
+    let Some(read_state) = context.read_file_state.get(target) else {
+        return Err(anyhow!(
+            "File has not been read yet. Read it first before writing to it."
+        ));
+    };
+    if read_state.is_partial_view {
+        return Err(anyhow!(
+            "File has not been read yet. Read it first before writing to it."
+        ));
+    }
+
+    let last_write_time = file_mtime_ms(target)?;
+    if last_write_time > read_state.timestamp {
+        let content_unchanged = read_state.offset.is_none()
+            && read_state.limit.is_none()
+            && current_content == read_state.content;
+        if !content_unchanged {
+            return Err(anyhow!(
+                "File has been modified since read, either by the user or by a linter. Read it again before attempting to write it."
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn ensure_current_read_state_before_atomic_write(
+    context: &ToolExecutionContext,
+    target: &Path,
+    current_content: &str,
+) -> Result<()> {
+    let Some(read_state) = context.read_file_state.get(target) else {
+        return Err(anyhow!(FILE_UNEXPECTEDLY_MODIFIED_ERROR));
+    };
+    let last_write_time = file_mtime_ms(target)?;
+    if last_write_time > read_state.timestamp {
+        let content_unchanged = read_state.offset.is_none()
+            && read_state.limit.is_none()
+            && current_content == read_state.content;
+        if !content_unchanged {
+            return Err(anyhow!(FILE_UNEXPECTEDLY_MODIFIED_ERROR));
+        }
+    }
+    Ok(())
+}
+
+fn update_post_write_state(context: &ToolExecutionContext, target: &Path, content: String) {
+    if let Ok(timestamp) = file_mtime_ms(target) {
+        context
+            .read_file_state
+            .set(target, FileState::post_write(content, timestamp));
     }
 }
 
@@ -152,12 +223,10 @@ pub(crate) fn list_directory(input: &Value, context: &ToolExecutionContext) -> R
     }
 }
 
-pub(crate) fn read_file(input: &Value, context: &ToolExecutionContext) -> Result<String> {
+pub fn read_file(input: &Value, context: &ToolExecutionContext) -> Result<String> {
     let path = file_path_input(input).ok_or_else(|| anyhow!("read_file requires file_path"))?;
     let target =
         resolve_workspace_path_for_operation(context, Some(path), FilesystemOperation::Read)?;
-    let contents = std::fs::read_to_string(&target)
-        .with_context(|| format!("failed to read {}", target.display()))?;
     let start_line = input
         .get("offset")
         .or_else(|| input.get("start_line"))
@@ -180,6 +249,32 @@ pub(crate) fn read_file(input: &Value, context: &ToolExecutionContext) -> Result
         .get("max_chars")
         .and_then(Value::as_u64)
         .unwrap_or(50_000) as usize;
+
+    if let Some(read_state) = context.read_file_state.get(&target)
+        && !read_state.is_partial_view
+        && read_state.offset == Some(start_line)
+        && read_state.limit == limit
+        && let Ok(mtime) = file_mtime_ms(&target)
+        && mtime <= read_state.timestamp
+    {
+        return Ok(FILE_UNCHANGED_STUB.to_owned());
+    }
+
+    let contents = std::fs::read_to_string(&target)
+        .with_context(|| format!("failed to read {}", target.display()))?;
+    let raw_selected = contents
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let line_number = index + 1;
+            if line_number < start_line || line_number > end_line {
+                None
+            } else {
+                Some(line.to_owned())
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     let selected = contents
         .lines()
         .enumerate()
@@ -193,7 +288,14 @@ pub(crate) fn read_file(input: &Value, context: &ToolExecutionContext) -> Result
         })
         .collect::<Vec<_>>()
         .join("\n");
-    Ok(selected.chars().take(max_chars).collect())
+    let selected = selected.chars().take(max_chars).collect::<String>();
+    if let Ok(timestamp) = file_mtime_ms(&target) {
+        context.read_file_state.set(
+            &target,
+            FileState::read(raw_selected, timestamp, start_line, limit),
+        );
+    }
+    Ok(selected)
 }
 
 pub(crate) fn search_text(input: &Value, context: &ToolExecutionContext) -> Result<String> {
@@ -261,10 +363,24 @@ pub(crate) fn write_file(input: &Value, context: &ToolExecutionContext) -> Resul
         .unwrap_or(false);
     let target =
         resolve_workspace_path_for_operation(context, Some(path), FilesystemOperation::Create)?;
+    let existing = match std::fs::read_to_string(&target) {
+        Ok(existing) => Some(existing),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    if let Some(existing) = existing.as_deref() {
+        ensure_current_read_state(context, &target, existing)?;
+    }
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;
     }
     if append {
+        let existing = existing.unwrap_or_default();
+        ensure_current_read_state_before_atomic_write(context, &target, &existing).or_else(
+            |error| {
+                if target.exists() { Err(error) } else { Ok(()) }
+            },
+        )?;
         use std::io::Write as _;
         let mut file = std::fs::OpenOptions::new()
             .create(true)
@@ -272,8 +388,17 @@ pub(crate) fn write_file(input: &Value, context: &ToolExecutionContext) -> Resul
             .open(&target)?;
         file.write_all(content.as_bytes())?;
     } else {
+        if let Some(existing) = existing.as_deref() {
+            ensure_current_read_state_before_atomic_write(context, &target, existing)?;
+        }
         std::fs::write(&target, content)?;
     }
+    let final_content = if append {
+        std::fs::read_to_string(&target).unwrap_or_else(|_| content.to_owned())
+    } else {
+        content.to_owned()
+    };
+    update_post_write_state(context, &target, final_content);
     maybe_persist_plan_snapshot(&target);
     Ok(format!("Wrote {}", target.display()))
 }
@@ -299,12 +424,26 @@ pub(crate) fn replace_in_file(input: &Value, context: &ToolExecutionContext) -> 
     let target =
         resolve_workspace_path_for_operation(context, Some(path), FilesystemOperation::Write)?;
     let original = std::fs::read_to_string(&target)?;
+    ensure_current_read_state(context, &target, &original)?;
+    if search == replace {
+        return Err(anyhow!(
+            "No changes to make: old_string and new_string are exactly the same."
+        ));
+    }
+    if !original.contains(search) {
+        return Err(anyhow!(
+            "String to replace not found in file.\nString: {search}"
+        ));
+    }
     let updated = if replace_all {
         original.replace(search, replace)
     } else {
         original.replacen(search, replace, 1)
     };
+    ensure_current_read_state_before_atomic_write(context, &target, &original)?;
     std::fs::write(&target, updated)?;
+    let updated = std::fs::read_to_string(&target).unwrap_or_default();
+    update_post_write_state(context, &target, updated);
     maybe_persist_plan_snapshot(&target);
     Ok(format!("Updated {}", target.display()))
 }
@@ -345,12 +484,20 @@ pub(crate) fn edit_file(input: &Value, context: &ToolExecutionContext) -> Result
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let mut content = if target.exists() {
-        std::fs::read_to_string(&target)?
-    } else if create_if_missing {
+        let content = std::fs::read_to_string(&target)?;
+        ensure_current_read_state(context, &target, &content)?;
+        content
+    } else if create_if_missing
+        || edits
+            .first()
+            .and_then(|edit| edit.get("search").and_then(Value::as_str))
+            == Some("")
+    {
         String::new()
     } else {
         return Err(anyhow!("{} does not exist", target.display()));
     };
+    let original_content = content.clone();
     for edit in edits {
         let search = edit
             .get("search")
@@ -361,9 +508,28 @@ pub(crate) fn edit_file(input: &Value, context: &ToolExecutionContext) -> Result
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("edit is missing replace"))?;
         let replace_all = edit.get("all").and_then(Value::as_bool).unwrap_or(false);
-        if search.is_empty() && create_if_missing && content.is_empty() {
-            content = replace.to_owned();
-            continue;
+        if search.is_empty() {
+            if content.is_empty() {
+                content = replace.to_owned();
+                continue;
+            }
+            return Err(anyhow!("Cannot create new file - file already exists."));
+        }
+        if search == replace {
+            return Err(anyhow!(
+                "No changes to make: old_string and new_string are exactly the same."
+            ));
+        }
+        let matches = content.matches(search).count();
+        if matches == 0 {
+            return Err(anyhow!(
+                "String to replace not found in file.\nString: {search}"
+            ));
+        }
+        if matches > 1 && !replace_all {
+            return Err(anyhow!(
+                "Found {matches} matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, please provide more context to uniquely identify the instance.\nString: {search}"
+            ));
         }
         content = if replace_all {
             content.replace(search, replace)
@@ -374,7 +540,12 @@ pub(crate) fn edit_file(input: &Value, context: &ToolExecutionContext) -> Result
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    if target.exists() {
+        ensure_current_read_state_before_atomic_write(context, &target, &original_content)?;
+    }
     std::fs::write(&target, content)?;
+    let updated = std::fs::read_to_string(&target).unwrap_or_default();
+    update_post_write_state(context, &target, updated);
     maybe_persist_plan_snapshot(&target);
     Ok(format!(
         "Applied {} edits to {}",

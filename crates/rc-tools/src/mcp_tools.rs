@@ -1039,6 +1039,7 @@ mod tests {
             sub_agent: None,
             progress_cb: None,
             task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
         };
         let original_policy = current_tool_runtime_policy();
         configure_tool_runtime_policy(ToolRuntimePolicy {
