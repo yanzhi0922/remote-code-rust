@@ -58,6 +58,10 @@ pub mod rule;
 pub mod setup;
 pub mod shadowed_detection;
 pub mod shell_matching;
+// -- V2 extended classifiers ------------------------------------------------
+pub mod bash_classifier;
+pub mod yolo_classifier;
+
 
 // ── V1 re-exports ─────────────────────────────────────────────
 pub use audit::PermissionAuditRecord;
