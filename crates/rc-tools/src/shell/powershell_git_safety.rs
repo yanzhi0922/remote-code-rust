@@ -1,4 +1,4 @@
-//! PowerShell-specific git safety checks.
+﻿//! PowerShell-specific git safety checks.
 //!
 //! Detects destructive git operations and returns warning messages.
 //! This is a PowerShell-specific complement to the generic `git_safety` module,
@@ -36,7 +36,7 @@ pub fn check_powershell_git_safety(command: &str) -> Option<String> {
 /// Detects `git reset --hard` which discards all uncommitted changes.
 fn check_git_reset_hard(command: &str) -> Option<String> {
     static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bgit\s+reset\s+--hard\b").unwrap()
+        Regex::new(r"(?i)\bgit\s+reset\s+--hard\b").expect("valid regex")
     });
     if RE.is_match(command) {
         return Some(
@@ -51,7 +51,7 @@ fn check_git_reset_hard(command: &str) -> Option<String> {
 /// Detects `git push --force` or `git push -f` which overwrites remote history.
 fn check_git_push_force(command: &str) -> Option<String> {
     static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bgit\s+push\b.*(--force\b|--force-with-lease\b|-f\b)").unwrap()
+        Regex::new(r"(?i)\bgit\s+push\b.*(--force\b|--force-with-lease\b|-f\b)").expect("valid regex")
     });
     if RE.is_match(command) {
         return Some(
@@ -66,7 +66,7 @@ fn check_git_push_force(command: &str) -> Option<String> {
 /// Detects `git clean -fdx` which permanently deletes untracked files.
 fn check_git_clean(command: &str) -> Option<String> {
     static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bgit\s+clean\b").unwrap()
+        Regex::new(r"(?i)\bgit\s+clean\b").expect("valid regex")
     });
     if RE.is_match(command) {
         let lower = command.to_ascii_lowercase();
@@ -114,7 +114,7 @@ fn git_clean_has_dry_run_flag(lower_command: &str) -> bool {
 /// Detects `git checkout -- <file>` which discards working directory changes.
 fn check_git_checkout_discard(command: &str) -> Option<String> {
     static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bgit\s+checkout\s+--\s").unwrap()
+        Regex::new(r"(?i)\bgit\s+checkout\s+--\s").expect("valid regex")
     });
     if RE.is_match(command) {
         return Some(
@@ -125,7 +125,7 @@ fn check_git_checkout_discard(command: &str) -> Option<String> {
     }
     // Also check git restore --source (newer syntax)
     static RE_RESTORE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bgit\s+restore\b.*--source\b").unwrap()
+        Regex::new(r"(?i)\bgit\s+restore\b.*--source\b").expect("valid regex")
     });
     if RE_RESTORE.is_match(command) {
         return Some(
@@ -140,7 +140,7 @@ fn check_git_checkout_discard(command: &str) -> Option<String> {
 /// Detects `git rebase` operations which rewrite history.
 fn check_git_rebase(command: &str) -> Option<String> {
     static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bgit\s+rebase\b").unwrap()
+        Regex::new(r"(?i)\bgit\s+rebase\b").expect("valid regex")
     });
     if RE.is_match(command) {
         let lower = command.to_ascii_lowercase();
@@ -164,7 +164,7 @@ fn check_git_rebase(command: &str) -> Option<String> {
 /// Detects `git commit --amend` which modifies the last commit.
 fn check_git_amend(command: &str) -> Option<String> {
     static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bgit\s+commit\b.*--amend\b").unwrap()
+        Regex::new(r"(?i)\bgit\s+commit\b.*--amend\b").expect("valid regex")
     });
     if RE.is_match(command) {
         return Some(
@@ -180,7 +180,7 @@ fn check_git_amend(command: &str) -> Option<String> {
 /// Detects `git stash drop` or `git stash clear` which permanently removes stashed changes.
 fn check_git_stash_drop(command: &str) -> Option<String> {
     static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bgit\s+stash\s+(drop|clear)\b").unwrap()
+        Regex::new(r"(?i)\bgit\s+stash\s+(drop|clear)\b").expect("valid regex")
     });
     if RE.is_match(command) {
         return Some(
@@ -195,7 +195,7 @@ fn check_git_stash_drop(command: &str) -> Option<String> {
 /// Detects `--no-verify` or GPG bypass flags.
 fn check_git_no_verify(command: &str) -> Option<String> {
     static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bgit\s+\w+\b.*(--no-verify\b|--no-gpg-sign\b|commit\.gpgsign\s*=\s*false)").unwrap()
+        Regex::new(r"(?i)\bgit\s+\w+\b.*(--no-verify\b|--no-gpg-sign\b|commit\.gpgsign\s*=\s*false)").expect("valid regex")
     });
     if RE.is_match(command) {
         return Some(
@@ -240,14 +240,14 @@ mod tests {
     fn test_git_reset_hard() {
         let result = check_powershell_git_safety("git reset --hard HEAD~1");
         assert!(result.is_some());
-        assert!(result.unwrap().contains("reset --hard"));
+        assert!(result.expect("valid regex").contains("reset --hard"));
     }
 
     #[test]
     fn test_git_push_force() {
         let result = check_powershell_git_safety("git push --force origin main");
         assert!(result.is_some());
-        assert!(result.unwrap().contains("force push"));
+        assert!(result.expect("valid regex").contains("force push"));
 
         let result = check_powershell_git_safety("git push -f origin main");
         assert!(result.is_some());
@@ -257,7 +257,7 @@ mod tests {
     fn test_git_clean_force() {
         let result = check_powershell_git_safety("git clean -fdx");
         assert!(result.is_some());
-        assert!(result.unwrap().contains("clean"));
+        assert!(result.expect("valid regex").contains("clean"));
     }
 
     #[test]
@@ -270,35 +270,35 @@ mod tests {
     fn test_git_checkout_discard() {
         let result = check_powershell_git_safety("git checkout -- file.txt");
         assert!(result.is_some());
-        assert!(result.unwrap().contains("checkout"));
+        assert!(result.expect("valid regex").contains("checkout"));
     }
 
     #[test]
     fn test_git_rebase() {
         let result = check_powershell_git_safety("git rebase main");
         assert!(result.is_some());
-        assert!(result.unwrap().contains("rebase"));
+        assert!(result.expect("valid regex").contains("rebase"));
     }
 
     #[test]
     fn test_git_amend() {
         let result = check_powershell_git_safety("git commit --amend -m 'fixed'");
         assert!(result.is_some());
-        assert!(result.unwrap().contains("amend"));
+        assert!(result.expect("valid regex").contains("amend"));
     }
 
     #[test]
     fn test_git_stash_drop() {
         let result = check_powershell_git_safety("git stash drop stash@{0}");
         assert!(result.is_some());
-        assert!(result.unwrap().contains("stash"));
+        assert!(result.expect("valid regex").contains("stash"));
     }
 
     #[test]
     fn test_git_no_verify() {
         let result = check_powershell_git_safety("git commit --no-verify -m 'test'");
         assert!(result.is_some());
-        assert!(result.unwrap().contains("no-verify"));
+        assert!(result.expect("valid regex").contains("no-verify"));
     }
 
     #[test]
@@ -318,6 +318,6 @@ mod tests {
     fn test_git_bare_repo_hooks() {
         let result = check_powershell_git_safety("Set-Content .git/hooks/pre-commit '#!/bin/sh'");
         assert!(result.is_some());
-        assert!(result.unwrap().contains("hook"));
+        assert!(result.expect("valid regex").contains("hook"));
     }
 }

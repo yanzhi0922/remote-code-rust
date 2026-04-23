@@ -60,7 +60,7 @@ pub fn interpret_powershell_result(
                 (true, Some(format!("Robocopy failed with exit code {exit_code}")))
             } else if exit_code == 0 {
                 (false, Some("No files copied (already in sync)".to_owned()))
-            } else if exit_code >= 1 && exit_code < 8 {
+            } else if (1..8).contains(&exit_code) {
                 let msg = if exit_code & 1 != 0 {
                     "Files copied successfully"
                 } else {
