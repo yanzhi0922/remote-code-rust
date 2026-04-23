@@ -122,37 +122,60 @@ Notes:
 
 /// Prompt for `bash_command`.
 pub const BASH_COMMAND: &str = "\
-Executes a shell command and returns its output.
+Executes a given bash command and returns its output.
 
 The working directory persists between commands, but shell state does not. The shell \
 environment is initialized from the user's profile (bash or zsh).
 
 IMPORTANT: Avoid using this tool to run `find`, `grep`, `cat`, `head`, `tail`, `sed`, \
-`awk`, or `echo` commands unless explicitly instructed. Instead, use the appropriate \
-dedicated tool for a better experience:
-- File search: Use `glob` (NOT find or ls)
-- Content search: Use `grep` or `search_text` (NOT grep or rg)
-- Read files: Use `read_file` (NOT cat/head/tail)
-- Edit files: Use `edit_file` (NOT sed/awk)
-- Write files: Use `write_file` (NOT echo/cat)
+`awk`, or `echo` commands, unless explicitly instructed or after you have verified that \
+a dedicated tool cannot accomplish your task. Instead, use the appropriate dedicated tool \
+as this will provide a much better experience for the user:
+- File search: Use Glob (NOT find or ls)
+- Content search: Use Grep (NOT grep or rg)
+- Read files: Use Read (NOT cat/head/tail)
+- Edit files: Use Edit (NOT sed/awk)
+- Write files: Use Write (NOT echo/cat)
+- Communication: Output text directly (NOT echo/printf)
 
-Instructions:
-- If creating new directories/files, first run `ls` to verify the parent directory exists.
-- Always quote file paths containing spaces with double quotes.
-- Try to maintain your current working directory by using absolute paths and avoiding `cd`.
-- Use `cwd` parameter to run in a subdirectory instead of prefixing with cd.
-- Specify an optional timeout in milliseconds (up to 600000ms / 10 minutes).
-- Use `background` to run long-running commands without blocking.
+While the Bash tool can do similar things, it's better to use the built-in tools as they \
+provide a better user experience and make it easier to review tool calls and give permission.
 
-For multiple commands:
-- Independent commands: make multiple bash_command calls in parallel.
-- Dependent commands: chain with && in a single call.
-- Use ; when you don't care if earlier commands fail.
-
-Git safety:
-- NEVER run destructive git commands (push --force, reset --hard) unless explicitly requested.
-- NEVER skip hooks (--no-verify) unless the user explicitly requests it.
-- Prefer creating new commits over amending existing ones.";
+# Instructions
+- If your command will create new directories or files, first use this tool to run `ls` \
+to verify the parent directory exists and is the correct location.
+- Always quote file paths that contain spaces with double quotes in your command \
+(e.g., cd \"path with spaces/file.txt\")
+- Try to maintain your current working directory throughout the session by using absolute \
+paths and avoiding usage of `cd`. You may use `cd` if the User explicitly requests it.
+- You may specify an optional timeout in milliseconds (up to 600000ms / 10 minutes). By \
+default, your command will timeout after 600000ms (10 minutes).
+- You can use the `run_in_background` parameter to run the command in the background. \
+Only use this if you don't need the result immediately and are OK being notified when the \
+command completes later. You do not need to check the output right away — you'll be \
+notified when it finishes. You do not need to use '&' at the end of the command when \
+using this parameter.
+- When issuing multiple commands:
+  - If the commands are independent and can run in parallel, make multiple Bash tool \
+calls in a single message.
+  - If the commands depend on each other and must run sequentially, use a single Bash \
+call with '&&' to chain them together.
+  - Use ';' only when you need to run commands sequentially but don't care if earlier \
+commands fail.
+  - DO NOT use newlines to separate commands (newlines are ok in quoted strings).
+- For git commands:
+  - Prefer to create a new commit rather than amending an existing commit.
+  - Before running destructive operations (e.g., git reset --hard, git push --force, \
+git checkout --), consider whether there is a safer alternative.
+  - Never skip hooks (--no-verify) or bypass signing (--no-gpg-sign) unless the user \
+has explicitly asked for it.
+- Avoid unnecessary `sleep` commands:
+  - Do not sleep between commands that can run immediately — just run them.
+  - If your command is long running and you would like to be notified when it finishes — \
+use `run_in_background`. No sleep needed.
+  - Do not retry failing commands in a sleep loop — diagnose the root cause.
+  - If waiting for a background task you started with `run_in_background`, you will be \
+notified when it completes — do not poll.";
 
 /// Prompt for `glob`.
 pub const GLOB: &str = "\
@@ -1598,10 +1621,16 @@ pub fn bash_tool_prompt() -> String {
 Only create commits when requested by the user. If unclear, ask first. When the user asks you to \
 create a new git commit, follow these steps carefully:
 
+You can call multiple tools in a single response. When multiple independent pieces of information \
+are requested and all commands are likely to succeed, run multiple tool calls in parallel for \
+optimal performance. The numbered steps below indicate which commands should be batched in parallel.
+
 Git Safety Protocol:
 - NEVER update the git config
 - NEVER run destructive git commands (push --force, reset --hard, checkout ., restore ., clean \
--f, branch -D) unless the user explicitly requests these actions
+-f, branch -D) unless the user explicitly requests these actions. Taking unauthorized destructive \
+actions is unhelpful and can result in lost work, so it's best to ONLY run these commands when \
+given direct instructions
 - NEVER skip hooks (--no-verify, --no-gpg-sign, etc) unless the user explicitly requests it
 - NEVER run force push to main/master, warn the user if they request it
 - CRITICAL: Always create NEW commits rather than amending, unless the user explicitly requests a \
@@ -1610,19 +1639,91 @@ PREVIOUS commit, which may result in destroying work or losing previous changes.
 hook failure, fix the issue, re-stage, and create a NEW commit
 - When staging files, prefer adding specific files by name rather than using \"git add -A\" or \
 \"git add .\", which can accidentally include sensitive files (.env, credentials) or large binaries
-- NEVER commit changes unless the user explicitly asks you to
+- NEVER commit changes unless the user explicitly asks you to. It is VERY IMPORTANT to only \
+commit when explicitly asked, otherwise the user will feel that you are being too proactive
 
-1. Run git status, git diff, and git log in parallel to understand the current state.
-2. Analyze all staged changes and draft a commit message focusing on the \"why\" rather than the \
-\"what\".
-3. Add relevant files, create the commit, and verify with git status.
-4. If the commit fails due to pre-commit hook: fix the issue and create a NEW commit.
+1. Run the following bash commands in parallel, each using the Bash tool:
+   - Run a git status command to see all untracked files. IMPORTANT: Never use the -uall flag as \
+it can cause memory issues on large repos.
+   - Run a git diff command to see both staged and unstaged changes that will be committed.
+   - Run a git log command to see recent commit messages, so that you can follow this \
+repository's commit message style.
+2. Analyze all staged changes (both previously staged and newly added) and draft a commit message:
+   - Summarize the nature of the changes (eg. new feature, enhancement to an existing feature, \
+bug fix, refactoring, test, docs, etc.). Ensure the message accurately reflects the changes and \
+their purpose (i.e. \"add\" means a wholly new feature, \"update\" means an enhancement to an \
+existing feature, \"fix\" means a bug fix, etc.).
+   - Do not commit files that likely contain secrets (.env, credentials.json, etc). Warn the \
+user if they specifically request to commit those files
+   - Draft a concise (1-2 sentences) commit message that focuses on the \"why\" rather than the \
+\"what\"
+   - Ensure it accurately reflects the changes and their purpose
+3. Run the following commands in parallel:
+   - Add relevant untracked files to the staging area.
+   - Create the commit with a message.
+   - Run git status after the commit completes to verify success.
+   Note: git status depends on the commit completing, so run it sequentially after the commit.
+4. If the commit fails due to pre-commit hook: fix the issue and create a NEW commit
+
+Important notes:
+- NEVER run additional commands to read or explore code, besides git bash commands
+- DO NOT push to the remote repository unless the user explicitly asks you to do so
+- IMPORTANT: Never use git commands with the -i flag (like git rebase -i or git add -i) since \
+they require interactive input which is not supported.
+- IMPORTANT: Do not use --no-edit with git rebase commands, as the --no-edit flag is not a valid \
+option for git rebase.
+- If there are no changes to commit (i.e., no untracked files and no modifications), do not \
+create an empty commit
+- In order to ensure good formatting, ALWAYS pass the commit message via a HEREDOC, a la this \
+example:
+<example>
+git commit -m \"$(cat <<'EOF'
+   Commit message here.
+   EOF
+   )\"
+</example>
 
 # Creating pull requests
-Use the gh command via the Bash tool for ALL GitHub-related tasks. When creating a PR:
-1. Run git status, git diff, git log, and git diff [base]...HEAD in parallel.
-2. Analyze ALL commits (not just the latest) and draft a PR title and summary.
-3. Create the branch, push, and create PR using gh pr create with a HEREDOC for the body.";
+Use the gh command via the Bash tool for ALL GitHub-related tasks including working with issues, \
+pull requests, checks, and releases. If given a Github URL use the gh command to get the \
+information needed.
+
+IMPORTANT: When the user asks you to create a pull request, follow these steps carefully:
+
+1. Run the following bash commands in parallel using the Bash tool, in order to understand the \
+current state of the branch since it diverged from the main branch:
+   - Run a git status command to see all untracked files (never use -uall flag)
+   - Run a git diff command to see both staged and unstaged changes that will be committed
+   - Check if the current branch tracks a remote branch and is up to date with the remote, so \
+you know if you need to push to the remote
+   - Run a git log command and `git diff [base-branch]...HEAD` to understand the full commit \
+history for the current branch (from the time it diverged from the base branch)
+2. Analyze all changes that will be included in the pull request, making sure to look at all \
+relevant commits (NOT just the latest commit, but ALL commits that will be included in the pull \
+request!!!), and draft a pull request title and summary:
+   - Keep the PR title short (under 70 characters)
+   - Use the description/body for details, not the title
+3. Run the following commands in parallel:
+   - Create new branch if needed
+   - Push to remote with -u flag if needed
+   - Create PR using gh pr create with the format below. Use a HEREDOC to pass the body to \
+ensure correct formatting.
+<example>
+gh pr create --title \"the pr title\" --body \"$(cat <<'EOF'
+## Summary
+<1-3 bullet points>
+
+## Test plan
+[Bulleted markdown checklist of TODOs for testing the pull request...]
+EOF
+)\"
+</example>
+
+Important:
+- Return the PR URL when you're done, so the user can see it
+
+# Other common operations
+- View comments on a Github PR: gh api repos/foo/bar/pulls/123/comments";
 
     let sandbox = "# Command sandbox
 By default, your command will be run in a sandbox. This sandbox controls which directories and \
@@ -1635,27 +1736,53 @@ always use the $TMPDIR environment variable instead of /tmp directly.";
         environment is initialized from the user's profile (bash or zsh).\n\n\
         IMPORTANT: Avoid using this tool to run `find`, `grep`, `cat`, `head`, `tail`, `sed`, \
         `awk`, or `echo` commands, unless explicitly instructed or after you have verified that \
-        a dedicated tool cannot accomplish your task. Instead, use the appropriate dedicated tool:\n\
+        a dedicated tool cannot accomplish your task. Instead, use the appropriate dedicated tool \
+        as this will provide a much better experience for the user:\n\
         - File search: Use Glob (NOT find or ls)\n\
         - Content search: Use Grep (NOT grep or rg)\n\
         - Read files: Use Read (NOT cat/head/tail)\n\
         - Edit files: Use Edit (NOT sed/awk)\n\
-        - Write files: Use Write (NOT echo/cat)\n\n\
+        - Write files: Use Write (NOT echo/cat)\n\
+        - Communication: Output text directly (NOT echo/printf)\n\n\
         While the Bash tool can do similar things, it's better to use the built-in tools as they \
         provide a better user experience and make it easier to review tool calls and give \
         permission.\n\n\
         # Instructions\n\
-        - If your command will create new directories or files, first run `ls` to verify the \
-        parent directory exists.\n\
-        - Always quote file paths containing spaces with double quotes.\n\
-        - Try to maintain your current working directory by using absolute paths and avoiding `cd`.\n\
-        - You may specify an optional timeout in milliseconds (up to 600000ms / 10 minutes).\n\
+        - If your command will create new directories or files, first use this tool to run `ls` \
+        to verify the parent directory exists and is the correct location.\n\
+        - Always quote file paths that contain spaces with double quotes in your command \
+        (e.g., cd \"path with spaces/file.txt\")\n\
+        - Try to maintain your current working directory throughout the session by using absolute \
+        paths and avoiding usage of `cd`. You may use `cd` if the User explicitly requests it.\n\
+        - You may specify an optional timeout in milliseconds (up to 600000ms / 10 minutes). By \
+        default, your command will timeout after 600000ms (10 minutes).\n\
         - {background_note}\n\
-        - When issuing multiple commands, use && for sequential dependent commands, and make \
-        multiple Bash calls for parallel independent commands.\n\
-        - For git commands: prefer new commits over amending. Never skip hooks. Never force push \
-        to main.\n\
-        - Avoid unnecessary sleep commands. Use run_in_background for long-running tasks.\n\n\
+        - When issuing multiple commands:\n\
+          - If the commands are independent and can run in parallel, make multiple Bash tool \
+        calls in a single message.\n\
+          - If the commands depend on each other and must run sequentially, use a single Bash \
+        call with '&&' to chain them together.\n\
+          - Use ';' only when you need to run commands sequentially but don't care if earlier \
+        commands fail.\n\
+          - DO NOT use newlines to separate commands (newlines are ok in quoted strings).\n\
+        - For git commands:\n\
+          - Prefer to create a new commit rather than amending an existing commit.\n\
+          - Before running destructive operations (e.g., git reset --hard, git push --force, \
+        git checkout --), consider whether there is a safer alternative that achieves the same \
+        goal. Only use destructive operations when they are truly the best approach.\n\
+          - Never skip hooks (--no-verify) or bypass signing (--no-gpg-sign, -c \
+        commit.gpgsign=false) unless the user has explicitly asked for it. If a hook fails, \
+        investigate and fix the underlying issue.\n\
+        - Avoid unnecessary `sleep` commands:\n\
+          - Do not sleep between commands that can run immediately — just run them.\n\
+          - If your command is long running and you would like to be notified when it finishes — \
+        use `run_in_background`. No sleep needed.\n\
+          - Do not retry failing commands in a sleep loop — diagnose the root cause.\n\
+          - If waiting for a background task you started with `run_in_background`, you will be \
+        notified when it completes — do not poll.\n\
+          - If you must poll an external process, use a check command (e.g. `gh run view`) \
+        rather than sleeping first.\n\
+          - If you must sleep, keep the duration short (1-5 seconds) to avoid blocking the user.\n\n\
         {sandbox}\n\n\
         {commit_pr}"
     )
@@ -1665,75 +1792,70 @@ always use the $TMPDIR environment variable instead of /tmp directly.";
 #[must_use]
 pub fn file_edit_tool_prompt() -> String {
     "Performs exact string replacements in files.\n\n\
-    # Usage\n\
+    Usage:\n\
     - You must use your `Read` tool at least once in the conversation before editing. This tool \
     will error if you attempt an edit without reading the file.\n\
-    - The `file_path` parameter must be an absolute path, not a relative path.\n\
-    - The `old_string` string must match exactly, including all whitespace and indentation.\n\
-    - The `new_string` string replaces `old_string` and must be different from it.\n\
-    - The edit will FAIL if `old_string` is not unique in the file. Either provide more context \
-    to make it unique or use `replace_all` to change every instance of `old_string`.\n\
-    - Use `replace_all` for replacing and renaming strings across the file.\n\n\
-    # Best practices\n\
+    - When editing text from Read tool output, ensure you preserve the exact indentation (tabs/\
+    spaces) as it appears AFTER the line number prefix. The line number prefix format is: \
+    spaces + line number + arrow. Everything after that is the actual file content to match. \
+    Never include any part of the line number prefix in the old_string or new_string.\n\
     - ALWAYS prefer editing existing files in the codebase. NEVER write new files unless \
     explicitly required.\n\
-    - Use the smallest search string that is clearly unique — usually 2-4 adjacent lines is \
-    sufficient.\n\
-    - When editing text from Read tool output, ensure you preserve the exact indentation after \
-    the line number prefix.\n\
-    - Never include any part of the line number prefix in the old_string or new_string.\n\
     - Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless \
-    asked.\n\n\
-    # Important\n\
-    - Do NOT include `// rest of code unchanged` or similar placeholders.\n\
-    - ALWAYS provide the COMPLETE intended content in `new_string`.\n\
-    - Partial updates or placeholders are STRICTLY FORBIDDEN."
+    asked.\n\
+    - The edit will FAIL if `old_string` is not unique in the file. Either provide a larger \
+    string with more surrounding context to make it unique or use `replace_all` to change every \
+    instance of `old_string`.\n\
+    - Use the smallest old_string that's clearly unique — usually 2-4 adjacent lines is \
+    sufficient. Avoid including 10+ lines of context when less uniquely identifies the target.\n\
+    - Use `replace_all` for replacing and renaming strings across the file. This parameter is \
+    useful if you want to rename a variable for instance."
         .to_owned()
 }
 
 /// Returns the file-read tool prompt with detailed reading instructions.
 #[must_use]
 pub fn file_read_tool_prompt() -> String {
-    "Reads a UTF-8 text file from the local filesystem. You can access any file directly by using \
-    this tool.\n\n\
-    # Usage\n\
-    - The `file_path` parameter must be an absolute path, not a relative path.\n\
+    "Reads a file from the local filesystem. You can access any file directly by using this tool. \
+    Assume this tool is able to read all files on the machine. If the User provides a path to a \
+    file assume that path is valid. It is okay to read a file that does not exist; an error will \
+    be returned.\n\n\
+    Usage:\n\
+    - The file_path parameter must be an absolute path, not a relative path.\n\
     - By default, it reads up to 2000 lines starting from the beginning of the file.\n\
-    - You can optionally specify a line `offset` and `limit`, especially for large files.\n\
-    - Results are returned with line numbers, starting at 1.\n\
-    - This tool can read images (PNG, JPG, etc.) — contents are presented visually.\n\
-    - This tool can read Jupyter notebooks (.ipynb) and returns all cells with outputs.\n\
-    - This tool can only read files, not directories. Use list_directory for directories.\n\n\
-    # Notes\n\
-    - If you read a file that exists but has empty contents, a warning will be returned.\n\
-    - It is okay to read a file that does not exist; an error will be returned.\n\
-    - Always read a file before editing it — the edit tool requires a prior read.\n\
-    - For very large files, read in chunks using offset/limit to avoid truncation.\n\
-    - Supports text extraction from PDF and DOCX files.\n\
-    - Lines longer than 2000 characters are truncated in the output."
+    - You can optionally specify a line offset and limit (especially handy for long files), but \
+    it's recommended to read the whole file by not providing these parameters.\n\
+    - Results are returned using cat -n format, with line numbers starting at 1.\n\
+    - This tool allows Claude Code to read images (eg PNG, JPG, etc). When reading an image file \
+    the contents are presented visually as Claude Code is a multimodal LLM.\n\
+    - This tool can read PDF files (.pdf). For large PDFs (more than 10 pages), you MUST provide \
+    the pages parameter to read specific page ranges (e.g., pages: \"1-5\").\n\
+    - This tool can read Jupyter notebooks (.ipynb files) and returns all cells with their \
+    outputs, combining code, text, and visualizations.\n\
+    - This tool can only read files, not directories. To read a directory, use an ls command via \
+    the Bash tool.\n\
+    - You will regularly be asked to read screenshots. If the user provides a path to a \
+    screenshot, ALWAYS use this tool to view the file at the path.\n\
+    - If you read a file that exists but has empty contents you will receive a system reminder \
+    warning in place of file contents."
         .to_owned()
 }
 
 /// Returns the file-write tool prompt with detailed writing instructions.
 #[must_use]
 pub fn file_write_tool_prompt() -> String {
-    "Writes a file to the local filesystem. Creates the file if it does not exist; overwrites if \
-    it does.\n\n\
-    # Usage\n\
-    - The `file_path` parameter must be an absolute path, not a relative path.\n\
-    - The `content` parameter must contain the COMPLETE file content — partial writes are not \
-    supported.\n\
-    - If this is an existing file, you MUST read it first to understand its current contents.\n\
-    - Prefer the edit_file or replace_in_file tool for modifying existing files — it only sends \
-    the diff.\n\n\
-    # Important\n\
-    - NEVER create documentation files (*.md) or README files unless explicitly requested.\n\
-    - This tool automatically creates any intermediate directories needed.\n\
-    - Do NOT use this tool for small edits to existing files — use edit_file instead.\n\
-    - ALWAYS provide the COMPLETE intended content. Partial updates or placeholders are FORBIDDEN.\n\
-    - Failure to do so will result in incomplete or broken code.\n\
-    - When creating a new project, organize all new files within a dedicated project directory \
-    unless the user specifies otherwise.".to_owned()
+    "Writes a file to the local filesystem.\n\n\
+    Usage:\n\
+    - This tool will overwrite the existing file if there is one at the provided path.\n\
+    - If this is an existing file, you MUST use the Read tool first to read the file's contents. \
+    This tool will fail if you did not read the file first.\n\
+    - Prefer the Edit tool for modifying existing files — it only sends the diff. Only use this \
+    tool to create new files or for complete rewrites.\n\
+    - NEVER create documentation files (*.md) or README files unless explicitly requested by \
+    the User.\n\
+    - Only use emojis if the user explicitly requests it. Avoid writing emojis to files unless \
+    asked."
+        .to_owned()
 }
 
 /// Returns the agent tool prompt with detailed sub-agent delegation instructions.
@@ -2292,8 +2414,15 @@ mod tests {
             "should be >200 chars, got {}",
             prompt.len()
         );
-        assert!(prompt.contains("search"), "should mention search");
+        assert!(
+            prompt.contains("old_string"),
+            "should mention old_string"
+        );
         assert!(prompt.contains("replace"), "should mention replace");
+        assert!(
+            prompt.contains("line number prefix"),
+            "should mention line number prefix format"
+        );
     }
 
     #[test]
@@ -2319,8 +2448,14 @@ mod tests {
             "should be >200 chars, got {}",
             prompt.len()
         );
-        assert!(prompt.contains("COMPLETE"), "should mention COMPLETE");
-        assert!(prompt.contains("file_path"), "should mention file_path");
+        assert!(
+            prompt.contains("overwrite"),
+            "should mention overwrite"
+        );
+        assert!(
+            prompt.contains("Edit tool"),
+            "should mention Edit tool preference"
+        );
     }
 
     #[test]

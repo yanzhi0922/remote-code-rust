@@ -76,6 +76,8 @@ pub struct ResolvedRuntimeSettings {
     pub auto_compact_enabled: Option<bool>,
     pub auto_memory_enabled: Option<bool>,
     pub auto_memory_directory: Option<String>,
+    /// Permission mode from settings file (e.g. "bypassPermissions", "acceptEdits").
+    pub permission_mode: Option<String>,
     pub setting_sources: Vec<String>,
     pub auth_source: Option<String>,
 }
@@ -123,6 +125,21 @@ struct SettingsDocument {
     #[serde(default)]
     #[serde(alias = "autoMemoryDirectory")]
     auto_memory_directory: Option<String>,
+    #[serde(default)]
+    permissions: Option<SettingsPermissions>,
+}
+
+/// Permissions section of the settings file.
+///
+/// Supports the same format as the upstream Claude Code settings:
+/// ```json
+/// { "permissions": { "mode": "bypassPermissions" } }
+/// ```
+#[derive(Debug, Default, Deserialize)]
+struct SettingsPermissions {
+    /// Permission mode string (e.g. "bypassPermissions", "acceptEdits", "plan").
+    #[serde(default)]
+    mode: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -300,6 +317,11 @@ pub fn load_runtime_settings(paths: &[PathBuf]) -> Result<ResolvedRuntimeSetting
         }
         if let Some(auto_memory_directory) = document.auto_memory_directory {
             resolved.auto_memory_directory = normalize_optional_string(Some(auto_memory_directory));
+        }
+        if let Some(permissions) = document.permissions {
+            if let Some(mode) = permissions.mode {
+                resolved.permission_mode = Some(mode);
+            }
         }
     }
     resolved.allowed_tools = normalize_tool_filters(&resolved.allowed_tools);

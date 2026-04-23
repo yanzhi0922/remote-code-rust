@@ -446,12 +446,24 @@ pub fn load_runtime_config(
         .session_name
         .clone()
         .or(settings.session_name.clone());
+    // When the CLI uses the default permission mode (i.e. the user did not
+    // explicitly pass --permission-mode), fall back to the settings file value.
+    let effective_permission_mode = if permission_mode == PermissionMode::Default {
+        settings
+            .permission_mode
+            .as_deref()
+            .and_then(parse_permission_mode_from_settings)
+            .unwrap_or(permission_mode)
+    } else {
+        permission_mode
+    };
+
     Ok(RuntimeConfig {
         cwd: cwd.clone(),
         original_cwd: cwd,
         active_worktree_session: None,
         session_id: session_id_override.unwrap_or_else(Uuid::new_v4),
-        permission_mode,
+        permission_mode: effective_permission_mode,
         input_format,
         output_format,
         print_mode,
@@ -810,6 +822,23 @@ fn build_request_metadata(session_id: Option<Uuid>) -> BTreeMap<String, String> 
     }
 
     metadata
+}
+
+/// Parse a permission mode string from settings files.
+///
+/// Accepts camelCase (`bypassPermissions`), kebab-case (`bypass-permissions`),
+/// and snake_case (`bypass_permissions`) formats.
+fn parse_permission_mode_from_settings(mode: &str) -> Option<PermissionMode> {
+    match mode {
+        "default" | "Default" => Some(PermissionMode::Default),
+        "acceptEdits" | "accept-edits" | "accept_edits" => Some(PermissionMode::AcceptEdits),
+        "bypassPermissions" | "bypass-permissions" | "bypass_permissions" => {
+            Some(PermissionMode::BypassPermissions)
+        }
+        "dontAsk" | "dont-ask" | "dont_ask" => Some(PermissionMode::DontAsk),
+        "plan" | "Plan" => Some(PermissionMode::Plan),
+        _ => None,
+    }
 }
 
 fn read_env_first(keys: &[&str]) -> Option<String> {
