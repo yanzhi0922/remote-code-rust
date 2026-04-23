@@ -84,6 +84,7 @@ use crate::hooks::{
 use crate::repl_hook_runtime::{
     ReplHookRuntimeResources, apply_runtime_hook_context, register_repl_runtime_hooks,
 };
+use crate::session_memory_runtime::try_session_memory_compaction;
 struct CompatSharedState {
     config: Mutex<RuntimeConfig>,
     conversation: Mutex<Vec<ConversationEntry>>,
@@ -2352,6 +2353,16 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
             .await
         })
     }));
+    let compact_runtime_config = config.clone();
+    query_config =
+        query_config.with_compact_conversation_handler(Arc::new(move |conversation, manager| {
+            let compact_runtime_config = compact_runtime_config.clone();
+            Box::pin(async move {
+                try_session_memory_compaction(&compact_runtime_config, &conversation, &manager)
+                    .await
+                    .map(|compacted| (compacted, "session_memory".to_owned()))
+            })
+        }));
     if event_sink.is_some() || config.print_mode {
         query_config =
             query_config.with_provider_invocation_mode(ProviderInvocationMode::Streaming);

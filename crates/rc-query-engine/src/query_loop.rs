@@ -499,7 +499,18 @@ async fn maybe_compact_conversation(
         strategy: "standard".to_owned(),
     });
     let before_messages = legacy_conversation.len();
-    let mut compacted = config.context_manager.compact(legacy_conversation);
+    let mut strategy = "standard".to_owned();
+    let mut compacted = if let Some(handler) = config.compact_conversation_handler.as_ref() {
+        match handler(legacy_conversation.clone(), config.context_manager.clone()).await {
+            Some((conversation, selected_strategy)) => {
+                strategy = selected_strategy;
+                conversation
+            }
+            None => config.context_manager.compact(legacy_conversation),
+        }
+    } else {
+        config.context_manager.compact(legacy_conversation)
+    };
     if compacted.len() == before_messages {
         return;
     }
@@ -511,7 +522,7 @@ async fn maybe_compact_conversation(
     state.replace_from_legacy(legacy_conversation);
     config.event_stream.emit(EngineEvent::CompactCompleted {
         result: CompactionResult {
-            strategy: "standard".to_owned(),
+            strategy,
             before_messages,
             after_messages: legacy_conversation.len(),
             summary: Some("compat context compaction applied".to_owned()),

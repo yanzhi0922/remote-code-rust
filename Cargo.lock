@@ -4705,6 +4705,7 @@ dependencies = [
  "futures",
  "rc-agents",
  "rc-auth",
+ "rc-compact",
  "rc-config",
  "rc-context",
  "rc-control-plane",

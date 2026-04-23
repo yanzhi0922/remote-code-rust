@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use anyhow::Result;
+use rc_compact::session_memory::SessionMemoryCompactFileContext;
+use rc_compact::{SessionMemoryCompactConfig, build_post_compact_messages, session_memory_compact};
 use rc_config::RuntimeConfig;
 use rc_core::{ConversationEntry, ConversationRole, PermissionMode};
 use rc_permissions::{PermissionBroker, PermissionDecision, PermissionRequest};
@@ -30,10 +32,30 @@ static SESSION_MEMORY_STATES: OnceLock<
 > = OnceLock::new();
 static SESSION_MEMORY_GROWTHBOOK: OnceLock<GrowthBookClient> = OnceLock::new();
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct SessionMemoryRuntimeState {
-    pub(crate) shared: SessionMemoryState,
+    pub(crate) shared: Arc<std::sync::Mutex<SessionMemoryState>>,
     pub(crate) last_memory_message_id: Option<String>,
+}
+
+impl Default for SessionMemoryRuntimeState {
+    fn default() -> Self {
+        Self {
+            shared: Arc::new(std::sync::Mutex::new(SessionMemoryState::default())),
+            last_memory_message_id: None,
+        }
+    }
+}
+
+pub(crate) async fn session_memory_shared_state_for_session(
+    session_id: Uuid,
+) -> Arc<std::sync::Mutex<SessionMemoryState>> {
+    session_memory_state_for_session(session_id)
+        .await
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .shared
+        .clone()
 }
 
 fn session_memory_states()
@@ -176,10 +198,14 @@ fn session_memory_dynamic_config() -> SessionMemoryConfig {
 }
 
 fn init_session_memory_config_if_needed(state: &mut SessionMemoryRuntimeState) {
-    if state.shared.initialized {
+    let mut shared = state
+        .shared
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if shared.initialized {
         return;
     }
-    state.shared.config = session_memory_dynamic_config();
+    shared.config = session_memory_dynamic_config();
 }
 
 fn has_tool_calls_in_last_assistant_turn(conversation: &[ConversationEntry]) -> bool {
@@ -244,29 +270,31 @@ fn should_extract_memory(
     state: &mut SessionMemoryRuntimeState,
 ) -> bool {
     let current_token_count = count_conversation_tokens(conversation);
+    let mut shared = state
+        .shared
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-    if !state.shared.initialized {
-        if !state
-            .shared
-            .has_met_initialization_threshold(current_token_count)
-        {
+    if !shared.initialized {
+        if !shared.has_met_initialization_threshold(current_token_count) {
             return false;
         }
-        state.shared.mark_initialized();
+        shared.mark_initialized();
     }
 
-    let has_met_token_threshold = state.shared.has_met_update_threshold(current_token_count);
+    let has_met_token_threshold = shared.has_met_update_threshold(current_token_count);
     let last_memory_uuid = state
         .last_memory_message_id
         .as_deref()
         .and_then(|value| Uuid::parse_str(value).ok());
     let has_met_tool_call_threshold = count_tool_calls_since(conversation, last_memory_uuid)
-        >= state.shared.config.tool_calls_between_updates;
+        >= shared.config.tool_calls_between_updates;
     let has_tool_calls_in_last_turn = has_tool_calls_in_last_assistant_turn(conversation);
 
     let should_extract = (has_met_token_threshold && has_met_tool_call_threshold)
         || (has_met_token_threshold && !has_tool_calls_in_last_turn);
 
+    drop(shared);
     if should_extract {
         update_last_memory_message_id(conversation, state);
     }
@@ -284,6 +312,8 @@ fn update_last_summarized_message_id_if_safe(
     if let Some(last_message) = conversation.last() {
         state
             .shared
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .set_last_summarized_message_id(Some(last_message.uuid.to_string()));
     }
 }
@@ -312,7 +342,11 @@ pub(crate) async fn maybe_spawn_session_memory_update(
     if !should_extract_memory(conversation, &mut guard) {
         return;
     }
-    guard.shared.mark_extraction_started();
+    guard
+        .shared
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .mark_extraction_started();
     drop(guard);
 
     let child_config = config.clone();
@@ -327,10 +361,15 @@ pub(crate) async fn maybe_spawn_session_memory_update(
         let store = match SessionStore::open(paths) {
             Ok(store) => store,
             Err(_) => {
-                let mut state = state
+                let shared = state
                     .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                state.shared.mark_extraction_completed();
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .shared
+                    .clone();
+                shared
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .mark_extraction_completed();
                 return;
             }
         };
@@ -345,6 +384,70 @@ pub(crate) async fn maybe_spawn_session_memory_update(
         )
         .await;
     });
+}
+
+pub(crate) async fn try_session_memory_compaction(
+    config: &RuntimeConfig,
+    conversation: &[ConversationEntry],
+    context_manager: &rc_provider::context::ContextWindowManager,
+) -> Option<Vec<ConversationEntry>> {
+    let gate_enabled = session_memory_gate_enabled(config).ok()?;
+    try_session_memory_compaction_with_gate(config, conversation, context_manager, gate_enabled)
+        .await
+}
+
+async fn try_session_memory_compaction_with_gate(
+    config: &RuntimeConfig,
+    conversation: &[ConversationEntry],
+    context_manager: &rc_provider::context::ContextWindowManager,
+    gate_enabled: bool,
+) -> Option<Vec<ConversationEntry>> {
+    if !gate_enabled {
+        return None;
+    }
+
+    let shared_state = session_memory_shared_state_for_session(config.session_id).await;
+    {
+        let mut shared = shared_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !shared.initialized {
+            shared.config = session_memory_dynamic_config();
+        }
+    }
+
+    let messages = conversation
+        .iter()
+        .cloned()
+        .map(rc_core::Message::from)
+        .collect::<Vec<_>>();
+    let threshold = context_manager
+        .budget_snapshot(conversation)
+        .threshold_tokens();
+    let compact_config = SessionMemoryCompactConfig::default();
+    let file_context = SessionMemoryCompactFileContext {
+        runtime_config: config.clone(),
+        state: shared_state.clone(),
+    };
+    let result = session_memory_compact(&messages, &compact_config, Some(&file_context), None)
+        .await
+        .ok()?;
+    let built = build_post_compact_messages(&result);
+    let compacted = built
+        .into_iter()
+        .filter_map(|message| message.as_conversation_entry())
+        .collect::<Vec<_>>();
+
+    if context_manager.budget_snapshot(&compacted).estimated_tokens >= threshold {
+        return None;
+    }
+
+    shared_state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .set_last_summarized_message_id(None);
+
+    Some(compacted)
 }
 
 struct SessionMemoryFileSetup {
@@ -458,15 +561,24 @@ async fn run_session_memory_update(
     let outcome = match run_result {
         Ok(outcome) => outcome,
         Err(error) => {
-            let mut state = state
+            let shared = state
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            state.shared.mark_extraction_completed();
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .shared
+                .clone();
+            shared
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .mark_extraction_completed();
             return Err(error);
         }
     };
 
-    let guard = state
+    let shared = state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let shared_guard = shared
+        .shared
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     store.append_named_event(
@@ -477,30 +589,73 @@ async fn run_session_memory_update(
             "output_tokens": outcome.usage.output_tokens,
             "cache_read_input_tokens": outcome.cache_read_input_tokens,
             "cache_creation_input_tokens": outcome.cache_creation_input_tokens,
-            "config_min_message_tokens_to_init": guard.shared.config.minimum_message_tokens_to_init,
-            "config_min_tokens_between_update": guard.shared.config.minimum_tokens_between_update,
-            "config_tool_calls_between_updates": guard.shared.config.tool_calls_between_updates,
+            "config_min_message_tokens_to_init": shared_guard.config.minimum_message_tokens_to_init,
+            "config_min_tokens_between_update": shared_guard.config.minimum_tokens_between_update,
+            "config_tool_calls_between_updates": shared_guard.config.tool_calls_between_updates,
         }),
     )?;
-    drop(guard);
+    drop(shared_guard);
+    drop(shared);
 
     let mut state = state
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     state
         .shared
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .record_extraction_token_count(count_conversation_tokens(conversation));
     update_last_summarized_message_id_if_safe(conversation, &mut state);
-    state.shared.mark_extraction_completed();
+    state
+        .shared
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .mark_extraction_completed();
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::SessionMemoryPermissionBroker;
+    use super::{SessionMemoryPermissionBroker, session_memory_shared_state_for_session};
+    use rc_config::{ProviderOverrides, RuntimeConfig, RuntimeOverrides, load_runtime_config};
+    use rc_core::{ConversationEntry, PermissionMode, ProviderProtocol};
     use rc_permissions::{PermissionBroker, PermissionRequest};
+    use rc_provider::context::ContextWindowManager;
+    use rc_session::session_memory::ensure_session_memory_file;
     use serde_json::json;
-    use tempfile::tempdir;
+    use tempfile::{TempDir, tempdir};
+
+    fn test_runtime() -> (TempDir, RuntimeConfig) {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        std::fs::create_dir_all(&cwd).expect("cwd");
+        std::fs::create_dir_all(&profile).expect("profile");
+
+        let config = load_runtime_config(
+            Some(cwd),
+            Some(profile),
+            None,
+            PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides {
+                provider: Some("mock".to_owned()),
+                base_url: Some("mock://provider".to_owned()),
+                api_key: Some("mock".to_owned()),
+                model: Some("mock-model".to_owned()),
+                protocol: Some(ProviderProtocol::Anthropic),
+            },
+            RuntimeOverrides::default(),
+        )
+        .expect("config");
+        (tempdir, config)
+    }
 
     #[tokio::test]
     async fn session_memory_broker_allows_exact_edit_file_path_only() {
@@ -591,5 +746,51 @@ mod tests {
             })
             .await;
         assert!(!deny_other_path.allowed);
+    }
+
+    #[tokio::test]
+    async fn try_session_memory_compaction_returns_compacted_conversation_and_clears_boundary() {
+        let (_tempdir, config) = test_runtime();
+        let summary_path = ensure_session_memory_file(&config).expect("summary file");
+        std::fs::write(
+            &summary_path,
+            "# Session Title\nA real summary\n\n# Current State\nWorking state\n",
+        )
+        .expect("write summary");
+        let shared = session_memory_shared_state_for_session(config.session_id).await;
+        {
+            let mut guard = shared
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.initialized = true;
+            guard.set_last_summarized_message_id(None);
+        }
+        let conversation = vec![
+            ConversationEntry::system("sys"),
+            ConversationEntry::user("user ".repeat(300)),
+            ConversationEntry::assistant("assistant ".repeat(300)),
+            ConversationEntry::user("latest ".repeat(200)),
+        ];
+        let manager = ContextWindowManager::new(20_000, 100);
+        let compacted =
+            super::try_session_memory_compaction_with_gate(&config, &conversation, &manager, true)
+                .await
+                .expect("session memory compaction should succeed");
+
+        assert!(!compacted.is_empty());
+        assert!(
+            compacted
+                .iter()
+                .any(|entry| entry.text.contains("A real summary")
+                    || entry.text.contains("Current State"))
+        );
+        let shared = session_memory_shared_state_for_session(config.session_id).await;
+        assert!(
+            shared
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .last_summarized_message_id
+                .is_none()
+        );
     }
 }
