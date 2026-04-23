@@ -40,6 +40,14 @@ pub mod utility;
 pub mod version;
 pub mod vim;
 pub mod worktree;
+pub mod chrome_cmd;
+pub mod desktop_cmd;
+pub mod mobile_cmd;
+pub mod passes_cmd;
+pub mod privacy_cmd;
+pub mod rate_limit_cmd;
+pub mod statusline_cmd;
+pub mod workflows_cmd;
 
 /// Result of handling a slash command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -484,6 +492,46 @@ pub const SLASH_COMMANDS: &[SlashCommandSpec] = &[
         usage: "/teleport <path>",
     },
     SlashCommandSpec {
+        name: "/desktop",
+        summary: "Show desktop integration status",
+        usage: "/desktop",
+    },
+    SlashCommandSpec {
+        name: "/chrome",
+        summary: "Show Chrome extension status",
+        usage: "/chrome",
+    },
+    SlashCommandSpec {
+        name: "/mobile",
+        summary: "Show mobile app connection status",
+        usage: "/mobile",
+    },
+    SlashCommandSpec {
+        name: "/privacy",
+        summary: "Show privacy settings",
+        usage: "/privacy",
+    },
+    SlashCommandSpec {
+        name: "/workflows",
+        summary: "List and manage workflow scripts",
+        usage: "/workflows [list|show <name>|run <name>]",
+    },
+    SlashCommandSpec {
+        name: "/passes",
+        summary: "Show available passes",
+        usage: "/passes",
+    },
+    SlashCommandSpec {
+        name: "/statusline",
+        summary: "Configure status line display",
+        usage: "/statusline [show|set <format>]",
+    },
+    SlashCommandSpec {
+        name: "/rate-limits",
+        summary: "Show rate limit status",
+        usage: "/rate-limits",
+    },
+    SlashCommandSpec {
         name: "/quit",
         summary: "Exit the interactive session",
         usage: "/quit",
@@ -805,6 +853,14 @@ pub fn dispatch_with_result(input: &str, context: SlashCommandContext<'_>) -> Sl
         "/version" => version::render(),
         "/install" => install::dispatch(trimmed, context.config),
         "/teleport" => teleport::dispatch(trimmed, context.config),
+        "/desktop" => desktop_cmd::render(),
+        "/chrome" => chrome_cmd::render(),
+        "/mobile" => mobile_cmd::render(),
+        "/privacy" => privacy_cmd::render(context.config),
+        "/workflows" => workflows_cmd::dispatch(trimmed, context.config),
+        "/passes" => passes_cmd::render(),
+        "/statusline" => statusline_cmd::dispatch(trimmed),
+        "/rate-limits" => rate_limit_cmd::render(),
         "/quit" | "/exit" => {
             return SlashCommandResult {
                 action: SlashCommandAction::Quit,

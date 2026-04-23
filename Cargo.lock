@@ -4562,6 +4562,7 @@ dependencies = [
  "rc-skills",
  "rc-system-prompt",
  "rc-tools",
+ "rc-utils",
  "serde",
  "serde_json",
  "tempfile",
