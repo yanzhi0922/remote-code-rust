@@ -3,6 +3,9 @@
 //! Corresponds to `.research/cc-haha/src/utils/desktopDeepLink.ts`.
 //! Provides URL-based deep linking to resume sessions, open files, etc.
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::path::Path;
+
 /// Minimum desktop app version required for deep link support.
 pub const MIN_DESKTOP_VERSION: &str = "1.0.0";
 
