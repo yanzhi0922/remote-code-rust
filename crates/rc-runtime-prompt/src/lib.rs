@@ -13,6 +13,7 @@ use auto_memory::{
     team_memory_dir_for_read_permissions_with_features,
 };
 use chrono::Local;
+use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use rc_agents::coordinator::{
     COORDINATOR_MODE_ALLOWED_TOOLS, McpClientInfo as CoordinatorMcpClientInfo,
     get_coordinator_system_prompt, get_coordinator_user_context, is_coordinator_mode,
@@ -691,6 +692,8 @@ struct ClaudeMemoryFile {
     memory_type: ClaudeMemoryType,
     content: String,
     has_paths_frontmatter: bool,
+    globs: Vec<String>,
+    content_differs_from_disk: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -773,7 +776,7 @@ fn read_memory_file(
     memory_type: ClaudeMemoryType,
 ) -> Option<(ClaudeMemoryFile, Vec<PathBuf>)> {
     let raw = fs::read_to_string(path).ok()?;
-    let (without_frontmatter, has_paths_frontmatter) = strip_frontmatter(&raw);
+    let (without_frontmatter, has_paths_frontmatter, globs) = strip_frontmatter(&raw);
     let without_comments = strip_html_comments_outside_fences(&without_frontmatter);
     let include_paths = extract_include_paths(path, &without_frontmatter);
     let content = without_comments.trim();
@@ -787,17 +790,44 @@ fn read_memory_file(
             memory_type,
             content: content.to_owned(),
             has_paths_frontmatter,
+            globs,
+            content_differs_from_disk: content != raw.trim(),
         },
         include_paths,
     ))
 }
 
-fn strip_frontmatter(raw: &str) -> (String, bool) {
+fn split_path_frontmatter(value: &str) -> Vec<String> {
+    value
+        .split([',', '\n'])
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn normalize_rule_globs(globs: Vec<String>) -> Vec<String> {
+    if globs.iter().any(|glob| {
+        matches!(
+            glob.trim(),
+            "*" | "**" | "**/*" | "./**" | "./**/*" | "."
+        )
+    }) {
+        Vec::new()
+    } else {
+        globs.into_iter()
+            .map(|glob| glob.trim().to_owned())
+            .filter(|glob| !glob.is_empty())
+            .collect()
+    }
+}
+
+fn strip_frontmatter(raw: &str) -> (String, bool, Vec<String>) {
     let Some(rest) = raw
         .strip_prefix("---\n")
         .or_else(|| raw.strip_prefix("---\r\n"))
     else {
-        return (raw.to_owned(), false);
+        return (raw.to_owned(), false, Vec::new());
     };
 
     let mut offset = raw.len() - rest.len();
@@ -806,17 +836,27 @@ fn strip_frontmatter(raw: &str) -> (String, bool) {
         let trimmed = line.trim_end_matches(['\r', '\n']);
         offset += line.len();
         if trimmed == "---" {
+            let mut globs = Vec::new();
             let has_paths_frontmatter = frontmatter_lines.iter().any(|entry: &String| {
-                entry
-                    .split_once(':')
-                    .is_some_and(|(key, _)| key.trim() == "paths")
+                entry.split_once(':').is_some_and(|(key, value)| {
+                    if key.trim() == "paths" {
+                        globs.extend(split_path_frontmatter(value));
+                        true
+                    } else {
+                        false
+                    }
+                })
             });
-            return (raw[offset..].to_owned(), has_paths_frontmatter);
+            return (
+                raw[offset..].to_owned(),
+                has_paths_frontmatter,
+                normalize_rule_globs(globs),
+            );
         }
         frontmatter_lines.push(trimmed.to_owned());
     }
 
-    (raw.to_owned(), false)
+    (raw.to_owned(), false, Vec::new())
 }
 
 fn strip_html_comments_outside_fences(content: &str) -> String {
@@ -1233,6 +1273,325 @@ fn process_rules_dir(
                 .filter(|file| !file.has_paths_frontmatter),
         );
     }
+}
+
+fn rule_glob_base_dir(rules_dir: &Path, memory_type: ClaudeMemoryType, original_cwd: &Path) -> PathBuf {
+    match memory_type {
+        ClaudeMemoryType::Managed | ClaudeMemoryType::User => canonical_or_original(original_cwd),
+        ClaudeMemoryType::Project | ClaudeMemoryType::Local => rules_dir
+            .parent()
+            .and_then(Path::parent)
+            .map(canonical_or_original)
+            .unwrap_or_else(|| canonical_or_original(original_cwd)),
+    }
+}
+
+fn build_glob_set(globs: &[String]) -> Option<GlobSet> {
+    if globs.is_empty() {
+        return None;
+    }
+    let mut builder = GlobSetBuilder::new();
+    for glob in globs {
+        let glob = GlobBuilder::new(&glob.replace('\\', "/"))
+            .literal_separator(true)
+            .build()
+            .ok()?;
+        builder.add(glob);
+    }
+    builder.build().ok()
+}
+
+fn memory_rule_matches_target(
+    file: &ClaudeMemoryFile,
+    rules_dir: &Path,
+    target_path: &Path,
+    original_cwd: &Path,
+) -> bool {
+    if file.globs.is_empty() {
+        return true;
+    }
+    let base_dir = rule_glob_base_dir(rules_dir, file.memory_type, original_cwd);
+    let canonical = canonical_or_original(target_path);
+    let Ok(relative) = canonical.strip_prefix(&base_dir) else {
+        return false;
+    };
+    let relative = relative.to_string_lossy().replace('\\', "/");
+    if relative.is_empty() || relative.starts_with("../") || Path::new(&relative).is_absolute() {
+        return false;
+    }
+
+    build_glob_set(&file.globs).is_some_and(|set: GlobSet| set.is_match(&relative))
+}
+
+fn process_conditioned_rules_dir(
+    rules_dir: &Path,
+    memory_type: ClaudeMemoryType,
+    processed_paths: &mut HashSet<String>,
+    include_external: bool,
+    original_cwd: &Path,
+    target_path: &Path,
+    results: &mut Vec<ClaudeMemoryFile>,
+) {
+    let Ok(entries) = fs::read_dir(rules_dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            process_conditioned_rules_dir(
+                &path,
+                memory_type,
+                processed_paths,
+                include_external,
+                original_cwd,
+                target_path,
+                results,
+            );
+            continue;
+        }
+        if !file_type.is_file()
+            || path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_none_or(|ext| !ext.eq_ignore_ascii_case("md"))
+        {
+            continue;
+        }
+
+        let mut file_results = Vec::new();
+        process_memory_file(
+            &path,
+            memory_type,
+            processed_paths,
+            include_external,
+            original_cwd,
+            0,
+            &mut file_results,
+        );
+        results.extend(file_results.into_iter().filter(|file| {
+            file.has_paths_frontmatter
+                && memory_rule_matches_target(file, rules_dir, target_path, original_cwd)
+        }));
+    }
+}
+
+fn dedup_runtime_memory_files(files: Vec<ClaudeMemoryFile>) -> Vec<ClaudeMemoryFile> {
+    let mut seen = HashSet::new();
+    let mut deduped = Vec::new();
+    for file in files {
+        if seen.insert(normalize_path_for_comparison(&file.path)) {
+            deduped.push(file);
+        }
+    }
+    deduped
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeClaudeMemoryFile {
+    pub path: PathBuf,
+    pub content: String,
+    pub globs: Vec<String>,
+    pub content_differs_from_disk: bool,
+    pub memory_type: String,
+}
+
+impl RuntimeClaudeMemoryFile {
+    fn from_claude_memory(file: ClaudeMemoryFile) -> Self {
+        Self {
+            path: file.path,
+            content: file.content,
+            globs: file.globs,
+            content_differs_from_disk: file.content_differs_from_disk,
+            memory_type: format!("{:?}", file.memory_type).to_ascii_lowercase(),
+        }
+    }
+}
+
+fn nested_memory_directories(config: &RuntimeConfig, target_path: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let original_cwd = canonical_or_original(&config.original_cwd);
+    let target_parent = canonical_or_original(target_path.parent().unwrap_or(target_path));
+
+    let mut nested_dirs = Vec::new();
+    if target_parent.starts_with(&original_cwd) {
+        let mut current = original_cwd.clone();
+        loop {
+            nested_dirs.push(current.clone());
+            if current == target_parent {
+                break;
+            }
+            let Ok(relative) = target_parent.strip_prefix(&current) else {
+                break;
+            };
+            let Some(next_component) = relative.components().next() else {
+                break;
+            };
+            current = current.join(next_component.as_os_str());
+        }
+    }
+
+    let mut cwd_level_dirs = config
+        .original_cwd
+        .ancestors()
+        .map(canonical_or_original)
+        .collect::<Vec<_>>();
+    cwd_level_dirs.reverse();
+    (nested_dirs, cwd_level_dirs)
+}
+
+pub fn get_managed_and_user_conditional_rules(
+    config: &RuntimeConfig,
+    target_path: &Path,
+    settings: Option<&RuntimePromptSettings>,
+) -> Vec<RuntimeClaudeMemoryFile> {
+    let roots = ClaudeMemoryRoots::from_runtime_settings(settings);
+    let mut processed_paths = HashSet::new();
+    let mut results = Vec::new();
+
+    process_conditioned_rules_dir(
+        &roots.managed_dir.join(".claude").join("rules"),
+        ClaudeMemoryType::Managed,
+        &mut processed_paths,
+        false,
+        &config.original_cwd,
+        target_path,
+        &mut results,
+    );
+
+    if config
+        .allowed_setting_sources
+        .contains(&SettingSource::User)
+    {
+        process_conditioned_rules_dir(
+            &roots.user_config_dir.join("rules"),
+            ClaudeMemoryType::User,
+            &mut processed_paths,
+            true,
+            &config.original_cwd,
+            target_path,
+            &mut results,
+        );
+    }
+
+    dedup_runtime_memory_files(results)
+        .into_iter()
+        .map(RuntimeClaudeMemoryFile::from_claude_memory)
+        .collect()
+}
+
+pub fn get_memory_files_for_nested_directory(
+    config: &RuntimeConfig,
+    directory: &Path,
+    target_path: &Path,
+) -> Vec<RuntimeClaudeMemoryFile> {
+    let mut processed_paths = HashSet::new();
+    let mut results = Vec::new();
+
+    process_memory_file(
+        &directory.join("CLAUDE.md"),
+        ClaudeMemoryType::Project,
+        &mut processed_paths,
+        false,
+        &config.original_cwd,
+        0,
+        &mut results,
+    );
+    process_memory_file(
+        &directory.join(".claude").join("CLAUDE.md"),
+        ClaudeMemoryType::Project,
+        &mut processed_paths,
+        false,
+        &config.original_cwd,
+        0,
+        &mut results,
+    );
+    process_memory_file(
+        &directory.join("CLAUDE.local.md"),
+        ClaudeMemoryType::Local,
+        &mut processed_paths,
+        false,
+        &config.original_cwd,
+        0,
+        &mut results,
+    );
+    process_rules_dir(
+        &directory.join(".claude").join("rules"),
+        ClaudeMemoryType::Project,
+        &mut processed_paths,
+        false,
+        &config.original_cwd,
+        &mut results,
+    );
+    process_conditioned_rules_dir(
+        &directory.join(".claude").join("rules"),
+        ClaudeMemoryType::Project,
+        &mut processed_paths,
+        false,
+        &config.original_cwd,
+        target_path,
+        &mut results,
+    );
+
+    dedup_runtime_memory_files(results)
+        .into_iter()
+        .map(RuntimeClaudeMemoryFile::from_claude_memory)
+        .collect()
+}
+
+pub fn get_conditional_rules_for_cwd_level_directory(
+    config: &RuntimeConfig,
+    directory: &Path,
+    target_path: &Path,
+) -> Vec<RuntimeClaudeMemoryFile> {
+    let mut processed_paths = HashSet::new();
+    let mut results = Vec::new();
+    process_conditioned_rules_dir(
+        &directory.join(".claude").join("rules"),
+        ClaudeMemoryType::Project,
+        &mut processed_paths,
+        false,
+        &config.original_cwd,
+        target_path,
+        &mut results,
+    );
+
+    dedup_runtime_memory_files(results)
+        .into_iter()
+        .map(RuntimeClaudeMemoryFile::from_claude_memory)
+        .collect()
+}
+
+pub fn get_nested_memory_files_for_target(
+    config: &RuntimeConfig,
+    target_path: &Path,
+    settings: Option<&RuntimePromptSettings>,
+) -> Vec<RuntimeClaudeMemoryFile> {
+    let target = canonical_or_original(target_path);
+    let (nested_dirs, cwd_level_dirs) = nested_memory_directories(config, &target);
+    let nested_dir_set = nested_dirs
+        .iter()
+        .map(|path| normalize_path_for_comparison(path))
+        .collect::<HashSet<_>>();
+    let mut results = get_managed_and_user_conditional_rules(config, &target, settings);
+
+    for dir in nested_dirs {
+        results.extend(get_memory_files_for_nested_directory(config, &dir, &target));
+    }
+    for dir in cwd_level_dirs {
+        if nested_dir_set.contains(&normalize_path_for_comparison(&dir)) {
+            continue;
+        }
+        results.extend(get_conditional_rules_for_cwd_level_directory(
+            config, &dir, &target,
+        ));
+    }
+
+    let mut seen = HashSet::new();
+    results.retain(|file| seen.insert(normalize_path_for_comparison(&file.path)));
+    results
 }
 
 fn collect_claude_md_context_with_roots(
