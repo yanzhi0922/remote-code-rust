@@ -32,3 +32,39 @@ export {
   McpPermissionRequest,
   GenericPermissionRequest,
 } from './ToolPermissionRequests';
+
+export { BashPermissionRequest as BashPermissionRequestV2 } from './BashPermissionRequest';
+export type { BashPermissionRequestProps } from './BashPermissionRequest';
+
+export { PowerShellPermissionRequest } from './PowerShellPermissionRequest';
+export type { PowerShellPermissionRequestProps } from './PowerShellPermissionRequest';
+
+export { FileEditPermissionRequest as FileEditPermissionRequestV2 } from './FileEditPermissionRequest';
+export type { FileEditPermissionRequestProps } from './FileEditPermissionRequest';
+
+export { FileWritePermissionRequest as FileWritePermissionRequestV2 } from './FileWritePermissionRequest';
+export type { FileWritePermissionRequestProps } from './FileWritePermissionRequest';
+
+export { FilesystemPermissionRequest } from './FilesystemPermissionRequest';
+export type { FilesystemPermissionRequestProps } from './FilesystemPermissionRequest';
+
+export { WebFetchPermissionRequest } from './WebFetchPermissionRequest';
+export type { WebFetchPermissionRequestProps } from './WebFetchPermissionRequest';
+
+export { NotebookEditPermissionRequest } from './NotebookEditPermissionRequest';
+export type { NotebookEditPermissionRequestProps } from './NotebookEditPermissionRequest';
+
+export { SkillPermissionRequest } from './SkillPermissionRequest';
+export type { SkillPermissionRequestProps } from './SkillPermissionRequest';
+
+export { ComputerUseApproval } from './ComputerUseApproval';
+export type { ComputerUseApprovalProps } from './ComputerUseApproval';
+
+export { EnterPlanModePermissionRequest } from './EnterPlanModePermissionRequest';
+export type { EnterPlanModePermissionRequestProps } from './EnterPlanModePermissionRequest';
+
+export { ExitPlanModePermissionRequest } from './ExitPlanModePermissionRequest';
+export type { ExitPlanModePermissionRequestProps } from './ExitPlanModePermissionRequest';
+
+export { PermissionRuleExplanation } from './PermissionRuleExplanation';
+export type { PermissionRuleExplanationProps, PermissionRule } from './PermissionRuleExplanation';
