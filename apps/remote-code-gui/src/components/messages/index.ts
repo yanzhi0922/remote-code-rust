@@ -114,3 +114,43 @@ export type { MarkdownProps } from './Markdown';
 
 export { VirtualMessageList } from './VirtualMessageList';
 export type { VirtualMessageListProps } from './VirtualMessageList';
+
+// ─── Batch 18 新增消息组件 ──────────────────────────────────
+
+export { AdvisorMessage } from './AdvisorMessage';
+export type { AdvisorMessageProps } from './AdvisorMessage';
+
+export { AttachmentMessage } from './AttachmentMessage';
+export type { AttachmentMessageProps } from './AttachmentMessage';
+
+export { CollapsedReadSearchContent } from './CollapsedReadSearchContent';
+export type { CollapsedReadSearchContentProps } from './CollapsedReadSearchContent';
+
+export { HighlightedThinkingText } from './HighlightedThinkingText';
+export type { HighlightedThinkingTextProps } from './HighlightedThinkingText';
+
+export { SnipBoundaryMessage } from './SnipBoundaryMessage';
+export type { SnipBoundaryMessageProps } from './SnipBoundaryMessage';
+
+export { UserAgentNotificationMessage } from './UserAgentNotificationMessage';
+export type { UserAgentNotificationMessageProps } from './UserAgentNotificationMessage';
+
+export { UserChannelMessage } from './UserChannelMessage';
+export type { UserChannelMessageProps } from './UserChannelMessage';
+
+export { UserForkBoilerplateMessage } from './UserForkBoilerplateMessage';
+export type { UserForkBoilerplateMessageProps } from './UserForkBoilerplateMessage';
+
+export { UserGitHubWebhookMessage } from './UserGitHubWebhookMessage';
+export type { UserGitHubWebhookMessageProps } from './UserGitHubWebhookMessage';
+
+export { UserLocalCommandOutputMessage } from './UserLocalCommandOutputMessage';
+export type { UserLocalCommandOutputMessageProps } from './UserLocalCommandOutputMessage';
+
+export { UserMemoryInputMessage } from './UserMemoryInputMessage';
+export type { UserMemoryInputMessageProps } from './UserMemoryInputMessage';
+
+export { TeamMemCollapsed } from './teamMemCollapsed';
+export type { TeamMemCollapsedProps } from './teamMemCollapsed';
+
+export * as messageUtils from './messageUtils';
