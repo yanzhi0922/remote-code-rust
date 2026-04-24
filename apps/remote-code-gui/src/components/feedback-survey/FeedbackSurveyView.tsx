@@ -10,16 +10,6 @@ type Props = {
   message?: string;
 };
 
-const RESPONSE_INPUTS = ['0', '1', '2', '3'] as const;
-type ResponseInput = (typeof RESPONSE_INPUTS)[number];
-
-const inputToResponse: Record<ResponseInput, FeedbackSurveyResponse> = {
-  '0': 'dismissed',
-  '1': 'bad',
-  '2': 'fine',
-  '3': 'good',
-} as const;
-
 export { isValidResponseInput };
 
 const DEFAULT_MESSAGE = 'How is the assistant doing this session? (optional)';

@@ -14,7 +14,7 @@ type Props = {
   onClose?: () => void;
 };
 
-export function Stats({ stats, loading = false, onClose }: Props): React.ReactElement {
+export function Stats({ stats, loading = false, onClose: _onClose }: Props): React.ReactElement {
   if (loading) {
     return (
       <div data-testid="stats-loading" className="mt-2 flex items-center gap-2">

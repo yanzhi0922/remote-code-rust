@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Info, Palette, Settings, Shield, Terminal, X } from 'lucide-react';
+import type { FullSettings } from '../../lib/types';
 import { useAppStore } from '../../stores/useAppStore';
 import { AboutPanel } from './AboutPanel';
 import { GeneralSettings } from './GeneralSettings';
@@ -55,7 +56,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
     }
   }, [draft, updateSettings]);
 
-  const current = { ...settings, ...draft } as typeof settings;
+  const current = { ...settings, ...draft } as FullSettings;
 
   return (
     <div className="fixed inset-0 z-50 flex" data-testid="settings-panel">

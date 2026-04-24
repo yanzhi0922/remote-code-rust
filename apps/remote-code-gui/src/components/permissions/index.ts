@@ -67,4 +67,4 @@ export { ExitPlanModePermissionRequest } from './ExitPlanModePermissionRequest';
 export type { ExitPlanModePermissionRequestProps } from './ExitPlanModePermissionRequest';
 
 export { PermissionRuleExplanation } from './PermissionRuleExplanation';
-export type { PermissionRuleExplanationProps, PermissionRule } from './PermissionRuleExplanation';
+export type { PermissionRuleExplanationProps, PermissionRule as PermissionRuleExplanationRule } from './PermissionRuleExplanation';

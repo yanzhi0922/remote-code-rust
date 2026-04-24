@@ -1,6 +1,5 @@
 import React from 'react';
 import { Shield, AlertTriangle } from 'lucide-react';
-import { cn } from '../../lib/utils';
 
 export interface SandboxConfig {
   enabled: boolean;
