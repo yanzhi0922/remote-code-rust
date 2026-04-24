@@ -11,3 +11,20 @@ export { TokenWarning } from './TokenWarning';
 export { getWarningLevel, formatTokens } from './TokenWarning';
 export { FastIcon } from './FastIcon';
 export { FilePathLink } from './FilePathLink';
+
+// Batch 15 additions
+export { ContextVisualization } from './ContextVisualization';
+export { TaskListV2 } from './TaskListV2';
+export { FileEditToolDiff } from './FileEditToolDiff';
+export { ToolUseLoader } from './ToolUseLoader';
+export { EffortCallout } from './EffortCallout';
+export { CostThresholdDialog } from './CostThresholdDialog';
+export { MemoryUsageIndicator } from './MemoryUsageIndicator';
+export { AgentProgressLine } from './AgentProgressLine';
+export { CoordinatorAgentStatus } from './CoordinatorAgentStatus';
+export { TeammateViewHeader } from './TeammateViewHeader';
+export { QuickOpenDialog } from './QuickOpenDialog';
+export { ResumeTask } from './ResumeTask';
+export { CompactSummary } from './CompactSummary';
+export { ClickableImageRef } from './ClickableImageRef';
+export { SessionPreview } from './SessionPreview';
