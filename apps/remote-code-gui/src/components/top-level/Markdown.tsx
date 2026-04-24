@@ -12,7 +12,6 @@ export function Markdown({ children, dimColor = false }: Props): React.ReactElem
   const elements: React.ReactNode[] = [];
   let inCodeBlock = false;
   let codeBlockContent: string[] = [];
-  let codeBlockLang = '';
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -34,7 +33,7 @@ export function Markdown({ children, dimColor = false }: Props): React.ReactElem
         inCodeBlock = false;
       } else {
         inCodeBlock = true;
-        codeBlockLang = line.slice(3).trim();
+        // language tag extracted: line.slice(3).trim()
       }
       continue;
     }

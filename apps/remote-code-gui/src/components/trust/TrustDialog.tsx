@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Shield, AlertTriangle, X } from 'lucide-react';
+import { Shield, AlertTriangle } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 export interface TrustWarning {

@@ -23,7 +23,6 @@ export function ToolSelector({ selectedTools, onToggle, availableTools, searchQu
   );
 
   const allSelected = filteredTools.length > 0 && filteredTools.every((t) => selectedTools.includes(t));
-  const noneSelected = filteredTools.length > 0 && filteredTools.every((t) => !selectedTools.includes(t));
 
   function handleToggleAll() {
     if (allSelected) {

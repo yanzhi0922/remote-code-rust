@@ -28,7 +28,6 @@ function computeDiff(oldContent: string, newContent: string): {
   let additions = 0;
   let deletions = 0;
 
-  const maxLen = Math.max(oldLines.length, newLines.length);
   let oi = 0;
   let ni = 0;
 

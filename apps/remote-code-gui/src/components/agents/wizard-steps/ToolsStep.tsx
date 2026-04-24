@@ -10,7 +10,6 @@ export interface ToolsStepProps {
 
 export function ToolsStep({ selected, onToggle, availableTools, className }: ToolsStepProps) {
   const allSelected = availableTools.length > 0 && selected.length === availableTools.length;
-  const noneSelected = selected.length === 0;
 
   const handleSelectAll = () => {
     if (allSelected) {

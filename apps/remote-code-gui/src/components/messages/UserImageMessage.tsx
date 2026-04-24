@@ -1,5 +1,4 @@
 import { memo } from 'react';
-import { ImageIcon } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 /** 用户图片消息组件属性 */

@@ -20,6 +20,16 @@ export function McpToolDetail({ tool, serverName, onBack }: McpToolDetailProps) 
           <ArrowLeft size={14} />
           返回工具列表
         </button>
+        {tool.inputSchema != null && (
+          <div className="mt-4">
+            <div className="text-sm font-medium text-slate-600">输入 Schema</div>
+            <pre className="mt-1 overflow-x-auto rounded-xl bg-slate-50 p-3 text-xs text-slate-700">
+              {typeof tool.inputSchema === 'string'
+                ? tool.inputSchema
+                : JSON.stringify(tool.inputSchema, null, 2)}
+            </pre>
+          </div>
+        )}
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -40,16 +50,6 @@ export function McpToolDetail({ tool, serverName, onBack }: McpToolDetailProps) 
           </div>
         )}
 
-        {'inputSchema' in tool && tool.inputSchema && (
-          <div className="mt-4">
-            <div className="text-sm font-medium text-slate-600">输入 Schema</div>
-            <pre className="mt-1 overflow-x-auto rounded-xl bg-slate-50 p-3 text-xs text-slate-700">
-              {typeof tool.inputSchema === 'string'
-                ? tool.inputSchema
-                : JSON.stringify(tool.inputSchema, null, 2)}
-            </pre>
-          </div>
-        )}
       </div>
     </div>
   );

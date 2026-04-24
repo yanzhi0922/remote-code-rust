@@ -146,6 +146,7 @@ export interface DoctorReportInfo {
 export interface McpToolInfo {
   name: string;
   description: string | null;
+  inputSchema?: unknown;
 }
 
 export interface McpServerLiveInfo {

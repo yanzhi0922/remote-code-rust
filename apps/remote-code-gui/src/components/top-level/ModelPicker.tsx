@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ChevronDown, Check } from 'lucide-react';
+import { Check } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 export interface ModelOption {
