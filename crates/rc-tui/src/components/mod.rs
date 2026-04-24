@@ -3,6 +3,7 @@
 //! Each module provides a `render` function that draws into a [`ratatui::Frame`]
 //! region, reading state from [`App`](crate::app::App).
 
+pub mod agent_editor;
 pub mod agent_panel;
 pub mod chat;
 pub mod compact_summary;
@@ -20,6 +21,7 @@ pub mod mcp_panel;
 pub mod messages;
 pub mod model_picker;
 pub mod permission;
+pub mod permission_dialogs;
 pub mod progress;
 pub mod progress_bar;
 pub mod provider_picker;
@@ -29,5 +31,6 @@ pub mod sidebar;
 pub mod status_bar;
 pub mod tabs;
 pub mod task_list;
+pub mod team_panel;
 pub mod token_indicator;
 pub mod tool_output;
