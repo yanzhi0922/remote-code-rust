@@ -68,3 +68,79 @@ export type { ExitPlanModePermissionRequestProps } from './ExitPlanModePermissio
 
 export { PermissionRuleExplanation } from './PermissionRuleExplanation';
 export type { PermissionRuleExplanationProps, PermissionRule as PermissionRuleExplanationRule } from './PermissionRuleExplanation';
+
+// ─── Batch 18 新增权限组件 ──────────────────────────────────
+
+export { AddPermissionRules } from './AddPermissionRules';
+export type { AddPermissionRulesProps } from './AddPermissionRules';
+
+export { AddWorkspaceDirectory } from './AddWorkspaceDirectory';
+export type { AddWorkspaceDirectoryProps } from './AddWorkspaceDirectory';
+
+export { AskUserQuestionPermissionRequest } from './AskUserQuestionPermissionRequest';
+export type { AskUserQuestionPermissionRequestProps } from './AskUserQuestionPermissionRequest';
+
+export { FallbackPermissionRequest } from './FallbackPermissionRequest';
+export type { FallbackPermissionRequestProps } from './FallbackPermissionRequest';
+
+export { FilePermissionDialog } from './FilePermissionDialog';
+export type { FilePermissionDialogProps } from './FilePermissionDialog';
+
+export { FileWriteToolDiff } from './FileWriteToolDiff';
+export type { FileWriteToolDiffProps } from './FileWriteToolDiff';
+
+export { MonitorPermissionRequest } from './MonitorPermissionRequest';
+export type { MonitorPermissionRequestProps } from './MonitorPermissionRequest';
+
+export { NotebookEditToolDiff } from './NotebookEditToolDiff';
+export type { NotebookEditToolDiffProps } from './NotebookEditToolDiff';
+
+export { PermissionDialog } from './PermissionDialog';
+export type { PermissionDialogProps } from './PermissionDialog';
+
+export { PermissionPrompt } from './PermissionPrompt';
+export type { PermissionPromptProps } from './PermissionPrompt';
+
+export { PermissionRequest } from './PermissionRequest';
+export type { PermissionRequestProps } from './PermissionRequest';
+
+export { PreviewBox } from './PreviewBox';
+export type { PreviewBoxProps } from './PreviewBox';
+
+export { PreviewQuestionView } from './PreviewQuestionView';
+export type { PreviewQuestionViewProps } from './PreviewQuestionView';
+
+export { QuestionNavigationBar } from './QuestionNavigationBar';
+export type { QuestionNavigationBarProps } from './QuestionNavigationBar';
+
+export { QuestionView } from './QuestionView';
+export type { QuestionViewProps } from './QuestionView';
+
+export { RecentDenialsTab } from './RecentDenialsTab';
+export type { RecentDenialsTabProps } from './RecentDenialsTab';
+
+export { RemoveWorkspaceDirectory } from './RemoveWorkspaceDirectory';
+export type { RemoveWorkspaceDirectoryProps } from './RemoveWorkspaceDirectory';
+
+export { ReviewArtifactPermissionRequest } from './ReviewArtifactPermissionRequest';
+export type { ReviewArtifactPermissionRequestProps } from './ReviewArtifactPermissionRequest';
+
+export { SandboxPermissionRequest } from './SandboxPermissionRequest';
+export type { SandboxPermissionRequestProps } from './SandboxPermissionRequest';
+
+export { SedEditPermissionRequest } from './SedEditPermissionRequest';
+export type { SedEditPermissionRequestProps } from './SedEditPermissionRequest';
+
+export { SubmitQuestionsView } from './SubmitQuestionsView';
+export type { SubmitQuestionsViewProps } from './SubmitQuestionsView';
+
+export { WorkerBadge } from './WorkerBadge';
+export type { WorkerBadgeProps } from './WorkerBadge';
+
+export { WorkerPendingPermission } from './WorkerPendingPermission';
+export type { WorkerPendingPermissionProps } from './WorkerPendingPermission';
+
+export { WorkspaceTab } from './WorkspaceTab';
+export type { WorkspaceTabProps } from './WorkspaceTab';
+
+export * as permissionUtils from './permissionUtils';
