@@ -43,17 +43,14 @@ enum StructuredMessageInput {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 enum MessagePriority {
     Low,
+    #[default]
     Normal,
     High,
 }
 
-impl Default for MessagePriority {
-    fn default() -> Self {
-        Self::Normal
-    }
-}
 
 /// Send a message to a specific agent or broadcast with `to: "*"`.
 ///

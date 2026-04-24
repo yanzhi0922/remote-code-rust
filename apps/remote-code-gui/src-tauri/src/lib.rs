@@ -3797,6 +3797,7 @@ async fn switch_profile(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 async fn resolve_permission_request(
     state: State<'_, AppState>,

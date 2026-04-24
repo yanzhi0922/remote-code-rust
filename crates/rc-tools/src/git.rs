@@ -170,8 +170,8 @@ pub fn exit_worktree_tool(input: &Value, context: &ToolExecutionContext) -> Resu
     }
 
     let summary = count_worktree_changes(&session)?;
-    if action == "remove" && !discard_changes {
-        if summary.changed_files > 0 || summary.commits > 0 {
+    if action == "remove" && !discard_changes
+        && (summary.changed_files > 0 || summary.commits > 0) {
             let mut parts = Vec::new();
             if summary.changed_files > 0 {
                 parts.push(format!(
@@ -204,7 +204,6 @@ pub fn exit_worktree_tool(input: &Value, context: &ToolExecutionContext) -> Resu
                 parts.join(" and ")
             ));
         }
-    }
 
     match action {
         "keep" => Ok(json!({

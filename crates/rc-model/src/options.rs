@@ -194,8 +194,8 @@ pub fn get_model_options(ctx: &OptionsContext) -> Vec<ModelOption> {
     let mut options = get_model_options_base(ctx);
 
     // Add custom model from environment variable.
-    if let Some(ref custom) = ctx.custom_model {
-        if !options.iter().any(|o| o.value == *custom) {
+    if let Some(ref custom) = ctx.custom_model
+        && !options.iter().any(|o| o.value == *custom) {
             options.push(ModelOption {
                 value: custom.clone(),
                 label: custom.clone(),
@@ -203,7 +203,6 @@ pub fn get_model_options(ctx: &OptionsContext) -> Vec<ModelOption> {
                 description_for_model: None,
             });
         }
-    }
 
     // Add additional model options from bootstrap config.
     for opt in &ctx.additional_options {
@@ -213,8 +212,8 @@ pub fn get_model_options(ctx: &OptionsContext) -> Vec<ModelOption> {
     }
 
     // Add current model if not already in options.
-    if let Some(ref current) = ctx.current_model {
-        if !current.is_empty() && !options.iter().any(|o| o.value == *current) {
+    if let Some(ref current) = ctx.current_model
+        && !current.is_empty() && !options.iter().any(|o| o.value == *current) {
             if let Some(display) = get_public_model_display_name(current) {
                 options.push(ModelOption {
                     value: current.clone(),
@@ -231,7 +230,6 @@ pub fn get_model_options(ctx: &OptionsContext) -> Vec<ModelOption> {
                 });
             }
         }
-    }
 
     filter_by_allowlist(options, ctx.available_models.as_deref())
 }

@@ -64,7 +64,7 @@ fn session_memory_states()
 }
 
 fn growthbook_client() -> &'static GrowthBookClient {
-    SESSION_MEMORY_GROWTHBOOK.get_or_init(|| GrowthBookClient::with_defaults())
+    SESSION_MEMORY_GROWTHBOOK.get_or_init(GrowthBookClient::with_defaults)
 }
 
 pub(crate) async fn session_memory_state_for_session(
@@ -291,8 +291,8 @@ fn should_extract_memory(
         >= shared.config.tool_calls_between_updates;
     let has_tool_calls_in_last_turn = has_tool_calls_in_last_assistant_turn(conversation);
 
-    let should_extract = (has_met_token_threshold && has_met_tool_call_threshold)
-        || (has_met_token_threshold && !has_tool_calls_in_last_turn);
+    let should_extract =
+        has_met_token_threshold && (has_met_tool_call_threshold || !has_tool_calls_in_last_turn);
 
     drop(shared);
     if should_extract {
@@ -326,10 +326,7 @@ pub(crate) async fn maybe_spawn_session_memory_update(
     conversation: &[ConversationEntry],
     fork_snapshot: Option<ForkCacheSafeParams>,
 ) {
-    let gate_enabled = match session_memory_gate_enabled(config) {
-        Ok(enabled) => enabled,
-        Err(_) => false,
-    };
+    let gate_enabled = session_memory_gate_enabled(config).unwrap_or_default();
     if !gate_enabled {
         return;
     }

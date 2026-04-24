@@ -668,7 +668,7 @@ pub fn build_default_system_prompt_for_session(
     let mut caches = SESSION_SECTION_CACHES
         .lock()
         .expect("system prompt section cache poisoned");
-    let cache = caches.entry(session_id).or_insert_with(SectionCache::new);
+    let cache = caches.entry(session_id).or_default();
     resolve_default_prompt_blocks(cache, ctx, use_global_cache_scope)
 }
 

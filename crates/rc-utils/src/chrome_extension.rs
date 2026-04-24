@@ -12,6 +12,7 @@ use std::path::PathBuf;
 
 /// Status of the Chrome extension integration.
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct ChromeExtensionStatus {
     /// Whether the Chrome extension is detected as installed.
     pub installed: bool,
@@ -23,16 +24,6 @@ pub struct ChromeExtensionStatus {
     pub port: Option<u16>,
 }
 
-impl Default for ChromeExtensionStatus {
-    fn default() -> Self {
-        Self {
-            installed: false,
-            connected: false,
-            version: None,
-            port: None,
-        }
-    }
-}
 
 impl ChromeExtensionStatus {
     /// Create a new status with default (not installed) values.
@@ -313,8 +304,8 @@ fn which_cli_path() -> anyhow::Result<PathBuf> {
         let output = std::process::Command::new("where")
             .arg("remote-code")
             .output();
-        if let Ok(o) = output {
-            if o.status.success() {
+        if let Ok(o) = output
+            && o.status.success() {
                 let path = String::from_utf8_lossy(&o.stdout)
                     .lines()
                     .next()
@@ -325,7 +316,6 @@ fn which_cli_path() -> anyhow::Result<PathBuf> {
                     return Ok(PathBuf::from(path));
                 }
             }
-        }
     }
 
     // Final fallback: assume it's in a standard location

@@ -33,7 +33,7 @@ impl BedrockRegionPrefix {
     }
 
     /// Parse a region prefix from a string.
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "us" => Some(Self::Us),
             "eu" => Some(Self::Eu),
@@ -96,7 +96,7 @@ pub fn get_bedrock_region_prefix(model_id: &str) -> Option<BedrockRegionPrefix> 
     for &prefix_str in BEDROCK_REGION_PREFIXES {
         let pattern = format!("{prefix_str}.anthropic.");
         if effective_id.starts_with(&pattern) {
-            return BedrockRegionPrefix::from_str(prefix_str);
+            return BedrockRegionPrefix::parse(prefix_str);
         }
     }
     None
@@ -329,7 +329,7 @@ mod tests {
             BedrockRegionPrefix::Apac,
             BedrockRegionPrefix::Global,
         ] {
-            assert_eq!(BedrockRegionPrefix::from_str(prefix.as_str()), Some(prefix));
+            assert_eq!(BedrockRegionPrefix::parse(prefix.as_str()), Some(prefix));
         }
     }
 }

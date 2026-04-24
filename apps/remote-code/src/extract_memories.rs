@@ -52,6 +52,7 @@ struct PendingExtractionContext {
 }
 
 #[derive(Clone)]
+#[derive(Default)]
 struct ExtractMemoriesState {
     last_memory_message_uuid: Option<Uuid>,
     has_logged_gate_failure: bool,
@@ -60,17 +61,6 @@ struct ExtractMemoriesState {
     pending_context: Option<PendingExtractionContext>,
 }
 
-impl Default for ExtractMemoriesState {
-    fn default() -> Self {
-        Self {
-            last_memory_message_uuid: None,
-            has_logged_gate_failure: false,
-            in_progress: false,
-            turns_since_last_extraction: 0,
-            pending_context: None,
-        }
-    }
-}
 
 static EXTRACT_MEMORY_STATE: OnceLock<Mutex<HashMap<Uuid, ExtractMemoriesState>>> = OnceLock::new();
 static IN_FLIGHT_EXTRACTIONS: OnceLock<AtomicUsize> = OnceLock::new();
@@ -302,6 +292,7 @@ pub(crate) async fn drain_pending_extractions(timeout: Duration) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_extract_memories_once(
     config: &RuntimeConfig,
     store: &SessionStore,
@@ -451,6 +442,7 @@ fn create_memory_saved_message(
     entry
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_extraction_child(
     config: &RuntimeConfig,
     store: &SessionStore,

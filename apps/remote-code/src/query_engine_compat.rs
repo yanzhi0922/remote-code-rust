@@ -1578,8 +1578,8 @@ impl QueryObserver for CompatObserver {
                         });
                     }
                 }
-                if context.needs_compaction {
-                    if self.should_persist() {
+                if context.needs_compaction
+                    && self.should_persist() {
                         self.store.append_named_event(
                             session_id,
                             "context_overflow",
@@ -1592,7 +1592,6 @@ impl QueryObserver for CompatObserver {
                             }),
                         )?;
                     }
-                }
             }
             QueryObserverEvent::ContextCompactionApplied {
                 turn,
@@ -2254,7 +2253,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         .fork_snapshot
         .as_ref()
         .and_then(|snapshot| snapshot.read_file_state.clone())
-        .unwrap_or_else(FileStateCache::new);
+        .unwrap_or_default();
     let shared = Arc::new(CompatSharedState {
         config: Mutex::new(config.clone()),
         conversation: Mutex::new(conversation.clone()),
