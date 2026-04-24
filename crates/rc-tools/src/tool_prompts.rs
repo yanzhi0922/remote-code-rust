@@ -2582,10 +2582,7 @@ mod tests {
             "should be >200 chars, got {}",
             prompt.len()
         );
-        assert!(
-            prompt.contains("old_string"),
-            "should mention old_string"
-        );
+        assert!(prompt.contains("old_string"), "should mention old_string");
         assert!(prompt.contains("replace"), "should mention replace");
         assert!(
             prompt.contains("line number prefix"),
@@ -2616,10 +2613,7 @@ mod tests {
             "should be >200 chars, got {}",
             prompt.len()
         );
-        assert!(
-            prompt.contains("overwrite"),
-            "should mention overwrite"
-        );
+        assert!(prompt.contains("overwrite"), "should mention overwrite");
         assert!(
             prompt.contains("Edit tool"),
             "should mention Edit tool preference"

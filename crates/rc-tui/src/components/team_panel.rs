@@ -179,7 +179,10 @@ impl TeamPanel {
 // ---------------------------------------------------------------------------
 
 fn dim_span(text: &str) -> Span<'static> {
-    Span::styled(text.to_owned(), Style::default().add_modifier(Modifier::DIM))
+    Span::styled(
+        text.to_owned(),
+        Style::default().add_modifier(Modifier::DIM),
+    )
 }
 
 fn header_span(text: &str, style: &StyleConfig) -> Span<'static> {
@@ -208,7 +211,9 @@ pub fn render_team_list(panel: &TeamPanel, style: &StyleConfig) -> Vec<Line<'sta
     let mut lines = Vec::new();
 
     lines.push(Line::from(header_span(" Teams", style)));
-    lines.push(Line::from(dim_span(" ─────────────────────────────────────────")));
+    lines.push(Line::from(dim_span(
+        " ─────────────────────────────────────────",
+    )));
     lines.push(Line::from(""));
 
     if panel.teams.is_empty() {
@@ -303,7 +308,9 @@ pub fn render_team_detail(
         header_span(&team.name, style),
         dim_span(&format!(" ({})", team.id)),
     ]));
-    lines.push(Line::from(dim_span(" ─────────────────────────────────────────")));
+    lines.push(Line::from(dim_span(
+        " ─────────────────────────────────────────",
+    )));
     lines.push(Line::from(""));
 
     if team.is_active {

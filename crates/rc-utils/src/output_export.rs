@@ -37,7 +37,10 @@ impl std::fmt::Display for ExportFormat {
 // ---------------------------------------------------------------------------
 
 /// Export conversation entries to the specified format.
-pub fn export_conversation(messages: &[ConversationEntry], format: ExportFormat) -> anyhow::Result<String> {
+pub fn export_conversation(
+    messages: &[ConversationEntry],
+    format: ExportFormat,
+) -> anyhow::Result<String> {
     match format {
         ExportFormat::Json => export_json(messages),
         ExportFormat::Markdown => export_markdown(messages),
@@ -89,7 +92,10 @@ fn export_markdown(messages: &[ConversationEntry]) -> anyhow::Result<String> {
             output.push_str(&format!("**Tool: {}** (`{}`)", tc.name, tc.id));
             output.push(line_sep());
             let args = serde_json::to_string_pretty(&tc.input)?;
-            output.push_str(&format!("```json{ls}{args}{ls}```{ls}{ls}", ls = line_sep()));
+            output.push_str(&format!(
+                "```json{ls}{args}{ls}```{ls}{ls}",
+                ls = line_sep()
+            ));
         }
 
         if let Some(ref tc_id) = entry.tool_call_id {
@@ -167,9 +173,7 @@ fn export_html(messages: &[ConversationEntry]) -> anyhow::Result<String> {
         let role_class = format_role_class(&entry.role);
         let role_label = format_role(&entry.role);
 
-        output.push_str(&format!(
-            "<div class={q}message {role_class}{q}>"
-        ));
+        output.push_str(&format!("<div class={q}message {role_class}{q}>"));
         output.push(line_sep());
         output.push_str(&format!("<div class={q}role{q}>{role_label}</div>"));
         output.push(line_sep());
@@ -417,7 +421,10 @@ mod tests {
     fn export_markdown_with_messages() {
         let messages = vec![
             make_entry(ConversationRole::User, "What is Rust?"),
-            make_entry(ConversationRole::Assistant, "Rust is a systems programming language."),
+            make_entry(
+                ConversationRole::Assistant,
+                "Rust is a systems programming language.",
+            ),
         ];
         let result = export_conversation(&messages, ExportFormat::Markdown);
         assert!(result.is_ok());
@@ -552,7 +559,11 @@ mod tests {
             make_tool_entry("tool", "tc-1"),
         ];
 
-        for fmt in [ExportFormat::Json, ExportFormat::Markdown, ExportFormat::Html] {
+        for fmt in [
+            ExportFormat::Json,
+            ExportFormat::Markdown,
+            ExportFormat::Html,
+        ] {
             let result = export_conversation(&messages, fmt);
             assert!(result.is_ok(), "Failed for format {fmt}");
             let content = result.unwrap();

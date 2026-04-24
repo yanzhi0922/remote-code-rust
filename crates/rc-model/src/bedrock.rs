@@ -150,7 +150,10 @@ pub fn find_first_match<'a>(profiles: &'a [String], substring: &str) -> Option<&
 
 /// Build a Bedrock model ID from a canonical first-party ID, optionally with
 /// a region prefix.
-pub fn build_bedrock_model_id(canonical_id: &str, region_prefix: Option<BedrockRegionPrefix>) -> String {
+pub fn build_bedrock_model_id(
+    canonical_id: &str,
+    region_prefix: Option<BedrockRegionPrefix>,
+) -> String {
     let base = if canonical_id.contains("2025") || canonical_id.contains("2024") {
         format!("anthropic.{}-v1:0", canonical_id)
     } else {
@@ -263,10 +266,7 @@ mod tests {
     #[test]
     fn apply_prefix_non_bedrock_unchanged() {
         assert_eq!(
-            apply_bedrock_region_prefix(
-                "claude-sonnet-4-5-20250929",
-                BedrockRegionPrefix::Eu
-            ),
+            apply_bedrock_region_prefix("claude-sonnet-4-5-20250929", BedrockRegionPrefix::Eu),
             "claude-sonnet-4-5-20250929"
         );
     }
@@ -317,7 +317,9 @@ mod tests {
     fn is_bedrock_model_id_check() {
         assert!(is_bedrock_model_id("anthropic.claude-sonnet-4-5-v1:0"));
         assert!(is_bedrock_model_id("us.anthropic.claude-sonnet-4-5-v1:0"));
-        assert!(is_bedrock_model_id("arn:aws:bedrock:us-east-1:123:inference-profile/test"));
+        assert!(is_bedrock_model_id(
+            "arn:aws:bedrock:us-east-1:123:inference-profile/test"
+        ));
         assert!(!is_bedrock_model_id("claude-sonnet-4-5-20250929"));
     }
 

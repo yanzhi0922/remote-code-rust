@@ -153,12 +153,7 @@ impl BridgeMessage {
     }
 
     /// Create a tool result.
-    pub fn tool_result(
-        id: String,
-        tool_call_id: String,
-        output: String,
-        is_error: bool,
-    ) -> Self {
+    pub fn tool_result(id: String, tool_call_id: String, output: String, is_error: bool) -> Self {
         Self::ToolResult {
             id,
             tool_call_id,
@@ -341,7 +336,10 @@ mod tests {
             BridgeMessageType::PermissionResponse.to_string(),
             "permission_response"
         );
-        assert_eq!(BridgeMessageType::SessionUpdate.to_string(), "session_update");
+        assert_eq!(
+            BridgeMessageType::SessionUpdate.to_string(),
+            "session_update"
+        );
         assert_eq!(BridgeMessageType::StatusUpdate.to_string(), "status_update");
     }
 }

@@ -86,7 +86,7 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build release
-        run: cargo build --workspace --release --target ${{ matrix.target }}
+        run: cargo build --workspace --release --target ${{ matrix.target }} --exclude remote-code-gui
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-musl-gcc

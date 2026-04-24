@@ -189,7 +189,10 @@ impl AgentEditor {
 // ---------------------------------------------------------------------------
 
 fn dim_span(text: &str) -> Span<'static> {
-    Span::styled(text.to_owned(), Style::default().add_modifier(Modifier::DIM))
+    Span::styled(
+        text.to_owned(),
+        Style::default().add_modifier(Modifier::DIM),
+    )
 }
 
 fn header_span(text: &str, style: &StyleConfig) -> Span<'static> {
@@ -225,9 +228,7 @@ fn field_label(label: &str, focused: bool, style: &StyleConfig) -> Span<'static>
 pub fn render_agent_editor(editor: &AgentEditor, style: &StyleConfig) -> Vec<Line<'static>> {
     match &editor.mode {
         AgentEditorMode::List => render_agent_list(editor, style),
-        AgentEditorMode::Edit { .. } | AgentEditorMode::Create => {
-            render_agent_form(editor, style)
-        }
+        AgentEditorMode::Edit { .. } | AgentEditorMode::Create => render_agent_form(editor, style),
     }
 }
 
@@ -236,7 +237,9 @@ pub fn render_agent_list(editor: &AgentEditor, style: &StyleConfig) -> Vec<Line<
     let mut lines = Vec::new();
 
     lines.push(Line::from(header_span(" Agents", style)));
-    lines.push(Line::from(dim_span(" ─────────────────────────────────────────")));
+    lines.push(Line::from(dim_span(
+        " ─────────────────────────────────────────",
+    )));
     lines.push(Line::from(""));
 
     if editor.agents.is_empty() {
@@ -337,14 +340,20 @@ pub fn render_agent_form(editor: &AgentEditor, style: &StyleConfig) -> Vec<Line<
         Span::styled(" ◀ ".to_owned(), Style::default().fg(style.accent_color)),
         header_span(title, style),
     ]));
-    lines.push(Line::from(dim_span(" ─────────────────────────────────────────")));
+    lines.push(Line::from(dim_span(
+        " ─────────────────────────────────────────",
+    )));
     lines.push(Line::from(""));
 
     let draft = &editor.draft;
 
     // Name field
     lines.push(Line::from(vec![
-        field_label("Name", editor.focused_field == AgentEditorField::Name, style),
+        field_label(
+            "Name",
+            editor.focused_field == AgentEditorField::Name,
+            style,
+        ),
         Span::styled(
             if draft.name.is_empty() {
                 "<enter name>".to_owned()
@@ -382,13 +391,13 @@ pub fn render_agent_form(editor: &AgentEditor, style: &StyleConfig) -> Vec<Line<
 
     // Model field
     lines.push(Line::from(vec![
-        field_label("Model", editor.focused_field == AgentEditorField::Model, style),
+        field_label(
+            "Model",
+            editor.focused_field == AgentEditorField::Model,
+            style,
+        ),
         Span::styled(
-            draft
-                .model
-                .as_deref()
-                .unwrap_or("<default>")
-                .to_owned(),
+            draft.model.as_deref().unwrap_or("<default>").to_owned(),
             if editor.focused_field == AgentEditorField::Model {
                 Style::default().fg(Color::Cyan)
             } else {
@@ -422,7 +431,11 @@ pub fn render_agent_form(editor: &AgentEditor, style: &StyleConfig) -> Vec<Line<
 
     // Tools field
     lines.push(Line::from(vec![
-        field_label("Tools", editor.focused_field == AgentEditorField::Tools, style),
+        field_label(
+            "Tools",
+            editor.focused_field == AgentEditorField::Tools,
+            style,
+        ),
         Span::styled(
             if draft.allowed_tools.is_empty() {
                 "<all tools>".to_owned()
@@ -445,7 +458,11 @@ pub fn render_agent_form(editor: &AgentEditor, style: &StyleConfig) -> Vec<Line<
             style,
         ),
         Span::styled(
-            if draft.enabled { "yes".to_owned() } else { "no".to_owned() },
+            if draft.enabled {
+                "yes".to_owned()
+            } else {
+                "no".to_owned()
+            },
             if draft.enabled {
                 Style::default().fg(Color::Green)
             } else {

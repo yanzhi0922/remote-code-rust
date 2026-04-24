@@ -25,7 +25,10 @@ use crate::style::StyleConfig;
 // ---------------------------------------------------------------------------
 
 fn dim_span(text: &str) -> Span<'static> {
-    Span::styled(text.to_owned(), Style::default().add_modifier(Modifier::DIM))
+    Span::styled(
+        text.to_owned(),
+        Style::default().add_modifier(Modifier::DIM),
+    )
 }
 
 /// Render a horizontal divider line.
@@ -60,7 +63,10 @@ pub fn render_byline(
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" ".repeat(padding), Style::default()),
-        Span::styled(right.to_owned(), Style::default().add_modifier(Modifier::DIM)),
+        Span::styled(
+            right.to_owned(),
+            Style::default().add_modifier(Modifier::DIM),
+        ),
     ])]
 }
 
@@ -88,7 +94,10 @@ pub fn render_list_item(
         ]
     } else {
         vec![
-            Span::styled(format!(" {bullet} "), Style::default().add_modifier(Modifier::DIM)),
+            Span::styled(
+                format!(" {bullet} "),
+                Style::default().add_modifier(Modifier::DIM),
+            ),
             Span::styled(text.to_owned(), Style::default().fg(style.status_fg)),
         ]
     };

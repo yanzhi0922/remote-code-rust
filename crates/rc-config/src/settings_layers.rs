@@ -319,9 +319,10 @@ pub fn load_runtime_settings(paths: &[PathBuf]) -> Result<ResolvedRuntimeSetting
             resolved.auto_memory_directory = normalize_optional_string(Some(auto_memory_directory));
         }
         if let Some(permissions) = document.permissions
-            && let Some(mode) = permissions.mode {
-                resolved.permission_mode = Some(mode);
-            }
+            && let Some(mode) = permissions.mode
+        {
+            resolved.permission_mode = Some(mode);
+        }
     }
     resolved.allowed_tools = normalize_tool_filters(&resolved.allowed_tools);
     resolved.disallowed_tools = normalize_tool_filters(&resolved.disallowed_tools);

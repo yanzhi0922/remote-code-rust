@@ -120,7 +120,10 @@ pub struct PermissionRequest {
 // ---------------------------------------------------------------------------
 
 fn dim_span(text: &str) -> Span<'static> {
-    Span::styled(text.to_owned(), Style::default().add_modifier(Modifier::DIM))
+    Span::styled(
+        text.to_owned(),
+        Style::default().add_modifier(Modifier::DIM),
+    )
 }
 
 fn warning_span(text: &str) -> Span<'static> {
@@ -145,27 +148,32 @@ pub fn render_permission_request(
 
     // Header with icon and label
     lines.push(Line::from(vec![
-        Span::styled(
-            format!(" {} ", request.kind.icon()),
-            Style::default(),
-        ),
+        Span::styled(format!(" {} ", request.kind.icon()), Style::default()),
         Span::styled(
             request.kind.label().to_owned(),
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" Permission Request".to_owned(), Style::default().fg(Color::Yellow)),
+        Span::styled(
+            " Permission Request".to_owned(),
+            Style::default().fg(Color::Yellow),
+        ),
     ]));
 
-    lines.push(Line::from(dim_span(" ─────────────────────────────────────────")));
+    lines.push(Line::from(dim_span(
+        " ─────────────────────────────────────────",
+    )));
     lines.push(Line::from(""));
 
     // Target details based on kind
     match &request.kind {
         PermissionKind::Bash { command } => {
             lines.push(Line::from(vec![
-                Span::styled("  Command: ".to_owned(), Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "  Command: ".to_owned(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(command.clone(), Style::default().fg(Color::Cyan)),
             ]));
         }
@@ -173,29 +181,44 @@ pub fn render_permission_request(
         | PermissionKind::FileWrite { path }
         | PermissionKind::FileEdit { path } => {
             lines.push(Line::from(vec![
-                Span::styled("  Path: ".to_owned(), Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "  Path: ".to_owned(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(path.clone(), Style::default().fg(Color::Cyan)),
             ]));
         }
         PermissionKind::McpTool { server, tool } => {
             lines.push(Line::from(vec![
-                Span::styled("  Server: ".to_owned(), Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "  Server: ".to_owned(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(server.clone(), Style::default().fg(Color::Cyan)),
             ]));
             lines.push(Line::from(vec![
-                Span::styled("  Tool: ".to_owned(), Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "  Tool: ".to_owned(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(tool.clone(), Style::default().fg(Color::Cyan)),
             ]));
         }
         PermissionKind::WebFetch { url } => {
             lines.push(Line::from(vec![
-                Span::styled("  URL: ".to_owned(), Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "  URL: ".to_owned(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(url.clone(), Style::default().fg(Color::Cyan)),
             ]));
         }
         PermissionKind::ToolUse { tool_name } => {
             lines.push(Line::from(vec![
-                Span::styled("  Tool: ".to_owned(), Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "  Tool: ".to_owned(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(tool_name.clone(), Style::default().fg(Color::Cyan)),
             ]));
         }
@@ -256,10 +279,7 @@ pub fn render_permission_explanation(
     let mut lines = Vec::new();
 
     lines.push(Line::from(vec![
-        Span::styled(
-            format!(" {} ", kind.icon()),
-            Style::default(),
-        ),
+        Span::styled(format!(" {} ", kind.icon()), Style::default()),
         Span::styled(
             kind.label().to_owned(),
             Style::default()
@@ -268,7 +288,9 @@ pub fn render_permission_explanation(
         ),
     ]));
 
-    lines.push(Line::from(dim_span(" ─────────────────────────────────────────")));
+    lines.push(Line::from(dim_span(
+        " ─────────────────────────────────────────",
+    )));
     lines.push(Line::from(""));
 
     for line in reason.lines() {

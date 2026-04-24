@@ -59,7 +59,6 @@ pub struct SessionMemoryCompactStrategy {
     pub file_context: Option<SessionMemoryCompactFileContext>,
 }
 
-
 impl SessionMemoryCompactStrategy {
     pub fn new(config: SessionMemoryCompactConfig) -> Self {
         Self {

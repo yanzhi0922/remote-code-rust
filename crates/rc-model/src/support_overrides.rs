@@ -205,10 +205,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    fn mock_ctx(
-        provider: ModelProvider,
-        vars: HashMap<String, String>,
-    ) -> SupportOverrideContext {
+    fn mock_ctx(provider: ModelProvider, vars: HashMap<String, String>) -> SupportOverrideContext {
         SupportOverrideContext {
             provider,
             env_getter: Box::new(move |key: &str| vars.get(key).cloned()),
@@ -242,11 +239,19 @@ mod tests {
         let ctx = mock_ctx(ModelProvider::AwsBedrock { region: None }, vars);
 
         assert_eq!(
-            get_3p_model_capability_override("my-custom-opus", ModelCapabilityOverride::Thinking, &ctx),
+            get_3p_model_capability_override(
+                "my-custom-opus",
+                ModelCapabilityOverride::Thinking,
+                &ctx
+            ),
             Some(true)
         );
         assert_eq!(
-            get_3p_model_capability_override("my-custom-opus", ModelCapabilityOverride::Effort, &ctx),
+            get_3p_model_capability_override(
+                "my-custom-opus",
+                ModelCapabilityOverride::Effort,
+                &ctx
+            ),
             Some(true)
         );
         assert_eq!(
@@ -274,7 +279,11 @@ mod tests {
         let ctx = mock_ctx(ModelProvider::AwsBedrock { region: None }, vars);
 
         assert_eq!(
-            get_3p_model_capability_override("other-model", ModelCapabilityOverride::Thinking, &ctx),
+            get_3p_model_capability_override(
+                "other-model",
+                ModelCapabilityOverride::Thinking,
+                &ctx
+            ),
             None
         );
     }
@@ -291,7 +300,11 @@ mod tests {
         let ctx = mock_ctx(ModelProvider::AwsBedrock { region: None }, vars);
 
         assert_eq!(
-            get_3p_model_capability_override("my-custom-opus", ModelCapabilityOverride::Thinking, &ctx),
+            get_3p_model_capability_override(
+                "my-custom-opus",
+                ModelCapabilityOverride::Thinking,
+                &ctx
+            ),
             None
         );
     }
@@ -311,7 +324,11 @@ mod tests {
         let ctx = mock_ctx(ModelProvider::GcpVertex { project: None }, vars);
 
         assert_eq!(
-            get_3p_model_capability_override("my-custom-sonnet", ModelCapabilityOverride::Thinking, &ctx),
+            get_3p_model_capability_override(
+                "my-custom-sonnet",
+                ModelCapabilityOverride::Thinking,
+                &ctx
+            ),
             Some(true)
         );
     }
@@ -319,10 +336,7 @@ mod tests {
     #[test]
     fn all_capabilities_override() {
         let mut vars = HashMap::new();
-        vars.insert(
-            "ANTHROPIC_DEFAULT_OPUS_MODEL".into(),
-            "my-opus".into(),
-        );
+        vars.insert("ANTHROPIC_DEFAULT_OPUS_MODEL".into(), "my-opus".into());
         vars.insert(
             "ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES".into(),
             "effort,thinking".into(),
@@ -330,7 +344,7 @@ mod tests {
 
         let ctx = mock_ctx(ModelProvider::AwsBedrock { region: None }, vars);
 
-        let all = get_all_capability_overrides("my-opus", &ctx).unwrap();
+        let all = get_all_capability_overrides("my-opus", &ctx).expect("overrides should exist");
         assert_eq!(all.len(), 5);
         assert_eq!(all[0], (ModelCapabilityOverride::Effort, true));
         assert_eq!(all[2], (ModelCapabilityOverride::Thinking, true));
@@ -347,10 +361,7 @@ mod tests {
             ModelCapabilityOverride::parse("MAX_EFFORT"),
             Some(ModelCapabilityOverride::MaxEffort)
         );
-        assert_eq!(
-            ModelCapabilityOverride::parse("unknown"),
-            None
-        );
+        assert_eq!(ModelCapabilityOverride::parse("unknown"), None);
     }
 
     #[test]

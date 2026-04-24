@@ -32,9 +32,9 @@ pub mod messaging;
 pub mod path_conversion;
 
 pub use bridge::{IdeAction, IdeBridge, IdeNotification, IdeResponse};
-pub use bridge_config::{BridgeConfig, BridgeTransport, load_bridge_config, default_bridge_config};
+pub use bridge_config::{BridgeConfig, BridgeTransport, default_bridge_config, load_bridge_config};
 pub use bridge_messaging::{
-    BridgeMessage, BridgeMessageType, serialize_bridge_message, deserialize_bridge_message,
+    BridgeMessage, BridgeMessageType, deserialize_bridge_message, serialize_bridge_message,
 };
 pub use bridge_status::{BridgeConnectionInfo, BridgeStatus, format_bridge_status};
 pub use config::{ConnectionMode, IdeConfig, IdeType, detect_ide};

@@ -93,7 +93,10 @@ impl BridgeConfig {
 
     /// Check whether this configuration uses a network-based transport.
     pub fn is_network_transport(&self) -> bool {
-        matches!(self.transport, BridgeTransport::WebSocket | BridgeTransport::Http)
+        matches!(
+            self.transport,
+            BridgeTransport::WebSocket | BridgeTransport::Http
+        )
     }
 }
 
@@ -165,28 +168,21 @@ mod tests {
 
     #[test]
     fn with_endpoint_sets_endpoint() {
-        let config = BridgeConfig::with_endpoint(
-            BridgeTransport::Http,
-            "http://localhost:8080".to_string(),
-        );
+        let config =
+            BridgeConfig::with_endpoint(BridgeTransport::Http, "http://localhost:8080".to_string());
         assert!(config.enabled);
-        assert_eq!(
-            config.endpoint.as_deref(),
-            Some("http://localhost:8080")
-        );
+        assert_eq!(config.endpoint.as_deref(), Some("http://localhost:8080"));
     }
 
     #[test]
     fn builder_pattern_session_id() {
-        let config = BridgeConfig::new(BridgeTransport::Stdio)
-            .session_id("sess-123".to_string());
+        let config = BridgeConfig::new(BridgeTransport::Stdio).session_id("sess-123".to_string());
         assert_eq!(config.session_id.as_deref(), Some("sess-123"));
     }
 
     #[test]
     fn builder_pattern_reconnect_interval() {
-        let config = BridgeConfig::new(BridgeTransport::WebSocket)
-            .reconnect_interval(10000);
+        let config = BridgeConfig::new(BridgeTransport::WebSocket).reconnect_interval(10000);
         assert_eq!(config.reconnect_interval_ms, 10000);
     }
 

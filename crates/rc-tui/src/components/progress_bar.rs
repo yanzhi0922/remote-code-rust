@@ -138,10 +138,7 @@ impl ProgressBar {
 /// - Under 70%: accent color
 /// - 70–90%: tool/warning color
 /// - Over 90%: error color
-pub fn render_progress_bar(
-    bar: &ProgressBar,
-    style: &StyleConfig,
-) -> Line<'static> {
+pub fn render_progress_bar(bar: &ProgressBar, style: &StyleConfig) -> Line<'static> {
     let ratio = bar.ratio();
     let (filled_char, empty_char) = bar.style.chars();
     let filled_count = (ratio * bar.width as f64) as usize;
@@ -210,11 +207,7 @@ pub fn render_progress_detail(
 }
 
 /// Render a spinner-based indeterminate progress indicator.
-pub fn render_indeterminate(
-    label: &str,
-    frame: usize,
-    style: &StyleConfig,
-) -> Line<'static> {
+pub fn render_indeterminate(label: &str, frame: usize, style: &StyleConfig) -> Line<'static> {
     let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
     let spinner = frames[frame % frames.len()];
 
@@ -225,10 +218,7 @@ pub fn render_indeterminate(
                 .fg(style.accent_color)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            label.to_owned(),
-            Style::default().fg(style.status_fg),
-        ),
+        Span::styled(label.to_owned(), Style::default().fg(style.status_fg)),
         Span::styled(
             "…".to_owned(),
             Style::default()
@@ -389,8 +379,10 @@ mod tests {
 
     #[test]
     fn render_bar_minimal_style() {
-        let bar =
-            ProgressBar::new("Mini", 2, 5).with_style(ProgressStyle::Minimal).with_width(5).with_percent(false);
+        let bar = ProgressBar::new("Mini", 2, 5)
+            .with_style(ProgressStyle::Minimal)
+            .with_width(5)
+            .with_percent(false);
         let line = render_progress_bar(&bar, &test_style());
         let text = line.to_string();
         assert!(text.contains('●'));

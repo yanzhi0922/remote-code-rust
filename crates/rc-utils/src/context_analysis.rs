@@ -212,7 +212,10 @@ mod tests {
 
     #[test]
     fn assistant_tokens_counted() {
-        let messages = vec![make_entry(ConversationRole::Assistant, "Hi! How can I help?")];
+        let messages = vec![make_entry(
+            ConversationRole::Assistant,
+            "Hi! How can I help?",
+        )];
         let analysis = analyze_context_usage(&messages, 100000);
         assert!(analysis.conversation_tokens > 0);
     }

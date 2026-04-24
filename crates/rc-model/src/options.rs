@@ -5,7 +5,7 @@
 //! TypeScript `modelOptions.ts` module.
 
 use crate::allowlist::is_model_allowed;
-use crate::configs::{model_id_for_provider, ModelKey};
+use crate::configs::{ModelKey, model_id_for_provider};
 use crate::providers::ModelProvider;
 use crate::validate::get_public_model_display_name;
 
@@ -143,8 +143,8 @@ fn haiku_option() -> ModelOption {
 fn sonnet_1m_option(ctx: &OptionsContext) -> ModelOption {
     let is_3p = !matches!(ctx.provider, ModelProvider::Anthropic);
     let value = if is_3p {
-        let base = model_id_for_provider(ModelKey::Sonnet46, &ctx.provider)
-            .unwrap_or("claude-sonnet-4-6");
+        let base =
+            model_id_for_provider(ModelKey::Sonnet46, &ctx.provider).unwrap_or("claude-sonnet-4-6");
         format!("{base}[1m]")
     } else {
         "sonnet[1m]".into()
@@ -162,8 +162,8 @@ fn sonnet_1m_option(ctx: &OptionsContext) -> ModelOption {
 fn opus_1m_option(ctx: &OptionsContext) -> ModelOption {
     let is_3p = !matches!(ctx.provider, ModelProvider::Anthropic);
     let value = if is_3p {
-        let base = model_id_for_provider(ModelKey::Opus46, &ctx.provider)
-            .unwrap_or("claude-opus-4-6");
+        let base =
+            model_id_for_provider(ModelKey::Opus46, &ctx.provider).unwrap_or("claude-opus-4-6");
         format!("{base}[1m]")
     } else {
         "opus[1m]".into()
@@ -195,14 +195,15 @@ pub fn get_model_options(ctx: &OptionsContext) -> Vec<ModelOption> {
 
     // Add custom model from environment variable.
     if let Some(ref custom) = ctx.custom_model
-        && !options.iter().any(|o| o.value == *custom) {
-            options.push(ModelOption {
-                value: custom.clone(),
-                label: custom.clone(),
-                description: format!("Custom model ({custom})"),
-                description_for_model: None,
-            });
-        }
+        && !options.iter().any(|o| o.value == *custom)
+    {
+        options.push(ModelOption {
+            value: custom.clone(),
+            label: custom.clone(),
+            description: format!("Custom model ({custom})"),
+            description_for_model: None,
+        });
+    }
 
     // Add additional model options from bootstrap config.
     for opt in &ctx.additional_options {
@@ -213,23 +214,25 @@ pub fn get_model_options(ctx: &OptionsContext) -> Vec<ModelOption> {
 
     // Add current model if not already in options.
     if let Some(ref current) = ctx.current_model
-        && !current.is_empty() && !options.iter().any(|o| o.value == *current) {
-            if let Some(display) = get_public_model_display_name(current) {
-                options.push(ModelOption {
-                    value: current.clone(),
-                    label: display,
-                    description: current.clone(),
-                    description_for_model: None,
-                });
-            } else {
-                options.push(ModelOption {
-                    value: current.clone(),
-                    label: current.clone(),
-                    description: "Custom model".into(),
-                    description_for_model: None,
-                });
-            }
+        && !current.is_empty()
+        && !options.iter().any(|o| o.value == *current)
+    {
+        if let Some(display) = get_public_model_display_name(current) {
+            options.push(ModelOption {
+                value: current.clone(),
+                label: display,
+                description: current.clone(),
+                description_for_model: None,
+            });
+        } else {
+            options.push(ModelOption {
+                value: current.clone(),
+                label: current.clone(),
+                description: "Custom model".into(),
+                description_for_model: None,
+            });
         }
+    }
 
     filter_by_allowlist(options, ctx.available_models.as_deref())
 }
@@ -306,9 +309,7 @@ fn filter_by_allowlist(
         None => options,
         Some(list) => options
             .into_iter()
-            .filter(|opt| {
-                opt.value.is_empty() || is_model_allowed(&opt.value, Some(list))
-            })
+            .filter(|opt| opt.value.is_empty() || is_model_allowed(&opt.value, Some(list)))
             .collect(),
     }
 }
@@ -382,7 +383,10 @@ mod tests {
         // Only allowed models should remain (plus default).
         for opt in &options {
             if !opt.value.is_empty() {
-                assert!(is_model_allowed(&opt.value, ctx.available_models.as_deref()));
+                assert!(is_model_allowed(
+                    &opt.value,
+                    ctx.available_models.as_deref()
+                ));
             }
         }
     }

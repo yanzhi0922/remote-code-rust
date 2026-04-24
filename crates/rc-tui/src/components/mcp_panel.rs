@@ -223,7 +223,10 @@ impl McpPanel {
 // ---------------------------------------------------------------------------
 
 fn dim_span(text: &str) -> Span<'static> {
-    Span::styled(text.to_owned(), Style::default().add_modifier(Modifier::DIM))
+    Span::styled(
+        text.to_owned(),
+        Style::default().add_modifier(Modifier::DIM),
+    )
 }
 
 fn header_span(text: &str, style: &StyleConfig) -> Span<'static> {
@@ -262,7 +265,9 @@ pub fn render_mcp_server_list(panel: &McpPanel, style: &StyleConfig) -> Vec<Line
         header_span(" MCP Servers", style),
         dim_span(&format!(" ({})", panel.servers.len())),
     ]));
-    lines.push(Line::from(dim_span(" ─────────────────────────────────────────")));
+    lines.push(Line::from(dim_span(
+        " ─────────────────────────────────────────",
+    )));
     lines.push(Line::from(""));
 
     if panel.servers.is_empty() {
@@ -323,7 +328,10 @@ pub fn render_mcp_server_list(panel: &McpPanel, style: &StyleConfig) -> Vec<Line
             let tool_count = server.tools.len();
             if tool_count > 0 {
                 spans.push(Span::styled(
-                    format!(" {tool_count} tool{}", if tool_count != 1 { "s" } else { "" }),
+                    format!(
+                        " {tool_count} tool{}",
+                        if tool_count != 1 { "s" } else { "" }
+                    ),
                     Style::default().add_modifier(Modifier::DIM),
                 ));
             }
@@ -379,7 +387,9 @@ pub fn render_mcp_tool_list(
         header_span(&format!("{} — Tools", server.name), style),
         dim_span(&format!(" ({})", server.tools.len())),
     ]));
-    lines.push(Line::from(dim_span(" ─────────────────────────────────────────")));
+    lines.push(Line::from(dim_span(
+        " ─────────────────────────────────────────",
+    )));
     lines.push(Line::from(""));
 
     if server.tools.is_empty() {
@@ -482,22 +492,33 @@ pub fn render_mcp_tool_detail(
         Span::styled(" ◀ ".to_owned(), Style::default().fg(style.accent_color)),
         header_span(&format!("{} → {}", server.name, tool.name), style),
     ]));
-    lines.push(Line::from(dim_span(" ─────────────────────────────────────────")));
+    lines.push(Line::from(dim_span(
+        " ─────────────────────────────────────────",
+    )));
     lines.push(Line::from(""));
 
     // Tool info
     lines.push(Line::from(vec![
-        Span::styled("  Name:  ".to_owned(), Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "  Name:  ".to_owned(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
         Span::styled(tool.name.clone(), Style::default().fg(style.accent_color)),
     ]));
 
     lines.push(Line::from(vec![
-        Span::styled("  Server: ".to_owned(), Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "  Server: ".to_owned(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
         Span::raw(server.name.clone()),
     ]));
 
     lines.push(Line::from(vec![
-        Span::styled("  Type:  ".to_owned(), Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "  Type:  ".to_owned(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
         Span::raw(server.server_type.to_string()),
     ]));
 
@@ -663,10 +684,7 @@ mod tests {
         let mut panel = sample_panel();
         panel.selected = 1;
         panel.enter_server();
-        assert_eq!(
-            panel.view,
-            McpViewState::ToolList { server_index: 1 }
-        );
+        assert_eq!(panel.view, McpViewState::ToolList { server_index: 1 });
         assert_eq!(panel.selected, 0);
     }
 

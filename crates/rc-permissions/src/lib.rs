@@ -62,7 +62,6 @@ pub mod shell_matching;
 pub mod bash_classifier;
 pub mod yolo_classifier;
 
-
 // ── V1 re-exports ─────────────────────────────────────────────
 pub use audit::PermissionAuditRecord;
 pub use rules::{LayeredRuleEngine, RuleAction, RuleMatch, RuleSource, SourceAwarePermissionRule};

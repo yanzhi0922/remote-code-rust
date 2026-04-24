@@ -246,9 +246,10 @@ pub fn classify_tool_use(
 
     // For Bash/Shell tools, classify the command
     if (tool_name == "Bash" || tool_name == "Shell" || tool_name == "bash" || tool_name == "shell")
-        && let Some(command) = tool_input.get("command").and_then(|v| v.as_str()) {
-            return classify_bash_in_yolo(command, rules);
-        }
+        && let Some(command) = tool_input.get("command").and_then(|v| v.as_str())
+    {
+        return classify_bash_in_yolo(command, rules);
+    }
 
     // For file write tools, ask for confirmation
     if is_write_tool(tool_name) {
@@ -319,9 +320,7 @@ fn classify_bash_in_yolo(command: &str, rules: &AutoModeRules) -> YoloClassifier
     }
 
     // Default: ask for unrecognized commands
-    YoloClassifierResult::Ask(format!(
-        "Unrecognized command requires review: '{trimmed}'"
-    ))
+    YoloClassifierResult::Ask(format!("Unrecognized command requires review: '{trimmed}'"))
 }
 
 /// Check if a tool is known to be read-only.
@@ -347,13 +346,7 @@ fn is_read_only_tool(tool_name: &str) -> bool {
 fn is_write_tool(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        "Write"
-            | "Edit"
-            | "write"
-            | "edit"
-            | "write_to_file"
-            | "apply_diff"
-            | "create_file"
+        "Write" | "Edit" | "write" | "edit" | "write_to_file" | "apply_diff" | "create_file"
     )
 }
 
@@ -441,22 +434,14 @@ mod tests {
     #[test]
     fn safe_git_commands_are_allowed() {
         let rules = AutoModeRules::external();
-        let result = classify_tool_use(
-            "Bash",
-            &json!({"command": "git status"}),
-            &rules,
-        );
+        let result = classify_tool_use("Bash", &json!({"command": "git status"}), &rules);
         assert!(matches!(result, YoloClassifierResult::Allow));
     }
 
     #[test]
     fn dangerous_commands_are_denied() {
         let rules = AutoModeRules::external();
-        let result = classify_tool_use(
-            "Bash",
-            &json!({"command": "rm -rf /"}),
-            &rules,
-        );
+        let result = classify_tool_use("Bash", &json!({"command": "rm -rf /"}), &rules);
         assert!(matches!(result, YoloClassifierResult::Deny(_)));
     }
 
@@ -518,11 +503,7 @@ mod tests {
     #[test]
     fn write_tool_to_system_path_is_asked() {
         let rules = AutoModeRules::external();
-        let result = classify_tool_use(
-            "Write",
-            &json!({"path": "/etc/passwd"}),
-            &rules,
-        );
+        let result = classify_tool_use("Write", &json!({"path": "/etc/passwd"}), &rules);
         assert!(matches!(result, YoloClassifierResult::Ask(_)));
     }
 
@@ -540,22 +521,14 @@ mod tests {
     #[test]
     fn anthropic_rules_allow_more_operations() {
         let rules = AutoModeRules::anthropic();
-        let result = classify_tool_use(
-            "Bash",
-            &json!({"command": "git add src/main.rs"}),
-            &rules,
-        );
+        let result = classify_tool_use("Bash", &json!({"command": "git add src/main.rs"}), &rules);
         assert!(matches!(result, YoloClassifierResult::Allow));
     }
 
     #[test]
     fn external_rules_deny_git_add() {
         let rules = AutoModeRules::external();
-        let result = classify_tool_use(
-            "Bash",
-            &json!({"command": "git add src/main.rs"}),
-            &rules,
-        );
+        let result = classify_tool_use("Bash", &json!({"command": "git add src/main.rs"}), &rules);
         // git add is not in external allow list, so it should ask
         assert!(matches!(result, YoloClassifierResult::Ask(_)));
     }
@@ -600,11 +573,7 @@ mod tests {
     #[test]
     fn apply_auto_mode_rules_delegates_to_classify() {
         let rules = AutoModeRules::external();
-        let result = apply_auto_mode_rules(
-            "Read",
-            &json!({"path": "/tmp/test"}),
-            &rules,
-        );
+        let result = apply_auto_mode_rules("Read", &json!({"path": "/tmp/test"}), &rules);
         assert!(matches!(result, YoloClassifierResult::Allow));
     }
 

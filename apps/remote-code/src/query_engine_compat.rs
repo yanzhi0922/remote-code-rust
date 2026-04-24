@@ -1578,20 +1578,19 @@ impl QueryObserver for CompatObserver {
                         });
                     }
                 }
-                if context.needs_compaction
-                    && self.should_persist() {
-                        self.store.append_named_event(
-                            session_id,
-                            "context_overflow",
-                            serde_json::json!({
-                                "turn": turn,
-                                "estimated_tokens": context.estimated_tokens,
-                                "max_input_tokens": context.max_input_tokens,
-                                "threshold_tokens": context.threshold_tokens,
-                                "usage_ratio": context.usage_ratio,
-                            }),
-                        )?;
-                    }
+                if context.needs_compaction && self.should_persist() {
+                    self.store.append_named_event(
+                        session_id,
+                        "context_overflow",
+                        serde_json::json!({
+                            "turn": turn,
+                            "estimated_tokens": context.estimated_tokens,
+                            "max_input_tokens": context.max_input_tokens,
+                            "threshold_tokens": context.threshold_tokens,
+                            "usage_ratio": context.usage_ratio,
+                        }),
+                    )?;
+                }
             }
             QueryObserverEvent::ContextCompactionApplied {
                 turn,
