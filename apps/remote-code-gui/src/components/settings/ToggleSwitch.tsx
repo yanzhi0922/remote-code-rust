@@ -1,0 +1,42 @@
+import { clsx } from 'clsx';
+
+export interface ToggleSwitchProps {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label: string;
+  description?: string;
+  disabled?: boolean;
+}
+
+export function ToggleSwitch({ checked, onChange, label, description, disabled = false }: ToggleSwitchProps) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <div className="flex-1">
+        <div className="text-sm font-medium text-slate-800">{label}</div>
+        {description && (
+          <p className="mt-0.5 text-xs text-slate-500">{description}</p>
+        )}
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label={label}
+        disabled={disabled}
+        onClick={() => onChange(!checked)}
+        className={clsx(
+          'relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2',
+          checked ? 'bg-blue-600' : 'bg-slate-300',
+          disabled && 'cursor-not-allowed opacity-50',
+        )}
+      >
+        <span
+          className={clsx(
+            'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+            checked ? 'translate-x-5' : 'translate-x-0',
+          )}
+        />
+      </button>
+    </div>
+  );
+}
