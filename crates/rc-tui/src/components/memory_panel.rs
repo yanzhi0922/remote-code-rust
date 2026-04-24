@@ -54,10 +54,7 @@ pub struct MemoryPanel {
 impl MemoryPanel {
     /// Create a new memory panel.
     pub fn new(files: Vec<MemoryFileEntry>) -> Self {
-        Self {
-            files,
-            selected: 0,
-        }
+        Self { files, selected: 0 }
     }
 
     /// Move selection up.
@@ -80,7 +77,10 @@ impl MemoryPanel {
 // ---------------------------------------------------------------------------
 
 fn dim_span(text: &str) -> Span<'static> {
-    Span::styled(text.to_owned(), Style::default().add_modifier(Modifier::DIM))
+    Span::styled(
+        text.to_owned(),
+        Style::default().add_modifier(Modifier::DIM),
+    )
 }
 
 fn header_span(text: &str, style: &StyleConfig) -> Span<'static> {
@@ -111,7 +111,9 @@ pub fn render_memory_panel(panel: &MemoryPanel, style: &StyleConfig) -> Vec<Line
     let mut lines = Vec::new();
 
     lines.push(Line::from(header_span(" Memory Files", style)));
-    lines.push(Line::from(dim_span(" ─────────────────────────────────────────")));
+    lines.push(Line::from(dim_span(
+        " ─────────────────────────────────────────",
+    )));
     lines.push(Line::from(""));
 
     if panel.files.is_empty() {
@@ -189,14 +191,8 @@ pub fn render_memory_notification(
     style: &StyleConfig,
 ) -> Vec<Line<'static>> {
     vec![Line::from(vec![
-        Span::styled(
-            " 💾 ".to_owned(),
-            Style::default().fg(Color::Cyan),
-        ),
-        Span::styled(
-            format!("{action} "),
-            Style::default().fg(style.status_fg),
-        ),
+        Span::styled(" 💾 ".to_owned(), Style::default().fg(Color::Cyan)),
+        Span::styled(format!("{action} "), Style::default().fg(style.status_fg)),
         Span::styled(
             file_name.to_owned(),
             Style::default()

@@ -144,9 +144,7 @@ pub fn detect_screen_capabilities() -> Result<ComputerUseCapabilities, anyhow::E
 #[cfg(target_os = "linux")]
 pub fn detect_screen_capabilities() -> Result<ComputerUseCapabilities, anyhow::Error> {
     use std::process::Command;
-    let output = Command::new("xdpyinfo")
-        .arg(":0")
-        .output()?;
+    let output = Command::new("xdpyinfo").arg(":0").output()?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut width = 1920u32;
@@ -336,12 +334,16 @@ pub fn get_active_window_info() -> Result<WindowInfo, anyhow::Error> {
         .args(["getactivewindow", "getwindowpid"])
         .output()?;
 
-    let pid = String::from_utf8_lossy(&pid_output.stdout).trim().to_owned();
+    let pid = String::from_utf8_lossy(&pid_output.stdout)
+        .trim()
+        .to_owned();
     let process_name = if !pid.is_empty() {
         let proc_output = Command::new("ps")
             .args(["-p", &pid, "-o", "comm="])
             .output()?;
-        String::from_utf8_lossy(&proc_output.stdout).trim().to_owned()
+        String::from_utf8_lossy(&proc_output.stdout)
+            .trim()
+            .to_owned()
     } else {
         String::new()
     };
@@ -396,9 +398,7 @@ pub fn mouse_click(x: i32, y: i32, button: MouseButton) -> Result<(), anyhow::Er
     } else {
         format!("tell application \"System Events\" to {btn_flag} at {{{x}, {y}}}")
     };
-    Command::new("osascript")
-        .args(["-e", &script])
-        .status()?;
+    Command::new("osascript").args(["-e", &script]).status()?;
     Ok(())
 }
 
@@ -413,9 +413,7 @@ pub fn mouse_click(x: i32, y: i32, button: MouseButton) -> Result<(), anyhow::Er
     Command::new("xdotool")
         .args(["mousemove", &x.to_string(), &y.to_string()])
         .status()?;
-    Command::new("xdotool")
-        .args(["click", btn_num])
-        .status()?;
+    Command::new("xdotool").args(["click", btn_num]).status()?;
     Ok(())
 }
 
@@ -429,8 +427,9 @@ pub fn mouse_click(_x: i32, _y: i32, _button: MouseButton) -> Result<(), anyhow:
 pub fn keyboard_type(text: &str) -> Result<(), anyhow::Error> {
     use std::process::Command;
     let escaped = text.replace('\'', "''");
-    let script =
-        format!("Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('{escaped}')");
+    let script = format!(
+        "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('{escaped}')"
+    );
     Command::new("powershell")
         .args(["-NoProfile", "-Command", &script])
         .status()?;
@@ -442,9 +441,7 @@ pub fn keyboard_type(text: &str) -> Result<(), anyhow::Error> {
     use std::process::Command;
     let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
     let script = format!("tell application \"System Events\" to keystroke \"{escaped}\"");
-    Command::new("osascript")
-        .args(["-e", &script])
-        .status()?;
+    Command::new("osascript").args(["-e", &script]).status()?;
     Ok(())
 }
 
@@ -523,9 +520,7 @@ pub fn keyboard_key(key: Key) -> Result<(), anyhow::Error> {
         Key::Function(_) => anyhow::bail!("Function key out of range"),
     };
     let script = format!("tell application \"System Events\" to {key_code}");
-    Command::new("osascript")
-        .args(["-e", &script])
-        .status()?;
+    Command::new("osascript").args(["-e", &script]).status()?;
     Ok(())
 }
 
@@ -553,9 +548,7 @@ pub fn keyboard_key(key: Key) -> Result<(), anyhow::Error> {
         Key::CtrlZ => "ctrl+z",
         Key::Function(n) => return keyboard_type(&format!("F{n}")),
     };
-    Command::new("xdotool")
-        .args(["key", key_name])
-        .status()?;
+    Command::new("xdotool").args(["key", key_name]).status()?;
     Ok(())
 }
 
@@ -602,9 +595,7 @@ pub fn scroll(direction: ScrollDirection, amount: u32) -> Result<(), anyhow::Err
     };
     for _ in 0..amount.min(10) {
         let script = format!("tell application \"System Events\" to {key}");
-        let _ = Command::new("osascript")
-            .args(["-e", &script])
-            .status();
+        let _ = Command::new("osascript").args(["-e", &script]).status();
     }
     let _ = (dx, dy); // suppress unused warning
     Ok(())

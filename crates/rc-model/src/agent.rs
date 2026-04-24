@@ -7,8 +7,8 @@
 //! - Alias-to-parent-tier matching (prevents surprising downgrades)
 
 use crate::bedrock::{apply_bedrock_region_prefix, get_bedrock_region_prefix, is_bedrock_provider};
-use crate::model::parse_user_specified_model_with_ctx;
 use crate::model::ResolveContext;
+use crate::model::parse_user_specified_model_with_ctx;
 use crate::providers::ModelProvider;
 use crate::validate::get_canonical_name;
 
@@ -117,13 +117,14 @@ pub fn get_agent_model(
     // Helper to apply parent region prefix for Bedrock models.
     let apply_parent_prefix = |resolved: &str, original_spec: &str| -> String {
         if let Some(prefix) = parent_region_prefix
-            && is_bedrock {
-                // If the original spec already has its own region prefix, preserve it.
-                if get_bedrock_region_prefix(original_spec).is_some() {
-                    return resolved.to_owned();
-                }
-                return apply_bedrock_region_prefix(resolved, prefix);
+            && is_bedrock
+        {
+            // If the original spec already has its own region prefix, preserve it.
+            if get_bedrock_region_prefix(original_spec).is_some() {
+                return resolved.to_owned();
             }
+            return apply_bedrock_region_prefix(resolved, prefix);
+        }
         resolved.to_owned()
     };
 
@@ -251,12 +252,7 @@ mod tests {
     #[test]
     fn tool_specified_model_priority() {
         let ctx = default_ctx();
-        let model = get_agent_model(
-            Some("inherit"),
-            "claude-opus-4-6",
-            Some("sonnet"),
-            &ctx,
-        );
+        let model = get_agent_model(Some("inherit"), "claude-opus-4-6", Some("sonnet"), &ctx);
         assert!(model.contains("sonnet"));
     }
 
@@ -274,7 +270,10 @@ mod tests {
     #[test]
     fn alias_matches_parent_tier_opus() {
         assert!(alias_matches_parent_tier("opus", "claude-opus-4-6"));
-        assert!(alias_matches_parent_tier("opus", "claude-opus-4-5-20251101"));
+        assert!(alias_matches_parent_tier(
+            "opus",
+            "claude-opus-4-5-20251101"
+        ));
         assert!(!alias_matches_parent_tier("opus", "claude-sonnet-4-6"));
     }
 
@@ -286,7 +285,10 @@ mod tests {
 
     #[test]
     fn alias_matches_parent_tier_haiku() {
-        assert!(alias_matches_parent_tier("haiku", "claude-haiku-4-5-20251001"));
+        assert!(alias_matches_parent_tier(
+            "haiku",
+            "claude-haiku-4-5-20251001"
+        ));
         assert!(!alias_matches_parent_tier("haiku", "claude-opus-4-6"));
     }
 
@@ -387,9 +389,15 @@ mod tests {
 
     #[test]
     fn agent_alias_parse() {
-        assert_eq!(AgentModelAlias::parse("sonnet"), Some(AgentModelAlias::Sonnet));
+        assert_eq!(
+            AgentModelAlias::parse("sonnet"),
+            Some(AgentModelAlias::Sonnet)
+        );
         assert_eq!(AgentModelAlias::parse("OPUS"), Some(AgentModelAlias::Opus));
-        assert_eq!(AgentModelAlias::parse("inherit"), Some(AgentModelAlias::Inherit));
+        assert_eq!(
+            AgentModelAlias::parse("inherit"),
+            Some(AgentModelAlias::Inherit)
+        );
         assert_eq!(AgentModelAlias::parse("unknown"), None);
     }
 }

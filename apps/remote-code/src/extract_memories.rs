@@ -51,8 +51,7 @@ struct PendingExtractionContext {
     fork_snapshot: Option<ForkCacheSafeParams>,
 }
 
-#[derive(Clone)]
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct ExtractMemoriesState {
     last_memory_message_uuid: Option<Uuid>,
     has_logged_gate_failure: bool,
@@ -60,7 +59,6 @@ struct ExtractMemoriesState {
     turns_since_last_extraction: usize,
     pending_context: Option<PendingExtractionContext>,
 }
-
 
 static EXTRACT_MEMORY_STATE: OnceLock<Mutex<HashMap<Uuid, ExtractMemoriesState>>> = OnceLock::new();
 static IN_FLIGHT_EXTRACTIONS: OnceLock<AtomicUsize> = OnceLock::new();

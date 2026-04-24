@@ -18,14 +18,8 @@ pub fn render(config: &RuntimeConfig) {
             config.setting_sources.join(", ")
         }
     );
-    println!(
-        "Allowed tools:        {}",
-        config.allowed_tools.len()
-    );
-    println!(
-        "Disallowed tools:     {}",
-        config.disallowed_tools.len()
-    );
+    println!("Allowed tools:        {}", config.allowed_tools.len());
+    println!("Disallowed tools:     {}", config.disallowed_tools.len());
     println!(
         "Permission mode:      {}",
         config.permission_mode.as_legacy_str()

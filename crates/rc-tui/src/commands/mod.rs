@@ -11,7 +11,9 @@ use crate::theme::Theme;
 
 pub mod agent_commands;
 pub mod auth;
+pub mod chrome_cmd;
 pub mod config;
+pub mod desktop_cmd;
 pub mod doctor_cmd;
 pub mod git_commands;
 pub mod help;
@@ -22,11 +24,15 @@ pub mod mcp;
 pub mod memory;
 pub mod metrics;
 pub mod misc_commands;
+pub mod mobile_cmd;
 pub mod mode_commands;
 pub mod model;
+pub mod passes_cmd;
 pub mod permissions;
 pub mod plugins;
+pub mod privacy_cmd;
 pub mod provider;
+pub mod rate_limit_cmd;
 pub mod remote;
 pub mod review;
 pub mod security;
@@ -34,20 +40,14 @@ pub mod session;
 pub mod session_mgmt;
 pub mod skills;
 pub mod status;
+pub mod statusline_cmd;
 pub mod tasks;
 pub mod teleport;
 pub mod utility;
 pub mod version;
 pub mod vim;
-pub mod worktree;
-pub mod chrome_cmd;
-pub mod desktop_cmd;
-pub mod mobile_cmd;
-pub mod passes_cmd;
-pub mod privacy_cmd;
-pub mod rate_limit_cmd;
-pub mod statusline_cmd;
 pub mod workflows_cmd;
+pub mod worktree;
 
 /// Result of handling a slash command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

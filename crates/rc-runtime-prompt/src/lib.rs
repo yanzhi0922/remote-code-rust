@@ -807,15 +807,14 @@ fn split_path_frontmatter(value: &str) -> Vec<String> {
 }
 
 fn normalize_rule_globs(globs: Vec<String>) -> Vec<String> {
-    if globs.iter().any(|glob| {
-        matches!(
-            glob.trim(),
-            "*" | "**" | "**/*" | "./**" | "./**/*" | "."
-        )
-    }) {
+    if globs
+        .iter()
+        .any(|glob| matches!(glob.trim(), "*" | "**" | "**/*" | "./**" | "./**/*" | "."))
+    {
         Vec::new()
     } else {
-        globs.into_iter()
+        globs
+            .into_iter()
             .map(|glob| glob.trim().to_owned())
             .filter(|glob| !glob.is_empty())
             .collect()
@@ -1275,7 +1274,11 @@ fn process_rules_dir(
     }
 }
 
-fn rule_glob_base_dir(rules_dir: &Path, memory_type: ClaudeMemoryType, original_cwd: &Path) -> PathBuf {
+fn rule_glob_base_dir(
+    rules_dir: &Path,
+    memory_type: ClaudeMemoryType,
+    original_cwd: &Path,
+) -> PathBuf {
     match memory_type {
         ClaudeMemoryType::Managed | ClaudeMemoryType::User => canonical_or_original(original_cwd),
         ClaudeMemoryType::Project | ClaudeMemoryType::Local => rules_dir
@@ -1411,7 +1414,10 @@ impl RuntimeClaudeMemoryFile {
     }
 }
 
-fn nested_memory_directories(config: &RuntimeConfig, target_path: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
+fn nested_memory_directories(
+    config: &RuntimeConfig,
+    target_path: &Path,
+) -> (Vec<PathBuf>, Vec<PathBuf>) {
     let original_cwd = canonical_or_original(&config.original_cwd);
     let target_parent = canonical_or_original(target_path.parent().unwrap_or(target_path));
 

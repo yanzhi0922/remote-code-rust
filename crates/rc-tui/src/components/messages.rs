@@ -72,7 +72,11 @@ fn wrap_with_border(
 
     // Top border
     let top = if let Some(t) = title {
-        format!("╭─ {} ─{}", t, "─".repeat(width.saturating_sub(t.len() + 4)))
+        format!(
+            "╭─ {} ─{}",
+            t,
+            "─".repeat(width.saturating_sub(t.len() + 4))
+        )
     } else {
         format!("╭{}╮", "─".repeat(width.saturating_sub(2)))
     };
@@ -86,7 +90,10 @@ fn wrap_with_border(
         for span in line.spans {
             spans.push(span);
         }
-        spans.push(styled_span(format!("{}│", " ".repeat(padding)), border_color));
+        spans.push(styled_span(
+            format!("{}│", " ".repeat(padding)),
+            border_color,
+        ));
         result.push(Line::from(spans));
     }
 
@@ -203,10 +210,7 @@ pub fn render_tool_use_message(
     ];
 
     if duration_ms > 0 {
-        header_spans.push(dim_span(format!(
-            " ({}ms)",
-            duration_ms
-        )));
+        header_spans.push(dim_span(format!(" ({}ms)", duration_ms)));
     }
 
     lines.push(Line::from(header_spans));
@@ -246,10 +250,7 @@ pub fn render_tool_result_message(
     // Status header
     lines.push(Line::from(vec![
         styled_span(format!(" {icon} "), color),
-        bold_colored_span(
-            if is_error { "Error" } else { "Result" },
-            color,
-        ),
+        bold_colored_span(if is_error { "Error" } else { "Result" }, color),
     ]));
 
     // Content lines
@@ -274,9 +275,10 @@ pub fn render_tool_result_message(
 
         let total_lines = content.lines().count();
         if total_lines > 50 {
-            lines.push(Line::from(vec![
-                dim_span(format!("   … ({} more lines)", total_lines - 50)),
-            ]));
+            lines.push(Line::from(vec![dim_span(format!(
+                "   … ({} more lines)",
+                total_lines - 50
+            ))]));
         }
     }
 
@@ -389,10 +391,7 @@ pub fn render_plan_approval_message(
             if !plan_content.is_empty() {
                 inner.push(Line::from(""));
                 for text_line in plan_content.lines() {
-                    inner.push(Line::from(styled_span(
-                        text_line,
-                        style.assistant_color,
-                    )));
+                    inner.push(Line::from(styled_span(text_line, style.assistant_color)));
                 }
             }
 
@@ -468,7 +467,9 @@ pub fn render_hook_progress_message(
     vec![Line::from(vec![
         dim_span(format!(" {in_progress_count} ")),
         bold_colored_span(hook_event, style.info_color),
-        dim_span(format!(" {plural} {status} ({resolved_count}/{in_progress_count})")),
+        dim_span(format!(
+            " {plural} {status} ({resolved_count}/{in_progress_count})"
+        )),
     ])]
 }
 
@@ -480,10 +481,7 @@ pub fn render_hook_progress_message(
 ///
 /// System messages are displayed with a distinctive style to differentiate
 /// them from user and assistant messages.
-pub fn render_system_text_message(
-    content: &str,
-    style: &StyleConfig,
-) -> Vec<Line<'static>> {
+pub fn render_system_text_message(content: &str, style: &StyleConfig) -> Vec<Line<'static>> {
     if content.is_empty() {
         return Vec::new();
     }
@@ -544,7 +542,10 @@ pub fn render_task_assignment_message(
         Color::Cyan,
     )]));
 
-    inner.push(Line::from(vec![bold_colored_span(subject, style.status_fg)]));
+    inner.push(Line::from(vec![bold_colored_span(
+        subject,
+        style.status_fg,
+    )]));
 
     if let Some(desc) = description
         && !desc.is_empty()
@@ -657,10 +658,7 @@ pub enum ShutdownKind<'a> {
 }
 
 /// Render a shutdown message.
-pub fn render_shutdown_message(
-    kind: &ShutdownKind<'_>,
-    style: &StyleConfig,
-) -> Vec<Line<'static>> {
+pub fn render_shutdown_message(kind: &ShutdownKind<'_>, style: &StyleConfig) -> Vec<Line<'static>> {
     match kind {
         ShutdownKind::Request { from, reason } => {
             let mut inner = Vec::new();
@@ -704,10 +702,7 @@ pub fn render_shutdown_message(
             let mut inner = Vec::new();
             inner.push(Line::from(vec![
                 styled_span("✓ ", style.tool_color),
-                bold_colored_span(
-                    format!("Shutdown approved by {from}"),
-                    style.tool_color,
-                ),
+                bold_colored_span(format!("Shutdown approved by {from}"), style.tool_color),
             ]));
 
             wrap_with_border(inner, style.tool_color, None)
@@ -789,10 +784,7 @@ pub fn render_advisor_message(
                 {
                     let truncated: String = inp.chars().take(200).collect();
                     for text_line in truncated.lines() {
-                        lines.push(Line::from(vec![
-                            dim_span("   "),
-                            dim_span(text_line),
-                        ]));
+                        lines.push(Line::from(vec![dim_span("   "), dim_span(text_line)]));
                     }
                 }
             }
@@ -875,8 +867,7 @@ mod tests {
 
     #[test]
     fn tool_use_running_shows_spinner() {
-        let lines =
-            render_tool_use_message("Bash", "ls -la", "running", 0, &test_style());
+        let lines = render_tool_use_message("Bash", "ls -la", "running", 0, &test_style());
         assert!(!lines.is_empty());
         let text = lines[0].to_string();
         assert!(text.contains("⟳"));
@@ -885,8 +876,7 @@ mod tests {
 
     #[test]
     fn tool_use_success_shows_check() {
-        let lines =
-            render_tool_use_message("Read", "/foo.rs", "success", 150, &test_style());
+        let lines = render_tool_use_message("Read", "/foo.rs", "success", 150, &test_style());
         let text = lines[0].to_string();
         assert!(text.contains("✓"));
         assert!(text.contains("150ms"));
@@ -894,16 +884,14 @@ mod tests {
 
     #[test]
     fn tool_use_failed_shows_cross() {
-        let lines =
-            render_tool_use_message("Write", "/err", "failed", 0, &test_style());
+        let lines = render_tool_use_message("Write", "/err", "failed", 0, &test_style());
         let text = lines[0].to_string();
         assert!(text.contains("✗"));
     }
 
     #[test]
     fn tool_use_with_empty_preview() {
-        let lines =
-            render_tool_use_message("Tool", "", "running", 0, &test_style());
+        let lines = render_tool_use_message("Tool", "", "running", 0, &test_style());
         assert_eq!(lines.len(), 1); // only header
     }
 
@@ -919,8 +907,7 @@ mod tests {
 
     #[test]
     fn tool_result_error() {
-        let lines =
-            render_tool_result_message("permission denied", true, &test_style());
+        let lines = render_tool_result_message("permission denied", true, &test_style());
         let text = lines[0].to_string();
         assert!(text.contains("✗"));
         assert!(text.contains("Error"));
@@ -928,7 +915,10 @@ mod tests {
 
     #[test]
     fn tool_result_truncates_long_content() {
-        let long = (0..100).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let long = (0..100)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let lines = render_tool_result_message(&long, false, &test_style());
         // Should have header + 50 lines + truncation notice
         let last = lines.last().unwrap().to_string();
@@ -964,19 +954,14 @@ mod tests {
 
     #[test]
     fn rate_limit_basic() {
-        let lines =
-            render_rate_limit_message("Slow down", None, &test_style());
+        let lines = render_rate_limit_message("Slow down", None, &test_style());
         let text = lines[0].to_string();
         assert!(text.contains("Rate limit"));
     }
 
     #[test]
     fn rate_limit_with_upsell() {
-        let lines = render_rate_limit_message(
-            "Too many requests",
-            Some("/upgrade"),
-            &test_style(),
-        );
+        let lines = render_rate_limit_message("Too many requests", Some("/upgrade"), &test_style());
         let combined = lines
             .iter()
             .map(|l| l.to_string())
@@ -1103,13 +1088,8 @@ mod tests {
 
     #[test]
     fn task_assignment_basic() {
-        let lines = render_task_assignment_message(
-            42,
-            "coordinator",
-            "Fix the bug",
-            None,
-            &test_style(),
-        );
+        let lines =
+            render_task_assignment_message(42, "coordinator", "Fix the bug", None, &test_style());
         let combined = lines
             .iter()
             .map(|l| l.to_string())
@@ -1168,8 +1148,7 @@ mod tests {
 
     #[test]
     fn bash_output_stderr() {
-        let lines =
-            render_user_bash_output("", "error occurred", false, &test_style());
+        let lines = render_user_bash_output("", "error occurred", false, &test_style());
         let combined = lines
             .iter()
             .map(|l| l.to_string())
@@ -1195,8 +1174,7 @@ mod tests {
             .map(|i| format!("line {i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let lines =
-            render_user_bash_output(&long_output, "", true, &test_style());
+        let lines = render_user_bash_output(&long_output, "", true, &test_style());
         // Verbose mode should show all lines
         assert!(lines.len() >= 20);
     }
@@ -1207,8 +1185,7 @@ mod tests {
             .map(|i| format!("line {i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let lines =
-            render_user_bash_output(&long_output, "", false, &test_style());
+        let lines = render_user_bash_output(&long_output, "", false, &test_style());
         // Non-verbose should show 5 + truncation notice
         let last = lines.last().unwrap().to_string();
         assert!(last.contains("more lines"));
@@ -1286,8 +1263,7 @@ mod tests {
             is_resolved: true,
             is_error: false,
         };
-        let lines =
-            render_advisor_message(&block, Some("gpt-4"), false, &test_style());
+        let lines = render_advisor_message(&block, Some("gpt-4"), false, &test_style());
         let text = lines[0].to_string();
         assert!(text.contains("gpt-4"));
     }
@@ -1318,10 +1294,7 @@ mod tests {
 
     #[test]
     fn border_wrap_basic() {
-        let inner = vec![
-            Line::from("Hello"),
-            Line::from("World"),
-        ];
+        let inner = vec![Line::from("Hello"), Line::from("World")];
         let result = wrap_with_border(inner, Color::Blue, None);
         assert!(result.len() >= 4); // top + 2 content + bottom
         let first = result[0].to_string();

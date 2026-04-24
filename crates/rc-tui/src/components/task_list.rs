@@ -172,7 +172,10 @@ impl TaskListPanel {
 // ---------------------------------------------------------------------------
 
 fn dim_span(text: &str) -> Span<'static> {
-    Span::styled(text.to_owned(), Style::default().add_modifier(Modifier::DIM))
+    Span::styled(
+        text.to_owned(),
+        Style::default().add_modifier(Modifier::DIM),
+    )
 }
 
 fn header_span(text: &str, style: &StyleConfig) -> Span<'static> {
@@ -231,7 +234,9 @@ pub fn render_task_list(panel: &TaskListPanel, style: &StyleConfig) -> Vec<Line<
             total = panel.tasks.len()
         )),
     ]));
-    lines.push(Line::from(dim_span(" ─────────────────────────────────────────")));
+    lines.push(Line::from(dim_span(
+        " ─────────────────────────────────────────",
+    )));
     lines.push(Line::from(""));
 
     if panel.tasks.is_empty() {
@@ -331,17 +336,28 @@ pub fn render_task_detail(
         Span::styled(" ◀ ".to_owned(), Style::default().fg(style.accent_color)),
         header_span(&task.name, style),
     ]));
-    lines.push(Line::from(dim_span(" ─────────────────────────────────────────")));
+    lines.push(Line::from(dim_span(
+        " ─────────────────────────────────────────",
+    )));
     lines.push(Line::from(""));
 
     // Details
     lines.push(Line::from(vec![
-        Span::styled("  ID:     ".to_owned(), Style::default().add_modifier(Modifier::BOLD)),
-        Span::styled(task.id.clone(), Style::default().add_modifier(Modifier::DIM)),
+        Span::styled(
+            "  ID:     ".to_owned(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            task.id.clone(),
+            Style::default().add_modifier(Modifier::DIM),
+        ),
     ]));
 
     lines.push(Line::from(vec![
-        Span::styled("  Status: ".to_owned(), Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "  Status: ".to_owned(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
         Span::styled(
             task.status.label().to_owned(),
             Style::default().fg(task.status.color()),
@@ -349,21 +365,30 @@ pub fn render_task_detail(
     ]));
 
     lines.push(Line::from(vec![
-        Span::styled("  Type:   ".to_owned(), Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "  Type:   ".to_owned(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
         Span::raw(task.task_type.clone()),
     ]));
 
     if let Some(p) = task.progress {
         let pct = (p * 100.0) as usize;
         lines.push(Line::from(vec![
-            Span::styled("  Progress: ".to_owned(), Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "  Progress: ".to_owned(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
             Span::styled(format!("{pct}%"), Style::default().fg(Color::Cyan)),
         ]));
     }
 
     if let Some(dur) = task.duration_ms {
         lines.push(Line::from(vec![
-            Span::styled("  Duration: ".to_owned(), Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "  Duration: ".to_owned(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
             Span::raw(format_duration(dur)),
         ]));
     }
@@ -381,9 +406,7 @@ pub fn render_task_detail(
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "  Error:".to_owned(),
-            Style::default()
-                .fg(Color::Red)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         )));
         for line in err.lines() {
             lines.push(Line::from(format!("    {line}")));

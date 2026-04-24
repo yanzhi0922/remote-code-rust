@@ -139,7 +139,10 @@ impl Default for ShellOutputConfig {
 // ---------------------------------------------------------------------------
 
 fn dim_span(text: &str) -> Span<'static> {
-    Span::styled(text.to_owned(), Style::default().add_modifier(Modifier::DIM))
+    Span::styled(
+        text.to_owned(),
+        Style::default().add_modifier(Modifier::DIM),
+    )
 }
 
 fn format_duration(ms: u64) -> String {
@@ -174,7 +177,9 @@ pub fn render_shell_output(
         let mut header_spans = vec![
             Span::styled(
                 format!(" {} ", block.status.label().to_uppercase()),
-                Style::default().fg(status_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(status_color)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(block.command.clone(), Style::default().fg(style.status_fg)),
         ];
@@ -205,10 +210,7 @@ pub fn render_shell_output(
         let mut spans = Vec::new();
 
         if config.show_line_numbers {
-            spans.push(dim_span(&format!(
-                "{:>4} │ ",
-                output_line.line_number
-            )));
+            spans.push(dim_span(&format!("{:>4} │ ", output_line.line_number)));
         } else {
             spans.push(dim_span("   "));
         }
@@ -219,13 +221,9 @@ pub fn render_shell_output(
 
     // Truncation notice
     if block.truncated {
-        lines.push(Line::from(dim_span(
-            "   … output truncated …",
-        )));
+        lines.push(Line::from(dim_span("   … output truncated …")));
         if let Some(bytes) = block.total_bytes {
-            lines.push(Line::from(dim_span(&format!(
-                "   ({bytes} bytes total)"
-            ))));
+            lines.push(Line::from(dim_span(&format!("   ({bytes} bytes total)"))));
         }
     }
 
@@ -264,11 +262,17 @@ pub fn render_shell_summary(block: &ShellOutputBlock, _style: &StyleConfig) -> V
             format!(" {} ", block.status.label()),
             Style::default().fg(status_color),
         ),
-        Span::styled(block.command.clone(), Style::default().add_modifier(Modifier::DIM)),
+        Span::styled(
+            block.command.clone(),
+            Style::default().add_modifier(Modifier::DIM),
+        ),
     ];
 
     if let Some(dur) = block.duration_ms {
-        spans.push(dim_span(&format!(" ({}, {line_count} lines)", format_duration(dur))));
+        spans.push(dim_span(&format!(
+            " ({}, {line_count} lines)",
+            format_duration(dur)
+        )));
     } else {
         spans.push(dim_span(&format!(" ({line_count} lines)")));
     }

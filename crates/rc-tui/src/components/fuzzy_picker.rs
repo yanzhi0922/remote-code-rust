@@ -171,9 +171,7 @@ impl FuzzyPicker {
         let mut results: Vec<(String, FuzzyResult)> = self
             .items
             .iter()
-            .filter_map(|item| {
-                fuzzy_match(&self.query, item).map(|fr| (item.clone(), fr))
-            })
+            .filter_map(|item| fuzzy_match(&self.query, item).map(|fr| (item.clone(), fr)))
             .collect();
 
         // Sort by score descending
@@ -184,9 +182,7 @@ impl FuzzyPicker {
     /// Get the currently selected item, if any.
     pub fn selected_item(&self) -> Option<String> {
         let filtered = self.filtered();
-        filtered
-            .get(self.selected)
-            .map(|(item, _)| item.clone())
+        filtered.get(self.selected).map(|(item, _)| item.clone())
     }
 
     /// Move selection up.
@@ -213,10 +209,7 @@ impl FuzzyPicker {
 ///
 /// Shows a search prompt, the filtered list with the selected item
 /// highlighted, and match indicators on matched characters.
-pub fn render_fuzzy_picker(
-    picker: &FuzzyPicker,
-    style: &StyleConfig,
-) -> Vec<Line<'static>> {
+pub fn render_fuzzy_picker(picker: &FuzzyPicker, style: &StyleConfig) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
     // Search prompt
@@ -313,9 +306,7 @@ pub fn render_fuzzy_picker(
         let total = filtered.len();
         let showing = visible_count.min(total);
         lines.push(Line::from(vec![Span::styled(
-            format!(
-                "   {showing}/{total} items │ ↑↓ navigate │ Enter select │ Esc cancel"
-            ),
+            format!("   {showing}/{total} items │ ↑↓ navigate │ Enter select │ Esc cancel"),
             Style::default()
                 .fg(style.info_color)
                 .add_modifier(Modifier::DIM),
@@ -416,10 +407,7 @@ mod tests {
 
     #[test]
     fn picker_new() {
-        let picker = FuzzyPicker::new(vec![
-            "file1.rs".to_owned(),
-            "file2.ts".to_owned(),
-        ]);
+        let picker = FuzzyPicker::new(vec!["file1.rs".to_owned(), "file2.ts".to_owned()]);
         assert_eq!(picker.items.len(), 2);
         assert!(picker.query.is_empty());
         assert_eq!(picker.selected, 0);
@@ -427,8 +415,7 @@ mod tests {
 
     #[test]
     fn picker_set_query() {
-        let mut picker =
-            FuzzyPicker::new(vec!["file1.rs".to_owned(), "file2.ts".to_owned()]);
+        let mut picker = FuzzyPicker::new(vec!["file1.rs".to_owned(), "file2.ts".to_owned()]);
         picker.set_query("rs".to_owned());
         assert_eq!(picker.query, "rs");
         assert_eq!(picker.selected, 0);
@@ -436,10 +423,7 @@ mod tests {
 
     #[test]
     fn picker_filtered_no_query() {
-        let picker = FuzzyPicker::new(vec![
-            "file1.rs".to_owned(),
-            "file2.ts".to_owned(),
-        ]);
+        let picker = FuzzyPicker::new(vec!["file1.rs".to_owned(), "file2.ts".to_owned()]);
         let filtered = picker.filtered();
         assert_eq!(filtered.len(), 2);
     }
@@ -458,11 +442,7 @@ mod tests {
 
     #[test]
     fn picker_move_up_down() {
-        let mut picker = FuzzyPicker::new(vec![
-            "a".to_owned(),
-            "b".to_owned(),
-            "c".to_owned(),
-        ]);
+        let mut picker = FuzzyPicker::new(vec!["a".to_owned(), "b".to_owned(), "c".to_owned()]);
         assert_eq!(picker.selected, 0);
         picker.move_down();
         assert_eq!(picker.selected, 1);
@@ -483,10 +463,7 @@ mod tests {
 
     #[test]
     fn picker_selected_item() {
-        let mut picker = FuzzyPicker::new(vec![
-            "alpha".to_owned(),
-            "beta".to_owned(),
-        ]);
+        let mut picker = FuzzyPicker::new(vec!["alpha".to_owned(), "beta".to_owned()]);
         assert_eq!(picker.selected_item(), Some("alpha".to_owned()));
         picker.move_down();
         assert_eq!(picker.selected_item(), Some("beta".to_owned()));
@@ -496,10 +473,7 @@ mod tests {
 
     #[test]
     fn render_picker_basic() {
-        let picker = FuzzyPicker::new(vec![
-            "file1.rs".to_owned(),
-            "file2.ts".to_owned(),
-        ]);
+        let picker = FuzzyPicker::new(vec!["file1.rs".to_owned(), "file2.ts".to_owned()]);
         let lines = render_fuzzy_picker(&picker, &StyleConfig::dark());
         assert!(lines.len() >= 3); // prompt + 2 items + footer
         let first = lines[0].to_string();
@@ -508,10 +482,7 @@ mod tests {
 
     #[test]
     fn render_picker_with_query() {
-        let mut picker = FuzzyPicker::new(vec![
-            "file1.rs".to_owned(),
-            "file2.ts".to_owned(),
-        ]);
+        let mut picker = FuzzyPicker::new(vec!["file1.rs".to_owned(), "file2.ts".to_owned()]);
         picker.set_query("rs".to_owned());
         let lines = render_fuzzy_picker(&picker, &StyleConfig::dark());
         let first = lines[0].to_string();

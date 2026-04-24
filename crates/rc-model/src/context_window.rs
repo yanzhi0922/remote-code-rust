@@ -3,7 +3,7 @@
 //! Determines whether a user can upgrade their current model to a 1M context
 //! variant and provides upgrade messages for the UI.
 
-use crate::check_1m::{has_1m_access, OneMContext};
+use crate::check_1m::{OneMContext, has_1m_access};
 use crate::model::ModelSetting;
 
 // ── Types ────────────────────────────────────────────────────────────────
@@ -112,7 +112,7 @@ mod tests {
         let setting = ModelSetting::Specific("opus".into());
         let upgrade = get_available_upgrade(&setting, &payg_ctx());
         assert!(upgrade.is_some());
-        let u = upgrade.unwrap();
+        let u = upgrade.expect("upgrade should exist");
         assert_eq!(u.alias, "opus[1m]");
         assert_eq!(u.name, "Opus 1M");
         assert_eq!(u.multiplier, 5);
@@ -123,7 +123,7 @@ mod tests {
         let setting = ModelSetting::Specific("sonnet".into());
         let upgrade = get_available_upgrade(&setting, &payg_ctx());
         assert!(upgrade.is_some());
-        let u = upgrade.unwrap();
+        let u = upgrade.expect("upgrade should exist");
         assert_eq!(u.alias, "sonnet[1m]");
         assert_eq!(u.name, "Sonnet 1M");
     }

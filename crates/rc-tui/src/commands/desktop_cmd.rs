@@ -18,7 +18,11 @@ pub fn render() {
             println!("Desktop version:      {version}");
             println!(
                 "Version supported:    {}",
-                if supported { "Yes" } else { "No (upgrade needed)" }
+                if supported {
+                    "Yes"
+                } else {
+                    "No (upgrade needed)"
+                }
             );
         } else {
             println!("Desktop version:      (unknown)");
@@ -33,11 +37,8 @@ pub fn render() {
     );
 
     // Deep link example
-    let example_link = rc_utils::deep_link::build_deep_link(
-        "example-session-id",
-        "/home/user/project",
-        false,
-    );
+    let example_link =
+        rc_utils::deep_link::build_deep_link("example-session-id", "/home/user/project", false);
     println!("Example deep link:    {example_link}");
 }
 

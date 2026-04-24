@@ -40,15 +40,15 @@ pub enum PowerShellCommandSemantic {
 /// Returns `(is_error, optional_message)` based on the command's exit code
 /// and the detected semantic category.
 #[must_use]
-pub fn interpret_powershell_result(
-    command: &str,
-    exit_code: i32,
-) -> (bool, Option<String>) {
+pub fn interpret_powershell_result(command: &str, exit_code: i32) -> (bool, Option<String>) {
     let semantic = analyze_powershell_command(command);
     match semantic {
         PowerShellCommandSemantic::GrepLike => {
             if exit_code >= 2 {
-                (true, Some(format!("Command failed with exit code {exit_code}")))
+                (
+                    true,
+                    Some(format!("Command failed with exit code {exit_code}")),
+                )
             } else if exit_code == 1 {
                 (false, Some("No matches found".to_owned()))
             } else {
@@ -57,7 +57,10 @@ pub fn interpret_powershell_result(
         }
         PowerShellCommandSemantic::Robocopy => {
             if exit_code >= 8 {
-                (true, Some(format!("Robocopy failed with exit code {exit_code}")))
+                (
+                    true,
+                    Some(format!("Robocopy failed with exit code {exit_code}")),
+                )
             } else if exit_code == 0 {
                 (false, Some("No files copied (already in sync)".to_owned()))
             } else if (1..8).contains(&exit_code) {
@@ -73,7 +76,10 @@ pub fn interpret_powershell_result(
         }
         _ => {
             if exit_code != 0 {
-                (true, Some(format!("Command failed with exit code {exit_code}")))
+                (
+                    true,
+                    Some(format!("Command failed with exit code {exit_code}")),
+                )
             } else {
                 (false, None)
             }
@@ -151,8 +157,14 @@ const PACKAGE_MANAGERS: &[&str] = &[
     "npm", "yarn", "pnpm", "pip", "pip3", "python", "python3", "dotnet", "cargo", "nuget", "choco",
     "scoop", "winget",
 ];
-const NETWORK_COMMANDS: &[&str] =
-    &["curl", "wget", "invoke-webrequest", "iwr", "invoke-restmethod", "irm"];
+const NETWORK_COMMANDS: &[&str] = &[
+    "curl",
+    "wget",
+    "invoke-webrequest",
+    "iwr",
+    "invoke-restmethod",
+    "irm",
+];
 const DOCKER_COMMANDS: &[&str] = &["docker", "docker-compose", "podman"];
 const PROCESS_COMMANDS: &[&str] = &[
     "get-process",
@@ -175,19 +187,41 @@ const SERVICE_COMMANDS: &[&str] = &[
     "spsv",
 ];
 const FILE_CHANGE_COMMANDS: &[&str] = &[
-    "copy-item", "cp", "move-item", "mv", "remove-item", "rm", "del", "ri", "set-content", "sc",
-    "add-content", "ac", "out-file", "new-item", "ni", "rename-item", "rni",
+    "copy-item",
+    "cp",
+    "move-item",
+    "mv",
+    "remove-item",
+    "rm",
+    "del",
+    "ri",
+    "set-content",
+    "sc",
+    "add-content",
+    "ac",
+    "out-file",
+    "new-item",
+    "ni",
+    "rename-item",
+    "rni",
 ];
 
 /// Extracts the base command name from a PowerShell command string.
 /// Strips leading `&` / `.` call operators, quotes, path components, and `.exe` suffix.
 fn extract_base_command(command: &str) -> String {
     // Take the last pipeline segment (it determines the exit code)
-    let segments: Vec<&str> = command.split(['|', ';']).filter(|s| !s.trim().is_empty()).collect();
+    let segments: Vec<&str> = command
+        .split(['|', ';'])
+        .filter(|s| !s.trim().is_empty())
+        .collect();
     let last = segments.last().copied().unwrap_or(command);
 
     // Strip PowerShell call operators: & "cmd", . "cmd"
-    let stripped = last.trim().trim_start_matches('&').trim_start_matches('.').trim_start();
+    let stripped = last
+        .trim()
+        .trim_start_matches('&')
+        .trim_start_matches('.')
+        .trim_start();
 
     // Get first token
     let first_token = stripped.split_whitespace().next().unwrap_or("");
@@ -196,10 +230,7 @@ fn extract_base_command(command: &str) -> String {
     let unquoted = first_token.trim_matches(|c| c == '"' || c == '\'');
 
     // Strip path: C:\bin\grep.exe → grep.exe, .\rg.exe → rg.exe
-    let basename = unquoted
-        .rsplit(['\\', '/'])
-        .next()
-        .unwrap_or(unquoted);
+    let basename = unquoted.rsplit(['\\', '/']).next().unwrap_or(unquoted);
 
     // Strip .exe suffix (case-insensitive)
     let lower = basename.to_ascii_lowercase();
@@ -344,7 +375,10 @@ mod tests {
 
     #[test]
     fn test_extract_base_command_with_path() {
-        assert_eq!(super::extract_base_command("C:\\bin\\grep.exe 'test'"), "grep");
+        assert_eq!(
+            super::extract_base_command("C:\\bin\\grep.exe 'test'"),
+            "grep"
+        );
         assert_eq!(super::extract_base_command(".\\rg.exe 'test'"), "rg");
     }
 

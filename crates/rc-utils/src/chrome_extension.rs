@@ -11,8 +11,7 @@ use std::path::PathBuf;
 // ---------------------------------------------------------------------------
 
 /// Status of the Chrome extension integration.
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ChromeExtensionStatus {
     /// Whether the Chrome extension is detected as installed.
     pub installed: bool,
@@ -23,7 +22,6 @@ pub struct ChromeExtensionStatus {
     /// The native messaging port, if connected.
     pub port: Option<u16>,
 }
-
 
 impl ChromeExtensionStatus {
     /// Create a new status with default (not installed) values.
@@ -99,7 +97,9 @@ pub fn get_chrome_native_messaging_host_path() -> anyhow::Result<PathBuf> {
 
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 pub fn get_chrome_native_messaging_host_path() -> anyhow::Result<PathBuf> {
-    Err(anyhow::anyhow!("Chrome native messaging is not supported on this platform"))
+    Err(anyhow::anyhow!(
+        "Chrome native messaging is not supported on this platform"
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -132,7 +132,9 @@ pub fn is_native_messaging_host_registered() -> bool {
     std::process::Command::new("reg")
         .args([
             "query",
-            &format!(r"HKCU\Software\Google\Chrome\NativeMessagingHosts\{NATIVE_MESSAGING_HOST_NAME}"),
+            &format!(
+                r"HKCU\Software\Google\Chrome\NativeMessagingHosts\{NATIVE_MESSAGING_HOST_NAME}"
+            ),
             "/ve",
         ])
         .output()
@@ -208,7 +210,9 @@ pub fn register_native_messaging_host() -> anyhow::Result<()> {
     std::process::Command::new("reg")
         .args([
             "add",
-            &format!(r"HKCU\Software\Google\Chrome\NativeMessagingHosts\{NATIVE_MESSAGING_HOST_NAME}"),
+            &format!(
+                r"HKCU\Software\Google\Chrome\NativeMessagingHosts\{NATIVE_MESSAGING_HOST_NAME}"
+            ),
             "/ve",
             "/d",
             manifest_path.to_str().unwrap_or(""),
@@ -241,7 +245,9 @@ pub fn register_native_messaging_host() -> anyhow::Result<()> {
 
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 pub fn register_native_messaging_host() -> anyhow::Result<()> {
-    Err(anyhow::anyhow!("Chrome native messaging is not supported on this platform"))
+    Err(anyhow::anyhow!(
+        "Chrome native messaging is not supported on this platform"
+    ))
 }
 
 /// Unregister the native messaging host.
@@ -253,7 +259,9 @@ pub fn unregister_native_messaging_host() -> anyhow::Result<()> {
     let _ = std::process::Command::new("reg")
         .args([
             "delete",
-            &format!(r"HKCU\Software\Google\Chrome\NativeMessagingHosts\{NATIVE_MESSAGING_HOST_NAME}"),
+            &format!(
+                r"HKCU\Software\Google\Chrome\NativeMessagingHosts\{NATIVE_MESSAGING_HOST_NAME}"
+            ),
             "/f",
         ])
         .output();
@@ -278,7 +286,9 @@ pub fn unregister_native_messaging_host() -> anyhow::Result<()> {
 
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 pub fn unregister_native_messaging_host() -> anyhow::Result<()> {
-    Err(anyhow::anyhow!("Chrome native messaging is not supported on this platform"))
+    Err(anyhow::anyhow!(
+        "Chrome native messaging is not supported on this platform"
+    ))
 }
 
 /// Find the path to the remote-code CLI binary.
@@ -305,17 +315,18 @@ fn which_cli_path() -> anyhow::Result<PathBuf> {
             .arg("remote-code")
             .output();
         if let Ok(o) = output
-            && o.status.success() {
-                let path = String::from_utf8_lossy(&o.stdout)
-                    .lines()
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
-                if !path.is_empty() {
-                    return Ok(PathBuf::from(path));
-                }
+            && o.status.success()
+        {
+            let path = String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if !path.is_empty() {
+                return Ok(PathBuf::from(path));
             }
+        }
     }
 
     // Final fallback: assume it's in a standard location

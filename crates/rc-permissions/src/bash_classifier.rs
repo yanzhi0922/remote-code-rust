@@ -84,9 +84,7 @@ pub fn classify_bash_command(
     }
 
     // Default: deny unknown commands
-    BashClassificationResult::Deny(format!(
-        "Command not in allow list: '{trimmed}'"
-    ))
+    BashClassificationResult::Deny(format!("Command not in allow list: '{trimmed}'"))
 }
 
 /// Check if a command matches a rule pattern.
@@ -132,38 +130,28 @@ pub fn categorize_command(command: &str) -> CommandCategory {
     let first_word = trimmed.split_whitespace().next().unwrap_or("");
 
     match first_word {
-        "npm" | "yarn" | "pnpm" | "bun" | "pip" | "pip3" | "gem" | "cargo"
-        | "apt" | "apt-get" | "yum" | "dnf" | "brew" | "pacman" => {
-            CommandCategory::PackageInstall
-        }
-        "cat" | "head" | "tail" | "less" | "more" | "file" | "stat" | "wc"
-        | "md5sum" | "sha256sum" | "xxd" => CommandCategory::FileRead,
+        "npm" | "yarn" | "pnpm" | "bun" | "pip" | "pip3" | "gem" | "cargo" | "apt" | "apt-get"
+        | "yum" | "dnf" | "brew" | "pacman" => CommandCategory::PackageInstall,
+        "cat" | "head" | "tail" | "less" | "more" | "file" | "stat" | "wc" | "md5sum"
+        | "sha256sum" | "xxd" => CommandCategory::FileRead,
         "ls" | "dir" | "find" | "tree" | "locate" | "which" | "whereis" => {
             CommandCategory::FileRead
         }
-        "cp" | "mv" | "mkdir" | "touch" | "chmod" | "chown" | "ln" | "tar"
-        | "zip" | "unzip" | "gzip" | "gunzip" => CommandCategory::FileWrite,
+        "cp" | "mv" | "mkdir" | "touch" | "chmod" | "chown" | "ln" | "tar" | "zip" | "unzip"
+        | "gzip" | "gunzip" => CommandCategory::FileWrite,
         "rm" | "rmdir" | "shred" | "truncate" => CommandCategory::FileDelete,
-        "curl" | "wget" | "ssh" | "scp" | "rsync" | "ftp" | "nc" | "ncat"
-        | "telnet" | "dig" | "nslookup" | "ping" | "traceroute" => {
-            CommandCategory::Network
-        }
+        "curl" | "wget" | "ssh" | "scp" | "rsync" | "ftp" | "nc" | "ncat" | "telnet" | "dig"
+        | "nslookup" | "ping" | "traceroute" => CommandCategory::Network,
         "git" => CommandCategory::Git,
-        "ps" | "top" | "htop" | "df" | "du" | "free" | "uname" | "uptime"
-        | "hostname" | "whoami" | "id" | "date" | "env" | "printenv" => {
-            CommandCategory::SystemInfo
-        }
-        "kill" | "pkill" | "killall" | "nice" | "renice" | "nohup" | "bg"
-        | "fg" | "jobs" | "disown" => CommandCategory::ProcessManagement,
-        "echo" | "export" | "alias" | "unalias" | "set" | "unset" | "source"
-        | "type" | "command" | "hash" | "readonly" | "shift" | "eval" => {
-            CommandCategory::ShellBuiltin
-        }
-        "docker" | "podman" | "kubectl" | "docker-compose" => {
-            CommandCategory::Container
-        }
-        "make" | "cmake" | "ninja" | "bazel" | "gradle" | "mvn" | "ant"
-        | "xcodebuild" | "msbuild" | "dotnet" => CommandCategory::Build,
+        "ps" | "top" | "htop" | "df" | "du" | "free" | "uname" | "uptime" | "hostname"
+        | "whoami" | "id" | "date" | "env" | "printenv" => CommandCategory::SystemInfo,
+        "kill" | "pkill" | "killall" | "nice" | "renice" | "nohup" | "bg" | "fg" | "jobs"
+        | "disown" => CommandCategory::ProcessManagement,
+        "echo" | "export" | "alias" | "unalias" | "set" | "unset" | "source" | "type"
+        | "command" | "hash" | "readonly" | "shift" | "eval" => CommandCategory::ShellBuiltin,
+        "docker" | "podman" | "kubectl" | "docker-compose" => CommandCategory::Container,
+        "make" | "cmake" | "ninja" | "bazel" | "gradle" | "mvn" | "ant" | "xcodebuild"
+        | "msbuild" | "dotnet" => CommandCategory::Build,
         _ => CommandCategory::Unknown,
     }
 }
@@ -485,14 +473,23 @@ mod tests {
 
     #[test]
     fn categorize_file_read() {
-        assert_eq!(categorize_command("cat file.txt"), CommandCategory::FileRead);
+        assert_eq!(
+            categorize_command("cat file.txt"),
+            CommandCategory::FileRead
+        );
         assert_eq!(categorize_command("ls -la"), CommandCategory::FileRead);
     }
 
     #[test]
     fn categorize_network() {
-        assert_eq!(categorize_command("ssh user@host"), CommandCategory::Network);
-        assert_eq!(categorize_command("ping google.com"), CommandCategory::Network);
+        assert_eq!(
+            categorize_command("ssh user@host"),
+            CommandCategory::Network
+        );
+        assert_eq!(
+            categorize_command("ping google.com"),
+            CommandCategory::Network
+        );
     }
 
     #[test]

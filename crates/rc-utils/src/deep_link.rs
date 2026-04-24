@@ -71,11 +71,7 @@ pub fn is_desktop_installed() -> bool {
 #[cfg(target_os = "windows")]
 pub fn get_desktop_version() -> Option<String> {
     let output = std::process::Command::new("reg")
-        .args([
-            "query",
-            r"HKCR\remote-code\DefaultIcon",
-            "/ve",
-        ])
+        .args(["query", r"HKCR\remote-code\DefaultIcon", "/ve"])
         .output()
         .ok()?;
 

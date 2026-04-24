@@ -95,21 +95,13 @@ pub fn render_dialog(dialog: &Dialog, style: &StyleConfig) -> Vec<Line<'static>>
     let mut lines = Vec::new();
 
     // Compute width from the widest body line or title
-    let body_width = dialog
-        .body
-        .iter()
-        .map(|l| l.width())
-        .max()
-        .unwrap_or(0);
+    let body_width = dialog.body.iter().map(|l| l.width()).max().unwrap_or(0);
     let button_width: usize = dialog
         .buttons
         .iter()
         .map(|b| b.len() + 4) // padding + brackets
         .sum();
-    let inner_width = body_width
-        .max(button_width)
-        .max(dialog.title.len())
-        .max(20);
+    let inner_width = body_width.max(button_width).max(dialog.title.len()).max(20);
     let total_width = inner_width + 4; // border + padding
 
     // Top border with title
@@ -143,10 +135,7 @@ pub fn render_dialog(dialog: &Dialog, style: &StyleConfig) -> Vec<Line<'static>>
     }
 
     // Separator before buttons
-    let sep = format!(
-        "├{}┤",
-        "─".repeat(total_width.saturating_sub(2))
-    );
+    let sep = format!("├{}┤", "─".repeat(total_width.saturating_sub(2)));
     lines.push(Line::from(vec![Span::styled(
         sep,
         Style::default().fg(dialog.border_color),
@@ -174,11 +163,7 @@ pub fn render_dialog(dialog: &Dialog, style: &StyleConfig) -> Vec<Line<'static>>
         }
     }
 
-    let used_width: usize = dialog
-        .buttons
-        .iter()
-        .map(|b| b.len() + 4)
-        .sum();
+    let used_width: usize = dialog.buttons.iter().map(|b| b.len() + 4).sum();
     let trailing = inner_width.saturating_sub(used_width);
     button_spans.push(Span::styled(
         format!("{}│", " ".repeat(trailing)),
@@ -187,10 +172,7 @@ pub fn render_dialog(dialog: &Dialog, style: &StyleConfig) -> Vec<Line<'static>>
     lines.push(Line::from(button_spans));
 
     // Bottom border
-    let bottom = format!(
-        "╰{}╯",
-        "─".repeat(total_width.saturating_sub(2))
-    );
+    let bottom = format!("╰{}╯", "─".repeat(total_width.saturating_sub(2)));
     lines.push(Line::from(vec![Span::styled(
         bottom,
         Style::default().fg(dialog.border_color),
@@ -214,7 +196,12 @@ pub fn render_confirm_dialog(
 ) -> Vec<Line<'static>> {
     let body: Vec<Line<'static>> = message
         .lines()
-        .map(|l| Line::from(Span::styled(l.to_owned(), Style::default().fg(style.status_fg))))
+        .map(|l| {
+            Line::from(Span::styled(
+                l.to_owned(),
+                Style::default().fg(style.status_fg),
+            ))
+        })
         .collect();
 
     let dialog = Dialog {
@@ -255,16 +242,10 @@ pub fn render_input_dialog(
         .nth(cursor_pos)
         .map(|c| c.to_string())
         .unwrap_or_else(|| " ".to_owned());
-    let after: String = input_value
-        .chars()
-        .skip(cursor_pos + 1)
-        .collect();
+    let after: String = input_value.chars().skip(cursor_pos + 1).collect();
 
     body.push(Line::from(vec![
-        Span::styled(
-            "  > ".to_owned(),
-            Style::default().fg(style.accent_color),
-        ),
+        Span::styled("  > ".to_owned(), Style::default().fg(style.accent_color)),
         Span::styled(before, Style::default().fg(style.status_fg)),
         Span::styled(
             at_cursor,
@@ -336,8 +317,11 @@ mod tests {
 
     #[test]
     fn render_dialog_shows_all_buttons() {
-        let dlg = Dialog::new("Q", vec![])
-            .with_buttons(vec!["Yes".to_owned(), "No".to_owned(), "Maybe".to_owned()]);
+        let dlg = Dialog::new("Q", vec![]).with_buttons(vec![
+            "Yes".to_owned(),
+            "No".to_owned(),
+            "Maybe".to_owned(),
+        ]);
         let lines = render_dialog(&dlg, &test_style());
         // Find button line (second to last)
         let button_line = lines[lines.len() - 2].to_string();
@@ -372,8 +356,7 @@ mod tests {
 
     #[test]
     fn confirm_dialog_yes_selected() {
-        let lines =
-            render_confirm_dialog("Confirm", "Are you sure?", 0, &test_style());
+        let lines = render_confirm_dialog("Confirm", "Are you sure?", 0, &test_style());
         let combined = lines
             .iter()
             .map(|l| l.to_string())
@@ -387,8 +370,7 @@ mod tests {
 
     #[test]
     fn confirm_dialog_no_selected() {
-        let lines =
-            render_confirm_dialog("Delete?", "Delete file?", 1, &test_style());
+        let lines = render_confirm_dialog("Delete?", "Delete file?", 1, &test_style());
         let combined = lines
             .iter()
             .map(|l| l.to_string())
@@ -399,8 +381,7 @@ mod tests {
 
     #[test]
     fn confirm_dialog_has_top_border() {
-        let lines =
-            render_confirm_dialog("Test", "msg", 0, &test_style());
+        let lines = render_confirm_dialog("Test", "msg", 0, &test_style());
         let first = lines[0].to_string();
         assert!(first.starts_with('╭'));
     }
@@ -409,8 +390,7 @@ mod tests {
 
     #[test]
     fn input_dialog_basic() {
-        let lines =
-            render_input_dialog("Input", "Enter name:", "hello", 2, &test_style());
+        let lines = render_input_dialog("Input", "Enter name:", "hello", 2, &test_style());
         let combined = lines
             .iter()
             .map(|l| l.to_string())
@@ -424,8 +404,7 @@ mod tests {
 
     #[test]
     fn input_dialog_empty_value() {
-        let lines =
-            render_input_dialog("Input", "Type:", "", 0, &test_style());
+        let lines = render_input_dialog("Input", "Type:", "", 0, &test_style());
         let combined = lines
             .iter()
             .map(|l| l.to_string())
@@ -436,16 +415,14 @@ mod tests {
 
     #[test]
     fn input_dialog_cursor_at_end() {
-        let lines =
-            render_input_dialog("Input", ">", "abc", 3, &test_style());
+        let lines = render_input_dialog("Input", ">", "abc", 3, &test_style());
         // Should not panic with cursor beyond content
         assert!(!lines.is_empty());
     }
 
     #[test]
     fn input_dialog_multiline_prompt() {
-        let lines =
-            render_input_dialog("Input", "Enter value:", "test", 1, &test_style());
+        let lines = render_input_dialog("Input", "Enter value:", "test", 1, &test_style());
         let combined = lines
             .iter()
             .map(|l| l.to_string())
@@ -456,8 +433,7 @@ mod tests {
 
     #[test]
     fn input_dialog_has_borders() {
-        let lines =
-            render_input_dialog("Title", "p", "v", 0, &test_style());
+        let lines = render_input_dialog("Title", "p", "v", 0, &test_style());
         let first = lines[0].to_string();
         let last = lines.last().unwrap().to_string();
         assert!(first.starts_with('╭'));

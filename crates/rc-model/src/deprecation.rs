@@ -199,9 +199,10 @@ mod tests {
 
     #[test]
     fn warning_message_format() {
-        let msg = get_model_deprecation_warning("claude-3-opus-20240229", &ModelProvider::Anthropic);
+        let msg =
+            get_model_deprecation_warning("claude-3-opus-20240229", &ModelProvider::Anthropic);
         assert!(msg.is_some());
-        let m = msg.unwrap();
+        let m = msg.expect("deprecation warning should exist");
         assert!(m.starts_with("⚠"));
         assert!(m.contains("Claude 3 Opus"));
         assert!(m.contains("January 5, 2026"));

@@ -1,4 +1,4 @@
-﻿//! PowerShell-specific git safety checks.
+//! PowerShell-specific git safety checks.
 //!
 //! Detects destructive git operations and returns warning messages.
 //! This is a PowerShell-specific complement to the generic `git_safety` module,
@@ -35,9 +35,8 @@ pub fn check_powershell_git_safety(command: &str) -> Option<String> {
 
 /// Detects `git reset --hard` which discards all uncommitted changes.
 fn check_git_reset_hard(command: &str) -> Option<String> {
-    static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bgit\s+reset\s+--hard\b").expect("valid regex")
-    });
+    static RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?i)\bgit\s+reset\s+--hard\b").expect("valid regex"));
     if RE.is_match(command) {
         return Some(
             "Warning: git reset --hard will discard ALL uncommitted changes permanently. \
@@ -51,7 +50,8 @@ fn check_git_reset_hard(command: &str) -> Option<String> {
 /// Detects `git push --force` or `git push -f` which overwrites remote history.
 fn check_git_push_force(command: &str) -> Option<String> {
     static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bgit\s+push\b.*(--force\b|--force-with-lease\b|-f\b)").expect("valid regex")
+        Regex::new(r"(?i)\bgit\s+push\b.*(--force\b|--force-with-lease\b|-f\b)")
+            .expect("valid regex")
     });
     if RE.is_match(command) {
         return Some(
@@ -65,9 +65,7 @@ fn check_git_push_force(command: &str) -> Option<String> {
 
 /// Detects `git clean -fdx` which permanently deletes untracked files.
 fn check_git_clean(command: &str) -> Option<String> {
-    static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bgit\s+clean\b").expect("valid regex")
-    });
+    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\bgit\s+clean\b").expect("valid regex"));
     if RE.is_match(command) {
         let lower = command.to_ascii_lowercase();
         let has_force = lower.contains("-f") || lower.contains("--force");
@@ -113,9 +111,8 @@ fn git_clean_has_dry_run_flag(lower_command: &str) -> bool {
 
 /// Detects `git checkout -- <file>` which discards working directory changes.
 fn check_git_checkout_discard(command: &str) -> Option<String> {
-    static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bgit\s+checkout\s+--\s").expect("valid regex")
-    });
+    static RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?i)\bgit\s+checkout\s+--\s").expect("valid regex"));
     if RE.is_match(command) {
         return Some(
             "Warning: git checkout -- <file> discards uncommitted changes to the specified files. \
@@ -124,9 +121,8 @@ fn check_git_checkout_discard(command: &str) -> Option<String> {
         );
     }
     // Also check git restore --source (newer syntax)
-    static RE_RESTORE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bgit\s+restore\b.*--source\b").expect("valid regex")
-    });
+    static RE_RESTORE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?i)\bgit\s+restore\b.*--source\b").expect("valid regex"));
     if RE_RESTORE.is_match(command) {
         return Some(
             "Warning: git restore --source discards changes by restoring from another source. \
@@ -139,9 +135,8 @@ fn check_git_checkout_discard(command: &str) -> Option<String> {
 
 /// Detects `git rebase` operations which rewrite history.
 fn check_git_rebase(command: &str) -> Option<String> {
-    static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bgit\s+rebase\b").expect("valid regex")
-    });
+    static RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?i)\bgit\s+rebase\b").expect("valid regex"));
     if RE.is_match(command) {
         let lower = command.to_ascii_lowercase();
         // Interactive rebase is blocked elsewhere; warn about any rebase
@@ -163,9 +158,8 @@ fn check_git_rebase(command: &str) -> Option<String> {
 
 /// Detects `git commit --amend` which modifies the last commit.
 fn check_git_amend(command: &str) -> Option<String> {
-    static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bgit\s+commit\b.*--amend\b").expect("valid regex")
-    });
+    static RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?i)\bgit\s+commit\b.*--amend\b").expect("valid regex"));
     if RE.is_match(command) {
         return Some(
             "Note: amending a commit modifies existing history. If this commit has already been \
@@ -179,9 +173,8 @@ fn check_git_amend(command: &str) -> Option<String> {
 
 /// Detects `git stash drop` or `git stash clear` which permanently removes stashed changes.
 fn check_git_stash_drop(command: &str) -> Option<String> {
-    static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bgit\s+stash\s+(drop|clear)\b").expect("valid regex")
-    });
+    static RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?i)\bgit\s+stash\s+(drop|clear)\b").expect("valid regex"));
     if RE.is_match(command) {
         return Some(
             "Warning: git stash drop/clear permanently removes stashed changes. \
@@ -195,7 +188,10 @@ fn check_git_stash_drop(command: &str) -> Option<String> {
 /// Detects `--no-verify` or GPG bypass flags.
 fn check_git_no_verify(command: &str) -> Option<String> {
     static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bgit\s+\w+\b.*(--no-verify\b|--no-gpg-sign\b|commit\.gpgsign\s*=\s*false)").expect("valid regex")
+        Regex::new(
+            r"(?i)\bgit\s+\w+\b.*(--no-verify\b|--no-gpg-sign\b|commit\.gpgsign\s*=\s*false)",
+        )
+        .expect("valid regex")
     });
     if RE.is_match(command) {
         return Some(
@@ -219,7 +215,8 @@ fn check_git_bare_repo_attack(command: &str) -> Option<String> {
         );
     }
     // Check for creation of git-internal files at repo root (bare repo attack)
-    let has_head = lower.contains("head") && !lower.contains("headers") && !lower.contains("get-head");
+    let has_head =
+        lower.contains("head") && !lower.contains("headers") && !lower.contains("get-head");
     let has_objects = lower.contains("objects") && !lower.contains("get-");
     let has_refs = lower.contains("refs");
     if has_head && (has_objects || has_refs) {

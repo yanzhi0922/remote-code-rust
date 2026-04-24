@@ -170,40 +170,40 @@ pub fn exit_worktree_tool(input: &Value, context: &ToolExecutionContext) -> Resu
     }
 
     let summary = count_worktree_changes(&session)?;
-    if action == "remove" && !discard_changes
-        && (summary.changed_files > 0 || summary.commits > 0) {
-            let mut parts = Vec::new();
-            if summary.changed_files > 0 {
-                parts.push(format!(
-                    "{} uncommitted {}",
-                    summary.changed_files,
-                    if summary.changed_files == 1 {
-                        "file"
-                    } else {
-                        "files"
-                    }
-                ));
-            }
-            if summary.commits > 0 {
-                parts.push(format!(
-                    "{} {} on {}",
-                    summary.commits,
-                    if summary.commits == 1 {
-                        "commit"
-                    } else {
-                        "commits"
-                    },
-                    session
-                        .worktree_branch
-                        .as_deref()
-                        .unwrap_or("the worktree branch")
-                ));
-            }
-            return Err(anyhow!(
-                "Worktree has {}. Removing will discard this work permanently. Re-invoke with discard_changes=true to proceed, or use action=\"keep\".",
-                parts.join(" and ")
+    if action == "remove" && !discard_changes && (summary.changed_files > 0 || summary.commits > 0)
+    {
+        let mut parts = Vec::new();
+        if summary.changed_files > 0 {
+            parts.push(format!(
+                "{} uncommitted {}",
+                summary.changed_files,
+                if summary.changed_files == 1 {
+                    "file"
+                } else {
+                    "files"
+                }
             ));
         }
+        if summary.commits > 0 {
+            parts.push(format!(
+                "{} {} on {}",
+                summary.commits,
+                if summary.commits == 1 {
+                    "commit"
+                } else {
+                    "commits"
+                },
+                session
+                    .worktree_branch
+                    .as_deref()
+                    .unwrap_or("the worktree branch")
+            ));
+        }
+        return Err(anyhow!(
+            "Worktree has {}. Removing will discard this work permanently. Re-invoke with discard_changes=true to proceed, or use action=\"keep\".",
+            parts.join(" and ")
+        ));
+    }
 
     match action {
         "keep" => Ok(json!({

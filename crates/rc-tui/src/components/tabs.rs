@@ -130,10 +130,7 @@ pub fn render_tab_bar(tab_bar: &TabBar, style: &StyleConfig) -> Vec<Line<'static
                     .add_modifier(Modifier::BOLD),
             ));
         } else {
-            spans.push(Span::styled(
-                label,
-                Style::default().fg(style.info_color),
-            ));
+            spans.push(Span::styled(label, Style::default().fg(style.info_color)));
         }
     }
 
@@ -144,10 +141,7 @@ pub fn render_tab_bar(tab_bar: &TabBar, style: &StyleConfig) -> Vec<Line<'static
 ///
 /// This variant draws a row of tab labels followed by a second line with
 /// an underline positioned beneath the active tab.
-pub fn render_tab_bar_underlined(
-    tab_bar: &TabBar,
-    style: &StyleConfig,
-) -> Vec<Line<'static>> {
+pub fn render_tab_bar_underlined(tab_bar: &TabBar, style: &StyleConfig) -> Vec<Line<'static>> {
     if tab_bar.tabs.is_empty() {
         return vec![Line::from(vec![Span::styled(
             " (no tabs) ",
@@ -165,10 +159,7 @@ pub fn render_tab_bar_underlined(
 
         // Separator
         if i > 0 {
-            label_spans.push(Span::styled(
-                "  ".to_owned(),
-                Style::default(),
-            ));
+            label_spans.push(Span::styled("  ".to_owned(), Style::default()));
         }
 
         let label = format!(" {tab_label} ");
@@ -183,10 +174,7 @@ pub fn render_tab_bar_underlined(
                     .add_modifier(Modifier::BOLD),
             ));
         } else {
-            label_spans.push(Span::styled(
-                label,
-                Style::default().fg(style.info_color),
-            ));
+            label_spans.push(Span::styled(label, Style::default().fg(style.info_color)));
         }
     }
 
@@ -204,10 +192,7 @@ pub fn render_tab_bar_underlined(
                 Style::default().fg(style.accent_color),
             ));
         } else {
-            underline_spans.push(Span::styled(
-                " ".repeat(*width),
-                Style::default(),
-            ));
+            underline_spans.push(Span::styled(" ".repeat(*width), Style::default()));
         }
     }
 
@@ -217,10 +202,7 @@ pub fn render_tab_bar_underlined(
 /// Render a compact tab bar suitable for narrow areas.
 ///
 /// Only shows the active tab and a count indicator.
-pub fn render_tab_bar_compact(
-    tab_bar: &TabBar,
-    style: &StyleConfig,
-) -> Vec<Line<'static>> {
+pub fn render_tab_bar_compact(tab_bar: &TabBar, style: &StyleConfig) -> Vec<Line<'static>> {
     if tab_bar.tabs.is_empty() {
         return vec![Line::from("")];
     }
@@ -246,10 +228,7 @@ pub fn render_tab_bar_compact(
                 .bg(style.accent_color)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            indicator,
-            Style::default().fg(style.info_color),
-        ),
+        Span::styled(indicator, Style::default().fg(style.info_color)),
     ])]
 }
 
@@ -269,10 +248,7 @@ mod tests {
 
     #[test]
     fn tab_bar_new() {
-        let bar = TabBar::new(vec![
-            "Tab1".to_owned(),
-            "Tab2".to_owned(),
-        ]);
+        let bar = TabBar::new(vec!["Tab1".to_owned(), "Tab2".to_owned()]);
         assert_eq!(bar.tabs.len(), 2);
         assert_eq!(bar.active, 0);
         assert!(!bar.show_close);
@@ -300,11 +276,7 @@ mod tests {
 
     #[test]
     fn tab_bar_next() {
-        let mut bar = TabBar::new(vec![
-            "A".to_owned(),
-            "B".to_owned(),
-            "C".to_owned(),
-        ]);
+        let mut bar = TabBar::new(vec!["A".to_owned(), "B".to_owned(), "C".to_owned()]);
         assert_eq!(bar.active, 0);
         bar.next();
         assert_eq!(bar.active, 1);
@@ -316,11 +288,7 @@ mod tests {
 
     #[test]
     fn tab_bar_prev() {
-        let mut bar = TabBar::new(vec![
-            "A".to_owned(),
-            "B".to_owned(),
-            "C".to_owned(),
-        ]);
+        let mut bar = TabBar::new(vec!["A".to_owned(), "B".to_owned(), "C".to_owned()]);
         bar.prev(); // wraps around to last
         assert_eq!(bar.active, 2);
         bar.prev();
@@ -376,10 +344,7 @@ mod tests {
 
     #[test]
     fn render_tab_bar_has_separator() {
-        let bar = TabBar::new(vec![
-            "A".to_owned(),
-            "B".to_owned(),
-        ]);
+        let bar = TabBar::new(vec!["A".to_owned(), "B".to_owned()]);
         let lines = render_tab_bar(&bar, &test_style());
         let text = lines[0].to_string();
         assert!(text.contains('│'));
@@ -389,21 +354,14 @@ mod tests {
 
     #[test]
     fn render_underlined_two_lines() {
-        let bar = TabBar::new(vec![
-            "Tab1".to_owned(),
-            "Tab2".to_owned(),
-        ]);
+        let bar = TabBar::new(vec!["Tab1".to_owned(), "Tab2".to_owned()]);
         let lines = render_tab_bar_underlined(&bar, &test_style());
         assert_eq!(lines.len(), 2); // labels + underline
     }
 
     #[test]
     fn render_underlined_active_has_dash() {
-        let bar = TabBar::new(vec![
-            "A".to_owned(),
-            "B".to_owned(),
-        ])
-        .with_active(1);
+        let bar = TabBar::new(vec!["A".to_owned(), "B".to_owned()]).with_active(1);
         let lines = render_tab_bar_underlined(&bar, &test_style());
         let underline = lines[1].to_string();
         assert!(underline.contains('─'));
@@ -430,12 +388,7 @@ mod tests {
 
     #[test]
     fn render_compact_multiple_tabs() {
-        let bar = TabBar::new(vec![
-            "A".to_owned(),
-            "B".to_owned(),
-            "C".to_owned(),
-        ])
-        .with_active(1);
+        let bar = TabBar::new(vec!["A".to_owned(), "B".to_owned(), "C".to_owned()]).with_active(1);
         let lines = render_tab_bar_compact(&bar, &test_style());
         let text = lines[0].to_string();
         assert!(text.contains("B"));

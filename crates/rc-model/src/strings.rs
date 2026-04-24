@@ -7,9 +7,7 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use crate::configs::{
-    model_id_for_provider, key_for_canonical_id, ModelKey, ALL_MODEL_CONFIGS,
-};
+use crate::configs::{ALL_MODEL_CONFIGS, ModelKey, key_for_canonical_id, model_id_for_provider};
 use crate::providers::ModelProvider;
 
 // ── Model strings map ────────────────────────────────────────────────────
@@ -31,9 +29,8 @@ pub fn get_builtin_model_strings(provider: &ModelProvider) -> ModelStrings {
 // ── Static default strings ───────────────────────────────────────────────
 
 /// Default model strings for first-party provider.
-static DEFAULT_STRINGS: LazyLock<ModelStrings> = LazyLock::new(|| {
-    get_builtin_model_strings(&ModelProvider::Anthropic)
-});
+static DEFAULT_STRINGS: LazyLock<ModelStrings> =
+    LazyLock::new(|| get_builtin_model_strings(&ModelProvider::Anthropic));
 
 // ── Lookup helpers ───────────────────────────────────────────────────────
 
@@ -113,7 +110,10 @@ mod tests {
     #[test]
     fn builtin_strings_anthropic() {
         let strings = get_builtin_model_strings(&ModelProvider::Anthropic);
-        assert_eq!(strings.get(&ModelKey::Opus46), Some(&"claude-opus-4-6".to_string()));
+        assert_eq!(
+            strings.get(&ModelKey::Opus46),
+            Some(&"claude-opus-4-6".to_string())
+        );
         assert_eq!(
             strings.get(&ModelKey::Sonnet46),
             Some(&"claude-sonnet-4-6".to_string())
@@ -161,7 +161,7 @@ mod tests {
             Some(&"arn:aws:bedrock:us-east-1:123:inference-profile/custom-opus".to_string())
         );
         // Other keys should be unchanged.
-        assert!(result.get(&ModelKey::Sonnet46).is_some());
+        assert!(result.contains_key(&ModelKey::Sonnet46));
     }
 
     #[test]

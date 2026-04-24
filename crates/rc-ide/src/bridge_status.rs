@@ -107,7 +107,10 @@ pub fn format_bridge_status(info: &BridgeConnectionInfo) -> String {
     let status_str = info.status.to_string();
     let transport_str = info.transport.to_string();
 
-    let mut parts = vec![format!("status={status_str}"), format!("transport={transport_str}")];
+    let mut parts = vec![
+        format!("status={status_str}"),
+        format!("transport={transport_str}"),
+    ];
 
     if let Some(ref since) = info.connected_since {
         parts.push(format!("since={since}"));
@@ -175,7 +178,10 @@ mod tests {
 
         assert_eq!(info.status, BridgeStatus::Connected);
         assert_eq!(info.transport, BridgeTransport::WebSocket);
-        assert_eq!(info.connected_since.as_deref(), Some("2026-01-01T00:00:00Z"));
+        assert_eq!(
+            info.connected_since.as_deref(),
+            Some("2026-01-01T00:00:00Z")
+        );
         assert_eq!(info.session_id.as_deref(), Some("sess-abc"));
         assert_eq!(info.latency_ms, Some(42));
     }

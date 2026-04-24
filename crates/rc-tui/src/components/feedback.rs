@@ -93,7 +93,10 @@ pub struct FeedbackEntry {
 // ---------------------------------------------------------------------------
 
 fn dim_span(text: &str) -> Span<'static> {
-    Span::styled(text.to_owned(), Style::default().add_modifier(Modifier::DIM))
+    Span::styled(
+        text.to_owned(),
+        Style::default().add_modifier(Modifier::DIM),
+    )
 }
 
 fn header_span(text: &str, style: &StyleConfig) -> Span<'static> {
@@ -133,10 +136,7 @@ pub fn render_feedback_dialog(
             spans.push(Span::styled("  ".to_owned(), Style::default()));
         }
 
-        spans.push(Span::styled(
-            rating.emoji().to_owned(),
-            Style::default(),
-        ));
+        spans.push(Span::styled(rating.emoji().to_owned(), Style::default()));
         spans.push(Span::styled(
             format!(" {}", rating.label()),
             if is_selected {
@@ -160,18 +160,23 @@ pub fn render_feedback_dialog(
 }
 
 /// Render a thank-you message after feedback submission.
-pub fn render_feedback_thanks(
-    entry: &FeedbackEntry,
-    style: &StyleConfig,
-) -> Vec<Line<'static>> {
+pub fn render_feedback_thanks(entry: &FeedbackEntry, style: &StyleConfig) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
-    lines.push(Line::from(header_span(" ✅ Thank you for your feedback!", style)));
-    lines.push(Line::from(dim_span(" ─────────────────────────────────────────")));
+    lines.push(Line::from(header_span(
+        " ✅ Thank you for your feedback!",
+        style,
+    )));
+    lines.push(Line::from(dim_span(
+        " ─────────────────────────────────────────",
+    )));
     lines.push(Line::from(""));
 
     lines.push(Line::from(vec![
-        Span::styled("  Rating: ".to_owned(), Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "  Rating: ".to_owned(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
         Span::styled(
             format!("{} {}", entry.rating.emoji(), entry.rating.label()),
             Style::default().fg(Color::Cyan),

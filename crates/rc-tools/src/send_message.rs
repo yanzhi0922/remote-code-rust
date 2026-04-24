@@ -51,7 +51,6 @@ enum MessagePriority {
     High,
 }
 
-
 /// Send a message to a specific agent or broadcast with `to: "*"`.
 ///
 /// # Errors

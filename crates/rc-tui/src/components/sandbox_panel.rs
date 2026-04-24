@@ -111,7 +111,10 @@ pub struct DoctorCheck {
 // ---------------------------------------------------------------------------
 
 fn dim_span(text: &str) -> Span<'static> {
-    Span::styled(text.to_owned(), Style::default().add_modifier(Modifier::DIM))
+    Span::styled(
+        text.to_owned(),
+        Style::default().add_modifier(Modifier::DIM),
+    )
 }
 
 fn header_span(text: &str, style: &StyleConfig) -> Span<'static> {
@@ -132,13 +135,18 @@ pub fn render_sandbox_panel(panel: &SandboxPanel, style: &StyleConfig) -> Vec<Li
     let mut lines = Vec::new();
 
     lines.push(Line::from(header_span(" Sandbox Settings", style)));
-    lines.push(Line::from(dim_span(" ─────────────────────────────────────────")));
+    lines.push(Line::from(dim_span(
+        " ─────────────────────────────────────────",
+    )));
     lines.push(Line::from(""));
 
     // Status
     let status_color = panel.status.color();
     lines.push(Line::from(vec![
-        Span::styled("  Status: ".to_owned(), Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "  Status: ".to_owned(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
         Span::styled(
             panel.status.indicator().to_owned(),
             Style::default().fg(status_color),
@@ -164,7 +172,10 @@ pub fn render_sandbox_panel(panel: &SandboxPanel, style: &StyleConfig) -> Vec<Li
     )));
 
     lines.push(Line::from(vec![
-        Span::styled("  Enabled: ".to_owned(), Style::default().add_modifier(Modifier::DIM)),
+        Span::styled(
+            "  Enabled: ".to_owned(),
+            Style::default().add_modifier(Modifier::DIM),
+        ),
         Span::styled(
             if panel.config.enabled { "yes" } else { "no" }.to_owned(),
             if panel.config.enabled {
@@ -176,7 +187,10 @@ pub fn render_sandbox_panel(panel: &SandboxPanel, style: &StyleConfig) -> Vec<Li
     ]));
 
     lines.push(Line::from(vec![
-        Span::styled("  Type: ".to_owned(), Style::default().add_modifier(Modifier::DIM)),
+        Span::styled(
+            "  Type: ".to_owned(),
+            Style::default().add_modifier(Modifier::DIM),
+        ),
         Span::raw(panel.config.sandbox_type.clone()),
     ]));
 
@@ -238,7 +252,9 @@ pub fn render_sandbox_doctor(panel: &SandboxPanel, style: &StyleConfig) -> Vec<L
     let mut lines = Vec::new();
 
     lines.push(Line::from(header_span(" Sandbox Doctor", style)));
-    lines.push(Line::from(dim_span(" ─────────────────────────────────────────")));
+    lines.push(Line::from(dim_span(
+        " ─────────────────────────────────────────",
+    )));
     lines.push(Line::from(""));
 
     if panel.doctor_checks.is_empty() {

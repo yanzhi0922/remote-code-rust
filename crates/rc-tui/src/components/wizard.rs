@@ -156,7 +156,10 @@ impl WizardState {
 // ---------------------------------------------------------------------------
 
 fn dim_span(text: &str) -> Span<'static> {
-    Span::styled(text.to_owned(), Style::default().add_modifier(Modifier::DIM))
+    Span::styled(
+        text.to_owned(),
+        Style::default().add_modifier(Modifier::DIM),
+    )
 }
 
 fn header_span(text: &str, style: &StyleConfig) -> Span<'static> {
@@ -179,7 +182,11 @@ pub fn render_wizard(state: &WizardState, style: &StyleConfig) -> Vec<Line<'stat
     // Progress bar
     let step_idx = state.current_step.index();
     let total = state.total_steps;
-    let filled = if total > 1 { step_idx * 10 / (total - 1) } else { 10 };
+    let filled = if total > 1 {
+        step_idx * 10 / (total - 1)
+    } else {
+        10
+    };
     let bar: String = "█".repeat(filled) + &"░".repeat(10 - filled);
     lines.push(Line::from(vec![
         dim_span(" Step "),
@@ -197,7 +204,9 @@ pub fn render_wizard(state: &WizardState, style: &StyleConfig) -> Vec<Line<'stat
         &format!(" {}", state.current_step.title()),
         style,
     )));
-    lines.push(Line::from(dim_span(" ─────────────────────────────────────────")));
+    lines.push(Line::from(dim_span(
+        " ─────────────────────────────────────────",
+    )));
     lines.push(Line::from(""));
 
     // Step content
@@ -205,7 +214,9 @@ pub fn render_wizard(state: &WizardState, style: &StyleConfig) -> Vec<Line<'stat
         WizardStep::Welcome => {
             lines.push(Line::from("  Welcome! Let's set up your environment."));
             lines.push(Line::from(""));
-            lines.push(Line::from(dim_span("  This wizard will guide you through:")));
+            lines.push(Line::from(dim_span(
+                "  This wizard will guide you through:",
+            )));
             lines.push(Line::from(dim_span("    1. API key configuration")));
             lines.push(Line::from(dim_span("    2. Provider selection")));
             lines.push(Line::from(dim_span("    3. Theme selection")));
@@ -324,7 +335,10 @@ pub fn render_wizard(state: &WizardState, style: &StyleConfig) -> Vec<Line<'stat
             lines.push(Line::from("  ✅ You're all set!"));
             lines.push(Line::from(""));
             lines.push(Line::from(dim_span("  Configuration:")));
-            lines.push(Line::from(dim_span(&format!("    Provider: {}", state.provider))));
+            lines.push(Line::from(dim_span(&format!(
+                "    Provider: {}",
+                state.provider
+            ))));
             lines.push(Line::from(dim_span(&format!("    Theme: {}", state.theme))));
             lines.push(Line::from(dim_span(&format!("    Shell: {}", state.shell))));
             lines.push(Line::from(dim_span(&format!(
@@ -340,7 +354,9 @@ pub fn render_wizard(state: &WizardState, style: &StyleConfig) -> Vec<Line<'stat
 
     // Navigation footer
     lines.push(Line::from(""));
-    lines.push(Line::from(dim_span("   Enter next │ Esc back │ q skip wizard")));
+    lines.push(Line::from(dim_span(
+        "   Enter next │ Esc back │ q skip wizard",
+    )));
 
     lines
 }

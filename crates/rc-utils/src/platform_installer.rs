@@ -91,10 +91,7 @@ impl PlatformInstaller {
 
     /// Get the installed version of remote-code, if present.
     pub fn get_installed_version() -> Option<String> {
-        let output = Command::new("remote-code")
-            .arg("--version")
-            .output()
-            .ok()?;
+        let output = Command::new("remote-code").arg("--version").output().ok()?;
 
         if !output.status.success() {
             return None;
@@ -142,7 +139,8 @@ impl PlatformInstaller {
             ],
             InstallMethod::Scoop => vec![
                 "Install via Scoop:".to_string(),
-                "  scoop bucket add remote-code https://github.com/remote-code/scoop-bucket".to_string(),
+                "  scoop bucket add remote-code https://github.com/remote-code/scoop-bucket"
+                    .to_string(),
                 "  scoop install remote-code".to_string(),
             ],
             InstallMethod::Winget => vec![
@@ -159,12 +157,14 @@ impl PlatformInstaller {
             ],
             InstallMethod::Yum => vec![
                 "Install via Yum:".to_string(),
-                "  sudo yum-config-manager --add-repo https://get.remote-code.dev/yum.repo".to_string(),
+                "  sudo yum-config-manager --add-repo https://get.remote-code.dev/yum.repo"
+                    .to_string(),
                 "  sudo yum install remote-code".to_string(),
             ],
             InstallMethod::Dnf => vec![
                 "Install via DNF:".to_string(),
-                "  sudo dnf config-manager --add-repo https://get.remote-code.dev/dnf.repo".to_string(),
+                "  sudo dnf config-manager --add-repo https://get.remote-code.dev/dnf.repo"
+                    .to_string(),
                 "  sudo dnf install remote-code".to_string(),
             ],
             InstallMethod::Pacman => vec![
@@ -177,7 +177,8 @@ impl PlatformInstaller {
             ],
             InstallMethod::Unknown => vec![
                 "Manual installation:".to_string(),
-                "  Visit https://github.com/yanzhi0922/remote-code-rust for instructions".to_string(),
+                "  Visit https://github.com/yanzhi0922/remote-code-rust for instructions"
+                    .to_string(),
             ],
         }
     }
@@ -227,7 +228,8 @@ impl PlatformInstaller {
             ],
             InstallMethod::Unknown => vec![
                 "Manual update:".to_string(),
-                "  Visit https://github.com/yanzhi0922/remote-code-rust for instructions".to_string(),
+                "  Visit https://github.com/yanzhi0922/remote-code-rust for instructions"
+                    .to_string(),
             ],
         }
     }
@@ -335,7 +337,8 @@ mod tests {
     fn platform_installer_default() {
         let installer = PlatformInstaller::default();
         // Should detect something (at minimum Unknown)
-        assert!(!matches!(installer.method(), InstallMethod::Unknown) || true);
+        // PlatformInstaller always detects a method (even if Unknown)
+        let _method = installer.method();
     }
 
     #[test]
