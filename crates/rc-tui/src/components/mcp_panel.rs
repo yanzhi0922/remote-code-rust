@@ -172,15 +172,14 @@ impl McpPanel {
 
     /// Navigate into the selected tool's detail view.
     pub fn enter_tool(&mut self) {
-        if let McpViewState::ToolList { server_index } = self.view {
-            if let Some(server) = self.servers.get(server_index) {
-                if self.selected < server.tools.len() {
-                    self.view = McpViewState::ToolDetail {
-                        server_index,
-                        tool_index: self.selected,
-                    };
-                }
-            }
+        if let McpViewState::ToolList { server_index } = self.view
+            && let Some(server) = self.servers.get(server_index)
+            && self.selected < server.tools.len()
+        {
+            self.view = McpViewState::ToolDetail {
+                server_index,
+                tool_index: self.selected,
+            };
         }
     }
 
@@ -330,13 +329,13 @@ pub fn render_mcp_server_list(panel: &McpPanel, style: &StyleConfig) -> Vec<Line
             }
 
             // Auth status for remote servers
-            if let Some(auth) = server.is_authenticated {
-                if !auth {
-                    spans.push(Span::styled(
-                        " ⚠ not authenticated".to_owned(),
-                        Style::default().fg(Color::Yellow),
-                    ));
-                }
+            if let Some(auth) = server.is_authenticated
+                && !auth
+            {
+                spans.push(Span::styled(
+                    " ⚠ not authenticated".to_owned(),
+                    Style::default().fg(Color::Yellow),
+                ));
             }
 
             // Scope

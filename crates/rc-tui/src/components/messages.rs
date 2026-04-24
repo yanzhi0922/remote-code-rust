@@ -546,11 +546,11 @@ pub fn render_task_assignment_message(
 
     inner.push(Line::from(vec![bold_colored_span(subject, style.status_fg)]));
 
-    if let Some(desc) = description {
-        if !desc.is_empty() {
-            inner.push(Line::from(""));
-            inner.push(Line::from(dim_span(desc)));
-        }
+    if let Some(desc) = description
+        && !desc.is_empty()
+    {
+        inner.push(Line::from(""));
+        inner.push(Line::from(dim_span(desc)));
     }
 
     wrap_with_border(inner, Color::Cyan, None)
@@ -566,14 +566,10 @@ pub fn render_user_bash_input(input: &str, style: &StyleConfig) -> Vec<Line<'sta
         return Vec::new();
     }
 
-    let mut lines = Vec::new();
-
-    lines.push(Line::from(vec![
+    vec![Line::from(vec![
         styled_span(" ! ", style.tool_color),
         styled_span(input, style.status_fg),
-    ]));
-
-    lines
+    ])]
 }
 
 // ---------------------------------------------------------------------------
@@ -788,15 +784,15 @@ pub fn render_advisor_message(
                     styled_span(*tool_name, style.tool_color),
                 ]));
 
-                if let Some(inp) = input {
-                    if !inp.is_empty() {
-                        let truncated: String = inp.chars().take(200).collect();
-                        for text_line in truncated.lines() {
-                            lines.push(Line::from(vec![
-                                dim_span("   "),
-                                dim_span(text_line),
-                            ]));
-                        }
+                if let Some(inp) = input
+                    && !inp.is_empty()
+                {
+                    let truncated: String = inp.chars().take(200).collect();
+                    for text_line in truncated.lines() {
+                        lines.push(Line::from(vec![
+                            dim_span("   "),
+                            dim_span(text_line),
+                        ]));
                     }
                 }
             }
