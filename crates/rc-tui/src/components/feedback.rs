@@ -110,14 +110,13 @@ pub fn render_feedback_dialog(
     selected: Option<FeedbackRating>,
     style: &StyleConfig,
 ) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-
-    lines.push(Line::from(header_span(" 📝 How was your experience?", style)));
-    lines.push(Line::from(dim_span(" ─────────────────────────────────────────")));
-    lines.push(Line::from(""));
-
-    lines.push(Line::from("  Rate your experience:"));
-    lines.push(Line::from(""));
+    let mut lines = vec![
+        Line::from(header_span(" 📝 How was your experience?", style)),
+        Line::from(dim_span(" ─────────────────────────────────────────")),
+        Line::from(""),
+        Line::from("  Rate your experience:"),
+        Line::from(""),
+    ];
 
     for rating in FeedbackRating::all() {
         let is_selected = selected == Some(*rating);

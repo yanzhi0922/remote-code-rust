@@ -112,6 +112,12 @@ pub struct WizardState {
     pub shell: String,
 }
 
+impl Default for WizardState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WizardState {
     /// Create a new wizard starting at the welcome step.
     pub fn new() -> Self {

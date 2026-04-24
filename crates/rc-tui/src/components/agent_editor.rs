@@ -407,13 +407,10 @@ pub fn render_agent_form(editor: &AgentEditor, style: &StyleConfig) -> Vec<Line<
         Span::styled(
             if draft.instructions.is_empty() {
                 "<system prompt>".to_owned()
+            } else if draft.instructions.len() > 40 {
+                format!("{}…", &draft.instructions[..39])
             } else {
-                let preview = if draft.instructions.len() > 40 {
-                    format!("{}…", &draft.instructions[..39])
-                } else {
-                    draft.instructions.clone()
-                };
-                preview
+                draft.instructions.clone()
             },
             if editor.focused_field == AgentEditorField::Instructions {
                 Style::default().fg(Color::Cyan)

@@ -179,10 +179,10 @@ pub fn render_shell_output(
             Span::styled(block.command.clone(), Style::default().fg(style.status_fg)),
         ];
 
-        if let Some(dur) = block.duration_ms {
-            if config.show_timing {
-                header_spans.push(dim_span(&format!(" ({})", format_duration(dur))));
-            }
+        if let Some(dur) = block.duration_ms
+            && config.show_timing
+        {
+            header_spans.push(dim_span(&format!(" ({})", format_duration(dur))));
         }
 
         lines.push(Line::from(header_spans));
