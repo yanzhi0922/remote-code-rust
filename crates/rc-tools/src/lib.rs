@@ -1195,7 +1195,7 @@ fn precheck_filesystem_permission(
     let mut options = filesystem_access_options();
     let mut additional_dirs = broker.additional_working_directories();
     if !additional_dirs.is_empty() {
-        options.additional_dirs.extend(additional_dirs.drain(..));
+        options.additional_dirs.append(&mut additional_dirs);
     }
     options.current_mode = broker.mode();
     let check =

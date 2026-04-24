@@ -130,7 +130,7 @@ fn estimate_tokens(text: &str) -> usize {
         return 0;
     }
     // Rough heuristic: 1 token ≈ 4 characters
-    (text.len() + 3) / 4
+    text.len().div_ceil(4)
 }
 
 // ---------------------------------------------------------------------------

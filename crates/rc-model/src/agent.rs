@@ -32,7 +32,7 @@ impl AgentModelAlias {
     pub const ALL: &[Self] = &[Self::Sonnet, Self::Opus, Self::Haiku, Self::Inherit];
 
     /// Parse from a string.
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "sonnet" => Some(Self::Sonnet),
             "opus" => Some(Self::Opus),
@@ -116,15 +116,14 @@ pub fn get_agent_model(
 
     // Helper to apply parent region prefix for Bedrock models.
     let apply_parent_prefix = |resolved: &str, original_spec: &str| -> String {
-        if let Some(prefix) = parent_region_prefix {
-            if is_bedrock {
+        if let Some(prefix) = parent_region_prefix
+            && is_bedrock {
                 // If the original spec already has its own region prefix, preserve it.
                 if get_bedrock_region_prefix(original_spec).is_some() {
                     return resolved.to_owned();
                 }
                 return apply_bedrock_region_prefix(resolved, prefix);
             }
-        }
         resolved.to_owned()
     };
 
@@ -388,9 +387,9 @@ mod tests {
 
     #[test]
     fn agent_alias_parse() {
-        assert_eq!(AgentModelAlias::from_str("sonnet"), Some(AgentModelAlias::Sonnet));
-        assert_eq!(AgentModelAlias::from_str("OPUS"), Some(AgentModelAlias::Opus));
-        assert_eq!(AgentModelAlias::from_str("inherit"), Some(AgentModelAlias::Inherit));
-        assert_eq!(AgentModelAlias::from_str("unknown"), None);
+        assert_eq!(AgentModelAlias::parse("sonnet"), Some(AgentModelAlias::Sonnet));
+        assert_eq!(AgentModelAlias::parse("OPUS"), Some(AgentModelAlias::Opus));
+        assert_eq!(AgentModelAlias::parse("inherit"), Some(AgentModelAlias::Inherit));
+        assert_eq!(AgentModelAlias::parse("unknown"), None);
     }
 }

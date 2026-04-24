@@ -596,6 +596,7 @@ pub struct MemoryHeader {
     pub memory_type: Option<MemoryType>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SurfacedMemoryContent {
     pub path: PathBuf,
@@ -849,6 +850,7 @@ pub fn format_memory_manifest(memories: &[MemoryHeader]) -> String {
         .join("\n")
 }
 
+#[allow(dead_code)]
 pub fn collect_surfaced_memory_bytes(
     conversation: &[rc_core::ConversationEntry],
     marker_prefix: &str,
@@ -873,6 +875,7 @@ pub fn collect_surfaced_memory_bytes(
     (paths, total_bytes)
 }
 
+#[allow(dead_code)]
 pub fn read_memories_for_surfacing(
     memories: &[MemoryHeader],
     max_lines: usize,

@@ -737,6 +737,7 @@ pub async fn apply_post_tool_hooks(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn apply_post_tool_hooks_with_options(
     discovery: &RuntimeHookDiscovery,
     config: &RuntimeConfig,

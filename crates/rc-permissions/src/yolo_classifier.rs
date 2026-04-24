@@ -245,11 +245,10 @@ pub fn classify_tool_use(
     }
 
     // For Bash/Shell tools, classify the command
-    if tool_name == "Bash" || tool_name == "Shell" || tool_name == "bash" || tool_name == "shell" {
-        if let Some(command) = tool_input.get("command").and_then(|v| v.as_str()) {
+    if (tool_name == "Bash" || tool_name == "Shell" || tool_name == "bash" || tool_name == "shell")
+        && let Some(command) = tool_input.get("command").and_then(|v| v.as_str()) {
             return classify_bash_in_yolo(command, rules);
         }
-    }
 
     // For file write tools, ask for confirmation
     if is_write_tool(tool_name) {

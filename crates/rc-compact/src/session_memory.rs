@@ -53,19 +53,12 @@ pub struct SessionMemoryCompactFileContext {
     pub state: Arc<Mutex<SessionMemoryState>>,
 }
 
+#[derive(Default)]
 pub struct SessionMemoryCompactStrategy {
     pub config: SessionMemoryCompactConfig,
     pub file_context: Option<SessionMemoryCompactFileContext>,
 }
 
-impl Default for SessionMemoryCompactStrategy {
-    fn default() -> Self {
-        Self {
-            config: SessionMemoryCompactConfig::default(),
-            file_context: None,
-        }
-    }
-}
 
 impl SessionMemoryCompactStrategy {
     pub fn new(config: SessionMemoryCompactConfig) -> Self {

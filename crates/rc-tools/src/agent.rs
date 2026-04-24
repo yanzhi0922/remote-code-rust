@@ -32,7 +32,7 @@ use crate::tasks::{
 };
 use crate::team_runtime::{LiveTeammateRegistration, finish_live_teammate, start_live_teammate};
 use crate::{
-    RuntimeAgentPromptContext, ToolSpec, current_runtime_agent_prompt_context,
+    ToolSpec, current_runtime_agent_prompt_context,
     current_runtime_fork_snapshot, current_runtime_mcp_cli_state, runtime_provider_tool_specs,
 };
 
@@ -251,7 +251,7 @@ fn implicit_fork_snapshot(input: &AgentToolInput) -> Option<rc_core::SubAgentFor
         return None;
     }
     let runtime_context =
-        current_runtime_agent_prompt_context().unwrap_or_else(RuntimeAgentPromptContext::default);
+        current_runtime_agent_prompt_context().unwrap_or_default();
     if !is_fork_subagent_enabled(
         runtime_context.is_coordinator,
         runtime_context.is_non_interactive,

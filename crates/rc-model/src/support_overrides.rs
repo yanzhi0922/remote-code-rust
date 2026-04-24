@@ -26,7 +26,7 @@ pub enum ModelCapabilityOverride {
 
 impl ModelCapabilityOverride {
     /// Parse from a string (case-insensitive).
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_lowercase().as_str() {
             "effort" => Some(Self::Effort),
             "max_effort" => Some(Self::MaxEffort),
@@ -75,12 +75,15 @@ const TIERS: &[TierDef] = &[
 // ── Override check ───────────────────────────────────────────────────────
 
 /// Context for support override checks.
+/// Type alias for environment variable getter closure.
+pub type EnvGetter = Box<dyn Fn(&str) -> Option<String>>;
+
 pub struct SupportOverrideContext {
     /// The active API provider.
     pub provider: ModelProvider,
     /// Environment variable getter (injectable for testing).
     /// Maps env var name → value.
-    pub env_getter: Box<dyn Fn(&str) -> Option<String>>,
+    pub env_getter: EnvGetter,
 }
 
 impl std::fmt::Debug for SupportOverrideContext {
@@ -139,7 +142,7 @@ pub fn get_3p_model_capability_override(
         let has_capability = capabilities
             .to_lowercase()
             .split(',')
-            .filter_map(|s| ModelCapabilityOverride::from_str(s.trim()))
+            .filter_map(|s| ModelCapabilityOverride::parse(s.trim()))
             .any(|c| c == capability);
 
         return Some(has_capability);
@@ -183,7 +186,7 @@ pub fn get_all_capability_overrides(
         let parsed: Vec<ModelCapabilityOverride> = capabilities
             .to_lowercase()
             .split(',')
-            .filter_map(|s| ModelCapabilityOverride::from_str(s.trim()))
+            .filter_map(|s| ModelCapabilityOverride::parse(s.trim()))
             .collect();
 
         let result: Vec<(ModelCapabilityOverride, bool)> = ModelCapabilityOverride::ALL
@@ -337,15 +340,15 @@ mod tests {
     #[test]
     fn capability_parse() {
         assert_eq!(
-            ModelCapabilityOverride::from_str("thinking"),
+            ModelCapabilityOverride::parse("thinking"),
             Some(ModelCapabilityOverride::Thinking)
         );
         assert_eq!(
-            ModelCapabilityOverride::from_str("MAX_EFFORT"),
+            ModelCapabilityOverride::parse("MAX_EFFORT"),
             Some(ModelCapabilityOverride::MaxEffort)
         );
         assert_eq!(
-            ModelCapabilityOverride::from_str("unknown"),
+            ModelCapabilityOverride::parse("unknown"),
             None
         );
     }
