@@ -465,3 +465,129 @@ export interface TaskSnapshotInfo {
   session_id: string;
   tasks: SessionSubtask[];
 }
+
+// ── Scheduled Tasks ──────────────────────────────────────────────────
+
+export type ScheduledTaskWizardData = {
+  name?: string;
+  description?: string;
+  prompt?: string;
+  model?: string;
+  permissionMode?: string;
+  folder?: string;
+  worktree?: boolean;
+  frequency?: string;
+  scheduledTime?: string;
+  cron?: string;
+};
+
+// ── Context Visualization ────────────────────────────────────────────
+
+export interface ContextCategory {
+  name: string;
+  tokens: number;
+  color: string;
+}
+
+export interface ContextData {
+  categories: ContextCategory[];
+  totalTokens: number;
+  maxTokens: number;
+  percentage: number;
+  model: string;
+}
+
+// ── Task List V2 ─────────────────────────────────────────────────────
+
+export type TaskStatus = 'pending' | 'in_progress' | 'completed';
+
+export interface TaskItem {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  owner?: string;
+  blockedBy: string[];
+}
+
+// ── File Edit Diff ───────────────────────────────────────────────────
+
+export interface FileEdit {
+  old_string: string;
+  new_string: string;
+  replace_all?: boolean;
+}
+
+export interface DiffLine {
+  type: 'add' | 'remove' | 'context';
+  content: string;
+  lineNumber?: number;
+}
+
+// ── Agent Progress ───────────────────────────────────────────────────
+
+export interface AgentProgressInfo {
+  agentType: string;
+  description?: string;
+  name?: string;
+  toolUseCount: number;
+  tokens: number | null;
+  isResolved: boolean;
+  isError: boolean;
+  isAsync?: boolean;
+  lastToolInfo?: string | null;
+}
+
+// ── Coordinator Agent ────────────────────────────────────────────────
+
+export interface CoordinatorTask {
+  id: string;
+  name?: string;
+  status: TaskStatus;
+  description: string;
+  startTime: number;
+  endTime?: number;
+  tokenCount?: number;
+}
+
+// ── Teammate View ────────────────────────────────────────────────────
+
+export interface TeammateInfo {
+  agentName: string;
+  color?: string;
+  prompt?: string;
+}
+
+// ── Session Preview ──────────────────────────────────────────────────
+
+export interface SessionInfo {
+  id: string;
+  title: string;
+  messageCount: number;
+  modified: string;
+  gitBranch?: string;
+  messages: unknown[];
+}
+
+// ── Quick Open ───────────────────────────────────────────────────────
+
+export interface QuickOpenResult {
+  path: string;
+  label: string;
+}
+
+// ── Compact Summary ──────────────────────────────────────────────────
+
+export interface SummarizeMetadata {
+  messagesSummarized: number;
+  direction: 'up_to' | 'from_here';
+  userContext?: string;
+}
+
+// ── Memory Usage ─────────────────────────────────────────────────────
+
+export type MemoryStatus = 'normal' | 'high' | 'critical';
+
+export interface MemoryUsageData {
+  heapUsed: number;
+  status: MemoryStatus;
+}
