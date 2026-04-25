@@ -136,6 +136,29 @@ pub struct ProviderRequestContext {
     pub session_id: SessionId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<AgentId>,
+    /// Optional per-request model override used for fallback/retry paths.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_override: Option<String>,
+    /// Optional per-request output token limit override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    /// Optional user-facing effort level to forward as `output_config.effort`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    /// Whether this request should opt into provider fast mode.
+    #[serde(default)]
+    pub fast_mode: bool,
+    /// Optional API-side token budget forwarded as `output_config.task_budget`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_budget: Option<ProviderTaskBudget>,
+}
+
+/// API-side task budget sent with Anthropic `output_config.task_budget`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderTaskBudget {
+    pub total: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remaining: Option<u64>,
 }
 
 impl ProviderRequestContext {
@@ -145,12 +168,53 @@ impl ProviderRequestContext {
             query_source,
             session_id,
             agent_id: None,
+            model_override: None,
+            max_output_tokens: None,
+            effort: None,
+            fast_mode: false,
+            task_budget: None,
         }
     }
 
     #[must_use]
     pub fn with_agent_id(mut self, agent_id: AgentId) -> Self {
         self.agent_id = Some(agent_id);
+        self
+    }
+
+    #[must_use]
+    pub fn with_model_override(mut self, model: Option<String>) -> Self {
+        self.model_override = model.and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_owned())
+        });
+        self
+    }
+
+    #[must_use]
+    pub fn with_max_output_tokens(mut self, max_output_tokens: Option<u32>) -> Self {
+        self.max_output_tokens = max_output_tokens.filter(|value| *value > 0);
+        self
+    }
+
+    #[must_use]
+    pub fn with_effort(mut self, effort: Option<String>) -> Self {
+        self.effort = effort.and_then(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            matches!(normalized.as_str(), "low" | "medium" | "high" | "max").then_some(normalized)
+        });
+        self
+    }
+
+    #[must_use]
+    pub fn with_fast_mode(mut self, fast_mode: bool) -> Self {
+        self.fast_mode = fast_mode;
+        self
+    }
+
+    #[must_use]
+    pub fn with_task_budget(mut self, task_budget: Option<ProviderTaskBudget>) -> Self {
+        self.task_budget = task_budget.filter(|budget| budget.total > 0);
         self
     }
 }

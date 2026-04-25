@@ -10,6 +10,7 @@
 
 use reqwest::header::{HeaderName, HeaderValue};
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 
 // ---------------------------------------------------------------------------
 // Beta header constants
@@ -18,17 +19,44 @@ use serde_json::{Value, json};
 /// Prompt caching beta.
 pub const PROMPT_CACHING_BETA: &str = "prompt-caching-2024-07-31";
 
+/// Claude Code request-shaping beta.
+pub const CLAUDE_CODE_BETA: &str = "claude-code-20250219";
+
 /// PDF support beta.
 pub const PDFS_BETA: &str = "pdfs-2024-09-25";
 
 /// Extended thinking beta.
 pub const INTERLEAVED_THINKING_BETA: &str = "interleaved-thinking-2025-05-14";
 
+/// Native context-management beta.
+pub const CONTEXT_MANAGEMENT_BETA: &str = "context-management-2025-06-27";
+
+/// 1M context beta.
+pub const CONTEXT_1M_BETA: &str = "context-1m-2025-08-07";
+
 /// Structured outputs beta.
-pub const STRUCTURED_OUTPUTS_BETA: &str = "structured-outputs-2025-05-14";
+pub const STRUCTURED_OUTPUTS_BETA: &str = "structured-outputs-2025-12-15";
+
+/// Effort beta.
+pub const EFFORT_BETA: &str = "effort-2025-11-24";
+
+/// API-side task budget beta.
+pub const TASK_BUDGETS_BETA: &str = "task-budgets-2026-03-13";
+
+/// Prompt cache global-scope beta.
+pub const PROMPT_CACHING_SCOPE_BETA: &str = "prompt-caching-scope-2026-01-05";
+
+/// Fast mode beta.
+pub const FAST_MODE_BETA: &str = "fast-mode-2026-02-01";
+
+/// Redacted thinking beta.
+pub const REDACT_THINKING_BETA: &str = "redact-thinking-2026-02-12";
 
 /// Token-efficient tool use beta.
-pub const TOKEN_EFFICIENT_TOOLS_BETA: &str = "token-efficient-tools-2025-02-19";
+pub const TOKEN_EFFICIENT_TOOLS_BETA: &str = "token-efficient-tools-2026-03-28";
+
+/// Advisor tool beta.
+pub const ADVISOR_BETA: &str = "advisor-tool-2026-03-01";
 
 /// Tool search beta for first-party Anthropic-style providers.
 pub const TOOL_SEARCH_BETA_1P: &str = "advanced-tool-use-2025-11-20";
@@ -37,7 +65,7 @@ pub const TOOL_SEARCH_BETA_1P: &str = "advanced-tool-use-2025-11-20";
 pub const TOOL_SEARCH_BETA_3P: &str = "tool-search-tool-2025-10-19";
 
 /// Default beta headers for Anthropic first-party requests.
-pub const DEFAULT_BETA_HEADERS: &[&str] = &[PROMPT_CACHING_BETA, PDFS_BETA];
+pub const DEFAULT_BETA_HEADERS: &[&str] = &[CLAUDE_CODE_BETA, PROMPT_CACHING_BETA, PDFS_BETA];
 
 // ---------------------------------------------------------------------------
 // get_extra_body_params
@@ -123,20 +151,22 @@ pub fn get_beta_headers(
     enable_caching: bool,
     enable_thinking: bool,
 ) -> Vec<String> {
-    let mut betas = Vec::new();
+    let mut betas = BTreeSet::new();
 
     // Default betas.
+    betas.insert(CLAUDE_CODE_BETA.to_owned());
     if enable_caching {
-        betas.push(PROMPT_CACHING_BETA.to_owned());
+        betas.insert(PROMPT_CACHING_BETA.to_owned());
     }
-    betas.push(PDFS_BETA.to_owned());
+    betas.insert(PDFS_BETA.to_owned());
 
     // Model-specific betas.
     let model_lower = model.to_ascii_lowercase();
 
     // Extended thinking for Claude models.
     if enable_thinking && model_lower.contains("claude") {
-        betas.push(INTERLEAVED_THINKING_BETA.to_owned());
+        betas.insert(INTERLEAVED_THINKING_BETA.to_owned());
+        betas.insert(CONTEXT_MANAGEMENT_BETA.to_owned());
     }
 
     // Token-efficient tools for newer Claude models.
@@ -145,35 +175,51 @@ pub fn get_beta_headers(
         || model_lower.contains("claude-3-7")
         || model_lower.contains("claude-3.7")
     {
-        betas.push(TOKEN_EFFICIENT_TOOLS_BETA.to_owned());
+        betas.insert(TOKEN_EFFICIENT_TOOLS_BETA.to_owned());
     }
 
     // Structured outputs for Claude models.
     if model_lower.contains("claude") {
-        betas.push(STRUCTURED_OUTPUTS_BETA.to_owned());
+        betas.insert(STRUCTURED_OUTPUTS_BETA.to_owned());
     }
 
     // Bedrock-specific betas.
     if is_bedrock {
         // Bedrock may need additional betas for compatibility.
-        if enable_caching && !betas.contains(&PROMPT_CACHING_BETA.to_owned()) {
-            betas.push(PROMPT_CACHING_BETA.to_owned());
+        if enable_caching {
+            betas.insert(PROMPT_CACHING_BETA.to_owned());
         }
     }
 
     // Vertex AI-specific betas.
     if is_vertex {
         // Vertex AI may need additional betas for compatibility.
-        if enable_caching && !betas.contains(&PROMPT_CACHING_BETA.to_owned()) {
-            betas.push(PROMPT_CACHING_BETA.to_owned());
+        if enable_caching {
+            betas.insert(PROMPT_CACHING_BETA.to_owned());
         }
     }
 
-    // Deduplicate.
-    betas.sort();
-    betas.dedup();
+    betas.into_iter().collect()
+}
 
-    betas
+/// Merge explicit user opt-in Anthropic betas from `ANTHROPIC_BETAS`.
+///
+/// The reference CLI treats this as an additive escape hatch regardless of
+/// model/provider. Keep ordering stable and avoid duplicates so snapshot tests
+/// and proxies see deterministic headers.
+pub fn merge_env_anthropic_betas(betas: &mut Vec<String>) {
+    if let Ok(raw) = std::env::var("ANTHROPIC_BETAS") {
+        for beta in raw.split(',').map(str::trim).filter(|beta| !beta.is_empty()) {
+            push_beta_once(betas, beta);
+        }
+    }
+}
+
+/// Insert a beta header once.
+pub fn push_beta_once(betas: &mut Vec<String>, beta: &str) {
+    if !betas.iter().any(|existing| existing == beta) {
+        betas.push(beta.to_owned());
+    }
 }
 
 /// Build the `anthropic-beta` header value from a list of beta strings.

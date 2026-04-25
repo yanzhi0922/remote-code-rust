@@ -326,55 +326,21 @@ impl ProviderClient {
         carried_discovered_tools: &BTreeSet<String>,
         request_context: Option<&query_source::ProviderRequestContext>,
     ) -> Result<ProviderResponse> {
-        let model_name = provider.model.as_deref().unwrap_or("");
-        let is_reasoning_model = model_name.starts_with("o1")
-            || model_name.starts_with("o3")
-            || model_name.starts_with("o4");
-        let tools =
-            current_openai_tool_schemas(provider, conversation, carried_discovered_tools).await;
-
-        let mut body = if is_reasoning_model {
-            // Reasoning models (o1/o3/o4-mini) do not support temperature
-            // and use max_completion_tokens instead of max_tokens.
-            json!({
-                "model": provider.model,
-                "messages": to_openai_messages(conversation),
-                "tools": tools,
-                "tool_choice": "auto",
-                "max_completion_tokens": provider.max_output_tokens,
-                "stream": false,
-            })
-        } else {
-            json!({
-                "model": provider.model,
-                "messages": to_openai_messages(conversation),
-                "tools": tools,
-                "tool_choice": "auto",
-                "temperature": 0.1,
-                "max_tokens": provider.max_output_tokens,
-                "stream": false,
-            })
-        };
-
-        // If thinking_budget is set and the model supports it, add reasoning_effort.
-        if is_reasoning_model && let Some(budget) = provider.thinking_budget {
-            // Map budget to reasoning_effort: low/medium/high.
-            let effort = if budget <= 5000 {
-                "low"
-            } else if budget <= 20000 {
-                "medium"
-            } else {
-                "high"
-            };
-            body["reasoning_effort"] = json!(effort);
-        }
+        let effective_provider = provider_for_request(provider, request_context);
+        let body = build_openai_request_body(
+            &effective_provider,
+            conversation,
+            carried_discovered_tools,
+            false,
+        )
+        .await;
         let base_url = provider
             .base_url
             .as_ref()
             .ok_or_else(|| anyhow!("provider is missing a normalized base URL"))?;
         let response = self
             .send_json_request(
-                provider,
+                &effective_provider,
                 base_url,
                 &body,
                 "openai-compatible",
@@ -391,42 +357,22 @@ impl ProviderClient {
         carried_discovered_tools: &BTreeSet<String>,
         request_context: Option<&query_source::ProviderRequestContext>,
     ) -> Result<ProviderResponse> {
-        let (system, messages, tools) =
-            prepare_anthropic_request_surface(provider, conversation, carried_discovered_tools)
-                .await;
-        let mut body = json!({
-            "model": provider.model,
-            "system": system,
-            "messages": messages,
-            "tools": tools,
-            "max_tokens": provider.max_output_tokens,
-            "stream": false,
-        });
-        apply_anthropic_request_metadata(&mut body, provider, request_context);
-        // Enable extended thinking if a budget is configured.
-        if let Some(budget) = provider.thinking_budget {
-            body["thinking"] = json!({
-                "type": "enabled",
-                "budget_tokens": budget,
-            });
-            // Anthropic requires max_tokens > budget_tokens.
-            let current_max = body.get("max_tokens").and_then(Value::as_u64).unwrap_or(0);
-            if current_max <= u64::from(budget) {
-                body["max_tokens"] = json!(u64::from(budget) + 4096);
-            }
-        }
-        // Detect resume: if there are tool-role entries, this is a continued conversation.
-        let is_resume = conversation
-            .iter()
-            .any(|entry| matches!(entry.role, ConversationRole::Tool));
-        add_stable_cache_control(&mut body, is_resume);
+        let effective_provider = provider_for_request(provider, request_context);
+        let body = build_anthropic_request_body(
+            &effective_provider,
+            conversation,
+            carried_discovered_tools,
+            request_context,
+            false,
+        )
+        .await;
         let base_url = provider
             .base_url
             .as_ref()
             .ok_or_else(|| anyhow!("provider is missing a normalized base URL"))?;
         let response = self
             .send_json_request(
-                provider,
+                &effective_provider,
                 base_url,
                 &body,
                 "anthropic-compatible",
@@ -451,6 +397,7 @@ impl ProviderClient {
         carried_discovered_tools: &BTreeSet<String>,
         request_context: Option<&query_source::ProviderRequestContext>,
     ) -> Result<ProviderResponse> {
+        let effective_provider = provider_for_request(provider, request_context);
         let credentials = match sigv4::load_aws_credentials() {
             Some(creds) => creds,
             None => {
@@ -466,23 +413,26 @@ impl ProviderClient {
             }
         };
 
-        let model = provider
+        let model = effective_provider
             .model
             .as_deref()
             .ok_or_else(|| anyhow!("Bedrock provider requires a model ID (e.g. anthropic.claude-sonnet-4-20250514-v1:0)"))?;
 
         // Build Anthropic-format body for Claude models on Bedrock.
-        let (system, messages, tools) =
-            prepare_anthropic_request_surface(provider, conversation, carried_discovered_tools)
-                .await;
+        let (system, messages, tools) = prepare_anthropic_request_surface(
+            &effective_provider,
+            conversation,
+            carried_discovered_tools,
+        )
+        .await;
         let mut body = json!({
             "anthropic_version": "bedrock-2023-05-31",
             "system": system,
             "messages": messages,
             "tools": tools,
-            "max_tokens": provider.max_output_tokens,
+            "max_tokens": effective_provider.max_output_tokens,
         });
-        apply_anthropic_request_metadata(&mut body, provider, request_context);
+        apply_anthropic_request_metadata(&mut body, &effective_provider, request_context);
         if body_uses_tool_search_features(Some(&body)) {
             merge_anthropic_beta_body_param(&mut body, beta_headers::TOOL_SEARCH_BETA_3P);
         }
@@ -496,7 +446,14 @@ impl ProviderClient {
         let url = format!("https://{host}{path}");
 
         let (status, text) = self
-            .send_bedrock_request(&url, &host, &path, &payload, provider, &credentials)
+            .send_bedrock_request(
+                &url,
+                &host,
+                &path,
+                &payload,
+                &effective_provider,
+                &credentials,
+            )
             .await?;
 
         // Bedrock returns Anthropic-format responses for Claude models.
@@ -595,6 +552,7 @@ impl ProviderClient {
         carried_discovered_tools: &BTreeSet<String>,
         request_context: Option<&query_source::ProviderRequestContext>,
     ) -> Result<ProviderResponse> {
+        let effective_provider = provider_for_request(provider, request_context);
         let access_token = match load_vertex_access_token() {
             Some(token) => token,
             None => {
@@ -610,7 +568,7 @@ impl ProviderClient {
             }
         };
 
-        let model = provider.model.as_deref().ok_or_else(|| {
+        let model = effective_provider.model.as_deref().ok_or_else(|| {
             anyhow!("Vertex AI provider requires a model ID (e.g. claude-sonnet-4@20250514)")
         })?;
 
@@ -625,17 +583,20 @@ impl ProviderClient {
             .unwrap_or_else(|_| "us-east5".to_string());
 
         // Build Anthropic-format body for Claude models on Vertex AI.
-        let (system, messages, tools) =
-            prepare_anthropic_request_surface(provider, conversation, carried_discovered_tools)
-                .await;
+        let (system, messages, tools) = prepare_anthropic_request_surface(
+            &effective_provider,
+            conversation,
+            carried_discovered_tools,
+        )
+        .await;
         let mut body = json!({
             "anthropic_version": "vertex-2023-10-16",
             "system": system,
             "messages": messages,
             "tools": tools,
-            "max_tokens": provider.max_output_tokens,
+            "max_tokens": effective_provider.max_output_tokens,
         });
-        apply_anthropic_request_metadata(&mut body, provider, request_context);
+        apply_anthropic_request_metadata(&mut body, &effective_provider, request_context);
         if body_uses_tool_search_features(Some(&body)) {
             merge_anthropic_beta_body_param(&mut body, beta_headers::TOOL_SEARCH_BETA_3P);
         }
@@ -646,7 +607,7 @@ impl ProviderClient {
         );
 
         let (status, text) = self
-            .send_vertex_request(&url, &access_token, &body, provider)
+            .send_vertex_request(&url, &access_token, &body, &effective_provider)
             .await?;
 
         // Vertex AI returns Anthropic-format responses for Claude models.
@@ -779,6 +740,77 @@ fn is_retryable_http_status(status: u16) -> bool {
 
 fn is_retryable_transport_error(error: &reqwest::Error) -> bool {
     error.is_timeout() || error.is_connect()
+}
+
+fn provider_for_request(
+    provider: &ProviderConfig,
+    request_context: Option<&query_source::ProviderRequestContext>,
+) -> ProviderConfig {
+    let Some(context) = request_context else {
+        return provider.clone();
+    };
+    if context.model_override.is_none() && context.max_output_tokens.is_none() {
+        return provider.clone();
+    }
+
+    let mut effective = provider.clone();
+    if let Some(model) = context.model_override.as_ref() {
+        effective.model = Some(model.clone());
+    }
+    if let Some(max_output_tokens) = context.max_output_tokens {
+        effective.max_output_tokens = max_output_tokens;
+    }
+    effective
+}
+
+async fn build_openai_request_body(
+    provider: &ProviderConfig,
+    conversation: &[ConversationEntry],
+    carried_discovered_tools: &BTreeSet<String>,
+    stream: bool,
+) -> Value {
+    let model_name = provider.model.as_deref().unwrap_or("");
+    let is_reasoning_model = model_name.starts_with("o1")
+        || model_name.starts_with("o3")
+        || model_name.starts_with("o4");
+    let tools = current_openai_tool_schemas(provider, conversation, carried_discovered_tools).await;
+
+    let mut body = if is_reasoning_model {
+        // Reasoning models (o1/o3/o4-mini) do not support temperature
+        // and use max_completion_tokens instead of max_tokens.
+        json!({
+            "model": provider.model,
+            "messages": to_openai_messages(conversation),
+            "tools": tools,
+            "tool_choice": "auto",
+            "max_completion_tokens": provider.max_output_tokens,
+            "stream": stream,
+        })
+    } else {
+        json!({
+            "model": provider.model,
+            "messages": to_openai_messages(conversation),
+            "tools": tools,
+            "tool_choice": "auto",
+            "temperature": 0.1,
+            "max_tokens": provider.max_output_tokens,
+            "stream": stream,
+        })
+    };
+
+    // If thinking_budget is set and the model supports it, add reasoning_effort.
+    if is_reasoning_model && let Some(budget) = provider.thinking_budget {
+        // Map budget to reasoning_effort: low/medium/high.
+        let effort = if budget <= 5000 {
+            "low"
+        } else if budget <= 20000 {
+            "medium"
+        } else {
+            "high"
+        };
+        body["reasoning_effort"] = json!(effort);
+    }
+    body
 }
 
 fn compute_retry_delay(
@@ -920,13 +952,33 @@ fn build_headers(
             HeaderName::from_static("anthropic-version"),
             HeaderValue::from_static("2023-06-01"),
         );
-        // Claude Code typically sends these beta features.
-        let mut betas = vec!["prompt-caching-2024-07-31", "pdfs-2024-09-25"];
+        let mut betas = beta_headers::DEFAULT_BETA_HEADERS
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect::<Vec<_>>();
         if body_uses_global_prompt_cache_scope(body) {
-            betas.push("prompt-caching-scope-2026-01-05");
+            beta_headers::push_beta_once(&mut betas, beta_headers::PROMPT_CACHING_SCOPE_BETA);
         }
         if body_uses_tool_search_features(body) {
-            betas.push(beta_headers::TOOL_SEARCH_BETA_1P);
+            beta_headers::push_beta_once(&mut betas, beta_headers::TOOL_SEARCH_BETA_1P);
+        }
+        if body_uses_thinking(body) {
+            beta_headers::push_beta_once(&mut betas, beta_headers::INTERLEAVED_THINKING_BETA);
+        }
+        if body_uses_context_management(body) {
+            beta_headers::push_beta_once(&mut betas, beta_headers::CONTEXT_MANAGEMENT_BETA);
+        }
+        if body_uses_output_config_effort(body) {
+            beta_headers::push_beta_once(&mut betas, beta_headers::EFFORT_BETA);
+        }
+        if body_uses_output_config_task_budget(body) {
+            beta_headers::push_beta_once(&mut betas, beta_headers::TASK_BUDGETS_BETA);
+        }
+        if body_uses_output_config_format(body) {
+            beta_headers::push_beta_once(&mut betas, beta_headers::STRUCTURED_OUTPUTS_BETA);
+        }
+        if body_uses_fast_mode(body) {
+            beta_headers::push_beta_once(&mut betas, beta_headers::FAST_MODE_BETA);
         }
         headers.insert(
             HeaderName::from_static("anthropic-beta"),
@@ -995,6 +1047,45 @@ fn body_uses_global_prompt_cache_scope(body: Option<&Value>) -> bool {
         })
 }
 
+fn body_uses_thinking(body: Option<&Value>) -> bool {
+    body.and_then(|payload| payload.get("thinking"))
+        .is_some_and(|thinking| {
+            thinking
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kind == "enabled" || kind == "adaptive")
+        })
+}
+
+fn body_uses_context_management(body: Option<&Value>) -> bool {
+    body.and_then(|payload| payload.get("context_management"))
+        .is_some()
+}
+
+fn body_uses_fast_mode(body: Option<&Value>) -> bool {
+    body.and_then(|payload| payload.get("speed"))
+        .and_then(Value::as_str)
+        == Some("fast")
+}
+
+fn body_uses_output_config_effort(body: Option<&Value>) -> bool {
+    body.and_then(|payload| payload.get("output_config"))
+        .and_then(|output_config| output_config.get("effort"))
+        .is_some()
+}
+
+fn body_uses_output_config_task_budget(body: Option<&Value>) -> bool {
+    body.and_then(|payload| payload.get("output_config"))
+        .and_then(|output_config| output_config.get("task_budget"))
+        .is_some()
+}
+
+fn body_uses_output_config_format(body: Option<&Value>) -> bool {
+    body.and_then(|payload| payload.get("output_config"))
+        .and_then(|output_config| output_config.get("format"))
+        .is_some()
+}
+
 fn body_uses_tool_search_features(body: Option<&Value>) -> bool {
     let Some(payload) = body else {
         return false;
@@ -1006,7 +1097,10 @@ fn body_uses_tool_search_features(body: Option<&Value>) -> bool {
         .is_some_and(|tools| {
             tools.iter().any(|tool| {
                 tool.get("defer_loading").and_then(Value::as_bool) == Some(true)
-                    || tool.get("name").and_then(Value::as_str) == Some("tool_search")
+                    || matches!(
+                        tool.get("name").and_then(Value::as_str),
+                        Some("ToolSearch" | "tool_search")
+                    )
             })
         });
     if uses_defer_loading {
@@ -1104,7 +1198,7 @@ fn to_openai_messages(conversation: &[ConversationEntry]) -> Vec<Value> {
                                     "id": call.id,
                                     "type": "function",
                                     "function": {
-                                        "name": call.name,
+                                        "name": provider_wire_tool_name(&call.name),
                                         "arguments": call.input.to_string(),
                                     }
                                 })
@@ -1121,6 +1215,10 @@ fn to_openai_messages(conversation: &[ConversationEntry]) -> Vec<Value> {
             }),
         })
         .collect()
+}
+
+fn provider_wire_tool_name(name: &str) -> String {
+    rc_tools::provider_wire_tool_name_for(name)
 }
 
 fn anthropic_user_blocks(entry: &ConversationEntry) -> Vec<Value> {
@@ -1220,7 +1318,7 @@ fn to_anthropic_messages(conversation: &[ConversationEntry]) -> (Vec<Value>, Vec
                         blocks.push(json!({
                             "type": "tool_use",
                             "id": call.id,
-                            "name": call.name,
+                            "name": provider_wire_tool_name(&call.name),
                             "input": call.input,
                         }));
                     }
@@ -1229,9 +1327,14 @@ fn to_anthropic_messages(conversation: &[ConversationEntry]) -> (Vec<Value>, Vec
                         "content": blocks,
                     }));
                 } else {
+                    let content_blocks = entry
+                        .content_blocks
+                        .iter()
+                        .map(normalize_provider_assistant_content_block)
+                        .collect::<Vec<_>>();
                     messages.push(json!({
                         "role": "assistant",
-                        "content": entry.content_blocks,
+                        "content": content_blocks,
                     }));
                 }
                 index += 1;
@@ -1271,6 +1374,17 @@ fn to_anthropic_messages(conversation: &[ConversationEntry]) -> (Vec<Value>, Vec
     }
 
     (system, messages)
+}
+
+fn normalize_provider_assistant_content_block(block: &Value) -> Value {
+    if block.get("type").and_then(Value::as_str) != Some("tool_use") {
+        return block.clone();
+    }
+    let mut normalized = block.clone();
+    if let Some(name) = block.get("name").and_then(Value::as_str) {
+        normalized["name"] = Value::String(provider_wire_tool_name(name));
+    }
+    normalized
 }
 
 fn is_client_only_system_message(entry: &ConversationEntry) -> bool {
@@ -1526,7 +1640,7 @@ async fn current_anthropic_tool_schemas(
 fn tool_search_enabled_from_tool_schemas(tools: &[Value]) -> bool {
     tools
         .iter()
-        .any(|tool| tool.get("name").and_then(Value::as_str) == Some("tool_search"))
+        .any(|tool| tool.get("name").and_then(Value::as_str) == Some("ToolSearch"))
 }
 
 fn available_tool_names_from_schemas(tools: &[Value]) -> BTreeSet<String> {
@@ -1742,6 +1856,191 @@ async fn prepare_anthropic_request_surface(
         inject_tool_reference_turn_boundary_siblings(messages)
     };
     (system, messages, tools)
+}
+
+async fn build_anthropic_request_body(
+    provider: &ProviderConfig,
+    conversation: &[ConversationEntry],
+    carried_discovered_tools: &BTreeSet<String>,
+    request_context: Option<&query_source::ProviderRequestContext>,
+    stream: bool,
+) -> Value {
+    let (system, messages, tools) =
+        prepare_anthropic_request_surface(provider, conversation, carried_discovered_tools).await;
+    let mut body = json!({
+        "model": provider.model,
+        "system": system,
+        "messages": messages,
+        "tools": tools,
+        "max_tokens": provider.max_output_tokens,
+        "stream": stream,
+    });
+    if body
+        .get("tools")
+        .and_then(Value::as_array)
+        .is_some_and(|tools| !tools.is_empty())
+    {
+        body["tool_choice"] = json!({"type": "auto"});
+    }
+
+    merge_anthropic_extra_body_params(&mut body);
+    apply_anthropic_request_metadata(&mut body, provider, request_context);
+    apply_anthropic_thinking_options(&mut body, provider);
+    apply_anthropic_output_config(&mut body, provider, request_context);
+    apply_anthropic_fast_mode(&mut body, provider, request_context);
+    apply_anthropic_context_management(&mut body, provider);
+
+    // Detect resume: if there are tool-role entries, this is a continued conversation.
+    let is_resume = conversation
+        .iter()
+        .any(|entry| matches!(entry.role, ConversationRole::Tool));
+    add_stable_cache_control(&mut body, is_resume);
+    body
+}
+
+fn merge_anthropic_extra_body_params(body: &mut Value) {
+    let extra_params = beta_headers::get_extra_body_params(None);
+    let Some(extra_object) = extra_params.as_object() else {
+        return;
+    };
+
+    for (key, value) in extra_object {
+        if key == "output_config"
+            && let Some(existing) = body.get_mut("output_config")
+            && let (Some(existing_object), Some(extra_output_config)) =
+                (existing.as_object_mut(), value.as_object())
+        {
+            for (output_key, output_value) in extra_output_config {
+                existing_object
+                    .entry(output_key.clone())
+                    .or_insert_with(|| output_value.clone());
+            }
+            continue;
+        }
+        if body.get(key).is_none() {
+            body[key.clone()] = value.clone();
+        }
+    }
+}
+
+fn apply_anthropic_thinking_options(body: &mut Value, provider: &ProviderConfig) {
+    if env::var("CLAUDE_CODE_DISABLE_THINKING")
+        .ok()
+        .as_deref()
+        .is_some_and(is_env_truthy)
+    {
+        body["temperature"] = json!(1.0);
+        return;
+    }
+
+    let Some(budget) = provider.thinking_budget else {
+        body["temperature"] = json!(1.0);
+        return;
+    };
+    body["thinking"] = json!({
+        "type": "enabled",
+        "budget_tokens": budget,
+    });
+    // Anthropic requires max_tokens > budget_tokens.
+    let current_max = body.get("max_tokens").and_then(Value::as_u64).unwrap_or(0);
+    if current_max <= u64::from(budget) {
+        body["max_tokens"] = json!(u64::from(budget) + 4096);
+    }
+}
+
+fn apply_anthropic_output_config(
+    body: &mut Value,
+    provider: &ProviderConfig,
+    request_context: Option<&query_source::ProviderRequestContext>,
+) {
+    let mut output_config = body
+        .get("output_config")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+
+    if let Some(context) = request_context {
+        if let Some(effort) = context.effort.as_deref() {
+            let model = provider.model.as_deref().unwrap_or_default();
+            if crate::effort_params::model_supports_effort(model)
+                && output_config.get("effort").is_none()
+            {
+                output_config["effort"] = json!(effort);
+            }
+        }
+
+        if first_party_only_request(provider)
+            && let Some(task_budget) = context.task_budget.as_ref()
+            && output_config.get("task_budget").is_none()
+        {
+            output_config["task_budget"] = json!({
+                "type": "tokens",
+                "total": task_budget.total,
+            });
+            if let Some(remaining) = task_budget.remaining {
+                output_config["task_budget"]["remaining"] = json!(remaining);
+            }
+        }
+    }
+
+    if output_config
+        .as_object()
+        .is_some_and(|object| !object.is_empty())
+    {
+        body["output_config"] = output_config;
+    }
+}
+
+fn apply_anthropic_fast_mode(
+    body: &mut Value,
+    provider: &ProviderConfig,
+    request_context: Option<&query_source::ProviderRequestContext>,
+) {
+    let Some(context) = request_context else {
+        return;
+    };
+    if context.fast_mode
+        && (first_party_only_request(provider)
+            || env::var("REMOTE_CODE_FORCE_FAST_MODE")
+                .ok()
+                .as_deref()
+                .is_some_and(is_env_truthy))
+    {
+        body["speed"] = json!("fast");
+    }
+}
+
+fn apply_anthropic_context_management(body: &mut Value, provider: &ProviderConfig) {
+    if !body.get("thinking").is_some_and(|thinking| {
+        thinking
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value != "disabled")
+    }) {
+        return;
+    }
+    if !first_party_only_request(provider)
+        && !env::var("REMOTE_CODE_FORCE_CONTEXT_MANAGEMENT")
+            .ok()
+            .as_deref()
+            .is_some_and(is_env_truthy)
+    {
+        return;
+    }
+    if body.get("context_management").is_none() {
+        body["context_management"] = json!({
+            "edits": [{
+                "type": "clear_thinking_20251015",
+                "keep": "all",
+            }],
+        });
+    }
+}
+
+fn first_party_only_request(provider: &ProviderConfig) -> bool {
+    provider
+        .base_url
+        .as_deref()
+        .is_some_and(is_first_party_anthropic_base_url)
 }
 
 fn parse_openai_response(status: u16, raw_text: String) -> Result<ProviderResponse> {
@@ -2368,11 +2667,11 @@ mod tests {
         let specs = provider_runtime_tool_specs_for_request(&provider, &[], &BTreeSet::new()).await;
         let names = specs
             .iter()
-            .map(|spec| spec.name.as_str())
+            .map(|spec| spec.provider_wire_name())
             .collect::<Vec<_>>();
 
-        assert!(names.contains(&"web_fetch"));
-        assert!(!names.contains(&"tool_search"));
+        assert!(names.contains(&"WebFetch"));
+        assert!(!names.contains(&"ToolSearch"));
     }
 
     #[tokio::test]
@@ -2407,9 +2706,9 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        assert!(initial.iter().any(|name| name == "tool_search"));
-        assert!(initial.iter().any(|name| name == "read_file"));
-        assert!(!initial.iter().any(|name| name == "web_fetch"));
+        assert!(initial.iter().any(|name| name == "ToolSearch"));
+        assert!(initial.iter().any(|name| name == "Read"));
+        assert!(!initial.iter().any(|name| name == "WebFetch"));
 
         let discovered = current_anthropic_tool_schemas(
             &provider,
@@ -2424,13 +2723,12 @@ mod tests {
         .await;
 
         assert!(
-            discovered
-                .iter()
-                .any(|tool| tool.get("name").and_then(serde_json::Value::as_str)
-                    == Some("web_fetch"))
+            discovered.iter().any(
+                |tool| tool.get("name").and_then(serde_json::Value::as_str) == Some("WebFetch")
+            )
         );
         assert!(discovered.iter().any(|tool| {
-            tool.get("name").and_then(serde_json::Value::as_str) == Some("web_fetch")
+            tool.get("name").and_then(serde_json::Value::as_str) == Some("WebFetch")
                 && tool
                     .get("defer_loading")
                     .and_then(serde_json::Value::as_bool)
@@ -2447,7 +2745,7 @@ mod tests {
         let discovered = current_anthropic_tool_schemas(&provider, &[], &carried).await;
 
         assert!(discovered.iter().any(|tool| {
-            tool.get("name").and_then(serde_json::Value::as_str) == Some("web_fetch")
+            tool.get("name").and_then(serde_json::Value::as_str) == Some("WebFetch")
                 && tool
                     .get("defer_loading")
                     .and_then(serde_json::Value::as_bool)
@@ -2507,8 +2805,8 @@ mod tests {
         provider.protocol = rc_core::ProviderProtocol::Anthropic;
         let body = json!({
             "tools": [
-                {"name": "tool_search"},
-                {"name": "web_fetch", "defer_loading": true}
+                {"name": "ToolSearch"},
+                {"name": "WebFetch", "defer_loading": true}
             ]
         });
 
@@ -2519,6 +2817,81 @@ mod tests {
             .to_str()
             .expect("anthropic-beta header should be utf8");
         assert!(beta.contains(crate::beta_headers::TOOL_SEARCH_BETA_1P));
+    }
+
+    #[test]
+    fn anthropic_headers_include_output_config_and_fast_mode_betas() {
+        let mut provider = test_provider_config("https://api.anthropic.com/v1/messages".to_owned());
+        provider.protocol = rc_core::ProviderProtocol::Anthropic;
+        provider.model = Some("minimax-m2.7".to_owned());
+        let body = json!({
+            "output_config": {
+                "effort": "high",
+                "task_budget": {"type": "tokens", "total": 32000},
+                "format": {"type": "json_schema", "schema": {"type": "object"}}
+            },
+            "speed": "fast"
+        });
+
+        let headers = build_headers(&provider, Some(&body), None).expect("headers");
+        let beta = headers
+            .get("anthropic-beta")
+            .expect("anthropic-beta header")
+            .to_str()
+            .expect("anthropic-beta header should be utf8");
+
+        assert!(beta.contains(crate::beta_headers::CLAUDE_CODE_BETA));
+        assert!(beta.contains(crate::beta_headers::EFFORT_BETA));
+        assert!(beta.contains(crate::beta_headers::TASK_BUDGETS_BETA));
+        assert!(beta.contains(crate::beta_headers::STRUCTURED_OUTPUTS_BETA));
+        assert!(beta.contains(crate::beta_headers::FAST_MODE_BETA));
+    }
+
+    #[tokio::test]
+    async fn anthropic_request_body_applies_context_controls() {
+        let mut provider = test_provider_config("https://proxy.example.com/v1/messages".to_owned());
+        provider.protocol = rc_core::ProviderProtocol::Anthropic;
+        provider.model = Some("minimax-m2.7".to_owned());
+        let request_context = crate::query_source::ProviderRequestContext::new(
+            crate::query_source::QuerySource::Sdk,
+            rc_core::SessionId::from("session-ctx"),
+        )
+        .with_effort(Some("high".to_owned()))
+        .with_fast_mode(true)
+        .with_task_budget(Some(crate::query_source::ProviderTaskBudget {
+            total: 12_000,
+            remaining: Some(8_000),
+        }));
+
+        let body = super::build_anthropic_request_body(
+            &provider,
+            &[ConversationEntry::user("hello")],
+            &BTreeSet::new(),
+            Some(&request_context),
+            true,
+        )
+        .await;
+
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["output_config"]["effort"], "high");
+        assert!(body["output_config"].get("task_budget").is_none());
+        assert!(body.get("speed").is_none());
+
+        provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
+        provider.model = Some("claude-sonnet-4-6-20260401".to_owned());
+        let body = super::build_anthropic_request_body(
+            &provider,
+            &[ConversationEntry::user("hello")],
+            &BTreeSet::new(),
+            Some(&request_context),
+            true,
+        )
+        .await;
+
+        assert_eq!(body["tool_choice"], json!({"type": "auto"}));
+        assert_eq!(body["output_config"]["task_budget"]["total"], 12_000);
+        assert_eq!(body["output_config"]["task_budget"]["remaining"], 8_000);
+        assert_eq!(body["speed"], "fast");
     }
 
     #[test]
@@ -2552,6 +2925,19 @@ mod tests {
     fn openai_messages_include_user_role() {
         let messages = to_openai_messages(&[ConversationEntry::user("ship it")]);
         assert_eq!(messages[0]["role"], "user");
+    }
+
+    #[test]
+    fn openai_messages_replay_tool_use_with_provider_wire_names() {
+        let mut assistant = ConversationEntry::assistant("");
+        assistant.tool_calls = vec![ToolCall {
+            id: "call-1".to_owned(),
+            name: "bash_command".to_owned(),
+            input: json!({"command":"pwd"}),
+        }];
+
+        let messages = to_openai_messages(&[assistant]);
+        assert_eq!(messages[0]["tool_calls"][0]["function"]["name"], "Bash");
     }
 
     #[test]
@@ -2917,6 +3303,59 @@ mod tests {
         assert_eq!(parsed["client"], "remote-code-rust");
         assert_eq!(parsed["query_source"], "agent");
         assert_eq!(parsed["agent_id"], "agent-ctx");
+    }
+
+    #[tokio::test]
+    async fn request_context_overrides_anthropic_model_and_max_tokens() {
+        let mut provider = test_provider_config("https://api.anthropic.com/v1/messages".to_owned());
+        provider.protocol = rc_core::ProviderProtocol::Anthropic;
+        provider.model = Some("primary-model".to_owned());
+        provider.max_output_tokens = 4_096;
+        let request_context = crate::query_source::ProviderRequestContext::new(
+            crate::query_source::QuerySource::Sdk,
+            rc_core::SessionId::from("session-ctx"),
+        )
+        .with_model_override(Some("fallback-model".to_owned()))
+        .with_max_output_tokens(Some(16_384));
+
+        let effective = super::provider_for_request(&provider, Some(&request_context));
+        let body = super::build_anthropic_request_body(
+            &effective,
+            &[ConversationEntry::user("hello")],
+            &BTreeSet::new(),
+            Some(&request_context),
+            false,
+        )
+        .await;
+
+        assert_eq!(body["model"], "fallback-model");
+        assert_eq!(body["max_tokens"], 16_384);
+    }
+
+    #[tokio::test]
+    async fn request_context_overrides_openai_model_and_max_tokens() {
+        let mut provider = test_provider_config("https://example.invalid/v1/chat".to_owned());
+        provider.model = Some("primary-model".to_owned());
+        provider.max_output_tokens = 1_024;
+        let request_context = crate::query_source::ProviderRequestContext::new(
+            crate::query_source::QuerySource::Sdk,
+            rc_core::SessionId::from("session-ctx"),
+        )
+        .with_model_override(Some("fallback-model".to_owned()))
+        .with_max_output_tokens(Some(8_192));
+
+        let effective = super::provider_for_request(&provider, Some(&request_context));
+        let body = super::build_openai_request_body(
+            &effective,
+            &[ConversationEntry::user("hello")],
+            &BTreeSet::new(),
+            true,
+        )
+        .await;
+
+        assert_eq!(body["model"], "fallback-model");
+        assert_eq!(body["max_tokens"], 8_192);
+        assert_eq!(body["stream"], true);
     }
 
     #[tokio::test]

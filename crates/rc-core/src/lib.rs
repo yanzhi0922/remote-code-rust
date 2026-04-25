@@ -156,6 +156,8 @@ pub enum OutputFormat {
     /// Human-readable text output.
     #[default]
     Text,
+    /// Single JSON result object.
+    Json,
     /// Line-delimited JSON streaming output.
     StreamJson,
 }

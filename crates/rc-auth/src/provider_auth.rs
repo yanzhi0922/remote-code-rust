@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
+use crate::api_key_helper;
 use crate::oauth::types::OAuthTokens;
 
 /// The resolved authentication source for a provider request.
@@ -158,7 +159,10 @@ async fn resolve_first_party_auth(
     // 3. API key helper
     if let Some(ref helper) = config.api_key_helper {
         debug!("Executing apiKeyHelper command");
-        let key = execute_api_key_helper(helper).await?;
+        let key = api_key_helper::execute_api_key_helper_cached(helper)
+            .await
+            .map_err(|error| ProviderAuthError::ApiKeyHelperFailed(error.to_string()))?
+            .key;
         return Ok(AuthSource::AnthropicApiKey { key });
     }
 
@@ -251,32 +255,6 @@ fn resolve_openai_compatible_auth(
         .ok_or(ProviderAuthError::NoAuth)?;
 
     Ok(AuthSource::OpenAiCompatible { key, base_url })
-}
-
-/// Execute an apiKeyHelper command and return the trimmed stdout.
-async fn execute_api_key_helper(command: &str) -> Result<String, ProviderAuthError> {
-    let output = tokio::process::Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .output()
-        .await
-        .map_err(|e| ProviderAuthError::CommandExec(e.to_string()))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(ProviderAuthError::ApiKeyHelperFailed(
-            stderr.trim().to_owned(),
-        ));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    if stdout.is_empty() {
-        return Err(ProviderAuthError::ApiKeyHelperFailed(
-            "command returned empty output".to_owned(),
-        ));
-    }
-
-    Ok(stdout)
 }
 
 /// Execute an AWS credential export command and parse JSON output.
@@ -379,5 +357,21 @@ mod tests {
         if let AuthSource::AnthropicApiKey { key } = result.expect("ok") {
             assert_eq!(key, "sk-ant-test");
         }
+    }
+
+    #[tokio::test]
+    async fn first_party_api_key_helper_uses_shared_shell_helper() {
+        api_key_helper::clear_global_api_key_helper_cache();
+        let config = ProviderAuthConfig {
+            provider_type: ProviderType::FirstParty,
+            api_key_helper: Some("echo provider-helper-key".to_owned()),
+            ..Default::default()
+        };
+        let result = resolve_first_party_auth(&config).await;
+        assert!(result.is_ok());
+        if let AuthSource::AnthropicApiKey { key } = result.expect("ok") {
+            assert_eq!(key, "provider-helper-key");
+        }
+        api_key_helper::clear_global_api_key_helper_cache();
     }
 }

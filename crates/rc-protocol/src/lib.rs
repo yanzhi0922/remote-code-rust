@@ -320,32 +320,7 @@ impl<W: Write> ProtocolEmitter<W> {
 
     /// Emit a result event summarising the completed turn.
     pub fn emit_result(&mut self, payload: ResultPayload) -> Result<()> {
-        let mut event = json!({
-            "type": "result",
-            "subtype": if payload.is_error { "error_during_execution" } else { "success" },
-            "duration_ms": payload.duration_ms,
-            "duration_api_ms": payload.duration_api_ms,
-            "is_error": payload.is_error,
-            "num_turns": payload.num_turns,
-            "result": payload.result,
-            "stop_reason": payload.stop_reason,
-            "total_cost_usd": payload.total_cost_usd,
-            "usage": {
-                "input_tokens": payload.usage.input_tokens,
-                "output_tokens": payload.usage.output_tokens,
-                "cache_creation_input_tokens": 0,
-                "cache_read_input_tokens": 0,
-                "service_tier": "standard",
-            },
-            "modelUsage": payload.model_usage,
-            "permission_denials": payload.permission_denials,
-            "uuid": Uuid::new_v4(),
-            "session_id": self.session_id,
-        });
-        if !payload.errors.is_empty() {
-            event["errors"] = json!(payload.errors);
-        }
-        self.emit(event)
+        self.emit(result_event_value(self.session_id, &payload))
     }
 
     /// Emit a permission request event for the external consumer.
@@ -455,6 +430,37 @@ pub struct InitPayload {
     pub skills: Vec<String>,
     /// Available plugin names.
     pub plugins: Vec<String>,
+}
+
+/// Build the JSON object emitted for a completed turn.
+#[must_use]
+pub fn result_event_value(session_id: Uuid, payload: &ResultPayload) -> Value {
+    let mut event = json!({
+        "type": "result",
+        "subtype": if payload.is_error { "error_during_execution" } else { "success" },
+        "duration_ms": payload.duration_ms,
+        "duration_api_ms": payload.duration_api_ms,
+        "is_error": payload.is_error,
+        "num_turns": payload.num_turns,
+        "result": payload.result,
+        "stop_reason": payload.stop_reason,
+        "total_cost_usd": payload.total_cost_usd,
+        "usage": {
+            "input_tokens": payload.usage.input_tokens,
+            "output_tokens": payload.usage.output_tokens,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "service_tier": "standard",
+        },
+        "modelUsage": payload.model_usage,
+        "permission_denials": payload.permission_denials,
+        "uuid": Uuid::new_v4(),
+        "session_id": session_id,
+    });
+    if !payload.errors.is_empty() {
+        event["errors"] = json!(payload.errors);
+    }
+    event
 }
 
 /// Payload for the `result` event emitted at turn completion.

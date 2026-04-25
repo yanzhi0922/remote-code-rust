@@ -51,7 +51,8 @@ pub use provider_auth::{
 // API key helper
 pub use api_key_helper::{
     ApiKeyHelperCache, ApiKeyHelperError, ApiKeyHelperResult, ApiKeySource,
-    DEFAULT_API_KEY_HELPER_TTL, execute_api_key_helper,
+    DEFAULT_API_KEY_HELPER_TTL, clear_global_api_key_helper_cache, execute_api_key_helper,
+    execute_api_key_helper_cached,
 };
 
 // Secure storage

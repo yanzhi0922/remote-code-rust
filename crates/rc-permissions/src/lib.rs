@@ -732,8 +732,8 @@ pub fn classify_tool(name: &str) -> PermissionClass {
         // PascalCase (permission_tool_name / rule patterns)
         "Read" | "Glob" | "LS" => PermissionClass::Read,
         "Edit" | "Write" | "MultiEdit" => PermissionClass::Edit,
-        "Bash" | "WebFetch" | "WebSearch" | "WebBrowser" | "TerminalCapture" | "RemoteTrigger"
-        | "Daemon" => PermissionClass::Bash,
+        "Bash" | "PowerShell" | "WebFetch" | "WebSearch" | "WebBrowser" | "TerminalCapture"
+        | "RemoteTrigger" | "Daemon" => PermissionClass::Bash,
         "mcp" | "McpServerList" | "McpAuth" | "McpCall" => PermissionClass::Mcp,
         "Agent" | "Task" | "ExecuteSkill" | "TeamDelete" => PermissionClass::Agent,
         "Config" | "LSP" | "ToolSearch" | "VerifyPlan" | "Snip" => PermissionClass::Read,

@@ -384,7 +384,7 @@ impl McpConnectionManager {
             .await?;
         let count = match surface {
             McpListChangedSurface::Tools => result.tools.len(),
-            McpListChangedSurface::Prompts => usize::from(result.instructions.is_some()),
+            McpListChangedSurface::Prompts => result.prompts.len(),
             McpListChangedSurface::Resources => result.resources.len(),
         };
         self.emit_event(McpLifecycleEvent::ListRefreshed {
@@ -669,6 +669,7 @@ mod tests {
                 annotations: serde_json::json!({}),
             }],
             vec![],
+            vec![],
             None,
         );
 
@@ -699,6 +700,7 @@ mod tests {
                 "file:///data",
                 "srv-a",
             )],
+            vec![],
             Some("instructions".to_owned()),
         );
 

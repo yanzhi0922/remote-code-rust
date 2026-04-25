@@ -72,6 +72,15 @@ pub fn build_mcp_tool_name(server_name: &str, tool_name: &str) -> String {
     format!("mcp__{server_name}__{tool_name}")
 }
 
+/// Build a fully-qualified MCP prompt/slash-command name from raw server and
+/// prompt identifiers.
+///
+/// Claude Code normalizes only the server segment for MCP prompt commands and
+/// keeps the prompt programmatic name unchanged.
+pub fn build_mcp_prompt_command_name(server_name: &str, prompt_name: &str) -> String {
+    build_mcp_tool_name(&normalize_name_for_mcp(server_name), prompt_name)
+}
+
 /// Get the MCP tool name prefix for a given server.
 ///
 /// Format: `mcp__<server_name>__`
@@ -119,6 +128,14 @@ mod tests {
     #[test]
     fn normalize_empty_input() {
         assert_eq!(normalize_name_for_mcp(""), "_");
+    }
+
+    #[test]
+    fn build_mcp_prompt_command_normalizes_server_only() {
+        assert_eq!(
+            build_mcp_prompt_command_name("my server", "daily.plan"),
+            "mcp__my_server__daily.plan"
+        );
     }
 
     #[test]

@@ -1235,6 +1235,7 @@ fn tool_aliases(spec: &ToolSpec) -> BTreeSet<String> {
         spec.name.clone(),
         spec.protocol_name.clone(),
         spec.permission_tool_name.clone(),
+        spec.provider_wire_name().to_owned(),
     ]);
     match spec.name.as_str() {
         "read_file" => {

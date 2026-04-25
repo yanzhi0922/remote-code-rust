@@ -138,7 +138,7 @@ fn build_runtime_tool_search_index(specs: &[crate::ToolSpec]) -> ToolSearchEngin
     for spec in specs {
         let search_terms = spec.tool_search_terms();
         let tags = search_terms.iter().map(String::as_str).collect::<Vec<_>>();
-        engine.add_tool(&spec.name, &spec.description, &tags);
+        engine.add_tool(spec.provider_wire_name(), &spec.description, &tags);
     }
     engine
 }
@@ -161,10 +161,9 @@ fn select_requested_tool_specs<'a>(
     let mut seen = std::collections::BTreeSet::new();
 
     for requested_name in requested {
-        let matched = specs.iter().find(|spec| {
-            spec.name.eq_ignore_ascii_case(requested_name)
-                || spec.protocol_name.eq_ignore_ascii_case(requested_name)
-        });
+        let matched = specs
+            .iter()
+            .find(|spec| spec.matches_tool_name(requested_name));
         if let Some(spec) = matched {
             if seen.insert(spec.name.clone()) {
                 selected.push(spec);
@@ -255,7 +254,7 @@ pub(crate) async fn tool_search_tool(input: &Value) -> Result<ToolResult> {
         let (selected, missing) = select_requested_tool_specs(&specs, query, max_results);
         let matches = selected
             .into_iter()
-            .map(|spec| spec.name.clone())
+            .map(|spec| spec.provider_wire_name().to_owned())
             .collect::<Vec<_>>();
         return Ok(tool_search_result(query, specs.len(), matches, missing));
     }
