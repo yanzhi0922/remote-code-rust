@@ -357,24 +357,31 @@ mod tests {
         )
         .expect("write config.json");
 
-        let result = with_base_dir_override(temp.path().to_path_buf(), || {
-            tasks::configure_task_list_context(None, Some(tasks_root))
-                .expect("configure tasks dir");
-            tasks::set_leader_team_name(Some("test-team".to_owned()))
-                .expect("set leader team name");
-            let input = json!({});
-            let context = test_context();
-            team_delete(&input, &context)
-        });
+        let (result, team_dir_exists, task_dir_exists, worktree_dir_exists) =
+            with_base_dir_override(temp.path().to_path_buf(), || {
+                tasks::configure_task_list_context(None, Some(tasks_root))
+                    .expect("configure tasks dir");
+                tasks::set_leader_team_name(Some("test-team".to_owned()))
+                    .expect("set leader team name");
+                let input = json!({});
+                let context = test_context();
+                let result = team_delete(&input, &context);
+                (
+                    result,
+                    team_dir.exists(),
+                    task_dir.exists(),
+                    worktree_dir.exists(),
+                )
+            });
 
         assert!(result.is_ok());
         let output = result.expect("team_delete should succeed");
         let parsed: Value = serde_json::from_str(&output).expect("valid json");
         assert_eq!(parsed["success"], true);
         assert_eq!(parsed["team_name"], "test-team");
-        assert!(!team_dir.exists(), "team dir should be removed");
-        assert!(!task_dir.exists(), "task dir should be removed");
-        assert!(!worktree_dir.exists(), "worktree dir should be removed");
+        assert!(!team_dir_exists, "team dir should be removed");
+        assert!(!task_dir_exists, "task dir should be removed");
+        assert!(!worktree_dir_exists, "worktree dir should be removed");
     }
 
     #[test]

@@ -309,6 +309,12 @@ pub struct RuntimeConfig {
     pub replay_user_messages: bool,
     /// Whether to include partial streaming messages in output.
     pub include_partial_messages: bool,
+    /// Optional JSON Schema for structured output validation.
+    pub structured_output_schema: Option<serde_json::Value>,
+    /// Explicit MCP config files or directories supplied by the current entrypoint.
+    pub mcp_config_paths: Vec<PathBuf>,
+    /// Whether runtime MCP discovery should use only explicit MCP configs.
+    pub strict_mcp_config: bool,
     /// Maximum number of conversation turns per session.
     pub max_turns: usize,
     /// Optional human-friendly display name for the session.
@@ -343,6 +349,10 @@ pub struct RuntimeConfig {
     pub proactive_active: bool,
     /// Explanation of where the active auth token came from.
     pub auth_source: Option<String>,
+    /// Command configured via `apiKeyHelper`, if any.
+    pub api_key_helper: Option<String>,
+    /// Settings source that supplied `apiKeyHelper`, if known.
+    pub api_key_helper_source: Option<SettingSource>,
     /// Active provider configuration.
     pub provider: ProviderConfig,
     /// Application paths.
@@ -470,6 +480,9 @@ pub fn load_runtime_config(
         verbose,
         replay_user_messages,
         include_partial_messages,
+        structured_output_schema: runtime_overrides.structured_output_schema.clone(),
+        mcp_config_paths: runtime_overrides.mcp_config_paths.clone(),
+        strict_mcp_config: runtime_overrides.strict_mcp_config,
         max_turns: max_turns.max(1),
         session_name,
         system_prompt: runtime_overrides.system_prompt.clone(),
@@ -487,6 +500,8 @@ pub fn load_runtime_config(
         brief_enabled,
         proactive_active,
         auth_source: resolve_auth_source(&provider_overrides, &settings, &provider),
+        api_key_helper: settings.api_key_helper.clone(),
+        api_key_helper_source: settings.api_key_helper_source,
         provider,
         paths,
     })
@@ -894,6 +909,15 @@ fn cli_setting_sources(
     if !runtime_overrides.disallowed_tools.is_empty() {
         sources.push("cli:disallowed-tools".to_owned());
     }
+    if runtime_overrides.structured_output_schema.is_some() {
+        sources.push("cli:json-schema".to_owned());
+    }
+    if !runtime_overrides.mcp_config_paths.is_empty() {
+        sources.push("cli:mcp-config".to_owned());
+    }
+    if runtime_overrides.strict_mcp_config {
+        sources.push("cli:strict-mcp-config".to_owned());
+    }
     if runtime_overrides.effort.is_some() {
         sources.push("cli:effort".to_owned());
     }
@@ -1029,6 +1053,10 @@ where
         && provider.api_key.as_deref() == Some(settings_api_key)
     {
         return settings.auth_source.clone();
+    }
+
+    if settings.api_key_helper.is_some() && provider.api_key.is_none() {
+        return Some("apiKeyHelper".to_owned());
     }
 
     provider_auth_source_from_lookup(provider, lookup).or_else(|| settings.auth_source.clone())
@@ -1990,6 +2018,49 @@ mod tests {
     }
 
     #[test]
+    fn load_runtime_config_preserves_api_key_helper_and_auth_source() {
+        let temp = tempdir().expect("tempdir should work");
+        let cwd = temp.path().join("workspace");
+        let profile_dir = temp.path().join("profile");
+        fs::create_dir_all(&cwd).expect("workspace dir");
+        fs::create_dir_all(&profile_dir).expect("profile dir");
+        let settings = profile_dir.join("settings.json");
+        fs::write(
+            &settings,
+            r#"{
+                "apiKeyHelper": "echo helper-key",
+                "provider": {
+                    "name": "anthropic",
+                    "base_url": "https://api.anthropic.com",
+                    "model": "claude-sonnet-4-5"
+                }
+            }"#,
+        )
+        .expect("write settings");
+
+        let config = load_runtime_config(
+            Some(cwd),
+            Some(profile_dir),
+            None,
+            PermissionMode::Default,
+            InputFormat::Text,
+            OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            8,
+            ProviderOverrides::default(),
+            RuntimeOverrides::default(),
+        )
+        .expect("config should load");
+
+        assert_eq!(config.api_key_helper.as_deref(), Some("echo helper-key"));
+        assert_eq!(config.provider.api_key, None);
+        assert_eq!(config.auth_source.as_deref(), Some("apiKeyHelper"));
+    }
+
+    #[test]
     fn load_runtime_config_can_limit_discovery_to_local_sources() {
         let temp = tempdir().expect("tempdir should work");
         let cwd = temp.path().join("workspace");
@@ -2143,6 +2214,40 @@ mod tests {
             thinking_budget: None,
         };
         let settings = ResolvedRuntimeSettings::default();
+        let env_values = HashMap::from([("ANTHROPIC_API_KEY", "env-secret".to_owned())]);
+
+        let auth_source = resolve_auth_source_with_lookup(
+            &ProviderOverrides::default(),
+            &settings,
+            &provider,
+            &mut |keys| keys.iter().find_map(|key| env_values.get(*key).cloned()),
+        );
+
+        assert_eq!(auth_source.as_deref(), Some("env:ANTHROPIC_API_KEY"));
+    }
+
+    #[test]
+    fn resolve_auth_source_prefers_existing_key_over_api_key_helper() {
+        let provider = ProviderConfig {
+            name: "anthropic".to_owned(),
+            base_url: Some("https://api.anthropic.com/v1/messages".to_owned()),
+            api_key: Some("env-secret".to_owned()),
+            model: Some("claude-sonnet-4-5".to_owned()),
+            protocol: ProviderProtocol::Anthropic,
+            timeout_ms: 600_000,
+            max_output_tokens: 8_192,
+            max_retries: default_provider_max_retries(),
+            retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+            retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+            respect_retry_after: default_provider_respect_retry_after(),
+            request_header_overrides: BTreeMap::new(),
+            request_metadata: BTreeMap::new(),
+            thinking_budget: None,
+        };
+        let settings = ResolvedRuntimeSettings {
+            api_key_helper: Some("echo helper".to_owned()),
+            ..ResolvedRuntimeSettings::default()
+        };
         let env_values = HashMap::from([("ANTHROPIC_API_KEY", "env-secret".to_owned())]);
 
         let auth_source = resolve_auth_source_with_lookup(

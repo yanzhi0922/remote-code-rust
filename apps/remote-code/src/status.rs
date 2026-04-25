@@ -355,6 +355,7 @@ mod tests {
                 language: Some("Chinese".to_owned()),
                 brief_enabled: Some(true),
                 proactive_active: Some(true),
+                ..RuntimeOverrides::default()
             },
         )
         .expect("config should load");

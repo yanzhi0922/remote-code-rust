@@ -8,17 +8,19 @@ use std::time::Instant;
 
 use anyhow::Result;
 use rc_config::{RUNTIME_VERSION, RuntimeConfig};
-use rc_core::{InputFormat, OutputFormat, PermissionMode, SessionState};
+use rc_core::{InputFormat, PermissionMode, SessionState};
 use rc_permissions::{
     LayeredPermissionBroker, PermissionBroker, PermissionClass, PermissionDecision,
     PermissionRequest, load_layered_rules,
 };
 use rc_protocol::{
     InitPayload, PermissionRequestPayload, ProtocolEmitter, ProtocolInput, ResultPayload,
-    UsagePayload, parse_input_line,
+    UsagePayload, parse_input_line, result_event_value,
 };
 use rc_provider::ProviderCompatBackend;
 use rc_session::SessionStore;
+use rc_tui::builtin_protocol_slash_command_names;
+use rc_tools::mcp_catalog::runtime_mcp_prompt_command_names;
 use rc_tools::runtime_plan_mode::{RuntimePlanModeController, install_plan_mode_runtime};
 use rc_tools::runtime_provider_tool_specs;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -40,6 +42,7 @@ pub(crate) async fn run_headless(
     inline_prompt: Option<String>,
 ) -> Result<()> {
     let discovery = discover_runtime_extensions(config);
+    let slash_commands = headless_slash_commands().await;
     let emitter = Arc::new(Mutex::new(ProtocolEmitter::new(
         io::stdout(),
         config.session_id,
@@ -64,7 +67,7 @@ pub(crate) async fn run_headless(
             mcp_servers: discovery.mcp_servers,
             model: config.provider.model.clone(),
             permission_mode: config.permission_mode.as_legacy_str().to_owned(),
-            slash_commands: Vec::new(),
+            slash_commands,
             output_style: "default".to_owned(),
             skills: discovery.skills,
             plugins: discovery.plugins,
@@ -192,6 +195,14 @@ pub(crate) async fn run_headless(
     Ok(())
 }
 
+pub(crate) async fn headless_slash_commands() -> Vec<String> {
+    let mut commands = builtin_protocol_slash_command_names();
+    commands.extend(runtime_mcp_prompt_command_names().await);
+    commands.sort();
+    commands.dedup();
+    commands
+}
+
 pub(crate) async fn run_headless_text_print(
     config: &mut RuntimeConfig,
     store: &SessionStore,
@@ -203,9 +214,67 @@ pub(crate) async fn run_headless_text_print(
     Ok(())
 }
 
+pub(crate) async fn run_headless_json_print(
+    config: &mut RuntimeConfig,
+    store: &SessionStore,
+    prompt: String,
+) -> Result<()> {
+    let outcome = run_headless_text_prompt_once(config, store, &prompt).await?;
+    let payload = prompt_success_result_payload(outcome);
+    println!(
+        "{}",
+        serde_json::to_string(&result_event_value(config.session_id, &payload))?
+    );
+    drain_pending_extractions(std::time::Duration::from_secs(60)).await;
+    Ok(())
+}
+
+pub(crate) async fn run_headless_stream_json_print(
+    config: &mut RuntimeConfig,
+    store: &SessionStore,
+    prompt: String,
+) -> Result<()> {
+    let backend = ProviderCompatBackend::new(
+        Arc::new(rc_provider::ProviderClient::new()?),
+        &config.provider,
+    );
+    let discovered_tool_scope = backend.discovered_tool_scope();
+    let discovery = discover_runtime_hooks(config, &[]);
+    let (plan_mode_controller, broker) =
+        rc_tools::runtime_plan_mode::build_runtime_plan_mode(config, store)?;
+    let _plan_mode_runtime = install_plan_mode_runtime(plan_mode_controller)?;
+    let (mut conversation, mut hook_state) = prepare_prompt_runtime_state(
+        store,
+        config,
+        &discovered_tool_scope,
+        &discovery,
+        Some(&prompt),
+    )
+    .await?;
+    let emitter = Arc::new(Mutex::new(ProtocolEmitter::new(
+        io::stdout(),
+        config.session_id,
+    )));
+
+    run_headless_prompt_once(
+        emitter,
+        config,
+        store,
+        Arc::new(backend),
+        discovered_tool_scope,
+        broker,
+        &discovery,
+        &mut hook_state,
+        &mut conversation,
+        &prompt,
+    )
+    .await?;
+    drain_pending_extractions(std::time::Duration::from_secs(60)).await;
+    Ok(())
+}
+
 pub(crate) fn should_run_headless(config: &RuntimeConfig) -> bool {
     matches!(config.input_format, InputFormat::StreamJson)
-        || matches!(config.output_format, OutputFormat::StreamJson)
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -287,6 +356,22 @@ fn prompt_failure_result_payload(
         model_usage,
         permission_denials: snapshot.permission_denials,
         errors: vec![error.to_string()],
+    }
+}
+
+fn prompt_success_result_payload(outcome: PromptRunOutcome) -> ResultPayload {
+    ResultPayload {
+        is_error: false,
+        duration_ms: outcome.duration_ms,
+        duration_api_ms: outcome.duration_api_ms,
+        num_turns: outcome.num_turns,
+        result: outcome.text,
+        stop_reason: outcome.stop_reason,
+        total_cost_usd: outcome.total_cost_usd,
+        usage: outcome.usage,
+        model_usage: outcome.model_usage,
+        permission_denials: outcome.permission_denials,
+        errors: Vec::new(),
     }
 }
 
@@ -427,19 +512,7 @@ async fn run_headless_prompt_once<W: Write + Send + 'static>(
     match result {
         Ok(outcome) => {
             emitter.emit_assistant(&outcome.text)?;
-            emitter.emit_result(ResultPayload {
-                is_error: false,
-                duration_ms: outcome.duration_ms,
-                duration_api_ms: outcome.duration_api_ms,
-                num_turns: outcome.num_turns,
-                result: outcome.text,
-                stop_reason: outcome.stop_reason,
-                total_cost_usd: outcome.total_cost_usd,
-                usage: outcome.usage,
-                model_usage: outcome.model_usage,
-                permission_denials: outcome.permission_denials,
-                errors: Vec::new(),
-            })?;
+            emitter.emit_result(prompt_success_result_payload(outcome))?;
         }
         Err(error) => {
             #[allow(clippy::cast_possible_truncation)]
@@ -731,6 +804,7 @@ mod tests {
         LayeredPermissionBroker, PermissionBroker, PermissionClass, PermissionDecision,
         PermissionRequest, StaticPermissionBroker,
     };
+    use rc_protocol::UsagePayload;
     use rc_provider::{ConversationBackend, StreamingCallbacks};
     use rc_session::SessionStore;
     use rc_tools::runtime_plan_mode::install_plan_mode_runtime;
@@ -738,8 +812,13 @@ mod tests {
     use tempfile::{NamedTempFile, TempDir, tempdir};
     use tokio::sync::{Mutex, oneshot};
 
-    use super::{HeadlessPermissionBroker, resolve_pending_permission, run_headless_prompt_once};
-    use crate::conversation::{initialize_conversation, prepare_prompt_runtime_state, run_prompt};
+    use super::{
+        HeadlessPermissionBroker, headless_slash_commands, prompt_success_result_payload,
+        resolve_pending_permission, run_headless_prompt_once, should_run_headless,
+    };
+    use crate::conversation::{
+        PromptRunOutcome, initialize_conversation, prepare_prompt_runtime_state, run_prompt,
+    };
     use crate::hooks::{HookRunState, RuntimeHookDiscovery};
     use rc_protocol::ProtocolEmitter;
     use rc_tools::runtime_plan_mode::RuntimePlanModeController;
@@ -799,6 +878,15 @@ mod tests {
             .iter()
             .position(|event| event.get("type").and_then(Value::as_str) == Some(event_type))
             .unwrap_or_else(|| panic!("missing event type `{event_type}`"))
+    }
+
+    #[tokio::test]
+    async fn headless_init_slash_commands_include_builtin_protocol_names() {
+        let commands = headless_slash_commands().await;
+        assert!(commands.contains(&"help".to_owned()));
+        assert!(commands.contains(&"status".to_owned()));
+        assert!(commands.contains(&"mcp".to_owned()));
+        assert!(!commands.contains(&"/help".to_owned()));
     }
 
     struct DummySubAgentCompletion;
@@ -968,6 +1056,45 @@ mod tests {
         fn sub_agent_completion(&self) -> Arc<dyn SubAgentCompletion> {
             Arc::new(DummySubAgentCompletion)
         }
+    }
+
+    #[test]
+    fn should_run_headless_only_tracks_stream_json_input_protocol() {
+        let (_tempdir, mut config, _store) = mock_config_and_store();
+        config.print_mode = true;
+        config.input_format = InputFormat::Text;
+        config.output_format = OutputFormat::StreamJson;
+        assert!(!should_run_headless(&config));
+
+        config.input_format = InputFormat::StreamJson;
+        assert!(should_run_headless(&config));
+    }
+
+    #[test]
+    fn json_print_payload_uses_result_event_shape() {
+        let (_tempdir, config, _store) = mock_config_and_store();
+        let payload = prompt_success_result_payload(PromptRunOutcome {
+            text: "done".to_owned(),
+            duration_ms: 11,
+            duration_api_ms: 7,
+            num_turns: 2,
+            stop_reason: "end_turn".to_owned(),
+            total_cost_usd: 0.0,
+            usage: UsagePayload {
+                input_tokens: 3,
+                output_tokens: 4,
+            },
+            model_usage: serde_json::json!({"provider":"mock"}),
+            permission_denials: Vec::new(),
+        });
+        let event = rc_protocol::result_event_value(config.session_id, &payload);
+
+        assert_eq!(event["type"], "result");
+        assert_eq!(event["subtype"], "success");
+        assert_eq!(event["result"], "done");
+        assert_eq!(event["usage"]["input_tokens"], 3);
+        assert_eq!(event["usage"]["cache_creation_input_tokens"], 0);
+        assert_eq!(event["session_id"], config.session_id.to_string());
     }
 
     #[tokio::test]

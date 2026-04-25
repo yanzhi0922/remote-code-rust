@@ -47,7 +47,7 @@ impl std::fmt::Display for EffortLevel {
 // ---------------------------------------------------------------------------
 
 /// The beta header that enables the effort parameter.
-pub const EFFORT_BETA_HEADER: &str = "interleaved-thinking-2025-05-14";
+pub const EFFORT_BETA_HEADER: &str = crate::beta_headers::EFFORT_BETA;
 
 // ---------------------------------------------------------------------------
 // Model support check
@@ -55,12 +55,11 @@ pub const EFFORT_BETA_HEADER: &str = "interleaved-thinking-2025-05-14";
 
 /// Models known to support the effort parameter.
 const EFFORT_SUPPORTED_PREFIXES: &[&str] = &[
-    "claude-sonnet-4",
-    "claude-opus-4",
-    "claude-3-7-sonnet",
-    "claude-3.7-sonnet",
+    "claude-sonnet-4-6",
+    "claude-opus-4-6",
     "glm-5",
     "glm-4-plus",
+    "minimax-m2",
 ];
 
 /// Check whether a model supports the effort parameter.
@@ -70,9 +69,16 @@ const EFFORT_SUPPORTED_PREFIXES: &[&str] = &[
 #[must_use]
 pub fn model_supports_effort(model: &str) -> bool {
     let model_lower = model.to_ascii_lowercase();
+    if std::env::var("CLAUDE_CODE_ALWAYS_ENABLE_EFFORT")
+        .ok()
+        .as_deref()
+        .is_some_and(|value| matches!(value, "1" | "true" | "yes" | "on"))
+    {
+        return true;
+    }
     EFFORT_SUPPORTED_PREFIXES
         .iter()
-        .any(|prefix| model_lower.starts_with(prefix))
+        .any(|prefix| model_lower.starts_with(prefix) || model_lower.contains(prefix))
 }
 
 // ---------------------------------------------------------------------------
@@ -110,9 +116,11 @@ pub fn configure_effort_params(
 
     match effort_level {
         Some(level) => {
-            // Validate the effort level.
             let level_lower = level.to_ascii_lowercase();
             let normalized = level_lower.as_str();
+            if !matches!(normalized, "low" | "medium" | "high" | "max") {
+                return;
+            }
 
             // Set output_config.effort on the body.
             if body.get("output_config").is_none() {
@@ -143,17 +151,18 @@ mod tests {
 
     #[test]
     fn model_supports_effort_for_known_models() {
-        assert!(model_supports_effort("claude-sonnet-4-20250514"));
-        assert!(model_supports_effort("claude-opus-4"));
-        assert!(model_supports_effort("claude-3-7-sonnet-20250219"));
-        assert!(model_supports_effort("Claude-Sonnet-4"));
+        assert!(model_supports_effort("claude-sonnet-4-6-20260401"));
+        assert!(model_supports_effort("claude-opus-4-6-20260401"));
+        assert!(model_supports_effort("anthropic/claude-sonnet-4-6"));
         assert!(model_supports_effort("glm-5"));
+        assert!(model_supports_effort("minimax-m2.7"));
     }
 
     #[test]
     fn model_does_not_support_effort_for_unknown() {
         assert!(!model_supports_effort("gpt-4o"));
         assert!(!model_supports_effort("claude-3-haiku"));
+        assert!(!model_supports_effort("claude-sonnet-4-20250514"));
         assert!(!model_supports_effort("unknown-model"));
     }
 
@@ -161,7 +170,7 @@ mod tests {
     fn configure_effort_params_sets_output_config() {
         let mut body = json!({});
         let mut betas = Vec::new();
-        configure_effort_params(&mut body, &mut betas, "claude-sonnet-4", Some("high"));
+        configure_effort_params(&mut body, &mut betas, "claude-sonnet-4-6", Some("high"));
         assert_eq!(body["output_config"]["effort"], "high");
         assert!(betas.contains(&EFFORT_BETA_HEADER.to_owned()));
     }
@@ -179,7 +188,7 @@ mod tests {
     fn configure_effort_params_does_not_override_existing() {
         let mut body = json!({"output_config": {"effort": "low"}});
         let mut betas = Vec::new();
-        configure_effort_params(&mut body, &mut betas, "claude-sonnet-4", Some("high"));
+        configure_effort_params(&mut body, &mut betas, "claude-sonnet-4-6", Some("high"));
         // Should not override the existing effort.
         assert_eq!(body["output_config"]["effort"], "low");
     }
@@ -188,7 +197,7 @@ mod tests {
     fn configure_effort_params_default_enables_beta() {
         let mut body = json!({});
         let mut betas = Vec::new();
-        configure_effort_params(&mut body, &mut betas, "claude-sonnet-4", None);
+        configure_effort_params(&mut body, &mut betas, "claude-sonnet-4-6", None);
         assert!(betas.contains(&EFFORT_BETA_HEADER.to_owned()));
         // output_config.effort should NOT be set when no explicit level.
         assert!(body.get("output_config").is_none());

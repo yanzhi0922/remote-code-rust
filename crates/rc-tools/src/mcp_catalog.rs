@@ -4,7 +4,7 @@ use anyhow::{Result, anyhow};
 use once_cell::sync::Lazy;
 use rc_mcp::{
     McpClientInfo, McpListChangedSurface, McpServerConfig, McpServerInspection, inspect_server,
-    normalization::{build_mcp_tool_name, normalize_name_for_mcp},
+    normalization::{build_mcp_prompt_command_name, build_mcp_tool_name, normalize_name_for_mcp},
 };
 use rc_ui_bridge::UiRuntimeMcpServerStatus;
 use serde::{Deserialize, Serialize};
@@ -35,6 +35,18 @@ pub struct RuntimeMcpToolDescriptor {
     pub annotations: Value,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeMcpPromptCommandDescriptor {
+    pub command_name: String,
+    pub server_name: String,
+    pub normalized_server_name: String,
+    pub prompt_name: String,
+    pub description: String,
+    pub arg_names: Vec<String>,
+    pub server_config: McpServerConfig,
+    pub prompt: rc_mcp::McpPromptDescriptor,
+}
+
 impl RuntimeMcpToolDescriptor {
     #[must_use]
     pub fn qualified_name(&self) -> &str {
@@ -46,6 +58,7 @@ impl RuntimeMcpToolDescriptor {
 pub struct RuntimeMcpCatalog {
     pub clients: Vec<RuntimeMcpClientDescriptor>,
     pub tools: Vec<RuntimeMcpToolDescriptor>,
+    pub prompts: Vec<RuntimeMcpPromptCommandDescriptor>,
     pub warnings: Vec<String>,
 }
 
@@ -139,6 +152,26 @@ fn build_mcp_tool_spec(
     }
 }
 
+fn build_mcp_prompt_command_descriptor(
+    entry: &RuntimeMcpServerPolicyEntry,
+    prompt: &rc_mcp::McpPromptDescriptor,
+) -> RuntimeMcpPromptCommandDescriptor {
+    RuntimeMcpPromptCommandDescriptor {
+        command_name: build_mcp_prompt_command_name(&entry.server.name, &prompt.name),
+        server_name: entry.server.name.clone(),
+        normalized_server_name: normalize_name_for_mcp(&entry.server.name),
+        prompt_name: prompt.name.clone(),
+        description: prompt.description.clone().unwrap_or_default(),
+        arg_names: prompt
+            .arguments
+            .iter()
+            .map(|argument| argument.name.clone())
+            .collect(),
+        server_config: entry.server.clone(),
+        prompt: prompt.clone(),
+    }
+}
+
 async fn inspect_runtime_mcp_server(
     entry: &RuntimeMcpServerPolicyEntry,
 ) -> Result<McpServerInspection> {
@@ -172,6 +205,7 @@ pub async fn runtime_mcp_catalog() -> RuntimeMcpCatalog {
     let policy = current_tool_runtime_policy();
     let mut catalog = RuntimeMcpCatalog::default();
     let mut tool_map = BTreeMap::<String, RuntimeMcpToolDescriptor>::new();
+    let mut prompt_map = BTreeMap::<String, RuntimeMcpPromptCommandDescriptor>::new();
 
     for entry in &policy.mcp_servers {
         if !entry.server.enabled {
@@ -206,6 +240,26 @@ pub async fn runtime_mcp_catalog() -> RuntimeMcpCatalog {
                         ));
                     }
                 }
+
+                for prompt in &inspection.prompts {
+                    let descriptor = build_mcp_prompt_command_descriptor(entry, prompt);
+                    if !tool_allowed_by_policy(&descriptor.command_name, &policy) {
+                        continue;
+                    }
+
+                    if let Some(existing) =
+                        prompt_map.insert(descriptor.command_name.clone(), descriptor.clone())
+                    {
+                        catalog.warnings.push(format!(
+                            "Normalized MCP prompt command collision for {} between {}:{} and {}:{}; keeping the later definition",
+                            existing.command_name,
+                            existing.server_name,
+                            existing.prompt_name,
+                            descriptor.server_name,
+                            descriptor.prompt_name
+                        ));
+                    }
+                }
             }
             Err(error) => catalog.warnings.push(format!(
                 "Failed to inspect MCP server {} from {}: {error}",
@@ -228,6 +282,13 @@ pub async fn runtime_mcp_catalog() -> RuntimeMcpCatalog {
             .then_with(|| left.server_name.cmp(&right.server_name))
             .then_with(|| left.tool_name.cmp(&right.tool_name))
     });
+    catalog.prompts = prompt_map.into_values().collect();
+    catalog.prompts.sort_by(|left, right| {
+        left.command_name
+            .cmp(&right.command_name)
+            .then_with(|| left.server_name.cmp(&right.server_name))
+            .then_with(|| left.prompt_name.cmp(&right.prompt_name))
+    });
     catalog
 }
 
@@ -241,6 +302,15 @@ pub async fn runtime_mcp_tool_specs() -> Vec<ToolSpec> {
         .collect()
 }
 
+pub async fn runtime_mcp_prompt_command_names() -> Vec<String> {
+    runtime_mcp_catalog()
+        .await
+        .prompts
+        .into_iter()
+        .map(|prompt| prompt.command_name)
+        .collect()
+}
+
 pub async fn resolve_runtime_mcp_tool(name: &str) -> Result<RuntimeMcpToolDescriptor> {
     runtime_mcp_catalog()
         .await
@@ -248,6 +318,51 @@ pub async fn resolve_runtime_mcp_tool(name: &str) -> Result<RuntimeMcpToolDescri
         .into_iter()
         .find(|tool| tool.qualified_name() == name)
         .ok_or_else(|| anyhow!("MCP tool '{name}' is not available in the current runtime catalog"))
+}
+
+pub async fn runtime_mcp_prompt_commands() -> Vec<RuntimeMcpPromptCommandDescriptor> {
+    runtime_mcp_catalog().await.prompts
+}
+
+pub async fn resolve_runtime_mcp_prompt_command(
+    name: &str,
+) -> Result<RuntimeMcpPromptCommandDescriptor> {
+    runtime_mcp_catalog()
+        .await
+        .prompts
+        .into_iter()
+        .find(|prompt| prompt.command_name == name)
+        .ok_or_else(|| {
+            anyhow!("MCP prompt command '{name}' is not available in the current runtime catalog")
+        })
+}
+
+pub async fn execute_runtime_mcp_prompt_command(
+    name: &str,
+    args: &str,
+    context: &crate::ToolExecutionContext,
+) -> Result<Vec<Value>> {
+    let descriptor = resolve_runtime_mcp_prompt_command(name).await?;
+    let arguments = descriptor
+        .arg_names
+        .iter()
+        .zip(args.split_whitespace())
+        .map(|(name, value)| (name.clone(), Value::String(value.to_owned())))
+        .collect::<serde_json::Map<_, _>>();
+    let response = rc_mcp::get_prompt(
+        &descriptor.server_config,
+        &McpClientInfo::default(),
+        &descriptor.prompt_name,
+        Value::Object(arguments),
+    )
+    .await?;
+
+    let tool_results_dir = crate::mcp_tools::runtime_tool_results_dir(context);
+    Ok(crate::mcp_tools::transform_mcp_prompt_messages(
+        &response.result.messages,
+        &descriptor.server_name,
+        tool_results_dir.as_deref(),
+    ))
 }
 
 pub async fn execute_runtime_mcp_tool(
@@ -353,6 +468,8 @@ mod tests {
                     input_schema: json!({}),
                     annotations: json!({}),
                 }],
+                prompts: Vec::new(),
+                resources: Vec::new(),
             },
         }
     }

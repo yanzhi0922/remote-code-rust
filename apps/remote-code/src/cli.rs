@@ -64,11 +64,32 @@ pub struct Cli {
     #[arg(long = "show-setting-sources")]
     pub show_setting_sources: bool,
 
-    #[arg(long, value_delimiter = ',')]
+    #[arg(
+        long,
+        alias = "allowedTools",
+        value_delimiter = ',',
+        num_args = 1..,
+        value_name = "TOOLS"
+    )]
     pub allowed_tools: Vec<String>,
 
-    #[arg(long, value_delimiter = ',')]
+    #[arg(
+        long,
+        alias = "disallowedTools",
+        value_delimiter = ',',
+        num_args = 1..,
+        value_name = "TOOLS"
+    )]
     pub disallowed_tools: Vec<String>,
+
+    #[arg(long = "json-schema")]
+    pub json_schema: Option<String>,
+
+    #[arg(long = "mcp-config", num_args = 1.., value_name = "CONFIG")]
+    pub mcp_config: Vec<String>,
+
+    #[arg(long = "strict-mcp-config")]
+    pub strict_mcp_config: bool,
 
     #[arg(long)]
     pub provider: Option<String>,
@@ -1324,5 +1345,34 @@ mod tests {
             cli.append_system_prompt_file,
             Some(PathBuf::from("append.txt"))
         );
+    }
+
+    #[test]
+    fn parses_reference_style_tool_filter_aliases_and_mcp_flags() {
+        let cli = Cli::try_parse_from([
+            "remote-code",
+            "--allowedTools",
+            "Bash(git:*)",
+            "Edit,Read",
+            "--disallowedTools",
+            "WebFetch",
+            "--json-schema",
+            r#"{"type":"object"}"#,
+            "--mcp-config",
+            "mcp.json",
+            r#"{"mcpServers":{"demo":{"command":"node"}}}"#,
+            "--strict-mcp-config",
+            "-p",
+            "--output-format",
+            "json",
+            "hello",
+        ])
+        .expect("cli should parse");
+
+        assert_eq!(cli.allowed_tools, vec!["Bash(git:*)", "Edit", "Read"]);
+        assert_eq!(cli.disallowed_tools, vec!["WebFetch"]);
+        assert_eq!(cli.json_schema.as_deref(), Some(r#"{"type":"object"}"#));
+        assert_eq!(cli.mcp_config.len(), 2);
+        assert!(cli.strict_mcp_config);
     }
 }

@@ -20,11 +20,15 @@ use crate::config::{McpConfig, McpServerConfig};
 use crate::error::{McpConfigError, McpRuntimeError};
 use crate::jsonrpc::{
     InitializeParams, JsonRpcEnvelope, JsonRpcNotification, JsonRpcRequest, McpInitializeResult,
-    McpResourceContent, McpResourceReadResult, McpResourcesListResult, McpToolsListResult,
-    ResourceReadParams, ToolCallParams, rpc_id_matches,
+    McpPromptGetRpcResult, McpPromptsListResult, McpResourceContent, McpResourceReadResult,
+    McpResourcesListResult, McpToolsListResult, PromptGetParams, ResourceReadParams,
+    ToolCallParams, rpc_id_matches,
 };
 use crate::resources::ServerResource;
-use crate::types::{McpClientInfo, McpServerInspection, McpToolCallResponse, McpToolCallResult};
+use crate::types::{
+    McpClientInfo, McpPromptDescriptor, McpPromptGetResponse, McpServerInspection,
+    McpToolCallResponse, McpToolCallResult,
+};
 
 /// Default MCP protocol version used during initialisation.
 pub const DEFAULT_MCP_PROTOCOL_VERSION: &str = "2025-03-26";
@@ -113,6 +117,60 @@ pub async fn list_resources(
                 StdioMcpSession::connect(server, command, args, cwd.as_deref(), env, client_info)
                     .await?;
             let result = session.list_resources().await;
+            session.shutdown().await;
+            result
+        }
+        _ => Err(McpRuntimeError::UnsupportedTransport {
+            server: server.name.clone(),
+            transport: server.transport.kind(),
+        }),
+    }
+}
+
+/// List prompts exposed by an MCP server.
+pub async fn list_prompts(
+    server: &McpServerConfig,
+    client_info: &McpClientInfo,
+) -> Result<Vec<McpPromptDescriptor>, McpRuntimeError> {
+    match &server.transport {
+        crate::transport::McpTransportConfig::Stdio {
+            command,
+            args,
+            cwd,
+            env,
+        } => {
+            let mut session =
+                StdioMcpSession::connect(server, command, args, cwd.as_deref(), env, client_info)
+                    .await?;
+            let result = session.list_prompts().await;
+            session.shutdown().await;
+            result
+        }
+        _ => Err(McpRuntimeError::UnsupportedTransport {
+            server: server.name.clone(),
+            transport: server.transport.kind(),
+        }),
+    }
+}
+
+/// Get a prompt from an MCP server.
+pub async fn get_prompt(
+    server: &McpServerConfig,
+    client_info: &McpClientInfo,
+    prompt_name: &str,
+    arguments: Value,
+) -> Result<McpPromptGetResponse, McpRuntimeError> {
+    match &server.transport {
+        crate::transport::McpTransportConfig::Stdio {
+            command,
+            args,
+            cwd,
+            env,
+        } => {
+            let mut session =
+                StdioMcpSession::connect(server, command, args, cwd.as_deref(), env, client_info)
+                    .await?;
+            let result = session.get_prompt(prompt_name, arguments).await;
             session.shutdown().await;
             result
         }
@@ -337,6 +395,24 @@ impl StdioMcpSession {
             self.request_timeout_secs,
         )
         .await?;
+        let resources = if self.supports_resources() {
+            match self.list_resources().await {
+                Ok(resources) => resources,
+                Err(error) if is_unsupported_method_error(&error) => Vec::new(),
+                Err(error) => return Err(error),
+            }
+        } else {
+            Vec::new()
+        };
+        let prompts = if self.supports_prompts() {
+            match self.list_prompts().await {
+                Ok(prompts) => prompts,
+                Err(error) if is_unsupported_method_error(&error) => Vec::new(),
+                Err(error) => return Err(error),
+            }
+        } else {
+            Vec::new()
+        };
 
         Ok(McpServerInspection {
             server_name: self.server_name.clone(),
@@ -345,6 +421,8 @@ impl StdioMcpSession {
             capabilities: self.initialized.capabilities.clone(),
             instructions: self.initialized.instructions.clone(),
             tools: tools.tools,
+            prompts,
+            resources,
         })
     }
 
@@ -381,6 +459,72 @@ impl StdioMcpSession {
         Ok(McpToolCallResponse {
             server_name: self.server_name.clone(),
             tool_name: tool_name.to_owned(),
+            protocol_version: self.initialized.protocol_version.clone(),
+            server_info: self.initialized.server_info.clone(),
+            result,
+        })
+    }
+
+    /// List prompts exposed by this MCP server.
+    async fn list_prompts(&mut self) -> Result<Vec<McpPromptDescriptor>, McpRuntimeError> {
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: 5,
+            method: "prompts/list",
+            params: serde_json::json!({}),
+        };
+        write_message(
+            &mut self.stdin,
+            &self.server_name,
+            "prompts/list request",
+            &request,
+        )
+        .await?;
+        let result: McpPromptsListResult = wait_for_response(
+            &mut self.lines,
+            &self.server_name,
+            5,
+            "prompts/list response",
+            self.request_timeout_secs,
+        )
+        .await?;
+        Ok(result.prompts)
+    }
+
+    /// Get a prompt from this MCP server.
+    async fn get_prompt(
+        &mut self,
+        prompt_name: &str,
+        arguments: Value,
+    ) -> Result<McpPromptGetResponse, McpRuntimeError> {
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: 6,
+            method: "prompts/get",
+            params: PromptGetParams {
+                name: prompt_name.to_owned(),
+                arguments,
+            },
+        };
+        write_message(
+            &mut self.stdin,
+            &self.server_name,
+            "prompts/get request",
+            &request,
+        )
+        .await?;
+        let result: McpPromptGetRpcResult = wait_for_response(
+            &mut self.lines,
+            &self.server_name,
+            6,
+            "prompts/get response",
+            self.request_timeout_secs,
+        )
+        .await?;
+
+        Ok(McpPromptGetResponse {
+            server_name: self.server_name.clone(),
+            prompt_name: prompt_name.to_owned(),
             protocol_version: self.initialized.protocol_version.clone(),
             server_info: self.initialized.server_info.clone(),
             result,
@@ -459,6 +603,24 @@ impl StdioMcpSession {
     async fn shutdown(&mut self) {
         shutdown_child(&mut self.child).await;
     }
+
+    fn supports_resources(&self) -> bool {
+        self.initialized
+            .capabilities
+            .get("resources")
+            .is_some_and(|resources| !resources.is_null() && resources != false)
+    }
+
+    fn supports_prompts(&self) -> bool {
+        self.initialized
+            .capabilities
+            .get("prompts")
+            .is_some_and(|prompts| !prompts.is_null() && prompts != false)
+    }
+}
+
+fn is_unsupported_method_error(error: &McpRuntimeError) -> bool {
+    matches!(error, McpRuntimeError::Rpc { code: -32601, .. })
 }
 
 async fn write_message<T: Serialize>(

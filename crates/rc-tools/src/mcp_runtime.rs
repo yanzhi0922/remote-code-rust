@@ -310,8 +310,12 @@ fn collect_runtime_mcp_candidates(
     let mut servers = Vec::new();
     let mut warnings = Vec::new();
     let mut loaded_paths = BTreeSet::new();
+    let load_only_explicit = config.strict_mcp_config;
 
-    if setting_source_enabled(config, SettingSource::User) && config.paths.plugins_dir.exists() {
+    if !load_only_explicit
+        && setting_source_enabled(config, SettingSource::User)
+        && config.paths.plugins_dir.exists()
+    {
         match rc_plugins::discover_plugins(&config.paths.plugins_dir) {
             Ok(plugins) => {
                 for plugin in plugins {
@@ -341,7 +345,7 @@ fn collect_runtime_mcp_candidates(
         }
     }
 
-    if setting_source_enabled(config, SettingSource::User) {
+    if !load_only_explicit && setting_source_enabled(config, SettingSource::User) {
         load_runtime_mcp_candidates_in_dir(
             &mut servers,
             &mut warnings,
@@ -351,7 +355,7 @@ fn collect_runtime_mcp_candidates(
             &config.paths.profile_dir,
         );
     }
-    if setting_source_enabled(config, SettingSource::Project) {
+    if !load_only_explicit && setting_source_enabled(config, SettingSource::Project) {
         load_runtime_project_mcp_hierarchy(
             &mut servers,
             &mut warnings,
@@ -813,6 +817,59 @@ args = ["managed.py"]"#,
         assert_eq!(summary.origins.plugin, 0);
         assert_eq!(summary.status_counts.pending, 1);
         assert_eq!(summary.status_counts.disabled, 0);
+    }
+
+    #[test]
+    fn runtime_mcp_strict_config_uses_only_explicit_paths() {
+        let tempdir = tempdir().expect("tempdir");
+        let cwd = tempdir.path().join("workspace");
+        let profile = tempdir.path().join(".remote-code-rust");
+        let explicit = tempdir.path().join("explicit.json");
+        fs::create_dir_all(&cwd).expect("cwd");
+        fs::create_dir_all(&profile).expect("profile");
+        fs::write(
+            cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            "[mcp_servers.project]\ncommand = \"python\"\n",
+        )
+        .expect("cwd mcp");
+        fs::write(
+            profile.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            "[mcp_servers.profile]\ncommand = \"python\"\n",
+        )
+        .expect("profile mcp");
+        fs::write(
+            &explicit,
+            r#"{"mcpServers":{"explicit":{"command":"python"}}}"#,
+        )
+        .expect("explicit mcp");
+
+        let mut config = load_runtime_config(
+            Some(cwd),
+            Some(profile),
+            None,
+            PermissionMode::Default,
+            InputFormat::Text,
+            OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+            RuntimeOverrides::default(),
+        )
+        .expect("config");
+        config.strict_mcp_config = true;
+
+        let discovery =
+            super::discover_runtime_mcp_servers(&config, std::slice::from_ref(&explicit));
+        let names = discovery
+            .servers
+            .iter()
+            .map(|entry| entry.server.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["explicit"]);
+        assert_eq!(discovery.servers[0].origin_kind, "explicit");
     }
 
     #[tokio::test]

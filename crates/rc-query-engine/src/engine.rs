@@ -119,7 +119,10 @@ impl QueryEngine {
     #[must_use]
     pub fn new(config: QueryEngineConfig, existing_messages: Vec<Message>) -> Self {
         let budget_tracker = BudgetTracker::new(config.max_turns, None);
-        let model_switcher = ModelSwitcher::new(&config.model);
+        let mut model_switcher = ModelSwitcher::new(&config.model);
+        if let Some(fallback_model) = config.fallback_model.as_ref() {
+            model_switcher = model_switcher.with_fallback(fallback_model.clone());
+        }
         let chain_manager = ChainManager::new(config.max_chain_depth);
         let failure_tracker =
             FailureTracker::new(config.failure_threshold, std::time::Duration::from_secs(30));
@@ -399,6 +402,8 @@ mod tests {
     struct MockBackend {
         responses: Mutex<VecDeque<ProviderResponse>>,
         stream_scripts: Mutex<VecDeque<Vec<MockStreamingEvent>>>,
+        errors: Mutex<VecDeque<String>>,
+        contexts: Mutex<Vec<rc_provider::query_source::ProviderRequestContext>>,
         complete_calls: AtomicUsize,
         complete_streaming_calls: AtomicUsize,
     }
@@ -408,6 +413,19 @@ mod tests {
             Self {
                 responses: Mutex::new(VecDeque::from(responses)),
                 stream_scripts: Mutex::new(VecDeque::new()),
+                errors: Mutex::new(VecDeque::new()),
+                contexts: Mutex::new(Vec::new()),
+                complete_calls: AtomicUsize::new(0),
+                complete_streaming_calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn with_errors(errors: Vec<&'static str>, responses: Vec<ProviderResponse>) -> Self {
+            Self {
+                responses: Mutex::new(VecDeque::from(responses)),
+                stream_scripts: Mutex::new(VecDeque::new()),
+                errors: Mutex::new(errors.into_iter().map(str::to_owned).collect()),
+                contexts: Mutex::new(Vec::new()),
                 complete_calls: AtomicUsize::new(0),
                 complete_streaming_calls: AtomicUsize::new(0),
             }
@@ -420,9 +438,18 @@ mod tests {
             Self {
                 responses: Mutex::new(VecDeque::from(responses)),
                 stream_scripts: Mutex::new(VecDeque::from(stream_scripts)),
+                errors: Mutex::new(VecDeque::new()),
+                contexts: Mutex::new(Vec::new()),
                 complete_calls: AtomicUsize::new(0),
                 complete_streaming_calls: AtomicUsize::new(0),
             }
+        }
+
+        fn contexts(&self) -> Vec<rc_provider::query_source::ProviderRequestContext> {
+            self.contexts
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
         }
     }
 
@@ -464,11 +491,31 @@ mod tests {
     impl ConversationBackend for MockBackend {
         async fn complete(&self, _conversation: &[ConversationEntry]) -> Result<ProviderResponse> {
             self.complete_calls.fetch_add(1, Ordering::SeqCst);
+            if let Some(error) = self
+                .errors
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .pop_front()
+            {
+                return Err(anyhow!(error));
+            }
             self.responses
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .pop_front()
                 .ok_or_else(|| anyhow!("no more responses"))
+        }
+
+        async fn complete_with_context(
+            &self,
+            conversation: &[ConversationEntry],
+            context: &rc_provider::query_source::ProviderRequestContext,
+        ) -> Result<ProviderResponse> {
+            self.contexts
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(context.clone());
+            self.complete(conversation).await
         }
 
         async fn complete_streaming(
@@ -514,6 +561,19 @@ mod tests {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .pop_front()
                 .ok_or_else(|| anyhow!("no more responses for streaming call {conversation:?}"))
+        }
+
+        async fn complete_streaming_with_context(
+            &self,
+            conversation: &[ConversationEntry],
+            callbacks: Option<StreamingCallbacks>,
+            context: &rc_provider::query_source::ProviderRequestContext,
+        ) -> Result<ProviderResponse> {
+            self.contexts
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(context.clone());
+            self.complete_streaming(conversation, callbacks).await
         }
 
         fn sub_agent_completion(&self) -> Arc<dyn SubAgentCompletion> {
@@ -875,6 +935,119 @@ mod tests {
             QueryObserverEvent::StreamingUsageUpdated { usage, .. }
                 if usage.input_tokens == 2 && usage.output_tokens == 4
         )));
+    }
+
+    #[tokio::test]
+    async fn query_engine_fallback_model_reaches_provider_context() {
+        let session_id = SessionId::new();
+        let backend = Arc::new(MockBackend::with_errors(
+            vec!["provider overloaded"],
+            vec![ProviderResponse {
+                text: "fallback ok".to_owned(),
+                history_text: None,
+                thinking: None,
+                content_blocks: Vec::new(),
+                tool_calls: Vec::new(),
+                request_id: None,
+                usage: UsageSummary::default(),
+                stop_reason: "end_turn".to_owned(),
+            }],
+        ));
+        let config = QueryEngineConfig::new(
+            session_id.clone(),
+            "primary-model",
+            Arc::clone(&backend) as Arc<dyn ConversationBackend>,
+            Arc::new(MockToolRunner),
+            rc_engine_events::EventStream::new(8),
+        )
+        .with_fallback_model("fallback-model");
+        let mut engine = QueryEngine::new(
+            config,
+            vec![rc_core::Message::from(ConversationEntry::system("sys"))],
+        );
+        let context =
+            ProcessUserInputContext::new(session_id, PermissionMode::Default, "primary-model");
+
+        let result = engine
+            .submit_message(
+                vec![rc_core::Message::from(ConversationEntry::user("hello"))],
+                context,
+            )
+            .await
+            .expect("fallback query should succeed");
+
+        assert_eq!(result.final_text.as_deref(), Some("fallback ok"));
+        let contexts = backend.contexts();
+        assert_eq!(contexts.len(), 2);
+        assert_eq!(contexts[0].model_override, None);
+        assert_eq!(
+            contexts[1].model_override.as_deref(),
+            Some("fallback-model")
+        );
+    }
+
+    #[tokio::test]
+    async fn query_engine_max_token_escalation_retries_with_provider_override() {
+        let session_id = SessionId::new();
+        let backend = Arc::new(MockBackend::new(vec![
+            ProviderResponse {
+                text: "partial".to_owned(),
+                history_text: None,
+                thinking: None,
+                content_blocks: Vec::new(),
+                tool_calls: Vec::new(),
+                request_id: None,
+                usage: UsageSummary {
+                    input_tokens: 100,
+                    output_tokens: 8_192,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                },
+                stop_reason: "max_tokens".to_owned(),
+            },
+            ProviderResponse {
+                text: "full".to_owned(),
+                history_text: None,
+                thinking: None,
+                content_blocks: Vec::new(),
+                tool_calls: Vec::new(),
+                request_id: None,
+                usage: UsageSummary {
+                    input_tokens: 100,
+                    output_tokens: 10,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                },
+                stop_reason: "end_turn".to_owned(),
+            },
+        ]));
+        let config = QueryEngineConfig::new(
+            session_id.clone(),
+            "primary-model",
+            Arc::clone(&backend) as Arc<dyn ConversationBackend>,
+            Arc::new(MockToolRunner),
+            rc_engine_events::EventStream::new(8),
+        );
+        let mut engine = QueryEngine::new(
+            config,
+            vec![rc_core::Message::from(ConversationEntry::system("sys"))],
+        );
+        let context =
+            ProcessUserInputContext::new(session_id, PermissionMode::Default, "primary-model");
+
+        let result = engine
+            .submit_message(
+                vec![rc_core::Message::from(ConversationEntry::user("hello"))],
+                context,
+            )
+            .await
+            .expect("max-token retry should succeed");
+
+        assert_eq!(result.final_text.as_deref(), Some("full"));
+        let contexts = backend.contexts();
+        assert_eq!(contexts.len(), 2);
+        assert_eq!(contexts[0].max_output_tokens, None);
+        assert_eq!(contexts[1].max_output_tokens, Some(16_384));
     }
 
     #[tokio::test]

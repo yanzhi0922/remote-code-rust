@@ -1108,22 +1108,22 @@ fn build_deferred_tools_delta_from_specs(
         .filter(|spec| spec.is_deferred())
         .cloned()
         .collect::<Vec<_>>();
-    deferred_specs.sort_by(|left, right| left.name.cmp(&right.name));
+    deferred_specs.sort_by(|left, right| left.provider_wire_name().cmp(right.provider_wire_name()));
 
     let announced = announced_deferred_tool_names(conversation);
     let deferred_names = deferred_specs
         .iter()
-        .map(|spec| spec.name.clone())
+        .map(|spec| spec.provider_wire_name().to_owned())
         .collect::<std::collections::BTreeSet<_>>();
     let pool_names = specs
         .iter()
-        .map(|spec| spec.name.clone())
+        .map(|spec| spec.provider_wire_name().to_owned())
         .collect::<std::collections::BTreeSet<_>>();
 
     let added_names = deferred_specs
         .iter()
-        .filter(|spec| !announced.contains(spec.name.as_str()))
-        .map(|spec| spec.name.clone())
+        .filter(|spec| !announced.contains(spec.provider_wire_name()))
+        .map(|spec| spec.provider_wire_name().to_owned())
         .collect::<Vec<_>>();
     let removed_names = announced
         .into_iter()
@@ -2305,12 +2305,21 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         None => backend,
     };
     let runtime_extensions = discover_runtime_extensions(config);
+    let prompt_settings = load_query_runtime_prompt_settings(config)?;
     let mut process_context = ProcessUserInputContext::new(
         config.session_id.into(),
         config.permission_mode,
         &model_name,
     );
     process_context.effort = parse_effort(config.effort.as_deref());
+    process_context.requested_effort = config.effort.clone();
+    process_context.fast_mode = prompt_settings
+        .runtime_identity
+        .fast_mode_user_setting
+        .unwrap_or(false)
+        || prompt_settings
+            .runtime_identity
+            .fast_mode_per_session_opt_in;
     process_context.query_source = execution.query_source;
     process_context.agent_id = execution.agent_id.clone();
     process_context.discovered_skills = runtime_extensions
@@ -2332,6 +2341,12 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         rc_engine_events::EventStream::new(64),
     )
     .with_observer(observer);
+    if let Some(schema) = config.structured_output_schema.clone() {
+        query_config = query_config.with_structured_output_schema(schema);
+    }
+    if let Some(fallback_model) = config.fallback_model.clone() {
+        query_config = query_config.with_fallback_model(fallback_model);
+    }
     let post_compact_store = compat_store.clone();
     let post_compact_config = config.clone();
     let post_compact_broker = broker.clone();
@@ -3354,6 +3369,8 @@ mod tests {
                 capabilities: json!({}),
                 instructions: Some("Use Context7 for docs.".to_owned()),
                 tools: Vec::new(),
+                prompts: Vec::new(),
+                resources: Vec::new(),
             });
         }
 
@@ -3416,6 +3433,8 @@ mod tests {
                     capabilities: json!({}),
                     instructions: Some("Use Context7 for API and library docs.".to_owned()),
                     tools: Vec::new(),
+                    prompts: Vec::new(),
+                    resources: Vec::new(),
                 }),
                 error: None,
             }],
@@ -3494,6 +3513,8 @@ mod tests {
                 capabilities: json!({"tools": {"listChanged": true}}),
                 instructions: Some("stale instructions".to_owned()),
                 tools: Vec::new(),
+                prompts: Vec::new(),
+                resources: Vec::new(),
             });
         }
 

@@ -9,8 +9,8 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use rc_core::ToolResult;
 use rc_mcp::{
-    McpResourceContent, McpToolCallContent, McpToolCallResponse, McpToolCallResult,
-    normalization::normalize_name_for_mcp,
+    McpPromptMessage, McpResourceContent, McpToolCallContent, McpToolCallResponse,
+    McpToolCallResult, normalization::normalize_name_for_mcp,
 };
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
@@ -205,6 +205,40 @@ pub(crate) fn transform_mcp_tool_response(
     )
 }
 
+pub fn transform_mcp_prompt_messages(
+    messages: &[McpPromptMessage],
+    server_name: &str,
+    tool_results_dir: Option<&Path>,
+) -> Vec<Value> {
+    messages
+        .iter()
+        .flat_map(|message| {
+            let content = McpToolCallContent {
+                kind: message
+                    .content
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("text")
+                    .to_owned(),
+                fields: message
+                    .content
+                    .as_object()
+                    .map(|object| {
+                        object
+                            .iter()
+                            .filter(|(key, _)| key.as_str() != "type")
+                            .map(|(key, value)| (key.clone(), value.clone()))
+                            .collect::<BTreeMap<_, _>>()
+                    })
+                    .unwrap_or_else(|| {
+                        BTreeMap::from([("text".to_owned(), message.content.clone())])
+                    }),
+            };
+            transform_mcp_content_block(&content, server_name, tool_results_dir)
+        })
+        .collect()
+}
+
 pub(crate) fn transform_mcp_tool_result(
     result: &McpToolCallResult,
     server_name: &str,
@@ -321,7 +355,7 @@ enum PersistedMcpBlob {
     Error { message: String },
 }
 
-fn runtime_tool_results_dir(context: &ToolExecutionContext) -> Option<PathBuf> {
+pub(crate) fn runtime_tool_results_dir(context: &ToolExecutionContext) -> Option<PathBuf> {
     current_runtime_agent_prompt_context()
         .and_then(|prompt_context| prompt_context.tool_results_dir)
         .or_else(|| current_tool_runtime_policy().tool_results_dir)

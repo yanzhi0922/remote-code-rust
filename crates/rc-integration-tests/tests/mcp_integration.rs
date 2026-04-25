@@ -358,6 +358,7 @@ fn discovery_cache_operations() {
             annotations: serde_json::Value::Null,
         }],
         vec![],
+        vec![],
         None,
     );
 

@@ -35,6 +35,7 @@ use std::{
 
 use anyhow::{Result, anyhow};
 use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
+use rc_core::{InputFormat, OutputFormat};
 use rc_session::SessionStore;
 use rc_telemetry::install_tracing;
 use rc_tools::mcp_runtime::runtime_mcp_policy_entries;
@@ -51,7 +52,10 @@ use conversation::{
 };
 use doctor::run_doctor;
 use extract_memories::drain_pending_extractions;
-use headless::{run_headless, run_headless_text_print, should_run_headless};
+use headless::{
+    run_headless, run_headless_json_print, run_headless_stream_json_print, run_headless_text_print,
+    should_run_headless,
+};
 use hooks::run_hooks;
 use interactive::run_interactive_shell;
 use mcp_cli::run_mcp;
@@ -94,7 +98,10 @@ async fn run_app() -> Result<()> {
     install_tracing("remote_code_rust", false)?;
     let permission_mode_explicit = permission_mode_override_was_explicit();
     let cli = Cli::parse();
+    validate_cli_mode(&cli)?;
     let prompt_overrides = resolve_cli_prompt_overrides(&cli)?;
+    let structured_output_schema = parse_json_schema_arg(cli.json_schema.as_deref())?;
+    let mcp_config_paths = resolve_mcp_config_args(&cli.mcp_config)?;
 
     let resume_session = resolve_resume_session(&cli, &prompt_overrides)?;
     let overrides = ProviderOverrides {
@@ -124,8 +131,11 @@ async fn run_app() -> Result<()> {
             settings_files: cli.settings_files.clone(),
             show_setting_sources: cli.show_setting_sources,
             allowed_setting_sources: setting_sources_from_cli(&cli.setting_sources),
-            allowed_tools: cli.allowed_tools.clone(),
-            disallowed_tools: cli.disallowed_tools.clone(),
+            allowed_tools: normalize_cli_tool_values(&cli.allowed_tools),
+            disallowed_tools: normalize_cli_tool_values(&cli.disallowed_tools),
+            structured_output_schema: structured_output_schema.clone(),
+            mcp_config_paths: mcp_config_paths.clone(),
+            strict_mcp_config: cli.strict_mcp_config,
             effort: None,
             fallback_model: None,
             output_style: None,
@@ -144,6 +154,7 @@ async fn run_app() -> Result<()> {
             permission_mode_explicit,
         );
     }
+    hydrate_api_key_helper(&mut config).await?;
     configure_runtime_policy(&config)?;
     if cli.show_setting_sources && !should_run_headless(&config) {
         print_setting_sources(&config);
@@ -162,6 +173,32 @@ async fn run_app() -> Result<()> {
     let result = dispatch_command(command, prompt_parts, &mut config, &store).await;
     drain_pending_extractions(std::time::Duration::from_secs(60)).await;
     result
+}
+
+async fn hydrate_api_key_helper(config: &mut rc_config::RuntimeConfig) -> Result<()> {
+    if config.provider.api_key.is_some() {
+        return Ok(());
+    }
+    if !config.print_mode
+        && matches!(
+            config.api_key_helper_source,
+            Some(SettingSource::Project | SettingSource::Local)
+        )
+    {
+        return Ok(());
+    }
+    let Some(helper) = config.api_key_helper.as_deref() else {
+        return Ok(());
+    };
+    let helper = helper.trim();
+    if helper.is_empty() {
+        return Ok(());
+    }
+
+    let result = rc_auth::execute_api_key_helper_cached(helper).await?;
+    config.provider.api_key = Some(result.key);
+    config.auth_source = Some("apiKeyHelper".to_owned());
+    Ok(())
 }
 
 fn dispatch_command<'a>(
@@ -231,13 +268,61 @@ async fn run_session_entry(
                 "Input must be provided either through stdin or as a prompt argument when using --print"
             )
         })?;
-        return run_headless_text_print(config, store, prompt).await;
+        return match config.output_format {
+            OutputFormat::Text => run_headless_text_print(config, store, prompt).await,
+            OutputFormat::Json => run_headless_json_print(config, store, prompt).await,
+            OutputFormat::StreamJson => run_headless_stream_json_print(config, store, prompt).await,
+        };
     }
     if let Some(prompt) = prompt {
         run_oneshot_text(config, store, prompt).await
     } else {
         run_interactive_shell(config.clone(), store).await
     }
+}
+
+fn validate_cli_mode(cli: &Cli) -> Result<()> {
+    if matches!(cli.input_format, InputFormat::StreamJson)
+        && !matches!(cli.output_format, OutputFormat::StreamJson)
+    {
+        return Err(anyhow!(
+            "--input-format=stream-json requires --output-format=stream-json"
+        ));
+    }
+
+    if cli.replay_user_messages
+        && !(matches!(cli.input_format, InputFormat::StreamJson)
+            && matches!(cli.output_format, OutputFormat::StreamJson))
+    {
+        return Err(anyhow!(
+            "--replay-user-messages requires both --input-format=stream-json and --output-format=stream-json"
+        ));
+    }
+
+    if cli.include_partial_messages
+        && !(cli.print_mode && matches!(cli.output_format, OutputFormat::StreamJson))
+    {
+        return Err(anyhow!(
+            "--include-partial-messages requires --print and --output-format=stream-json"
+        ));
+    }
+
+    if cli.print_mode && matches!(cli.output_format, OutputFormat::StreamJson) && !cli.verbose {
+        return Err(anyhow!(
+            "When using --print, --output-format=stream-json requires --verbose"
+        ));
+    }
+
+    if !cli.print_mode
+        && !matches!(cli.input_format, InputFormat::StreamJson)
+        && !matches!(cli.output_format, OutputFormat::Text)
+    {
+        return Err(anyhow!(
+            "--output-format=json and --output-format=stream-json can only be used with --print"
+        ));
+    }
+
+    Ok(())
 }
 
 fn resolve_resume_session(
@@ -275,6 +360,9 @@ fn resolve_resume_session(
                     allowed_setting_sources: setting_sources_from_cli(&cli.setting_sources),
                     allowed_tools: Vec::new(),
                     disallowed_tools: Vec::new(),
+                    structured_output_schema: parse_json_schema_arg(cli.json_schema.as_deref())?,
+                    mcp_config_paths: resolve_mcp_config_args(&cli.mcp_config)?,
+                    strict_mcp_config: cli.strict_mcp_config,
                     effort: None,
                     fallback_model: None,
                     output_style: None,
@@ -302,6 +390,50 @@ fn setting_sources_from_cli(values: &[SettingSourceArgValue]) -> Option<Vec<Sett
             })
             .collect()
     })
+}
+
+fn parse_json_schema_arg(raw: Option<&str>) -> Result<Option<serde_json::Value>> {
+    raw.map(|schema| {
+        serde_json::from_str::<serde_json::Value>(schema)
+            .map_err(|error| anyhow!("Invalid --json-schema: {error}"))
+    })
+    .transpose()
+}
+
+fn resolve_mcp_config_args(values: &[String]) -> Result<Vec<PathBuf>> {
+    values
+        .iter()
+        .map(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Err(anyhow!("--mcp-config cannot be empty"));
+            }
+            if trimmed.starts_with('{') {
+                rc_mcp::McpConfig::from_json_str(trimmed)
+                    .map_err(|error| anyhow!("Invalid --mcp-config JSON: {error}"))?;
+                let mut path = std::env::temp_dir();
+                path.push(format!("remote-code-mcp-{}.json", Uuid::new_v4()));
+                fs::write(&path, trimmed)?;
+                Ok(path)
+            } else {
+                resolve_cli_file_path(Path::new(trimmed))
+            }
+        })
+        .collect()
+}
+
+fn normalize_cli_tool_values(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .flat_map(|value| {
+            value
+                .split([',', ' '])
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 fn configure_runtime_policy(config: &rc_config::RuntimeConfig) -> Result<()> {
@@ -342,7 +474,7 @@ fn configure_runtime_policy(config: &rc_config::RuntimeConfig) -> Result<()> {
                     .join(config.session_id.to_string()),
             ),
         },
-        mcp_servers: runtime_mcp_policy_entries(config, &[]),
+        mcp_servers: runtime_mcp_policy_entries(config, &config.mcp_config_paths),
     })
 }
 
@@ -570,7 +702,7 @@ fn resolve_prompt_input(
     parts: Vec<String>,
 ) -> Result<Option<String>> {
     let prompt = join_prompt(parts);
-    if prompt.is_some() || !config.print_mode || should_run_headless(config) {
+    if prompt.is_some() || should_run_headless(config) {
         return Ok(prompt);
     }
     if io::stdin().is_terminal() {
@@ -620,7 +752,10 @@ mod tests {
         remote_get_bytes, remote_get_json, remote_post_json, remote_runner_path,
         remote_session_commands_path, remote_session_state_path, remote_sessions_path,
     };
-    use crate::{Cli, resolve_cli_prompt_overrides};
+    use crate::{
+        Cli, hydrate_api_key_helper, normalize_cli_tool_values, parse_json_schema_arg,
+        resolve_cli_prompt_overrides, resolve_mcp_config_args, validate_cli_mode,
+    };
 
     use axum::{
         Router,
@@ -633,7 +768,7 @@ mod tests {
     };
     use chrono::{DateTime, Utc};
     use futures::SinkExt;
-    use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
+    use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
     use rc_tools::mcp_runtime::{discover_runtime_mcp_servers, resolve_runtime_mcp_server};
     use std::{
         collections::BTreeSet,
@@ -760,6 +895,258 @@ mod tests {
         );
         assert_eq!(default_artifact_name(Path::new("   ")), "artifact");
         assert_eq!(default_artifact_file_name(Path::new("   ")), "artifact.bin");
+    }
+
+    #[test]
+    fn cli_validation_matches_headless_format_constraints() {
+        let cli = Cli::parse_from([
+            "remote-code",
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "json",
+            "-p",
+        ]);
+        let error = validate_cli_mode(&cli).expect_err("stream input needs stream output");
+        assert!(
+            error
+                .to_string()
+                .contains("--input-format=stream-json requires --output-format=stream-json")
+        );
+
+        let cli = Cli::parse_from(["remote-code", "--replay-user-messages", "-p"]);
+        let error = validate_cli_mode(&cli).expect_err("replay requires both stream formats");
+        assert!(
+            error
+                .to_string()
+                .contains("--replay-user-messages requires both")
+        );
+
+        let cli = Cli::parse_from([
+            "remote-code",
+            "--include-partial-messages",
+            "--output-format",
+            "json",
+            "-p",
+        ]);
+        let error = validate_cli_mode(&cli).expect_err("partial messages need stream-json print");
+        assert!(
+            error
+                .to_string()
+                .contains("--include-partial-messages requires --print")
+        );
+
+        let cli = Cli::parse_from(["remote-code", "--output-format", "json"]);
+        let error = validate_cli_mode(&cli).expect_err("json output needs print mode");
+        assert!(
+            error
+                .to_string()
+                .contains("--output-format=json and --output-format=stream-json")
+        );
+
+        let cli = Cli::parse_from([
+            "remote-code",
+            "-p",
+            "--output-format",
+            "stream-json",
+            "--include-partial-messages",
+            "hello",
+        ]);
+        let error = validate_cli_mode(&cli).expect_err("stream-json print needs verbose");
+        assert!(
+            error
+                .to_string()
+                .contains("--output-format=stream-json requires --verbose")
+        );
+
+        let cli = Cli::parse_from([
+            "remote-code",
+            "-p",
+            "--verbose",
+            "--output-format",
+            "stream-json",
+            "--include-partial-messages",
+            "hello",
+        ]);
+        validate_cli_mode(&cli).expect("valid stream-json print mode");
+    }
+
+    #[tokio::test]
+    async fn api_key_helper_hydrates_runtime_provider_key() {
+        rc_auth::clear_global_api_key_helper_cache();
+        let temp = tempdir().expect("tempdir should work");
+        let cwd = temp.path().join("workspace");
+        let profile_dir = temp.path().join("profile");
+        fs::create_dir_all(&cwd).expect("workspace dir");
+        fs::create_dir_all(&profile_dir).expect("profile dir");
+        fs::write(
+            profile_dir.join("settings.json"),
+            r#"{
+                "apiKeyHelper": "echo hydrated-helper-key",
+                "provider": {
+                    "name": "anthropic",
+                    "base_url": "https://api.anthropic.com",
+                    "model": "claude-sonnet-4-5"
+                }
+            }"#,
+        )
+        .expect("write settings");
+        let mut config = load_runtime_config(
+            Some(cwd),
+            Some(profile_dir),
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+            RuntimeOverrides::default(),
+        )
+        .expect("config load failed");
+
+        assert_eq!(config.auth_source.as_deref(), Some("apiKeyHelper"));
+        assert!(config.provider.api_key.is_none());
+
+        hydrate_api_key_helper(&mut config)
+            .await
+            .expect("helper should hydrate");
+
+        assert_eq!(
+            config.provider.api_key.as_deref(),
+            Some("hydrated-helper-key")
+        );
+        assert_eq!(config.auth_source.as_deref(), Some("apiKeyHelper"));
+        rc_auth::clear_global_api_key_helper_cache();
+    }
+
+    #[tokio::test]
+    async fn project_api_key_helper_is_not_hydrated_before_interactive_trust() {
+        rc_auth::clear_global_api_key_helper_cache();
+        let temp = tempdir().expect("tempdir should work");
+        let cwd = temp.path().join("workspace");
+        let profile_dir = temp.path().join("profile");
+        fs::create_dir_all(cwd.join(".remote-code")).expect("workspace settings dir");
+        fs::create_dir_all(&profile_dir).expect("profile dir");
+        fs::write(
+            cwd.join(".remote-code").join("settings.json"),
+            r#"{
+                "apiKeyHelper": "echo should-not-run",
+                "provider": {
+                    "name": "anthropic",
+                    "base_url": "https://api.anthropic.com",
+                    "model": "claude-sonnet-4-5"
+                }
+            }"#,
+        )
+        .expect("write settings");
+        let mut config = load_runtime_config(
+            Some(cwd),
+            Some(profile_dir),
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            false,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+            RuntimeOverrides::default(),
+        )
+        .expect("config load failed");
+
+        assert_eq!(config.api_key_helper_source, Some(SettingSource::Project));
+
+        hydrate_api_key_helper(&mut config)
+            .await
+            .expect("helper hydration should skip safely");
+
+        assert!(config.provider.api_key.is_none());
+        rc_auth::clear_global_api_key_helper_cache();
+    }
+
+    #[tokio::test]
+    async fn project_api_key_helper_runs_in_print_mode() {
+        rc_auth::clear_global_api_key_helper_cache();
+        let temp = tempdir().expect("tempdir should work");
+        let cwd = temp.path().join("workspace");
+        let profile_dir = temp.path().join("profile");
+        fs::create_dir_all(cwd.join(".remote-code")).expect("workspace settings dir");
+        fs::create_dir_all(&profile_dir).expect("profile dir");
+        fs::write(
+            cwd.join(".remote-code").join("settings.json"),
+            r#"{
+                "apiKeyHelper": "echo print-helper-key",
+                "provider": {
+                    "name": "anthropic",
+                    "base_url": "https://api.anthropic.com",
+                    "model": "claude-sonnet-4-5"
+                }
+            }"#,
+        )
+        .expect("write settings");
+        let mut config = load_runtime_config(
+            Some(cwd),
+            Some(profile_dir),
+            None,
+            rc_core::PermissionMode::Default,
+            rc_core::InputFormat::Text,
+            rc_core::OutputFormat::Text,
+            true,
+            false,
+            false,
+            false,
+            4,
+            ProviderOverrides::default(),
+            RuntimeOverrides::default(),
+        )
+        .expect("config load failed");
+
+        hydrate_api_key_helper(&mut config)
+            .await
+            .expect("print helper should hydrate");
+
+        assert_eq!(config.provider.api_key.as_deref(), Some("print-helper-key"));
+        rc_auth::clear_global_api_key_helper_cache();
+    }
+
+    #[test]
+    fn cli_json_schema_and_mcp_config_values_are_resolved() {
+        let schema = parse_json_schema_arg(Some(r#"{"type":"object"}"#))
+            .expect("schema parses")
+            .expect("schema present");
+        assert_eq!(schema["type"], "object");
+        assert!(parse_json_schema_arg(Some("{broken")).is_err());
+
+        let temp = tempdir().expect("tempdir should work");
+        let file = temp.path().join("mcp.json");
+        fs::write(&file, r#"{"mcpServers":{"file-demo":{"command":"node"}}}"#).expect("write mcp");
+        let resolved = resolve_mcp_config_args(&[
+            file.display().to_string(),
+            r#"{"mcpServers":{"inline-demo":{"command":"node"}}}"#.to_owned(),
+        ])
+        .expect("mcp configs should resolve");
+
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved[0], file);
+        assert!(resolved[1].exists());
+    }
+
+    #[test]
+    fn cli_tool_values_accept_space_and_comma_separated_reference_form() {
+        assert_eq!(
+            normalize_cli_tool_values(&["Bash(git:*)".to_owned(), "Edit,Read".to_owned()]),
+            vec![
+                "Bash(git:*)".to_owned(),
+                "Edit".to_owned(),
+                "Read".to_owned()
+            ]
+        );
     }
 
     #[test]

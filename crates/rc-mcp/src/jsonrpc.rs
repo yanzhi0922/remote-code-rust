@@ -6,7 +6,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::types::{McpClientInfo, McpPeerInfo, McpToolDescriptor};
+use crate::types::{
+    McpClientInfo, McpPeerInfo, McpPromptDescriptor, McpPromptGetResult, McpToolDescriptor,
+};
 
 /// A JSON-RPC request (with method and params).
 #[derive(Debug, Serialize)]
@@ -79,6 +81,25 @@ pub(crate) struct ToolCallParams<'a> {
     pub name: &'a str,
     pub arguments: Value,
 }
+
+/// Result of the MCP `prompts/list` method.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct McpPromptsListResult {
+    #[serde(default)]
+    pub prompts: Vec<McpPromptDescriptor>,
+}
+
+/// Parameters for the MCP `prompts/get` method.
+#[derive(Debug, Serialize)]
+pub(crate) struct PromptGetParams {
+    pub name: String,
+    #[serde(default)]
+    pub arguments: Value,
+}
+
+/// Result of the MCP `prompts/get` method.
+pub(crate) type McpPromptGetRpcResult = McpPromptGetResult;
 
 /// Result of the MCP `resources/list` method.
 #[derive(Debug, Deserialize)]
@@ -200,5 +221,15 @@ mod tests {
         let result: McpToolsListResult = serde_json::from_str(json).expect("deserialize");
         assert_eq!(result.tools.len(), 1);
         assert_eq!(result.tools[0].name, "search");
+    }
+
+    #[test]
+    fn prompts_list_result_deserialize() {
+        let json = r#"{"prompts":[{"name":"plan","description":"Plan","arguments":[{"name":"topic","required":true}]}]}"#;
+        let result: McpPromptsListResult = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(result.prompts.len(), 1);
+        assert_eq!(result.prompts[0].name, "plan");
+        assert_eq!(result.prompts[0].arguments[0].name, "topic");
+        assert!(result.prompts[0].arguments[0].required);
     }
 }

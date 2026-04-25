@@ -9,9 +9,7 @@
 use anyhow::{Context, Result, anyhow};
 use futures::StreamExt;
 use rc_config::ProviderConfig;
-use rc_core::{
-    ConversationEntry, ConversationRole, ProviderProtocol, ProviderResponse, ToolCall, UsageSummary,
-};
+use rc_core::{ConversationEntry, ProviderProtocol, ProviderResponse, ToolCall, UsageSummary};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{
@@ -21,8 +19,8 @@ use std::sync::{
 use std::time::Duration;
 
 use crate::{
-    ProviderClient, build_headers, current_openai_tool_schemas, prepare_anthropic_request_surface,
-    to_openai_messages,
+    ProviderClient, build_anthropic_request_body, build_headers, build_openai_request_body,
+    provider_for_request,
 };
 
 // ---------------------------------------------------------------------------
@@ -211,17 +209,14 @@ impl ProviderClient {
         carried_discovered_tools: &BTreeSet<String>,
         request_context: Option<&crate::query_source::ProviderRequestContext>,
     ) -> Result<ProviderResponse> {
-        let tools =
-            current_openai_tool_schemas(provider, conversation, carried_discovered_tools).await;
-        let body = json!({
-            "model": provider.model,
-            "messages": to_openai_messages(conversation),
-            "tools": tools,
-            "tool_choice": "auto",
-            "temperature": 0.1,
-            "max_tokens": provider.max_output_tokens,
-            "stream": true,
-        });
+        let effective_provider = provider_for_request(provider, request_context);
+        let body = build_openai_request_body(
+            &effective_provider,
+            conversation,
+            carried_discovered_tools,
+            true,
+        )
+        .await;
         let base_url = provider
             .base_url
             .as_ref()
@@ -229,7 +224,7 @@ impl ProviderClient {
 
         let response = self
             .send_streaming_request(
-                provider,
+                &effective_provider,
                 base_url,
                 &body,
                 "openai-compatible",
@@ -393,34 +388,15 @@ impl ProviderClient {
         carried_discovered_tools: &BTreeSet<String>,
         request_context: Option<&crate::query_source::ProviderRequestContext>,
     ) -> Result<ProviderResponse> {
-        let (system, messages, tools) =
-            prepare_anthropic_request_surface(provider, conversation, carried_discovered_tools)
-                .await;
-        let mut body = json!({
-            "model": provider.model,
-            "system": system,
-            "messages": messages,
-            "tools": tools,
-            "max_tokens": provider.max_output_tokens,
-            "stream": true,
-        });
-        crate::apply_anthropic_request_metadata(&mut body, provider, request_context);
-        // Enable extended thinking if a budget is configured.
-        if let Some(budget) = provider.thinking_budget {
-            body["thinking"] = json!({
-                "type": "enabled",
-                "budget_tokens": budget,
-            });
-            let current_max = body.get("max_tokens").and_then(Value::as_u64).unwrap_or(0);
-            if current_max <= u64::from(budget) {
-                body["max_tokens"] = json!(u64::from(budget) + 4096);
-            }
-        }
-        // Apply stable cache control breakpoints (system, tools, latest user message).
-        let is_resume = conversation
-            .iter()
-            .any(|entry| matches!(entry.role, ConversationRole::Tool));
-        crate::add_stable_cache_control(&mut body, is_resume);
+        let effective_provider = provider_for_request(provider, request_context);
+        let body = build_anthropic_request_body(
+            &effective_provider,
+            conversation,
+            carried_discovered_tools,
+            request_context,
+            true,
+        )
+        .await;
         let base_url = provider
             .base_url
             .as_ref()
@@ -428,7 +404,7 @@ impl ProviderClient {
 
         let response = self
             .send_streaming_request(
-                provider,
+                &effective_provider,
                 base_url,
                 &body,
                 "anthropic-compatible",

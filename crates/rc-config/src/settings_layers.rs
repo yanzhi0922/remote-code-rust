@@ -44,6 +44,9 @@ pub struct RuntimeOverrides {
     pub allowed_setting_sources: Option<Vec<SettingSource>>,
     pub allowed_tools: Vec<String>,
     pub disallowed_tools: Vec<String>,
+    pub structured_output_schema: Option<serde_json::Value>,
+    pub mcp_config_paths: Vec<PathBuf>,
+    pub strict_mcp_config: bool,
     pub effort: Option<String>,
     pub fallback_model: Option<String>,
     pub output_style: Option<String>,
@@ -59,6 +62,7 @@ pub struct ResolvedRuntimeSettings {
     pub base_url: Option<String>,
     pub api_key: Option<String>,
     pub api_key_helper: Option<String>,
+    pub api_key_helper_source: Option<SettingSource>,
     pub model: Option<String>,
     pub protocol: Option<ProviderProtocol>,
     pub timeout_ms: Option<u64>,
@@ -283,6 +287,10 @@ pub fn load_runtime_settings(paths: &[PathBuf]) -> Result<ResolvedRuntimeSetting
         }
         if let Some(api_key_helper) = document.api_key_helper {
             resolved.api_key_helper = normalize_optional_string(Some(api_key_helper));
+            resolved.api_key_helper_source = resolved
+                .api_key_helper
+                .as_ref()
+                .and_then(|_| setting_source_for_path(path));
         }
         if let Some(fast_mode) = document.fast_mode {
             resolved.fast_mode = Some(fast_mode);
@@ -327,6 +335,17 @@ pub fn load_runtime_settings(paths: &[PathBuf]) -> Result<ResolvedRuntimeSetting
     resolved.allowed_tools = normalize_tool_filters(&resolved.allowed_tools);
     resolved.disallowed_tools = normalize_tool_filters(&resolved.disallowed_tools);
     Ok(resolved)
+}
+
+fn setting_source_for_path(path: &Path) -> Option<SettingSource> {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    if normalized.ends_with(".remote-code/settings.local.json") {
+        Some(SettingSource::Local)
+    } else if normalized.ends_with(".remote-code/settings.json") {
+        Some(SettingSource::Project)
+    } else {
+        Some(SettingSource::User)
+    }
 }
 
 fn load_settings_document(path: &Path) -> Result<SettingsDocument> {
@@ -451,6 +470,18 @@ base_url = "https://example.com/v1"
                 .is_some_and(|source| source.starts_with("settings:"))
         );
         assert!(resolved.allowed_tools.contains(&"glob".to_owned()));
+    }
+
+    #[test]
+    fn load_runtime_settings_supports_api_key_helper_alias() {
+        let tempdir = tempdir().expect("tempdir");
+        let settings = tempdir.path().join("settings.json");
+        fs::write(&settings, r#"{ "apiKeyHelper": " echo helper-key " }"#).expect("write settings");
+
+        let resolved = load_runtime_settings(&[settings]).expect("load settings");
+
+        assert_eq!(resolved.api_key_helper.as_deref(), Some("echo helper-key"));
+        assert_eq!(resolved.api_key_helper_source, Some(SettingSource::User));
     }
 
     #[test]

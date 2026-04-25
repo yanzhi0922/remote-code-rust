@@ -738,7 +738,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
         ToolSpec {
             name: "powershell".to_owned(),
             protocol_name: "PowerShell".to_owned(),
-            permission_tool_name: "Bash".to_owned(),
+            permission_tool_name: "PowerShell".to_owned(),
             description: tool_prompts::powershell_tool_prompt(
                 tool_prompts::PowerShellEdition::Unknown,
             ),

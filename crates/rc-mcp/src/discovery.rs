@@ -10,7 +10,7 @@ use crate::config::McpServerConfig;
 use crate::error::McpRuntimeError;
 use crate::lifecycle::McpListChangedSurface;
 use crate::resources::ServerResource;
-use crate::types::{McpClientInfo, McpServerInspection, McpToolDescriptor};
+use crate::types::{McpClientInfo, McpPromptDescriptor, McpToolDescriptor};
 
 /// Result of discovering tools and resources from a server.
 #[derive(Debug, Clone)]
@@ -19,6 +19,8 @@ pub struct McpDiscoveryResult {
     pub tools: Vec<McpToolDescriptor>,
     /// Discovered resources.
     pub resources: Vec<ServerResource>,
+    /// Discovered prompts.
+    pub prompts: Vec<McpPromptDescriptor>,
     /// Server instructions (if any).
     pub instructions: Option<String>,
 }
@@ -33,6 +35,8 @@ pub struct McpDiscovery {
     tools: HashMap<String, Vec<McpToolDescriptor>>,
     /// Server name → discovered resources.
     resources: HashMap<String, Vec<ServerResource>>,
+    /// Server name → discovered prompts.
+    prompts: HashMap<String, Vec<McpPromptDescriptor>>,
     /// Server name → server instructions.
     instructions: HashMap<String, Option<String>>,
 }
@@ -57,17 +61,20 @@ impl McpDiscovery {
         let inspection = crate::session::inspect_server(config, client_info).await?;
 
         let tools = inspection.tools.clone();
-        let resources = extract_resources_from_inspection(&inspection, name);
+        let resources = inspection.resources.clone();
+        let prompts = inspection.prompts.clone();
         let instructions = inspection.instructions.clone();
 
         self.tools.insert(name.to_owned(), tools.clone());
         self.resources.insert(name.to_owned(), resources.clone());
+        self.prompts.insert(name.to_owned(), prompts.clone());
         self.instructions
             .insert(name.to_owned(), instructions.clone());
 
         Ok(McpDiscoveryResult {
             tools,
             resources,
+            prompts,
             instructions,
         })
     }
@@ -78,10 +85,12 @@ impl McpDiscovery {
         name: &str,
         tools: Vec<McpToolDescriptor>,
         resources: Vec<ServerResource>,
+        prompts: Vec<McpPromptDescriptor>,
         instructions: Option<String>,
     ) {
         self.tools.insert(name.to_owned(), tools);
         self.resources.insert(name.to_owned(), resources);
+        self.prompts.insert(name.to_owned(), prompts);
         self.instructions.insert(name.to_owned(), instructions);
     }
 
@@ -107,6 +116,12 @@ impl McpDiscovery {
         self.resources.get(server_name).map(Vec::as_slice)
     }
 
+    /// Get the prompts for a specific server.
+    #[must_use]
+    pub fn prompts(&self, server_name: &str) -> Option<&[McpPromptDescriptor]> {
+        self.prompts.get(server_name).map(Vec::as_slice)
+    }
+
     /// Get the instructions for a specific server.
     #[must_use]
     pub fn instructions(&self, server_name: &str) -> Option<&Option<String>> {
@@ -117,6 +132,7 @@ impl McpDiscovery {
     pub fn clear_server(&mut self, server_name: &str) {
         self.tools.remove(server_name);
         self.resources.remove(server_name);
+        self.prompts.remove(server_name);
         self.instructions.remove(server_name);
     }
 
@@ -128,9 +144,7 @@ impl McpDiscovery {
                 self.instructions.remove(server_name);
             }
             McpListChangedSurface::Prompts => {
-                // Prompts are not represented yet, but server instructions are
-                // part of the provider-visible prompt surface and must be
-                // recomputed with the next inspection.
+                self.prompts.remove(server_name);
                 self.instructions.remove(server_name);
             }
             McpListChangedSurface::Resources => {
@@ -143,6 +157,7 @@ impl McpDiscovery {
     pub fn clear_all(&mut self) {
         self.tools.clear();
         self.resources.clear();
+        self.prompts.clear();
         self.instructions.clear();
     }
 
@@ -158,25 +173,17 @@ impl McpDiscovery {
         self.resources.values().map(Vec::len).sum()
     }
 
+    /// Return the total number of prompts across all servers.
+    #[must_use]
+    pub fn total_prompt_count(&self) -> usize {
+        self.prompts.values().map(Vec::len).sum()
+    }
+
     /// Return the number of servers with cached discovery data.
     #[must_use]
     pub fn server_count(&self) -> usize {
         self.tools.len()
     }
-}
-
-/// Extract resources from an inspection result.
-///
-/// Since `McpServerInspection` does not currently include a `resources` field,
-/// this returns an empty list. When the protocol adds resource discovery, this
-/// function will be updated to extract them.
-fn extract_resources_from_inspection(
-    _inspection: &McpServerInspection,
-    _server_name: &str,
-) -> Vec<ServerResource> {
-    // TODO: Once the MCP protocol's resources/list is integrated into
-    // McpServerInspection, extract resources here.
-    vec![]
 }
 
 #[cfg(test)]
@@ -189,6 +196,7 @@ mod tests {
         assert_eq!(discovery.server_count(), 0);
         assert_eq!(discovery.total_tool_count(), 0);
         assert_eq!(discovery.total_resource_count(), 0);
+        assert_eq!(discovery.total_prompt_count(), 0);
     }
 
     #[test]
@@ -201,7 +209,7 @@ mod tests {
             input_schema: serde_json::json!({}),
             annotations: serde_json::json!({}),
         }];
-        discovery.store("srv", tools.clone(), vec![], None);
+        discovery.store("srv", tools.clone(), vec![], vec![], None);
         assert_eq!(discovery.tools("srv"), Some(tools.as_slice()));
         assert_eq!(discovery.total_tool_count(), 1);
     }
@@ -214,15 +222,29 @@ mod tests {
                 .with_name("Data")
                 .with_mime_type("text/csv"),
         ];
-        discovery.store("srv", vec![], resources.clone(), None);
+        discovery.store("srv", vec![], resources.clone(), vec![], None);
         assert_eq!(discovery.resources("srv"), Some(resources.as_slice()));
         assert_eq!(discovery.total_resource_count(), 1);
     }
 
     #[test]
+    fn store_and_retrieve_prompts() {
+        let mut discovery = McpDiscovery::new();
+        let prompts = vec![McpPromptDescriptor {
+            name: "plan".to_owned(),
+            title: None,
+            description: Some("Plan work".to_owned()),
+            arguments: vec![],
+        }];
+        discovery.store("srv", vec![], vec![], prompts.clone(), None);
+        assert_eq!(discovery.prompts("srv"), Some(prompts.as_slice()));
+        assert_eq!(discovery.total_prompt_count(), 1);
+    }
+
+    #[test]
     fn store_and_retrieve_instructions() {
         let mut discovery = McpDiscovery::new();
-        discovery.store("srv", vec![], vec![], Some("Be careful".to_owned()));
+        discovery.store("srv", vec![], vec![], vec![], Some("Be careful".to_owned()));
         assert_eq!(
             discovery.instructions("srv"),
             Some(&Some("Be careful".to_owned()))
@@ -246,8 +268,8 @@ mod tests {
             input_schema: serde_json::json!({}),
             annotations: serde_json::json!({}),
         }];
-        discovery.store("a", tools_a, vec![], None);
-        discovery.store("b", tools_b, vec![], None);
+        discovery.store("a", tools_a, vec![], vec![], None);
+        discovery.store("b", tools_b, vec![], vec![], None);
         let all = discovery.all_tools();
         assert_eq!(all.len(), 2);
         assert_eq!(discovery.total_tool_count(), 2);
@@ -256,7 +278,7 @@ mod tests {
     #[test]
     fn clear_server_removes_data() {
         let mut discovery = McpDiscovery::new();
-        discovery.store("srv", vec![], vec![], None);
+        discovery.store("srv", vec![], vec![], vec![], None);
         assert_eq!(discovery.server_count(), 1);
         discovery.clear_server("srv");
         assert_eq!(discovery.server_count(), 0);
@@ -274,21 +296,40 @@ mod tests {
             annotations: serde_json::json!({}),
         }];
         let resources = vec![ServerResource::new("file:///data", "srv")];
+        let prompts = vec![McpPromptDescriptor {
+            name: "plan".to_owned(),
+            title: None,
+            description: None,
+            arguments: vec![],
+        }];
         discovery.store(
             "srv",
             tools.clone(),
             resources.clone(),
+            prompts.clone(),
             Some("instructions".to_owned()),
         );
 
         discovery.clear_server_surface("srv", McpListChangedSurface::Resources);
         assert_eq!(discovery.tools("srv"), Some(tools.as_slice()));
         assert!(discovery.resources("srv").is_none());
+        assert_eq!(discovery.prompts("srv"), Some(prompts.as_slice()));
         assert_eq!(
             discovery.instructions("srv"),
             Some(&Some("instructions".to_owned()))
         );
 
+        discovery.clear_server_surface("srv", McpListChangedSurface::Prompts);
+        assert!(discovery.prompts("srv").is_none());
+        assert!(discovery.instructions("srv").is_none());
+
+        discovery.store(
+            "srv",
+            tools.clone(),
+            Vec::new(),
+            prompts,
+            Some("instructions".to_owned()),
+        );
         discovery.clear_server_surface("srv", McpListChangedSurface::Tools);
         assert!(discovery.tools("srv").is_none());
         assert!(discovery.instructions("srv").is_none());
@@ -297,8 +338,8 @@ mod tests {
     #[test]
     fn clear_all_removes_everything() {
         let mut discovery = McpDiscovery::new();
-        discovery.store("a", vec![], vec![], None);
-        discovery.store("b", vec![], vec![], None);
+        discovery.store("a", vec![], vec![], vec![], None);
+        discovery.store("b", vec![], vec![], vec![], None);
         discovery.clear_all();
         assert_eq!(discovery.server_count(), 0);
     }
@@ -308,6 +349,7 @@ mod tests {
         let discovery = McpDiscovery::new();
         assert!(discovery.tools("nonexistent").is_none());
         assert!(discovery.resources("nonexistent").is_none());
+        assert!(discovery.prompts("nonexistent").is_none());
         assert!(discovery.instructions("nonexistent").is_none());
     }
 }

@@ -13,7 +13,7 @@ use tempfile::tempdir;
 use crate::config::{McpCapabilityMatrix, McpConfig, McpServerConfig};
 use crate::error::{McpConfigError, McpRuntimeError};
 use crate::session::{
-    DEFAULT_MCP_CONFIG_FILE, call_tool, discover_mcp_configs, inspect_server,
+    DEFAULT_MCP_CONFIG_FILE, call_tool, discover_mcp_configs, get_prompt, inspect_server,
     load_discovered_mcp_configs,
 };
 use crate::transport::{McpTransport, McpTransportConfig};
@@ -311,6 +311,150 @@ while True:
         inspection.tools[0].description.as_deref(),
         Some("Search indexed documentation")
     );
+    assert!(inspection.resources.is_empty());
+    assert!(inspection.prompts.is_empty());
+}
+
+#[tokio::test]
+async fn inspection_lists_prompts_and_get_prompt_returns_messages() {
+    let Some((python, mut prefix_args)) = python_command() else {
+        eprintln!("Skipping MCP stdio prompt inspection test because Python is unavailable.");
+        return;
+    };
+
+    let temp = ok(tempdir());
+    let script = temp.path().join("mock_mcp_prompts.py");
+    ok(fs::write(&script, mock_prompt_server_script()));
+    prefix_args.push(script.to_string_lossy().into_owned());
+
+    let server = McpServerConfig {
+        name: "mock".to_owned(),
+        enabled: true,
+        transport: McpTransportConfig::Stdio {
+            command: python,
+            args: prefix_args,
+            cwd: Some(temp.path().to_path_buf()),
+            env: BTreeMap::new(),
+        },
+        capabilities: McpCapabilityMatrix::default(),
+        startup_timeout_secs: Some(3),
+        request_timeout_secs: Some(3),
+        metadata: BTreeMap::new(),
+    };
+
+    let inspection = inspect_server(&server, &McpClientInfo::new("remote-code-rust", "test"))
+        .await
+        .unwrap_or_else(|error| panic!("inspection failed: {error}"));
+
+    assert_eq!(inspection.prompts.len(), 1);
+    assert_eq!(inspection.prompts[0].name, "plan");
+    assert_eq!(inspection.prompts[0].arguments.len(), 1);
+    assert_eq!(inspection.prompts[0].arguments[0].name, "topic");
+    assert!(inspection.prompts[0].arguments[0].required);
+
+    let response = get_prompt(
+        &server,
+        &McpClientInfo::new("remote-code-rust", "test"),
+        "plan",
+        serde_json::json!({"topic": "MCP"}),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("get prompt failed: {error}"));
+
+    assert_eq!(response.prompt_name, "plan");
+    assert_eq!(
+        response.result.description.as_deref(),
+        Some("Planning prompt")
+    );
+    assert_eq!(response.result.messages.len(), 1);
+    assert_eq!(response.result.messages[0].role, "user");
+    assert_eq!(response.result.messages[0].content["text"], "Plan MCP");
+}
+
+#[tokio::test]
+async fn inspection_lists_advertised_resources() {
+    let Some((python, mut prefix_args)) = python_command() else {
+        eprintln!("Skipping MCP stdio resource inspection test because Python is unavailable.");
+        return;
+    };
+
+    let temp = ok(tempdir());
+    let script = temp.path().join("mock_mcp_resources.py");
+    ok(fs::write(&script, mock_resource_server_script("list")));
+    prefix_args.push(script.to_string_lossy().into_owned());
+
+    let server = McpServerConfig {
+        name: "mock".to_owned(),
+        enabled: true,
+        transport: McpTransportConfig::Stdio {
+            command: python,
+            args: prefix_args,
+            cwd: Some(temp.path().to_path_buf()),
+            env: BTreeMap::new(),
+        },
+        capabilities: McpCapabilityMatrix::default(),
+        startup_timeout_secs: Some(3),
+        request_timeout_secs: Some(3),
+        metadata: BTreeMap::new(),
+    };
+
+    let inspection = inspect_server(&server, &McpClientInfo::new("remote-code-rust", "test"))
+        .await
+        .unwrap_or_else(|error| panic!("inspection failed: {error}"));
+
+    assert_eq!(inspection.tools.len(), 1);
+    assert_eq!(inspection.resources.len(), 2);
+    assert_eq!(inspection.resources[0].uri, "file:///workspace/README.md");
+    assert_eq!(inspection.resources[0].server, "mock");
+    assert_eq!(inspection.resources[0].name.as_deref(), Some("Readme"));
+    assert_eq!(
+        inspection.resources[0].mime_type.as_deref(),
+        Some("text/markdown")
+    );
+    assert_eq!(
+        inspection.resources[1].description.as_deref(),
+        Some("Project metadata")
+    );
+}
+
+#[tokio::test]
+async fn inspection_tolerates_unsupported_advertised_resources() {
+    let Some((python, mut prefix_args)) = python_command() else {
+        eprintln!("Skipping MCP stdio unsupported resources test because Python is unavailable.");
+        return;
+    };
+
+    let temp = ok(tempdir());
+    let script = temp.path().join("mock_mcp_resources.py");
+    ok(fs::write(
+        &script,
+        mock_resource_server_script("unsupported"),
+    ));
+    prefix_args.push(script.to_string_lossy().into_owned());
+
+    let server = McpServerConfig {
+        name: "mock".to_owned(),
+        enabled: true,
+        transport: McpTransportConfig::Stdio {
+            command: python,
+            args: prefix_args,
+            cwd: Some(temp.path().to_path_buf()),
+            env: BTreeMap::new(),
+        },
+        capabilities: McpCapabilityMatrix::default(),
+        startup_timeout_secs: Some(3),
+        request_timeout_secs: Some(3),
+        metadata: BTreeMap::new(),
+    };
+
+    let inspection = inspect_server(&server, &McpClientInfo::new("remote-code-rust", "test"))
+        .await
+        .unwrap_or_else(|error| {
+            panic!("inspection should tolerate unsupported resources: {error}")
+        });
+
+    assert_eq!(inspection.tools.len(), 1);
+    assert!(inspection.resources.is_empty());
 }
 
 #[tokio::test]
@@ -749,5 +893,158 @@ while True:
                     "isError": False
                 }
             })
+"#
+}
+
+fn mock_resource_server_script(mode: &str) -> String {
+    format!(
+        r#"
+import json
+import sys
+
+mode = {mode:?}
+
+def send(payload):
+    sys.stdout.write(json.dumps(payload) + "\n")
+    sys.stdout.flush()
+
+while True:
+    raw = sys.stdin.readline()
+    if not raw:
+        break
+    raw = raw.strip()
+    if not raw:
+        continue
+    message = json.loads(raw)
+    method = message.get("method")
+    message_id = message.get("id")
+    if method == "initialize":
+        send({{
+            "jsonrpc": "2.0",
+            "id": message_id,
+            "result": {{
+                "protocolVersion": "2025-03-26",
+                "capabilities": {{"tools": {{}}, "resources": {{}}}},
+                "serverInfo": {{"name": "mock-mcp", "version": "0.1.0"}}
+            }}
+        }})
+    elif method == "notifications/initialized":
+        continue
+    elif method == "tools/list":
+        send({{
+            "jsonrpc": "2.0",
+            "id": message_id,
+            "result": {{
+                "tools": [
+                    {{"name": "fetch", "description": "Fetch", "inputSchema": {{}}}}
+                ]
+            }}
+        }})
+    elif method == "resources/list" and mode == "list":
+        send({{
+            "jsonrpc": "2.0",
+            "id": message_id,
+            "result": {{
+                "resources": [
+                    {{
+                        "uri": "file:///workspace/README.md",
+                        "name": "Readme",
+                        "description": "Workspace readme",
+                        "mimeType": "text/markdown"
+                    }},
+                    {{
+                        "uri": "file:///workspace/package.json",
+                        "description": "Project metadata"
+                    }}
+                ]
+            }}
+        }})
+    elif method == "resources/list":
+        send({{
+            "jsonrpc": "2.0",
+            "id": message_id,
+            "error": {{"code": -32601, "message": "method not found"}}
+        }})
+    else:
+        send({{
+            "jsonrpc": "2.0",
+            "id": message_id,
+            "error": {{"code": -32601, "message": "unknown method"}}
+        }})
+"#
+    )
+}
+
+fn mock_prompt_server_script() -> &'static str {
+    r#"
+import json
+import sys
+
+def send(payload):
+    sys.stdout.write(json.dumps(payload) + "\n")
+    sys.stdout.flush()
+
+while True:
+    raw = sys.stdin.readline()
+    if not raw:
+        break
+    raw = raw.strip()
+    if not raw:
+        continue
+    message = json.loads(raw)
+    method = message.get("method")
+    message_id = message.get("id")
+    if method == "initialize":
+        send({
+            "jsonrpc": "2.0",
+            "id": message_id,
+            "result": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {"tools": {}, "prompts": {}},
+                "serverInfo": {"name": "mock-mcp", "version": "0.1.0"}
+            }
+        })
+    elif method == "notifications/initialized":
+        continue
+    elif method == "tools/list":
+        send({
+            "jsonrpc": "2.0",
+            "id": message_id,
+            "result": {"tools": []}
+        })
+    elif method == "prompts/list":
+        send({
+            "jsonrpc": "2.0",
+            "id": message_id,
+            "result": {
+                "prompts": [
+                    {
+                        "name": "plan",
+                        "description": "Planning prompt",
+                        "arguments": [
+                            {"name": "topic", "required": True}
+                        ]
+                    }
+                ]
+            }
+        })
+    elif method == "prompts/get":
+        topic = message.get("params", {}).get("arguments", {}).get("topic", "")
+        send({
+            "jsonrpc": "2.0",
+            "id": message_id,
+            "result": {
+                "description": "Planning prompt",
+                "messages": [
+                    {"role": "user", "content": {"type": "text", "text": f"Plan {topic}"}}
+                ]
+            }
+        })
+    else:
+        send({
+            "jsonrpc": "2.0",
+            "id": message_id,
+            "error": {"code": -32601, "message": "unknown method"}
+        })
 "#
 }

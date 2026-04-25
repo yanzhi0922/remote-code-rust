@@ -111,11 +111,21 @@ pub struct ProcessUserInputContext {
     pub thinking_config: ThinkingConfig,
     #[serde(default)]
     pub effort: EffortLevel,
+    /// Effort explicitly configured by the runtime. `effort` above has a UI
+    /// default, while this stays `None` unless the user/settings supplied one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_effort: Option<String>,
     #[serde(default)]
     pub fast_mode: bool,
     #[serde(default)]
     pub query_source: QuerySource,
     pub model: String,
+    /// Per-request provider model override used by fallback retries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_model_override: Option<String>,
+    /// Per-request provider output token limit override used by truncation recovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens_override: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_budget: Option<TaskBudget>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -147,9 +157,12 @@ impl ProcessUserInputContext {
             file_history: FileHistoryState::default(),
             thinking_config: ThinkingConfig::default(),
             effort: EffortLevel::default(),
+            requested_effort: None,
             fast_mode: false,
             query_source: QuerySource::default(),
             model: model.into(),
+            provider_model_override: None,
+            max_output_tokens_override: None,
             task_budget: None,
             memory_content: None,
             mcp_instructions: None,

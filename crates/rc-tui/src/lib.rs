@@ -79,7 +79,7 @@ use rc_tools::{
     agent::{parse_delegate_progress_event, render_delegate_progress_event},
     configure_tool_runtime_policy, execute_tool_call,
     git::{apply_worktree_tool_result_to_runtime, sync_tool_context_from_runtime},
-    mcp_catalog::clear_runtime_mcp_catalog_cache,
+    mcp_catalog::{clear_runtime_mcp_catalog_cache, execute_runtime_mcp_prompt_command},
     mcp_runtime::runtime_mcp_policy_entries,
     plan_mode::normalize_exit_plan_mode_tool_calls,
     runtime_plan_mode::{
@@ -113,6 +113,25 @@ pub use message::{
     ToolCallInfo,
 };
 
+struct McpPromptCommandInput<'a> {
+    command_name: &'a str,
+    args: &'a str,
+}
+
+fn mcp_prompt_command_input(input: &str) -> Option<McpPromptCommandInput<'_>> {
+    let trimmed = input.trim();
+    let command_name = trimmed.split_whitespace().next()?;
+    command_name.strip_prefix("/mcp__")?;
+    let args = trimmed
+        .strip_prefix(command_name)
+        .map(str::trim_start)
+        .unwrap_or_default();
+    Some(McpPromptCommandInput {
+        command_name: command_name.trim_start_matches('/'),
+        args,
+    })
+}
+
 fn config_prompt_runtime_overrides(config: &RuntimeConfig) -> PromptRuntimeOverrides {
     PromptRuntimeOverrides {
         system_prompt: config.system_prompt.clone(),
@@ -122,6 +141,19 @@ fn config_prompt_runtime_overrides(config: &RuntimeConfig) -> PromptRuntimeOverr
 }
 pub use style::StyleConfig;
 pub use vim::{VimAction, VimMode, VimStateMachine};
+
+/// Built-in slash command names in the SDK/headless init format.
+///
+/// Claude Code emits command names without the leading `/` in `system/init`.
+/// The interactive TUI still accepts commands with `/`; this helper is for
+/// protocol surfaces that need the user-invocable command catalog.
+#[must_use]
+pub fn builtin_protocol_slash_command_names() -> Vec<String> {
+    commands::command_names()
+        .into_iter()
+        .map(|command| command.trim_start_matches('/').to_owned())
+        .collect()
+}
 
 // ---------------------------------------------------------------------------
 // Public entry points
@@ -327,6 +359,70 @@ pub async fn run_tui_app(mut config: RuntimeConfig, store: &SessionStore) -> Res
                 terminal = Terminal::new(new_backend)?;
             }
             AppAction::SlashCommand(cmd) => {
+                if let Some(command_input) = mcp_prompt_command_input(&cmd) {
+                    let mut tool_context = ToolExecutionContext::from_runtime_config(&config);
+                    tool_context.sub_agent = Some(backend.sub_agent_completion());
+                    let run_prompt = execute_runtime_mcp_prompt_command(
+                        command_input.command_name,
+                        command_input.args,
+                        &tool_context,
+                    )
+                    .await;
+                    match run_prompt {
+                        Ok(blocks) => {
+                            let prompt_entry = ConversationEntry::user_with_content_blocks(blocks);
+                            let preview = prompt_entry
+                                .text
+                                .trim()
+                                .lines()
+                                .next()
+                                .unwrap_or(command_input.command_name)
+                                .to_owned();
+                            store.append_conversation_entry(config.session_id, &prompt_entry)?;
+                            conversation.push(prompt_entry);
+                            app.add_message(ChatMessage::system(format!(
+                                "Executed: {}",
+                                command_input.command_name
+                            )));
+                            app.add_message(ChatMessage::user(preview));
+
+                            disable_raw_mode()?;
+                            crossterm::execute!(io::stdout(), LeaveAlternateScreen)?;
+
+                            if let Err(error) = run_conversation_turn_with_messages(
+                                &backend,
+                                &mut config,
+                                store,
+                                &session_hooks,
+                                &mut conversation,
+                                &context_manager,
+                                broker.as_ref(),
+                                &cost_tracker,
+                                Vec::new(),
+                            )
+                            .await
+                            {
+                                eprintln!("⚠ Error: {error:#}");
+                                eprintln!(
+                                    "  The MCP prompt was saved. Type to continue or /help for options."
+                                );
+                            }
+
+                            app.status.cost = cost_tracker.total_cost_usd();
+
+                            enable_raw_mode()?;
+                            crossterm::execute!(io::stdout(), EnterAlternateScreen)?;
+                            let new_backend = CrosstermBackend::new(io::stdout());
+                            terminal = Terminal::new(new_backend)?;
+                        }
+                        Err(error) => {
+                            app.add_message(ChatMessage::system(format!(
+                                "MCP prompt command failed: {error:#}"
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 let is_clear_command = cmd.trim() == "/clear";
                 let mut pre_outputs = Vec::new();
                 if is_clear_command {
@@ -715,10 +811,36 @@ async fn run_conversation_turn(
     cost_tracker: &CostTracker,
     prompt: &str,
 ) -> Result<()> {
-    // Add user message
-    let user_entry = ConversationEntry::user(prompt);
-    store.append_conversation_entry(config.session_id, &user_entry)?;
-    conversation.push(user_entry);
+    run_conversation_turn_with_messages(
+        backend,
+        config,
+        store,
+        discovery,
+        conversation,
+        context_manager,
+        broker,
+        cost_tracker,
+        vec![ConversationEntry::user(prompt)],
+    )
+    .await
+}
+
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+async fn run_conversation_turn_with_messages(
+    backend: &ProviderCompatBackend,
+    config: &mut RuntimeConfig,
+    store: &SessionStore,
+    discovery: &runtime_hooks::RuntimeSessionHookDiscovery,
+    conversation: &mut Vec<ConversationEntry>,
+    context_manager: &ContextWindowManager,
+    broker: &dyn PermissionBroker,
+    cost_tracker: &CostTracker,
+    user_entries: Vec<ConversationEntry>,
+) -> Result<()> {
+    for user_entry in user_entries {
+        store.append_conversation_entry(config.session_id, &user_entry)?;
+        conversation.push(user_entry);
+    }
 
     let mut tool_context = ToolExecutionContext {
         cwd: config.cwd.clone(),
@@ -1054,6 +1176,16 @@ mod tests {
     fn truncate_display_long() {
         let result = truncate_display("abcdefghij", 5);
         assert_eq!(result, "abcde...");
+    }
+
+    #[test]
+    fn mcp_prompt_command_input_parses_command_and_args() {
+        let parsed = mcp_prompt_command_input("/mcp__docs__plan rust async")
+            .expect("mcp prompt command should parse");
+
+        assert_eq!(parsed.command_name, "mcp__docs__plan");
+        assert_eq!(parsed.args, "rust async");
+        assert!(mcp_prompt_command_input("/mcp list").is_none());
     }
 
     #[test]

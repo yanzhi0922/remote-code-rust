@@ -79,8 +79,9 @@ pub use transport::{McpTransport, McpTransportConfig};
 
 // Core types
 pub use types::{
-    McpClientInfo, McpPeerInfo, McpServerInspection, McpToolCallContent, McpToolCallResponse,
-    McpToolCallResult, McpToolDescriptor,
+    McpClientInfo, McpPeerInfo, McpPromptArgument, McpPromptDescriptor, McpPromptGetResponse,
+    McpPromptGetResult, McpPromptMessage, McpServerInspection, McpToolCallContent,
+    McpToolCallResponse, McpToolCallResult, McpToolDescriptor,
 };
 
 // Error types
@@ -88,8 +89,8 @@ pub use error::{McpConfigError, McpRuntimeError};
 
 // Session functions
 pub use session::{
-    call_tool, discover_mcp_configs, inspect_server, list_resources, load_discovered_mcp_configs,
-    read_resource, resolve_stdio_command,
+    call_tool, discover_mcp_configs, get_prompt, inspect_server, list_prompts, list_resources,
+    load_discovered_mcp_configs, read_resource, resolve_stdio_command,
 };
 
 // Resource types

@@ -7,7 +7,10 @@ use rc_engine_events::{
     CompactionResult, EngineEvent, EngineStateSnapshot, ToolError, ToolResult as EventToolResult,
     Usage,
 };
-use rc_provider::{StreamingCallbacks, query_source::ProviderRequestContext};
+use rc_provider::{
+    StreamingCallbacks,
+    query_source::{ProviderRequestContext, ProviderTaskBudget},
+};
 use serde_json::json;
 use tokio::sync::mpsc;
 
@@ -42,6 +45,7 @@ pub async fn run_query_loop(
     user_input: Vec<Message>,
     context: &ProcessUserInputContext,
 ) -> Result<QueryResult, EngineError> {
+    let mut context = context.clone();
     let appended_messages = user_input;
     state.messages.extend(appended_messages.clone());
     let _ = config
@@ -129,10 +133,10 @@ pub async fn run_query_loop(
             config.provider_invocation_mode,
             ProviderInvocationMode::Streaming
         ) {
-            complete_with_streaming_observer(config, context, &legacy_conversation, state.turn + 1)
+            complete_with_streaming_observer(config, &context, &legacy_conversation, state.turn + 1)
                 .await
         } else {
-            let provider_context = provider_request_context(context);
+            let provider_context = provider_request_context(&context);
             config
                 .backend
                 .complete_with_context(&legacy_conversation, &provider_context)
@@ -181,6 +185,8 @@ pub async fn run_query_loop(
                         .model_switcher
                         .switch_to(fallback, crate::model_switch::SwitchReason::Fallback);
                     if switch_result.is_switched() {
+                        context.model = fallback.to_owned();
+                        context.provider_model_override = Some(fallback.to_owned());
                         let _ = config
                             .observer
                             .on_event(QueryObserverEvent::MessagesAppended {
@@ -214,20 +220,20 @@ pub async fn run_query_loop(
                 max_tokens_recovery.handle_truncation(estimate_current_max_tokens(&state.usage))
         {
             match action {
-                MaxTokensRecoveryAction::Escalate { new_max_tokens: _ } => {
-                    // The escalation is handled by updating the request
-                    // parameters on the next iteration. For now, emit an
-                    // event and continue the loop so the assistant response
-                    // is processed normally and the next turn uses the
-                    // escalated limit.
+                MaxTokensRecoveryAction::Escalate { new_max_tokens } => {
+                    context.max_output_tokens_override =
+                        Some(u32::try_from(new_max_tokens).unwrap_or(u32::MAX));
                     config.event_stream.emit(EngineEvent::StateUpdated {
                         state_snapshot: state_snapshot(state, 0),
                     });
+                    continue;
                 }
                 MaxTokensRecoveryAction::ContinueWithMessage {
-                    max_tokens: _,
+                    max_tokens,
                     continuation_message,
                 } => {
+                    context.max_output_tokens_override =
+                        Some(u32::try_from(max_tokens).unwrap_or(u32::MAX));
                     // Append the assistant's truncated response
                     let assistant_message = assistant_message_from_response(&response);
                     state.messages.push(assistant_message.clone());
@@ -363,7 +369,8 @@ pub async fn run_query_loop(
         // Transition: ProcessingResponse -> ExecutingTools
         let _ = state.state_machine.transition(EnginePhase::ExecutingTools);
 
-        let checkpoints = checkpoints_for_tool_batch(state, context, &assistant_message, &response);
+        let checkpoints =
+            checkpoints_for_tool_batch(state, &context, &assistant_message, &response);
         for checkpoint in &checkpoints {
             let _ = config
                 .observer
@@ -388,7 +395,7 @@ pub async fn run_query_loop(
                 tool_name: tool_call.name.clone(),
                 input: tool_call.input.clone(),
             });
-            let tool_run = match config.tool_runner.run_tool(tool_call, context).await {
+            let tool_run = match config.tool_runner.run_tool(tool_call, &context).await {
                 Ok(result) => result,
                 Err(error) => {
                     config.event_stream.emit(EngineEvent::ToolUseError {
@@ -662,6 +669,21 @@ fn provider_request_context(context: &ProcessUserInputContext) -> ProviderReques
     if let Some(agent_id) = context.agent_id.clone() {
         provider_context = provider_context.with_agent_id(agent_id);
     }
+    provider_context = provider_context
+        .with_model_override(context.provider_model_override.clone())
+        .with_max_output_tokens(context.max_output_tokens_override)
+        .with_effort(context.requested_effort.clone())
+        .with_fast_mode(context.fast_mode)
+        .with_task_budget(
+            context
+                .task_budget
+                .as_ref()
+                .and_then(|budget| budget.max_total_tokens)
+                .map(|total| ProviderTaskBudget {
+                    total,
+                    remaining: None,
+                }),
+        );
     provider_context
 }
 

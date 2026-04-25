@@ -441,6 +441,100 @@ impl ToolResultSizePolicy {
 const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
 const TOOL_SEARCH_COMPAT_NAME: &str = "toolsearch";
 
+fn normalize_tool_alias_key(name: &str) -> String {
+    name.chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn canonical_builtin_tool_name(internal_name: &str) -> Option<&'static str> {
+    match internal_name {
+        "list_directory" => Some("LS"),
+        "read_file" => Some("Read"),
+        "write_file" => Some("Write"),
+        "replace_in_file" => Some("ReplaceInFile"),
+        "edit_file" => Some("Edit"),
+        "bash_command" => Some("Bash"),
+        "glob" => Some("Glob"),
+        "grep" => Some("Grep"),
+        "web_fetch" => Some("WebFetch"),
+        "ask_user" => Some("AskUserQuestion"),
+        "todo_write" => Some("TodoWrite"),
+        "config_read" => Some("Config"),
+        "agent" => Some("Agent"),
+        "web_search" => Some("WebSearch"),
+        "lsp" => Some("LSP"),
+        "task_create" => Some("TaskCreate"),
+        "task_get" => Some("TaskGet"),
+        "task_list" => Some("TaskList"),
+        "task_update" => Some("TaskUpdate"),
+        "notebook_edit" => Some("NotebookEdit"),
+        "skill_discover" => Some("DiscoverSkills"),
+        "skill_execute" => Some("Skill"),
+        "send_message" => Some("SendMessage"),
+        "enter_plan_mode" => Some("EnterPlanMode"),
+        "exit_plan_mode" => Some("ExitPlanMode"),
+        "sleep" => Some("Sleep"),
+        "snip" => Some("snip"),
+        "team_create" => Some("TeamCreate"),
+        "team_status" => Some("TeamStatus"),
+        "web_browser" => Some("WebBrowser"),
+        "tool_search" => Some("ToolSearch"),
+        "verify_plan" => Some("verify_plan_execution"),
+        "terminal_capture" => Some("terminal_capture"),
+        "powershell" => Some("PowerShell"),
+        "repl" => Some("REPL"),
+        "monitor" => Some("Monitor"),
+        "schedule_cron" => Some("CronCreate"),
+        "remote_trigger" => Some("RemoteTrigger"),
+        "workflow" => Some("workflow"),
+        "suggest_pr" => Some("SuggestPR"),
+        "enter_worktree" => Some("EnterWorktree"),
+        "exit_worktree" => Some("ExitWorktree"),
+        "list_worktrees" => Some("ListWorktrees"),
+        "brief" => Some("SendUserMessage"),
+        "ctx_inspect" => Some("CtxInspect"),
+        "list_peers" => Some("ListPeers"),
+        "tungsten" => Some("Tungsten"),
+        "overflow_test" => Some("OverflowTest"),
+        "synthetic_output" => Some("SyntheticOutput"),
+        "mcp_auth" => Some("McpAuth"),
+        "mcp_call" => Some("McpCall"),
+        "voice_input" => Some("VoiceInput"),
+        "daemon" => Some("Daemon"),
+        "discover_skills" => Some("discover_skills"),
+        "team_delete" => Some("TeamDelete"),
+        "team_list" => Some("TeamList"),
+        "broadcast_message" => Some("BroadcastMessage"),
+        "review_artifact" => Some("ReviewArtifact"),
+        "send_user_file" => Some("send_user_file"),
+        "list_mcp_resources" => Some("ListMcpResourcesTool"),
+        "read_mcp_resource" => Some("ReadMcpResourceTool"),
+        _ => None,
+    }
+}
+
+fn builtin_tool_aliases(internal_name: &str) -> &'static [&'static str] {
+    match internal_name {
+        "list_directory" => &["ListDirectory", "LS"],
+        "read_file" => &["ReadFile", "Read"],
+        "write_file" => &["WriteFile", "Write"],
+        "replace_in_file" => &["ReplaceInFile"],
+        "edit_file" => &["EditFile", "Edit"],
+        "agent" => &["Task"],
+        "skill_execute" => &["ExecuteSkill"],
+        "tool_search" => &["ToolSearch", "tool_search", "toolsearch"],
+        "verify_plan" => &["VerifyPlan"],
+        "terminal_capture" => &["TerminalCapture"],
+        "schedule_cron" => &["ScheduleCron", "CronCreate"],
+        "brief" => &["Brief"],
+        "list_mcp_resources" => &["ListMcpResources", "ListMcpResourcesTool"],
+        "read_mcp_resource" => &["ReadMcpResource", "ReadMcpResourceTool"],
+        _ => &[],
+    }
+}
+
 fn builtin_tool_is_deferred(name: &str) -> bool {
     matches!(
         name,
@@ -517,6 +611,7 @@ fn collect_tool_search_terms(raw: &str, terms: &mut std::collections::BTreeSet<S
 
 fn is_tool_search_tool_name(name: &str) -> bool {
     matches!(name, TOOL_SEARCH_TOOL_NAME | TOOL_SEARCH_COMPAT_NAME)
+        || normalize_tool_alias_key(name) == "toolsearch"
 }
 
 pub async fn runtime_provider_tool_specs() -> Vec<ToolSpec> {
@@ -579,7 +674,8 @@ pub fn extract_discovered_tool_names(
                 continue;
             }
             if let Some(name) = block.get("tool_name").and_then(Value::as_str) {
-                discovered.insert(name.to_owned());
+                discovered
+                    .insert(normalize_provider_tool_name(name).unwrap_or_else(|| name.to_owned()));
             }
         }
 
@@ -593,7 +689,9 @@ pub fn extract_discovered_tool_names(
             .and_then(Value::as_array)
         {
             for tool_name in matches.iter().filter_map(Value::as_str) {
-                discovered.insert(tool_name.to_owned());
+                discovered.insert(
+                    normalize_provider_tool_name(tool_name).unwrap_or_else(|| tool_name.to_owned()),
+                );
             }
         }
 
@@ -603,7 +701,9 @@ pub fn extract_discovered_tool_names(
             };
             for result in results {
                 if let Some(name) = result.get("name").and_then(Value::as_str) {
-                    discovered.insert(name.to_owned());
+                    discovered.insert(
+                        normalize_provider_tool_name(name).unwrap_or_else(|| name.to_owned()),
+                    );
                 }
             }
         }
@@ -644,24 +744,62 @@ pub async fn runtime_visible_provider_tool_specs_with_discovered_tools(
     specs
         .into_iter()
         .filter(|spec| {
-            spec.is_tool_search() || !spec.is_deferred() || discovered.contains(spec.name.as_str())
+            spec.is_tool_search()
+                || !spec.is_deferred()
+                || discovered.contains(spec.name.as_str())
+                || discovered.contains(spec.provider_wire_name())
         })
         .collect()
 }
 
 pub async fn runtime_provider_tool_spec(name: &str) -> Option<ToolSpec> {
-    if matches!(name, "list_mcp_resources" | "read_mcp_resource")
-        && runtime_policy_supports_mcp_resources()
+    if matches!(
+        normalize_provider_tool_name(name).as_deref(),
+        Some("list_mcp_resources" | "read_mcp_resource")
+    ) && runtime_policy_supports_mcp_resources()
     {
         return specs::mcp_resource_tool_specs()
             .into_iter()
-            .find(|spec| spec.name == name);
+            .find(|spec| spec.matches_tool_name(name));
     }
 
     runtime_provider_tool_specs()
         .await
         .into_iter()
-        .find(|spec| spec.name == name)
+        .find(|spec| spec.matches_tool_name(name))
+}
+
+/// Normalize provider-facing or legacy tool names to the internal execution name.
+#[must_use]
+pub fn normalize_provider_tool_name(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    builtin_tool_specs()
+        .into_iter()
+        .chain(specs::mcp_resource_tool_specs())
+        .find(|spec| spec.matches_tool_name(trimmed))
+        .map(|spec| spec.name)
+        .or_else(|| {
+            if trimmed.starts_with("mcp__") {
+                Some(trimmed.to_owned())
+            } else {
+                None
+            }
+        })
+}
+
+#[must_use]
+pub fn provider_wire_tool_name_for(name: &str) -> String {
+    builtin_tool_specs()
+        .into_iter()
+        .chain(specs::mcp_resource_tool_specs())
+        .find(|spec| spec.matches_tool_name(name))
+        .map_or_else(
+            || name.to_owned(),
+            |spec| spec.provider_wire_name().to_owned(),
+        )
 }
 
 #[must_use]
@@ -749,8 +887,12 @@ impl ToolSpec {
             self.name.as_str(),
             self.protocol_name.as_str(),
             self.permission_tool_name.as_str(),
+            self.provider_wire_name(),
         ] {
             collect_tool_search_terms(raw, &mut terms);
+        }
+        for alias in builtin_tool_aliases(&self.name) {
+            collect_tool_search_terms(alias, &mut terms);
         }
 
         if let Some(stripped) = self.name.strip_prefix("mcp__") {
@@ -766,13 +908,37 @@ impl ToolSpec {
         terms.into_iter().collect()
     }
 
+    /// Provider-facing name exposed in tool schemas and Anthropic tool_use blocks.
+    #[must_use]
+    pub fn provider_wire_name(&self) -> &str {
+        canonical_builtin_tool_name(&self.name).unwrap_or(self.protocol_name.as_str())
+    }
+
+    #[must_use]
+    pub fn matches_tool_name(&self, requested: &str) -> bool {
+        let requested_key = normalize_tool_alias_key(requested);
+        if requested_key.is_empty() {
+            return false;
+        }
+        [
+            self.name.as_str(),
+            self.protocol_name.as_str(),
+            self.provider_wire_name(),
+        ]
+        .into_iter()
+        .any(|candidate| normalize_tool_alias_key(candidate) == requested_key)
+            || builtin_tool_aliases(&self.name)
+                .iter()
+                .any(|alias| normalize_tool_alias_key(alias) == requested_key)
+    }
+
     /// Convert to an OpenAI-compatible function-calling schema.
     #[must_use]
     pub fn to_openai_schema(&self) -> Value {
         serde_json::json!({
             "type": "function",
             "function": {
-                "name": self.name,
+                "name": self.provider_wire_name(),
                 "description": self.description,
                 "parameters": self.input_schema,
             }
@@ -789,7 +955,7 @@ impl ToolSpec {
     #[must_use]
     pub fn to_anthropic_schema_with_options(&self, defer_loading: bool) -> Value {
         let mut schema = serde_json::json!({
-            "name": self.name,
+            "name": self.provider_wire_name(),
             "description": self.description,
             "input_schema": self.input_schema,
         });
@@ -968,8 +1134,9 @@ impl ToolRegistry {
         let mut engine = search::ToolSearchEngine::new();
 
         for spec in &all {
-            let tags: Vec<&str> = Vec::new();
-            engine.add_tool(&spec.name, &spec.description, &tags);
+            let search_terms = spec.tool_search_terms();
+            let tags = search_terms.iter().map(String::as_str).collect::<Vec<_>>();
+            engine.add_tool(spec.provider_wire_name(), &spec.description, &tags);
 
             if EAGER_TOOL_NAMES.contains(&spec.name.as_str()) {
                 eager.push(spec.clone());
@@ -1375,6 +1542,7 @@ pub async fn execute_tool_call(
     if spec.description.is_empty() {
         return Err(anyhow!("unknown tool {}", call.name));
     }
+    effective_call.name = spec.name.clone();
 
     if !tool_allowed_by_runtime(&spec.name) {
         return Ok(ToolResult {
@@ -1392,10 +1560,11 @@ pub async fn execute_tool_call(
         return Ok(rejected);
     }
 
-    let permission = effective_permission_for_call(call, &spec);
-    let filesystem_precheck = precheck_filesystem_permission(&spec, call, context, broker);
+    let permission = effective_permission_for_call(&effective_call, &spec);
+    let filesystem_precheck =
+        precheck_filesystem_permission(&spec, &effective_call, context, broker);
     let filesystem_rule_relevant = filesystem_operation_for_tool(&spec.name).is_some()
-        && path_input_for_filesystem_tool(&spec.name, &call.input).is_some();
+        && path_input_for_filesystem_tool(&spec.name, &effective_call.input).is_some();
 
     if filesystem_precheck
         .as_ref()
@@ -1417,7 +1586,7 @@ pub async fn execute_tool_call(
         let broker_mode = broker.mode();
         let permission_request = filesystem_permission_request(
             &spec,
-            call,
+            &effective_call,
             context,
             &permission,
             filesystem_precheck.as_ref(),
@@ -1704,8 +1873,9 @@ mod tests {
         ToolResultSizePolicy, ToolRuntimePolicy, ToolRuntimePolicyOverlay, ToolSpec,
         builtin_tool_specs, configure_tool_runtime_policy, execute_command_hook, execute_tool_call,
         extract_discovered_tool_names, extract_discovered_tool_names_from_conversation,
-        runtime_provider_tool_specs, runtime_tool_result_persistence_skip_names,
-        runtime_tool_search_candidate_specs, runtime_visible_provider_tool_specs,
+        runtime_provider_tool_spec, runtime_provider_tool_specs,
+        runtime_tool_result_persistence_skip_names, runtime_tool_search_candidate_specs,
+        runtime_visible_provider_tool_specs,
         runtime_visible_provider_tool_specs_with_discovered_tools,
         with_runtime_agent_prompt_context_provider, with_tool_runtime_policy_overlay,
     };
@@ -1716,8 +1886,8 @@ mod tests {
         ToolCall, UsageSummary,
     };
     use rc_mcp::{
-        McpCapabilityMatrix, McpServerConfig, McpServerInspection, McpToolDescriptor,
-        McpTransportConfig,
+        McpCapabilityMatrix, McpPromptArgument, McpPromptDescriptor, McpServerConfig,
+        McpServerInspection, McpToolDescriptor, McpTransportConfig,
     };
     use rc_permissions::{
         LayeredPermissionBroker, PermissionBroker, PermissionDecision, PermissionRequest,
@@ -2015,6 +2185,7 @@ while True:
     }
 
     struct TaskListDirGuard {
+        _runtime_policy_guard: tokio::sync::MutexGuard<'static, ()>,
         _guard: crate::tasks::TaskTestGuard,
     }
 
@@ -2029,6 +2200,7 @@ while True:
         base: &std::path::Path,
         task_list_id: Option<&str>,
     ) -> TaskListDirGuard {
+        let runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX.lock().await;
         let guard = crate::tasks::test_guard_for_tests();
         crate::tasks::configure_task_list_context(
             task_list_id.map(ToOwned::to_owned),
@@ -2036,7 +2208,10 @@ while True:
         )
         .expect("configure task list context");
         crate::tasks::set_leader_team_name(None).expect("clear leader team name");
-        TaskListDirGuard { _guard: guard }
+        TaskListDirGuard {
+            _runtime_policy_guard: runtime_policy_guard,
+            _guard: guard,
+        }
     }
 
     struct TeamDirGuard {
@@ -2229,6 +2404,77 @@ while True:
                 .iter()
                 .any(|spec| spec.protocol_name == "Bash")
         );
+    }
+
+    #[tokio::test]
+    async fn provider_tool_schemas_expose_claude_wire_names() {
+        let specs = runtime_provider_tool_specs().await;
+        let read = specs
+            .iter()
+            .find(|spec| spec.name == "read_file")
+            .expect("read_file spec");
+        let bash = specs
+            .iter()
+            .find(|spec| spec.name == "bash_command")
+            .expect("bash_command spec");
+        let tool_search = specs
+            .iter()
+            .find(|spec| spec.name == "tool_search")
+            .expect("tool_search spec");
+
+        assert_eq!(read.provider_wire_name(), "Read");
+        assert_eq!(bash.provider_wire_name(), "Bash");
+        assert_eq!(tool_search.provider_wire_name(), "ToolSearch");
+        assert_eq!(read.to_anthropic_schema()["name"], "Read");
+        assert_eq!(bash.to_openai_schema()["function"]["name"], "Bash");
+        assert_eq!(
+            runtime_provider_tool_spec("Read")
+                .await
+                .expect("Read alias")
+                .name,
+            "read_file"
+        );
+        assert_eq!(
+            runtime_provider_tool_spec("ToolSearch")
+                .await
+                .expect("ToolSearch alias")
+                .name,
+            "tool_search"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_tool_call_accepts_provider_wire_name() {
+        let tempdir = tempdir().expect("tempdir");
+        let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
+            cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
+        };
+        let broker = StaticPermissionBroker::new(true);
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "bash-provider-name".to_owned(),
+                name: "Bash".to_owned(),
+                input: json!({
+                    "command": "echo provider-wire-ok",
+                    "timeout_ms": 10_000,
+                }),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("Bash alias should execute");
+
+        assert!(!result.is_error, "Bash alias failed: {}", result.content);
+        assert!(result.content.contains("provider-wire-ok"));
     }
 
     #[tokio::test]
@@ -6273,6 +6519,8 @@ while True:
                         input_schema: json!({"type": "object"}),
                         annotations: json!({}),
                     }],
+                    prompts: Vec::new(),
+                    resources: Vec::new(),
                 }),
                 error: None,
             }],
@@ -6295,6 +6543,70 @@ while True:
         configure_tool_runtime_policy(original_policy).expect("restore runtime policy");
 
         assert!(inside.contains("mcp__context7__query_docs"));
+    }
+
+    #[tokio::test]
+    async fn runtime_mcp_catalog_exposes_prompt_commands_from_snapshot() {
+        let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX.lock().await;
+        let original_policy = super::current_tool_runtime_policy();
+        configure_tool_runtime_policy(ToolRuntimePolicy {
+            allowed_tools: Vec::new(),
+            disallowed_tools: Vec::new(),
+            task_output_dir: None,
+            tasks_dir: None,
+            tool_results_dir: None,
+            mcp_servers: vec![fake_runtime_mcp_policy_entry("docs server")],
+            shell_policy: Default::default(),
+        })
+        .expect("set runtime policy");
+        crate::mcp_catalog::clear_runtime_mcp_catalog_cache().await;
+
+        let observation = crate::mcp_runtime::RuntimeMcpObservation {
+            servers: vec![crate::mcp_runtime::RuntimeMcpServerObservation {
+                entry: crate::mcp_runtime::RuntimeMcpServerEntry {
+                    origin_kind: "cwd",
+                    origin_name: "workspace".to_owned(),
+                    config_path: PathBuf::from(".mcp.json"),
+                    server: fake_runtime_mcp_policy_entry("docs server").server,
+                },
+                status: rc_ui_bridge::UiRuntimeMcpServerStatus::Connected,
+                inspection: Some(McpServerInspection {
+                    server_name: "docs server".to_owned(),
+                    protocol_version: "2025-03-26".to_owned(),
+                    server_info: None,
+                    capabilities: json!({"prompts": {}}),
+                    instructions: None,
+                    tools: Vec::new(),
+                    prompts: vec![McpPromptDescriptor {
+                        name: "plan".to_owned(),
+                        title: None,
+                        description: Some("Plan with docs".to_owned()),
+                        arguments: vec![McpPromptArgument {
+                            name: "topic".to_owned(),
+                            title: None,
+                            description: None,
+                            required: true,
+                        }],
+                    }],
+                    resources: Vec::new(),
+                }),
+                error: None,
+            }],
+            warnings: Vec::new(),
+        };
+
+        let catalog = crate::with_runtime_mcp_observation_provider(
+            live_mcp_observation_provider(observation),
+            async { crate::mcp_catalog::runtime_mcp_catalog().await },
+        )
+        .await;
+
+        crate::mcp_catalog::clear_runtime_mcp_catalog_cache().await;
+        configure_tool_runtime_policy(original_policy).expect("restore runtime policy");
+
+        assert_eq!(catalog.prompts.len(), 1);
+        assert_eq!(catalog.prompts[0].command_name, "mcp__docs_server__plan");
+        assert_eq!(catalog.prompts[0].arg_names, vec!["topic".to_owned()]);
     }
 
     #[tokio::test]

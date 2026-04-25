@@ -5,6 +5,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::resources::ServerResource;
+
 /// Client identification sent during MCP initialisation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpClientInfo {
@@ -64,7 +66,80 @@ pub struct McpToolDescriptor {
     pub annotations: Value,
 }
 
-/// Full inspection result from an MCP server (initialize + tools/list).
+/// A prompt argument descriptor returned by an MCP server via `prompts/list`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpPromptArgument {
+    /// Argument name.
+    pub name: String,
+    /// Human-readable title.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Argument description.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Whether the argument is required.
+    #[serde(default)]
+    pub required: bool,
+}
+
+/// A prompt descriptor returned by an MCP server via `prompts/list`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpPromptDescriptor {
+    /// Prompt name.
+    pub name: String,
+    /// Human-readable title.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Prompt description.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Prompt arguments.
+    #[serde(default)]
+    pub arguments: Vec<McpPromptArgument>,
+}
+
+/// A prompt message returned by `prompts/get`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpPromptMessage {
+    /// Message role.
+    pub role: String,
+    /// MCP content block payload.
+    pub content: Value,
+}
+
+/// Result payload from `prompts/get`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpPromptGetResult {
+    /// Optional description from the server.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Prompt messages.
+    #[serde(default)]
+    pub messages: Vec<McpPromptMessage>,
+}
+
+/// Full response from a `prompts/get` invocation including server metadata.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpPromptGetResponse {
+    /// Server name from the config key.
+    pub server_name: String,
+    /// Prompt name that was invoked.
+    pub prompt_name: String,
+    /// Negotiated protocol version.
+    pub protocol_version: String,
+    /// Server identification.
+    #[serde(default)]
+    pub server_info: Option<McpPeerInfo>,
+    /// Prompt result.
+    pub result: McpPromptGetResult,
+}
+
+/// Full inspection result from an MCP server (initialize + tools/list + prompts/list + resources/list).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerInspection {
@@ -84,6 +159,12 @@ pub struct McpServerInspection {
     /// Available tools.
     #[serde(default)]
     pub tools: Vec<McpToolDescriptor>,
+    /// Available prompts.
+    #[serde(default)]
+    pub prompts: Vec<McpPromptDescriptor>,
+    /// Available resources.
+    #[serde(default)]
+    pub resources: Vec<ServerResource>,
 }
 
 /// A single content block in a tool call result.
@@ -202,9 +283,19 @@ mod tests {
             capabilities: serde_json::json!({}),
             instructions: Some("Use carefully".to_owned()),
             tools: vec![],
+            prompts: vec![],
+            resources: vec![],
         };
         let json = serde_json::to_string(&inspection).expect("serialize");
         let back: McpServerInspection = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(inspection, back);
+    }
+
+    #[test]
+    fn server_inspection_deserializes_without_resources_for_compatibility() {
+        let json = r#"{"serverName":"test","protocolVersion":"2025-03-26","tools":[]}"#;
+        let inspection: McpServerInspection = serde_json::from_str(json).expect("deserialize");
+        assert!(inspection.resources.is_empty());
+        assert!(inspection.prompts.is_empty());
     }
 }
