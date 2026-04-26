@@ -142,7 +142,7 @@ struct ProviderConfig {
     active_profile: Option<String>,
     /// Read-only: true when an API key exists in the OS keychain for this provider.
     /// Not persisted in JSON — computed at runtime when listing configs.
-    #[serde(default, skip)]
+    #[serde(default, skip_deserializing)]
     api_key_stored: bool,
 }
 
@@ -669,6 +669,8 @@ struct McpServerLiveDto {
 struct McpToolInfoDto {
     name: String,
     description: Option<String>,
+    #[serde(skip_serializing_if = "serde_json::Value::is_null")]
+    input_schema: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1518,6 +1520,7 @@ fn mcp_live_to_dto(inspection: McpServerInspection) -> McpServerLiveDto {
             .map(|tool| McpToolInfoDto {
                 name: tool.name,
                 description: tool.description,
+                input_schema: tool.input_schema,
             })
             .collect(),
         error: None,
