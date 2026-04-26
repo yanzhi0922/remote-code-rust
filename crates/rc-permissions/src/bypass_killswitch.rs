@@ -82,24 +82,24 @@ impl BypassKillswitchManager {
 
     /// Activate the killswitch.
     pub fn activate(&self, reason: String) {
-        self.state.lock().expect("lock").activate(reason);
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).activate(reason);
     }
 
     /// Deactivate the killswitch.
     pub fn deactivate(&self) {
-        self.state.lock().expect("lock").deactivate();
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).deactivate();
     }
 
     /// Check if bypass permissions is currently disabled.
     #[must_use]
     pub fn is_bypass_disabled(&self) -> bool {
-        self.state.lock().expect("lock").is_active()
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).is_active()
     }
 
     /// Get the reason for the killswitch being active.
     #[must_use]
     pub fn reason(&self) -> Option<String> {
-        self.state.lock().expect("lock").reason.clone()
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).reason.clone()
     }
 }
 

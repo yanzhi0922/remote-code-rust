@@ -104,29 +104,29 @@ impl AutoModeManager {
 
     /// Activate auto mode.
     pub fn activate(&self) {
-        self.state.lock().expect("lock").activate();
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).activate();
     }
 
     /// Deactivate auto mode.
     pub fn deactivate(&self) {
-        self.state.lock().expect("lock").deactivate();
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).deactivate();
     }
 
     /// Check if auto mode is active.
     #[must_use]
     pub fn is_active(&self) -> bool {
-        self.state.lock().expect("lock").active
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).active
     }
 
     /// Record a classifier result.
     pub fn record_result(&self, result: &ClassifierResult) {
-        self.state.lock().expect("lock").record_result(result);
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).record_result(result);
     }
 
     /// Get a snapshot of the current state.
     #[must_use]
     pub fn snapshot(&self) -> AutoModeState {
-        self.state.lock().expect("lock").clone()
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
 
