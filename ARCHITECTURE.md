@@ -6,7 +6,16 @@ Each subsystem has one owner crate, one state model, and one boundary for integr
 
 ## Top-Level Structure
 
-The workspace is split into binaries under `apps/` and libraries under `crates/`.
+The workspace is split into binaries under `apps/`, libraries under `crates/`, and agent source repositories under `agents/`.
+
+### Agent Sources
+
+The `agents/` directory contains source code for external AI agents that are adapted into the multi-agent architecture:
+
+- `agents/codex/`: OpenAI Codex source (`codex-rs/app-server`) — JSON-RPC v2 over stdio
+- `agents/roo-code/`: Roo Code source (`crates/roo-server`) — JSON-RPC 2.0 with Content-Length framing over stdio
+
+These are independent Git repositories (excluded from the main repo via `.gitignore`). Build scripts in `scripts/` compile agent binaries to `target/agent-binaries/`.
 
 ### Applications
 
@@ -313,6 +322,8 @@ When context approaches the window limit:
 
 ## Multi-Agent System Architecture
 
+### Internal Swarm (`rc-agents`)
+
 `rc-agents` is the single owner of multi-agent state:
 
 - agent identities with labels and ownership paths
@@ -331,6 +342,32 @@ When context approaches the window limit:
 - `send_message` — send a message to another agent's mailbox
 - `team_create` — create a team of agents with a shared objective
 - `team_status` — query the status of a team and its agents
+
+### Multi-Agent Adapter Architecture
+
+The GUI supports multiple AI agent backends through a unified adapter pattern. See [plans/multi-agent-architecture.md](plans/multi-agent-architecture.md) for the full design.
+
+**Supported Agents:**
+
+| Agent | Transport | Protocol | Entry Point |
+|-------|-----------|----------|-------------|
+| Remote Code | In-process (Tauri IPC) | Direct Rust calls | `rc-provider`, `rc-tools`, etc. |
+| Roo Code | Subprocess stdio | JSON-RPC 2.0 + Content-Length framing | `roo-server` binary |
+| OpenAI Codex | Subprocess stdio | JSON-RPC v2 + line-delimited JSON | `codex-app-server` binary |
+
+**Core Abstractions:**
+
+- `AgentAdapter` trait — unified interface: `start()`, `send_message()`, `cancel()`, `resolve_permission()`, `stop()`, `is_alive()`
+- `AgentRouter` — routes sessions to the correct adapter based on `agent_type`
+- `UnifiedAgentEvent` — normalized event model translating all agent protocols to common events
+- `rc-agent-protocol` (new crate) — shared types, adapter trait, event definitions
+
+**Key Design Decisions:**
+
+1. Agent binaries are isolated in `~/.remote-code/agents/{name}/bin/` — not system-installed
+2. Agent cores are never modified — only adapters are built
+3. Sessions are bound to a single agent type at creation time
+4. Permission requests from all agents are routed through the same GUI approval flow
 
 ## MCP, Skills, and Plugins
 

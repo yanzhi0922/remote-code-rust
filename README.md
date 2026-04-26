@@ -1,6 +1,6 @@
 # Remote Code Rust
 
-高性能 Rust 实现的 AI 编码代理平台，兼容 Claude Code / OpenAI Codex 协议。
+高性能 Rust 实现的 AI 编码代理平台，兼容 Claude Code / OpenAI Codex 协议，支持多 Agent 统一管理。
 
 ## 项目概览
 
@@ -28,6 +28,7 @@
 - 📦 **插件系统** — JSON-RPC stdio 协议，隔离进程运行
 - 🧩 **Skills 系统** — Markdown frontmatter 技能发现与索引
 - 🤝 **多代理系统（Swarm）** — AgentScheduler + 并行执行 + 邮箱消息传递
+- 🌐 **多 Agent 统一管理** — Remote Code / Roo Code / OpenAI Codex 三引擎适配器架构
 - 💾 **记忆系统** — RC.md 持久化记忆（全局 / 项目双作用域）
 - 🛡️ **沙箱执行** — Seatbelt (macOS) / Landlock (Linux) / Windows 策略
 - 📊 **成本追踪** — 多模型 Token 使用统计 + 费用累计
@@ -41,6 +42,29 @@
 - 🔐 **OAuth2 认证** — PKCE 流程 + 自动 Token 刷新
 - 📈 **遥测与分析** — Datadog / 自有端点 / 文件导出三种方式
 - 🎤 **语音输入** — Web Speech API + 音频级别实时反馈
+
+## 项目结构
+
+```
+remote-code-rust/
+├── apps/                    # 应用程序
+│   ├── remote-code/         # 主 CLI（交互式 / 无头 / 远程模式）
+│   ├── remote-code-gui/     # 桌面 GUI（Tauri v2 + React 19）
+│   ├── remote-code-mobile/  # 移动端（Capacitor）
+│   ├── remote-code-control-plane/  # 控制平面
+│   ├── remote-code-runner/  # 远程 Runner
+│   └── remote-code-migrate/ # 数据迁移
+├── crates/                  # 库 Crate（38 个）
+├── agents/                  # Agent 源码（独立 Git 仓库）
+│   ├── codex/               # OpenAI Codex（codex-rs）
+│   └── roo-code/            # Roo Code（roo-server）
+├── plans/                   # 设计文档
+│   ├── multi-agent-architecture.md  # 多 Agent 架构设计
+│   └── archive/             # 归档文档
+├── scripts/                 # 构建与工具脚本
+├── deploy/                  # 部署配置
+└── fixtures/                # 测试固件
+```
 
 ## 架构
 
@@ -160,6 +184,27 @@ cargo build --release
 cargo check --workspace
 ```
 
+### 构建 Agent 二进制
+
+```bash
+# PowerShell (Windows)
+powershell -ExecutionPolicy Bypass -File scripts/build-agents.ps1 all
+
+# Bash (Linux/macOS)
+./scripts/build-agents.sh all
+
+# 单独构建
+powershell -ExecutionPolicy Bypass -File scripts/build-agents.ps1 roo-code
+powershell -ExecutionPolicy Bypass -File scripts/build-agents.ps1 codex
+```
+
+> Agent 源码位于 `agents/` 目录，为独立 Git 仓库，需单独克隆：
+> ```bash
+> cd agents
+> gh repo clone openai/codex       # Codex 源码
+> # roo-code 已包含在仓库中
+> ```
+
 ### 配置
 
 ```bash
@@ -256,6 +301,18 @@ ls deploy/tencent-cloud/
 # - 环境变量模板
 ```
 
+## 多 Agent 架构
+
+Remote Code GUI 支持三种 AI Agent 引擎，通过统一的 `AgentAdapter` trait 实现：
+
+| Agent | 通信方式 | 说明 |
+|-------|----------|------|
+| **Remote Code** | 进程内（Tauri IPC） | 默认引擎，直接调用 rc-* crate |
+| **Roo Code** | 子进程 stdio（JSON-RPC 2.0 + Content-Length） | `roo-server` 二进制 |
+| **OpenAI Codex** | 子进程 stdio（JSON-RPC v2 + 行分隔 JSON） | `codex-app-server` 二进制 |
+
+详细设计见 [plans/multi-agent-architecture.md](plans/multi-agent-architecture.md)。
+
 ## 项目文档
 
 | 文档 | 说明 |
@@ -265,7 +322,8 @@ ls deploy/tencent-cloud/
 | [COMPATIBILITY.md](COMPATIBILITY.md) | 兼容性说明 |
 | [PROVENANCE.md](PROVENANCE.md) | 来源证明 |
 | [ROADMAP.md](ROADMAP.md) | 路线图 |
-| [plans/](plans/) | 详细设计文档 |
+| [plans/multi-agent-architecture.md](plans/multi-agent-architecture.md) | 多 Agent 架构设计 |
+| [plans/](plans/) | 全部设计文档 |
 
 ## 许可证
 
