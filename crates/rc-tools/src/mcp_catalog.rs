@@ -475,6 +475,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn invalidate_runtime_mcp_catalog_server_removes_only_matching_server() {
         let _guard = MCP_CATALOG_TEST_MUTEX.lock().expect("test mutex");
         let first = policy_entry("test-invalidate-alpha", "test-invalidate-alpha.toml");
@@ -502,6 +503,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn list_changed_invalidates_tools_and_prompts_but_not_resources() {
         let _guard = MCP_CATALOG_TEST_MUTEX.lock().expect("test mutex");
         let entry = policy_entry("test-list-changed-alpha", "test-list-changed-alpha.toml");

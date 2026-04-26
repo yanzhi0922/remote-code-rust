@@ -948,8 +948,14 @@ fn build_headers(
         // This is the same approach used by OpenCode, OpenClaw, Cline, and
         // other open-source coding agents that consume Coding Plan quotas.
 
-        headers.insert(HeaderName::from_static("x-app"), HeaderValue::from_static("cli"));
-        headers.insert(USER_AGENT, HeaderValue::from_str(&claude_code_user_agent())?);
+        headers.insert(
+            HeaderName::from_static("x-app"),
+            HeaderValue::from_static("cli"),
+        );
+        headers.insert(
+            USER_AGENT,
+            HeaderValue::from_str(&claude_code_user_agent())?,
+        );
         let session_id = request_context
             .map(|context| context.session_id.as_str().to_owned())
             .or_else(|| {
@@ -1100,7 +1106,11 @@ fn claude_code_user_agent() -> String {
     {
         parts.push(format!("client-app/{}", client_app.trim()));
     }
-    format!("claude-cli/{} ({})", rc_config::RUNTIME_VERSION, parts.join(", "))
+    format!(
+        "claude-cli/{} ({})",
+        rc_config::RUNTIME_VERSION,
+        parts.join(", ")
+    )
 }
 
 fn env_truthy(name: &str) -> bool {
@@ -2944,7 +2954,10 @@ mod tests {
 
         let headers = build_headers(&provider, None, Some(&request_context)).expect("headers");
 
-        assert_eq!(headers.get("x-app").and_then(|h| h.to_str().ok()), Some("cli"));
+        assert_eq!(
+            headers.get("x-app").and_then(|h| h.to_str().ok()),
+            Some("cli")
+        );
         assert_eq!(
             headers
                 .get("x-claude-code-session-id")

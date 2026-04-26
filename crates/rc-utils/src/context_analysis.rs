@@ -300,7 +300,11 @@ mod tests {
         };
         let suggestion = suggest_compaction(&analysis);
         assert!(suggestion.is_some());
-        assert!(suggestion.unwrap().contains("full"));
+        assert!(
+            suggestion
+                .expect("full compaction should have a suggestion")
+                .contains("full")
+        );
     }
 
     #[test]
@@ -314,7 +318,11 @@ mod tests {
         };
         let suggestion = suggest_compaction(&analysis);
         assert!(suggestion.is_some());
-        assert!(suggestion.unwrap().contains("critically low"));
+        assert!(
+            suggestion
+                .expect("critical compaction should have a suggestion")
+                .contains("critically low")
+        );
     }
 
     #[test]

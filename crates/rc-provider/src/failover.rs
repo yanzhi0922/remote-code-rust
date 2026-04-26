@@ -69,10 +69,7 @@ impl FailoverProviderClient {
             .config
             .max_failover_attempts
             .min(self.config.providers.len());
-        let start_index = *self
-            .active_index
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let start_index = *self.active_index.lock().unwrap_or_else(|e| e.into_inner());
 
         let mut last_error: Option<anyhow::Error> = None;
         for attempt in 0..max_attempts {
@@ -114,10 +111,7 @@ impl FailoverProviderClient {
             .config
             .max_failover_attempts
             .min(self.config.providers.len());
-        let start_index = *self
-            .active_index
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let start_index = *self.active_index.lock().unwrap_or_else(|e| e.into_inner());
 
         let mut last_error: Option<anyhow::Error> = None;
         for attempt in 0..max_attempts {
@@ -149,27 +143,18 @@ impl FailoverProviderClient {
     /// # Panics
     /// Panics if the internal `active_index` mutex is poisoned.
     pub fn active_provider(&self) -> &ProviderConfig {
-        let index = *self
-            .active_index
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let index = *self.active_index.lock().unwrap_or_else(|e| e.into_inner());
         &self.config.providers[index]
     }
 
     /// # Panics
     /// Panics if the internal stats mutex is poisoned.
     pub fn stats(&self) -> FailoverStats {
-        self.stats
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        self.stats.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     fn mark_healthy(&self, index: usize) {
-        *self
-            .active_index
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = index;
+        *self.active_index.lock().unwrap_or_else(|e| e.into_inner()) = index;
     }
 
     fn record_attempt(&self, provider_name: &str) {

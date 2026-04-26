@@ -120,7 +120,10 @@ impl SharedDenialTracker {
 
     /// Record an approval.
     pub fn record_approval(&self, tool_name: &str) {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).record_approval(tool_name);
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .record_approval(tool_name);
     }
 
     /// Get consecutive denial count.

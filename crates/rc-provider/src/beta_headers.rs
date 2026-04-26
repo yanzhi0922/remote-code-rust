@@ -209,7 +209,11 @@ pub fn get_beta_headers(
 /// and proxies see deterministic headers.
 pub fn merge_env_anthropic_betas(betas: &mut Vec<String>) {
     if let Ok(raw) = std::env::var("ANTHROPIC_BETAS") {
-        for beta in raw.split(',').map(str::trim).filter(|beta| !beta.is_empty()) {
+        for beta in raw
+            .split(',')
+            .map(str::trim)
+            .filter(|beta| !beta.is_empty())
+        {
             push_beta_once(betas, beta);
         }
     }

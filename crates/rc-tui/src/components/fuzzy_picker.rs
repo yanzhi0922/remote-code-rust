@@ -337,14 +337,14 @@ mod tests {
     fn fuzzy_match_exact() {
         let result = fuzzy_match("hello", "hello");
         assert!(result.is_some());
-        assert!(result.unwrap().score > 0);
+        assert!(result.expect("exact match should succeed").score > 0);
     }
 
     #[test]
     fn fuzzy_match_prefix() {
         let result = fuzzy_match("fs", "filesystem");
         assert!(result.is_some());
-        let r = result.unwrap();
+        let r = result.expect("prefix match should succeed");
         assert!(r.score > 0);
         assert_eq!(r.matched_indices.len(), 2);
     }
@@ -353,7 +353,13 @@ mod tests {
     fn fuzzy_match_subsequence() {
         let result = fuzzy_match("fle", "filesystem");
         assert!(result.is_some());
-        assert_eq!(result.unwrap().matched_indices.len(), 3);
+        assert_eq!(
+            result
+                .expect("subsequence match should succeed")
+                .matched_indices
+                .len(),
+            3
+        );
     }
 
     #[test]
@@ -372,7 +378,7 @@ mod tests {
     fn fuzzy_match_empty_query() {
         let result = fuzzy_match("", "anything");
         assert!(result.is_some());
-        assert_eq!(result.unwrap().score, 0);
+        assert_eq!(result.expect("empty query match should succeed").score, 0);
     }
 
     #[test]
@@ -389,16 +395,16 @@ mod tests {
 
     #[test]
     fn fuzzy_match_word_boundary_bonus() {
-        let r1 = fuzzy_match("sf", "some_function").unwrap();
-        let r2 = fuzzy_match("sf", "sxxxxfxxxx").unwrap();
+        let r1 = fuzzy_match("sf", "some_function").expect("word boundary match");
+        let r2 = fuzzy_match("sf", "sxxxxfxxxx").expect("non-word boundary match");
         // Word boundary match should score higher
         assert!(r1.score > r2.score);
     }
 
     #[test]
     fn fuzzy_match_consecutive_bonus() {
-        let r1 = fuzzy_match("ab", "abxxxx").unwrap();
-        let r2 = fuzzy_match("ab", "axbxxx").unwrap();
+        let r1 = fuzzy_match("ab", "abxxxx").expect("consecutive match");
+        let r2 = fuzzy_match("ab", "axbxxx").expect("non-consecutive match");
         // Consecutive match should score higher
         assert!(r1.score > r2.score);
     }

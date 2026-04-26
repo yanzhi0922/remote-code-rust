@@ -334,7 +334,10 @@ mod tests {
     fn render_dialog_bottom_border() {
         let dlg = Dialog::new("T", vec![Line::from("x")]);
         let lines = render_dialog(&dlg, &test_style());
-        let last = lines.last().unwrap().to_string();
+        let last = lines
+            .last()
+            .expect("dialog should have at least one line")
+            .to_string();
         assert!(last.starts_with('╰'));
         assert!(last.ends_with('╯'));
     }
@@ -435,7 +438,10 @@ mod tests {
     fn input_dialog_has_borders() {
         let lines = render_input_dialog("Title", "p", "v", 0, &test_style());
         let first = lines[0].to_string();
-        let last = lines.last().unwrap().to_string();
+        let last = lines
+            .last()
+            .expect("input dialog should have at least one line")
+            .to_string();
         assert!(first.starts_with('╭'));
         assert!(last.ends_with('╯'));
     }

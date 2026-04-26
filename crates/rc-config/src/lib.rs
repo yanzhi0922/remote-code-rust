@@ -31,11 +31,7 @@ use crate::tool_filters::merge_tool_filters;
 
 pub const RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const RESERVED_PROVIDER_HEADER_NAMES: &[&str] = &[
-    "content-length",
-    "content-type",
-    "host",
-];
+const RESERVED_PROVIDER_HEADER_NAMES: &[&str] = &["content-length", "content-type", "host"];
 
 const fn default_provider_max_retries() -> u32 {
     10

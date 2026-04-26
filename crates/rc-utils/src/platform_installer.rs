@@ -385,7 +385,11 @@ mod tests {
     fn get_latest_version_returns_ok() {
         let version = PlatformInstaller::get_latest_version();
         assert!(version.is_ok());
-        assert!(!version.unwrap().is_empty());
+        assert!(
+            !version
+                .expect("get_latest_version should succeed after is_ok check")
+                .is_empty()
+        );
     }
 
     #[test]

@@ -137,25 +137,27 @@ impl ClaudeAiProxyFetch {
     /// token endpoint with `grant_type=refresh_token`. On success,
     /// updates both the access token and (if provided) the refresh token.
     pub async fn refresh_token(&mut self) -> Result<(), McpRuntimeError> {
-        let refresh_token = self.proxy_config.refresh_token.as_deref().ok_or_else(|| {
-            McpRuntimeError::Proxy {
-                message: "no refresh token available".to_owned(),
-            }
-        })?;
-        let token_endpoint = self
-            .proxy_config
-            .token_endpoint
-            .as_deref()
-            .ok_or_else(|| McpRuntimeError::Proxy {
-                message: "no token endpoint configured for refresh".to_owned(),
-            })?;
-        let client_id = self
-            .proxy_config
-            .client_id
-            .as_deref()
-            .ok_or_else(|| McpRuntimeError::Proxy {
-                message: "no client ID configured for refresh".to_owned(),
-            })?;
+        let refresh_token =
+            self.proxy_config
+                .refresh_token
+                .as_deref()
+                .ok_or_else(|| McpRuntimeError::Proxy {
+                    message: "no refresh token available".to_owned(),
+                })?;
+        let token_endpoint =
+            self.proxy_config
+                .token_endpoint
+                .as_deref()
+                .ok_or_else(|| McpRuntimeError::Proxy {
+                    message: "no token endpoint configured for refresh".to_owned(),
+                })?;
+        let client_id =
+            self.proxy_config
+                .client_id
+                .as_deref()
+                .ok_or_else(|| McpRuntimeError::Proxy {
+                    message: "no client ID configured for refresh".to_owned(),
+                })?;
 
         let mut params = vec![
             ("grant_type", "refresh_token"),
@@ -184,9 +186,10 @@ impl ClaudeAiProxyFetch {
             });
         }
 
-        let token_resp: serde_json::Value = resp.json().await.map_err(|e| McpRuntimeError::Proxy {
-            message: format!("failed to parse token response: {e}"),
-        })?;
+        let token_resp: serde_json::Value =
+            resp.json().await.map_err(|e| McpRuntimeError::Proxy {
+                message: format!("failed to parse token response: {e}"),
+            })?;
 
         let new_access = token_resp
             .get("access_token")

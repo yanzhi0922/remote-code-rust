@@ -234,11 +234,17 @@ mod tests {
         );
 
         assert_eq!(
-            cache.get(Path::new("a").join("b.txt")).unwrap().content,
+            cache
+                .get(Path::new("a").join("b.txt"))
+                .expect("original cache should have entry")
+                .content,
             "one"
         );
         assert_eq!(
-            clone.get(Path::new("a").join("b.txt")).unwrap().content,
+            clone
+                .get(Path::new("a").join("b.txt"))
+                .expect("cloned cache should have entry")
+                .content,
             "two"
         );
     }

@@ -574,7 +574,8 @@ pub(crate) async fn register_runner(
         let mut registry = service.registry.write().await;
         registry.register_runner(request, service.runner_lease_ttl_secs)
     };
-    let _event = service.publish_event(TimelineEventDraft {
+    let _event = service
+        .publish_event(TimelineEventDraft {
             runner_id: Some(response.runner_id.clone()),
             session_id: None,
             detail: TimelineEventDetail::RunnerRegistered {
@@ -609,7 +610,8 @@ pub(crate) async fn update_runner_heartbeat(
         let mut registry = service.registry.write().await;
         registry.apply_heartbeat(&runner_id, heartbeat)?
     };
-    let _event = service.publish_event(TimelineEventDraft {
+    let _event = service
+        .publish_event(TimelineEventDraft {
             runner_id: Some(snapshot.registration.runner_id.clone()),
             session_id: None,
             detail: TimelineEventDetail::RunnerHeartbeat {
@@ -770,7 +772,8 @@ pub(crate) async fn update_session_state(
             updated_at,
         )?
     };
-    let _event = service.publish_event(TimelineEventDraft {
+    let _event = service
+        .publish_event(TimelineEventDraft {
             runner_id: updated.owner_runner_id.clone(),
             session_id: Some(updated.session_id),
             detail: TimelineEventDetail::SessionStateChanged {
@@ -917,7 +920,8 @@ pub(crate) async fn create_session(
         let mut registry = service.registry.write().await;
         registry.commit_session(record)?
     };
-    let _event = service.publish_event(TimelineEventDraft {
+    let _event = service
+        .publish_event(TimelineEventDraft {
             runner_id: record.owner_runner_id.clone(),
             session_id: Some(record.session_id),
             detail: TimelineEventDetail::SessionCreated {
@@ -1000,7 +1004,8 @@ pub(crate) async fn create_artifact(
     tokio::fs::write(&path, &contents).await.map_err(|error| {
         ApiError::internal(format!("failed to write {}: {error}", path.display()))
     })?;
-    let _event = service.publish_event(TimelineEventDraft {
+    let _event = service
+        .publish_event(TimelineEventDraft {
             runner_id: artifact.runner_id.clone(),
             session_id: Some(artifact.session_id),
             detail: TimelineEventDetail::ArtifactCreated {
@@ -1110,7 +1115,8 @@ pub(crate) async fn create_approval(
         let mut registry = service.registry.write().await;
         registry.commit_planned_approval(planned)?
     };
-    let _event = service.publish_event(TimelineEventDraft {
+    let _event = service
+        .publish_event(TimelineEventDraft {
             runner_id: (!approval.runner_id.is_empty()).then(|| approval.runner_id.clone()),
             session_id: Some(approval.session_id),
             detail: TimelineEventDetail::ApprovalRequested {
@@ -1121,7 +1127,8 @@ pub(crate) async fn create_approval(
         })
         .await;
     if let Some(transition) = transition {
-        let _event = service.publish_event(TimelineEventDraft {
+        let _event = service
+            .publish_event(TimelineEventDraft {
                 runner_id: transition.runner_id,
                 session_id: Some(transition.session_id),
                 detail: TimelineEventDetail::SessionStateChanged {
@@ -1217,7 +1224,8 @@ pub(crate) async fn apply_approval_decision(
         let mut registry = service.registry.write().await;
         registry.commit_planned_approval_decision(planned)?
     };
-    let _event = service.publish_event(TimelineEventDraft {
+    let _event = service
+        .publish_event(TimelineEventDraft {
             runner_id: (!approval.runner_id.is_empty()).then(|| approval.runner_id.clone()),
             session_id: Some(approval.session_id),
             detail: TimelineEventDetail::ApprovalResolved {
@@ -1228,7 +1236,8 @@ pub(crate) async fn apply_approval_decision(
         })
         .await;
     if let Some(transition) = transition {
-        let _event = service.publish_event(TimelineEventDraft {
+        let _event = service
+            .publish_event(TimelineEventDraft {
                 runner_id: transition.runner_id,
                 session_id: Some(transition.session_id),
                 detail: TimelineEventDetail::SessionStateChanged {
@@ -1331,7 +1340,8 @@ async fn dispatch_pending_sessions_for_runner(service: &ControlPlaneService, run
                 continue;
             };
             persist_state_logged(service).await;
-            let _event = service.publish_event(TimelineEventDraft {
+            let _event = service
+                .publish_event(TimelineEventDraft {
                     runner_id: record.owner_runner_id.clone(),
                     session_id: Some(record.session_id),
                     detail: TimelineEventDetail::SessionStateChanged {
@@ -1365,7 +1375,8 @@ async fn dispatch_pending_sessions_for_runner(service: &ControlPlaneService, run
             continue;
         };
 
-        let _event = service.publish_event(TimelineEventDraft {
+        let _event = service
+            .publish_event(TimelineEventDraft {
                 runner_id: record.owner_runner_id.clone(),
                 session_id: Some(record.session_id),
                 detail: TimelineEventDetail::SessionStateChanged {
