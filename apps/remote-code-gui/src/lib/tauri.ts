@@ -74,11 +74,13 @@ export function getRuntimeStatus(): Promise<RuntimeStatusInfo> {
 export function runDoctorReport(
   probeNetwork = false,
   probeProvider = false,
+  probeMcp = false,
   includeEnvProviders = false,
 ): Promise<DoctorReportInfo> {
   return invoke<DoctorReportInfo>('run_doctor_report', {
     probeNetwork,
     probeProvider,
+    probeMcp,
     includeEnvProviders,
   });
 }

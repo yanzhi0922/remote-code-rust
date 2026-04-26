@@ -83,7 +83,7 @@ export function OperationsTab() {
     setDoctorLoading(true);
     setDoctorError(null);
     void tauri
-      .runDoctorReport(false, false, true)
+      .runDoctorReport(false, false, false, true)
       .then((report) => {
         if (!cancelled) {
           setDoctor(report);
@@ -108,7 +108,7 @@ export function OperationsTab() {
     setDoctorLoading(true);
     setDoctorError(null);
     try {
-      const report = await tauri.runDoctorReport(probeNetwork, probeProvider, includeEnvProviders);
+      const report = await tauri.runDoctorReport(probeNetwork, probeProvider, false, includeEnvProviders);
       setDoctor(report);
     } catch (error) {
       setDoctorError(typeof error === 'string' ? error : String(error));

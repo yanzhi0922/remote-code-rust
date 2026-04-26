@@ -22,6 +22,14 @@ export interface RuntimeMcpOriginCounts {
   plugin: number;
 }
 
+export interface RuntimeMcpStatusCounts {
+  connected: number;
+  failed: number;
+  needs_auth: number;
+  pending: number;
+  disabled: number;
+}
+
 export interface RuntimeMcpInventorySummary {
   total_servers: number;
   enabled_servers: number;
@@ -30,12 +38,17 @@ export interface RuntimeMcpInventorySummary {
   ambiguous_server_names: number;
   warning_count: number;
   origins: RuntimeMcpOriginCounts;
+  status_counts: RuntimeMcpStatusCounts;
 }
 
 export interface RuntimeStatusInfo {
   session_name: string | null;
   provider: RuntimeProviderStatus;
   permission_mode: string;
+  output_style: string | null;
+  language: string | null;
+  brief_enabled: boolean;
+  proactive_active: boolean;
   setting_sources: string[];
   allowed_setting_sources: string[];
   allowed_tools: string[];
@@ -122,6 +135,23 @@ export interface DoctorExtensionsInfo {
   plugin_mcp_servers: number;
 }
 
+export interface DoctorMcpRuntimeServerInfo {
+  name: string;
+  status: string;
+  enabled: boolean;
+  origin_kind: string;
+  origin_name: string;
+  config_path: string;
+  tool_count: number;
+  error: string | null;
+}
+
+export interface DoctorMcpRuntimeInfo {
+  probed: boolean;
+  summary: RuntimeMcpInventorySummary;
+  servers: DoctorMcpRuntimeServerInfo[];
+}
+
 export interface DoctorEnvProviderInfo {
   name: string;
   protocol: string;
@@ -137,6 +167,7 @@ export interface DoctorReportInfo {
   tools: DoctorToolsInfo;
   permissions: DoctorPermissionsInfo;
   extensions: DoctorExtensionsInfo;
+  mcp_runtime: DoctorMcpRuntimeInfo;
   network: DoctorProbeInfo[];
   env_providers: DoctorEnvProviderInfo[];
   issues: string[];
@@ -204,6 +235,7 @@ export interface RuntimeMcpServerInfo {
 export interface RuntimeMcpInventoryInfo {
   effective_cwd: string;
   warnings: string[];
+  summary: RuntimeMcpInventorySummary;
   servers: RuntimeMcpServerInfo[];
 }
 
@@ -287,12 +319,15 @@ export interface FullSettings {
   provider_base_url: string | null;
   provider_protocol: string;
   provider_api_key_set: boolean;
+  max_output_tokens: number;
+  thinking_budget: number | null;
   max_retries: number;
   timeout_ms: number;
   retry_initial_backoff_ms: number;
   retry_max_backoff_ms: number;
   respect_retry_after: boolean;
   permission_mode: string;
+  max_turns: number;
   verbose: boolean;
 }
 
@@ -306,6 +341,8 @@ export interface UpdateProviderRequest {
   protocol?: string;
   provider_protocol?: string;
   api_key?: string;
+  max_output_tokens?: number;
+  thinking_budget?: number | null;
   max_retries?: number;
   timeout_ms?: number;
   retry_initial_backoff_ms?: number;
