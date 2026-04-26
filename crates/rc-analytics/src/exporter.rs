@@ -25,8 +25,10 @@ pub trait EventExporter: Send + Sync + std::fmt::Debug {
 
 /// Exports events formatted for Datadog.
 ///
-/// This is a placeholder implementation — in production it would use
-/// the Datadog Logs Intake API.
+/// Sends event batches to the Datadog Logs Intake API using the
+/// `DD-API-KEY` header for authentication. Each event is serialized
+/// as a JSON line with Datadog-specific metadata fields (`ddsource`,
+/// `service`) attached.
 #[derive(Debug, Clone)]
 pub struct DatadogExporter {
     /// Datadog API key.

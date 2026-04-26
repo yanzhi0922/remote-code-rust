@@ -162,23 +162,53 @@ pub fn deduplicate_hooks(hooks: &[HookDefinition]) -> (Vec<HookDefinition>, usiz
 
 /// Filter hooks by workspace trust level.
 ///
-/// Untrusted workspaces can only run hooks that are explicitly marked as safe.
-/// For now, this is a simple allow-all filter that can be extended later.
-pub fn filter_hooks_by_trust(hooks: &[HookDefinition], _trusted: bool) -> Vec<HookDefinition> {
-    // Future: filter out hooks that require trust in untrusted workspaces
-    hooks.to_vec()
+/// In **untrusted** workspaces, only hooks that execute in-process
+/// ([`HookDefinition::Callback`] and [`HookDefinition::Function`]) are
+/// permitted. All external-execution hooks (command, HTTP, prompt, agent)
+/// are stripped out because they could run arbitrary code.
+///
+/// In **trusted** workspaces, all hooks are allowed.
+pub fn filter_hooks_by_trust(hooks: &[HookDefinition], trusted: bool) -> Vec<HookDefinition> {
+    if trusted {
+        return hooks.to_vec();
+    }
+    hooks
+        .iter()
+        .filter(|h| {
+            matches!(
+                h,
+                HookDefinition::Callback(_) | HookDefinition::Function(_)
+            )
+        })
+        .cloned()
+        .collect()
 }
 
 /// Filter hooks by managed policy.
 ///
-/// Managed hooks are set by enterprise policy and cannot be overridden.
-/// For now, this is a simple pass-through that can be extended later.
+/// Managed hooks (set by enterprise policy) are merged into the result
+/// and cannot be overridden by user-defined hooks. If a managed hook has
+/// the same deduplication key as a user hook, the managed version wins.
 pub fn filter_hooks_by_managed(
     hooks: &[HookDefinition],
-    _managed_hooks: &[HookDefinition],
+    managed_hooks: &[HookDefinition],
 ) -> Vec<HookDefinition> {
-    // Future: merge managed hooks and prevent override
-    hooks.to_vec()
+    if managed_hooks.is_empty() {
+        return hooks.to_vec();
+    }
+
+    // Collect dedup keys of managed hooks — these take priority.
+    let managed_keys: std::collections::HashSet<String> =
+        managed_hooks.iter().map(|h| h.dedup_key()).collect();
+
+    // Start with managed hooks, then add user hooks that don't conflict.
+    let mut result: Vec<HookDefinition> = managed_hooks.to_vec();
+    for hook in hooks {
+        if !managed_keys.contains(&hook.dedup_key()) {
+            result.push(hook.clone());
+        }
+    }
+    result
 }
 
 /// Check if a hook event is one of the 26 standard hook events.
@@ -254,7 +284,7 @@ pub fn parse_hook_event(value: &str) -> Option<HookEventKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hook_types::{HookCommand, HookMatcherEntry, HookPrompt};
+    use crate::hook_types::{HookCallback, HookCommand, HookFunction, HookMatcherEntry, HookPrompt};
 
     fn make_command_hook(cmd: &str) -> HookDefinition {
         HookDefinition::Command(HookCommand {
@@ -540,22 +570,62 @@ mod tests {
     // ── filter_hooks_by_trust tests ──────────────────────────────────────
 
     #[test]
-    fn filter_by_trust_returns_all_for_now() {
+    fn filter_by_trust_allows_all_when_trusted() {
         let hooks = vec![make_command_hook("a"), make_command_hook("b")];
         let filtered = filter_hooks_by_trust(&hooks, true);
         assert_eq!(filtered.len(), 2);
-        let filtered_untrusted = filter_hooks_by_trust(&hooks, false);
-        assert_eq!(filtered_untrusted.len(), 2);
+    }
+
+    #[test]
+    fn filter_by_trust_strips_external_hooks_when_untrusted() {
+        let hooks = vec![make_command_hook("a")];
+        let filtered = filter_hooks_by_trust(&hooks, false);
+        assert!(filtered.is_empty(), "command hooks should be filtered in untrusted workspace");
+    }
+
+    #[test]
+    fn filter_by_trust_keeps_callback_and_function_when_untrusted() {
+        let cb = HookDefinition::Callback(HookCallback {
+            callback_id: "cb1".to_string(),
+            timeout: None,
+        });
+        let fn_ = HookDefinition::Function(HookFunction {
+            function_id: "fn1".to_string(),
+            timeout: None,
+        });
+        let hooks = vec![make_command_hook("cmd"), cb.clone(), fn_.clone()];
+        let filtered = filter_hooks_by_trust(&hooks, false);
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.contains(&cb));
+        assert!(filtered.contains(&fn_));
     }
 
     // ── filter_hooks_by_managed tests ────────────────────────────────────
 
     #[test]
-    fn filter_by_managed_returns_all_for_now() {
+    fn filter_by_managed_no_managed_returns_all() {
+        let hooks = vec![make_command_hook("a")];
+        let filtered = filter_hooks_by_managed(&hooks, &[]);
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn filter_by_managed_merges_managed_hooks() {
         let hooks = vec![make_command_hook("a")];
         let managed = vec![make_command_hook("m")];
         let filtered = filter_hooks_by_managed(&hooks, &managed);
+        // Both should be present: 1 managed + 1 user
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn filter_by_managed_managed_overrides_user() {
+        let user_hook = make_command_hook("lint.sh");
+        let managed_hook = make_command_hook("lint.sh");
+        let filtered = filter_hooks_by_managed(&[user_hook], &[managed_hook.clone()]);
+        // Managed wins — only 1 hook with that dedup key
         assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0], managed_hook);
     }
 
     // ── HOOK_EVENT_NAMES tests ───────────────────────────────────────────

@@ -22,6 +22,18 @@ pub struct ClaudeAiProxyConfig {
     /// OAuth access token for authentication.
     #[serde(default)]
     pub access_token: Option<String>,
+    /// OAuth refresh token (used to obtain a new access token).
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    /// OAuth token endpoint URL (e.g. `https://oauth.example.com/token`).
+    #[serde(default)]
+    pub token_endpoint: Option<String>,
+    /// OAuth client ID.
+    #[serde(default)]
+    pub client_id: Option<String>,
+    /// OAuth client secret.
+    #[serde(default)]
+    pub client_secret: Option<String>,
 }
 
 // ── Proxy request ───────────────────────────────────────────────────────────
@@ -119,18 +131,79 @@ impl ClaudeAiProxyFetch {
         self.proxy_config.access_token.is_some()
     }
 
-    /// Refresh the access token.
+    /// Refresh the access token using the stored refresh token.
     ///
-    /// This is a placeholder for the actual token refresh logic,
-    /// which would typically involve calling an OAuth endpoint.
+    /// Performs an OAuth2 token refresh by POSTing to the configured
+    /// token endpoint with `grant_type=refresh_token`. On success,
+    /// updates both the access token and (if provided) the refresh token.
     pub async fn refresh_token(&mut self) -> Result<(), McpRuntimeError> {
-        // In a real implementation, this would:
-        // 1. Use a refresh token to get a new access token
-        // 2. Update self.proxy_config.access_token
-        // For now, return an error indicating the feature needs configuration
-        Err(McpRuntimeError::Proxy {
-            message: "token refresh not configured".to_owned(),
-        })
+        let refresh_token = self.proxy_config.refresh_token.as_deref().ok_or_else(|| {
+            McpRuntimeError::Proxy {
+                message: "no refresh token available".to_owned(),
+            }
+        })?;
+        let token_endpoint = self
+            .proxy_config
+            .token_endpoint
+            .as_deref()
+            .ok_or_else(|| McpRuntimeError::Proxy {
+                message: "no token endpoint configured for refresh".to_owned(),
+            })?;
+        let client_id = self
+            .proxy_config
+            .client_id
+            .as_deref()
+            .ok_or_else(|| McpRuntimeError::Proxy {
+                message: "no client ID configured for refresh".to_owned(),
+            })?;
+
+        let mut params = vec![
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token),
+            ("client_id", client_id),
+        ];
+        if let Some(secret) = self.proxy_config.client_secret.as_deref() {
+            params.push(("client_secret", secret));
+        }
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(token_endpoint)
+            .form(&params)
+            .send()
+            .await
+            .map_err(|e| McpRuntimeError::Proxy {
+                message: format!("token refresh request failed: {e}"),
+            })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(McpRuntimeError::Proxy {
+                message: format!("token refresh failed with status {status}: {body}"),
+            });
+        }
+
+        let token_resp: serde_json::Value = resp.json().await.map_err(|e| McpRuntimeError::Proxy {
+            message: format!("failed to parse token response: {e}"),
+        })?;
+
+        let new_access = token_resp
+            .get("access_token")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| McpRuntimeError::Proxy {
+                message: "token response missing access_token".to_owned(),
+            })?;
+
+        self.proxy_config.access_token = Some(new_access.to_owned());
+
+        // Some providers rotate refresh tokens.
+        if let Some(new_refresh) = token_resp.get("refresh_token").and_then(|v| v.as_str()) {
+            self.proxy_config.refresh_token = Some(new_refresh.to_owned());
+        }
+
+        // Token refreshed successfully.
+        Ok(())
     }
 }
 
@@ -145,6 +218,10 @@ mod tests {
             url: "https://api.claude.ai".to_owned(),
             id: "proxy-123".to_owned(),
             access_token: Some("test-token-abc".to_owned()),
+            refresh_token: None,
+            token_endpoint: None,
+            client_id: None,
+            client_secret: None,
         }
     }
 
@@ -210,6 +287,10 @@ mod tests {
             url: "https://api.claude.ai".to_owned(),
             id: "proxy-1".to_owned(),
             access_token: None,
+            refresh_token: None,
+            token_endpoint: None,
+            client_id: None,
+            client_secret: None,
         };
         let fetch = ClaudeAiProxyFetch::new(config);
         let result = fetch.build_authenticated_request("test", "GET", None);
@@ -222,6 +303,10 @@ mod tests {
             url: "https://api.claude.ai".to_owned(),
             id: "p1".to_owned(),
             access_token: None,
+            refresh_token: None,
+            token_endpoint: None,
+            client_id: None,
+            client_secret: None,
         });
         assert!(!fetch.has_token());
 
