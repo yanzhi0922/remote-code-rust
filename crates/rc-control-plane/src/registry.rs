@@ -416,6 +416,7 @@ impl Registry {
         lease_ttl_secs: u64,
     ) -> crate::types::RunnerRegistrationResponse {
         let now = Utc::now();
+        let runner_id = request.runner_id.clone();
         let snapshot = RunnerSnapshot {
             registration: request.clone(),
             state: RunnerState::Idle,
@@ -424,10 +425,21 @@ impl Registry {
             registered_at: now,
             last_seen_at: now,
         };
-        self.runners
-            .insert(request.runner_id.clone(), snapshot.clone());
+        self.runners.insert(runner_id.clone(), snapshot);
+
+        // Recalculate session counts from existing sessions so that a
+        // runner re-registering (e.g. after a brief restart) does not
+        // appear to have zero sessions, which would allow the dispatch
+        // loop to over-assign work beyond its capacity.
+        self.refresh_runner_session_counts(&runner_id, now);
+
+        let snapshot = self
+            .runners
+            .get(&runner_id)
+            .cloned()
+            .expect("runner was just inserted");
         crate::types::RunnerRegistrationResponse {
-            runner_id: request.runner_id,
+            runner_id,
             registered_at: now,
             lease_ttl_secs,
             snapshot,

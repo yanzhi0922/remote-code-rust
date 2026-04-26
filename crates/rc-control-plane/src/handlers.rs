@@ -738,6 +738,7 @@ pub(crate) async fn update_session_state(
         } else {
             Some(
                 update_runner_session_state(
+                    &service.http_client,
                     &runner,
                     session_id,
                     &RunnerSessionStateUpdateRequest {
@@ -839,7 +840,9 @@ pub(crate) async fn post_session_command(
             message: message.to_owned(),
         }));
     }
-    let response = dispatch_session_command_to_runner(&runner, session_id, &request).await?;
+    let response =
+        dispatch_session_command_to_runner(&service.http_client, &runner, session_id, &request)
+            .await?;
     Ok(Json(response))
 }
 
@@ -902,7 +905,9 @@ pub(crate) async fn create_session(
                 },
             )?;
         } else {
-            let dispatched = dispatch_session_to_runner(&owner_runner, &dispatch_request).await?;
+            let dispatched =
+                dispatch_session_to_runner(&service.http_client, &owner_runner, &dispatch_request)
+                    .await?;
             record.state = session_state_from_runner(dispatched.state);
             record.updated_at = dispatched.updated_at;
         }
@@ -1085,7 +1090,9 @@ pub(crate) async fn create_approval(
             description: planned.approval.description.clone(),
             metadata: planned.approval.metadata.clone(),
         };
-        let relayed = relay_approval_to_runner(runner, session_id, &relay_request).await?;
+        let relayed =
+            relay_approval_to_runner(&service.http_client, runner, session_id, &relay_request)
+                .await?;
         if relayed.approval_id != planned.approval.approval_id {
             return Err(ApiError::bad_gateway(format!(
                 "runner `{}` acknowledged approval `{}` instead of `{}`",
@@ -1183,9 +1190,13 @@ pub(crate) async fn apply_approval_decision(
             responder: planned.approval.responder.clone(),
             note: planned.approval.note.clone(),
         };
-        let relayed =
-            relay_approval_decision_to_runner(runner, planned.approval.approval_id, &relay_request)
-                .await?;
+        let relayed = relay_approval_decision_to_runner(
+            &service.http_client,
+            runner,
+            planned.approval.approval_id,
+            &relay_request,
+        )
+        .await?;
         if relayed.approval_id != planned.approval.approval_id {
             return Err(ApiError::bad_gateway(format!(
                 "runner `{}` acknowledged approval decision for `{}` instead of `{}`",
@@ -1330,7 +1341,9 @@ async fn dispatch_pending_sessions_for_runner(service: &ControlPlaneService, run
                 })
                 .await;
             continue;
-        } else if let Ok(dispatched) = dispatch_session_to_runner(&planned.runner, &request).await {
+        } else if let Ok(dispatched) =
+            dispatch_session_to_runner(&service.http_client, &planned.runner, &request).await
+        {
             dispatched
         } else {
             skipped_session_ids.insert(planned.session_id);
