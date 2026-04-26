@@ -56,7 +56,10 @@ pub fn dispatch_sandbox_toggle(input: &str, config: &RuntimeConfig) {
             println!("Usage: /sandboxToggle [on|off|status]");
         }
     }
-    let _ = config;
+    println!(
+        "  permission mode: {:?}",
+        config.permission_mode
+    );
 }
 
 #[cfg(test)]

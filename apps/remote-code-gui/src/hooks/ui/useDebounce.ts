@@ -40,8 +40,7 @@ export function useDebounce<T extends (...args: unknown[]) => unknown>(
         callback(...args);
       }, delay);
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [delay, clearTimer, ...deps],
+    [delay, clearTimer, ...deps], // eslint-disable-line react-hooks/exhaustive-deps — clearTimer is stable via useRef
   );
 
   return debouncedFunction as T;

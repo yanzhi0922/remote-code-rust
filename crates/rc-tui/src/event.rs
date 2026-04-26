@@ -177,8 +177,7 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) -> AppAction {
 }
 
 /// Handle a terminal resize event.
-fn handle_resize(app: &mut App, width: u16, height: u16) {
-    let _ = (width, height);
+fn handle_resize(app: &mut App, _width: u16, height: u16) {
     // Recalculate scroll viewport — the render pass will update it.
     // For now, just ensure scroll doesn't overflow.
     app.scroll.set_viewport_height(

@@ -316,10 +316,10 @@ impl IdeBridge {
         }
 
         // Check if a response was already received for this request ID.
-        if let Ok(mut pending) = self.pending_responses.lock() {
-            if let Some(response) = pending.remove(&id) {
-                return Ok(response);
-            }
+        if let Ok(mut pending) = self.pending_responses.lock()
+            && let Some(response) = pending.remove(&id)
+        {
+            return Ok(response);
         }
 
         // No response yet — the caller should use `handle_response` when
@@ -366,18 +366,18 @@ impl IdeBridge {
         }
 
         // Store the response for the matching request ID.
-        if let Ok(mut pending) = self.pending_responses.lock() {
-            if let Some(id) = response.id {
-                let ide_response = if let Some(error) = response.error {
-                    IdeResponse::fail(&error.message)
-                } else {
-                    match response.result {
-                        Some(val) => IdeResponse::ok(val),
-                        None => IdeResponse::ok_empty(),
-                    }
-                };
-                pending.insert(id, ide_response);
-            }
+        if let Ok(mut pending) = self.pending_responses.lock()
+            && let Some(id) = response.id
+        {
+            let ide_response = if let Some(error) = response.error {
+                IdeResponse::fail(&error.message)
+            } else {
+                match response.result {
+                    Some(val) => IdeResponse::ok(val),
+                    None => IdeResponse::ok_empty(),
+                }
+            };
+            pending.insert(id, ide_response);
         }
 
         Ok(())

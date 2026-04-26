@@ -90,12 +90,32 @@ impl CompactStrategy for SessionMemoryCompactStrategy {
         &self,
         messages: &[Message],
         options: &CompactOptions,
-        provider: &dyn SummaryProvider,
+        _provider: &dyn SummaryProvider,
         progress: Option<&ProgressCallback>,
     ) -> Result<CompactionResult, anyhow::Error> {
-        let _ = options;
-        let _ = provider;
-        session_memory_compact(messages, &self.config, self.file_context.as_ref(), progress).await
+        // Merge caller-provided options into the strategy config where applicable.
+        // Session-memory compaction does not use a SummaryProvider — it relies on
+        // the persisted session-memory file instead of LLM summarisation.
+        let effective_config = SessionMemoryCompactConfig {
+            max_tokens: if options.max_tokens > 0 {
+                options.max_tokens
+            } else {
+                self.config.max_tokens
+            },
+            min_tokens: self.config.min_tokens,
+            min_text_block_messages: if options.preserve_recent_messages > 0 {
+                options.preserve_recent_messages
+            } else {
+                self.config.min_text_block_messages
+            },
+        };
+        session_memory_compact(
+            messages,
+            &effective_config,
+            self.file_context.as_ref(),
+            progress,
+        )
+        .await
     }
 }
 

@@ -114,9 +114,7 @@ export function useSpeechInput(options: UseSpeechInputOptions) {
     async (blob: Blob) => {
       setStatus('transcribing');
       try {
-        // 预留：通过 Tauri 后端调用 STT 服务
-        // 实际实现需要后端支持
-        console.log('Speech transcription requested for blob:', blob.size, 'bytes');
+        // TODO: 通过 Tauri 后端调用 STT 服务 — 实际实现需要后端支持
         setStatus('idle');
         setErrorCode('not-configured');
         setErrorMessage('Speech-to-text is not yet configured');

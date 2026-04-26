@@ -67,7 +67,7 @@ pub fn dispatch(input: &str, config: &RuntimeConfig) {
             println!("Usage: /keybindings [list|set <key> <action>|reset]");
         }
     }
-    let _ = config;
+    println!("  session: {}", config.session_id);
 }
 
 fn render_list() {

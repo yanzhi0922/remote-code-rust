@@ -210,15 +210,15 @@ fn scan_transcript(path: &Path) -> Option<SessionMetadata> {
 
         // Extract metadata from payload if available.
         if let Some(payload) = &event.payload {
-            if cwd.is_empty() {
-                if let Some(c) = payload.get("cwd").and_then(|v| v.as_str()) {
-                    cwd = c.to_string();
-                }
+            if cwd.is_empty()
+                && let Some(c) = payload.get("cwd").and_then(|v| v.as_str())
+            {
+                cwd = c.to_string();
             }
-            if model.is_empty() {
-                if let Some(m) = payload.get("model").and_then(|v| v.as_str()) {
-                    model = m.to_string();
-                }
+            if model.is_empty()
+                && let Some(m) = payload.get("model").and_then(|v| v.as_str())
+            {
+                model = m.to_string();
             }
         }
     }
@@ -233,7 +233,7 @@ fn scan_transcript(path: &Path) -> Option<SessionMetadata> {
 
     Some(SessionMetadata {
         session_id: session_id.unwrap_or_default(),
-        timestamp: timestamp.unwrap_or_else(|| DateTime::UNIX_EPOCH),
+        timestamp: timestamp.unwrap_or(DateTime::UNIX_EPOCH),
         cwd,
         model,
         message_count,
@@ -266,7 +266,7 @@ fn find_restorable_sessions_in(
     limit: usize,
 ) -> anyhow::Result<Vec<SessionRestoreInfo>> {
 
-    let entries = match fs::read_dir(&sessions_dir) {
+    let entries = match fs::read_dir(sessions_dir) {
         Ok(entries) => entries,
         Err(e) => {
             // Session directory doesn't exist or isn't readable — not an error,

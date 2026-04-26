@@ -169,7 +169,7 @@ export function McpTab() {
 
   useEffect(() => {
     void loadServers();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps — loadServers captures all needed state
   }, [scope, effectiveProjectPath, activeProjectPath, connect]);
 
   const saveServer = async () => {
