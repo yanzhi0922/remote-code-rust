@@ -99,7 +99,7 @@ impl ApiKeyHelperCache {
 
     /// Get a cached API key if it exists and is not expired.
     pub fn get_cached(&self) -> Option<String> {
-        let inner = self.inner.lock().expect("cache lock");
+        let inner = lock_or_recover(&self.inner);
         match inner.as_ref() {
             Some(entry) if entry.cached_at.elapsed() < self.ttl => Some(entry.value.clone()),
             Some(entry) => {
@@ -113,7 +113,7 @@ impl ApiKeyHelperCache {
 
     /// Get a cached API key only if it's fresh (within TTL).
     pub fn get_fresh(&self) -> Option<String> {
-        let inner = self.inner.lock().expect("cache lock");
+        let inner = lock_or_recover(&self.inner);
         match inner.as_ref() {
             Some(entry) if entry.cached_at.elapsed() < self.ttl => Some(entry.value.clone()),
             _ => None,
@@ -122,7 +122,7 @@ impl ApiKeyHelperCache {
 
     /// Store a value in the cache.
     pub fn set(&self, value: String) {
-        let mut inner = self.inner.lock().expect("cache lock");
+        let mut inner = lock_or_recover(&self.inner);
         *inner = Some(CachedEntry {
             value,
             cached_at: Instant::now(),
@@ -131,25 +131,25 @@ impl ApiKeyHelperCache {
 
     /// Clear the cache.
     pub fn clear(&self) {
-        let mut inner = self.inner.lock().expect("cache lock");
+        let mut inner = lock_or_recover(&self.inner);
         *inner = None;
-        *self.refresh_inflight.lock().expect("inflight lock") = false;
+        *lock_or_recover(&self.refresh_inflight) = false;
     }
 
     /// Check if the cache has a value (even if stale).
     pub fn is_populated(&self) -> bool {
-        self.inner.lock().expect("cache lock").is_some()
+        lock_or_recover(&self.inner).is_some()
     }
 
     fn refresh_timestamp_for_current_value(&self) {
-        let mut inner = self.inner.lock().expect("cache lock");
+        let mut inner = lock_or_recover(&self.inner);
         if let Some(entry) = inner.as_mut() {
             entry.cached_at = Instant::now();
         }
     }
 
     fn try_start_refresh(&self) -> bool {
-        let mut inflight = self.refresh_inflight.lock().expect("inflight lock");
+        let mut inflight = lock_or_recover(&self.refresh_inflight);
         if *inflight {
             return false;
         }
@@ -158,7 +158,20 @@ impl ApiKeyHelperCache {
     }
 
     fn finish_refresh(&self) {
-        *self.refresh_inflight.lock().expect("inflight lock") = false;
+        *lock_or_recover(&self.refresh_inflight) = false;
+    }
+}
+
+/// Lock a `std::sync::Mutex`, recovering from poison by logging a warning
+/// and accessing the inner value anyway. This prevents a panicked thread
+/// from crashing the entire process when the lock guard is still usable.
+fn lock_or_recover<'a, T>(mutex: &'a StdMutex<T>) -> std::sync::MutexGuard<'a, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            warn!("Mutex poisoned — another thread panicked while holding the lock; recovering");
+            poisoned.into_inner()
+        }
     }
 }
 

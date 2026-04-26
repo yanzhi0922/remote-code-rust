@@ -4009,6 +4009,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chrono",
+ "getrandom 0.3.4",
  "hmac",
  "once_cell",
  "rc-context",
@@ -4091,6 +4092,7 @@ dependencies = [
  "tokio-tungstenite",
  "tower",
  "tower-http",
+ "tracing",
  "uuid",
 ]
 

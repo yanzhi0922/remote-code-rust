@@ -213,7 +213,13 @@ async fn file_based_save(
     secret: &str,
 ) -> Result<(), SecureStorageError> {
     let path = secrets_dir()?.join(safe_filename(service, account));
-    tokio::fs::create_dir_all(path.parent().expect("path has parent"))
+    let parent = path.parent().ok_or_else(|| {
+        SecureStorageError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "secret file path has no parent directory",
+        ))
+    })?;
+    tokio::fs::create_dir_all(parent)
         .await
         .map_err(SecureStorageError::Io)?;
     tokio::fs::write(&path, secret.as_bytes())

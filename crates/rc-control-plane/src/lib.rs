@@ -292,10 +292,15 @@ impl ControlPlaneService {
         };
         let state_db_path = self.state_db_path.clone();
         let event_to_persist = event.clone();
-        let _ = tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             persist_control_plane_state(&state_db_path, &snapshot, Some(&event_to_persist))
         })
         .await;
+        if let Err(e) = &result {
+            tracing::error!("Failed to spawn persistence task: {e}");
+        } else if let Ok(Err(e)) = &result {
+            tracing::error!("Failed to persist control plane state after event: {e:#}");
+        }
         event
     }
 
