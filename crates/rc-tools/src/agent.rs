@@ -655,7 +655,7 @@ async fn run_single_delegation(
 ) -> Result<String> {
     // Determine current delegation depth from the task stack.
     let depth = {
-        let stack = context.task_stack.lock().expect("task_stack lock poisoned");
+        let stack = context.task_stack.lock().unwrap_or_else(|e| e.into_inner());
         stack.depth()
     };
 
@@ -718,7 +718,7 @@ async fn run_batch_delegation(
     let broker: Arc<dyn PermissionBroker> = Arc::new(StaticPermissionBroker::new(true));
 
     let (batch_depth, parent_task_id) = {
-        let stack = context.task_stack.lock().expect("task_stack lock poisoned");
+        let stack = context.task_stack.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(frame) = stack.current() {
             (frame.depth.saturating_add(1), Some(frame.task_id.clone()))
         } else {
@@ -1284,7 +1284,7 @@ fn start_agent_tracking(
     title: &str,
 ) -> Result<(String, Option<String>, u32)> {
     let (parent_task_id, depth) = {
-        let stack = context.task_stack.lock().expect("task_stack lock poisoned");
+        let stack = context.task_stack.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(frame) = stack.current() {
             (Some(frame.task_id.clone()), frame.depth.saturating_add(1))
         } else {
