@@ -182,6 +182,9 @@ pub struct IdeBridge {
     connected: Arc<AtomicBool>,
     /// Pending responses from the IDE, keyed by request ID.
     pending_responses: Arc<std::sync::Mutex<HashMap<u64, IdeResponse>>>,
+    /// Outgoing message queue — serialized JSON-RPC payloads waiting to be
+    /// written to the transport by the caller.
+    outgoing: Arc<std::sync::Mutex<Vec<String>>>,
     /// Next request ID for JSON-RPC.
     next_id: Arc<std::sync::atomic::AtomicU64>,
 }
@@ -194,6 +197,7 @@ impl IdeBridge {
             config,
             connected,
             pending_responses: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            outgoing: Arc::new(std::sync::Mutex::new(Vec::new())),
             next_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
         }
     }
@@ -229,8 +233,9 @@ impl IdeBridge {
 
     /// Send a notification to the IDE.
     ///
-    /// Serializes the notification as a JSON-RPC notification and sends it
-    /// over the transport.
+    /// Serializes the notification as a JSON-RPC notification and enqueues it
+    /// in the outgoing message buffer. Call [`Self::drain_outgoing`] to
+    /// retrieve and flush the buffered messages to the transport.
     pub fn send_notification(&self, notification: &IdeNotification) -> anyhow::Result<()> {
         if !self.is_connected() {
             warn!("Attempted to send notification while disconnected");
@@ -249,12 +254,12 @@ impl IdeBridge {
             kind = ?notification.kind,
             msg = %notification.message,
             bytes = payload.len(),
-            "Sent notification"
+            "Queued notification"
         );
 
-        // In production, `payload` would be written to the IdeConnection transport.
-        // The caller is responsible for routing this to the actual connection.
-        let _ = payload;
+        if let Ok(mut queue) = self.outgoing.lock() {
+            queue.push(payload);
+        }
         Ok(())
     }
 
@@ -280,8 +285,9 @@ impl IdeBridge {
     /// Request an action from the IDE and return the response.
     ///
     /// Serializes the action as a JSON-RPC request, assigns a unique ID,
-    /// and returns the response. In production, this would send the request
-    /// over the transport and wait for the response.
+    /// enqueues the payload, and checks for a previously stored response
+    /// with the matching ID (set via [`Self::handle_response`]).
+    /// If no response is available yet, returns an empty success response.
     pub fn request_action(&self, action: &IdeAction) -> anyhow::Result<IdeResponse> {
         if !self.is_connected() {
             warn!("Attempted to request action while disconnected");
@@ -301,13 +307,24 @@ impl IdeBridge {
             kind = ?action.kind,
             id = id,
             bytes = payload.len(),
-            "Requested action"
+            "Queued action request"
         );
 
-        // In production, `payload` would be written to the IdeConnection transport
-        // and we'd wait for a response with matching ID.
-        // For now, return a success response.
-        let _ = payload;
+        // Enqueue the serialized request for the transport layer.
+        if let Ok(mut queue) = self.outgoing.lock() {
+            queue.push(payload);
+        }
+
+        // Check if a response was already received for this request ID.
+        if let Ok(mut pending) = self.pending_responses.lock() {
+            if let Some(response) = pending.remove(&id) {
+                return Ok(response);
+            }
+        }
+
+        // No response yet — the caller should use `handle_response` when
+        // the transport delivers the reply, then call this method again or
+        // poll `take_response(id)`.
         Ok(IdeResponse::ok_empty())
     }
 
@@ -364,6 +381,31 @@ impl IdeBridge {
         }
 
         Ok(())
+    }
+
+    /// Drain all queued outgoing messages.
+    ///
+    /// Returns the serialized JSON-RPC payloads that were enqueued by
+    /// [`Self::send_notification`] and [`Self::request_action`], clearing
+    /// the internal buffer. The caller should write each payload to the
+    /// transport (e.g., via LSP-style Content-Length framing over stdio).
+    pub fn drain_outgoing(&self) -> Vec<String> {
+        match self.outgoing.lock() {
+            Ok(mut queue) => std::mem::take(&mut *queue),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// Take the stored response for a specific request ID, if any.
+    ///
+    /// Returns `Some(response)` if a response was previously received via
+    /// [`Self::handle_response`] for the given ID, removing it from the
+    /// pending map. Returns `None` if no response is available yet.
+    pub fn take_response(&self, id: u64) -> Option<IdeResponse> {
+        self.pending_responses
+            .lock()
+            .ok()
+            .and_then(|mut pending| pending.remove(&id))
     }
 }
 

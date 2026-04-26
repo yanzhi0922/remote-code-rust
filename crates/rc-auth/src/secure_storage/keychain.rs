@@ -132,19 +132,60 @@ async fn delete_secret(service: &str, account: &str) -> Result<(), SecureStorage
 
 #[cfg(target_os = "windows")]
 async fn save_secret(service: &str, account: &str, secret: &str) -> Result<(), SecureStorageError> {
-    // Use a file-based fallback on Windows.
-    // In production, integrate with Windows Credential Manager via
-    // the `windows` crate or `credential` crate.
+    // Use Windows Credential Manager via cmdkey CLI.
+    let target = format!("{service}:{account}");
+    let output = tokio::process::Command::new("cmdkey")
+        .args([
+            "/generic",
+            &target,
+            "/user",
+            account,
+            "/pass",
+            secret,
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await
+        .map_err(|e| SecureStorageError::Platform(format!("cmdkey failed to execute: {e}")))?;
+
+    if output.status.success() {
+        debug!("Saved secret to Windows Credential Manager for target={target}");
+        return Ok(());
+    }
+
+    // Fall back to file-based storage if cmdkey is unavailable.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    tracing::warn!(
+        "cmdkey save failed ({stderr}), falling back to file-based storage"
+    );
     file_based_save(service, account, secret).await
 }
 
 #[cfg(target_os = "windows")]
 async fn load_secret(service: &str, account: &str) -> Result<Option<String>, SecureStorageError> {
+    // Windows Credential Manager does not support non-interactive credential
+    // retrieval via cmdkey. Use the file-based fallback for loading.
     file_based_load(service, account).await
 }
 
 #[cfg(target_os = "windows")]
 async fn delete_secret(service: &str, account: &str) -> Result<(), SecureStorageError> {
+    let target = format!("{service}:{account}");
+    let output = tokio::process::Command::new("cmdkey")
+        .args(["/delete", &target])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await
+        .map_err(|e| SecureStorageError::Platform(format!("cmdkey failed to execute: {e}")))?;
+
+    if output.status.success() {
+        debug!("Deleted secret from Windows Credential Manager for target={target}");
+        return Ok(());
+    }
+
+    // Not found is OK for delete — fall through to file-based cleanup.
     file_based_delete(service, account).await
 }
 
