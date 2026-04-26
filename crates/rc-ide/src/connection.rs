@@ -211,11 +211,11 @@ impl IdeConnection for StdioConnection {
         self.set_status(IdeStatus::Disconnecting);
 
         // Close the writer to signal EOF to the subprocess.
-        if let Ok(mut writer) = self.writer.lock() {
-            if let Some(mut w) = writer.take() {
-                let _ = w.flush();
-                // ChildStdin doesn't have close(); dropping it closes the pipe.
-            }
+        if let Ok(mut writer) = self.writer.lock()
+            && let Some(mut w) = writer.take()
+        {
+            let _ = w.flush();
+            // ChildStdin doesn't have close(); dropping it closes the pipe.
         }
         if let Ok(mut reader) = self.reader.lock() {
             *reader = None;
@@ -227,20 +227,20 @@ impl IdeConnection for StdioConnection {
     }
 
     fn send(&mut self, message: &str) -> anyhow::Result<()> {
-        if let Ok(mut writer) = self.writer.lock() {
-            if let Some(ref mut w) = *writer {
-                // Write with LSP-style Content-Length framing.
-                let content = message.as_bytes();
-                let header = format!("Content-Length: {}\r\n\r\n", content.len());
-                w.write_all(header.as_bytes())
-                    .map_err(|e| anyhow::anyhow!("failed to write header: {}", e))?;
-                w.write_all(content)
-                    .map_err(|e| anyhow::anyhow!("failed to write message: {}", e))?;
-                w.flush()
-                    .map_err(|e| anyhow::anyhow!("failed to flush: {}", e))?;
-                debug!(len = content.len(), "StdioConnection sent framed message");
-                return Ok(());
-            }
+        if let Ok(mut writer) = self.writer.lock()
+            && let Some(ref mut w) = *writer
+        {
+            // Write with LSP-style Content-Length framing.
+            let content = message.as_bytes();
+            let header = format!("Content-Length: {}\r\n\r\n", content.len());
+            w.write_all(header.as_bytes())
+                .map_err(|e| anyhow::anyhow!("failed to write header: {}", e))?;
+            w.write_all(content)
+                .map_err(|e| anyhow::anyhow!("failed to write message: {}", e))?;
+            w.flush()
+                .map_err(|e| anyhow::anyhow!("failed to flush: {}", e))?;
+            debug!(len = content.len(), "StdioConnection sent framed message");
+            return Ok(());
         }
 
         // Fallback: loopback mode (testing).
@@ -253,17 +253,17 @@ impl IdeConnection for StdioConnection {
 
     fn receive(&mut self) -> anyhow::Result<String> {
         // Try to read from the subprocess stdout.
-        if let Ok(mut reader) = self.reader.lock() {
-            if let Some(ref mut r) = *reader {
-                return read_framed_message(r);
-            }
+        if let Ok(mut reader) = self.reader.lock()
+            && let Some(ref mut r) = *reader
+        {
+            return read_framed_message(r);
         }
 
         // Fallback: loopback mode (testing) — read from inbox.
-        if let Ok(mut inbox) = self.inbox.lock() {
-            if let Some(msg) = inbox.pop() {
-                return Ok(msg);
-            }
+        if let Ok(mut inbox) = self.inbox.lock()
+            && let Some(msg) = inbox.pop()
+        {
+            return Ok(msg);
         }
 
         Err(anyhow::anyhow!("No messages available"))
@@ -473,10 +473,9 @@ impl IdeConnection for HttpConnection {
             let url = format!("{}/messages", self.endpoint);
             match client.get(&url).send() {
                 Ok(resp) if resp.status().is_success() => {
-                    if let Ok(text) = resp.text() {
-                        if !text.is_empty() {
-                            return Ok(text);
-                        }
+                    let text = resp.text().unwrap_or_default();
+                    if !text.is_empty() {
+                        return Ok(text);
                     }
                 }
                 Ok(resp) => {
@@ -516,7 +515,7 @@ fn read_framed_message<R: BufRead>(reader: &mut R) -> anyhow::Result<String> {
             return Err(anyhow::anyhow!("connection closed while reading headers"));
         }
 
-        let line = line.trim_end_matches(|c| c == '\r' || c == '\n');
+        let line = line.trim_end_matches(['\r', '\n']);
         if line.is_empty() {
             break; // End of headers
         }

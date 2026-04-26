@@ -115,13 +115,21 @@ pub trait ToolHook: Send + Sync + 'static {
     ) -> Result<Option<PostHookResult>>;
 
     /// Run as a PostToolUseFailure hook.  Return `None` to skip.
+    ///
+    /// The default implementation logs the failure at warn level.
     fn post_tool_use_failure(
         &self,
         tool_name: &str,
         tool_input: &Value,
         error: &str,
     ) -> Result<Option<PostFailureHookResult>> {
-        let _ = (tool_name, tool_input, error);
+        eprintln!(
+            "[hook:{}] tool '{}' failed: {}",
+            self.name(),
+            tool_name,
+            error
+        );
+        let _ = tool_input;
         Ok(None)
     }
 }

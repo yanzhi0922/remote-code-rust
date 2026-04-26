@@ -62,6 +62,8 @@ impl SandboxPolicy {
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
         {
+            // Unsupported platform — fall back to basic sandbox.
+            // `workspace` is unused here but kept for API consistency.
             let _ = workspace;
             Self::Basic
         }
@@ -180,10 +182,12 @@ pub async fn execute_in_sandbox(command: &str, config: &SandboxConfig) -> Result
         SandboxPolicy::Seatbelt(policy) => execute_seatbelt(command, policy, timeout).await,
 
         #[cfg(target_os = "linux")]
-        SandboxPolicy::Landlock(policy) => {
-            // Landlock requires the `landlock` crate which is not yet integrated.
-            // Fall back to basic isolation for now.
-            let _ = policy;
+        SandboxPolicy::Landlock(_policy) => {
+            // NOTE: Landlock (Linux Kernel ≥ 5.13) provides filesystem-level
+            // access control via the `landlock` crate.  Integration is deferred
+            // until the `landlock` crate is added as a dependency.  The policy
+            // fields (`allowed_dirs`, `allow_network`) are preserved here so
+            // they can be wired in once the crate is available.
             execute_basic(command, config, timeout).await
         }
 

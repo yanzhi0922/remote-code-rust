@@ -40,8 +40,7 @@ export function useThrottle<T extends (...args: unknown[]) => unknown>(
         }, delay - timeSinceLastExec);
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [delay, ...deps],
+    [delay, ...deps], // eslint-disable-line react-hooks/exhaustive-deps — deps intentionally spread
   );
 
   return throttledFunction as T;

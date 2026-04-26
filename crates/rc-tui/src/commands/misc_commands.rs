@@ -15,8 +15,8 @@ pub fn render_ide(config: &RuntimeConfig) {
 pub fn render_voice(config: &RuntimeConfig) {
     println!("Voice mode:");
     println!("  status: off");
+    println!("  session: {}", config.session_id);
     println!("  (voice mode requires a configured audio input/output device)");
-    let _ = config;
 }
 
 /// Dispatch `/thinkback` — show thinking/reasoning playback.

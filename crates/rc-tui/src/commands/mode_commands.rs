@@ -240,7 +240,10 @@ pub fn dispatch_fast(input: &str, config: &RuntimeConfig) {
             println!("Usage: /fast [on|off]");
         }
     }
-    let _ = config;
+    println!(
+        "  current effort: {}",
+        config.effort.as_deref().unwrap_or("default")
+    );
 }
 
 /// Dispatch `/outputStyle` — switch output style.
@@ -280,7 +283,10 @@ pub fn dispatch_color(input: &str, config: &RuntimeConfig) {
             println!("Available: {}", available.join(", "));
         }
     }
-    let _ = config;
+    println!(
+        "  output style: {}",
+        config.output_style.as_deref().unwrap_or("default")
+    );
 }
 
 fn proactive_status_message(enabled: bool) -> String {
