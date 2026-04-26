@@ -332,20 +332,20 @@ impl QueuedElicitationHandler {
     ///
     /// Returns all queued events and clears the internal buffer.
     pub fn drain_pending(&self) -> Vec<ElicitationRequestEvent> {
-        let mut guard = self.pending.lock().expect("elicitation lock");
+        let mut guard = self.pending.lock().unwrap_or_else(|e| e.into_inner());
         std::mem::take(&mut *guard)
     }
 
     /// Get the number of pending events.
     #[must_use]
     pub fn pending_count(&self) -> usize {
-        self.pending.lock().expect("elicitation lock").len()
+        self.pending.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 }
 
 impl ElicitationHandler for QueuedElicitationHandler {
     fn handle_elicitation(&self, event: ElicitationRequestEvent) -> ElicitationResult {
-        let mut guard = self.pending.lock().expect("elicitation lock");
+        let mut guard = self.pending.lock().unwrap_or_else(|e| e.into_inner());
         guard.push(event);
         // Return decline by default; the queued events can be processed
         // asynchronously and the response can be updated later.

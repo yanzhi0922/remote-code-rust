@@ -206,7 +206,7 @@ impl StreamingToolExecutor {
     ///
     /// The tool is dispatched immediately if concurrency rules allow.
     pub fn add_tool(&self, id: &str, name: &str, input: &Value, is_concurrency_safe: bool) {
-        let mut state = self.state.lock().expect("lock");
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.discarded {
             return;
         }
@@ -226,7 +226,7 @@ impl StreamingToolExecutor {
 
     /// Discard all pending and in-progress tools.
     pub fn discard(&self) {
-        let mut state = self.state.lock().expect("lock");
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.discarded = true;
         for tool in state.tools.iter_mut() {
             if tool.call.status == ToolStatus::Queued {
@@ -246,7 +246,7 @@ impl StreamingToolExecutor {
 
     /// Return completed (but not yet yielded) results in order.
     pub fn completed_results(&self) -> Vec<ToolExecutionResult> {
-        let mut state = self.state.lock().expect("lock");
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let mut out = Vec::new();
 
         for tool in state.tools.iter_mut() {
@@ -267,7 +267,7 @@ impl StreamingToolExecutor {
     pub async fn wait_for_remaining(&self) -> Vec<ToolExecutionResult> {
         loop {
             {
-                let state = self.state.lock().expect("lock");
+                let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 let all_done = state
                     .tools
                     .iter()
@@ -284,7 +284,7 @@ impl StreamingToolExecutor {
     /// Whether any tool is still executing or queued.
     #[must_use]
     pub fn has_unfinished_tools(&self) -> bool {
-        let state = self.state.lock().expect("lock");
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state
             .tools
             .iter()
@@ -294,7 +294,7 @@ impl StreamingToolExecutor {
     /// Whether any tool is currently executing.
     #[must_use]
     pub fn has_executing_tools(&self) -> bool {
-        let state = self.state.lock().expect("lock");
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state
             .tools
             .iter()
@@ -304,14 +304,14 @@ impl StreamingToolExecutor {
     /// Number of tools in the executor (all statuses).
     #[must_use]
     pub fn tool_count(&self) -> usize {
-        self.state.lock().expect("lock").tools.len()
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).tools.len()
     }
 
     /// Snapshot of all tracked tool calls and their statuses.
     pub fn tracked_calls(&self) -> Vec<TrackedToolCall> {
         self.state
             .lock()
-            .expect("lock")
+            .unwrap_or_else(|e| e.into_inner())
             .tools
             .iter()
             .map(|t| t.call.clone())
@@ -320,13 +320,13 @@ impl StreamingToolExecutor {
 
     /// Mark a tool as errored, which cancels sibling bash-like tools.
     pub fn mark_error(&self, _tool_description: &str) {
-        self.state.lock().expect("lock").has_errored = true;
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).has_errored = true;
     }
 
     /// Whether any tool has errored.
     #[must_use]
     pub fn has_errored(&self) -> bool {
-        self.state.lock().expect("lock").has_errored
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).has_errored
     }
 
     // -- internal dispatch --------------------------------------------------
@@ -392,7 +392,7 @@ impl StreamingToolExecutor {
                 let start = std::time::Instant::now();
 
                 // Check preconditions
-                let discarded = state_arc.lock().expect("lock").discarded;
+                let discarded = state_arc.lock().unwrap_or_else(|e| e.into_inner()).discarded;
                 if discarded {
                     let r = ToolExecutionResult {
                         tool_call_id: id.clone(),
@@ -400,7 +400,7 @@ impl StreamingToolExecutor {
                         is_error: true,
                         duration: start.elapsed(),
                     };
-                    let mut s = state_arc.lock().expect("lock");
+                    let mut s = state_arc.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(tool) = s.tools.iter_mut().find(|t| t.call.id == id) {
                         tool.call.status = ToolStatus::Completed;
                         tool.result = Some(r);
@@ -419,7 +419,7 @@ impl StreamingToolExecutor {
                     return;
                 }
 
-                let has_errored = state_arc.lock().expect("lock").has_errored;
+                let has_errored = state_arc.lock().unwrap_or_else(|e| e.into_inner()).has_errored;
                 if has_errored {
                     let r = ToolExecutionResult {
                         tool_call_id: id.clone(),
@@ -429,7 +429,7 @@ impl StreamingToolExecutor {
                         is_error: true,
                         duration: start.elapsed(),
                     };
-                    let mut s = state_arc.lock().expect("lock");
+                    let mut s = state_arc.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(tool) = s.tools.iter_mut().find(|t| t.call.id == id) {
                         tool.call.status = ToolStatus::Completed;
                         tool.result = Some(r);
@@ -464,7 +464,7 @@ impl StreamingToolExecutor {
                                 is_error: true,
                                 duration: start.elapsed(),
                             };
-                            let mut s = state_arc.lock().expect("lock");
+                            let mut s = state_arc.lock().unwrap_or_else(|e| e.into_inner());
                             if let Some(tool) = s.tools.iter_mut().find(|t| t.call.id == id) {
                                 tool.call.status = ToolStatus::Completed;
                                 tool.result = Some(r);
@@ -504,7 +504,7 @@ impl StreamingToolExecutor {
 
                 // Store result
                 {
-                    let mut s = state_arc.lock().expect("lock");
+                    let mut s = state_arc.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(tool) = s.tools.iter_mut().find(|t| t.call.id == id) {
                         tool.call.status = ToolStatus::Completed;
                         tool.result = Some(r);
@@ -537,7 +537,7 @@ impl StreamingToolExecutor {
         timeout: Option<Duration>,
         max_bytes: usize,
     ) {
-        let mut state = state_arc.lock().expect("lock");
+        let mut state = state_arc.lock().unwrap_or_else(|e| e.into_inner());
         let executing_count = state
             .tools
             .iter()
@@ -592,7 +592,7 @@ impl StreamingToolExecutor {
                                 is_error: true,
                                 duration: start.elapsed(),
                             };
-                            let mut s = state_arc.lock().expect("lock");
+                            let mut s = state_arc.lock().unwrap_or_else(|e| e.into_inner());
                             if let Some(tool) = s.tools.iter_mut().find(|t| t.call.id == id) {
                                 tool.call.status = ToolStatus::Completed;
                                 tool.result = Some(r);
@@ -630,7 +630,7 @@ impl StreamingToolExecutor {
                 }
 
                 {
-                    let mut s = state_arc.lock().expect("lock");
+                    let mut s = state_arc.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(tool) = s.tools.iter_mut().find(|t| t.call.id == id) {
                         tool.call.status = ToolStatus::Completed;
                         tool.result = Some(r);

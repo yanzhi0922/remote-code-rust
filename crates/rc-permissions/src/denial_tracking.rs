@@ -114,13 +114,13 @@ impl SharedDenialTracker {
     pub fn record_denial(&self, tool_name: &str, reason: &str) {
         self.inner
             .lock()
-            .expect("lock")
+            .unwrap_or_else(|e| e.into_inner())
             .record_denial(tool_name, reason);
     }
 
     /// Record an approval.
     pub fn record_approval(&self, tool_name: &str) {
-        self.inner.lock().expect("lock").record_approval(tool_name);
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).record_approval(tool_name);
     }
 
     /// Get consecutive denial count.
@@ -128,7 +128,7 @@ impl SharedDenialTracker {
     pub fn consecutive_denials(&self, tool_name: &str) -> u32 {
         self.inner
             .lock()
-            .expect("lock")
+            .unwrap_or_else(|e| e.into_inner())
             .consecutive_denials(tool_name)
     }
 
@@ -137,7 +137,7 @@ impl SharedDenialTracker {
     pub fn should_auto_skip(&self, tool_name: &str, threshold: u32) -> bool {
         self.inner
             .lock()
-            .expect("lock")
+            .unwrap_or_else(|e| e.into_inner())
             .should_auto_skip(tool_name, threshold)
     }
 }

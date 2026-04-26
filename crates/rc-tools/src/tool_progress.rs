@@ -337,7 +337,7 @@ impl ProgressStream {
 
     /// Emit a progress event for the given tool.
     pub fn emit(&self, tool_call_id: &str, data: ToolProgressData) {
-        let mut inner = self.inner.lock().expect("progress stream lock poisoned");
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if inner.closed {
             return;
         }
@@ -349,7 +349,7 @@ impl ProgressStream {
 
     /// Drain all buffered events, returning them as a vector.
     pub fn drain(&self) -> Vec<(String, ToolProgressData)> {
-        let mut inner = self.inner.lock().expect("progress stream lock poisoned");
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         std::mem::take(&mut inner.events)
     }
 
