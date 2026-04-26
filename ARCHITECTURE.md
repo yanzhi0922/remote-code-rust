@@ -42,6 +42,7 @@ The codex and roo-code directories are excluded from the main repo via `.gitigno
 - `rc-runner`: runner protocol, HTTP API, workspace registration, heartbeat, session/approval management
 - `rc-control-plane`: API models, runner registry, realtime fan-out (WebSocket), approvals, artifact routes, timeline events
 - `rc-telemetry`: tracing setup, structured logging, JSON output, cost telemetry
+- `rc-agent-protocol`: multi-agent protocol abstraction layer — `AgentAdapter` trait, `UnifiedAgentEvent` enum, `AgentRouter` for routing messages to different agent backends; includes `RemoteCodeAdapter` (in-process callback), `RooCodeAdapter` (subprocess JSON-RPC 2.0 + Content-Length framing), and `CodexAdapter` (subprocess NDJSON line-delimited)
 
 ## Process Model
 

@@ -59,7 +59,7 @@ remote-code-rust/
 │   ├── remote-code-control-plane/ # 控制平面
 │   ├── remote-code-runner/        # 远程 Runner
 │   └── remote-code-migrate/       # 数据迁移
-├── crates/                        # 库 Crate（38 个）
+├── crates/                        # 库 Crate（39 个）
 ├── plans/                         # 设计文档
 │   ├── multi-agent-architecture.md  # 多 Agent 架构设计
 │   └── archive/                   # 归档文档
@@ -123,6 +123,7 @@ remote-code-rust/
 | `rc-runner` | Runner 协议、HTTP API、心跳 |
 | `rc-control-plane` | API 模型、Runner 注册、WebSocket 扇出 |
 | `rc-utils` | 工具函数（Git、Diff、Markdown、图片、Cron 等） |
+| `rc-agent-protocol` | 多代理协议抽象层：AgentAdapter trait、UnifiedAgentEvent、AgentRouter |
 
 ### 数据流
 

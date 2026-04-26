@@ -111,6 +111,27 @@ pub enum McpRuntimeError {
         code: i64,
         message: String,
     },
+    #[error("HTTP request to MCP server `{server}` failed during {phase}")]
+    Http {
+        server: String,
+        phase: &'static str,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("MCP server `{server}` returned HTTP {status} during {phase}: {message}")]
+    HttpError {
+        server: String,
+        phase: &'static str,
+        status: u16,
+        message: String,
+    },
+    #[error("MCP server `{server}` returned JSON-RPC error {code} during {phase}: {message}")]
+    JsonRpc {
+        server: String,
+        phase: &'static str,
+        code: i64,
+        message: String,
+    },
     // ── OAuth errors ───────────────────────────────────────────────────────
     #[error("OAuth error for `{server}`: {message}")]
     OAuth { server: String, message: String },

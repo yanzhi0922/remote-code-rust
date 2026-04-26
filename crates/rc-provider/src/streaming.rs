@@ -5,6 +5,9 @@
 //! processes server-sent events (SSE) from OpenAI- and Anthropic-compatible
 //! APIs, invoking optional callbacks for text deltas, tool-call progress, and
 //! usage telemetry.
+//!
+//! Also supports native Bedrock event-stream and Vertex SSE streaming for
+//! Anthropic Claude models hosted on AWS and GCP.
 
 use anyhow::{Context, Result, anyhow};
 use futures::StreamExt;
@@ -20,7 +23,7 @@ use std::time::Duration;
 
 use crate::{
     ProviderClient, build_anthropic_request_body, build_headers, build_openai_request_body,
-    provider_for_request,
+    prepare_anthropic_request_surface, provider_for_request,
 };
 
 // ---------------------------------------------------------------------------
@@ -142,10 +145,9 @@ impl ProviderClient {
                 )
                 .await
             }
-            // Native Bedrock/Vertex use non-streaming for now (SSE event-stream
-            // parsing for Bedrock is not yet implemented).  If a base_url is set
-            // (proxy mode) we fall back to OpenAI-compatible streaming.
-            ProviderProtocol::Bedrock | ProviderProtocol::Vertex => {
+            // Native Bedrock uses AWS event-stream; Vertex uses SSE.
+            // If a base_url is set (proxy mode), fall back to OpenAI-compatible streaming.
+            ProviderProtocol::Bedrock => {
                 if provider.base_url.is_some() {
                     self.complete_streaming_openai(
                         provider,
@@ -156,10 +158,31 @@ impl ProviderClient {
                     )
                     .await
                 } else {
-                    // Native mode — fall back to non-streaming completion.
-                    self.complete_with_discovered_tools(
+                    self.complete_streaming_bedrock(
                         provider,
                         conversation,
+                        Some(&tracked_callbacks),
+                        carried_discovered_tools,
+                        request_context,
+                    )
+                    .await
+                }
+            }
+            ProviderProtocol::Vertex => {
+                if provider.base_url.is_some() {
+                    self.complete_streaming_openai(
+                        provider,
+                        conversation,
+                        Some(&tracked_callbacks),
+                        carried_discovered_tools,
+                        request_context,
+                    )
+                    .await
+                } else {
+                    self.complete_streaming_vertex(
+                        provider,
+                        conversation,
+                        Some(&tracked_callbacks),
                         carried_discovered_tools,
                         request_context,
                     )
@@ -654,6 +677,688 @@ impl ProviderClient {
         })
     }
 
+    /// Streaming completion for Amazon Bedrock using native SigV4 signing and
+    /// the `invokeModelWithResponseStream` endpoint.
+    ///
+    /// Bedrock returns an AWS Event Stream encoded response where each frame
+    /// contains a JSON payload with Anthropic SSE event types.
+    #[allow(clippy::too_many_lines)]
+    async fn complete_streaming_bedrock(
+        &self,
+        provider: &ProviderConfig,
+        conversation: &[ConversationEntry],
+        callbacks: Option<&StreamingCallbacks>,
+        carried_discovered_tools: &BTreeSet<String>,
+        request_context: Option<&crate::query_source::ProviderRequestContext>,
+    ) -> Result<ProviderResponse> {
+        let effective_provider = provider_for_request(provider, request_context);
+        let credentials = match crate::sigv4::load_aws_credentials() {
+            Some(creds) => creds,
+            None => {
+                // No AWS credentials — fall back to non-streaming.
+                return self
+                    .complete_with_discovered_tools(
+                        provider,
+                        conversation,
+                        carried_discovered_tools,
+                        request_context,
+                    )
+                    .await;
+            }
+        };
+
+        let model = effective_provider
+            .model
+            .as_deref()
+            .ok_or_else(|| anyhow!("Bedrock provider requires a model ID"))?;
+
+        let (system, messages, tools) = prepare_anthropic_request_surface(
+            &effective_provider,
+            conversation,
+            carried_discovered_tools,
+        )
+        .await;
+        let mut body = json!({
+            "anthropic_version": "bedrock-2023-05-31",
+            "system": system,
+            "messages": messages,
+            "tools": tools,
+            "max_tokens": effective_provider.max_output_tokens,
+            "stream": true,
+        });
+        crate::apply_anthropic_request_metadata(&mut body, &effective_provider, request_context);
+        let payload =
+            serde_json::to_vec(&body).context("failed to serialise Bedrock streaming request")?;
+
+        // Construct Bedrock invoke-with-response-stream URL.
+        let host = format!("bedrock-runtime.{}.amazonaws.com", credentials.region);
+        let encoded_model = model.replace(':', "%3A").replace('+', "%2B");
+        let path = format!("/model/{encoded_model}/invoke-with-response-stream");
+        let url = format!("https://{host}{path}");
+
+        // Sign the request.
+        let signed = crate::sigv4::sign("POST", &host, &path, &payload, &credentials, "bedrock");
+
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
+        headers.insert(
+            reqwest::header::ACCEPT,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
+        headers.insert(
+            reqwest::header::HeaderName::from_static("host"),
+            reqwest::header::HeaderValue::from_str(&signed.host)?,
+        );
+        headers.insert(
+            reqwest::header::HeaderName::from_static("x-amz-date"),
+            reqwest::header::HeaderValue::from_str(&signed.x_amz_date)?,
+        );
+        headers.insert(
+            reqwest::header::HeaderName::from_static("x-amz-content-sha256"),
+            reqwest::header::HeaderValue::from_str(&signed.x_amz_content_sha256)?,
+        );
+        headers.insert(
+            reqwest::header::AUTHORIZATION,
+            reqwest::header::HeaderValue::from_str(&signed.authorization)?,
+        );
+        if let Some(ref token) = signed.x_amz_security_token {
+            headers.insert(
+                reqwest::header::HeaderName::from_static("x-amz-security-token"),
+                reqwest::header::HeaderValue::from_str(token)?,
+            );
+        }
+
+        let response = self
+            .http
+            .post(&url)
+            .headers(headers)
+            .timeout(Duration::from_millis(provider.timeout_ms))
+            .body(payload)
+            .send()
+            .await
+            .context("Bedrock streaming request failed")?;
+
+        let status = response.status().as_u16();
+        if status >= 400 {
+            let text = response
+                .text()
+                .await
+                .context("failed to read Bedrock streaming error body")?;
+            return Err(anyhow!(
+                "Bedrock streaming request failed ({status}): {text}"
+            ));
+        }
+
+        // Parse the AWS Event Stream response.
+        // Bedrock sends binary event stream frames. Each frame has:
+        //   - 4 bytes: total length (big-endian)
+        //   - 4 bytes: headers length (big-endian)
+        //   - 4 bytes: prelude CRC
+        //   - headers (variable)
+        //   - payload (variable)
+        //   - 4 bytes: message CRC
+        //
+        // The payload contains JSON like: {"type":"content_block_delta","index":0,"delta":{...}}
+        let mut content_block_accumulators: BTreeMap<usize, AnthropicContentAccumulator> =
+            BTreeMap::new();
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+
+        let mut stream = response.bytes_stream();
+        let mut buffer: Vec<u8> = Vec::new();
+
+        while let Some(chunk) = stream.next().await {
+            let bytes = chunk.with_context(|| "failed to read Bedrock streaming chunk")?;
+            buffer.extend_from_slice(&bytes);
+
+            // Parse complete event stream frames from the buffer.
+            while buffer.len() >= 12 {
+                // Minimum frame size: 4 (total_len) + 4 (headers_len) + 4 (prelude_crc)
+                let total_len =
+                    u32::from_be_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) as usize;
+                if buffer.len() < total_len {
+                    break; // Incomplete frame, wait for more data.
+                }
+
+                let headers_len =
+                    u32::from_be_bytes([buffer[4], buffer[5], buffer[6], buffer[7]]) as usize;
+
+                // Extract payload (between headers and final 4-byte CRC).
+                let payload_start = 12 + headers_len;
+                let payload_end = total_len - 4; // Last 4 bytes are message CRC.
+                if payload_start >= payload_end {
+                    // Malformed frame — skip it.
+                    buffer.drain(..total_len);
+                    continue;
+                }
+
+                let payload_bytes = &buffer[payload_start..payload_end];
+
+                // Parse headers to find the event type.
+                let _event_type = parse_bedrock_event_type(&buffer[12..12 + headers_len]);
+
+                // The payload is JSON with Anthropic SSE event structure.
+                if let Ok(event) = serde_json::from_slice::<Value>(payload_bytes) {
+                    let event_type = event.get("type").and_then(Value::as_str).unwrap_or("");
+
+                    match event_type {
+                        "message_start" => {
+                            if let Some(msg) = event.get("message") {
+                                if request_id.is_none() {
+                                    request_id = msg
+                                        .get("id")
+                                        .and_then(Value::as_str)
+                                        .map(ToOwned::to_owned);
+                                }
+                                if let Some(u) = msg.get("usage") {
+                                    let inp =
+                                        u.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
+                                    usage.input_tokens = inp;
+                                    if let Some(cb) = callbacks.and_then(|c| c.on_usage.as_ref()) {
+                                        cb(inp, 0);
+                                    }
+                                }
+                            }
+                        }
+                        "content_block_start" => {
+                            #[allow(clippy::cast_possible_truncation)]
+                            let index =
+                                event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                            let content_block = event.get("content_block");
+                            let block_type = content_block
+                                .and_then(|b| b.get("type"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("");
+
+                            match block_type {
+                                "text" => {
+                                    let text = content_block
+                                        .and_then(|b| b.get("text"))
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("")
+                                        .to_owned();
+                                    content_block_accumulators
+                                        .insert(index, AnthropicContentAccumulator::Text { text });
+                                }
+                                "thinking" => {
+                                    let thinking = content_block
+                                        .and_then(|b| b.get("thinking"))
+                                        .or_else(|| content_block.and_then(|b| b.get("text")))
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("")
+                                        .to_owned();
+                                    let signature = content_block
+                                        .and_then(|b| b.get("signature"))
+                                        .and_then(Value::as_str)
+                                        .map(ToOwned::to_owned);
+                                    content_block_accumulators.insert(
+                                        index,
+                                        AnthropicContentAccumulator::Thinking {
+                                            thinking,
+                                            signature,
+                                        },
+                                    );
+                                }
+                                "tool_use" | "server_tool_use" => {
+                                    let id = content_block
+                                        .and_then(|b| b.get("id"))
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("")
+                                        .to_owned();
+                                    let name = content_block
+                                        .and_then(|b| b.get("name"))
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("")
+                                        .to_owned();
+                                    if let Some(cb) =
+                                        callbacks.and_then(|c| c.on_tool_call_start.as_ref())
+                                    {
+                                        cb(&id, &name);
+                                    }
+                                    content_block_accumulators.insert(
+                                        index,
+                                        AnthropicContentAccumulator::ToolUse(
+                                            AnthropicToolUseAccumulator {
+                                                block_type: block_type.to_owned(),
+                                                id,
+                                                name,
+                                                partial_json: String::new(),
+                                            },
+                                        ),
+                                    );
+                                }
+                                _ => {}
+                            }
+                        }
+                        "content_block_delta" => {
+                            #[allow(clippy::cast_possible_truncation)]
+                            let index =
+                                event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                            let delta = event.get("delta");
+                            let delta_type = delta
+                                .and_then(|d| d.get("type"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("");
+
+                            if delta_type == "thinking_delta"
+                                && let Some(thinking) = delta
+                                    .and_then(|d| d.get("thinking"))
+                                    .and_then(Value::as_str)
+                                && let Some(AnthropicContentAccumulator::Thinking {
+                                    thinking: existing,
+                                    ..
+                                }) = content_block_accumulators.get_mut(&index)
+                            {
+                                existing.push_str(thinking);
+                            } else if delta_type == "signature_delta"
+                                && let Some(signature) = delta
+                                    .and_then(|d| d.get("signature"))
+                                    .and_then(Value::as_str)
+                                && let Some(AnthropicContentAccumulator::Thinking {
+                                    signature: existing,
+                                    ..
+                                }) = content_block_accumulators.get_mut(&index)
+                            {
+                                *existing = Some(signature.to_owned());
+                            } else if delta_type == "text_delta"
+                                && let Some(text) =
+                                    delta.and_then(|d| d.get("text")).and_then(Value::as_str)
+                                && let Some(AnthropicContentAccumulator::Text { text: existing }) =
+                                    content_block_accumulators.get_mut(&index)
+                            {
+                                if let Some(cb) = callbacks.and_then(|c| c.on_text_delta.as_ref()) {
+                                    cb(text);
+                                }
+                                existing.push_str(text);
+                            }
+
+                            if (delta_type == "input_json_delta"
+                                || matches!(
+                                    content_block_accumulators.get(&index),
+                                    Some(AnthropicContentAccumulator::ToolUse(_))
+                                ))
+                                && let Some(partial) = delta
+                                    .and_then(|d| d.get("partial_json"))
+                                    .and_then(Value::as_str)
+                                && let Some(AnthropicContentAccumulator::ToolUse(acc)) =
+                                    content_block_accumulators.get_mut(&index)
+                            {
+                                if let Some(cb) =
+                                    callbacks.and_then(|c| c.on_tool_call_delta.as_ref())
+                                {
+                                    cb(&acc.id, partial);
+                                }
+                                acc.partial_json.push_str(partial);
+                            }
+                        }
+                        "content_block_stop" => {}
+                        "message_delta" => {
+                            if let Some(delta_val) = event.get("delta")
+                                && let Some(reason) =
+                                    delta_val.get("stop_reason").and_then(Value::as_str)
+                            {
+                                reason.clone_into(&mut stop_reason);
+                            }
+                            if let Some(u) = event.get("usage") {
+                                let out =
+                                    u.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
+                                usage.output_tokens = out;
+                                if let Some(cb) = callbacks.and_then(|c| c.on_usage.as_ref()) {
+                                    cb(usage.input_tokens, out);
+                                }
+                            }
+                        }
+                        "message_stop" => {}
+                        _ => {}
+                    }
+                }
+
+                buffer.drain(..total_len);
+            }
+        }
+
+        let (raw_text, thinking_text, content_blocks, tool_calls) =
+            finalize_anthropic_content_blocks(content_block_accumulators);
+        Ok(ProviderResponse {
+            text: crate::strip_reasoning_tags(&raw_text),
+            history_text: Some(raw_text),
+            thinking: thinking_text,
+            content_blocks,
+            tool_calls,
+            request_id,
+            usage,
+            stop_reason,
+        })
+    }
+
+    /// Streaming completion for Google Vertex AI using OAuth2 Bearer auth.
+    ///
+    /// Vertex AI Claude models use the Anthropic Messages API format with SSE
+    /// streaming, identical to the direct Anthropic API.
+    #[allow(clippy::too_many_lines)]
+    async fn complete_streaming_vertex(
+        &self,
+        provider: &ProviderConfig,
+        conversation: &[ConversationEntry],
+        callbacks: Option<&StreamingCallbacks>,
+        carried_discovered_tools: &BTreeSet<String>,
+        request_context: Option<&crate::query_source::ProviderRequestContext>,
+    ) -> Result<ProviderResponse> {
+        let effective_provider = provider_for_request(provider, request_context);
+        let access_token = match crate::load_vertex_access_token() {
+            Some(token) => token,
+            None => {
+                // No Google credentials — fall back to non-streaming.
+                return self
+                    .complete_with_discovered_tools(
+                        provider,
+                        conversation,
+                        carried_discovered_tools,
+                        request_context,
+                    )
+                    .await;
+            }
+        };
+
+        let model = effective_provider
+            .model
+            .as_deref()
+            .ok_or_else(|| anyhow!("Vertex AI provider requires a model ID"))?;
+
+        let project = std::env::var("GOOGLE_CLOUD_PROJECT")
+            .or_else(|_| std::env::var("GCLOUD_PROJECT"))
+            .map_err(|_| {
+                anyhow!("Vertex AI requires GOOGLE_CLOUD_PROJECT or GCLOUD_PROJECT env var")
+            })?;
+
+        let region = std::env::var("GOOGLE_CLOUD_REGION")
+            .or_else(|_| std::env::var("CLOUD_ML_REGION"))
+            .unwrap_or_else(|_| "us-east5".to_string());
+
+        // Build Anthropic-format body for Claude models on Vertex AI.
+        let (system, messages, tools) = prepare_anthropic_request_surface(
+            &effective_provider,
+            conversation,
+            carried_discovered_tools,
+        )
+        .await;
+        let mut body = json!({
+            "anthropic_version": "vertex-2023-10-16",
+            "system": system,
+            "messages": messages,
+            "tools": tools,
+            "max_tokens": effective_provider.max_output_tokens,
+            "stream": true,
+        });
+        crate::apply_anthropic_request_metadata(&mut body, &effective_provider, request_context);
+
+        // Construct Vertex AI streaming URL.
+        let url = format!(
+            "https://{region}-aiplatform.googleapis.com/v1/projects/{project}/locations/{region}/publishers/anthropic/models/{model}:streamRawPredict"
+        );
+
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
+        headers.insert(
+            reqwest::header::ACCEPT,
+            reqwest::header::HeaderValue::from_static("text/event-stream"),
+        );
+        headers.insert(
+            reqwest::header::AUTHORIZATION,
+            reqwest::header::HeaderValue::from_str(&format!("Bearer {access_token}"))?,
+        );
+
+        let response = self
+            .http
+            .post(&url)
+            .headers(headers)
+            .timeout(Duration::from_millis(provider.timeout_ms))
+            .json(&body)
+            .send()
+            .await
+            .context("Vertex AI streaming request failed")?;
+
+        let status = response.status().as_u16();
+        if status >= 400 {
+            let text = response
+                .text()
+                .await
+                .context("failed to read Vertex AI streaming error body")?;
+            return Err(anyhow!(
+                "Vertex AI streaming request failed ({status}): {text}"
+            ));
+        }
+
+        // Parse the SSE response — Vertex uses the same Anthropic SSE event format.
+        // Reuse the same Anthropic SSE parsing logic.
+        let mut content_block_accumulators: BTreeMap<usize, AnthropicContentAccumulator> =
+            BTreeMap::new();
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+
+        let mut stream = response.bytes_stream();
+        let mut sse_buffer = String::new();
+
+        while let Some(chunk) = stream.next().await {
+            let bytes = chunk.with_context(|| "failed to read Vertex streaming chunk")?;
+            sse_buffer.push_str(&String::from_utf8_lossy(&bytes));
+
+            while let Some(event_end) = sse_buffer.find("\n\n") {
+                let event_text = sse_buffer[..event_end].to_owned();
+                sse_buffer = sse_buffer[event_end + 2..].to_owned();
+
+                for line in event_text.lines() {
+                    let Some(data) = line.strip_prefix("data: ") else {
+                        continue;
+                    };
+                    let data = data.trim();
+                    if data == "[DONE]" {
+                        continue;
+                    }
+
+                    let event: Value = match serde_json::from_str(data) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+
+                    let event_type = event.get("type").and_then(Value::as_str).unwrap_or("");
+
+                    match event_type {
+                        "message_start" => {
+                            if let Some(msg) = event.get("message") {
+                                if request_id.is_none() {
+                                    request_id = msg
+                                        .get("id")
+                                        .and_then(Value::as_str)
+                                        .map(ToOwned::to_owned);
+                                }
+                                if let Some(u) = msg.get("usage") {
+                                    let inp =
+                                        u.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
+                                    usage.input_tokens = inp;
+                                    if let Some(cb) = callbacks.and_then(|c| c.on_usage.as_ref()) {
+                                        cb(inp, 0);
+                                    }
+                                }
+                            }
+                        }
+                        "content_block_start" => {
+                            #[allow(clippy::cast_possible_truncation)]
+                            let index =
+                                event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                            let content_block = event.get("content_block");
+                            let block_type = content_block
+                                .and_then(|b| b.get("type"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("");
+
+                            match block_type {
+                                "text" => {
+                                    let text = content_block
+                                        .and_then(|b| b.get("text"))
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("")
+                                        .to_owned();
+                                    content_block_accumulators
+                                        .insert(index, AnthropicContentAccumulator::Text { text });
+                                }
+                                "thinking" => {
+                                    let thinking = content_block
+                                        .and_then(|b| b.get("thinking"))
+                                        .or_else(|| content_block.and_then(|b| b.get("text")))
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("")
+                                        .to_owned();
+                                    let signature = content_block
+                                        .and_then(|b| b.get("signature"))
+                                        .and_then(Value::as_str)
+                                        .map(ToOwned::to_owned);
+                                    content_block_accumulators.insert(
+                                        index,
+                                        AnthropicContentAccumulator::Thinking {
+                                            thinking,
+                                            signature,
+                                        },
+                                    );
+                                }
+                                "tool_use" | "server_tool_use" => {
+                                    let id = content_block
+                                        .and_then(|b| b.get("id"))
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("")
+                                        .to_owned();
+                                    let name = content_block
+                                        .and_then(|b| b.get("name"))
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("")
+                                        .to_owned();
+                                    if let Some(cb) =
+                                        callbacks.and_then(|c| c.on_tool_call_start.as_ref())
+                                    {
+                                        cb(&id, &name);
+                                    }
+                                    content_block_accumulators.insert(
+                                        index,
+                                        AnthropicContentAccumulator::ToolUse(
+                                            AnthropicToolUseAccumulator {
+                                                block_type: block_type.to_owned(),
+                                                id,
+                                                name,
+                                                partial_json: String::new(),
+                                            },
+                                        ),
+                                    );
+                                }
+                                _ => {}
+                            }
+                        }
+                        "content_block_delta" => {
+                            #[allow(clippy::cast_possible_truncation)]
+                            let index =
+                                event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                            let delta = event.get("delta");
+                            let delta_type = delta
+                                .and_then(|d| d.get("type"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("");
+
+                            if delta_type == "thinking_delta"
+                                && let Some(thinking) = delta
+                                    .and_then(|d| d.get("thinking"))
+                                    .and_then(Value::as_str)
+                                && let Some(AnthropicContentAccumulator::Thinking {
+                                    thinking: existing,
+                                    ..
+                                }) = content_block_accumulators.get_mut(&index)
+                            {
+                                existing.push_str(thinking);
+                            } else if delta_type == "signature_delta"
+                                && let Some(signature) = delta
+                                    .and_then(|d| d.get("signature"))
+                                    .and_then(Value::as_str)
+                                && let Some(AnthropicContentAccumulator::Thinking {
+                                    signature: existing,
+                                    ..
+                                }) = content_block_accumulators.get_mut(&index)
+                            {
+                                *existing = Some(signature.to_owned());
+                            } else if delta_type == "text_delta"
+                                && let Some(text) =
+                                    delta.and_then(|d| d.get("text")).and_then(Value::as_str)
+                                && let Some(AnthropicContentAccumulator::Text { text: existing }) =
+                                    content_block_accumulators.get_mut(&index)
+                            {
+                                if let Some(cb) = callbacks.and_then(|c| c.on_text_delta.as_ref()) {
+                                    cb(text);
+                                }
+                                existing.push_str(text);
+                            }
+
+                            if (delta_type == "input_json_delta"
+                                || matches!(
+                                    content_block_accumulators.get(&index),
+                                    Some(AnthropicContentAccumulator::ToolUse(_))
+                                ))
+                                && let Some(partial) = delta
+                                    .and_then(|d| d.get("partial_json"))
+                                    .and_then(Value::as_str)
+                                && let Some(AnthropicContentAccumulator::ToolUse(acc)) =
+                                    content_block_accumulators.get_mut(&index)
+                            {
+                                if let Some(cb) =
+                                    callbacks.and_then(|c| c.on_tool_call_delta.as_ref())
+                                {
+                                    cb(&acc.id, partial);
+                                }
+                                acc.partial_json.push_str(partial);
+                            }
+                        }
+                        "content_block_stop" => {}
+                        "message_delta" => {
+                            if let Some(delta_val) = event.get("delta")
+                                && let Some(reason) =
+                                    delta_val.get("stop_reason").and_then(Value::as_str)
+                            {
+                                reason.clone_into(&mut stop_reason);
+                            }
+                            if let Some(u) = event.get("usage") {
+                                let out =
+                                    u.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
+                                usage.output_tokens = out;
+                                if let Some(cb) = callbacks.and_then(|c| c.on_usage.as_ref()) {
+                                    cb(usage.input_tokens, out);
+                                }
+                            }
+                        }
+                        "message_stop" => {}
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        let (raw_text, thinking_text, content_blocks, tool_calls) =
+            finalize_anthropic_content_blocks(content_block_accumulators);
+        Ok(ProviderResponse {
+            text: crate::strip_reasoning_tags(&raw_text),
+            history_text: Some(raw_text),
+            thinking: thinking_text,
+            content_blocks,
+            tool_calls,
+            request_id,
+            usage,
+            stop_reason,
+        })
+    }
+
     async fn send_streaming_request(
         &self,
         provider: &ProviderConfig,
@@ -727,6 +1432,69 @@ impl ProviderClient {
 
 fn is_retryable_http_status(status: u16) -> bool {
     matches!(status, 408 | 429 | 500 | 502 | 503 | 504 | 529)
+}
+
+/// Parse the `:event-type` header value from a Bedrock event stream header block.
+///
+/// AWS Event Stream headers are TLV-encoded. The event type header has:
+/// - 1 byte: header name length
+/// - N bytes: header name (":event-type")
+/// - 1 byte: header value type (7 = string)
+/// - 2 bytes: value length (big-endian)
+/// - N bytes: value string
+///
+/// Returns the event type string (e.g. "chunk", "internal-server-error") or
+/// an empty string if not found.
+fn parse_bedrock_event_type(header_bytes: &[u8]) -> String {
+    let mut pos = 0;
+    while pos + 2 < header_bytes.len() {
+        let name_len = header_bytes[pos] as usize;
+        pos += 1;
+        if pos + name_len >= header_bytes.len() {
+            break;
+        }
+        let name = &header_bytes[pos..pos + name_len];
+        pos += name_len;
+        if pos >= header_bytes.len() {
+            break;
+        }
+        let value_type = header_bytes[pos];
+        pos += 1;
+
+        if name == b":event-type" && value_type == 7 {
+            // String type: 2-byte length + value.
+            if pos + 2 > header_bytes.len() {
+                break;
+            }
+            let val_len = u16::from_be_bytes([header_bytes[pos], header_bytes[pos + 1]]) as usize;
+            pos += 2;
+            if pos + val_len > header_bytes.len() {
+                break;
+            }
+            return String::from_utf8_lossy(&header_bytes[pos..pos + val_len]).to_string();
+        }
+
+        // Skip other header values based on type.
+        match value_type {
+            0..=4 => pos += 4, // int/short/byte/bool
+            5 => pos += 8,     // long
+            6 => pos += 16,    // bytes (16 bytes)
+            7 => {
+                // String: 2-byte length + value.
+                if pos + 2 > header_bytes.len() {
+                    break;
+                }
+                let val_len =
+                    u16::from_be_bytes([header_bytes[pos], header_bytes[pos + 1]]) as usize;
+                pos += 2 + val_len;
+            }
+            8 => pos += 8,       // timestamp
+            9 | 10 => pos += 16, // uuid
+            11 | 12 => pos += 1, // byte/bool single byte
+            _ => break,          // Unknown type — stop parsing.
+        }
+    }
+    String::new()
 }
 
 fn maybe_dump_streaming_request_body(label: &str, body: &Value) {
@@ -934,7 +1702,7 @@ mod tests {
 
     use super::{
         AnthropicContentAccumulator, AnthropicToolUseAccumulator,
-        finalize_anthropic_content_blocks, is_retryable_http_status,
+        finalize_anthropic_content_blocks, is_retryable_http_status, parse_bedrock_event_type,
         should_fallback_after_streaming_error,
     };
 
@@ -1016,5 +1784,45 @@ mod tests {
         assert_eq!(tool_calls[0].id, "call-2");
         assert_eq!(tool_calls[1].id, "call-3");
         assert_eq!(tool_calls[0].input, json!({"path":"src/lib.rs"}));
+    }
+
+    #[test]
+    fn bedrock_event_type_header_parsing() {
+        // Build a minimal AWS Event Stream header block with :event-type = "chunk".
+        // Header format: name_len(1) + name(N) + value_type(1) + value_len(2) + value(N)
+        let event_type_name = b":event-type";
+        let event_type_value = b"chunk";
+
+        let mut header_bytes = Vec::new();
+        header_bytes.push(event_type_name.len() as u8);
+        header_bytes.extend_from_slice(event_type_name);
+        header_bytes.push(7); // String type.
+        header_bytes.push(0); // Value length high byte.
+        header_bytes.push(event_type_value.len() as u8); // Value length low byte.
+        header_bytes.extend_from_slice(event_type_value);
+
+        assert_eq!(parse_bedrock_event_type(&header_bytes), "chunk");
+    }
+
+    #[test]
+    fn bedrock_event_type_header_empty_on_missing() {
+        // Empty header block should return empty string.
+        assert_eq!(parse_bedrock_event_type(&[]), "");
+    }
+
+    #[test]
+    fn bedrock_event_type_header_other_headers() {
+        // Header block with other headers but no :event-type.
+        let mut header_bytes = Vec::new();
+        let name = b":message-id";
+        let value = b"test-123";
+        header_bytes.push(name.len() as u8);
+        header_bytes.extend_from_slice(name);
+        header_bytes.push(7); // String type.
+        header_bytes.push(0);
+        header_bytes.push(value.len() as u8);
+        header_bytes.extend_from_slice(value);
+
+        assert_eq!(parse_bedrock_event_type(&header_bytes), "");
     }
 }
