@@ -259,12 +259,18 @@ fn resolve_openai_compatible_auth(
 
 /// Execute an AWS credential export command and parse JSON output.
 async fn execute_aws_credential_export(command: &str) -> Result<AwsCredentials, ProviderAuthError> {
-    let output = tokio::process::Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .output()
-        .await
-        .map_err(|e| ProviderAuthError::CommandExec(e.to_string()))?;
+    let output = if cfg!(windows) {
+        tokio::process::Command::new("cmd")
+            .args(["/C", command])
+            .output()
+            .await
+    } else {
+        tokio::process::Command::new("sh")
+            .args(["-c", command])
+            .output()
+            .await
+    }
+    .map_err(|e| ProviderAuthError::CommandExec(e.to_string()))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
