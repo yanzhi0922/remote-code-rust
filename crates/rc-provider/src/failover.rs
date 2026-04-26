@@ -72,7 +72,7 @@ impl FailoverProviderClient {
         let start_index = *self
             .active_index
             .lock()
-            .expect("active_index lock poisoned");
+            .unwrap_or_else(|e| e.into_inner());
 
         let mut last_error: Option<anyhow::Error> = None;
         for attempt in 0..max_attempts {
@@ -117,7 +117,7 @@ impl FailoverProviderClient {
         let start_index = *self
             .active_index
             .lock()
-            .expect("active_index lock poisoned");
+            .unwrap_or_else(|e| e.into_inner());
 
         let mut last_error: Option<anyhow::Error> = None;
         for attempt in 0..max_attempts {
@@ -152,41 +152,44 @@ impl FailoverProviderClient {
         let index = *self
             .active_index
             .lock()
-            .expect("active_index lock poisoned");
+            .unwrap_or_else(|e| e.into_inner());
         &self.config.providers[index]
     }
 
     /// # Panics
     /// Panics if the internal stats mutex is poisoned.
     pub fn stats(&self) -> FailoverStats {
-        self.stats.lock().expect("stats lock poisoned").clone()
+        self.stats
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     fn mark_healthy(&self, index: usize) {
         *self
             .active_index
             .lock()
-            .expect("active_index lock poisoned") = index;
+            .unwrap_or_else(|e| e.into_inner()) = index;
     }
 
     fn record_attempt(&self, provider_name: &str) {
         self.stats
             .lock()
-            .expect("stats lock poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .record_attempt(provider_name);
     }
 
     fn record_failure(&self, provider_name: &str) {
         self.stats
             .lock()
-            .expect("stats lock poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .record_failure(provider_name);
     }
 
     fn record_failover_event(&self) {
         self.stats
             .lock()
-            .expect("stats lock poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .record_failover();
     }
 

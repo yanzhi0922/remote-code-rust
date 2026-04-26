@@ -312,11 +312,11 @@ pub(crate) fn runner_uses_pull_commands(runner: &RunnerSnapshot) -> bool {
 }
 
 pub(crate) async fn dispatch_session_to_runner(
+    client: &Client,
     runner: &RunnerSnapshot,
     request: &RunnerSessionCreateRequest,
 ) -> Result<RunnerSessionRecord, ApiError> {
     let base_url = runner_public_base_url(runner)?;
-    let client = Client::new();
     let response = client
         .post(format!("{}/v1/sessions", base_url.trim_end_matches('/')))
         .json(request)
@@ -347,12 +347,12 @@ pub(crate) async fn dispatch_session_to_runner(
 }
 
 pub(crate) async fn update_runner_session_state(
+    client: &Client,
     runner: &RunnerSnapshot,
     session_id: Uuid,
     request: &RunnerSessionStateUpdateRequest,
 ) -> Result<RunnerSessionRecord, ApiError> {
     let base_url = runner_public_base_url(runner)?;
-    let client = Client::new();
     let response = client
         .post(format!(
             "{}/v1/sessions/{session_id}/state",
@@ -386,12 +386,12 @@ pub(crate) async fn update_runner_session_state(
 }
 
 pub(crate) async fn relay_approval_to_runner(
+    client: &Client,
     runner: &RunnerSnapshot,
     session_id: Uuid,
     request: &ApprovalCreateRequest,
 ) -> Result<ApprovalRequestRecord, ApiError> {
     let base_url = runner_public_base_url(runner)?;
-    let client = Client::new();
     let response = client
         .post(format!(
             "{}/v1/sessions/{session_id}/approvals",
@@ -425,12 +425,12 @@ pub(crate) async fn relay_approval_to_runner(
 }
 
 pub(crate) async fn relay_approval_decision_to_runner(
+    client: &Client,
     runner: &RunnerSnapshot,
     approval_id: Uuid,
     request: &ApprovalDecisionRequest,
 ) -> Result<ApprovalRequestRecord, ApiError> {
     let base_url = runner_public_base_url(runner)?;
-    let client = Client::new();
     let response = client
         .post(format!(
             "{}/v1/approvals/{approval_id}/decision",
@@ -464,12 +464,12 @@ pub(crate) async fn relay_approval_decision_to_runner(
 }
 
 pub(crate) async fn dispatch_session_command_to_runner(
+    client: &Client,
     runner: &RunnerSnapshot,
     session_id: Uuid,
     request: &RunnerSessionCommandRequest,
 ) -> Result<RunnerSessionCommandResponse, ApiError> {
     let base_url = runner_public_base_url(runner)?;
-    let client = Client::new();
     let response = client
         .post(format!(
             "{}/v1/sessions/{session_id}/commands",

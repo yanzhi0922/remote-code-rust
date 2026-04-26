@@ -81,6 +81,10 @@ pub struct ControlPlaneService {
     bootstrap_secret_hash: Option<String>,
     registry: Arc<RwLock<Registry>>,
     timeline: TimelineStore,
+    /// Shared HTTP client for runner relay requests.  Reusing a single
+    /// client keeps TCP connections alive and avoids a TLS handshake
+    /// per request.
+    http_client: reqwest::Client,
 }
 
 #[derive(Debug, Clone)]
@@ -150,6 +154,7 @@ impl ControlPlaneService {
             bootstrap_secret_hash,
             registry: Arc::new(RwLock::new(registry)),
             timeline,
+            http_client: reqwest::Client::new(),
         }
     }
 
