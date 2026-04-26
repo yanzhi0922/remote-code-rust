@@ -56,6 +56,9 @@ remote-code-rust/
 │   └── remote-code-migrate/ # 数据迁移
 ├── crates/                  # 库 Crate（38 个）
 ├── agents/                  # Agent 源码（独立 Git 仓库）
+│   ├── claudecode/          # Claude Code 参考源码（项目基础）
+│   │   ├── claude-code-rev/ # Claude Code 逆向工程源码
+│   │   └── cc-haha/         # Claude Code 源码参考
 │   ├── codex/               # OpenAI Codex（codex-rs）
 │   └── roo-code/            # Roo Code（roo-server）
 ├── plans/                   # 设计文档
@@ -307,7 +310,7 @@ Remote Code GUI 支持三种 AI Agent 引擎，通过统一的 `AgentAdapter` tr
 
 | Agent | 通信方式 | 说明 |
 |-------|----------|------|
-| **Remote Code** | 进程内（Tauri IPC） | 默认引擎，直接调用 rc-* crate |
+| **Claude Code** | 进程内（Tauri IPC） | 默认引擎，基于 Claude Code 的 Rust 重写 |
 | **Roo Code** | 子进程 stdio（JSON-RPC 2.0 + Content-Length） | `roo-server` 二进制 |
 | **OpenAI Codex** | 子进程 stdio（JSON-RPC v2 + 行分隔 JSON） | `codex-app-server` 二进制 |
 

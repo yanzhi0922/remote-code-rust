@@ -12,10 +12,11 @@ The workspace is split into binaries under `apps/`, libraries under `crates/`, a
 
 The `agents/` directory contains source code for external AI agents that are adapted into the multi-agent architecture:
 
+- `agents/claudecode/`: Claude Code reference source code (`claude-code-rev/`, `cc-haha/`) — the foundation of this project (Rust rewrite)
 - `agents/codex/`: OpenAI Codex source (`codex-rs/app-server`) — JSON-RPC v2 over stdio
 - `agents/roo-code/`: Roo Code source (`crates/roo-server`) — JSON-RPC 2.0 with Content-Length framing over stdio
 
-These are independent Git repositories (excluded from the main repo via `.gitignore`). Build scripts in `scripts/` compile agent binaries to `target/agent-binaries/`.
+These are independent repositories/directories (excluded from the main repo via `.gitignore`). Build scripts in `scripts/` compile agent binaries to `target/agent-binaries/`.
 
 ### Applications
 
@@ -351,7 +352,7 @@ The GUI supports multiple AI agent backends through a unified adapter pattern. S
 
 | Agent | Transport | Protocol | Entry Point |
 |-------|-----------|----------|-------------|
-| Remote Code | In-process (Tauri IPC) | Direct Rust calls | `rc-provider`, `rc-tools`, etc. |
+| Claude Code | In-process (Tauri IPC) | Direct Rust calls | `rc-provider`, `rc-tools`, etc. |
 | Roo Code | Subprocess stdio | JSON-RPC 2.0 + Content-Length framing | `roo-server` binary |
 | OpenAI Codex | Subprocess stdio | JSON-RPC v2 + line-delimited JSON | `codex-app-server` binary |
 
