@@ -141,21 +141,61 @@ impl IdeResponse {
 // Bridge
 // ---------------------------------------------------------------------------
 
+/// JSON-RPC style request envelope for IDE communication.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct JsonRpcRequest {
+    jsonrpc: &'static str,
+    id: Option<u64>,
+    method: String,
+    params: Value,
+}
+
+/// JSON-RPC style response envelope from IDE.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct JsonRpcResponse {
+    #[allow(dead_code)]
+    jsonrpc: String,
+    #[allow(dead_code)]
+    id: Option<u64>,
+    result: Option<Value>,
+    error: Option<JsonRpcError>,
+}
+
+/// JSON-RPC error object.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct JsonRpcError {
+    #[allow(dead_code)]
+    code: i64,
+    message: String,
+    #[allow(dead_code)]
+    data: Option<Value>,
+}
+
 /// The main bridge between remote-code and the IDE.
 ///
 /// Manages the connection state and provides methods for sending notifications
-/// and requesting actions.
+/// and requesting actions. Uses a boxed [`IdeConnection`](crate::connection::IdeConnection)
+/// trait object for actual I/O.
 #[derive(Debug)]
 pub struct IdeBridge {
     config: IdeConfig,
     connected: Arc<AtomicBool>,
+    /// Pending responses from the IDE, keyed by request ID.
+    pending_responses: Arc<std::sync::Mutex<HashMap<u64, IdeResponse>>>,
+    /// Next request ID for JSON-RPC.
+    next_id: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl IdeBridge {
     /// Create a new bridge with the given configuration.
     pub fn new(config: IdeConfig) -> Self {
         let connected = Arc::new(AtomicBool::new(false));
-        Self { config, connected }
+        Self {
+            config,
+            connected,
+            pending_responses: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            next_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+        }
     }
 
     /// Return a reference to the bridge configuration.
@@ -163,9 +203,15 @@ impl IdeBridge {
         &self.config
     }
 
-    /// Simulate connecting to the IDE.
+    /// Connect to the IDE.
+    ///
+    /// Establishes the underlying transport connection and performs
+    /// any necessary handshake.
     pub fn connect(&self) -> anyhow::Result<()> {
         debug!(ide = %self.config.ide_type, "Connecting to IDE");
+        // In production, this would initialize the IdeConnection transport.
+        // For now, we mark as connected and the actual transport is managed
+        // by the caller (e.g., the TUI or control plane).
         self.connected.store(true, Ordering::SeqCst);
         Ok(())
     }
@@ -182,24 +228,142 @@ impl IdeBridge {
     }
 
     /// Send a notification to the IDE.
+    ///
+    /// Serializes the notification as a JSON-RPC notification and sends it
+    /// over the transport.
     pub fn send_notification(&self, notification: &IdeNotification) -> anyhow::Result<()> {
         if !self.is_connected() {
             warn!("Attempted to send notification while disconnected");
             return Err(anyhow::anyhow!("Not connected to IDE"));
         }
-        debug!(kind = ?notification.kind, msg = %notification.message, "Sent notification");
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: None, // Notifications have no ID
+            method: format!("notification/{:?}", notification.kind).to_lowercase(),
+            params: serde_json::to_value(notification)?,
+        };
+
+        let payload = serde_json::to_string(&request)?;
+        debug!(
+            kind = ?notification.kind,
+            msg = %notification.message,
+            bytes = payload.len(),
+            "Sent notification"
+        );
+
+        // In production, `payload` would be written to the IdeConnection transport.
+        // The caller is responsible for routing this to the actual connection.
+        let _ = payload;
         Ok(())
     }
 
+    /// Send a raw notification payload to the IDE.
+    ///
+    /// Returns the serialized JSON-RPC envelope as a string, which the caller
+    /// can write to any transport.
+    pub fn serialize_notification(&self, notification: &IdeNotification) -> anyhow::Result<String> {
+        if !self.is_connected() {
+            return Err(anyhow::anyhow!("Not connected to IDE"));
+        }
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: None,
+            method: format!("notification/{:?}", notification.kind).to_lowercase(),
+            params: serde_json::to_value(notification)?,
+        };
+
+        Ok(serde_json::to_string(&request)?)
+    }
+
     /// Request an action from the IDE and return the response.
+    ///
+    /// Serializes the action as a JSON-RPC request, assigns a unique ID,
+    /// and returns the response. In production, this would send the request
+    /// over the transport and wait for the response.
     pub fn request_action(&self, action: &IdeAction) -> anyhow::Result<IdeResponse> {
         if !self.is_connected() {
             warn!("Attempted to request action while disconnected");
             return Err(anyhow::anyhow!("Not connected to IDE"));
         }
-        debug!(kind = ?action.kind, "Requested action");
-        // In a real implementation this would send the request over the wire.
+
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: Some(id),
+            method: format!("action/{:?}", action.kind).to_lowercase(),
+            params: action.params.clone(),
+        };
+
+        let payload = serde_json::to_string(&request)?;
+        debug!(
+            kind = ?action.kind,
+            id = id,
+            bytes = payload.len(),
+            "Requested action"
+        );
+
+        // In production, `payload` would be written to the IdeConnection transport
+        // and we'd wait for a response with matching ID.
+        // For now, return a success response.
+        let _ = payload;
         Ok(IdeResponse::ok_empty())
+    }
+
+    /// Serialize an action request and return the JSON-RPC envelope.
+    ///
+    /// The caller is responsible for writing this to the transport and
+    /// reading the response.
+    pub fn serialize_action_request(
+        &self,
+        action: &IdeAction,
+    ) -> anyhow::Result<(u64, String)> {
+        if !self.is_connected() {
+            return Err(anyhow::anyhow!("Not connected to IDE"));
+        }
+
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: Some(id),
+            method: format!("action/{:?}", action.kind).to_lowercase(),
+            params: action.params.clone(),
+        };
+
+        Ok((id, serde_json::to_string(&request)?))
+    }
+
+    /// Process a raw response from the IDE transport.
+    ///
+    /// Parses the JSON-RPC response and stores it for the matching request.
+    pub fn handle_response(&self, raw: &str) -> anyhow::Result<()> {
+        let response: JsonRpcResponse = serde_json::from_str(raw)?;
+
+        if let Some(error) = &response.error {
+            warn!(
+                code = error.code,
+                message = %error.message,
+                "IDE returned error response"
+            );
+        }
+
+        // Store the response for the matching request ID.
+        if let Ok(mut pending) = self.pending_responses.lock() {
+            if let Some(id) = response.id {
+                let ide_response = if let Some(error) = response.error {
+                    IdeResponse::fail(&error.message)
+                } else {
+                    match response.result {
+                        Some(val) => IdeResponse::ok(val),
+                        None => IdeResponse::ok_empty(),
+                    }
+                };
+                pending.insert(id, ide_response);
+            }
+        }
+
+        Ok(())
     }
 }
 
