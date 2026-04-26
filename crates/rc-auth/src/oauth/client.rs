@@ -100,11 +100,12 @@ pub fn build_auth_url(params: &super::types::BuildAuthUrlParams, config: &OAuthC
         &config.console_authorize_url
     };
 
-    let redirect_uri = if params.is_manual {
-        config.manual_redirect_url.as_str()
+    let redirect_uri_owned;
+    let redirect_uri: &str = if params.is_manual {
+        &config.manual_redirect_url
     } else {
-        // leak to static lifetime is fine — this is a short-lived URL
-        Box::leak(format!("http://localhost:{}/callback", params.port).into_boxed_str())
+        redirect_uri_owned = format!("http://localhost:{}/callback", params.port);
+        &redirect_uri_owned
     };
 
     let scopes = if params.inference_only {
@@ -243,7 +244,8 @@ pub async fn refresh_oauth_token(
     }
 
     let data: OAuthTokenExchangeResponse = response.json().await?;
-    let expires_at = chrono::Utc::now().timestamp_millis() + (data.expires_in as i64) * 1000;
+    let expires_at = chrono::Utc::now().timestamp_millis()
+        + (data.expires_in as i64).saturating_mul(1000);
 
     info!("OAuth token refresh succeeded");
     Ok(OAuthTokens {
