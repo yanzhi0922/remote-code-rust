@@ -6,21 +6,21 @@ Each subsystem has one owner crate, one state model, and one boundary for integr
 
 ## Top-Level Structure
 
-The workspace is split into binaries under `apps/`, libraries under `crates/`, and agent source repositories under `agents/`.
+The workspace is split into agent engines under `agents/`, application binaries under `apps/`, and libraries under `crates/`.
 
 ### Agent Sources
 
-The `agents/` directory contains source code for external AI agents that are adapted into the multi-agent architecture:
+The `agents/` directory contains the AI agent engines:
 
-- `agents/claudecode/`: Claude Code reference source code (`claude-code-rev/`, `cc-haha/`) — the foundation of this project (Rust rewrite)
-- `agents/codex/`: OpenAI Codex source (`codex-rs/app-server`) — JSON-RPC v2 over stdio
-- `agents/roo-code/`: Roo Code source (`crates/roo-server`) — JSON-RPC 2.0 with Content-Length framing over stdio
+- `agents/claudecode/`: **Claude Code Agent** — the Rust rewrite of Claude Code (formerly `apps/remote-code/`). This is the primary agent engine with CLI, TUI, headless, and interactive modes. It is a full workspace member.
+- `agents/codex/`: OpenAI Codex source (`codex-rs/app-server`) — JSON-RPC v2 over stdio. Independent Git repository.
+- `agents/roo-code/`: Roo Code source (`crates/roo-server`) — JSON-RPC 2.0 with Content-Length framing over stdio. Independent Git repository.
 
-These are independent repositories/directories (excluded from the main repo via `.gitignore`). Build scripts in `scripts/` compile agent binaries to `target/agent-binaries/`.
+The codex and roo-code directories are excluded from the main repo via `.gitignore`. Build scripts in `scripts/` compile external agent binaries to `target/agent-binaries/`.
 
 ### Applications
 
-- `apps/remote-code`: CLI, headless runtime entrypoint, session commands, interactive shell, TUI launcher, conversation loop
+- `agents/claudecode`: Claude Code Agent (Rust rewrite) — CLI, headless runtime, interactive shell, TUI, conversation loop
 - `apps/remote-code-runner`: remote runner process that connects workspaces to the control plane
 - `apps/remote-code-control-plane`: HTTP and WebSocket backend for sessions, approvals, artifacts, and runner coordination
 - `apps/remote-code-migrate`: explicit migration and import tool
@@ -47,7 +47,7 @@ These are independent repositories/directories (excluded from the main repo via 
 
 ### Local Runtime
 
-The `remote-code` process owns:
+The `remote-code` (claudecode agent) process owns:
 
 - CLI parsing
 - session bootstrap

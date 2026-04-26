@@ -47,26 +47,25 @@
 
 ```
 remote-code-rust/
-├── apps/                    # 应用程序
-│   ├── remote-code/         # 主 CLI（交互式 / 无头 / 远程模式）
-│   ├── remote-code-gui/     # 桌面 GUI（Tauri v2 + React 19）
-│   ├── remote-code-mobile/  # 移动端（Capacitor）
-│   ├── remote-code-control-plane/  # 控制平面
-│   ├── remote-code-runner/  # 远程 Runner
-│   └── remote-code-migrate/ # 数据迁移
-├── crates/                  # 库 Crate（38 个）
-├── agents/                  # Agent 源码（独立 Git 仓库）
-│   ├── claudecode/          # Claude Code 参考源码（项目基础）
-│   │   ├── claude-code-rev/ # Claude Code 逆向工程源码
-│   │   └── cc-haha/         # Claude Code 源码参考
-│   ├── codex/               # OpenAI Codex（codex-rs）
-│   └── roo-code/            # Roo Code（roo-server）
-├── plans/                   # 设计文档
+├── agents/                        # Agent 引擎
+│   ├── claudecode/                # Claude Code Agent（Rust 重写，原 remote-code CLI）
+│   │   ├── src/                   # CLI / TUI / Headless / 交互式模式
+│   │   └── Cargo.toml
+│   ├── codex/                     # OpenAI Codex 源码（codex-rs，独立 Git 仓库）
+│   └── roo-code/                  # Roo Code 源码（roo-server，独立 Git 仓库）
+├── apps/                          # 应用程序
+│   ├── remote-code-gui/           # 桌面 GUI（Tauri v2 + React 19）
+│   ├── remote-code-mobile/        # 移动端（Capacitor）
+│   ├── remote-code-control-plane/ # 控制平面
+│   ├── remote-code-runner/        # 远程 Runner
+│   └── remote-code-migrate/       # 数据迁移
+├── crates/                        # 库 Crate（38 个）
+├── plans/                         # 设计文档
 │   ├── multi-agent-architecture.md  # 多 Agent 架构设计
-│   └── archive/             # 归档文档
-├── scripts/                 # 构建与工具脚本
-├── deploy/                  # 部署配置
-└── fixtures/                # 测试固件
+│   └── archive/                   # 归档文档
+├── scripts/                       # 构建与工具脚本
+├── deploy/                        # 部署配置
+└── fixtures/                      # 测试固件
 ```
 
 ## 架构
@@ -75,7 +74,7 @@ remote-code-rust/
 
 | 应用 | 说明 |
 |------|------|
-| `remote-code` | 主 CLI — 交互式 / 无头 / 远程模式 |
+| `remote-code` (claudecode) | Claude Code Rust 重写 — 交互式 / 无头 / 远程模式 |
 | `remote-code-gui` | 桌面 GUI（Tauri v2 + React 19） |
 | `remote-code-mobile` | 移动端（Capacitor + React） |
 | `remote-code-control-plane` | 控制平面服务器（HTTP + WebSocket） |

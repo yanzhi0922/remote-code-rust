@@ -1,5 +1,5 @@
 [workspace]
-members = ["apps/*", "crates/*", "apps/remote-code-gui/src-tauri"]
+members = ["apps/*", "crates/*", "apps/remote-code-gui/src-tauri", "agents/claudecode"]
 exclude = ["apps/remote-code-gui", "apps/remote-code-mobile"]
 resolver = "2"
 
