@@ -5,10 +5,11 @@
 
 use std::cmp::Reverse;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use anyhow::Result;
+use tracing::warn;
 
 use crate::security_check::SecurityChecker;
 use crate::sync_cache::SyncCache;
@@ -50,10 +51,10 @@ impl ManagedSettingsService {
     /// In a real implementation this would make an HTTP request to a
     /// settings server. Here it returns the stored "remote" settings.
     pub fn sync_from_remote(&self) -> Result<Vec<ManagedSetting>> {
-        let remote = self.remote_settings.lock().expect("lock").clone();
+        let remote = lock_or_recover(&self.remote_settings).clone();
 
         // Cache the remote settings
-        let mut cache = self.cache.lock().expect("lock");
+        let mut cache = lock_or_recover(&self.cache);
         for setting in &remote {
             cache.set(&setting.key, setting.clone())?;
         }
@@ -64,7 +65,7 @@ impl ManagedSettingsService {
     /// Apply a list of settings, respecting security checks and priorities.
     pub fn apply_settings(&self, settings: &[ManagedSetting]) -> Result<Vec<String>> {
         let mut applied = Vec::new();
-        let mut guard = self.settings.lock().expect("lock");
+        let mut guard = lock_or_recover(&self.settings);
 
         for setting in settings {
             // Security check
@@ -112,7 +113,7 @@ impl ManagedSettingsService {
     ///
     /// Returns all settings sorted by effective priority.
     pub fn get_effective_settings(&self) -> Vec<ManagedSetting> {
-        let guard = self.settings.lock().expect("lock");
+        let guard = lock_or_recover(&self.settings);
         let mut settings: Vec<ManagedSetting> = guard.values().cloned().collect();
         settings.sort_by_key(|setting| Reverse(setting.effective_priority()));
         settings
@@ -120,13 +121,13 @@ impl ManagedSettingsService {
 
     /// Get a single effective setting by key.
     pub fn get(&self, key: &str) -> Option<ManagedSetting> {
-        let guard = self.settings.lock().expect("lock");
+        let guard = lock_or_recover(&self.settings);
         guard.get(key).cloned()
     }
 
     /// Set a remote setting (for testing sync scenarios).
     pub fn set_remote(&self, setting: ManagedSetting) {
-        self.remote_settings.lock().expect("lock").push(setting);
+        lock_or_recover(&self.remote_settings).push(setting);
     }
 
     /// Get the configured sync interval.
@@ -138,6 +139,18 @@ impl ManagedSettingsService {
     pub fn full_sync(&self) -> Result<Vec<String>> {
         let remote = self.sync_from_remote()?;
         self.apply_settings(&remote)
+    }
+}
+
+/// Lock a `std::sync::Mutex`, recovering from poison by logging a warning
+/// and accessing the inner value anyway.
+fn lock_or_recover<'a, T>(mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            warn!("Mutex poisoned — another thread panicked while holding the lock; recovering");
+            poisoned.into_inner()
+        }
     }
 }
 

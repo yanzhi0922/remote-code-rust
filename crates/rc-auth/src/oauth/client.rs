@@ -118,7 +118,10 @@ pub fn build_auth_url(params: &super::types::BuildAuthUrlParams, config: &OAuthC
         ]
     };
 
-    let mut url = reqwest::Url::parse(base_url).expect("valid base URL");
+    let mut url = reqwest::Url::parse(base_url).unwrap_or_else(|e| {
+        tracing::error!("Invalid OAuth base URL '{base_url}': {e}");
+        reqwest::Url::parse("https://invalid-url.local").expect("fallback URL should parse")
+    });
     {
         let mut qp = url.query_pairs_mut();
         qp.append_pair("code", "true");
@@ -184,7 +187,10 @@ pub async fn exchange_code_for_tokens(
 
     let status = response.status().as_u16();
     if status != 200 {
-        let text = response.text().await.expect("read body");
+        let text = response.text().await.unwrap_or_else(|e| {
+            tracing::warn!("Failed to read OAuth error response body: {e}");
+            format!("<unreadable response body: {e}>")
+        });
         return Err(OAuthClientError::ExchangeFailed {
             status,
             message: text,
@@ -229,7 +235,10 @@ pub async fn refresh_oauth_token(
         .await?;
 
     if response.status().as_u16() != 200 {
-        let text = response.text().await.expect("read body");
+        let text = response.text().await.unwrap_or_else(|e| {
+            tracing::warn!("Failed to read OAuth refresh error body: {e}");
+            format!("<unreadable response body: {e}>")
+        });
         return Err(OAuthClientError::RefreshFailed(text));
     }
 
@@ -266,7 +275,10 @@ pub async fn fetch_profile(
         .await?;
 
     if response.status().as_u16() != 200 {
-        let text = response.text().await.expect("read body");
+        let text = response.text().await.unwrap_or_else(|e| {
+            tracing::warn!("Failed to read OAuth profile error body: {e}");
+            format!("<unreadable response body: {e}>")
+        });
         return Err(OAuthClientError::ProfileFetchFailed(text));
     }
 
