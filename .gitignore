@@ -38,6 +38,7 @@ node_modules/
 .research/
 output/
 
-# Agent source subdirectories (separate git repos)
+# Agent source subdirectories (separate git repos / reference code)
+agents/claudecode/
 agents/codex/
 agents/roo-code/
