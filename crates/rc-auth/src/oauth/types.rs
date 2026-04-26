@@ -42,11 +42,13 @@ impl OAuthTokens {
     }
 
     /// Parse the scope string into individual scope tokens.
+    ///
+    /// Returns an empty vector when no scope string is available.
     pub fn scopes(&self) -> Vec<String> {
         self.scope
             .as_deref()
             .map(|s| s.split(' ').map(str::to_owned).collect::<Vec<_>>())
-            .expect("scope string is always valid UTF-8")
+            .unwrap_or_default()
     }
 }
 

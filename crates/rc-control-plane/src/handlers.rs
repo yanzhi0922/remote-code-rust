@@ -1319,7 +1319,7 @@ async fn dispatch_pending_sessions_for_runner(service: &ControlPlaneService, run
                 skipped_session_ids.insert(planned.session_id);
                 continue;
             };
-            persist_state_logged(&service).await;
+            persist_state_logged(service).await;
             let _event = service.publish_event(TimelineEventDraft {
                     runner_id: record.owner_runner_id.clone(),
                     session_id: Some(record.session_id),

@@ -209,6 +209,7 @@ fn concurrent_mcp_discovery_access() {
                     annotations: serde_json::Value::Null,
                 }],
                 vec![],
+                vec![],
                 None,
             );
         }));
