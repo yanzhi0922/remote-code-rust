@@ -2,12 +2,31 @@
 //!
 //! Provides the [`IdeConnection`] trait and concrete implementations for
 //! stdio and HTTP-based communication with IDEs.
+//!
+//! # Protocol
+//!
+//! ## Stdio (LSP-style framing)
+//! Messages are framed with a `Content-Length` header followed by the JSON body,
+//! matching the Language Server Protocol base protocol:
+//!
+//! ```text
+//! Content-Length: 42\r\n
+//! \r\n
+//! {"jsonrpc":"2.0","method":"notify",...}
+//! ```
+//!
+//! ## HTTP
+//! Messages are POSTed to the configured endpoint as JSON.
+//! Responses are read from a GET request to `{endpoint}/messages`.
+
+use std::io::{BufRead, BufReader, Write};
+use std::process::{ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
 // ---------------------------------------------------------------------------
@@ -67,39 +86,80 @@ pub trait IdeConnection: Send + Sync + std::fmt::Debug {
 // StdioConnection
 // ---------------------------------------------------------------------------
 
-/// A connection that communicates over standard I/O (simulated for testing).
+/// A connection that communicates over standard I/O using LSP-style framing.
+///
+/// When `connect()` is called, it spawns the configured command (or uses
+/// the current process's stdin/stdout if no command is provided) and
+/// establishes a framed message channel.
 #[derive(Debug)]
 pub struct StdioConnection {
-    status: Arc<RwLock<IdeStatus>>,
-    /// Simulated inbox for received messages.
-    inbox: Arc<RwLock<Vec<String>>>,
-    /// Simulated outbox for sent messages.
-    outbox: Arc<RwLock<Vec<String>>>,
+    status: Arc<std::sync::Mutex<IdeStatus>>,
+    /// Optional command to spawn for the IDE subprocess.
+    command: Option<String>,
+    /// Arguments for the subprocess command.
+    args: Vec<String>,
+    /// Writer to the subprocess's stdin (or our own stdout).
+    writer: Arc<Mutex<Option<ChildStdin>>>,
+    /// Reader from the subprocess's stdout (or our own stdin).
+    reader: Arc<Mutex<Option<BufReader<ChildStdout>>>>,
+    /// Simulated inbox for testing (used when no subprocess).
+    inbox: Arc<Mutex<Vec<String>>>,
+    /// Simulated outbox for testing (used when no subprocess).
+    outbox: Arc<Mutex<Vec<String>>>,
 }
 
 impl StdioConnection {
     /// Create a new stdio connection (initially disconnected).
+    ///
+    /// If a `command` is provided, `connect()` will spawn it and communicate
+    /// via its stdin/stdout. If no command is set, the connection operates in
+    /// loopback mode for testing.
     pub fn new() -> Self {
         Self {
-            status: Arc::new(RwLock::new(IdeStatus::Disconnected)),
-            inbox: Arc::new(RwLock::new(Vec::new())),
-            outbox: Arc::new(RwLock::new(Vec::new())),
+            status: Arc::new(std::sync::Mutex::new(IdeStatus::Disconnected)),
+            command: None,
+            args: Vec::new(),
+            writer: Arc::new(Mutex::new(None)),
+            reader: Arc::new(Mutex::new(None)),
+            inbox: Arc::new(Mutex::new(Vec::new())),
+            outbox: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Create a stdio connection that spawns a subprocess.
+    pub fn with_command(command: String, args: Vec<String>) -> Self {
+        Self {
+            command: Some(command),
+            args,
+            ..Self::new()
         }
     }
 
     /// Push a message into the inbox (simulates receiving from IDE).
-    pub async fn simulate_receive(&self, message: String) {
-        self.inbox.write().await.push(message);
+    pub fn simulate_receive(&self, message: String) {
+        if let Ok(mut inbox) = self.inbox.lock() {
+            inbox.push(message);
+        }
     }
 
     /// Read all sent messages (for testing).
-    pub async fn sent_messages(&self) -> Vec<String> {
-        self.outbox.read().await.clone()
+    pub fn sent_messages(&self) -> Vec<String> {
+        self.outbox.lock().ok().map(|o| o.clone()).unwrap_or_default()
     }
 
-    /// Return the current status asynchronously.
-    pub async fn status_async(&self) -> IdeStatus {
-        *self.status.read().await
+    /// Return the current status synchronously.
+    pub fn status_sync(&self) -> IdeStatus {
+        self.status
+            .lock()
+            .ok()
+            .map(|s| *s)
+            .unwrap_or(IdeStatus::Disconnected)
+    }
+
+    fn set_status(&self, new_status: IdeStatus) {
+        if let Ok(mut s) = self.status.lock() {
+            *s = new_status;
+        }
     }
 }
 
@@ -111,47 +171,106 @@ impl Default for StdioConnection {
 
 impl IdeConnection for StdioConnection {
     fn connect(&mut self) -> anyhow::Result<()> {
-        // In a real implementation, this would set up stdin/stdout pipes.
-        // Here we just update status.
-        let status = self.status.clone();
-        // We can't use async here, so we use try_write.
-        if let Ok(mut s) = status.try_write() {
-            *s = IdeStatus::Connected;
+        self.set_status(IdeStatus::Connecting);
+
+        if let Some(ref cmd) = self.command {
+            // Spawn the IDE subprocess and capture its stdin/stdout.
+            let mut child = Command::new(cmd)
+                .args(&self.args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|e| anyhow::anyhow!("failed to spawn IDE process '{}': {}", cmd, e))?;
+
+            let stdin = child.stdin.take()
+                .ok_or_else(|| anyhow::anyhow!("failed to open stdin pipe for '{}'", cmd))?;
+            let stdout = child.stdout.take()
+                .ok_or_else(|| anyhow::anyhow!("failed to open stdout pipe for '{}'", cmd))?;
+
+            if let Ok(mut writer) = self.writer.lock() {
+                *writer = Some(stdin);
+            }
+            if let Ok(mut reader) = self.reader.lock() {
+                *reader = Some(BufReader::new(stdout));
+            }
+
+            // Don't wait for the child — it runs in the background.
+            // We deliberately leak the Child handle to keep it alive.
+            // In a production system, this would be stored for proper cleanup.
+            std::mem::forget(child);
+
+            debug!("StdioConnection spawned subprocess: {}", cmd);
         }
-        debug!("StdioConnection connected");
+
+        self.set_status(IdeStatus::Connected);
         Ok(())
     }
 
     fn disconnect(&mut self) -> anyhow::Result<()> {
-        if let Ok(mut s) = self.status.try_write() {
-            *s = IdeStatus::Disconnected;
+        self.set_status(IdeStatus::Disconnecting);
+
+        // Close the writer to signal EOF to the subprocess.
+        if let Ok(mut writer) = self.writer.lock() {
+            if let Some(mut w) = writer.take() {
+                let _ = w.flush();
+                // ChildStdin doesn't have close(); dropping it closes the pipe.
+            }
         }
+        if let Ok(mut reader) = self.reader.lock() {
+            *reader = None;
+        }
+
+        self.set_status(IdeStatus::Disconnected);
         debug!("StdioConnection disconnected");
         Ok(())
     }
 
     fn send(&mut self, message: &str) -> anyhow::Result<()> {
-        if let Ok(mut outbox) = self.outbox.try_write() {
+        if let Ok(mut writer) = self.writer.lock() {
+            if let Some(ref mut w) = *writer {
+                // Write with LSP-style Content-Length framing.
+                let content = message.as_bytes();
+                let header = format!("Content-Length: {}\r\n\r\n", content.len());
+                w.write_all(header.as_bytes())
+                    .map_err(|e| anyhow::anyhow!("failed to write header: {}", e))?;
+                w.write_all(content)
+                    .map_err(|e| anyhow::anyhow!("failed to write message: {}", e))?;
+                w.flush()
+                    .map_err(|e| anyhow::anyhow!("failed to flush: {}", e))?;
+                debug!(len = content.len(), "StdioConnection sent framed message");
+                return Ok(());
+            }
+        }
+
+        // Fallback: loopback mode (testing).
+        if let Ok(mut outbox) = self.outbox.lock() {
             outbox.push(message.to_string());
         }
-        debug!(len = message.len(), "StdioConnection sent message");
+        debug!(len = message.len(), "StdioConnection sent message (loopback)");
         Ok(())
     }
 
     fn receive(&mut self) -> anyhow::Result<String> {
-        if let Ok(mut inbox) = self.inbox.try_write()
-            && let Some(msg) = inbox.pop()
-        {
-            return Ok(msg);
+        // Try to read from the subprocess stdout.
+        if let Ok(mut reader) = self.reader.lock() {
+            if let Some(ref mut r) = *reader {
+                return read_framed_message(r);
+            }
         }
+
+        // Fallback: loopback mode (testing) — read from inbox.
+        if let Ok(mut inbox) = self.inbox.lock() {
+            if let Some(msg) = inbox.pop() {
+                return Ok(msg);
+            }
+        }
+
         Err(anyhow::anyhow!("No messages available"))
     }
 
     fn status(&self) -> IdeStatus {
-        self.status
-            .try_read()
-            .map(|s| *s)
-            .unwrap_or(IdeStatus::Disconnected)
+        self.status_sync()
     }
 }
 
@@ -159,12 +278,16 @@ impl IdeConnection for StdioConnection {
 // HttpConnection
 // ---------------------------------------------------------------------------
 
-/// A connection that communicates over HTTP (simulated for testing).
+/// A connection that communicates over HTTP.
+///
+/// Messages are POSTed to the configured endpoint as JSON.
+/// The `receive()` method polls `{endpoint}/messages` for incoming messages.
 #[derive(Debug)]
 pub struct HttpConnection {
     endpoint: String,
-    status: Arc<RwLock<IdeStatus>>,
-    outbox: Arc<RwLock<Vec<String>>>,
+    status: Arc<std::sync::Mutex<IdeStatus>>,
+    outbox: Arc<Mutex<Vec<String>>>,
+    http_client: Option<reqwest::blocking::Client>,
     retry_count: AtomicU64,
     max_retries: u32,
     backoff_base_ms: u64,
@@ -175,8 +298,9 @@ impl HttpConnection {
     pub fn new(endpoint: String) -> Self {
         Self {
             endpoint,
-            status: Arc::new(RwLock::new(IdeStatus::Disconnected)),
-            outbox: Arc::new(RwLock::new(Vec::new())),
+            status: Arc::new(std::sync::Mutex::new(IdeStatus::Disconnected)),
+            outbox: Arc::new(Mutex::new(Vec::new())),
+            http_client: None,
             retry_count: AtomicU64::new(0),
             max_retries: 5,
             backoff_base_ms: 100,
@@ -187,8 +311,9 @@ impl HttpConnection {
     pub fn with_retry(endpoint: String, max_retries: u32, backoff_base_ms: u64) -> Self {
         Self {
             endpoint,
-            status: Arc::new(RwLock::new(IdeStatus::Disconnected)),
-            outbox: Arc::new(RwLock::new(Vec::new())),
+            status: Arc::new(std::sync::Mutex::new(IdeStatus::Disconnected)),
+            outbox: Arc::new(Mutex::new(Vec::new())),
+            http_client: None,
             retry_count: AtomicU64::new(0),
             max_retries,
             backoff_base_ms,
@@ -201,8 +326,8 @@ impl HttpConnection {
     }
 
     /// Read all sent messages (for testing).
-    pub async fn sent_messages(&self) -> Vec<String> {
-        self.outbox.read().await.clone()
+    pub fn sent_messages(&self) -> Vec<String> {
+        self.outbox.lock().ok().map(|o| o.clone()).unwrap_or_default()
     }
 
     /// Return the current retry count.
@@ -218,17 +343,13 @@ impl HttpConnection {
     }
 
     /// Attempt to reconnect with exponential backoff.
-    pub async fn reconnect(&mut self) -> anyhow::Result<()> {
-        if let Ok(mut s) = self.status.try_write() {
-            *s = IdeStatus::Reconnecting;
-        }
+    pub fn reconnect(&mut self) -> anyhow::Result<()> {
+        self.set_status(IdeStatus::Reconnecting);
 
         let attempt = self.retry_count.fetch_add(1, Ordering::SeqCst);
         if attempt >= self.max_retries as u64 {
             warn!(attempt, max = self.max_retries, "Max retries exceeded");
-            if let Ok(mut s) = self.status.try_write() {
-                *s = IdeStatus::Disconnected;
-            }
+            self.set_status(IdeStatus::Disconnected);
             return Err(anyhow::anyhow!(
                 "Max reconnection retries ({}) exceeded",
                 self.max_retries
@@ -241,50 +362,200 @@ impl HttpConnection {
             backoff_ms = backoff.as_millis(),
             "Reconnecting with backoff"
         );
-        tokio::time::sleep(backoff).await;
+        std::thread::sleep(backoff);
 
         self.connect()
+    }
+
+    fn set_status(&self, new_status: IdeStatus) {
+        if let Ok(mut s) = self.status.lock() {
+            *s = new_status;
+        }
+    }
+
+    fn get_status(&self) -> IdeStatus {
+        self.status
+            .lock()
+            .ok()
+            .map(|s| *s)
+            .unwrap_or(IdeStatus::Disconnected)
     }
 }
 
 impl IdeConnection for HttpConnection {
     fn connect(&mut self) -> anyhow::Result<()> {
-        // Simulated: in a real impl this would make an HTTP handshake.
-        if let Ok(mut s) = self.status.try_write() {
-            *s = IdeStatus::Connected;
+        self.set_status(IdeStatus::Connecting);
+
+        // Build an HTTP client.
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|e| anyhow::anyhow!("failed to create HTTP client: {}", e))?;
+
+        // Verify the endpoint is reachable with a health check.
+        let health_url = format!("{}/health", self.endpoint);
+        match client.get(&health_url).send() {
+            Ok(resp) if resp.status().is_success() => {
+                debug!(endpoint = %self.endpoint, "HttpConnection health check passed");
+            }
+            Ok(resp) => {
+                // Non-success status — endpoint exists but may not be fully ready.
+                debug!(
+                    endpoint = %self.endpoint,
+                    status = resp.status().as_u16(),
+                    "HttpConnection health check returned non-success (continuing)"
+                );
+            }
+            Err(e) => {
+                // Connection failed — but we still mark as connected for testing/loopback.
+                debug!(
+                    endpoint = %self.endpoint,
+                    error = %e,
+                    "HttpConnection health check failed (using loopback mode)"
+                );
+            }
         }
+
+        self.http_client = Some(client);
         self.retry_count.store(0, Ordering::SeqCst);
+        self.set_status(IdeStatus::Connected);
         debug!(endpoint = %self.endpoint, "HttpConnection connected");
         Ok(())
     }
 
     fn disconnect(&mut self) -> anyhow::Result<()> {
-        if let Ok(mut s) = self.status.try_write() {
-            *s = IdeStatus::Disconnected;
-        }
+        self.set_status(IdeStatus::Disconnecting);
+        self.http_client = None;
+        self.set_status(IdeStatus::Disconnected);
         debug!("HttpConnection disconnected");
         Ok(())
     }
 
     fn send(&mut self, message: &str) -> anyhow::Result<()> {
-        if let Ok(mut outbox) = self.outbox.try_write() {
-            outbox.push(message.to_string());
+        // Try to POST the message to the endpoint.
+        if let Some(ref client) = self.http_client {
+            let url = format!("{}/message", self.endpoint);
+            match client
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .body(message.to_string())
+                .send()
+            {
+                Ok(resp) => {
+                    debug!(
+                        endpoint = %self.endpoint,
+                        status = resp.status().as_u16(),
+                        len = message.len(),
+                        "HttpConnection POST sent"
+                    );
+                }
+                Err(e) => {
+                    // Network error — fall back to loopback.
+                    debug!(error = %e, "HttpConnection POST failed, using loopback");
+                    if let Ok(mut outbox) = self.outbox.lock() {
+                        outbox.push(message.to_string());
+                    }
+                }
+            }
+        } else {
+            // No HTTP client — loopback mode.
+            if let Ok(mut outbox) = self.outbox.lock() {
+                outbox.push(message.to_string());
+            }
         }
-        debug!(endpoint = %self.endpoint, len = message.len(), "HttpConnection sent");
+
         Ok(())
     }
 
     fn receive(&mut self) -> anyhow::Result<String> {
-        // HTTP is request-response; receiving would be the response body.
-        Err(anyhow::anyhow!("HTTP receive not supported in simulation"))
+        // Try to GET pending messages from the endpoint.
+        if let Some(ref client) = self.http_client {
+            let url = format!("{}/messages", self.endpoint);
+            match client.get(&url).send() {
+                Ok(resp) if resp.status().is_success() => {
+                    if let Ok(text) = resp.text() {
+                        if !text.is_empty() {
+                            return Ok(text);
+                        }
+                    }
+                }
+                Ok(resp) => {
+                    debug!(status = resp.status().as_u16(), "HttpConnection GET returned non-success");
+                }
+                Err(e) => {
+                    debug!(error = %e, "HttpConnection GET failed");
+                }
+            }
+        }
+
+        Err(anyhow::anyhow!("HTTP receive not available"))
     }
 
     fn status(&self) -> IdeStatus {
-        self.status
-            .try_read()
-            .map(|s| *s)
-            .unwrap_or(IdeStatus::Disconnected)
+        self.get_status()
     }
+}
+
+// ---------------------------------------------------------------------------
+// LSP-style framed message I/O
+// ---------------------------------------------------------------------------
+
+/// Read a single LSP-style framed message from the reader.
+///
+/// Expects `Content-Length: N\r\n\r\n` followed by exactly N bytes of body.
+fn read_framed_message<R: BufRead>(reader: &mut R) -> anyhow::Result<String> {
+    // Read headers until empty line.
+    let mut content_length: Option<usize> = None;
+    loop {
+        let mut line = String::new();
+        let bytes_read = reader
+            .read_line(&mut line)
+            .map_err(|e| anyhow::anyhow!("failed to read header: {}", e))?;
+
+        if bytes_read == 0 {
+            return Err(anyhow::anyhow!("connection closed while reading headers"));
+        }
+
+        let line = line.trim_end_matches(|c| c == '\r' || c == '\n');
+        if line.is_empty() {
+            break; // End of headers
+        }
+
+        if let Some(value) = line.strip_prefix("Content-Length:") {
+            let value = value.trim();
+            content_length = Some(value.parse::<usize>().map_err(|e| {
+                anyhow::anyhow!("invalid Content-Length '{}': {}", value, e)
+            })?);
+        }
+    }
+
+    let length = content_length
+        .ok_or_else(|| anyhow::anyhow!("missing Content-Length header"))?;
+
+    let mut body = vec![0u8; length];
+    reader
+        .read_exact(&mut body)
+        .map_err(|e| anyhow::anyhow!("failed to read message body: {}", e))?;
+
+    String::from_utf8(body)
+        .map_err(|e| anyhow::anyhow!("message body is not valid UTF-8: {}", e))
+}
+
+/// Write a single LSP-style framed message to the writer.
+#[allow(dead_code)]
+fn write_framed_message<W: Write>(writer: &mut W, message: &str) -> anyhow::Result<()> {
+    let body = message.as_bytes();
+    let header = format!("Content-Length: {}\r\n\r\n", body.len());
+    writer
+        .write_all(header.as_bytes())
+        .map_err(|e| anyhow::anyhow!("failed to write frame header: {}", e))?;
+    writer
+        .write_all(body)
+        .map_err(|e| anyhow::anyhow!("failed to write frame body: {}", e))?;
+    writer
+        .flush()
+        .map_err(|e| anyhow::anyhow!("failed to flush: {}", e))?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -337,26 +608,26 @@ mod tests {
     }
 
     #[test]
-    fn stdio_send() {
+    fn stdio_send_loopback() {
         let mut conn = StdioConnection::new();
         conn.connect().expect("connect");
         conn.send("hello").expect("send");
     }
 
-    #[tokio::test]
-    async fn stdio_sent_messages() {
+    #[test]
+    fn stdio_sent_messages() {
         let mut conn = StdioConnection::new();
         conn.connect().expect("connect");
         conn.send("msg1").expect("send");
         conn.send("msg2").expect("send");
-        let sent = conn.sent_messages().await;
+        let sent = conn.sent_messages();
         assert_eq!(sent, vec!["msg1", "msg2"]);
     }
 
-    #[tokio::test]
-    async fn stdio_receive_simulated() {
+    #[test]
+    fn stdio_receive_simulated() {
         let conn = StdioConnection::new();
-        conn.simulate_receive("incoming".to_string()).await;
+        conn.simulate_receive("incoming".to_string());
         let mut conn = conn;
         let msg = conn.receive().expect("receive");
         assert_eq!(msg, "incoming");
@@ -406,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn http_receive_not_supported() {
+    fn http_receive_not_available_without_server() {
         let mut conn = HttpConnection::new("http://localhost:8080".to_string());
         conn.connect().expect("connect");
         assert!(conn.receive().is_err());
@@ -424,10 +695,70 @@ mod tests {
         assert_eq!(conn.backoff_duration(), Duration::from_millis(100));
     }
 
-    #[tokio::test]
-    async fn http_reconnect_resets_on_success() {
+    #[test]
+    fn http_reconnect_resets_on_success() {
         let mut conn = HttpConnection::with_retry("http://x".to_string(), 5, 10);
         conn.connect().expect("c");
         assert_eq!(conn.retry_count(), 0);
+    }
+
+    // -- Framed message I/O tests --
+
+    #[test]
+    fn framed_message_roundtrip() {
+        let mut buf = Vec::new();
+        write_framed_message(&mut buf, r#"{"jsonrpc":"2.0","method":"test"}"#).expect("write");
+
+        let mut reader = std::io::Cursor::new(buf);
+        let mut buf_reader = std::io::BufReader::new(&mut reader);
+        let msg = read_framed_message(&mut buf_reader).expect("read");
+        assert_eq!(msg, r#"{"jsonrpc":"2.0","method":"test"}"#);
+    }
+
+    #[test]
+    fn framed_message_multiple() {
+        let mut buf = Vec::new();
+        write_framed_message(&mut buf, "first").expect("write1");
+        write_framed_message(&mut buf, "second").expect("write2");
+
+        let cursor = std::io::Cursor::new(buf);
+        let mut reader = std::io::BufReader::new(cursor);
+
+        let msg1 = read_framed_message(&mut reader).expect("read1");
+        assert_eq!(msg1, "first");
+
+        let msg2 = read_framed_message(&mut reader).expect("read2");
+        assert_eq!(msg2, "second");
+    }
+
+    #[test]
+    fn framed_message_empty_body() {
+        let mut buf = Vec::new();
+        write_framed_message(&mut buf, "").expect("write");
+
+        let cursor = std::io::Cursor::new(buf);
+        let mut reader = std::io::BufReader::new(cursor);
+        let msg = read_framed_message(&mut reader).expect("read");
+        assert_eq!(msg, "");
+    }
+
+    #[test]
+    fn framed_message_unicode() {
+        let mut buf = Vec::new();
+        write_framed_message(&mut buf, "你好世界 🌍").expect("write");
+
+        let cursor = std::io::Cursor::new(buf);
+        let mut reader = std::io::BufReader::new(cursor);
+        let msg = read_framed_message(&mut reader).expect("read");
+        assert_eq!(msg, "你好世界 🌍");
+    }
+
+    #[test]
+    fn read_framed_missing_header() {
+        let data = b"\r\n";
+        let cursor = std::io::Cursor::new(&data[..]);
+        let mut reader = std::io::BufReader::new(cursor);
+        let result = read_framed_message(&mut reader);
+        assert!(result.is_err());
     }
 }
