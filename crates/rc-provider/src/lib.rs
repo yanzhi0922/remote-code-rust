@@ -62,6 +62,7 @@ use std::collections::BTreeSet;
 use std::env;
 use std::sync::Mutex;
 use std::time::Duration;
+use uuid::Uuid;
 
 const DEFAULT_AUTO_TOOL_SEARCH_PERCENTAGE: u64 = 10;
 const TOOL_SEARCH_CHARS_PER_TOKEN: f64 = 2.5;
@@ -947,7 +948,58 @@ fn build_headers(
         // This is the same approach used by OpenCode, OpenClaw, Cline, and
         // other open-source coding agents that consume Coding Plan quotas.
 
-        headers.insert(USER_AGENT, HeaderValue::from_static("claude-code/1.0.18"));
+        headers.insert(HeaderName::from_static("x-app"), HeaderValue::from_static("cli"));
+        headers.insert(USER_AGENT, HeaderValue::from_str(&claude_code_user_agent())?);
+        let session_id = request_context
+            .map(|context| context.session_id.as_str().to_owned())
+            .or_else(|| {
+                provider
+                    .request_metadata
+                    .get("session_id")
+                    .filter(|value| !value.trim().is_empty())
+                    .cloned()
+            })
+            .unwrap_or_else(|| "unknown".to_owned());
+        headers.insert(
+            HeaderName::from_static("x-claude-code-session-id"),
+            HeaderValue::from_str(&session_id)?,
+        );
+        if let Ok(container_id) = env::var("CLAUDE_CODE_CONTAINER_ID")
+            && !container_id.trim().is_empty()
+        {
+            headers.insert(
+                HeaderName::from_static("x-claude-remote-container-id"),
+                HeaderValue::from_str(container_id.trim())?,
+            );
+        }
+        if let Ok(remote_session_id) = env::var("CLAUDE_CODE_REMOTE_SESSION_ID")
+            && !remote_session_id.trim().is_empty()
+        {
+            headers.insert(
+                HeaderName::from_static("x-claude-remote-session-id"),
+                HeaderValue::from_str(remote_session_id.trim())?,
+            );
+        }
+        if let Ok(client_app) = env::var("CLAUDE_AGENT_SDK_CLIENT_APP")
+            && !client_app.trim().is_empty()
+        {
+            headers.insert(
+                HeaderName::from_static("x-client-app"),
+                HeaderValue::from_str(client_app.trim())?,
+            );
+        }
+        if env_truthy("CLAUDE_CODE_ADDITIONAL_PROTECTION") {
+            headers.insert(
+                HeaderName::from_static("x-anthropic-additional-protection"),
+                HeaderValue::from_static("true"),
+            );
+        }
+        if provider_looks_first_party_anthropic(provider) {
+            headers.insert(
+                HeaderName::from_static("x-client-request-id"),
+                HeaderValue::from_str(&Uuid::new_v4().to_string())?,
+            );
+        }
         headers.insert(
             HeaderName::from_static("anthropic-version"),
             HeaderValue::from_static("2023-06-01"),
@@ -980,6 +1032,7 @@ fn build_headers(
         if body_uses_fast_mode(body) {
             beta_headers::push_beta_once(&mut betas, beta_headers::FAST_MODE_BETA);
         }
+        beta_headers::merge_env_anthropic_betas(&mut betas);
         headers.insert(
             HeaderName::from_static("anthropic-beta"),
             HeaderValue::from_str(&betas.join(","))?,
@@ -1031,6 +1084,39 @@ fn request_context_to_query_source_context(
         query_source_context = query_source_context.with_agent_id(agent_id.as_str().to_owned());
     }
     query_source_context
+}
+
+fn claude_code_user_agent() -> String {
+    let user_type = env::var("USER_TYPE").unwrap_or_else(|_| "external".to_owned());
+    let entrypoint = env::var("CLAUDE_CODE_ENTRYPOINT").unwrap_or_else(|_| "cli".to_owned());
+    let mut parts = vec![user_type, entrypoint];
+    if let Ok(version) = env::var("CLAUDE_AGENT_SDK_VERSION")
+        && !version.trim().is_empty()
+    {
+        parts.push(format!("agent-sdk/{}", version.trim()));
+    }
+    if let Ok(client_app) = env::var("CLAUDE_AGENT_SDK_CLIENT_APP")
+        && !client_app.trim().is_empty()
+    {
+        parts.push(format!("client-app/{}", client_app.trim()));
+    }
+    format!("claude-cli/{} ({})", rc_config::RUNTIME_VERSION, parts.join(", "))
+}
+
+fn env_truthy(name: &str) -> bool {
+    env::var(name).ok().is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
+fn provider_looks_first_party_anthropic(provider: &ProviderConfig) -> bool {
+    provider
+        .base_url
+        .as_deref()
+        .is_some_and(|url| url.contains("api.anthropic.com"))
 }
 
 fn body_uses_global_prompt_cache_scope(body: Option<&Value>) -> bool {
@@ -2845,6 +2931,57 @@ mod tests {
         assert!(beta.contains(crate::beta_headers::TASK_BUDGETS_BETA));
         assert!(beta.contains(crate::beta_headers::STRUCTURED_OUTPUTS_BETA));
         assert!(beta.contains(crate::beta_headers::FAST_MODE_BETA));
+    }
+
+    #[test]
+    fn anthropic_headers_include_claude_code_identity_fields() {
+        let mut provider = test_provider_config("https://api.anthropic.com/v1/messages".to_owned());
+        provider.protocol = rc_core::ProviderProtocol::Anthropic;
+        let request_context = crate::query_source::ProviderRequestContext::new(
+            crate::query_source::QuerySource::Sdk,
+            rc_core::SessionId::from("session-ctx"),
+        );
+
+        let headers = build_headers(&provider, None, Some(&request_context)).expect("headers");
+
+        assert_eq!(headers.get("x-app").and_then(|h| h.to_str().ok()), Some("cli"));
+        assert_eq!(
+            headers
+                .get("x-claude-code-session-id")
+                .and_then(|h| h.to_str().ok()),
+            Some("session-ctx")
+        );
+        let user_agent = headers
+            .get(reqwest::header::USER_AGENT)
+            .and_then(|h| h.to_str().ok())
+            .expect("user-agent");
+        assert!(user_agent.starts_with("claude-cli/"));
+        assert!(headers.get("x-client-request-id").is_some());
+    }
+
+    #[test]
+    fn anthropic_header_overrides_can_replace_reference_headers() {
+        let mut provider = test_provider_config("https://api.anthropic.com/v1/messages".to_owned());
+        provider.protocol = rc_core::ProviderProtocol::Anthropic;
+        provider
+            .request_header_overrides
+            .insert("x-app".to_owned(), "custom-app".to_owned());
+        provider
+            .request_header_overrides
+            .insert("User-Agent".to_owned(), "custom-agent".to_owned());
+
+        let headers = build_headers(&provider, None, None).expect("headers");
+
+        assert_eq!(
+            headers.get("x-app").and_then(|h| h.to_str().ok()),
+            Some("custom-app")
+        );
+        assert_eq!(
+            headers
+                .get(reqwest::header::USER_AGENT)
+                .and_then(|h| h.to_str().ok()),
+            Some("custom-agent")
+        );
     }
 
     #[tokio::test]

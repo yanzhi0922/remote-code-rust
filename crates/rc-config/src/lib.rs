@@ -32,21 +32,9 @@ use crate::tool_filters::merge_tool_filters;
 pub const RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const RESERVED_PROVIDER_HEADER_NAMES: &[&str] = &[
-    "accept",
-    "anthropic-beta",
-    "anthropic-version",
-    "authorization",
     "content-length",
     "content-type",
     "host",
-    "user-agent",
-    "x-api-key",
-    "x-app",
-    "x-anthropic-additional-protection",
-    "x-claude-code-session-id",
-    "x-claude-remote-container-id",
-    "x-claude-remote-session-id",
-    "x-client-app",
 ];
 
 const fn default_provider_max_retries() -> u32 {
@@ -751,7 +739,7 @@ pub fn normalize_base_url(base_url: Option<String>, protocol: ProviderProtocol) 
 
 fn build_request_header_overrides(session_id: Option<Uuid>) -> BTreeMap<String, String> {
     let mut merged = BTreeMap::new();
-    if let Some(raw) = read_env_first(&["REMOTE_CODE_CUSTOM_HEADERS"]) {
+    if let Some(raw) = read_env_first(&["ANTHROPIC_CUSTOM_HEADERS", "REMOTE_CODE_CUSTOM_HEADERS"]) {
         for line in raw.lines() {
             let trimmed = line.trim();
             if trimmed.is_empty() {
@@ -1220,7 +1208,7 @@ fn effort_to_thinking_budget(effort: &str) -> Option<u32> {
 /// Additional overrides for the Anthropic provider:
 /// - `REMOTE_CODE_ANTHROPIC_BASE_URL` — custom Anthropic API base URL
 /// - `REMOTE_CODE_ANTHROPIC_MODEL` — custom Anthropic model name
-/// - `REMOTE_CODE_CUSTOM_HEADERS` — custom HTTP headers (colon-separated `Name: Value` per line)
+/// - `ANTHROPIC_CUSTOM_HEADERS` / `REMOTE_CODE_CUSTOM_HEADERS` — custom HTTP headers (colon-separated `Name: Value` per line)
 ///
 /// ## Coding Plan Providers (Subscription-based AI Coding)
 ///
