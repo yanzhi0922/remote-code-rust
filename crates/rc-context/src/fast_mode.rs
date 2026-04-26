@@ -165,6 +165,16 @@ impl Default for FastModeRuntime {
     }
 }
 
+fn lock_or_recover<'a, T>(mutex: &'a Mutex<T>) -> std::sync::MutexGuard<'a, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("fast mode mutex was poisoned; recovering");
+            poisoned.into_inner()
+        }
+    }
+}
+
 impl FastModeRuntime {
     /// Create a new runtime state manager.
     pub fn new() -> Self {
@@ -176,7 +186,7 @@ impl FastModeRuntime {
     /// Automatically transitions from Cooldown to Available if the
     /// cooldown period has expired.
     pub fn state(&self) -> FastModeState {
-        let mut inner = self.inner.lock().expect("fast mode runtime lock");
+        let mut inner = lock_or_recover(&self.inner);
         if let FastModeState::Cooldown { until, .. } = &inner.state
             && *until <= Utc::now()
         {
@@ -190,16 +200,20 @@ impl FastModeRuntime {
     ///
     /// Called when a rate limit or overloaded response is received.
     pub fn trigger_cooldown(&self, duration: Duration, reason: CooldownReason) {
-        let until = Utc::now() + chrono::Duration::from_std(duration).expect("valid duration");
+        let chrono_duration = chrono::Duration::from_std(duration).unwrap_or_else(|e| {
+            tracing::error!("invalid cooldown duration: {e}; using 60s fallback");
+            chrono::Duration::seconds(60)
+        });
+        let until = Utc::now() + chrono_duration;
         let cooldown_secs = duration.as_secs();
         tracing::debug!("Fast mode cooldown triggered ({reason:?}), duration {cooldown_secs}s");
-        let mut inner = self.inner.lock().expect("fast mode runtime lock");
+        let mut inner = lock_or_recover(&self.inner);
         inner.state = FastModeState::Cooldown { until, reason };
     }
 
     /// Clear any active cooldown, returning to Available state.
     pub fn clear_cooldown(&self) {
-        let mut inner = self.inner.lock().expect("fast mode runtime lock");
+        let mut inner = lock_or_recover(&self.inner);
         inner.state = FastModeState::Available;
     }
 
@@ -210,13 +224,13 @@ impl FastModeRuntime {
 
     /// Get the organization-level fast mode status.
     pub fn org_status(&self) -> OrgFastModeStatus {
-        let inner = self.inner.lock().expect("fast mode runtime lock");
+        let inner = lock_or_recover(&self.inner);
         inner.org_status.clone()
     }
 
     /// Set the organization-level fast mode status.
     pub fn set_org_status(&self, status: OrgFastModeStatus) {
-        let mut inner = self.inner.lock().expect("fast mode runtime lock");
+        let mut inner = lock_or_recover(&self.inner);
         inner.org_status = status;
     }
 
@@ -225,7 +239,7 @@ impl FastModeRuntime {
     /// Called when the API returns an error indicating fast mode is not
     /// enabled for the organization. Permanently disables fast mode.
     pub fn handle_api_rejection(&self) {
-        let mut inner = self.inner.lock().expect("fast mode runtime lock");
+        let mut inner = lock_or_recover(&self.inner);
         if let OrgFastModeStatus::Disabled { .. } = &inner.org_status {
             return; // Already disabled
         }
@@ -239,7 +253,7 @@ impl FastModeRuntime {
     ///
     /// Equivalent to `resolveFastModeStatusFromCache()` in fastMode.ts.
     pub fn resolve_from_cache(&self, is_ant_user: bool, cached_enabled: bool) {
-        let mut inner = self.inner.lock().expect("fast mode runtime lock");
+        let mut inner = lock_or_recover(&self.inner);
         if !matches!(inner.org_status, OrgFastModeStatus::Pending) {
             return;
         }
