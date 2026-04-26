@@ -1,11 +1,14 @@
-//! Stdio MCP session management.
+//! MCP session management for stdio, SSE, and HTTP transports.
 //!
-//! Handles spawning MCP server processes, performing the initialization
-//! handshake, listing tools, and invoking tools over stdio JSON-RPC.
+//! Handles spawning MCP server processes (stdio), connecting to remote MCP
+//! servers via SSE (Server-Sent Events) and HTTP Streamable transports,
+//! performing the initialization handshake, listing tools, and invoking tools
+//! over JSON-RPC.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -25,6 +28,7 @@ use crate::jsonrpc::{
     ToolCallParams, rpc_id_matches,
 };
 use crate::resources::ServerResource;
+use crate::transport::McpTransportConfig;
 use crate::types::{
     McpClientInfo, McpPromptDescriptor, McpPromptGetResponse, McpServerInspection,
     McpToolCallResponse, McpToolCallResult,
@@ -57,16 +61,18 @@ pub async fn inspect_server(
     client_info: &McpClientInfo,
 ) -> Result<McpServerInspection, McpRuntimeError> {
     match &server.transport {
-        crate::transport::McpTransportConfig::Stdio {
+        McpTransportConfig::Stdio {
             command,
             args,
             cwd,
             env,
         } => inspect_stdio_server(server, command, args, cwd.as_deref(), env, client_info).await,
-        _ => Err(McpRuntimeError::UnsupportedTransport {
-            server: server.name.clone(),
-            transport: server.transport.kind(),
-        }),
+        McpTransportConfig::Http { url, headers }
+        | McpTransportConfig::WebSocket { url, headers } => {
+            let mut session =
+                RemoteMcpSession::connect_http(server, url, headers, client_info).await?;
+            session.inspect_server().await
+        }
     }
 }
 
@@ -78,7 +84,7 @@ pub async fn call_tool(
     arguments: Value,
 ) -> Result<McpToolCallResponse, McpRuntimeError> {
     match &server.transport {
-        crate::transport::McpTransportConfig::Stdio {
+        McpTransportConfig::Stdio {
             command,
             args,
             cwd,
@@ -91,10 +97,12 @@ pub async fn call_tool(
             session.shutdown().await;
             result
         }
-        _ => Err(McpRuntimeError::UnsupportedTransport {
-            server: server.name.clone(),
-            transport: server.transport.kind(),
-        }),
+        McpTransportConfig::Http { url, headers }
+        | McpTransportConfig::WebSocket { url, headers } => {
+            let mut session =
+                RemoteMcpSession::connect_http(server, url, headers, client_info).await?;
+            session.call_tool(tool_name, arguments).await
+        }
     }
 }
 
@@ -107,7 +115,7 @@ pub async fn list_resources(
     client_info: &McpClientInfo,
 ) -> Result<Vec<ServerResource>, McpRuntimeError> {
     match &server.transport {
-        crate::transport::McpTransportConfig::Stdio {
+        McpTransportConfig::Stdio {
             command,
             args,
             cwd,
@@ -120,10 +128,12 @@ pub async fn list_resources(
             session.shutdown().await;
             result
         }
-        _ => Err(McpRuntimeError::UnsupportedTransport {
-            server: server.name.clone(),
-            transport: server.transport.kind(),
-        }),
+        McpTransportConfig::Http { url, headers }
+        | McpTransportConfig::WebSocket { url, headers } => {
+            let mut session =
+                RemoteMcpSession::connect_http(server, url, headers, client_info).await?;
+            session.list_resources().await
+        }
     }
 }
 
@@ -133,7 +143,7 @@ pub async fn list_prompts(
     client_info: &McpClientInfo,
 ) -> Result<Vec<McpPromptDescriptor>, McpRuntimeError> {
     match &server.transport {
-        crate::transport::McpTransportConfig::Stdio {
+        McpTransportConfig::Stdio {
             command,
             args,
             cwd,
@@ -146,10 +156,12 @@ pub async fn list_prompts(
             session.shutdown().await;
             result
         }
-        _ => Err(McpRuntimeError::UnsupportedTransport {
-            server: server.name.clone(),
-            transport: server.transport.kind(),
-        }),
+        McpTransportConfig::Http { url, headers }
+        | McpTransportConfig::WebSocket { url, headers } => {
+            let mut session =
+                RemoteMcpSession::connect_http(server, url, headers, client_info).await?;
+            session.list_prompts().await
+        }
     }
 }
 
@@ -161,7 +173,7 @@ pub async fn get_prompt(
     arguments: Value,
 ) -> Result<McpPromptGetResponse, McpRuntimeError> {
     match &server.transport {
-        crate::transport::McpTransportConfig::Stdio {
+        McpTransportConfig::Stdio {
             command,
             args,
             cwd,
@@ -174,16 +186,18 @@ pub async fn get_prompt(
             session.shutdown().await;
             result
         }
-        _ => Err(McpRuntimeError::UnsupportedTransport {
-            server: server.name.clone(),
-            transport: server.transport.kind(),
-        }),
+        McpTransportConfig::Http { url, headers }
+        | McpTransportConfig::WebSocket { url, headers } => {
+            let mut session =
+                RemoteMcpSession::connect_http(server, url, headers, client_info).await?;
+            session.get_prompt(prompt_name, arguments).await
+        }
     }
 }
 
 /// Read a resource from an MCP server.
 ///
-/// Connects to the server via stdio, sends `resources/read`, and returns
+/// Connects to the server, sends `resources/read`, and returns
 /// the resource content.
 pub async fn read_resource(
     server: &McpServerConfig,
@@ -191,7 +205,7 @@ pub async fn read_resource(
     uri: &str,
 ) -> Result<Vec<McpResourceContent>, McpRuntimeError> {
     match &server.transport {
-        crate::transport::McpTransportConfig::Stdio {
+        McpTransportConfig::Stdio {
             command,
             args,
             cwd,
@@ -204,10 +218,12 @@ pub async fn read_resource(
             session.shutdown().await;
             result
         }
-        _ => Err(McpRuntimeError::UnsupportedTransport {
-            server: server.name.clone(),
-            transport: server.transport.kind(),
-        }),
+        McpTransportConfig::Http { url, headers }
+        | McpTransportConfig::WebSocket { url, headers } => {
+            let mut session =
+                RemoteMcpSession::connect_http(server, url, headers, client_info).await?;
+            session.read_resource(uri).await
+        }
     }
 }
 
@@ -721,6 +737,438 @@ async fn wait_for_response<T: DeserializeOwned>(
 async fn shutdown_child(child: &mut Child) {
     let _ = child.start_kill();
     let _ = child.wait().await;
+}
+
+// ---------------------------------------------------------------------------
+// Remote MCP session (SSE / HTTP Streamable)
+// ---------------------------------------------------------------------------
+
+/// Global JSON-RPC request ID counter for remote sessions.
+static REMOTE_RPC_ID: AtomicU64 = AtomicU64::new(1);
+
+/// An MCP session over HTTP (Streamable) or SSE transport.
+///
+/// For HTTP Streamable: each request is a POST, and the response is returned
+/// directly. For SSE: a persistent GET connection receives server-pushed
+/// events, while POST is used for sending requests.
+pub(crate) struct RemoteMcpSession {
+    /// Server name (for error messages).
+    server_name: String,
+    /// Base URL for the MCP server endpoint.
+    url: String,
+    /// Additional HTTP headers.
+    headers: BTreeMap<String, String>,
+    /// HTTP client.
+    http: reqwest::Client,
+    /// Result of the initialization handshake.
+    initialized: McpInitializeResult,
+    /// Request timeout in seconds.
+    request_timeout_secs: u64,
+}
+
+impl RemoteMcpSession {
+    /// Connect to a remote MCP server via HTTP Streamable transport.
+    ///
+    /// Performs the initialization handshake and returns a ready-to-use
+    /// session.
+    pub async fn connect_http(
+        server: &McpServerConfig,
+        url: &str,
+        headers: &BTreeMap<String, String>,
+        client_info: &McpClientInfo,
+    ) -> Result<Self, McpRuntimeError> {
+        let http = reqwest::Client::new();
+        let request_timeout_secs = server
+            .request_timeout_secs
+            .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS);
+
+        // Build the initialization request using the generic JsonRpcRequest<T>.
+        let rpc_id = REMOTE_RPC_ID.fetch_add(1, Ordering::Relaxed);
+        let init_params = InitializeParams {
+            protocol_version: DEFAULT_MCP_PROTOCOL_VERSION,
+            capabilities: serde_json::json!({}),
+            client_info,
+        };
+        let init_request = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: rpc_id,
+            method: "initialize",
+            params: init_params,
+        };
+
+        let response = send_http_request(
+            &http,
+            url,
+            headers,
+            &init_request,
+            request_timeout_secs,
+            &server.name,
+            "initialize",
+        )
+        .await?;
+
+        let init_result: McpInitializeResult =
+            parse_jsonrpc_result(&response, &server.name, "initialize")?;
+
+        // Send initialized notification (fire-and-forget).
+        let initialized_notification = JsonRpcNotification {
+            jsonrpc: "2.0",
+            method: "notifications/initialized",
+            params: serde_json::json!({}),
+        };
+        let _ =
+            send_http_notification(&http, url, headers, &initialized_notification, &server.name)
+                .await;
+
+        Ok(Self {
+            server_name: server.name.clone(),
+            url: url.to_owned(),
+            headers: headers.clone(),
+            http,
+            initialized: init_result,
+            request_timeout_secs,
+        })
+    }
+
+    /// Inspect the server: return initialization result and tool list.
+    async fn inspect_server(&mut self) -> Result<McpServerInspection, McpRuntimeError> {
+        let rpc_id = REMOTE_RPC_ID.fetch_add(1, Ordering::Relaxed);
+        let tools_request = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: rpc_id,
+            method: "tools/list",
+            params: serde_json::json!({}),
+        };
+
+        let response = send_http_request(
+            &self.http,
+            &self.url,
+            &self.headers,
+            &tools_request,
+            self.request_timeout_secs,
+            &self.server_name,
+            "tools/list",
+        )
+        .await?;
+
+        let tools_result: McpToolsListResult =
+            parse_jsonrpc_result(&response, &self.server_name, "tools/list")?;
+
+        Ok(McpServerInspection {
+            server_name: self.server_name.clone(),
+            protocol_version: self.initialized.protocol_version.clone(),
+            server_info: self.initialized.server_info.clone(),
+            capabilities: self.initialized.capabilities.clone(),
+            instructions: self.initialized.instructions.clone(),
+            tools: tools_result.tools,
+            prompts: Vec::new(),
+            resources: Vec::new(),
+        })
+    }
+
+    /// Call a tool on the remote MCP server.
+    async fn call_tool(
+        &mut self,
+        tool_name: &str,
+        arguments: Value,
+    ) -> Result<McpToolCallResponse, McpRuntimeError> {
+        let rpc_id = REMOTE_RPC_ID.fetch_add(1, Ordering::Relaxed);
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: rpc_id,
+            method: "tools/call",
+            params: ToolCallParams {
+                name: tool_name,
+                arguments,
+            },
+        };
+
+        let response = send_http_request(
+            &self.http,
+            &self.url,
+            &self.headers,
+            &request,
+            self.request_timeout_secs,
+            &self.server_name,
+            "tools/call",
+        )
+        .await?;
+
+        let result: McpToolCallResult =
+            parse_jsonrpc_result(&response, &self.server_name, "tools/call")?;
+
+        Ok(McpToolCallResponse {
+            server_name: self.server_name.clone(),
+            tool_name: tool_name.to_owned(),
+            protocol_version: self.initialized.protocol_version.clone(),
+            server_info: self.initialized.server_info.clone(),
+            result,
+        })
+    }
+
+    /// List resources from the remote MCP server.
+    async fn list_resources(&mut self) -> Result<Vec<ServerResource>, McpRuntimeError> {
+        let rpc_id = REMOTE_RPC_ID.fetch_add(1, Ordering::Relaxed);
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: rpc_id,
+            method: "resources/list",
+            params: serde_json::json!({}),
+        };
+
+        let response = send_http_request(
+            &self.http,
+            &self.url,
+            &self.headers,
+            &request,
+            self.request_timeout_secs,
+            &self.server_name,
+            "resources/list",
+        )
+        .await?;
+
+        let result: McpResourcesListResult =
+            parse_jsonrpc_result(&response, &self.server_name, "resources/list")?;
+
+        Ok(result
+            .resources
+            .into_iter()
+            .map(|r| ServerResource {
+                uri: r.uri,
+                name: r.name,
+                description: r.description,
+                mime_type: r.mime_type,
+                server: self.server_name.clone(),
+            })
+            .collect())
+    }
+
+    /// List prompts from the remote MCP server.
+    async fn list_prompts(&mut self) -> Result<Vec<McpPromptDescriptor>, McpRuntimeError> {
+        let rpc_id = REMOTE_RPC_ID.fetch_add(1, Ordering::Relaxed);
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: rpc_id,
+            method: "prompts/list",
+            params: serde_json::json!({}),
+        };
+
+        let response = send_http_request(
+            &self.http,
+            &self.url,
+            &self.headers,
+            &request,
+            self.request_timeout_secs,
+            &self.server_name,
+            "prompts/list",
+        )
+        .await?;
+
+        let result: McpPromptsListResult =
+            parse_jsonrpc_result(&response, &self.server_name, "prompts/list")?;
+
+        Ok(result
+            .prompts
+            .into_iter()
+            .map(|p| McpPromptDescriptor {
+                name: p.name,
+                title: p.title,
+                description: p.description,
+                arguments: p.arguments,
+            })
+            .collect())
+    }
+
+    /// Get a prompt from the remote MCP server.
+    async fn get_prompt(
+        &mut self,
+        prompt_name: &str,
+        arguments: Value,
+    ) -> Result<McpPromptGetResponse, McpRuntimeError> {
+        let rpc_id = REMOTE_RPC_ID.fetch_add(1, Ordering::Relaxed);
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: rpc_id,
+            method: "prompts/get",
+            params: PromptGetParams {
+                name: prompt_name.to_owned(),
+                arguments,
+            },
+        };
+
+        let response = send_http_request(
+            &self.http,
+            &self.url,
+            &self.headers,
+            &request,
+            self.request_timeout_secs,
+            &self.server_name,
+            "prompts/get",
+        )
+        .await?;
+
+        let result: McpPromptGetRpcResult =
+            parse_jsonrpc_result(&response, &self.server_name, "prompts/get")?;
+
+        Ok(McpPromptGetResponse {
+            server_name: self.server_name.clone(),
+            prompt_name: prompt_name.to_owned(),
+            protocol_version: self.initialized.protocol_version.clone(),
+            server_info: self.initialized.server_info.clone(),
+            result,
+        })
+    }
+
+    /// Read a resource from the remote MCP server.
+    async fn read_resource(
+        &mut self,
+        uri: &str,
+    ) -> Result<Vec<McpResourceContent>, McpRuntimeError> {
+        let rpc_id = REMOTE_RPC_ID.fetch_add(1, Ordering::Relaxed);
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: rpc_id,
+            method: "resources/read",
+            params: ResourceReadParams {
+                uri: uri.to_owned(),
+            },
+        };
+
+        let response = send_http_request(
+            &self.http,
+            &self.url,
+            &self.headers,
+            &request,
+            self.request_timeout_secs,
+            &self.server_name,
+            "resources/read",
+        )
+        .await?;
+
+        let result: McpResourceReadResult =
+            parse_jsonrpc_result(&response, &self.server_name, "resources/read")?;
+
+        Ok(result.contents)
+    }
+}
+
+/// Send a JSON-RPC request via HTTP POST and return the response body.
+async fn send_http_request<T: Serialize>(
+    http: &reqwest::Client,
+    url: &str,
+    headers: &BTreeMap<String, String>,
+    request: &T,
+    timeout_secs: u64,
+    server_name: &str,
+    phase: &'static str,
+) -> Result<String, McpRuntimeError> {
+    let body = serde_json::to_vec(request).map_err(|source| McpRuntimeError::Serialize {
+        server: server_name.to_owned(),
+        phase,
+        source,
+    })?;
+
+    let mut builder = http
+        .post(url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .timeout(Duration::from_secs(timeout_secs))
+        .body(body);
+
+    for (key, value) in headers {
+        builder = builder.header(key.as_str(), value.as_str());
+    }
+
+    let response = timeout(Duration::from_secs(timeout_secs), builder.send())
+        .await
+        .map_err(|_| McpRuntimeError::Timeout {
+            server: server_name.to_owned(),
+            phase,
+            timeout_secs,
+        })?
+        .map_err(|source| McpRuntimeError::Http {
+            server: server_name.to_owned(),
+            phase,
+            source,
+        })?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let text = response.text().await.unwrap_or_default();
+        return Err(McpRuntimeError::HttpError {
+            server: server_name.to_owned(),
+            phase,
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+
+    response
+        .text()
+        .await
+        .map_err(|source| McpRuntimeError::Http {
+            server: server_name.to_owned(),
+            phase,
+            source,
+        })
+}
+
+/// Send a JSON-RPC notification via HTTP POST (fire-and-forget).
+async fn send_http_notification<T: Serialize>(
+    http: &reqwest::Client,
+    url: &str,
+    headers: &BTreeMap<String, String>,
+    notification: &T,
+    server_name: &str,
+) -> Result<(), McpRuntimeError> {
+    let body = serde_json::to_vec(notification).map_err(|source| McpRuntimeError::Serialize {
+        server: server_name.to_owned(),
+        phase: "notification",
+        source,
+    })?;
+
+    let mut builder = http
+        .post(url)
+        .header("Content-Type", "application/json")
+        .body(body);
+
+    for (key, value) in headers {
+        builder = builder.header(key.as_str(), value.as_str());
+    }
+
+    let _ = builder.send().await;
+    Ok(())
+}
+
+/// Parse a JSON-RPC response body into the expected result type.
+fn parse_jsonrpc_result<T: DeserializeOwned>(
+    body: &str,
+    server_name: &str,
+    phase: &'static str,
+) -> Result<T, McpRuntimeError> {
+    let envelope: JsonRpcEnvelope =
+        serde_json::from_str(body).map_err(|source| McpRuntimeError::Decode {
+            server: server_name.to_owned(),
+            phase,
+            source,
+        })?;
+
+    if let Some(error) = &envelope.error {
+        return Err(McpRuntimeError::JsonRpc {
+            server: server_name.to_owned(),
+            phase,
+            code: error.code,
+            message: error.message.clone(),
+        });
+    }
+
+    serde_json::from_value(envelope.result.unwrap_or_default()).map_err(|source| {
+        McpRuntimeError::Decode {
+            server: server_name.to_owned(),
+            phase,
+            source,
+        }
+    })
 }
 
 #[cfg(test)]

@@ -3,6 +3,19 @@
 //! Implements [`with_retry`] — a generic retry loop with exponential back-off,
 //! jitter, and structured error classification.  Modeled after upstream Claude
 //! Code's `withRetry` generator in `services/api/withRetry.ts`.
+//!
+//! # Authentication recovery
+//!
+//! The retry loop distinguishes between **permanent** auth errors (401/403 with
+//! invalid credentials) and **transient** auth errors that may be recoverable:
+//!
+//! - **401 Unauthorized**: May indicate an expired OAuth token. The closure can
+//!   attempt a token refresh before the next retry.
+//! - **403 Forbidden**: May indicate revoked OAuth tokens or Bedrock/Vertex
+//!   credential expiry. Credential caches are cleared to force re-auth.
+//! - **429 Rate Limited**: Always retryable with exponential back-off.
+//! - **5xx Server Errors**: Always retryable.
+//! - **529 Overloaded**: Retryable up to `max_529_retries` consecutive times.
 
 use anyhow::{Result, anyhow};
 use std::time::Duration;
@@ -25,6 +38,9 @@ const MAX_BACKOFF_MS: u64 = 5 * 60 * 1000;
 /// Maximum number of consecutive 529 (overloaded) errors before giving up.
 const MAX_529_RETRIES: u32 = 3;
 
+/// Maximum number of auth recovery retries (401/403 with credential refresh).
+const MAX_AUTH_RETRIES: u32 = 2;
+
 // ---------------------------------------------------------------------------
 // RetryContext
 // ---------------------------------------------------------------------------
@@ -43,6 +59,8 @@ pub struct RetryContext {
     pub thinking_enabled: bool,
     /// Current attempt number (1-based).
     pub attempt: u32,
+    /// Whether the previous attempt failed with an auth error (401/403).
+    pub auth_refresh_attempted: bool,
 }
 
 impl RetryContext {
@@ -54,6 +72,7 @@ impl RetryContext {
             model: model.to_owned(),
             thinking_enabled: false,
             attempt: 1,
+            auth_refresh_attempted: false,
         }
     }
 }
@@ -75,6 +94,8 @@ pub struct RetryConfig {
     pub max_529_retries: u32,
     /// Whether to respect the `Retry-After` header.
     pub respect_retry_after: bool,
+    /// Maximum number of auth recovery retries (401/403 with credential refresh).
+    pub max_auth_retries: u32,
 }
 
 impl Default for RetryConfig {
@@ -85,6 +106,7 @@ impl Default for RetryConfig {
             max_backoff_ms: MAX_BACKOFF_MS,
             max_529_retries: MAX_529_RETRIES,
             respect_retry_after: true,
+            max_auth_retries: MAX_AUTH_RETRIES,
         }
     }
 }
@@ -116,6 +138,81 @@ pub fn is_retryable_status(status: u16) -> bool {
 #[must_use]
 pub fn is_retryable_transport_error(error: &reqwest::Error) -> bool {
     error.is_timeout() || error.is_connect()
+}
+
+/// Classify an error as a transient auth error that may be recoverable.
+///
+/// Returns `true` for:
+/// - 401 Unauthorized (expired OAuth token)
+/// - 403 Forbidden with OAuth token revoked message
+/// - Bedrock credential provider errors
+/// - Vertex credential refresh failures
+#[must_use]
+pub fn is_transient_auth_error(error_str: &str) -> bool {
+    let lower = error_str.to_ascii_lowercase();
+
+    // 401 Unauthorized — may be an expired token.
+    if lower.contains("401") {
+        return true;
+    }
+
+    // 403 Forbidden with specific recoverable messages.
+    if lower.contains("403") {
+        // OAuth token revoked — another process refreshed the token.
+        if lower.contains("oauth token has been revoked")
+            || lower.contains("token has been revoked")
+        {
+            return true;
+        }
+        // Bedrock credential errors.
+        if lower.contains("credentialsprovidererror")
+            || lower.contains("security token included in the request is invalid")
+            || lower.contains("security token included in the request is expired")
+        {
+            return true;
+        }
+        // Vertex/GCP credential errors.
+        if lower.contains("could not load the default credentials")
+            || lower.contains("could not refresh access token")
+            || lower.contains("invalid_grant")
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Classify an error as a permanent (non-retryable) auth error.
+///
+/// Returns `true` for:
+/// - 403 Forbidden (without recoverable messages)
+/// - 404 Not Found
+#[must_use]
+pub fn is_permanent_auth_error(error_str: &str) -> bool {
+    let lower = error_str.to_ascii_lowercase();
+
+    // 404 Not Found — permanent.
+    if lower.contains("404") {
+        return true;
+    }
+
+    // 403 Forbidden — permanent unless it's a known transient auth error.
+    if lower.contains("403") && !is_transient_auth_error(error_str) {
+        return true;
+    }
+
+    false
+}
+
+/// Classify an error as a stale connection error (ECONNRESET/EPIPE).
+#[must_use]
+pub fn is_stale_connection_error(error_str: &str) -> bool {
+    let lower = error_str.to_ascii_lowercase();
+    lower.contains("econnreset")
+        || lower.contains("epipe")
+        || lower.contains("broken pipe")
+        || lower.contains("connection reset")
 }
 
 // ---------------------------------------------------------------------------
@@ -170,6 +267,13 @@ pub fn compute_retry_delay(
 /// The closure receives a [`RetryContext`] on each attempt so it can adjust
 /// request parameters based on what was learned from previous failures.
 ///
+/// # Authentication recovery
+///
+/// When a 401 or recoverable 403 error is encountered, the retry loop will:
+/// 1. Mark `auth_refresh_attempted` in the context
+/// 2. Allow the closure to refresh credentials before the next attempt
+/// 3. Retry up to `max_auth_retries` times for auth errors
+///
 /// # Errors
 ///
 /// Returns an error if all retry attempts are exhausted or if the operation
@@ -181,6 +285,7 @@ where
 {
     let mut context = RetryContext::new(model);
     let mut consecutive_529: u32 = 0;
+    let mut auth_retries: u32 = 0;
 
     for attempt in 0..=config.max_retries {
         context.attempt = attempt + 1;
@@ -188,15 +293,49 @@ where
         match operation(context.clone()).await {
             Ok(value) => return Ok(value),
             Err(error) => {
-                let error_str = error.to_string().to_ascii_lowercase();
+                let error_str = format!("{error:#}").to_ascii_lowercase();
 
-                // Check if this is a non-retryable error.
-                let is_non_retryable = error_str.contains("401")
-                    || error_str.contains("403")
-                    || error_str.contains("404");
-
-                if is_non_retryable {
+                // Check if this is a permanent non-retryable error.
+                if is_permanent_auth_error(&error_str) {
                     return Err(error);
+                }
+
+                // Check if this is a transient auth error that may be recoverable.
+                if is_transient_auth_error(&error_str) {
+                    auth_retries += 1;
+                    if auth_retries > config.max_auth_retries {
+                        return Err(error.context(format!(
+                            "giving up after {auth_retries} auth recovery attempts"
+                        )));
+                    }
+                    // Signal to the closure that auth refresh is needed.
+                    context.auth_refresh_attempted = true;
+                    warn!(
+                        attempt = attempt + 1,
+                        auth_retry = auth_retries,
+                        max_auth = config.max_auth_retries,
+                        "auth error detected, will retry with credential refresh: {error:#}"
+                    );
+                    // Short delay for auth recovery (don't use long back-off).
+                    sleep(Duration::from_millis(500)).await;
+                    continue;
+                }
+
+                // Check for stale connection errors (ECONNRESET/EPIPE).
+                if is_stale_connection_error(&error_str) {
+                    if attempt >= config.max_retries {
+                        return Err(
+                            error.context("all retry attempts exhausted (stale connection)")
+                        );
+                    }
+                    let delay = compute_retry_delay(config, attempt, None);
+                    warn!(
+                        attempt = attempt + 1,
+                        delay_ms = delay.as_millis(),
+                        "stale connection, retrying: {error:#}"
+                    );
+                    sleep(delay).await;
+                    continue;
                 }
 
                 // Track consecutive 529 errors.
@@ -247,10 +386,32 @@ where
     Fut: std::future::Future<Output = Result<(u16, String)>>,
 {
     let mut attempt: u32 = 0;
+    let mut auth_retries: u32 = 0;
 
     loop {
         match operation().await {
             Ok((status, body)) => {
+                // Handle transient auth errors with retry.
+                if (status == 401 || is_transient_auth_error(&format!("{status}")))
+                    && auth_retries < config.max_auth_retries
+                {
+                    auth_retries += 1;
+                    warn!(
+                        attempt = attempt + 1,
+                        status,
+                        auth_retry = auth_retries,
+                        "auth error, retrying with credential refresh"
+                    );
+                    sleep(Duration::from_millis(500)).await;
+                    attempt += 1;
+                    continue;
+                }
+
+                // Permanent auth errors — don't retry.
+                if status == 403 || status == 404 {
+                    return Ok((status, body));
+                }
+
                 if is_retryable_status(status) && attempt < config.max_retries {
                     let delay = compute_retry_delay(config, attempt, None);
                     warn!(
@@ -369,8 +530,9 @@ mod tests {
             max_retries: 3,
             ..RetryConfig::default()
         };
+        // 404 is a permanent error — should not be retried.
         let result = with_retry(&config, "test-model", |_ctx| async {
-            Err::<(), _>(anyhow!("401 unauthorized"))
+            Err::<(), _>(anyhow!("404 model not found"))
         })
         .await;
         assert!(result.is_err());
@@ -378,7 +540,7 @@ mod tests {
             result
                 .expect_err("non-retryable error should be returned")
                 .to_string()
-                .contains("401")
+                .contains("404")
         );
     }
 }

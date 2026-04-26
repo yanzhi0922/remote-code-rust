@@ -612,7 +612,10 @@ async fn surfaces_json_rpc_errors_from_tool_call() {
 }
 
 #[tokio::test]
-async fn rejects_non_stdio_runtime_transports() {
+async fn http_transport_attempts_connection() {
+    // HTTP transport is now supported — connecting to a non-existent server
+    // should produce an HTTP-level error (connection refused / DNS failure),
+    // not UnsupportedTransport.
     let server = McpServerConfig {
         name: "relay".to_owned(),
         enabled: true,
@@ -628,14 +631,17 @@ async fn rejects_non_stdio_runtime_transports() {
 
     let error = inspect_server(&server, &McpClientInfo::default())
         .await
-        .expect_err("http runtime inspection should not be supported yet");
-    assert!(matches!(
-        error,
-        McpRuntimeError::UnsupportedTransport {
-            transport: McpTransport::Http,
-            ..
-        }
-    ));
+        .expect_err("connecting to a fake URL should fail");
+    // The error should be an HTTP or JSON-RPC error, not UnsupportedTransport.
+    assert!(
+        matches!(
+            error,
+            McpRuntimeError::Http { .. }
+                | McpRuntimeError::HttpError { .. }
+                | McpRuntimeError::JsonRpc { .. }
+        ),
+        "expected HTTP/JSON-RPC error for fake URL, got: {error:?}"
+    );
 }
 
 // ── New integration tests for additional modules ────────────────────────────

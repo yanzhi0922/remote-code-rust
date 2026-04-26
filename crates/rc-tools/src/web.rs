@@ -39,66 +39,306 @@ pub(crate) async fn web_search(input: &Value, _context: &ToolExecutionContext) -
         .get("query")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("web_search requires a query"))?;
-    let _max_results = input
+    let max_results = input
         .get("max_results")
         .and_then(Value::as_u64)
         .unwrap_or(5)
         .min(10) as usize;
 
-    // Use the DuckDuckGo Instant Answer API (no API key required).
-    let url = format!(
-        "https://api.duckduckgo.com/?q={}&format=json&no_html=1",
-        urlencoding::encode(query)
-    );
-    let response = reqwest::get(&url)
-        .await
-        .context("failed to query DuckDuckGo search API")?;
-    let body = response
-        .text()
-        .await
-        .context("failed to read search response body")?;
+    // Try multiple search backends for better results.
+    let search_backends = get_search_backends();
 
-    let parsed: Value = serde_json::from_str(&body).unwrap_or_default();
+    let mut last_error: Option<String> = None;
+    for backend in &search_backends {
+        match backend.search(query, max_results).await {
+            Ok(Some(results)) if !results.is_empty() => return Ok(results),
+            Ok(_) => continue,
+            Err(e) => {
+                last_error = Some(e.to_string());
+                continue;
+            }
+        }
+    }
 
-    // Extract the abstract text (instant answer summary).
-    let abstract_text = parsed["AbstractText"].as_str().unwrap_or("");
-    let abstract_source = parsed["AbstractSource"].as_str().unwrap_or("");
-
-    if !abstract_text.is_empty() {
-        let source_info = if abstract_source.is_empty() {
-            String::new()
-        } else {
-            format!(" (source: {abstract_source})")
-        };
+    // All backends failed or returned no results.
+    if let Some(error) = last_error {
         Ok(format!(
-            "Search results for '{}':\n{}{}",
-            query, abstract_text, source_info
+            "No search results found for '{}' (last error: {error}). Try a more specific query.",
+            query
         ))
     } else {
-        // Try to extract related topics.
-        let related: Vec<String> = parsed
-            .get("RelatedTopics")
-            .and_then(Value::as_array)
-            .map(|topics| {
-                topics
-                    .iter()
-                    .filter_map(|topic| topic.get("Text").and_then(Value::as_str).map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
+        Ok(format!(
+            "No search results found for '{}'. Try a more specific query.",
+            query
+        ))
+    }
+}
 
-        if related.is_empty() {
-            Ok(format!(
-                "No instant answers found for '{}'. Try a more specific query.",
-                query
-            ))
+/// Get the ordered list of search backends to try.
+fn get_search_backends() -> Vec<Box<dyn SearchBackend>> {
+    // Check for custom search backend configuration via env var.
+    let backend_env = std::env::var("REMOTE_CODE_SEARCH_BACKEND")
+        .unwrap_or_default()
+        .to_lowercase();
+
+    if backend_env == "duckduckgo_html" {
+        vec![Box::new(DuckDuckGoHtmlBackend)]
+    } else if backend_env == "duckduckgo_api" {
+        vec![Box::new(DuckDuckGoApiBackend)]
+    } else {
+        // Default: try HTML scraping first (better results), fall back to API.
+        vec![
+            Box::new(DuckDuckGoHtmlBackend),
+            Box::new(DuckDuckGoApiBackend),
+        ]
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Search backend trait and implementations
+// ---------------------------------------------------------------------------
+
+/// A search backend that can execute web searches.
+trait SearchBackend: Send + Sync {
+    /// Execute a search and return formatted results.
+    fn search(
+        &self,
+        query: &str,
+        max_results: usize,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send>>;
+}
+
+/// DuckDuckGo HTML search backend — scrapes the lite version for better results.
+struct DuckDuckGoHtmlBackend;
+
+impl SearchBackend for DuckDuckGoHtmlBackend {
+    fn search(
+        &self,
+        query: &str,
+        max_results: usize,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send>> {
+        let query = query.to_owned();
+        Box::pin(async move {
+            let url = format!(
+                "https://lite.duckduckgo.com/lite/?q={}",
+                urlencoding::encode(&query)
+            );
+
+            let client = reqwest::Client::builder()
+                .user_agent(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
+                     AppleWebKit/537.36 (KHTML, like Gecko) \
+                     Chrome/120.0.0.0 Safari/537.36",
+                )
+                .build()
+                .context("failed to build HTTP client for DuckDuckGo HTML search")?;
+
+            let response = client
+                .get(&url)
+                .timeout(Duration::from_secs(15))
+                .send()
+                .await
+                .context("failed to query DuckDuckGo HTML search")?;
+
+            let status = response.status();
+            if !status.is_success() {
+                return Err(anyhow!("DuckDuckGo HTML search returned HTTP {status}"));
+            }
+
+            let html = response
+                .text()
+                .await
+                .context("failed to read DuckDuckGo HTML response")?;
+
+            // Parse results from the HTML.
+            let results = parse_ddg_html_results(&html, max_results);
+
+            if results.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(format!(
+                    "Search results for '{}':\n{}",
+                    query,
+                    results.join("\n")
+                )))
+            }
+        })
+    }
+}
+
+/// Parse DuckDuckGo Lite HTML search results.
+fn parse_ddg_html_results(html: &str, max_results: usize) -> Vec<String> {
+    let mut results = Vec::new();
+    let link_re = Regex::new(r#"<a[^>]*class="result-link"[^>]*>(.*?)</a>"#).unwrap_or_else(|_| {
+        Regex::new(r#"<a[^>]*>(.*?)</a>"#).expect("fallback link regex is valid")
+    });
+    let snippet_re = Regex::new(r#"<td[^>]*class="result-snippet"[^>]*>(.*?)</td>"#)
+        .unwrap_or_else(|_| {
+            Regex::new(r#"<td[^>]*>(.*?)</td>"#).expect("fallback snippet regex is valid")
+        });
+    let tag_re = Regex::new(r"<[^>]+>").expect("tag stripping regex is valid");
+
+    // Try to find result links and snippets in the DDG Lite HTML.
+    let link_captures: Vec<String> = link_re
+        .captures_iter(html)
+        .filter_map(|cap| {
+            cap.get(1)
+                .map(|m| tag_re.replace_all(m.as_str(), "").to_string())
+        })
+        .filter(|s| !s.trim().is_empty())
+        .take(max_results)
+        .collect();
+
+    let snippet_captures: Vec<String> = snippet_re
+        .captures_iter(html)
+        .filter_map(|cap| {
+            cap.get(1)
+                .map(|m| tag_re.replace_all(m.as_str(), "").to_string())
+        })
+        .filter(|s| !s.trim().is_empty())
+        .take(max_results)
+        .collect();
+
+    for (i, title) in link_captures.iter().enumerate() {
+        let snippet = snippet_captures.get(i).map(|s| s.as_str()).unwrap_or("");
+        let entry = if snippet.is_empty() {
+            format!("{}. {title}", i + 1)
         } else {
-            Ok(format!(
-                "Related topics for '{}':\n{}",
-                query,
-                related.join("\n")
-            ))
+            format!("{}. {title}\n   {snippet}", i + 1)
+        };
+        results.push(entry);
+    }
+
+    // Fallback: try to extract any meaningful text blocks from the HTML.
+    if results.is_empty() {
+        // Try a simpler approach: extract text between <tr> blocks.
+        let row_re = Regex::new(r"<tr[^>]*>(.*?)</tr>")
+            .unwrap_or_else(|_| Regex::new(".").expect("fallback row regex is valid"));
+        let mut count = 0;
+        for cap in row_re.captures_iter(html) {
+            let row_text = tag_re.replace_all(&cap[1], " ");
+            let cleaned = row_text
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .trim()
+                .to_string();
+            if cleaned.len() > 20 && !cleaned.contains("DuckDuckGo") && !cleaned.contains("cookie")
+            {
+                results.push(cleaned);
+                count += 1;
+                if count >= max_results {
+                    break;
+                }
+            }
         }
+    }
+
+    results
+}
+
+/// DuckDuckGo Instant Answer API backend — returns instant answers and related topics.
+struct DuckDuckGoApiBackend;
+
+impl SearchBackend for DuckDuckGoApiBackend {
+    fn search(
+        &self,
+        query: &str,
+        max_results: usize,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send>> {
+        let query = query.to_owned();
+        Box::pin(async move {
+            let url = format!(
+                "https://api.duckduckgo.com/?q={}&format=json&no_html=1",
+                urlencoding::encode(&query)
+            );
+
+            let response = reqwest::get(&url)
+                .await
+                .context("failed to query DuckDuckGo API")?;
+
+            let body = response
+                .text()
+                .await
+                .context("failed to read DuckDuckGo API response")?;
+
+            let parsed: Value = serde_json::from_str(&body).unwrap_or_default();
+
+            // Extract the abstract text (instant answer summary).
+            let abstract_text = parsed["AbstractText"].as_str().unwrap_or("");
+            let abstract_source = parsed["AbstractSource"].as_str().unwrap_or("");
+            let abstract_url = parsed["AbstractURL"].as_str().unwrap_or("");
+
+            if !abstract_text.is_empty() {
+                let source_info = if abstract_source.is_empty() {
+                    String::new()
+                } else {
+                    let url_info = if abstract_url.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({abstract_url})")
+                    };
+                    format!(" (source: {abstract_source}{url_info})")
+                };
+                return Ok(Some(format!(
+                    "Search results for '{}':\n{abstract_text}{source_info}",
+                    query
+                )));
+            }
+
+            // Try to extract related topics.
+            let related: Vec<String> = parsed
+                .get("RelatedTopics")
+                .and_then(Value::as_array)
+                .map(|topics| {
+                    topics
+                        .iter()
+                        .take(max_results)
+                        .filter_map(|topic| {
+                            // Handle both simple topics and nested topics.
+                            if let Some(text) = topic.get("Text").and_then(Value::as_str) {
+                                let url =
+                                    topic.get("FirstURL").and_then(Value::as_str).unwrap_or("");
+                                if url.is_empty() {
+                                    Some(text.to_owned())
+                                } else {
+                                    Some(format!("{text} ({url})"))
+                                }
+                            } else if let Some(nested) =
+                                topic.get("Topics").and_then(Value::as_array)
+                            {
+                                // Nested topics (category groups).
+                                nested
+                                    .iter()
+                                    .filter_map(|t| {
+                                        let text = t.get("Text").and_then(Value::as_str)?;
+                                        let url =
+                                            t.get("FirstURL").and_then(Value::as_str).unwrap_or("");
+                                        Some(if url.is_empty() {
+                                            text.to_owned()
+                                        } else {
+                                            format!("{text} ({url})")
+                                        })
+                                    })
+                                    .next()
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            if related.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(format!(
+                    "Related topics for '{}':\n{}",
+                    query,
+                    related.join("\n")
+                )))
+            }
+        })
     }
 }
 
