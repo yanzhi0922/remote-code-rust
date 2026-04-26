@@ -392,7 +392,10 @@ mod tests {
     fn export_json_empty() {
         let result = export_conversation(&[], ExportFormat::Json);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().trim(), "[]");
+        assert_eq!(
+            result.expect("empty json export should succeed").trim(),
+            "[]"
+        );
     }
 
     #[test]
@@ -403,7 +406,7 @@ mod tests {
         ];
         let result = export_conversation(&messages, ExportFormat::Json);
         assert!(result.is_ok());
-        let json = result.unwrap();
+        let json = result.expect("json export with messages should succeed");
         assert!(json.contains("Hello"));
         assert!(json.contains("Hi there!"));
     }
@@ -412,7 +415,7 @@ mod tests {
     fn export_markdown_empty() {
         let result = export_conversation(&[], ExportFormat::Markdown);
         assert!(result.is_ok());
-        let md = result.unwrap();
+        let md = result.expect("empty markdown export should succeed");
         assert!(md.contains("Conversation Export"));
         assert!(md.contains("Exported 0 messages"));
     }
@@ -428,7 +431,7 @@ mod tests {
         ];
         let result = export_conversation(&messages, ExportFormat::Markdown);
         assert!(result.is_ok());
-        let md = result.unwrap();
+        let md = result.expect("markdown export with messages should succeed");
         assert!(md.contains("User"));
         assert!(md.contains("Assistant"));
         assert!(md.contains("What is Rust?"));
@@ -439,7 +442,7 @@ mod tests {
         let messages = vec![make_assistant_with_tools("Let me read that file.")];
         let result = export_conversation(&messages, ExportFormat::Markdown);
         assert!(result.is_ok());
-        let md = result.unwrap();
+        let md = result.expect("markdown export with tool calls should succeed");
         assert!(md.contains("Tool: read_file"));
     }
 
@@ -448,7 +451,7 @@ mod tests {
         let messages = vec![make_error_entry(ConversationRole::Tool, "file not found")];
         let result = export_conversation(&messages, ExportFormat::Markdown);
         assert!(result.is_ok());
-        let md = result.unwrap();
+        let md = result.expect("markdown export with error should succeed");
         assert!(md.contains("Error"));
     }
 
@@ -456,7 +459,7 @@ mod tests {
     fn export_html_empty() {
         let result = export_conversation(&[], ExportFormat::Html);
         assert!(result.is_ok());
-        let html = result.unwrap();
+        let html = result.expect("empty html export should succeed");
         assert!(html.contains("<!DOCTYPE html>"));
         assert!(html.contains("Conversation Export"));
     }
@@ -469,7 +472,7 @@ mod tests {
         ];
         let result = export_conversation(&messages, ExportFormat::Html);
         assert!(result.is_ok());
-        let html = result.unwrap();
+        let html = result.expect("html export with messages should succeed");
         // Check HTML escaping worked
         let expected_lt_world = format!("{}lt;world{}gt;", '&', '&');
         let expected_amp_welcome = format!("{}amp; welcome!", '&');
@@ -488,7 +491,7 @@ mod tests {
         )];
         let result = export_conversation(&messages, ExportFormat::Html);
         assert!(result.is_ok());
-        let html = result.unwrap();
+        let html = result.expect("html export with special chars should succeed");
         assert!(!html.contains("<script>"));
         let expected = format!("{}lt;script{}gt;", '&', '&');
         assert!(html.contains(&expected));
@@ -538,7 +541,13 @@ mod tests {
         let result = export_conversation(&messages, ExportFormat::Json).expect("export");
         let parsed: serde_json::Value = serde_json::from_str(&result).expect("valid JSON");
         assert!(parsed.is_array());
-        assert_eq!(parsed.as_array().unwrap().len(), 4);
+        assert_eq!(
+            parsed
+                .as_array()
+                .expect("parsed JSON should be an array")
+                .len(),
+            4
+        );
     }
 
     #[test]
@@ -546,7 +555,7 @@ mod tests {
         let messages = vec![make_tool_entry("file contents here", "tc-abc")];
         let result = export_conversation(&messages, ExportFormat::Markdown);
         assert!(result.is_ok());
-        let md = result.unwrap();
+        let md = result.expect("markdown export with tool call id should succeed");
         assert!(md.contains("tc-abc"));
     }
 
@@ -566,7 +575,7 @@ mod tests {
         ] {
             let result = export_conversation(&messages, fmt);
             assert!(result.is_ok(), "Failed for format {fmt}");
-            let content = result.unwrap();
+            let content = result.expect("export should succeed for all formats");
             assert!(!content.is_empty(), "Empty output for format {fmt}");
         }
     }

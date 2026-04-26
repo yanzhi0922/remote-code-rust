@@ -244,8 +244,8 @@ pub async fn refresh_oauth_token(
     }
 
     let data: OAuthTokenExchangeResponse = response.json().await?;
-    let expires_at = chrono::Utc::now().timestamp_millis()
-        + (data.expires_in as i64).saturating_mul(1000);
+    let expires_at =
+        chrono::Utc::now().timestamp_millis() + (data.expires_in as i64).saturating_mul(1000);
 
     info!("OAuth token refresh succeeded");
     Ok(OAuthTokens {

@@ -921,7 +921,10 @@ mod tests {
             .join("\n");
         let lines = render_tool_result_message(&long, false, &test_style());
         // Should have header + 50 lines + truncation notice
-        let last = lines.last().unwrap().to_string();
+        let last = lines
+            .last()
+            .expect("truncated output should have lines")
+            .to_string();
         assert!(last.contains("more lines"));
     }
 
@@ -1187,7 +1190,10 @@ mod tests {
             .join("\n");
         let lines = render_user_bash_output(&long_output, "", false, &test_style());
         // Non-verbose should show 5 + truncation notice
-        let last = lines.last().unwrap().to_string();
+        let last = lines
+            .last()
+            .expect("bash output should have lines")
+            .to_string();
         assert!(last.contains("more lines"));
     }
 

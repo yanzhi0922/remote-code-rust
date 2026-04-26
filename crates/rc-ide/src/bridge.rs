@@ -332,10 +332,7 @@ impl IdeBridge {
     ///
     /// The caller is responsible for writing this to the transport and
     /// reading the response.
-    pub fn serialize_action_request(
-        &self,
-        action: &IdeAction,
-    ) -> anyhow::Result<(u64, String)> {
+    pub fn serialize_action_request(&self, action: &IdeAction) -> anyhow::Result<(u64, String)> {
         if !self.is_connected() {
             return Err(anyhow::anyhow!("Not connected to IDE"));
         }

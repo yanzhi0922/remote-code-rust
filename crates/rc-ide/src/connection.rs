@@ -144,7 +144,11 @@ impl StdioConnection {
 
     /// Read all sent messages (for testing).
     pub fn sent_messages(&self) -> Vec<String> {
-        self.outbox.lock().ok().map(|o| o.clone()).unwrap_or_default()
+        self.outbox
+            .lock()
+            .ok()
+            .map(|o| o.clone())
+            .unwrap_or_default()
     }
 
     /// Return the current status synchronously.
@@ -183,9 +187,13 @@ impl IdeConnection for StdioConnection {
                 .spawn()
                 .map_err(|e| anyhow::anyhow!("failed to spawn IDE process '{}': {}", cmd, e))?;
 
-            let stdin = child.stdin.take()
+            let stdin = child
+                .stdin
+                .take()
                 .ok_or_else(|| anyhow::anyhow!("failed to open stdin pipe for '{}'", cmd))?;
-            let stdout = child.stdout.take()
+            let stdout = child
+                .stdout
+                .take()
                 .ok_or_else(|| anyhow::anyhow!("failed to open stdout pipe for '{}'", cmd))?;
 
             if let Ok(mut writer) = self.writer.lock() {
@@ -247,7 +255,10 @@ impl IdeConnection for StdioConnection {
         if let Ok(mut outbox) = self.outbox.lock() {
             outbox.push(message.to_string());
         }
-        debug!(len = message.len(), "StdioConnection sent message (loopback)");
+        debug!(
+            len = message.len(),
+            "StdioConnection sent message (loopback)"
+        );
         Ok(())
     }
 
@@ -327,7 +338,11 @@ impl HttpConnection {
 
     /// Read all sent messages (for testing).
     pub fn sent_messages(&self) -> Vec<String> {
-        self.outbox.lock().ok().map(|o| o.clone()).unwrap_or_default()
+        self.outbox
+            .lock()
+            .ok()
+            .map(|o| o.clone())
+            .unwrap_or_default()
     }
 
     /// Return the current retry count.
@@ -479,7 +494,10 @@ impl IdeConnection for HttpConnection {
                     }
                 }
                 Ok(resp) => {
-                    debug!(status = resp.status().as_u16(), "HttpConnection GET returned non-success");
+                    debug!(
+                        status = resp.status().as_u16(),
+                        "HttpConnection GET returned non-success"
+                    );
                 }
                 Err(e) => {
                     debug!(error = %e, "HttpConnection GET failed");
@@ -522,22 +540,22 @@ fn read_framed_message<R: BufRead>(reader: &mut R) -> anyhow::Result<String> {
 
         if let Some(value) = line.strip_prefix("Content-Length:") {
             let value = value.trim();
-            content_length = Some(value.parse::<usize>().map_err(|e| {
-                anyhow::anyhow!("invalid Content-Length '{}': {}", value, e)
-            })?);
+            content_length = Some(
+                value
+                    .parse::<usize>()
+                    .map_err(|e| anyhow::anyhow!("invalid Content-Length '{}': {}", value, e))?,
+            );
         }
     }
 
-    let length = content_length
-        .ok_or_else(|| anyhow::anyhow!("missing Content-Length header"))?;
+    let length = content_length.ok_or_else(|| anyhow::anyhow!("missing Content-Length header"))?;
 
     let mut body = vec![0u8; length];
     reader
         .read_exact(&mut body)
         .map_err(|e| anyhow::anyhow!("failed to read message body: {}", e))?;
 
-    String::from_utf8(body)
-        .map_err(|e| anyhow::anyhow!("message body is not valid UTF-8: {}", e))
+    String::from_utf8(body).map_err(|e| anyhow::anyhow!("message body is not valid UTF-8: {}", e))
 }
 
 /// Write a single LSP-style framed message to the writer.

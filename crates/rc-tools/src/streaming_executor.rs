@@ -304,7 +304,11 @@ impl StreamingToolExecutor {
     /// Number of tools in the executor (all statuses).
     #[must_use]
     pub fn tool_count(&self) -> usize {
-        self.state.lock().unwrap_or_else(|e| e.into_inner()).tools.len()
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .tools
+            .len()
     }
 
     /// Snapshot of all tracked tool calls and their statuses.
@@ -320,13 +324,19 @@ impl StreamingToolExecutor {
 
     /// Mark a tool as errored, which cancels sibling bash-like tools.
     pub fn mark_error(&self, _tool_description: &str) {
-        self.state.lock().unwrap_or_else(|e| e.into_inner()).has_errored = true;
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .has_errored = true;
     }
 
     /// Whether any tool has errored.
     #[must_use]
     pub fn has_errored(&self) -> bool {
-        self.state.lock().unwrap_or_else(|e| e.into_inner()).has_errored
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .has_errored
     }
 
     // -- internal dispatch --------------------------------------------------
@@ -392,7 +402,10 @@ impl StreamingToolExecutor {
                 let start = std::time::Instant::now();
 
                 // Check preconditions
-                let discarded = state_arc.lock().unwrap_or_else(|e| e.into_inner()).discarded;
+                let discarded = state_arc
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .discarded;
                 if discarded {
                     let r = ToolExecutionResult {
                         tool_call_id: id.clone(),
@@ -419,7 +432,10 @@ impl StreamingToolExecutor {
                     return;
                 }
 
-                let has_errored = state_arc.lock().unwrap_or_else(|e| e.into_inner()).has_errored;
+                let has_errored = state_arc
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .has_errored;
                 if has_errored {
                     let r = ToolExecutionResult {
                         tool_call_id: id.clone(),

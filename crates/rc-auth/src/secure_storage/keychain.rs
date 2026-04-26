@@ -135,14 +135,7 @@ async fn save_secret(service: &str, account: &str, secret: &str) -> Result<(), S
     // Use Windows Credential Manager via cmdkey CLI.
     let target = format!("{service}:{account}");
     let output = tokio::process::Command::new("cmdkey")
-        .args([
-            "/generic",
-            &target,
-            "/user",
-            account,
-            "/pass",
-            secret,
-        ])
+        .args(["/generic", &target, "/user", account, "/pass", secret])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .output()
@@ -156,9 +149,7 @@ async fn save_secret(service: &str, account: &str, secret: &str) -> Result<(), S
 
     // Fall back to file-based storage if cmdkey is unavailable.
     let stderr = String::from_utf8_lossy(&output.stderr);
-    tracing::warn!(
-        "cmdkey save failed ({stderr}), falling back to file-based storage"
-    );
+    tracing::warn!("cmdkey save failed ({stderr}), falling back to file-based storage");
     file_based_save(service, account, secret).await
 }
 

@@ -131,11 +131,7 @@ fn resolve_sessions_dir() -> Option<PathBuf> {
     // Fall back to home directory.
     let home = dirs_home()?;
     let path = home.join(PROFILE_DIR_NAME).join(SESSIONS_SUBDIR);
-    if path.exists() {
-        Some(path)
-    } else {
-        None
-    }
+    if path.exists() { Some(path) } else { None }
 }
 
 /// Try to find the user's home directory.
@@ -156,11 +152,7 @@ fn dirs_home() -> Option<PathBuf> {
     let drive = std::env::var("HOMEDRIVE").unwrap_or_else(|_| "C:".to_string());
     let path_str = std::env::var("HOMEPATH").unwrap_or_else(|_| "\\Users\\Default".to_string());
     let p = PathBuf::from(format!("{drive}{path_str}"));
-    if p.exists() {
-        Some(p)
-    } else {
-        None
-    }
+    if p.exists() { Some(p) } else { None }
 }
 
 // ---------------------------------------------------------------------------
@@ -265,7 +257,6 @@ fn find_restorable_sessions_in(
     sessions_dir: &Path,
     limit: usize,
 ) -> anyhow::Result<Vec<SessionRestoreInfo>> {
-
     let entries = match fs::read_dir(sessions_dir) {
         Ok(entries) => entries,
         Err(e) => {
@@ -275,7 +266,10 @@ fn find_restorable_sessions_in(
                 return Ok(vec![]);
             }
             return Err(e).with_context(|| {
-                format!("failed to read sessions directory: {}", sessions_dir.display())
+                format!(
+                    "failed to read sessions directory: {}",
+                    sessions_dir.display()
+                )
             });
         }
     };
@@ -528,8 +522,7 @@ mod tests {
             let ndjson = format!(
                 r#"{{"timestamp":"{ts}","session_id":"sess-{i}","event_type":"init","payload":{{"cwd":"/tmp","model":"test"}}, "conversation":{{"role":"user","text":"msg"}}}}"#
             );
-            fs::write(sessions_dir.join(format!("sess-{i}.ndjson")), ndjson)
-                .expect("write");
+            fs::write(sessions_dir.join(format!("sess-{i}.ndjson")), ndjson).expect("write");
         }
 
         let result = find_restorable_sessions_in(&sessions_dir, 3).expect("find");

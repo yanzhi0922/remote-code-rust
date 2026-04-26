@@ -19,10 +19,10 @@ use rc_protocol::{
 };
 use rc_provider::ProviderCompatBackend;
 use rc_session::SessionStore;
-use rc_tui::builtin_protocol_slash_command_names;
 use rc_tools::mcp_catalog::runtime_mcp_prompt_command_names;
 use rc_tools::runtime_plan_mode::{RuntimePlanModeController, install_plan_mode_runtime};
 use rc_tools::runtime_provider_tool_specs;
+use rc_tui::builtin_protocol_slash_command_names;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tracing::warn;

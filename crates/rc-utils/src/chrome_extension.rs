@@ -380,7 +380,7 @@ mod tests {
         // Should succeed on supported platforms (Windows, macOS, Linux)
         let result = get_chrome_native_messaging_host_path();
         assert!(result.is_ok());
-        let path = result.unwrap();
+        let path = result.expect("get_host_path should succeed after is_ok check");
         assert!(path.to_string_lossy().contains("com.remotecode.cli.json"));
     }
 

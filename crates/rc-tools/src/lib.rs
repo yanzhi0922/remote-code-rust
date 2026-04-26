@@ -3942,7 +3942,11 @@ while True:
             "nbformat_minor": 5
         });
         let nb_path = tempdir.path().join("test.ipynb");
-        std::fs::write(&nb_path, serde_json::to_string_pretty(&notebook).unwrap()).unwrap();
+        std::fs::write(
+            &nb_path,
+            serde_json::to_string_pretty(&notebook).expect("serialize notebook"),
+        )
+        .expect("write notebook file");
 
         let context = ToolExecutionContext {
             original_cwd: tempdir.path().to_path_buf(),
@@ -3988,8 +3992,10 @@ while True:
         .expect("insert notebook cell");
         assert!(!insert.is_error, "{}", insert.content);
 
-        let after_insert: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&nb_path).unwrap()).unwrap();
+        let after_insert: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&nb_path).expect("read notebook after insert"),
+        )
+        .expect("parse notebook after insert");
         assert_eq!(after_insert["cells"][1]["cell_type"], json!("markdown"));
         assert_eq!(after_insert["cells"][1]["source"], json!("## Inserted"));
 
@@ -4011,9 +4017,17 @@ while True:
         .expect("delete notebook cell");
         assert!(!delete.is_error, "{}", delete.content);
 
-        let after_delete: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&nb_path).unwrap()).unwrap();
-        assert_eq!(after_delete["cells"].as_array().unwrap().len(), 1);
+        let after_delete: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&nb_path).expect("read notebook after delete"),
+        )
+        .expect("parse notebook after delete");
+        assert_eq!(
+            after_delete["cells"]
+                .as_array()
+                .expect("cells should be array")
+                .len(),
+            1
+        );
         assert_eq!(after_delete["cells"][0]["source"], json!("## Inserted"));
     }
 

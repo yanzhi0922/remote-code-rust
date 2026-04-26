@@ -174,12 +174,7 @@ pub fn filter_hooks_by_trust(hooks: &[HookDefinition], trusted: bool) -> Vec<Hoo
     }
     hooks
         .iter()
-        .filter(|h| {
-            matches!(
-                h,
-                HookDefinition::Callback(_) | HookDefinition::Function(_)
-            )
-        })
+        .filter(|h| matches!(h, HookDefinition::Callback(_) | HookDefinition::Function(_)))
         .cloned()
         .collect()
 }
@@ -284,7 +279,9 @@ pub fn parse_hook_event(value: &str) -> Option<HookEventKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hook_types::{HookCallback, HookCommand, HookFunction, HookMatcherEntry, HookPrompt};
+    use crate::hook_types::{
+        HookCallback, HookCommand, HookFunction, HookMatcherEntry, HookPrompt,
+    };
 
     fn make_command_hook(cmd: &str) -> HookDefinition {
         HookDefinition::Command(HookCommand {
@@ -580,7 +577,10 @@ mod tests {
     fn filter_by_trust_strips_external_hooks_when_untrusted() {
         let hooks = vec![make_command_hook("a")];
         let filtered = filter_hooks_by_trust(&hooks, false);
-        assert!(filtered.is_empty(), "command hooks should be filtered in untrusted workspace");
+        assert!(
+            filtered.is_empty(),
+            "command hooks should be filtered in untrusted workspace"
+        );
     }
 
     #[test]
@@ -622,7 +622,10 @@ mod tests {
     fn filter_by_managed_managed_overrides_user() {
         let user_hook = make_command_hook("lint.sh");
         let managed_hook = make_command_hook("lint.sh");
-        let filtered = filter_hooks_by_managed(&[user_hook], &[managed_hook.clone()]);
+        let filtered = filter_hooks_by_managed(
+            std::slice::from_ref(&user_hook),
+            std::slice::from_ref(&managed_hook),
+        );
         // Managed wins — only 1 hook with that dedup key
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0], managed_hook);
