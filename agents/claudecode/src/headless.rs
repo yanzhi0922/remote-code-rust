@@ -1097,84 +1097,105 @@ mod tests {
         assert_eq!(event["session_id"], config.session_id.to_string());
     }
 
-    #[tokio::test]
-    async fn headless_default_compat_path_emits_stream_json_message_events_and_result() {
-        let (_tempdir, mut config, store) = mock_config_and_store();
-        config.include_partial_messages = true;
-        config.input_format = InputFormat::StreamJson;
-        let mut conversation =
-            initialize_conversation(&store, &config, Some("streaming")).expect("conversation");
-        let mut hook_state = HookRunState::load(&store, config.session_id).expect("hook state");
-        let backend = Arc::new(RecordingStreamingBackend::default());
-        let output = NamedTempFile::new().expect("protocol output");
-        let broker = mock_broker(&config);
-        let emitter = Arc::new(Mutex::new(ProtocolEmitter::new(
-            output.reopen().expect("reopen output"),
-            config.session_id,
-        )));
+    /// Run on a dedicated thread with an 8 MiB stack to avoid Windows stack
+    /// overflow (the async state machine for `run_headless_prompt_once` is
+    /// large enough to exceed the default 1 MiB thread stack).
+    #[test]
+    fn headless_default_compat_path_emits_stream_json_message_events_and_result() {
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+                rt.block_on(async {
+                    let (_tempdir, mut config, store) = mock_config_and_store();
+                    config.include_partial_messages = true;
+                    config.input_format = InputFormat::StreamJson;
+                    let mut conversation =
+                        initialize_conversation(&store, &config, Some("streaming"))
+                            .expect("conversation");
+                    let mut hook_state =
+                        HookRunState::load(&store, config.session_id).expect("hook state");
+                    let backend = Arc::new(RecordingStreamingBackend::default());
+                    let output = NamedTempFile::new().expect("protocol output");
+                    let broker = mock_broker(&config);
+                    let emitter = Arc::new(Mutex::new(ProtocolEmitter::new(
+                        output.reopen().expect("reopen output"),
+                        config.session_id,
+                    )));
 
-        run_headless_prompt_once(
-            Arc::clone(&emitter),
-            &mut config,
-            &store,
-            backend.clone(),
-            rc_provider::DiscoveredToolScope::default(),
-            broker,
-            &RuntimeHookDiscovery::default(),
-            &mut hook_state,
-            &mut conversation,
-            "streaming",
-        )
-        .await
-        .expect("headless prompt should succeed");
+                    run_headless_prompt_once(
+                        Arc::clone(&emitter),
+                        &mut config,
+                        &store,
+                        backend.clone(),
+                        rc_provider::DiscoveredToolScope::default(),
+                        broker,
+                        &RuntimeHookDiscovery::default(),
+                        &mut hook_state,
+                        &mut conversation,
+                        "streaming",
+                    )
+                    .await
+                    .expect("headless prompt should succeed");
 
-        drop(emitter);
-        let events = read_protocol_events(output.path());
-        assert_eq!(backend.complete_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(backend.complete_streaming_calls.load(Ordering::SeqCst), 1);
+                    drop(emitter);
+                    let events = read_protocol_events(output.path());
+                    assert_eq!(backend.complete_calls.load(Ordering::SeqCst), 0);
+                    assert_eq!(
+                        backend.complete_streaming_calls.load(Ordering::SeqCst),
+                        1
+                    );
 
-        let running_index = events
-            .iter()
-            .position(|event| {
-                event.get("type").and_then(Value::as_str) == Some("system")
-                    && event.get("subtype").and_then(Value::as_str) == Some("session_state_changed")
-                    && event.get("state").and_then(Value::as_str) == Some("running")
+                    let running_index = events
+                        .iter()
+                        .position(|event| {
+                            event.get("type").and_then(Value::as_str) == Some("system")
+                                && event.get("subtype").and_then(Value::as_str)
+                                    == Some("session_state_changed")
+                                && event.get("state").and_then(Value::as_str)
+                                    == Some("running")
+                        })
+                        .expect("running state event");
+                    let context_index = index_of_event(&events, "context_usage");
+                    let delta_index = index_of_event(&events, "message_delta");
+                    let committed_index = index_of_event(&events, "message_committed");
+                    let assistant_index = index_of_event(&events, "assistant");
+                    let result_index = index_of_event(&events, "result");
+                    let idle_index = events
+                        .iter()
+                        .position(|event| {
+                            event.get("type").and_then(Value::as_str) == Some("system")
+                                && event.get("subtype").and_then(Value::as_str)
+                                    == Some("session_state_changed")
+                                && event.get("state").and_then(Value::as_str) == Some("idle")
+                        })
+                        .expect("idle state event");
+
+                    assert!(running_index < context_index);
+                    assert!(context_index < delta_index);
+                    assert!(delta_index < committed_index);
+                    assert!(committed_index < assistant_index);
+                    assert!(assistant_index < result_index);
+                    assert!(result_index < idle_index);
+                    assert_eq!(events[delta_index]["delta"], "streaming-backend");
+                    assert_eq!(events[committed_index]["text"], "streaming-backend");
+                    assert_eq!(
+                        events[assistant_index]["message"]["content"][0]["text"],
+                        "streaming-backend"
+                    );
+                    assert_eq!(events[result_index]["subtype"], "success");
+                    assert_eq!(events[result_index]["result"], "streaming-backend");
+                    assert_eq!(
+                        events[result_index]["permission_denials"],
+                        Value::Array(Vec::new())
+                    );
+                    assert_eq!(events[result_index]["usage"]["input_tokens"], 12);
+                    assert_eq!(events[result_index]["usage"]["output_tokens"], 3);
+                });
             })
-            .expect("running state event");
-        let context_index = index_of_event(&events, "context_usage");
-        let delta_index = index_of_event(&events, "message_delta");
-        let committed_index = index_of_event(&events, "message_committed");
-        let assistant_index = index_of_event(&events, "assistant");
-        let result_index = index_of_event(&events, "result");
-        let idle_index = events
-            .iter()
-            .position(|event| {
-                event.get("type").and_then(Value::as_str) == Some("system")
-                    && event.get("subtype").and_then(Value::as_str) == Some("session_state_changed")
-                    && event.get("state").and_then(Value::as_str) == Some("idle")
-            })
-            .expect("idle state event");
-
-        assert!(running_index < context_index);
-        assert!(context_index < delta_index);
-        assert!(delta_index < committed_index);
-        assert!(committed_index < assistant_index);
-        assert!(assistant_index < result_index);
-        assert!(result_index < idle_index);
-        assert_eq!(events[delta_index]["delta"], "streaming-backend");
-        assert_eq!(events[committed_index]["text"], "streaming-backend");
-        assert_eq!(
-            events[assistant_index]["message"]["content"][0]["text"],
-            "streaming-backend"
-        );
-        assert_eq!(events[result_index]["subtype"], "success");
-        assert_eq!(events[result_index]["result"], "streaming-backend");
-        assert_eq!(
-            events[result_index]["permission_denials"],
-            Value::Array(Vec::new())
-        );
-        assert_eq!(events[result_index]["usage"]["input_tokens"], 12);
-        assert_eq!(events[result_index]["usage"]["output_tokens"], 3);
+            .expect("thread spawn")
+            .join()
+            .expect("thread join");
     }
 
     #[tokio::test]
@@ -1219,49 +1240,62 @@ mod tests {
         assert_eq!(backend.complete_streaming_calls.load(Ordering::SeqCst), 1);
     }
 
-    #[tokio::test]
-    async fn headless_error_result_reuses_persisted_compat_metadata() {
-        let (_tempdir, mut config, store) = mock_config_and_store();
-        config.include_partial_messages = true;
-        let mut conversation =
-            initialize_conversation(&store, &config, Some("streaming")).expect("conversation");
-        let mut hook_state = HookRunState::load(&store, config.session_id).expect("hook state");
-        let output = NamedTempFile::new().expect("protocol output");
-        let broker = mock_broker(&config);
-        let emitter = Arc::new(Mutex::new(ProtocolEmitter::new(
-            output.reopen().expect("reopen output"),
-            config.session_id,
-        )));
+    /// Same stack-size workaround as
+    /// `headless_default_compat_path_emits_stream_json_message_events_and_result`.
+    #[test]
+    fn headless_error_result_reuses_persisted_compat_metadata() {
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+                rt.block_on(async {
+                    let (_tempdir, mut config, store) = mock_config_and_store();
+                    config.include_partial_messages = true;
+                    let mut conversation = initialize_conversation(&store, &config, Some("streaming"))
+                        .expect("conversation");
+                    let mut hook_state =
+                        HookRunState::load(&store, config.session_id).expect("hook state");
+                    let output = NamedTempFile::new().expect("protocol output");
+                    let broker = mock_broker(&config);
+                    let emitter = Arc::new(Mutex::new(ProtocolEmitter::new(
+                        output.reopen().expect("reopen output"),
+                        config.session_id,
+                    )));
 
-        run_headless_prompt_once(
-            Arc::clone(&emitter),
-            &mut config,
-            &store,
-            Arc::new(FailingStreamingBackend),
-            rc_provider::DiscoveredToolScope::default(),
-            broker,
-            &RuntimeHookDiscovery::default(),
-            &mut hook_state,
-            &mut conversation,
-            "streaming",
-        )
-        .await
-        .expect("headless prompt should emit error result");
+                    run_headless_prompt_once(
+                        Arc::clone(&emitter),
+                        &mut config,
+                        &store,
+                        Arc::new(FailingStreamingBackend),
+                        rc_provider::DiscoveredToolScope::default(),
+                        broker,
+                        &RuntimeHookDiscovery::default(),
+                        &mut hook_state,
+                        &mut conversation,
+                        "streaming",
+                    )
+                    .await
+                    .expect("headless prompt should emit error result");
 
-        drop(emitter);
-        let events = read_protocol_events(output.path());
-        let runtime_error_index = index_of_event(&events, "runtime_error");
-        let result_index = index_of_event(&events, "result");
-        assert!(runtime_error_index < result_index);
-        assert_eq!(events[result_index]["subtype"], "error_during_execution");
-        assert_eq!(events[result_index]["is_error"], true);
-        assert_eq!(events[result_index]["stop_reason"], "error");
-        assert_eq!(events[result_index]["modelUsage"]["provider"], "mock");
-        assert_eq!(events[result_index]["modelUsage"]["model"], "mock-model");
-        assert_eq!(
-            events[result_index]["permission_denials"],
-            Value::Array(Vec::new())
-        );
+                    drop(emitter);
+                    let events = read_protocol_events(output.path());
+                    let runtime_error_index = index_of_event(&events, "runtime_error");
+                    let result_index = index_of_event(&events, "result");
+                    assert!(runtime_error_index < result_index);
+                    assert_eq!(events[result_index]["subtype"], "error_during_execution");
+                    assert_eq!(events[result_index]["is_error"], true);
+                    assert_eq!(events[result_index]["stop_reason"], "error");
+                    assert_eq!(events[result_index]["modelUsage"]["provider"], "mock");
+                    assert_eq!(events[result_index]["modelUsage"]["model"], "mock-model");
+                    assert_eq!(
+                        events[result_index]["permission_denials"],
+                        Value::Array(Vec::new())
+                    );
+                });
+            })
+            .expect("thread spawn")
+            .join()
+            .expect("thread join");
     }
 
     #[tokio::test]
@@ -1314,46 +1348,59 @@ mod tests {
         assert_eq!(events[0]["state"], "running");
     }
 
-    #[tokio::test]
-    async fn headless_permission_request_preserves_suggestions() {
-        let (_tempdir, mut config, store) = mock_config_and_store();
-        let outside = config.cwd.parent().expect("parent").join("outside.txt");
-        fs::write(&outside, "secret").expect("outside file");
-        config.include_partial_messages = true;
-        let mut conversation =
-            initialize_conversation(&store, &config, Some("streaming")).expect("conversation");
-        let mut hook_state = HookRunState::load(&store, config.session_id).expect("hook state");
-        let output = NamedTempFile::new().expect("protocol output");
-        let emitter = Arc::new(Mutex::new(ProtocolEmitter::new(
-            output.reopen().expect("reopen output"),
-            config.session_id,
-        )));
-        let captured = Arc::new(StdMutex::new(Vec::new()));
+    /// Same stack-size workaround as
+    /// `headless_default_compat_path_emits_stream_json_message_events_and_result`.
+    #[test]
+    fn headless_permission_request_preserves_suggestions() {
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+                rt.block_on(async {
+                    let (_tempdir, mut config, store) = mock_config_and_store();
+                    let outside = config.cwd.parent().expect("parent").join("outside.txt");
+                    fs::write(&outside, "secret").expect("outside file");
+                    config.include_partial_messages = true;
+                    let mut conversation = initialize_conversation(&store, &config, Some("streaming"))
+                        .expect("conversation");
+                    let mut hook_state =
+                        HookRunState::load(&store, config.session_id).expect("hook state");
+                    let output = NamedTempFile::new().expect("protocol output");
+                    let emitter = Arc::new(Mutex::new(ProtocolEmitter::new(
+                        output.reopen().expect("reopen output"),
+                        config.session_id,
+                    )));
+                    let captured = Arc::new(StdMutex::new(Vec::new()));
 
-        run_headless_prompt_once(
-            Arc::clone(&emitter),
-            &mut config,
-            &store,
-            Arc::new(ToolCallingBackend {
-                outside_path: outside.to_string_lossy().into_owned(),
-                turn: AtomicUsize::new(0),
-            }),
-            rc_provider::DiscoveredToolScope::default(),
-            Arc::new(SuggestionCaptureBroker {
-                captured: captured.clone(),
-            }),
-            &RuntimeHookDiscovery::default(),
-            &mut hook_state,
-            &mut conversation,
-            "streaming",
-        )
-        .await
-        .expect("headless prompt should succeed");
+                    run_headless_prompt_once(
+                        Arc::clone(&emitter),
+                        &mut config,
+                        &store,
+                        Arc::new(ToolCallingBackend {
+                            outside_path: outside.to_string_lossy().into_owned(),
+                            turn: AtomicUsize::new(0),
+                        }),
+                        rc_provider::DiscoveredToolScope::default(),
+                        Arc::new(SuggestionCaptureBroker {
+                            captured: captured.clone(),
+                        }),
+                        &RuntimeHookDiscovery::default(),
+                        &mut hook_state,
+                        &mut conversation,
+                        "streaming",
+                    )
+                    .await
+                    .expect("headless prompt should succeed");
 
-        drop(emitter);
-        let requests = captured.lock().expect("captured");
-        assert_eq!(requests.len(), 1);
-        assert!(!requests[0].permission_suggestions.is_empty());
+                    drop(emitter);
+                    let requests = captured.lock().expect("captured");
+                    assert_eq!(requests.len(), 1);
+                    assert!(!requests[0].permission_suggestions.is_empty());
+                });
+            })
+            .expect("thread spawn")
+            .join()
+            .expect("thread join");
     }
 
     #[tokio::test]
