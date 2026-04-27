@@ -4667,6 +4667,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "rc-agent-protocol",
  "rc-agents",
  "rc-auth",
  "rc-compact",

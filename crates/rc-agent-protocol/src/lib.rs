@@ -12,7 +12,9 @@ pub mod adapter;
 pub mod adapters;
 pub mod error;
 pub mod events;
+pub mod health;
 pub mod permission;
+pub mod restart;
 pub mod router;
 pub mod types;
 

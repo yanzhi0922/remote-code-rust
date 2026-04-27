@@ -557,3 +557,564 @@ fn context_slice_default_and_serialization() {
     assert_eq!(decoded.summary, "test context");
     assert_eq!(decoded.token_estimate, 42);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase 6.1 — rc-agent-protocol integration tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+use std::collections::HashSet;
+use rc_agent_protocol::{
+    AgentAdapter, AgentRouter, AgentType,
+    UnifiedAgentEvent, AgentResult, UsageInfo, ToolCallInfo,
+    PermissionDecision,
+};
+use rc_agent_protocol::adapters::RemoteCodeAdapter;
+use rc_agent_protocol::types::{AgentConfig, AgentCapability, AgentInfo, AgentStatus};
+use rc_agent_protocol::health::{HealthChecker, HealthCheckConfig, HealthStatus};
+use rc_agent_protocol::restart::{RestartTracker, RestartPolicy};
+
+/// Helper: minimal RemoteCode AgentConfig for tests.
+fn protocol_test_config() -> AgentConfig {
+    AgentConfig {
+        agent_type: AgentType::RemoteCode,
+        binary_path: None,
+        args: vec![],
+        env: vec![],
+        working_dir: None,
+        model: None,
+        provider: None,
+        api_key: None,
+        base_url: None,
+    }
+}
+
+// ─── AgentRouter routing tests ─────────────────────────────────────────────
+
+#[tokio::test]
+async fn router_register_and_send_message_routes_correctly() {
+    let mut router = AgentRouter::new();
+
+    let adapter = RemoteCodeAdapter::new().with_send_message(|_sid, msg| {
+        Ok(vec![UnifiedAgentEvent::MessageDelta {
+            session_id: "sess-1".into(),
+            delta: format!("echo: {msg}"),
+        }])
+    });
+
+    let mut boxed: Box<dyn AgentAdapter> = Box::new(adapter);
+    boxed.start(&protocol_test_config()).await.unwrap();
+    router.register("sess-1".into(), boxed);
+
+    assert!(router.has_session("sess-1"));
+    assert_eq!(router.session_count(), 1);
+
+    let mut rx = router.send_message("sess-1", "hello").await.unwrap();
+    let event = rx.recv().await.expect("should receive event");
+    match event {
+        UnifiedAgentEvent::MessageDelta { delta, .. } => {
+            assert_eq!(delta, "echo: hello");
+        }
+        other => panic!("expected MessageDelta, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn router_multiple_sessions_route_independently() {
+    let mut router = AgentRouter::new();
+
+    // Session A
+    let adapter_a = RemoteCodeAdapter::new().with_send_message(|_sid, msg| {
+        Ok(vec![UnifiedAgentEvent::MessageDelta {
+            session_id: "sess-a".into(),
+            delta: format!("A:{msg}"),
+        }])
+    });
+    let mut boxed_a: Box<dyn AgentAdapter> = Box::new(adapter_a);
+    boxed_a.start(&protocol_test_config()).await.unwrap();
+    router.register("sess-a".into(), boxed_a);
+
+    // Session B
+    let adapter_b = RemoteCodeAdapter::new().with_send_message(|_sid, msg| {
+        Ok(vec![UnifiedAgentEvent::MessageDelta {
+            session_id: "sess-b".into(),
+            delta: format!("B:{msg}"),
+        }])
+    });
+    let mut boxed_b: Box<dyn AgentAdapter> = Box::new(adapter_b);
+    boxed_b.start(&protocol_test_config()).await.unwrap();
+    router.register("sess-b".into(), boxed_b);
+
+    assert_eq!(router.session_count(), 2);
+
+    // Route to A
+    let mut rx_a = router.send_message("sess-a", "test").await.unwrap();
+    let ev_a = rx_a.recv().await.unwrap();
+    match ev_a {
+        UnifiedAgentEvent::MessageDelta { delta, .. } => assert_eq!(delta, "A:test"),
+        _ => panic!("expected MessageDelta"),
+    }
+
+    // Route to B
+    let mut rx_b = router.send_message("sess-b", "test").await.unwrap();
+    let ev_b = rx_b.recv().await.unwrap();
+    match ev_b {
+        UnifiedAgentEvent::MessageDelta { delta, .. } => assert_eq!(delta, "B:test"),
+        _ => panic!("expected MessageDelta"),
+    }
+}
+
+#[tokio::test]
+async fn router_close_session_removes_adapter() {
+    let mut router = AgentRouter::new();
+
+    let adapter = RemoteCodeAdapter::new().with_send_message(|_sid, _msg| Ok(vec![]));
+    let mut boxed: Box<dyn AgentAdapter> = Box::new(adapter);
+    boxed.start(&protocol_test_config()).await.unwrap();
+    router.register("sess-x".into(), boxed);
+
+    assert_eq!(router.session_count(), 1);
+    router.close_session("sess-x").await.unwrap();
+    assert_eq!(router.session_count(), 0);
+    assert!(!router.has_session("sess-x"));
+}
+
+#[tokio::test]
+async fn router_cancel_delegates_to_adapter() {
+    let canceled = Arc::new(Mutex::new(false));
+    let canceled_clone = canceled.clone();
+
+    let adapter = RemoteCodeAdapter::new()
+        .with_send_message(|_sid, _msg| Ok(vec![]))
+        .with_cancel(move |_sid| {
+            *canceled_clone.lock().unwrap() = true;
+            Ok(())
+        });
+
+    let mut boxed: Box<dyn AgentAdapter> = Box::new(adapter);
+    boxed.start(&protocol_test_config()).await.unwrap();
+    let mut router = AgentRouter::new();
+    router.register("sess-c".into(), boxed);
+
+    router.cancel("sess-c").await.unwrap();
+    assert!(*canceled.lock().unwrap());
+}
+
+// ─── RemoteCodeAdapter integration tests ───────────────────────────────────
+
+#[tokio::test]
+async fn remotecode_adapter_lifecycle_start_send_stop() {
+    let messages_received = Arc::new(Mutex::new(Vec::<String>::new()));
+    let messages_clone = messages_received.clone();
+
+    let adapter = RemoteCodeAdapter::new().with_send_message(move |_sid, msg| {
+        messages_clone.lock().unwrap().push(msg.to_string());
+        Ok(vec![
+            UnifiedAgentEvent::Ready,
+            UnifiedAgentEvent::MessageDelta {
+                session_id: "s1".into(),
+                delta: msg.into(),
+            },
+            UnifiedAgentEvent::Completed {
+                session_id: "s1".into(),
+                result: AgentResult {
+                    response_text: msg.into(),
+                    tool_calls: vec![],
+                    usage: UsageInfo::default(),
+                    cost: None,
+                },
+            },
+        ])
+    });
+
+    let mut adapter = adapter;
+
+    // Before start — alive (status is Starting)
+    assert!(adapter.is_alive());
+
+    // Start
+    adapter.start(&protocol_test_config()).await.unwrap();
+    assert!(adapter.is_alive());
+    assert_eq!(adapter.info().status, AgentStatus::Ready);
+
+    // Send message
+    let mut rx = adapter.send_message("s1", "hello world").await.unwrap();
+    let mut events = Vec::new();
+    while let Some(ev) = rx.recv().await {
+        events.push(ev);
+    }
+    assert_eq!(events.len(), 3);
+    assert!(matches!(events[0], UnifiedAgentEvent::Ready));
+    assert!(matches!(events[1], UnifiedAgentEvent::MessageDelta { .. }));
+    assert!(matches!(events[2], UnifiedAgentEvent::Completed { .. }));
+
+    // Verify callback received the message
+    assert_eq!(messages_received.lock().unwrap().len(), 1);
+    assert_eq!(messages_received.lock().unwrap()[0], "hello world");
+
+    // Stop
+    adapter.stop().await.unwrap();
+    assert!(!adapter.is_alive());
+    assert_eq!(adapter.info().status, AgentStatus::Stopped);
+}
+
+#[tokio::test]
+async fn remotecode_adapter_is_alive_state_changes() {
+    let mut adapter = RemoteCodeAdapter::new();
+    assert!(adapter.is_alive()); // Starting
+
+    adapter.start(&protocol_test_config()).await.unwrap();
+    assert!(adapter.is_alive()); // Ready
+
+    adapter.stop().await.unwrap();
+    assert!(!adapter.is_alive()); // Stopped
+}
+
+#[tokio::test]
+async fn remotecode_adapter_info_has_correct_metadata() {
+    let adapter = RemoteCodeAdapter::new();
+    let info = adapter.info();
+
+    assert_eq!(info.name, "Remote Code");
+    assert!(!info.version.is_empty());
+    assert!(info.capabilities.contains(&AgentCapability::Streaming));
+    assert!(info.capabilities.contains(&AgentCapability::ToolUse));
+    assert_eq!(adapter.agent_type(), AgentType::RemoteCode);
+}
+
+#[tokio::test]
+async fn remotecode_adapter_resolve_permission_delegates() {
+    let resolved = Arc::new(Mutex::new(Vec::<(String, String, PermissionDecision)>::new()));
+    let resolved_clone = resolved.clone();
+
+    let adapter = RemoteCodeAdapter::new().with_resolve_permission(move |sid, rid, dec| {
+        resolved_clone.lock().unwrap().push((sid.to_string(), rid.to_string(), dec));
+        Ok(())
+    });
+
+    let mut adapter = adapter;
+    adapter.start(&protocol_test_config()).await.unwrap();
+
+    adapter
+        .resolve_permission("sess-1", "req-1", PermissionDecision::Allow)
+        .await
+        .unwrap();
+
+    let lock = resolved.lock().unwrap();
+    assert_eq!(lock.len(), 1);
+    assert_eq!(lock[0].0, "sess-1");
+    assert_eq!(lock[0].1, "req-1");
+    assert_eq!(lock[0].2, PermissionDecision::Allow);
+}
+
+// ─── Event translation / serialization tests ──────────────────────────────
+
+#[test]
+fn all_unified_agent_event_variants_roundtrip() {
+    let mut caps = HashSet::new();
+    caps.insert(AgentCapability::Streaming);
+
+    let info = AgentInfo {
+        name: "Test".into(),
+        version: "0.1.0".into(),
+        capabilities: caps,
+        status: AgentStatus::Ready,
+    };
+
+    let events = vec![
+        UnifiedAgentEvent::Started(info.clone()),
+        UnifiedAgentEvent::Ready,
+        UnifiedAgentEvent::MessageDelta {
+            session_id: "s".into(),
+            delta: "hi".into(),
+        },
+        UnifiedAgentEvent::ToolCallStarted {
+            session_id: "s".into(),
+            tool_name: "bash".into(),
+            tool_input: serde_json::json!({"cmd": "ls"}),
+        },
+        UnifiedAgentEvent::ToolCallProgress {
+            session_id: "s".into(),
+            tool_name: "bash".into(),
+            progress: "running".into(),
+        },
+        UnifiedAgentEvent::ToolCallCompleted {
+            session_id: "s".into(),
+            tool_name: "bash".into(),
+            result: serde_json::json!({"exit": 0}),
+        },
+        UnifiedAgentEvent::PermissionRequest {
+            session_id: "s".into(),
+            request_id: "r1".into(),
+            tool_name: "write".into(),
+            input: serde_json::json!({"path": "/tmp/x"}),
+        },
+        UnifiedAgentEvent::SubtaskStarted {
+            session_id: "s".into(),
+            task_id: "t1".into(),
+            description: "sub".into(),
+        },
+        UnifiedAgentEvent::SubtaskProgress {
+            session_id: "s".into(),
+            task_id: "t1".into(),
+            progress: "50%".into(),
+        },
+        UnifiedAgentEvent::SubtaskCompleted {
+            session_id: "s".into(),
+            task_id: "t1".into(),
+            result: serde_json::json!("done"),
+        },
+        UnifiedAgentEvent::ContextUsage {
+            session_id: "s".into(),
+            used: 1000,
+            total: 2000,
+        },
+        UnifiedAgentEvent::ContextOverflow {
+            session_id: "s".into(),
+        },
+        UnifiedAgentEvent::ContextCompacted {
+            session_id: "s".into(),
+        },
+        UnifiedAgentEvent::Error {
+            session_id: "s".into(),
+            message: "fail".into(),
+            recoverable: true,
+        },
+        UnifiedAgentEvent::Completed {
+            session_id: "s".into(),
+            result: AgentResult {
+                response_text: "ok".into(),
+                tool_calls: vec![ToolCallInfo {
+                    id: "tc-1".into(),
+                    name: "read".into(),
+                    input: serde_json::json!({}),
+                    output: serde_json::json!({}),
+                }],
+                usage: UsageInfo {
+                    input_tokens: 10,
+                    output_tokens: 5,
+                    cache_read: 0,
+                    cache_write: 0,
+                },
+                cost: Some(0.001),
+            },
+        },
+        UnifiedAgentEvent::Stopped,
+    ];
+
+    for event in &events {
+        let json = serde_json::to_string(event).unwrap_or_else(|e| {
+            panic!("failed to serialize {event:?}: {e}")
+        });
+        let back: UnifiedAgentEvent = serde_json::from_str(&json).unwrap_or_else(|e| {
+            panic!("failed to deserialize {json}: {e}")
+        });
+
+        // Re-serialize the deserialized value and compare JSON strings.
+        let json2 = serde_json::to_string(&back).unwrap();
+        assert_eq!(
+            json, json2,
+            "roundtrip mismatch for {event:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn events_flow_from_adapter_through_router() {
+    let adapter = RemoteCodeAdapter::new().with_send_message(|_sid, msg| {
+        Ok(vec![
+            UnifiedAgentEvent::MessageDelta {
+                session_id: "sess-flow".into(),
+                delta: format!("part1:{msg}"),
+            },
+            UnifiedAgentEvent::MessageDelta {
+                session_id: "sess-flow".into(),
+                delta: "part2".into(),
+            },
+            UnifiedAgentEvent::Completed {
+                session_id: "sess-flow".into(),
+                result: AgentResult {
+                    response_text: "done".into(),
+                    tool_calls: vec![],
+                    usage: UsageInfo::default(),
+                    cost: None,
+                },
+            },
+        ])
+    });
+
+    let mut boxed: Box<dyn AgentAdapter> = Box::new(adapter);
+    boxed.start(&protocol_test_config()).await.unwrap();
+
+    let mut router = AgentRouter::new();
+    router.register("sess-flow".into(), boxed);
+
+    let mut rx = router.send_message("sess-flow", "test-flow").await.unwrap();
+
+    let ev1 = rx.recv().await.unwrap();
+    assert!(matches!(ev1, UnifiedAgentEvent::MessageDelta { .. }));
+
+    let ev2 = rx.recv().await.unwrap();
+    assert!(matches!(ev2, UnifiedAgentEvent::MessageDelta { .. }));
+
+    let ev3 = rx.recv().await.unwrap();
+    assert!(matches!(ev3, UnifiedAgentEvent::Completed { .. }));
+
+    assert!(rx.recv().await.is_none(), "channel should be closed");
+}
+
+// ─── Error handling tests ──────────────────────────────────────────────────
+
+#[tokio::test]
+async fn router_send_message_unregistered_session_returns_error() {
+    let mut router = AgentRouter::new();
+    let result = router.send_message("nonexistent", "hello").await;
+    assert!(result.is_err());
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("no adapter found for session nonexistent"),
+        "unexpected error: {err_msg}"
+    );
+}
+
+#[tokio::test]
+async fn router_cancel_unregistered_session_returns_error() {
+    let mut router = AgentRouter::new();
+    let result = router.cancel("ghost").await;
+    assert!(result.is_err());
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("no adapter found for session ghost"),
+        "unexpected error: {err_msg}"
+    );
+}
+
+#[tokio::test]
+async fn adapter_send_message_without_callback_returns_error() {
+    let mut adapter = RemoteCodeAdapter::new();
+    adapter.start(&protocol_test_config()).await.unwrap();
+
+    let result = adapter.send_message("s1", "hello").await;
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("send_message callback not configured"),
+        "unexpected error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn adapter_cancel_without_callback_returns_error() {
+    let mut adapter = RemoteCodeAdapter::new();
+    adapter.start(&protocol_test_config()).await.unwrap();
+
+    let result = adapter.cancel("s1").await;
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("cancel callback not configured"),
+        "unexpected error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn router_close_nonexistent_session_is_ok() {
+    let mut router = AgentRouter::new();
+    let result = router.close_session("does-not-exist").await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn router_resolve_permission_unregistered_returns_error() {
+    let mut router = AgentRouter::new();
+    let result = router
+        .resolve_permission("no-sess", "req-1", PermissionDecision::Deny)
+        .await;
+    assert!(result.is_err());
+}
+
+// ─── Health check integration tests ────────────────────────────────────────
+
+#[test]
+fn health_checker_tracks_adapter_liveness() {
+    let mut checker = HealthChecker::new(HealthCheckConfig {
+        max_failures: 3,
+        ..Default::default()
+    });
+
+    // Simulate adapter alive
+    assert_eq!(checker.check(true), &HealthStatus::Healthy);
+
+    // Simulate failures
+    checker.check(false);
+    assert!(matches!(checker.status(), HealthStatus::Degraded { .. }));
+
+    checker.check(false);
+    assert!(matches!(checker.status(), HealthStatus::Degraded { .. }));
+
+    checker.check(false);
+    assert!(matches!(checker.status(), HealthStatus::Unhealthy { .. }));
+
+    // Recovery
+    checker.check(true);
+    assert_eq!(checker.status(), &HealthStatus::Healthy);
+}
+
+#[test]
+fn health_checker_reset_after_adapter_restart() {
+    let mut checker = HealthChecker::new(HealthCheckConfig {
+        max_failures: 1,
+        ..Default::default()
+    });
+
+    checker.check(false);
+    assert!(matches!(checker.status(), HealthStatus::Unhealthy { .. }));
+
+    // Simulate adapter restart → reset health
+    checker.reset();
+    assert_eq!(checker.status(), &HealthStatus::Healthy);
+
+    checker.check(true);
+    assert_eq!(checker.status(), &HealthStatus::Healthy);
+}
+
+// ─── Restart strategy integration tests ────────────────────────────────────
+
+#[test]
+fn restart_tracker_allows_backoff_and_reset() {
+    let mut tracker = RestartTracker::new(RestartPolicy {
+        max_restarts: 3,
+        initial_backoff: std::time::Duration::from_millis(100),
+        max_backoff: std::time::Duration::from_secs(5),
+        backoff_multiplier: 2.0,
+    });
+
+    let b1 = tracker.request_restart().unwrap();
+    assert_eq!(b1, std::time::Duration::from_millis(100));
+
+    let b2 = tracker.request_restart().unwrap();
+    assert_eq!(b2, std::time::Duration::from_millis(200));
+
+    let b3 = tracker.request_restart().unwrap();
+    assert_eq!(b3, std::time::Duration::from_millis(400));
+
+    // Exhausted
+    assert!(tracker.request_restart().is_none());
+
+    // After successful run → reset
+    tracker.reset();
+    assert!(tracker.can_restart());
+    let b_after = tracker.request_restart().unwrap();
+    assert_eq!(b_after, std::time::Duration::from_millis(100));
+}
+
+#[test]
+fn restart_tracker_zero_max_never_allows() {
+    let mut tracker = RestartTracker::new(RestartPolicy {
+        max_restarts: 0,
+        initial_backoff: std::time::Duration::from_secs(1),
+        max_backoff: std::time::Duration::from_secs(10),
+        backoff_multiplier: 2.0,
+    });
+    assert!(tracker.request_restart().is_none());
+    assert!(!tracker.can_restart());
+}
