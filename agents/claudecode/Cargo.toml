@@ -57,3 +57,4 @@ chrono.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
+serial_test.workspace = true

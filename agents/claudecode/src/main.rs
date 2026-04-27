@@ -725,6 +725,7 @@ fn normalize_prompt(prompt: String) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+    use serial_test::serial;
     use clap::Parser;
     use rc_control_plane::{
         ArtifactCreateRequest, ArtifactRecord, ControlPlaneMeta as RemoteControlPlaneMeta,
@@ -972,6 +973,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn api_key_helper_hydrates_runtime_provider_key() {
         rc_auth::clear_global_api_key_helper_cache();
         let temp = tempdir().expect("tempdir should work");
@@ -1024,6 +1026,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn project_api_key_helper_is_not_hydrated_before_interactive_trust() {
         rc_auth::clear_global_api_key_helper_cache();
         let temp = tempdir().expect("tempdir should work");
@@ -1071,6 +1074,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn project_api_key_helper_runs_in_print_mode() {
         rc_auth::clear_global_api_key_helper_cache();
         let temp = tempdir().expect("tempdir should work");
