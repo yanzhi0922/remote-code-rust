@@ -94,14 +94,21 @@ pub struct AllowedPrompt {
 }
 
 /// Host-owned runtime seam for real plan-mode state transitions.
+///
+/// Implementors **must** provide [`persist_plan_snapshot`] to durably save
+/// the current plan state. The default implementation is intentionally
+/// absent so that a missing override is caught at compile time.
 pub trait PlanModeRuntime: Send + Sync {
     fn enter_plan_mode(&self, objective: &str) -> Result<String>;
     fn exit_plan_mode(&self, input: ExitPlanModeInput) -> Result<String>;
     fn snapshot(&self) -> PlanModeRuntimeSnapshot;
 
-    fn persist_plan_snapshot(&self) -> Result<()> {
-        Ok(())
-    }
+    /// Persist the current plan snapshot to durable storage.
+    ///
+    /// Called after plan-mode transitions to ensure the plan state survives
+    /// process restarts. Implementations should write the snapshot returned
+    /// by [`snapshot`](Self::snapshot) to disk or another durable store.
+    fn persist_plan_snapshot(&self) -> Result<()>;
 }
 
 /// Configure the active process-scoped plan-mode runtime.
@@ -442,6 +449,11 @@ mod tests {
                 permission_mode: PermissionMode::Plan,
                 plan_file_path: self.plan_file_path.clone(),
             }
+        }
+
+        fn persist_plan_snapshot(&self) -> Result<()> {
+            // Stub: no-op for tests
+            Ok(())
         }
     }
 

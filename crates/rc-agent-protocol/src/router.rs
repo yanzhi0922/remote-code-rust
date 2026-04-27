@@ -18,8 +18,10 @@ use crate::types::{AgentConfig, AgentType};
 
 /// Manages multiple Agent instances and routes messages by session ID.
 ///
-/// This is a simplified framework — actual adapter instantiation (Remote Code,
-/// Roo Code, Codex) will be implemented in subsequent phases.
+/// Supports three agent adapter types: [`RemoteCode`][RemoteCodeAdapter],
+/// [`RooCode`][RooCodeAdapter], and [`Codex`][CodexAdapter].
+/// Adapters are created via [`create_adapter`](AgentRouter::create_adapter)
+/// and registered under session IDs for message routing.
 pub struct AgentRouter {
     /// Session ID → Agent adapter.
     adapters: HashMap<String, Box<dyn AgentAdapter>>,
@@ -40,8 +42,7 @@ impl AgentRouter {
 
     /// Create an adapter based on the [`AgentType`] specified in `config`.
     ///
-    /// Currently only [`AgentType::RemoteCode`] is supported; other types
-    /// will return an error.
+    /// All three agent types are supported: RemoteCode, RooCode, and Codex.
     pub fn create_adapter(config: &AgentConfig) -> anyhow::Result<Box<dyn AgentAdapter>> {
         match config.agent_type {
             AgentType::RemoteCode => {

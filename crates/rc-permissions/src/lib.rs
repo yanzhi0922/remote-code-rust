@@ -194,34 +194,52 @@ pub trait PermissionBroker: Send + Sync {
     }
     /// Add a session-scoped rule.
     fn add_session_rule(&self, _action: RuleAction, _tool_pattern: String) -> Result<()> {
+        tracing::debug!(
+            tool_pattern = %_tool_pattern,
+            "add_session_rule called on broker with no session rule support; ignoring"
+        );
         Ok(())
     }
     /// Clear all session-scoped rules, returning the count removed.
     fn clear_session_rules(&self) -> Result<usize> {
+        tracing::debug!(
+            "clear_session_rules called on broker with no session rule support; returning 0"
+        );
         Ok(0)
     }
     /// Apply session-scoped permission updates, returning the count of applied changes.
     fn apply_permission_updates(&self, _updates: &[PermissionUpdate]) -> Result<usize> {
+        tracing::debug!(
+            count = _updates.len(),
+            "apply_permission_updates called on broker with no update support; returning 0"
+        );
         Ok(0)
     }
     /// Return the current permission mode, if known.
     fn mode(&self) -> Option<rc_core::PermissionMode> {
+        tracing::debug!("mode() called on broker with no mode awareness; returning None");
         None
     }
     /// Return additional working directories granted for the current session.
     fn additional_working_directories(&self) -> Vec<PathBuf> {
+        tracing::debug!(
+            "additional_working_directories called on broker with no extra directories; returning empty"
+        );
         Vec::new()
     }
     /// Return audit records collected so far.
     fn audit_records(&self) -> Vec<PermissionAuditRecord> {
+        tracing::debug!("audit_records called on broker with no audit support; returning empty");
         Vec::new()
     }
     /// Return the layered rules, if this broker has any.
     fn layered_rules(&self) -> Vec<SourceAwarePermissionRule> {
+        tracing::debug!("layered_rules called on broker with no layered rules; returning empty");
         Vec::new()
     }
     /// Return the highest-priority matching rule, if this broker has layered rules.
     fn matching_rule(&self, _request: &PermissionRequest) -> Option<SourceAwarePermissionRule> {
+        tracing::debug!("matching_rule called on broker with no layered rules; returning None");
         None
     }
     /// Return the first matching rule action, if the broker has layered rules.

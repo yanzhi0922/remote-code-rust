@@ -2,7 +2,12 @@
 //!
 //! Provides a headless browser tool for fetching web content with
 //! JavaScript rendering support, link extraction, text extraction,
-//! and screenshot capabilities.
+//! and page information retrieval.
+//!
+//! **Note on screenshots**: True screenshot capture requires a headless
+//! browser runtime (e.g. Puppeteer MCP server). The `screenshot` action
+//! returns page metadata instead of an actual image when no headless
+//! browser is available.
 
 use anyhow::{Context, Result, anyhow};
 use regex::Regex;
@@ -19,7 +24,7 @@ const DEFAULT_MAX_CHARS: usize = 100_000;
 /// - `fetch`: Fetch the full HTML content of a URL
 /// - `extract_links`: Extract all links from a URL
 /// - `extract_text`: Extract text content (strip HTML tags)
-/// - `screenshot`: Take a screenshot (returns a placeholder)
+/// - `screenshot`: Retrieve page information (requires headless browser runtime for actual screenshots)
 ///
 /// # Errors
 /// Returns an error if the URL is missing or the HTTP request fails.
@@ -152,12 +157,17 @@ async fn extract_text(url: &str, max_chars: usize) -> Result<String> {
     .to_string())
 }
 
-/// Take a screenshot using a headless browser or fallback to page text extraction.
+/// Retrieve page information for a URL (not a true screenshot).
 ///
-/// Attempts to use a Puppeteer/MCP browser server if available. Falls back to
-/// fetching the page HTML and reporting the page dimensions and text content.
+/// True screenshot capture requires a headless browser runtime such as a
+/// Puppeteer MCP server. When no headless browser is available, this function
+/// fetches the page HTML and returns metadata (title, size, content type)
+/// with `screenshot_available: false`.
 async fn screenshot(url: &str) -> Result<String> {
-    // Try to use reqwest to fetch the page and extract basic info
+    tracing::warn!(
+        url = url,
+        "screenshot action called without headless browser runtime; returning page metadata instead"
+    );
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
@@ -198,6 +208,7 @@ async fn screenshot(url: &str) -> Result<String> {
                 "url": url,
                 "status": "fetched",
                 "http_status": status,
+                "screenshot_available": false,
                 "content_type": content_type,
                 "title": title,
                 "body_size_bytes": text_len,
@@ -210,6 +221,7 @@ async fn screenshot(url: &str) -> Result<String> {
             "type": "web_browser_screenshot",
             "url": url,
             "status": "error",
+            "screenshot_available": false,
             "error": format!("Failed to fetch page: {e}"),
             "note": "Screenshot capture requires network access and optionally a headless browser runtime."
         })

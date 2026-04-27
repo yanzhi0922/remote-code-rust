@@ -62,6 +62,10 @@ pub struct SearchIndex {
     indexed_slugs: HashSet<String>,
     /// Total number of documents in the index.
     doc_count: u64,
+    /// Sum of token counts across all indexed documents (for average document length).
+    total_doc_length: u64,
+    /// Per-document token counts (slug → total tokens across all fields).
+    doc_lengths: HashMap<String, u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -77,9 +81,6 @@ const WEIGHT_NAME: f64 = 3.0;
 const WEIGHT_DESCRIPTION: f64 = 1.0;
 const WEIGHT_TRIGGERS: f64 = 2.5;
 
-/// Average document length (tuned for short skill docs).
-const _AVG_DL: f64 = 20.0;
-
 // ---------------------------------------------------------------------------
 // Implementation
 // ---------------------------------------------------------------------------
@@ -91,6 +92,8 @@ impl SearchIndex {
             postings: HashMap::new(),
             indexed_slugs: HashSet::new(),
             doc_count: 0,
+            total_doc_length: 0,
+            doc_lengths: HashMap::new(),
         }
     }
 
@@ -119,6 +122,11 @@ impl SearchIndex {
         let name_tokens = tokenize(&skill.name);
         let desc_tokens = tokenize(&skill.description);
         let trigger_tokens = tokenize(&skill.triggers.join(" "));
+
+        // Compute total document length (sum of all field token counts).
+        let doc_length = (name_tokens.len() + desc_tokens.len() + trigger_tokens.len()) as u64;
+        self.total_doc_length += doc_length;
+        self.doc_lengths.insert(skill.slug.clone(), doc_length);
 
         // Count term frequencies per field.
         let mut name_tf: HashMap<&str, u32> = HashMap::new();
@@ -153,11 +161,15 @@ impl SearchIndex {
                 .push(posting);
         }
 
-        debug!(slug = %skill.slug, "Indexed skill");
+        debug!(slug = %skill.slug, doc_length = doc_length, "Indexed skill");
     }
 
     /// Remove all postings for a given slug.
     fn remove_skill_postings(&mut self, slug: &str) {
+        // Subtract document length from total.
+        if let Some(len) = self.doc_lengths.remove(slug) {
+            self.total_doc_length = self.total_doc_length.saturating_sub(len);
+        }
         for postings in self.postings.values_mut() {
             postings.retain(|p| p.slug != slug);
         }
@@ -167,7 +179,8 @@ impl SearchIndex {
 
     /// Search the index with a text query, returning up to `limit` results.
     ///
-    /// Uses a BM25-like scoring function with field boosting.
+    /// Uses a BM25 scoring function with field boosting and actual average
+    /// document length normalisation.
     pub fn search(&self, query: &str, limit: usize) -> Vec<SearchResult> {
         let query_tokens = tokenize(query);
         if query_tokens.is_empty() || self.doc_count == 0 {
@@ -175,6 +188,11 @@ impl SearchIndex {
         }
 
         let df: f64 = self.doc_count as f64;
+        let avg_dl = if self.doc_count > 0 {
+            self.total_doc_length as f64 / self.doc_count as f64
+        } else {
+            1.0
+        };
 
         // Accumulate scores per slug.
         let mut scores: HashMap<String, f64> = HashMap::new();
@@ -186,9 +204,12 @@ impl SearchIndex {
 
             if let Some(postings) = self.postings.get(term) {
                 for posting in postings {
-                    let score_name = bm25_term(posting.tf_name, idf, WEIGHT_NAME);
-                    let score_desc = bm25_term(posting.tf_description, idf, WEIGHT_DESCRIPTION);
-                    let score_trig = bm25_term(posting.tf_triggers, idf, WEIGHT_TRIGGERS);
+                    let dl = self.doc_lengths.get(&posting.slug).copied().unwrap_or(1) as f64;
+                    let score_name = bm25_term(posting.tf_name, idf, WEIGHT_NAME, dl, avg_dl);
+                    let score_desc =
+                        bm25_term(posting.tf_description, idf, WEIGHT_DESCRIPTION, dl, avg_dl);
+                    let score_trig =
+                        bm25_term(posting.tf_triggers, idf, WEIGHT_TRIGGERS, dl, avg_dl);
 
                     let total = score_name + score_desc + score_trig;
                     if total > 0.0 {
@@ -269,13 +290,16 @@ fn idf(term: &str, postings: &HashMap<String, Vec<PostingEntry>>, total_docs: f6
 }
 
 /// BM25 term score for a single field.
-fn bm25_term(tf: u32, idf: f64, weight: f64) -> f64 {
+///
+/// Uses actual document length (`dl`) and average document length (`avgdl`)
+/// for proper BM25 length normalisation.
+fn bm25_term(tf: u32, idf: f64, weight: f64, dl: f64, avgdl: f64) -> f64 {
     if tf == 0 {
         return 0.0;
     }
     let tf64 = tf as f64;
     let numerator = tf64 * (K1 + 1.0);
-    let denominator = tf64 + K1 * (1.0 - B + B * (1.0)); // simplified: dl/avgdl ≈ 1
+    let denominator = tf64 + K1 * (1.0 - B + B * (dl / avgdl));
     idf * (numerator / denominator) * weight
 }
 

@@ -119,9 +119,9 @@ pub enum ProviderProtocol {
     OpenAi,
     /// Anthropic Messages API.
     Anthropic,
-    /// AWS Bedrock (placeholder — uses SigV4 auth).
+    /// AWS Bedrock (uses SigV4 auth — not yet implemented at the provider layer).
     Bedrock,
-    /// Google Vertex AI (placeholder — uses GCP auth).
+    /// Google Vertex AI (uses GCP auth — not yet implemented at the provider layer).
     Vertex,
 }
 
