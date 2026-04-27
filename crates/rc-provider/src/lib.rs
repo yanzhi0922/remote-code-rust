@@ -38,6 +38,7 @@ pub mod workload;
 
 pub use api_client::{ApiClient, ContentBlock, QueryOptions, QueryResult, UsageStats};
 pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
+pub use context::{TokenEstimator, dual_ratio_estimate};
 pub use conversation_backend::{ConversationBackend, DiscoveredToolScope, ProviderCompatBackend};
 pub use retry::{RetryConfig, RetryContext};
 pub use streaming::StreamingCallbacks;
