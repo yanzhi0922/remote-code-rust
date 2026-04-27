@@ -1261,4 +1261,697 @@ mod tests {
         let mgr = ContextWindowManager::for_model("some-random-model");
         assert_eq!(mgr.available_budget(), 128_000 - 4_096);
     }
+
+    // -----------------------------------------------------------------------
+    // dual_ratio_estimate tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn dual_ratio_estimate_ascii_text() {
+        // "Hello world" = 11 ASCII chars / 4.0 ≈ 2.75 → ceil = 3
+        let tokens = dual_ratio_estimate("Hello world");
+        assert_eq!(tokens, 3);
+    }
+
+    #[test]
+    fn dual_ratio_estimate_cjk_text() {
+        // "你好世界" = 4 CJK chars / 1.5 ≈ 2.67 → ceil = 3
+        let tokens = dual_ratio_estimate("你好世界");
+        assert_eq!(tokens, 3);
+    }
+
+    #[test]
+    fn dual_ratio_estimate_mixed_text() {
+        // "Hello你好world世界" = 10 ASCII + 4 CJK = 10/4.0 + 4/1.5 = 2.5 + 2.67 = 5.17 → ceil = 6
+        let tokens = dual_ratio_estimate("Hello你好world世界");
+        assert_eq!(tokens, 6);
+    }
+
+    #[test]
+    fn dual_ratio_estimate_empty_string() {
+        assert_eq!(dual_ratio_estimate(""), 0);
+    }
+
+    #[test]
+    fn dual_ratio_estimate_single_char() {
+        // 1 ASCII char / 4.0 = 0.25 → ceil = 1
+        assert_eq!(dual_ratio_estimate("a"), 1);
+    }
+
+    #[test]
+    fn dual_ratio_estimate_single_cjk_char() {
+        // 1 CJK char / 1.5 = 0.67 → ceil = 1
+        assert_eq!(dual_ratio_estimate("你"), 1);
+    }
+
+    #[test]
+    fn dual_ratio_estimate_cjk_more_expensive_than_ascii() {
+        // Same number of characters, CJK should estimate more tokens.
+        let ascii_tokens = dual_ratio_estimate("aaaa"); // 4/4.0 = 1.0 → ceil = 1
+        let cjk_tokens = dual_ratio_estimate("你好你好"); // 4/1.5 = 2.67 → ceil = 3
+        assert!(
+            cjk_tokens >= ascii_tokens,
+            "CJK text should estimate at least as many tokens as ASCII of same char count"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // ContextWindowManager creation and budget tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn new_sets_correct_budget() {
+        let mgr = ContextWindowManager::new(200_000, 8_192);
+        assert_eq!(mgr.available_budget(), 200_000 - 8_192);
+    }
+
+    #[test]
+    fn default_manager_uses_defaults() {
+        let mgr = ContextWindowManager::default();
+        assert_eq!(mgr.available_budget(), 128_000 - 4_096);
+    }
+
+    #[test]
+    fn available_budget_saturating_sub() {
+        // If output_reserve > max_tokens, budget should be 0 (saturating).
+        let mgr = ContextWindowManager::new(100, 200);
+        assert_eq!(mgr.available_budget(), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // ContextBudgetSnapshot tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn budget_snapshot_threshold_calculation() {
+        let snapshot = ContextBudgetSnapshot {
+            estimated_tokens: 500,
+            max_input_tokens: 1000,
+            max_context_tokens: 1200,
+            output_reserve_tokens: 200,
+            compaction_threshold_ratio: 0.80,
+            usage_ratio: 0.50,
+        };
+        // threshold = ceil(1000 * 0.80) = 800
+        assert_eq!(snapshot.threshold_tokens(), 800);
+    }
+
+    #[test]
+    fn budget_snapshot_exceeds_threshold_true() {
+        let snapshot = ContextBudgetSnapshot {
+            estimated_tokens: 900,
+            max_input_tokens: 1000,
+            max_context_tokens: 1200,
+            output_reserve_tokens: 200,
+            compaction_threshold_ratio: 0.80,
+            usage_ratio: 0.90,
+        };
+        assert!(snapshot.exceeds_threshold());
+    }
+
+    #[test]
+    fn budget_snapshot_exceeds_threshold_false() {
+        let snapshot = ContextBudgetSnapshot {
+            estimated_tokens: 500,
+            max_input_tokens: 1000,
+            max_context_tokens: 1200,
+            output_reserve_tokens: 200,
+            compaction_threshold_ratio: 0.80,
+            usage_ratio: 0.50,
+        };
+        assert!(!snapshot.exceeds_threshold());
+    }
+
+    #[test]
+    fn budget_snapshot_exceeds_budget_true() {
+        let snapshot = ContextBudgetSnapshot {
+            estimated_tokens: 1000,
+            max_input_tokens: 1000,
+            max_context_tokens: 1200,
+            output_reserve_tokens: 200,
+            compaction_threshold_ratio: 0.80,
+            usage_ratio: 1.0,
+        };
+        assert!(snapshot.exceeds_budget());
+    }
+
+    #[test]
+    fn budget_snapshot_exceeds_budget_false() {
+        let snapshot = ContextBudgetSnapshot {
+            estimated_tokens: 500,
+            max_input_tokens: 1000,
+            max_context_tokens: 1200,
+            output_reserve_tokens: 200,
+            compaction_threshold_ratio: 0.80,
+            usage_ratio: 0.50,
+        };
+        assert!(!snapshot.exceeds_budget());
+    }
+
+    // -----------------------------------------------------------------------
+    // Reactive compaction tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn reactive_compact_preserves_system_prompt() {
+        let mgr = ContextWindowManager::new(100, 20);
+        let conv = vec![
+            ConversationEntry::system("SYS"),
+            ConversationEntry::user("m1"),
+            ConversationEntry::assistant("r1"),
+            ConversationEntry::user("m2"),
+            ConversationEntry::assistant("r2"),
+            ConversationEntry::user("m3"),
+            ConversationEntry::assistant("r3"),
+        ];
+
+        let result = mgr.reactive_compact(&conv);
+        assert!(result.iter().any(|e| e.text.contains("SYS")));
+    }
+
+    #[test]
+    fn reactive_compact_short_conversation_unchanged() {
+        let mgr = ContextWindowManager::new(100_000, 4_096);
+        let conv = vec![
+            ConversationEntry::user("hi"),
+            ConversationEntry::assistant("hello"),
+        ];
+        let result = mgr.reactive_compact(&conv);
+        assert_eq!(result.len(), conv.len());
+    }
+
+    #[test]
+    fn reactive_compact_empty_conversation() {
+        let mgr = ContextWindowManager::default();
+        let result = mgr.reactive_compact(&[]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn reactive_compact_truncates_tool_outputs() {
+        let mgr = ContextWindowManager::new(100, 20);
+        let long_tool_output = "x".repeat(5000);
+        let conv = vec![
+            ConversationEntry::system("sys"),
+            ConversationEntry::user("m1"),
+            ConversationEntry::assistant("r1"),
+            ConversationEntry::user("m2"),
+            ConversationEntry::assistant("r2"),
+            ConversationEntry::user("m3"),
+            ConversationEntry::tool("id1", "bash", &long_tool_output, false),
+            ConversationEntry::assistant("r3"),
+        ];
+
+        let result = mgr.reactive_compact(&conv);
+        // Tool output in the recent portion should be truncated.
+        let tool_entries: Vec<_> = result
+            .iter()
+            .filter(|e| matches!(e.role, ConversationRole::Tool))
+            .collect();
+        if let Some(tool) = tool_entries.first() {
+            assert!(tool.text.len() < long_tool_output.len());
+            assert!(tool.text.contains("[truncated"));
+        }
+    }
+
+    #[test]
+    fn reactive_compact_includes_summary_marker() {
+        let mgr = ContextWindowManager::new(100, 20);
+        let conv = vec![
+            ConversationEntry::system("sys"),
+            ConversationEntry::user("m1"),
+            ConversationEntry::assistant("r1"),
+            ConversationEntry::user("m2"),
+            ConversationEntry::assistant("r2"),
+            ConversationEntry::user("m3"),
+            ConversationEntry::assistant("r3"),
+        ];
+
+        let result = mgr.reactive_compact(&conv);
+        assert!(
+            result
+                .iter()
+                .any(|e| e.text.contains("[reactive-compaction]")),
+            "reactive compaction should include its marker"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Context collapse tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn context_collapse_preserves_system_prompt() {
+        let mgr = ContextWindowManager::default();
+        let conv = vec![
+            ConversationEntry::system("IMPORTANT"),
+            ConversationEntry::user("m1"),
+            ConversationEntry::assistant("r1"),
+            ConversationEntry::user("m2"),
+        ];
+
+        let result = mgr.context_collapse(&conv);
+        assert!(result.iter().any(|e| e.text.contains("IMPORTANT")));
+    }
+
+    #[test]
+    fn context_collapse_replaces_with_summary() {
+        let mgr = ContextWindowManager::default();
+        let conv = vec![
+            ConversationEntry::system("sys"),
+            ConversationEntry::user("question 1"),
+            ConversationEntry::assistant("answer 1"),
+            ConversationEntry::user("question 2"),
+            ConversationEntry::assistant("answer 2"),
+        ];
+
+        let result = mgr.context_collapse(&conv);
+        assert!(
+            result.iter().any(|e| e.text.contains("[context-collapse]")),
+            "context collapse should include its marker"
+        );
+        // Should keep the last user message.
+        assert!(
+            result.iter().any(|e| e.text.contains("question 2")),
+            "context collapse should preserve the last user message"
+        );
+    }
+
+    #[test]
+    fn context_collapse_empty_conversation() {
+        let mgr = ContextWindowManager::default();
+        let result = mgr.context_collapse(&[]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn context_collapse_system_only() {
+        let mgr = ContextWindowManager::default();
+        let conv = vec![ConversationEntry::system("sys")];
+        let result = mgr.context_collapse(&conv);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].text, "sys");
+    }
+
+    // -----------------------------------------------------------------------
+    // Microcompact tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn microcompact_truncates_long_tool_outputs() {
+        let mgr = ContextWindowManager::default();
+        let long_output = "y".repeat(5000);
+        let conv = vec![
+            ConversationEntry::system("sys"),
+            ConversationEntry::user("hi"),
+            ConversationEntry::tool("id1", "bash", &long_output, false),
+        ];
+
+        let result = mgr.microcompact(&conv);
+        let tool_entry = result
+            .iter()
+            .find(|e| matches!(e.role, ConversationRole::Tool))
+            .unwrap();
+        assert!(tool_entry.text.len() < long_output.len());
+        assert!(tool_entry.text.contains("[truncated"));
+    }
+
+    #[test]
+    fn microcompact_truncates_long_assistant_messages() {
+        let mgr = ContextWindowManager::default();
+        let long_reply = "z".repeat(8000);
+        let conv = vec![
+            ConversationEntry::system("sys"),
+            ConversationEntry::user("hi"),
+            ConversationEntry::assistant(&long_reply),
+        ];
+
+        let result = mgr.microcompact(&conv);
+        let assistant_entry = result
+            .iter()
+            .find(|e| matches!(e.role, ConversationRole::Assistant))
+            .unwrap();
+        assert!(assistant_entry.text.len() < long_reply.len());
+        assert!(assistant_entry.text.contains("microcompact"));
+    }
+
+    #[test]
+    fn microcompact_preserves_short_entries() {
+        let mgr = ContextWindowManager::default();
+        let conv = vec![
+            ConversationEntry::system("sys"),
+            ConversationEntry::user("short message"),
+            ConversationEntry::assistant("short reply"),
+            ConversationEntry::tool("id1", "bash", "short output", false),
+        ];
+
+        let result = mgr.microcompact(&conv);
+        assert_eq!(result.len(), conv.len());
+        // All entries should be unchanged.
+        for (orig, compacted) in conv.iter().zip(result.iter()) {
+            assert_eq!(orig.text, compacted.text);
+        }
+    }
+
+    #[test]
+    fn microcompact_empty_conversation() {
+        let mgr = ContextWindowManager::default();
+        let result = mgr.microcompact(&[]);
+        assert!(result.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // auto_compact tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn auto_compact_no_compaction_needed() {
+        let mgr = ContextWindowManager::new(100_000, 4_096);
+        let conv = vec![
+            ConversationEntry::system("sys"),
+            ConversationEntry::user("hi"),
+        ];
+
+        let result = mgr.auto_compact(&conv);
+        assert_eq!(result.len(), conv.len());
+    }
+
+    #[test]
+    fn auto_compact_triggers_when_over_threshold() {
+        let mgr = ContextWindowManager::new(100, 20);
+        let long_text = "a".repeat(300);
+        let conv = vec![
+            ConversationEntry::system("sys"),
+            ConversationEntry::user(long_text.clone()),
+            ConversationEntry::assistant("r1"),
+            ConversationEntry::user("m2"),
+            ConversationEntry::assistant("r2"),
+            ConversationEntry::user("m3"),
+            ConversationEntry::assistant("r3"),
+            ConversationEntry::user("m4"),
+            ConversationEntry::assistant("r4"),
+            ConversationEntry::user("m5"),
+            ConversationEntry::assistant("r5"),
+        ];
+
+        let result = mgr.auto_compact(&conv);
+        // Should be shorter than original due to compaction.
+        assert!(result.len() < conv.len(), "auto_compact should reduce conversation size");
+    }
+
+    // -----------------------------------------------------------------------
+    // auto_compact_v2 tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn auto_compact_v2_no_compaction_needed() {
+        let mgr = ContextWindowManager::new(100_000, 4_096);
+        let conv = vec![
+            ConversationEntry::system("sys"),
+            ConversationEntry::user("hi"),
+        ];
+
+        let result = mgr.auto_compact_v2(&conv);
+        assert_eq!(result.len(), conv.len());
+    }
+
+    #[test]
+    fn auto_compact_v2_triggers_compaction() {
+        let mgr = ContextWindowManager::new(100, 20);
+        let long_text = "a".repeat(300);
+        let conv = vec![
+            ConversationEntry::system("sys"),
+            ConversationEntry::user(long_text),
+            ConversationEntry::assistant("r1"),
+            ConversationEntry::user("m2"),
+            ConversationEntry::assistant("r2"),
+            ConversationEntry::user("m3"),
+            ConversationEntry::assistant("r3"),
+            ConversationEntry::user("m4"),
+            ConversationEntry::assistant("r4"),
+            ConversationEntry::user("m5"),
+            ConversationEntry::assistant("r5"),
+        ];
+
+        let result = mgr.auto_compact_v2(&conv);
+        assert!(
+            result.len() < conv.len(),
+            "auto_compact_v2 should reduce conversation size when over threshold"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // compact_on_error tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn compact_on_error_short_conversation_returns_none() {
+        let mgr = ContextWindowManager::default();
+        let conv = vec![
+            ConversationEntry::system("sys"),
+            ConversationEntry::user("hi"),
+            ConversationEntry::assistant("hello"),
+        ];
+        assert_eq!(conv.len(), 3);
+        assert!(mgr.compact_on_error(&conv).is_none());
+    }
+
+    #[test]
+    fn compact_on_error_long_conversation_compacts() {
+        let mgr = ContextWindowManager::default();
+        let conv = vec![
+            ConversationEntry::system("sys"),
+            ConversationEntry::user("m1"),
+            ConversationEntry::assistant("r1"),
+            ConversationEntry::user("m2"),
+            ConversationEntry::assistant("r2"),
+            ConversationEntry::user("m3"),
+            ConversationEntry::assistant("r3"),
+            ConversationEntry::user("m4"),
+            ConversationEntry::assistant("r4"),
+        ];
+
+        let result = mgr.compact_on_error(&conv);
+        assert!(result.is_some());
+        let compacted = result.unwrap();
+        assert!(compacted.len() < conv.len());
+    }
+
+    #[test]
+    fn compact_on_error_empty_conversation_returns_none() {
+        let mgr = ContextWindowManager::default();
+        assert!(mgr.compact_on_error(&[]).is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // sliding_window_compact tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn sliding_window_compact_short_conversation_unchanged() {
+        let mgr = ContextWindowManager::new(100_000, 4_096);
+        let conv = vec![
+            ConversationEntry::system("sys"),
+            ConversationEntry::user("hi"),
+            ConversationEntry::assistant("hello"),
+        ];
+        let result = mgr.sliding_window_compact(&conv);
+        assert_eq!(result.len(), conv.len());
+    }
+
+    #[test]
+    fn sliding_window_compact_empty() {
+        let mgr = ContextWindowManager::default();
+        let result = mgr.sliding_window_compact(&[]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn sliding_window_compact_long_conversation() {
+        let mgr = ContextWindowManager::new(100, 20);
+        let mut conv = vec![ConversationEntry::system("sys")];
+        for i in 0..20 {
+            conv.push(ConversationEntry::user(&format!("user msg {i}")));
+            conv.push(ConversationEntry::assistant(&format!("assistant reply {i}")));
+        }
+
+        let result = mgr.sliding_window_compact(&conv);
+        assert!(result.len() < conv.len());
+        // Should contain the sliding-window marker.
+        assert!(
+            result
+                .iter()
+                .any(|e| e.text.contains("[sliding-window-compaction]")),
+            "sliding window compaction should include its marker"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // priority_compact tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn priority_compact_empty() {
+        let mgr = ContextWindowManager::default();
+        let result = mgr.priority_compact(&[]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn priority_compact_preserves_system() {
+        let mgr = ContextWindowManager::new(100, 20);
+        let mut conv = vec![ConversationEntry::system("IMPORTANT SYS")];
+        for i in 0..10 {
+            conv.push(ConversationEntry::user(&format!("msg {i}")));
+            conv.push(ConversationEntry::assistant(&format!("reply {i}")));
+        }
+
+        let result = mgr.priority_compact(&conv);
+        assert!(result.iter().any(|e| e.text.contains("IMPORTANT SYS")));
+    }
+
+    #[test]
+    fn priority_compact_short_conversation_may_return_unchanged() {
+        let mgr = ContextWindowManager::new(100_000, 4_096);
+        let conv = vec![
+            ConversationEntry::system("sys"),
+            ConversationEntry::user("hi"),
+            ConversationEntry::assistant("hello"),
+        ];
+        let result = mgr.priority_compact(&conv);
+        assert_eq!(result.len(), conv.len());
+    }
+
+    // -----------------------------------------------------------------------
+    // semantic_chunk_compact tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn semantic_chunk_compact_empty() {
+        let mgr = ContextWindowManager::default();
+        let result = mgr.semantic_chunk_compact(&[]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn semantic_chunk_compact_few_chunks_unchanged() {
+        let mgr = ContextWindowManager::new(100_000, 4_096);
+        let conv = vec![
+            ConversationEntry::system("sys"),
+            ConversationEntry::user("hi"),
+            ConversationEntry::assistant("hello"),
+        ];
+        let result = mgr.semantic_chunk_compact(&conv);
+        assert_eq!(result.len(), conv.len());
+    }
+
+    #[test]
+    fn semantic_chunk_compact_many_chunks() {
+        let mgr = ContextWindowManager::new(100, 20);
+        let mut conv = vec![ConversationEntry::system("sys")];
+        for i in 0..10 {
+            conv.push(ConversationEntry::user(&format!("user {i}")));
+            conv.push(ConversationEntry::assistant(&format!("reply {i}")));
+        }
+
+        let result = mgr.semantic_chunk_compact(&conv);
+        // With a very small budget, should compact.
+        assert!(
+            result.len() <= conv.len(),
+            "semantic chunk compaction should not increase conversation size"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // TokenEstimator edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn token_estimator_only_cjk() {
+        let est = TokenEstimator::new();
+        // "你好世界" = 4 CJK chars / 1.5 = 2.67 → ceil = 3
+        let tokens = est.estimate("你好世界");
+        assert_eq!(tokens, 3);
+    }
+
+    #[test]
+    fn token_estimator_only_ascii() {
+        let est = TokenEstimator::new();
+        // "Hello" = 5 chars / 4.0 = 1.25 → ceil = 2
+        let tokens = est.estimate("Hello");
+        assert_eq!(tokens, 2);
+    }
+
+    #[test]
+    fn token_estimator_mixed() {
+        let est = TokenEstimator::new();
+        // "Hi你好" = 2 ASCII + 2 CJK = 2/4.0 + 2/1.5 = 0.5 + 1.33 = 1.83 → ceil = 2
+        let tokens = est.estimate("Hi你好");
+        assert_eq!(tokens, 2);
+    }
+
+    #[test]
+    fn token_estimate_entry_with_history_text() {
+        let est = TokenEstimator::new();
+        let mut entry = ConversationEntry::assistant("short");
+        entry.history_text = Some("this is a much longer history text that should be used for estimation".to_owned());
+        let tokens = est.estimate_entry(&entry);
+        // Should use the longer of text vs history_text.
+        let text_tokens = est.estimate("short");
+        let history_tokens = est.estimate("this is a much longer history text that should be used for estimation");
+        assert_eq!(tokens, history_tokens);
+        assert!(tokens > text_tokens);
+    }
+
+    // -----------------------------------------------------------------------
+    // truncate_tool_output_default tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn truncate_tool_output_default_short() {
+        let mgr = ContextWindowManager::default();
+        let short = "hello".to_owned();
+        let result = mgr.truncate_tool_output_default(&short);
+        assert_eq!(result, short);
+    }
+
+    #[test]
+    fn truncate_tool_output_default_long() {
+        let mgr = ContextWindowManager::default();
+        let long = "a".repeat(15_000);
+        let result = mgr.truncate_tool_output_default(&long);
+        assert!(result.len() < long.len());
+        assert!(result.contains("[truncated"));
+    }
+
+    // -----------------------------------------------------------------------
+    // build_summary / truncate_str (tested indirectly via compact)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn summary_contains_compacted_count() {
+        let mgr = ContextWindowManager::new(100, 20);
+        let conv = vec![
+            ConversationEntry::system("sys"),
+            ConversationEntry::user("m1"),
+            ConversationEntry::assistant("r1"),
+            ConversationEntry::user("m2"),
+            ConversationEntry::assistant("r2"),
+            ConversationEntry::user("m3"),
+            ConversationEntry::assistant("r3"),
+            ConversationEntry::user("m4"),
+            ConversationEntry::assistant("r4"),
+            ConversationEntry::user("m5"),
+            ConversationEntry::assistant("r5"),
+        ];
+
+        let result = mgr.compact(&conv);
+        let summary_entries: Vec<_> = result
+            .iter()
+            .filter(|e| e.text.contains("[Context Summary"))
+            .collect();
+        assert_eq!(summary_entries.len(), 1);
+        // Should mention the number of compacted messages.
+        assert!(summary_entries[0].text.contains("earlier messages compacted"));
+    }
 }

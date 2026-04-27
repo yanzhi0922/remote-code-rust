@@ -1657,4 +1657,806 @@ mod tests {
         assert_eq!(stop_reason, "tool_use");
         assert_eq!(usage.output_tokens, 42);
     }
+
+    // -----------------------------------------------------------------------
+    // Additional SSE parsing tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn sse_buffer_handles_comment_lines() {
+        // SSE comment lines (starting with ':') should be ignored.
+        let mut buf = ": this is a comment\n\ndata: {\"type\":\"ping\"}\n\n".to_owned();
+        let events = parse_sse_events_from_buffer(&mut buf);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["type"], "ping");
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn sse_buffer_handles_only_comments() {
+        let mut buf = ": comment line 1\n: comment line 2\n\n".to_owned();
+        let events = parse_sse_events_from_buffer(&mut buf);
+        assert!(events.is_empty());
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn sse_buffer_handles_empty_input() {
+        let mut buf = String::new();
+        let events = parse_sse_events_from_buffer(&mut buf);
+        assert!(events.is_empty());
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn sse_buffer_incomplete_event_no_double_newline() {
+        // No \n\n means the event is incomplete; buffer should be preserved.
+        let mut buf = "data: {\"type\":\"message_start\"}".to_owned();
+        let events = parse_sse_events_from_buffer(&mut buf);
+        assert!(events.is_empty());
+        assert_eq!(buf, "data: {\"type\":\"message_start\"}");
+    }
+
+    #[test]
+    fn sse_buffer_incomplete_after_one_complete() {
+        let mut buf =
+            "data: {\"type\":\"message_start\"}\n\ndata: {\"type\":\"content_block_delta\"}"
+                .to_owned();
+        let events = parse_sse_events_from_buffer(&mut buf);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["type"], "message_start");
+        // The incomplete second event remains in buffer.
+        assert_eq!(buf, "data: {\"type\":\"content_block_delta\"}");
+    }
+
+    #[test]
+    fn sse_buffer_ignores_invalid_json() {
+        let mut buf = "data: not-valid-json\n\ndata: {\"type\":\"ping\"}\n\n".to_owned();
+        let events = parse_sse_events_from_buffer(&mut buf);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["type"], "ping");
+    }
+
+    #[test]
+    fn sse_buffer_multiple_data_lines_in_one_event() {
+        // SSE spec: multiple data: lines within one event are joined with newlines.
+        // Our parser treats each data: line as a separate parse attempt.
+        let mut buf = "data: {\"type\":\"message_start\"}\ndata: {\"type\":\"ping\"}\n\n".to_owned();
+        let events = parse_sse_events_from_buffer(&mut buf);
+        // Both data lines are parsed as separate JSON events.
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["type"], "message_start");
+        assert_eq!(events[1]["type"], "ping");
+    }
+
+    #[test]
+    fn sse_buffer_handles_event_type_line() {
+        // The "event:" line is not a "data:" line, so it's ignored.
+        let mut buf = "event: message_start\ndata: {\"type\":\"message_start\"}\n\n".to_owned();
+        let events = parse_sse_events_from_buffer(&mut buf);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["type"], "message_start");
+    }
+
+    #[test]
+    fn sse_buffer_handles_three_consecutive_events() {
+        let mut buf = "data: {\"type\":\"message_start\"}\n\n\
+                       data: {\"type\":\"content_block_start\"}\n\n\
+                       data: {\"type\":\"message_stop\"}\n\n"
+            .to_owned();
+        let events = parse_sse_events_from_buffer(&mut buf);
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0]["type"], "message_start");
+        assert_eq!(events[1]["type"], "content_block_start");
+        assert_eq!(events[2]["type"], "message_stop");
+    }
+
+    #[test]
+    fn sse_buffer_done_signal_ignored() {
+        let mut buf = "data: [DONE]\n\n".to_owned();
+        let events = parse_sse_events_from_buffer(&mut buf);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn sse_buffer_done_signal_mixed_with_events() {
+        let mut buf = "data: {\"type\":\"message_start\"}\n\ndata: [DONE]\n\n".to_owned();
+        let events = parse_sse_events_from_buffer(&mut buf);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["type"], "message_start");
+    }
+
+    #[test]
+    fn sse_buffer_whitespace_trimming() {
+        let mut buf = "data:  {\"type\":\"ping\"} \n\n".to_owned();
+        let events = parse_sse_events_from_buffer(&mut buf);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["type"], "ping");
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional Anthropic event processing tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn process_anthropic_event_message_start_extracts_request_id() {
+        let mut accumulators = BTreeMap::new();
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+
+        let event = json!({
+            "type": "message_start",
+            "message": {
+                "id": "msg-test-abc",
+                "usage": { "input_tokens": 50 }
+            }
+        });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            None::<&StreamingCallbacks>,
+            false,
+        );
+
+        assert_eq!(request_id.as_deref(), Some("msg-test-abc"));
+        assert_eq!(usage.input_tokens, 50);
+    }
+
+    #[test]
+    fn process_anthropic_event_message_start_does_not_overwrite_request_id() {
+        let mut accumulators = BTreeMap::new();
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = Some("msg-original".to_owned());
+
+        let event = json!({
+            "type": "message_start",
+            "message": {
+                "id": "msg-new",
+                "usage": { "input_tokens": 50 }
+            }
+        });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            None::<&StreamingCallbacks>,
+            false,
+        );
+
+        // Should keep the original request_id.
+        assert_eq!(request_id.as_deref(), Some("msg-original"));
+    }
+
+    #[test]
+    fn process_anthropic_event_content_block_start_text() {
+        let mut accumulators = BTreeMap::new();
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+
+        let event = json!({
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": { "type": "text", "text": "Hello" }
+        });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            None::<&StreamingCallbacks>,
+            false,
+        );
+
+        assert!(matches!(
+            accumulators.get(&0),
+            Some(AnthropicContentAccumulator::Text { text }) if text == "Hello"
+        ));
+    }
+
+    #[test]
+    fn process_anthropic_event_content_block_start_thinking() {
+        let mut accumulators = BTreeMap::new();
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+
+        let event = json!({
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "thinking",
+                "thinking": "Let me think...",
+                "signature": "sig-abc"
+            }
+        });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            None::<&StreamingCallbacks>,
+            false,
+        );
+
+        assert!(matches!(
+            accumulators.get(&0),
+            Some(AnthropicContentAccumulator::Thinking { thinking, signature })
+                if thinking == "Let me think..." && signature.as_deref() == Some("sig-abc")
+        ));
+    }
+
+    #[test]
+    fn process_anthropic_event_content_block_start_tool_use() {
+        let mut accumulators = BTreeMap::new();
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+
+        let event = json!({
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "tool_use",
+                "id": "tool-123",
+                "name": "read_file"
+            }
+        });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            None::<&StreamingCallbacks>,
+            false,
+        );
+
+        assert!(matches!(
+            accumulators.get(&1),
+            Some(AnthropicContentAccumulator::ToolUse(acc))
+                if acc.id == "tool-123" && acc.name == "read_file" && acc.partial_json.is_empty()
+        ));
+    }
+
+    #[test]
+    fn process_anthropic_event_content_block_delta_text_accumulates() {
+        let mut accumulators = BTreeMap::new();
+        accumulators.insert(0, AnthropicContentAccumulator::Text { text: "Hello ".to_owned() });
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+
+        let event = json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": { "type": "text_delta", "text": "world!" }
+        });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            None::<&StreamingCallbacks>,
+            false,
+        );
+
+        assert!(matches!(
+            accumulators.get(&0),
+            Some(AnthropicContentAccumulator::Text { text }) if text == "Hello world!"
+        ));
+    }
+
+    #[test]
+    fn process_anthropic_event_content_block_delta_thinking_accumulates() {
+        let mut accumulators = BTreeMap::new();
+        accumulators.insert(
+            0,
+            AnthropicContentAccumulator::Thinking {
+                thinking: "Step 1. ".to_owned(),
+                signature: None,
+            },
+        );
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+
+        let event = json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": { "type": "thinking_delta", "thinking": "Step 2." }
+        });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            None::<&StreamingCallbacks>,
+            false,
+        );
+
+        assert!(matches!(
+            accumulators.get(&0),
+            Some(AnthropicContentAccumulator::Thinking { thinking, .. })
+                if thinking == "Step 1. Step 2."
+        ));
+    }
+
+    #[test]
+    fn process_anthropic_event_content_block_delta_signature() {
+        let mut accumulators = BTreeMap::new();
+        accumulators.insert(
+            0,
+            AnthropicContentAccumulator::Thinking {
+                thinking: "thoughts".to_owned(),
+                signature: None,
+            },
+        );
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+
+        let event = json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": { "type": "signature_delta", "signature": "sig-final" }
+        });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            None::<&StreamingCallbacks>,
+            false,
+        );
+
+        assert!(matches!(
+            accumulators.get(&0),
+            Some(AnthropicContentAccumulator::Thinking { signature: Some(sig), .. })
+                if sig == "sig-final"
+        ));
+    }
+
+    #[test]
+    fn process_anthropic_event_content_block_delta_tool_input_json() {
+        let mut accumulators = BTreeMap::new();
+        accumulators.insert(
+            1,
+            AnthropicContentAccumulator::ToolUse(AnthropicToolUseAccumulator {
+                block_type: "tool_use".to_owned(),
+                id: "tool-1".to_owned(),
+                name: "read_file".to_owned(),
+                partial_json: "{\"path\":".to_owned(),
+            }),
+        );
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+
+        let event = json!({
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": { "type": "input_json_delta", "partial_json": "\"src/lib.rs\"}" }
+        });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            None::<&StreamingCallbacks>,
+            false,
+        );
+
+        if let Some(AnthropicContentAccumulator::ToolUse(acc)) = accumulators.get(&1) {
+            assert_eq!(acc.partial_json, "{\"path\":\"src/lib.rs\"}");
+        } else {
+            panic!("expected ToolUse accumulator at index 1");
+        }
+    }
+
+    #[test]
+    fn process_anthropic_event_content_block_stop_is_noop() {
+        let mut accumulators = BTreeMap::new();
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+
+        let event = json!({ "type": "content_block_stop", "index": 0 });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            None::<&StreamingCallbacks>,
+            false,
+        );
+
+        // Should be a complete no-op.
+        assert!(accumulators.is_empty());
+        assert_eq!(stop_reason, "end_turn");
+    }
+
+    #[test]
+    fn process_anthropic_event_message_stop_is_noop() {
+        let mut accumulators = BTreeMap::new();
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+
+        let event = json!({ "type": "message_stop" });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            None::<&StreamingCallbacks>,
+            false,
+        );
+
+        assert!(accumulators.is_empty());
+        assert_eq!(stop_reason, "end_turn");
+    }
+
+    #[test]
+    fn process_anthropic_event_unknown_type_is_noop() {
+        let mut accumulators = BTreeMap::new();
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+
+        let event = json!({ "type": "ping" });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            None::<&StreamingCallbacks>,
+            false,
+        );
+
+        // "ping" falls through to the `_ => {}` branch — no state changes.
+        assert!(accumulators.is_empty());
+        assert_eq!(stop_reason, "end_turn");
+    }
+
+    #[test]
+    fn process_anthropic_event_message_delta_with_end_turn() {
+        let mut accumulators = BTreeMap::new();
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "tool_use".to_owned();
+        let mut request_id: Option<String> = None;
+
+        let event = json!({
+            "type": "message_delta",
+            "delta": { "stop_reason": "end_turn" },
+            "usage": { "output_tokens": 99 }
+        });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            None::<&StreamingCallbacks>,
+            false,
+        );
+
+        assert_eq!(stop_reason, "end_turn");
+        assert_eq!(usage.output_tokens, 99);
+    }
+
+    #[test]
+    fn process_anthropic_event_message_start_with_cache_tokens() {
+        let mut accumulators = BTreeMap::new();
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+
+        let event = json!({
+            "type": "message_start",
+            "message": {
+                "id": "msg-cache",
+                "usage": {
+                    "input_tokens": 200,
+                    "cache_read_input_tokens": 150,
+                    "cache_creation_input_tokens": 30
+                }
+            }
+        });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            None::<&StreamingCallbacks>,
+            true,
+        );
+
+        assert_eq!(usage.input_tokens, 200);
+        assert_eq!(usage.cache_read_input_tokens, 150);
+        assert_eq!(usage.cache_creation_input_tokens, 30);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional retry logic tests (imported from retry.rs)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn retryable_status_429() {
+        assert!(is_retryable_http_status(429));
+    }
+
+    #[test]
+    fn retryable_status_500() {
+        assert!(is_retryable_http_status(500));
+    }
+
+    #[test]
+    fn retryable_status_502() {
+        assert!(is_retryable_http_status(502));
+    }
+
+    #[test]
+    fn retryable_status_503() {
+        assert!(is_retryable_http_status(503));
+    }
+
+    #[test]
+    fn retryable_status_504() {
+        assert!(is_retryable_http_status(504));
+    }
+
+    #[test]
+    fn retryable_status_408() {
+        assert!(is_retryable_http_status(408));
+    }
+
+    #[test]
+    fn non_retryable_status_400() {
+        assert!(!is_retryable_http_status(400));
+    }
+
+    #[test]
+    fn non_retryable_status_401() {
+        assert!(!is_retryable_http_status(401));
+    }
+
+    #[test]
+    fn non_retryable_status_403() {
+        assert!(!is_retryable_http_status(403));
+    }
+
+    #[test]
+    fn non_retryable_status_404() {
+        assert!(!is_retryable_http_status(404));
+    }
+
+    #[test]
+    fn non_retryable_status_200() {
+        assert!(!is_retryable_http_status(200));
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional finalize_anthropic_content_blocks tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn finalize_empty_accumulators() {
+        let accumulators: BTreeMap<usize, AnthropicContentAccumulator> = BTreeMap::new();
+        let (raw_text, thinking_text, content_blocks, tool_calls) =
+            finalize_anthropic_content_blocks(accumulators);
+        assert_eq!(raw_text, "");
+        assert!(thinking_text.is_none());
+        assert!(content_blocks.is_empty());
+        assert!(tool_calls.is_empty());
+    }
+
+    #[test]
+    fn finalize_single_text_block() {
+        let mut accumulators = BTreeMap::new();
+        accumulators.insert(0, AnthropicContentAccumulator::Text { text: "Hello".to_owned() });
+
+        let (raw_text, thinking_text, content_blocks, tool_calls) =
+            finalize_anthropic_content_blocks(accumulators);
+
+        assert_eq!(raw_text, "Hello");
+        assert!(thinking_text.is_none());
+        assert_eq!(content_blocks.len(), 1);
+        assert_eq!(content_blocks[0]["type"], "text");
+        assert!(tool_calls.is_empty());
+    }
+
+    #[test]
+    fn finalize_empty_text_block_is_skipped() {
+        let mut accumulators = BTreeMap::new();
+        accumulators.insert(0, AnthropicContentAccumulator::Text { text: String::new() });
+
+        let (raw_text, thinking_text, content_blocks, tool_calls) =
+            finalize_anthropic_content_blocks(accumulators);
+
+        assert_eq!(raw_text, "");
+        assert!(thinking_text.is_none());
+        assert!(content_blocks.is_empty());
+        assert!(tool_calls.is_empty());
+    }
+
+    #[test]
+    fn finalize_thinking_block_with_signature() {
+        let mut accumulators = BTreeMap::new();
+        accumulators.insert(
+            0,
+            AnthropicContentAccumulator::Thinking {
+                thinking: "deep thoughts".to_owned(),
+                signature: Some("sig123".to_owned()),
+            },
+        );
+
+        let (raw_text, thinking_text, content_blocks, tool_calls) =
+            finalize_anthropic_content_blocks(accumulators);
+
+        assert_eq!(raw_text, "");
+        assert_eq!(thinking_text.as_deref(), Some("deep thoughts"));
+        assert_eq!(content_blocks.len(), 1);
+        assert_eq!(content_blocks[0]["type"], "thinking");
+        assert_eq!(content_blocks[0]["signature"], "sig123");
+        assert!(tool_calls.is_empty());
+    }
+
+    #[test]
+    fn finalize_tool_use_block_parses_json() {
+        let mut accumulators = BTreeMap::new();
+        accumulators.insert(
+            0,
+            AnthropicContentAccumulator::ToolUse(AnthropicToolUseAccumulator {
+                block_type: "tool_use".to_owned(),
+                id: "call-1".to_owned(),
+                name: "bash".to_owned(),
+                partial_json: r#"{"command":"ls -la"}"#.to_owned(),
+            }),
+        );
+
+        let (raw_text, thinking_text, content_blocks, tool_calls) =
+            finalize_anthropic_content_blocks(accumulators);
+
+        assert_eq!(raw_text, "");
+        assert!(thinking_text.is_none());
+        assert_eq!(content_blocks.len(), 1);
+        assert_eq!(content_blocks[0]["type"], "tool_use");
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].id, "call-1");
+        assert_eq!(tool_calls[0].name, "bash");
+        assert_eq!(tool_calls[0].input["command"], "ls -la");
+    }
+
+    #[test]
+    fn finalize_tool_use_block_empty_json_defaults_to_empty_object() {
+        let mut accumulators = BTreeMap::new();
+        accumulators.insert(
+            0,
+            AnthropicContentAccumulator::ToolUse(AnthropicToolUseAccumulator {
+                block_type: "tool_use".to_owned(),
+                id: "call-2".to_owned(),
+                name: "read".to_owned(),
+                partial_json: String::new(),
+            }),
+        );
+
+        let (_, _, _, tool_calls) = finalize_anthropic_content_blocks(accumulators);
+
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].input, json!({}));
+    }
+
+    #[test]
+    fn finalize_tool_use_block_invalid_json_defaults_to_empty_object() {
+        let mut accumulators = BTreeMap::new();
+        accumulators.insert(
+            0,
+            AnthropicContentAccumulator::ToolUse(AnthropicToolUseAccumulator {
+                block_type: "tool_use".to_owned(),
+                id: "call-3".to_owned(),
+                name: "write".to_owned(),
+                partial_json: "not valid json{".to_owned(),
+            }),
+        );
+
+        let (_, _, _, tool_calls) = finalize_anthropic_content_blocks(accumulators);
+
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].input, json!({}));
+    }
+
+    #[test]
+    fn finalize_tool_use_with_empty_id_is_skipped() {
+        let mut accumulators = BTreeMap::new();
+        accumulators.insert(
+            0,
+            AnthropicContentAccumulator::ToolUse(AnthropicToolUseAccumulator {
+                block_type: "tool_use".to_owned(),
+                id: String::new(),
+                name: "bash".to_owned(),
+                partial_json: "{}".to_owned(),
+            }),
+        );
+
+        let (_, _, content_blocks, tool_calls) = finalize_anthropic_content_blocks(accumulators);
+
+        assert!(tool_calls.is_empty());
+        assert!(content_blocks.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional should_fallback_after_streaming_error tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn fallback_on_broken_pipe() {
+        assert!(should_fallback_after_streaming_error(
+            &anyhow!("broken pipe"),
+            false,
+        ));
+    }
+
+    #[test]
+    fn fallback_on_unexpected_eof() {
+        assert!(should_fallback_after_streaming_error(
+            &anyhow!("unexpected eof"),
+            false,
+        ));
+    }
+
+    #[test]
+    fn fallback_on_connection_reset() {
+        assert!(should_fallback_after_streaming_error(
+            &anyhow!("connection reset"),
+            false,
+        ));
+    }
+
+    #[test]
+    fn no_fallback_on_generic_error() {
+        assert!(!should_fallback_after_streaming_error(
+            &anyhow!("something else went wrong"),
+            false,
+        ));
+    }
+
+    #[test]
+    fn no_fallback_on_chunk_error_with_tool_activity() {
+        assert!(!should_fallback_after_streaming_error(
+            &anyhow!("chunk read error"),
+            true,
+        ));
+    }
 }
