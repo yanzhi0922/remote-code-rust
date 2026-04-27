@@ -50,6 +50,9 @@ use rc_tools::{
     tasks::load_persisted_ui_task_snapshots,
     ToolExecutionContext, ToolRuntimePolicy,
 };
+use rc_agent_protocol::router::AgentRouter;
+use rc_agent_protocol::types::{AgentConfig, AgentType as ProtocolAgentType};
+use rc_agent_protocol::UnifiedAgentEvent;
 use rc_ui_bridge::{
     UiProviderStatusSnapshot, UiRuntimeMcpInventorySummary, UiRuntimeMcpServerStatus,
     UiRuntimeStatusSnapshot,
@@ -76,6 +79,7 @@ const APP_EVENT_TASK_SNAPSHOT: &str = "gui://task-snapshot";
 const APP_EVENT_CONTEXT_USAGE: &str = "gui://context-usage";
 const APP_EVENT_CONTEXT_OVERFLOW: &str = "gui://context-overflow";
 const APP_EVENT_CONTEXT_COMPACTED: &str = "gui://context-compacted";
+const APP_EVENT_AGENT_STATUS_CHANGED: &str = "gui://agent-status-changed";
 const APP_EVENT_RUNTIME_STATUS: &str = "gui://runtime-status";
 const PROJECTS_FILE_NAME: &str = "gui-projects.json";
 const PROVIDERS_FILE_NAME: &str = "gui-providers.json";
@@ -467,6 +471,21 @@ struct ContextCompactedDto {
     usage_ratio: f64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct AgentTypeInfoDto {
+    agent_type: String,
+    display_name: String,
+    available: bool,
+    installed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct AgentStatusChangedDto {
+    session_id: String,
+    agent_type: String,
+    status: String,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ConfigScopeDto {
@@ -752,6 +771,7 @@ struct AppState {
     runtime: Mutex<RuntimeState>,
     pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
     running_prompts: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
+    agent_router: Arc<Mutex<AgentRouter>>,
 }
 
 fn gui_storage_path(paths: &AppPaths, file_name: &str) -> PathBuf {
@@ -3018,6 +3038,226 @@ fn as_error<T>(result: Result<T>) -> std::result::Result<T, String> {
     result.map_err(|error| format!("{error:#}"))
 }
 
+/// Read the agent_type stored in session metadata.
+/// Returns `"remote_code"` when no agent_type has been set (the default path).
+fn get_session_agent_type(store: &SessionStore, session_id: Uuid) -> String {
+    store
+        .load_transcript(session_id)
+        .ok()
+        .and_then(|transcript| {
+            transcript
+                .latest_named_event_payload("agent_type")
+                .and_then(|val| val.get("agent_type").and_then(|v| v.as_str()).map(String::from))
+        })
+        .unwrap_or_else(|| "remote_code".to_owned())
+}
+
+/// Run a prompt through an external Agent adapter (RooCode / Codex).
+///
+/// Translates [`UnifiedAgentEvent`]s from the adapter into existing GUI events
+/// so the frontend can handle them uniformly.
+async fn run_agent_prompt(
+    app: AppHandle,
+    session_id: String,
+    agent_router: Arc<Mutex<AgentRouter>>,
+    prompt: &str,
+) -> Result<PromptRunOutcome> {
+    // 1. Send message through the AgentRouter to obtain an event stream.
+    let mut receiver = {
+        let mut router = agent_router.lock().await;
+        router.send_message(&session_id, prompt).await?
+    };
+
+    // 2. Notify the frontend that the agent is busy.
+    let _ = app.emit(
+        APP_EVENT_AGENT_STATUS_CHANGED,
+        AgentStatusChangedDto {
+            session_id: session_id.clone(),
+            agent_type: "external".to_owned(),
+            status: "busy".to_owned(),
+        },
+    );
+
+    // 3. Event loop: translate UnifiedAgentEvent → GUI events.
+    let mut response_text = String::new();
+    let mut tool_calls = Vec::new();
+    let mut usage = UsageSummary::default();
+
+    while let Some(event) = receiver.recv().await {
+        match event {
+            UnifiedAgentEvent::MessageDelta { delta, .. } => {
+                response_text.push_str(&delta);
+                let _ = app.emit(
+                    APP_EVENT_STREAMING_DELTA,
+                    StreamingDeltaDto {
+                        session_id: session_id.clone(),
+                        delta,
+                    },
+                );
+            }
+            UnifiedAgentEvent::ToolCallStarted { tool_name, .. } => {
+                let _ = app.emit(
+                    APP_EVENT_TOOL_START,
+                    ToolProgressDto {
+                        tool_call_id: String::new(),
+                        tool_name: tool_name.clone(),
+                        message: "running".to_owned(),
+                    },
+                );
+            }
+            UnifiedAgentEvent::ToolCallProgress { tool_name, progress, .. } => {
+                let _ = app.emit(
+                    APP_EVENT_TOOL_PROGRESS,
+                    ToolProgressDto {
+                        tool_call_id: String::new(),
+                        tool_name,
+                        message: progress,
+                    },
+                );
+            }
+            UnifiedAgentEvent::ToolCallCompleted { tool_name, result, .. } => {
+                let _ = app.emit(
+                    APP_EVENT_TOOL_RESULT,
+                    ToolResultDto {
+                        tool_call_id: String::new(),
+                        tool_name,
+                        is_error: false,
+                        output: result.to_string(),
+                    },
+                );
+            }
+            UnifiedAgentEvent::PermissionRequest { request_id, tool_name, input, .. } => {
+                // Forward the permission request to the frontend.
+                let _ = app.emit(
+                    APP_EVENT_PERMISSION_REQUEST,
+                    PermissionRequestDto {
+                        request_id,
+                        tool_name,
+                        tool_use_id: String::new(),
+                        title: "Agent 权限请求".to_owned(),
+                        description: "外部 Agent 请求执行操作".to_owned(),
+                        input,
+                        blocked_path: None,
+                        permission_suggestions: vec![],
+                    },
+                );
+            }
+            UnifiedAgentEvent::SubtaskStarted { task_id, description, .. } => {
+                let _ = app.emit(
+                    APP_EVENT_SUBTASK_STARTED,
+                    SubtaskStartedDto {
+                        session_id: session_id.clone(),
+                        task_id,
+                        parent_task_id: None,
+                        description,
+                        depth: 0,
+                    },
+                );
+            }
+            UnifiedAgentEvent::SubtaskProgress { task_id, progress, .. } => {
+                let _ = app.emit(
+                    APP_EVENT_SUBTASK_PROGRESS,
+                    SubtaskProgressDto {
+                        session_id: session_id.clone(),
+                        task_id,
+                        turn: 0,
+                        max_turns: 0,
+                        summary: progress,
+                    },
+                );
+            }
+            UnifiedAgentEvent::SubtaskCompleted { task_id, result, .. } => {
+                let _ = app.emit(
+                    APP_EVENT_SUBTASK_COMPLETED,
+                    SubtaskCompletedDto {
+                        session_id: session_id.clone(),
+                        task_id,
+                        success: true,
+                        output_preview: result.to_string(),
+                        turns_used: 0,
+                    },
+                );
+            }
+            UnifiedAgentEvent::ContextUsage { used, total, .. } => {
+                let _ = app.emit(
+                    APP_EVENT_CONTEXT_USAGE,
+                    ContextUsageDto {
+                        session_id: session_id.clone(),
+                        estimated_tokens: used as u64,
+                        max_input_tokens: total as u64,
+                        threshold_tokens: (total as f64 * 0.8) as u64,
+                        ratio: used as f64 / total as f64,
+                    },
+                );
+            }
+            UnifiedAgentEvent::ContextOverflow { .. } => {
+                let _ = app.emit(
+                    APP_EVENT_CONTEXT_OVERFLOW,
+                    ContextOverflowDto {
+                        session_id: session_id.clone(),
+                        estimated_tokens: 0,
+                        max_input_tokens: 0,
+                        threshold_tokens: 0,
+                        ratio: 1.0,
+                    },
+                );
+            }
+            UnifiedAgentEvent::ContextCompacted { .. } => {
+                let _ = app.emit(
+                    APP_EVENT_CONTEXT_COMPACTED,
+                    ContextCompactedDto {
+                        session_id: session_id.clone(),
+                        entries_removed: 0,
+                        usage_ratio: 0.0,
+                    },
+                );
+            }
+            UnifiedAgentEvent::Error { message, recoverable, .. } => {
+                if !recoverable {
+                    return Err(anyhow!("Agent 错误: {message}"));
+                }
+                // Recoverable errors: continue the event loop.
+            }
+            UnifiedAgentEvent::Completed { result, .. } => {
+                response_text = result.response_text;
+                usage.input_tokens = result.usage.input_tokens;
+                usage.output_tokens = result.usage.output_tokens;
+                tool_calls = result
+                    .tool_calls
+                    .iter()
+                    .map(|tc| ToolCall {
+                        id: tc.id.clone(),
+                        name: tc.name.clone(),
+                        input: tc.input.clone(),
+                    })
+                    .collect();
+                break;
+            }
+            UnifiedAgentEvent::Started(_) | UnifiedAgentEvent::Ready => {
+                let _ = app.emit(
+                    APP_EVENT_AGENT_STATUS_CHANGED,
+                    AgentStatusChangedDto {
+                        session_id: session_id.clone(),
+                        agent_type: "external".to_owned(),
+                        status: "ready".to_owned(),
+                    },
+                );
+            }
+            UnifiedAgentEvent::Stopped => {
+                break;
+            }
+        }
+    }
+
+    Ok(PromptRunOutcome {
+        text: response_text,
+        tool_calls,
+        usage,
+        num_turns: 1,
+        stop_reason: "stop".to_owned(),
+    })
+}
+
 #[tauri::command]
 async fn init_app(
     app: AppHandle,
@@ -3090,6 +3330,7 @@ async fn create_session(
     state: State<'_, AppState>,
     title: Option<String>,
     project_path: Option<String>,
+    agent_type: Option<String>,
 ) -> std::result::Result<String, String> {
     let runtime = state.runtime.lock().await;
     let mut config = runtime.config.clone();
@@ -3107,12 +3348,50 @@ async fn create_session(
     {
         return Err("会话必须创建在已管理的项目文件夹下。".to_owned());
     }
-    config.cwd = normalized_project_path;
+    config.cwd = normalized_project_path.clone();
+
+    // Parse and validate agent_type; default to "remote_code" when not provided.
+    let agent_type_str = agent_type
+        .as_deref()
+        .unwrap_or("remote_code")
+        .to_owned();
+    let _parsed_agent_type: ProtocolAgentType = serde_json::from_str(
+        &format!("\"{}\"", agent_type_str),
+    ).map_err(|e| format!("无效的 agent_type: {e}"))?;
+
     as_error(initialize_session_conversation(
         &runtime.session_store,
         &config,
         title.as_deref(),
     ))?;
+
+    // Persist agent_type into session transcript as a named event.
+    as_error(runtime.session_store.append_named_event(
+        config.session_id,
+        "agent_type",
+        serde_json::json!({ "agent_type": agent_type_str }),
+    ))?;
+
+    // For external agents (RooCode / Codex), pre-create and register an adapter.
+    if _parsed_agent_type != ProtocolAgentType::RemoteCode {
+        let agent_config = AgentConfig {
+            agent_type: _parsed_agent_type,
+            binary_path: None,
+            args: vec![],
+            env: vec![],
+            working_dir: Some(normalized_project_path),
+            model: config.provider.model.clone(),
+            provider: Some(config.provider.name.clone()),
+            api_key: None,
+            base_url: config.provider.base_url.clone(),
+        };
+        let mut router = state.agent_router.lock().await;
+        router
+            .create_and_register(config.session_id.to_string(), &agent_config)
+            .await
+            .map_err(|e| format!("Agent 启动失败: {e:#}"))?;
+    }
+
     Ok(config.session_id.to_string())
 }
 
@@ -3128,7 +3407,7 @@ async fn send_prompt(
         return Err("prompt cannot be empty".to_owned());
     }
 
-    let (mut config, provider, session_store, pending_permissions, provider_configs) = {
+    let (mut config, provider, session_store, pending_permissions, provider_configs, agent_type_str) = {
         let runtime = state.runtime.lock().await;
         let mut config = runtime.config.clone();
         let selected_provider = config.provider.clone();
@@ -3138,6 +3417,7 @@ async fn send_prompt(
         config.session_id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
         restore_session_context(&runtime.session_store, &mut config)
             .map_err(|error| format!("{error:#}"))?;
+        let agent_type_str = get_session_agent_type(&runtime.session_store, config.session_id);
         config.provider = selected_provider;
         config.permission_mode = selected_permission_mode;
         (
@@ -3146,8 +3426,11 @@ async fn send_prompt(
             Arc::clone(&runtime.session_store),
             Arc::clone(&state.pending_permissions),
             runtime.provider_configs.clone(),
+            agent_type_str,
         )
     };
+
+    let is_external_agent = agent_type_str != "remote_code";
 
     apply_provider_credentials_from_configs(&mut config.provider, &provider_configs);
     configure_runtime_policy_for_config(&config).map_err(|error| format!("{error:#}"))?;
@@ -3155,6 +3438,7 @@ async fn send_prompt(
     let sid = config.session_id.to_string();
 
     let running_prompts = Arc::clone(&state.running_prompts);
+    let agent_router = Arc::clone(&state.agent_router);
     let sid_for_cleanup = sid.clone();
 
     // Atomically check for duplicate and reserve the slot to prevent TOCTOU races.
@@ -3164,16 +3448,28 @@ async fn send_prompt(
             return Err("该会话已有正在运行的提示，请等待完成或取消后再试。".to_owned());
         }
         let handle = tokio::spawn(async move {
-            let backend = ProviderCompatBackend::new(Arc::clone(&provider), &config.provider);
-            let result = run_gui_prompt(
-                app.clone(),
-                config.clone(),
-                &backend,
-                session_store,
-                pending_permissions,
-                &prompt,
-            )
-            .await;
+            let result = if is_external_agent {
+                // External Agent path (RooCode / Codex)
+                run_agent_prompt(
+                    app.clone(),
+                    sid_for_cleanup.clone(),
+                    agent_router,
+                    &prompt,
+                )
+                .await
+            } else {
+                // Default RemoteCode path (zero-change)
+                let backend = ProviderCompatBackend::new(Arc::clone(&provider), &config.provider);
+                run_gui_prompt(
+                    app.clone(),
+                    config.clone(),
+                    &backend,
+                    session_store,
+                    pending_permissions,
+                    &prompt,
+                )
+                .await
+            };
 
             match result {
                 Ok(outcome) => {
@@ -3862,12 +4158,56 @@ async fn pick_folder(app: AppHandle) -> std::result::Result<Option<String>, Stri
     Ok(Some(path.display().to_string()))
 }
 
+#[tauri::command]
+async fn list_available_agents(
+    _state: State<'_, AppState>,
+) -> std::result::Result<Vec<AgentTypeInfoDto>, String> {
+    let agents = vec![
+        AgentTypeInfoDto {
+            agent_type: "remote_code".to_owned(),
+            display_name: "Remote Code".to_owned(),
+            available: true,
+            installed: true,
+        },
+        AgentTypeInfoDto {
+            agent_type: "roo_code".to_owned(),
+            display_name: "Roo Code".to_owned(),
+            available: true,
+            installed: false, // TODO: detect binary presence
+        },
+        AgentTypeInfoDto {
+            agent_type: "codex".to_owned(),
+            display_name: "OpenAI Codex".to_owned(),
+            available: true,
+            installed: false, // TODO: detect binary presence
+        },
+    ];
+    Ok(agents)
+}
+
+#[tauri::command]
+async fn install_agent(
+    _agent_type: String,
+) -> std::result::Result<(), String> {
+    // TODO: download and install agent binary
+    Err("尚未实现".to_owned())
+}
+
+#[tauri::command]
+async fn uninstall_agent(
+    _agent_type: String,
+) -> std::result::Result<(), String> {
+    // TODO: uninstall agent binary
+    Err("尚未实现".to_owned())
+}
+
 pub fn run() {
     let runtime_state = build_runtime_state().unwrap_or_else(|error| {
         panic!("failed to initialize remote-code-gui runtime: {error:#}");
     });
     let pending_permissions = Arc::new(Mutex::new(HashMap::new()));
     let running_prompts = Arc::new(Mutex::new(HashMap::new()));
+    let agent_router = Arc::new(Mutex::new(AgentRouter::new()));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -3876,6 +4216,7 @@ pub fn run() {
             runtime: Mutex::new(runtime_state),
             pending_permissions,
             running_prompts,
+            agent_router,
         })
         .invoke_handler(tauri::generate_handler![
             init_app,
@@ -3909,7 +4250,10 @@ pub fn run() {
             set_active_provider,
             switch_profile,
             resolve_permission_request,
-            pick_folder
+            pick_folder,
+            list_available_agents,
+            install_agent,
+            uninstall_agent
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|error| panic!("error while running tauri application: {error}"));
