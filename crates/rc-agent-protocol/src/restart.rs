@@ -39,7 +39,18 @@ pub struct RestartTracker {
 
 impl RestartTracker {
     /// Create a new tracker with the given policy.
-    pub fn new(policy: RestartPolicy) -> Self {
+    ///
+    /// # Panics
+    ///
+    /// Will **not** panic, but will clamp `backoff_multiplier` to `>= 1.0`
+    /// if the caller provides an invalid value (zero, negative, or NaN).
+    pub fn new(mut policy: RestartPolicy) -> Self {
+        // #21: Validate backoff_multiplier — must be >= 1.0 for exponential
+        // backoff to make sense. Use default of 2.0 if invalid.
+        if policy.backoff_multiplier.is_nan() || policy.backoff_multiplier < 1.0 {
+            // Catches NaN, negative, zero, and sub-one values.
+            policy.backoff_multiplier = 2.0;
+        }
         let next_backoff = policy.initial_backoff;
         Self {
             policy,

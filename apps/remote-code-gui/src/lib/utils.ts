@@ -5,9 +5,14 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+const isWindows =
+  typeof navigator !== 'undefined' && /win/i.test(navigator.platform);
+
 export function normalizePathKey(path: string): string {
-  const normalized = path.replace(/\//g, '\\').replace(/\\+$/, '');
-  return normalized.toLowerCase();
+  if (isWindows) {
+    return path.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+  }
+  return path.replace(/\\+$/, '');
 }
 
 export function truncateMiddle(value: string, maxLength = 72): string {

@@ -4457,7 +4457,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "futures",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -5301,6 +5300,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tempfile",
  "tokio",
+ "tracing",
  "uuid",
 ]
 

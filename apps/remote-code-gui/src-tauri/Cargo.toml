@@ -38,6 +38,7 @@ rc-skills = { path = "../../../crates/rc-skills" }
 rc-agent-protocol = { path = "../../../crates/rc-agent-protocol" }
 rc-voice = { path = "../../../crates/rc-voice" }
 reqwest = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

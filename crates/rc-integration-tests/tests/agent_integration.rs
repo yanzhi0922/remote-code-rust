@@ -603,7 +603,7 @@ async fn router_register_and_send_message_routes_correctly() {
 
     let mut boxed: Box<dyn AgentAdapter> = Box::new(adapter);
     boxed.start(&protocol_test_config()).await.unwrap();
-    router.register("sess-1".into(), boxed);
+    router.register("sess-1".into(), boxed).await;
 
     assert!(router.has_session("sess-1"));
     assert_eq!(router.session_count(), 1);
@@ -631,7 +631,7 @@ async fn router_multiple_sessions_route_independently() {
     });
     let mut boxed_a: Box<dyn AgentAdapter> = Box::new(adapter_a);
     boxed_a.start(&protocol_test_config()).await.unwrap();
-    router.register("sess-a".into(), boxed_a);
+    router.register("sess-a".into(), boxed_a).await;
 
     // Session B
     let adapter_b = RemoteCodeAdapter::new().with_send_message(|_sid, msg| {
@@ -642,7 +642,7 @@ async fn router_multiple_sessions_route_independently() {
     });
     let mut boxed_b: Box<dyn AgentAdapter> = Box::new(adapter_b);
     boxed_b.start(&protocol_test_config()).await.unwrap();
-    router.register("sess-b".into(), boxed_b);
+    router.register("sess-b".into(), boxed_b).await;
 
     assert_eq!(router.session_count(), 2);
 
@@ -670,7 +670,7 @@ async fn router_close_session_removes_adapter() {
     let adapter = RemoteCodeAdapter::new().with_send_message(|_sid, _msg| Ok(vec![]));
     let mut boxed: Box<dyn AgentAdapter> = Box::new(adapter);
     boxed.start(&protocol_test_config()).await.unwrap();
-    router.register("sess-x".into(), boxed);
+    router.register("sess-x".into(), boxed).await;
 
     assert_eq!(router.session_count(), 1);
     router.close_session("sess-x").await.unwrap();
@@ -693,7 +693,7 @@ async fn router_cancel_delegates_to_adapter() {
     let mut boxed: Box<dyn AgentAdapter> = Box::new(adapter);
     boxed.start(&protocol_test_config()).await.unwrap();
     let mut router = AgentRouter::new();
-    router.register("sess-c".into(), boxed);
+    router.register("sess-c".into(), boxed).await;
 
     router.cancel("sess-c").await.unwrap();
     assert!(*canceled.lock().unwrap());
@@ -870,9 +870,13 @@ fn all_unified_agent_event_variants_roundtrip() {
         },
         UnifiedAgentEvent::ContextOverflow {
             session_id: "s".into(),
+            used: 0,
+            total: 0,
         },
         UnifiedAgentEvent::ContextCompacted {
             session_id: "s".into(),
+            entries_removed: 0,
+            usage_ratio: 0.0,
         },
         UnifiedAgentEvent::Error {
             session_id: "s".into(),
@@ -946,7 +950,7 @@ async fn events_flow_from_adapter_through_router() {
     boxed.start(&protocol_test_config()).await.unwrap();
 
     let mut router = AgentRouter::new();
-    router.register("sess-flow".into(), boxed);
+    router.register("sess-flow".into(), boxed).await;
 
     let mut rx = router.send_message("sess-flow", "test-flow").await.unwrap();
 

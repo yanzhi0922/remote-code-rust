@@ -24,16 +24,16 @@ export function AgentSelector({ availableAgents, activeAgentType, onSelect }: Ag
     displayName: string;
     description: string;
     installed: boolean;
-    status: string;
+    available: boolean;
   }> = (['remote_code', 'roo_code', 'codex'] as const).map((type) => {
     const info = availableAgents.find((agent) => agent.agentType === type);
     const defaults = AGENT_DEFAULTS[type];
     return {
       agentType: type,
       displayName: info?.displayName ?? defaults.displayName,
-      description: info?.description ?? defaults.description,
+      description: defaults.description,
       installed: info?.installed ?? type === 'remote_code',
-      status: info?.status ?? (type === 'remote_code' ? 'available' : 'not_installed'),
+      available: info?.available ?? type === 'remote_code',
     };
   });
 

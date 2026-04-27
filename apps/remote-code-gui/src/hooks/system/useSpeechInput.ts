@@ -121,7 +121,7 @@ export function useSpeechInput(options: UseSpeechInputOptions) {
       try {
         // Convert blob to Uint8Array for Tauri backend.
         const arrayBuffer = await blob.arrayBuffer();
-        const audioData = Array.from(new Uint8Array(arrayBuffer));
+        const audioData = new Uint8Array(arrayBuffer);
 
         // Dynamically import to avoid errors in non-Tauri environments.
         const { transcribeAudio } = await import('../../lib/tauri');
