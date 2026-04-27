@@ -402,7 +402,6 @@ impl ProviderClient {
         })
     }
 
-    #[allow(clippy::too_many_lines)]
     async fn complete_streaming_anthropic(
         &self,
         provider: &ProviderConfig,
@@ -448,218 +447,17 @@ impl ProviderClient {
             let bytes = chunk.with_context(|| "failed to read streaming chunk")?;
             sse_buffer.push_str(&String::from_utf8_lossy(&bytes));
 
-            while let Some(event_end) = sse_buffer.find("\n\n") {
-                let event_text = sse_buffer[..event_end].to_owned();
-                sse_buffer = sse_buffer[event_end + 2..].to_owned();
-
-                for line in event_text.lines() {
-                    let Some(data) = line.strip_prefix("data: ") else {
-                        continue;
-                    };
-                    let data = data.trim();
-                    if data == "[DONE]" {
-                        continue;
-                    }
-
-                    let event: Value = match serde_json::from_str(data) {
-                        Ok(v) => v,
-                        Err(_) => continue,
-                    };
-
-                    let event_type = event.get("type").and_then(Value::as_str).unwrap_or("");
-
-                    match event_type {
-                        "message_start" => {
-                            if let Some(msg) = event.get("message") {
-                                if request_id.is_none() {
-                                    request_id = msg
-                                        .get("id")
-                                        .and_then(Value::as_str)
-                                        .map(ToOwned::to_owned);
-                                }
-                                if let Some(u) = msg.get("usage") {
-                                    let inp =
-                                        u.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
-                                    usage.input_tokens = inp;
-                                    usage.cache_read_input_tokens = u
-                                        .get("cache_read_input_tokens")
-                                        .and_then(Value::as_u64)
-                                        .unwrap_or(0);
-                                    usage.cache_creation_input_tokens = u
-                                        .get("cache_creation_input_tokens")
-                                        .and_then(Value::as_u64)
-                                        .unwrap_or(0);
-                                    if let Some(cb) =
-                                        callbacks.as_ref().and_then(|c| c.on_usage.as_ref())
-                                    {
-                                        cb(inp, 0);
-                                    }
-                                }
-                            }
-                        }
-                        "content_block_start" => {
-                            #[allow(clippy::cast_possible_truncation)]
-                            let index =
-                                event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
-                            let content_block = event.get("content_block");
-                            let block_type = content_block
-                                .and_then(|b| b.get("type"))
-                                .and_then(Value::as_str)
-                                .unwrap_or("");
-
-                            match block_type {
-                                "text" => {
-                                    let text = content_block
-                                        .and_then(|b| b.get("text"))
-                                        .and_then(Value::as_str)
-                                        .unwrap_or("")
-                                        .to_owned();
-                                    content_block_accumulators
-                                        .insert(index, AnthropicContentAccumulator::Text { text });
-                                }
-                                "thinking" => {
-                                    let thinking = content_block
-                                        .and_then(|b| b.get("thinking"))
-                                        .or_else(|| content_block.and_then(|b| b.get("text")))
-                                        .and_then(Value::as_str)
-                                        .unwrap_or("")
-                                        .to_owned();
-                                    let signature = content_block
-                                        .and_then(|b| b.get("signature"))
-                                        .and_then(Value::as_str)
-                                        .map(ToOwned::to_owned);
-                                    content_block_accumulators.insert(
-                                        index,
-                                        AnthropicContentAccumulator::Thinking {
-                                            thinking,
-                                            signature,
-                                        },
-                                    );
-                                }
-                                "tool_use" | "server_tool_use" => {
-                                    let id = content_block
-                                        .and_then(|b| b.get("id"))
-                                        .and_then(Value::as_str)
-                                        .unwrap_or("")
-                                        .to_owned();
-                                    let name = content_block
-                                        .and_then(|b| b.get("name"))
-                                        .and_then(Value::as_str)
-                                        .unwrap_or("")
-                                        .to_owned();
-                                    // Fire on_tool_call_start callback.
-                                    if let Some(cb) = callbacks
-                                        .as_ref()
-                                        .and_then(|c| c.on_tool_call_start.as_ref())
-                                    {
-                                        cb(&id, &name);
-                                    }
-                                    content_block_accumulators.insert(
-                                        index,
-                                        AnthropicContentAccumulator::ToolUse(
-                                            AnthropicToolUseAccumulator {
-                                                block_type: block_type.to_owned(),
-                                                id,
-                                                name,
-                                                partial_json: String::new(),
-                                            },
-                                        ),
-                                    );
-                                }
-                                _ => {}
-                            }
-                        }
-                        "content_block_delta" => {
-                            #[allow(clippy::cast_possible_truncation)]
-                            let index =
-                                event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
-                            let delta = event.get("delta");
-                            let delta_type = delta.and_then(Value::as_str).unwrap_or_else(|| {
-                                delta
-                                    .and_then(|d| d.get("type"))
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("")
-                            });
-
-                            if delta_type == "thinking_delta"
-                                && let Some(thinking) = delta
-                                    .and_then(|d| d.get("thinking"))
-                                    .and_then(Value::as_str)
-                                && let Some(AnthropicContentAccumulator::Thinking {
-                                    thinking: existing,
-                                    ..
-                                }) = content_block_accumulators.get_mut(&index)
-                            {
-                                existing.push_str(thinking);
-                            } else if delta_type == "signature_delta"
-                                && let Some(signature) = delta
-                                    .and_then(|d| d.get("signature"))
-                                    .and_then(Value::as_str)
-                                && let Some(AnthropicContentAccumulator::Thinking {
-                                    signature: existing,
-                                    ..
-                                }) = content_block_accumulators.get_mut(&index)
-                            {
-                                *existing = Some(signature.to_owned());
-                            } else if delta_type == "text_delta"
-                                && let Some(text) =
-                                    delta.and_then(|d| d.get("text")).and_then(Value::as_str)
-                                && let Some(AnthropicContentAccumulator::Text { text: existing }) =
-                                    content_block_accumulators.get_mut(&index)
-                            {
-                                // Fire on_text_delta callback.
-                                if let Some(cb) =
-                                    callbacks.as_ref().and_then(|c| c.on_text_delta.as_ref())
-                                {
-                                    cb(text);
-                                }
-                                existing.push_str(text);
-                            }
-
-                            if (delta_type == "input_json_delta"
-                                || matches!(
-                                    content_block_accumulators.get(&index),
-                                    Some(AnthropicContentAccumulator::ToolUse(_))
-                                ))
-                                && let Some(partial) = delta
-                                    .and_then(|d| d.get("partial_json"))
-                                    .and_then(Value::as_str)
-                                && let Some(AnthropicContentAccumulator::ToolUse(acc)) =
-                                    content_block_accumulators.get_mut(&index)
-                            {
-                                // Fire on_tool_call_delta callback.
-                                if let Some(cb) = callbacks
-                                    .as_ref()
-                                    .and_then(|c| c.on_tool_call_delta.as_ref())
-                                {
-                                    cb(&acc.id, partial);
-                                }
-                                acc.partial_json.push_str(partial);
-                            }
-                        }
-                        "content_block_stop" => {}
-                        "message_delta" => {
-                            if let Some(delta) = event.get("delta")
-                                && let Some(reason) =
-                                    delta.get("stop_reason").and_then(Value::as_str)
-                            {
-                                reason.clone_into(&mut stop_reason);
-                            }
-                            if let Some(u) = event.get("usage") {
-                                let out =
-                                    u.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
-                                usage.output_tokens = out;
-                                // Fire on_usage callback with final output token count.
-                                if let Some(cb) =
-                                    callbacks.as_ref().and_then(|c| c.on_usage.as_ref())
-                                {
-                                    cb(usage.input_tokens, out);
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+            for event in parse_sse_events_from_buffer(&mut sse_buffer) {
+                // Direct Anthropic API returns cache token counts.
+                process_anthropic_event(
+                    &event,
+                    &mut content_block_accumulators,
+                    &mut usage,
+                    &mut stop_reason,
+                    &mut request_id,
+                    callbacks,
+                    /* extract_cache_tokens */ true,
+                );
             }
         }
 
@@ -682,7 +480,6 @@ impl ProviderClient {
     ///
     /// Bedrock returns an AWS Event Stream encoded response where each frame
     /// contains a JSON payload with Anthropic SSE event types.
-    #[allow(clippy::too_many_lines)]
     async fn complete_streaming_bedrock(
         &self,
         provider: &ProviderConfig,
@@ -843,178 +640,16 @@ impl ProviderClient {
 
                 // The payload is JSON with Anthropic SSE event structure.
                 if let Ok(event) = serde_json::from_slice::<Value>(payload_bytes) {
-                    let event_type = event.get("type").and_then(Value::as_str).unwrap_or("");
-
-                    match event_type {
-                        "message_start" => {
-                            if let Some(msg) = event.get("message") {
-                                if request_id.is_none() {
-                                    request_id = msg
-                                        .get("id")
-                                        .and_then(Value::as_str)
-                                        .map(ToOwned::to_owned);
-                                }
-                                if let Some(u) = msg.get("usage") {
-                                    let inp =
-                                        u.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
-                                    usage.input_tokens = inp;
-                                    if let Some(cb) = callbacks.and_then(|c| c.on_usage.as_ref()) {
-                                        cb(inp, 0);
-                                    }
-                                }
-                            }
-                        }
-                        "content_block_start" => {
-                            #[allow(clippy::cast_possible_truncation)]
-                            let index =
-                                event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
-                            let content_block = event.get("content_block");
-                            let block_type = content_block
-                                .and_then(|b| b.get("type"))
-                                .and_then(Value::as_str)
-                                .unwrap_or("");
-
-                            match block_type {
-                                "text" => {
-                                    let text = content_block
-                                        .and_then(|b| b.get("text"))
-                                        .and_then(Value::as_str)
-                                        .unwrap_or("")
-                                        .to_owned();
-                                    content_block_accumulators
-                                        .insert(index, AnthropicContentAccumulator::Text { text });
-                                }
-                                "thinking" => {
-                                    let thinking = content_block
-                                        .and_then(|b| b.get("thinking"))
-                                        .or_else(|| content_block.and_then(|b| b.get("text")))
-                                        .and_then(Value::as_str)
-                                        .unwrap_or("")
-                                        .to_owned();
-                                    let signature = content_block
-                                        .and_then(|b| b.get("signature"))
-                                        .and_then(Value::as_str)
-                                        .map(ToOwned::to_owned);
-                                    content_block_accumulators.insert(
-                                        index,
-                                        AnthropicContentAccumulator::Thinking {
-                                            thinking,
-                                            signature,
-                                        },
-                                    );
-                                }
-                                "tool_use" | "server_tool_use" => {
-                                    let id = content_block
-                                        .and_then(|b| b.get("id"))
-                                        .and_then(Value::as_str)
-                                        .unwrap_or("")
-                                        .to_owned();
-                                    let name = content_block
-                                        .and_then(|b| b.get("name"))
-                                        .and_then(Value::as_str)
-                                        .unwrap_or("")
-                                        .to_owned();
-                                    if let Some(cb) =
-                                        callbacks.and_then(|c| c.on_tool_call_start.as_ref())
-                                    {
-                                        cb(&id, &name);
-                                    }
-                                    content_block_accumulators.insert(
-                                        index,
-                                        AnthropicContentAccumulator::ToolUse(
-                                            AnthropicToolUseAccumulator {
-                                                block_type: block_type.to_owned(),
-                                                id,
-                                                name,
-                                                partial_json: String::new(),
-                                            },
-                                        ),
-                                    );
-                                }
-                                _ => {}
-                            }
-                        }
-                        "content_block_delta" => {
-                            #[allow(clippy::cast_possible_truncation)]
-                            let index =
-                                event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
-                            let delta = event.get("delta");
-                            let delta_type = delta
-                                .and_then(|d| d.get("type"))
-                                .and_then(Value::as_str)
-                                .unwrap_or("");
-
-                            if delta_type == "thinking_delta"
-                                && let Some(thinking) = delta
-                                    .and_then(|d| d.get("thinking"))
-                                    .and_then(Value::as_str)
-                                && let Some(AnthropicContentAccumulator::Thinking {
-                                    thinking: existing,
-                                    ..
-                                }) = content_block_accumulators.get_mut(&index)
-                            {
-                                existing.push_str(thinking);
-                            } else if delta_type == "signature_delta"
-                                && let Some(signature) = delta
-                                    .and_then(|d| d.get("signature"))
-                                    .and_then(Value::as_str)
-                                && let Some(AnthropicContentAccumulator::Thinking {
-                                    signature: existing,
-                                    ..
-                                }) = content_block_accumulators.get_mut(&index)
-                            {
-                                *existing = Some(signature.to_owned());
-                            } else if delta_type == "text_delta"
-                                && let Some(text) =
-                                    delta.and_then(|d| d.get("text")).and_then(Value::as_str)
-                                && let Some(AnthropicContentAccumulator::Text { text: existing }) =
-                                    content_block_accumulators.get_mut(&index)
-                            {
-                                if let Some(cb) = callbacks.and_then(|c| c.on_text_delta.as_ref()) {
-                                    cb(text);
-                                }
-                                existing.push_str(text);
-                            }
-
-                            if (delta_type == "input_json_delta"
-                                || matches!(
-                                    content_block_accumulators.get(&index),
-                                    Some(AnthropicContentAccumulator::ToolUse(_))
-                                ))
-                                && let Some(partial) = delta
-                                    .and_then(|d| d.get("partial_json"))
-                                    .and_then(Value::as_str)
-                                && let Some(AnthropicContentAccumulator::ToolUse(acc)) =
-                                    content_block_accumulators.get_mut(&index)
-                            {
-                                if let Some(cb) =
-                                    callbacks.and_then(|c| c.on_tool_call_delta.as_ref())
-                                {
-                                    cb(&acc.id, partial);
-                                }
-                                acc.partial_json.push_str(partial);
-                            }
-                        }
-                        "content_block_stop" => {}
-                        "message_delta" => {
-                            if let Some(delta_val) = event.get("delta")
-                                && let Some(reason) =
-                                    delta_val.get("stop_reason").and_then(Value::as_str)
-                            {
-                                reason.clone_into(&mut stop_reason);
-                            }
-                            if let Some(u) = event.get("usage") {
-                                let out =
-                                    u.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
-                                usage.output_tokens = out;
-                                if let Some(cb) = callbacks.and_then(|c| c.on_usage.as_ref()) {
-                                    cb(usage.input_tokens, out);
-                                }
-                            }
-                        }
-                        "message_stop" => {}
-                        _ => {}
-                    }
+                    // Bedrock does not return cache token counts.
+                    process_anthropic_event(
+                        &event,
+                        &mut content_block_accumulators,
+                        &mut usage,
+                        &mut stop_reason,
+                        &mut request_id,
+                        callbacks,
+                        /* extract_cache_tokens */ false,
+                    );
                 }
 
                 buffer.drain(..total_len);
@@ -1039,7 +674,6 @@ impl ProviderClient {
     ///
     /// Vertex AI Claude models use the Anthropic Messages API format with SSE
     /// streaming, identical to the direct Anthropic API.
-    #[allow(clippy::too_many_lines)]
     async fn complete_streaming_vertex(
         &self,
         provider: &ProviderConfig,
@@ -1137,7 +771,6 @@ impl ProviderClient {
         }
 
         // Parse the SSE response — Vertex uses the same Anthropic SSE event format.
-        // Reuse the same Anthropic SSE parsing logic.
         let mut content_block_accumulators: BTreeMap<usize, AnthropicContentAccumulator> =
             BTreeMap::new();
         let mut usage = UsageSummary::default();
@@ -1151,197 +784,17 @@ impl ProviderClient {
             let bytes = chunk.with_context(|| "failed to read Vertex streaming chunk")?;
             sse_buffer.push_str(&String::from_utf8_lossy(&bytes));
 
-            while let Some(event_end) = sse_buffer.find("\n\n") {
-                let event_text = sse_buffer[..event_end].to_owned();
-                sse_buffer = sse_buffer[event_end + 2..].to_owned();
-
-                for line in event_text.lines() {
-                    let Some(data) = line.strip_prefix("data: ") else {
-                        continue;
-                    };
-                    let data = data.trim();
-                    if data == "[DONE]" {
-                        continue;
-                    }
-
-                    let event: Value = match serde_json::from_str(data) {
-                        Ok(v) => v,
-                        Err(_) => continue,
-                    };
-
-                    let event_type = event.get("type").and_then(Value::as_str).unwrap_or("");
-
-                    match event_type {
-                        "message_start" => {
-                            if let Some(msg) = event.get("message") {
-                                if request_id.is_none() {
-                                    request_id = msg
-                                        .get("id")
-                                        .and_then(Value::as_str)
-                                        .map(ToOwned::to_owned);
-                                }
-                                if let Some(u) = msg.get("usage") {
-                                    let inp =
-                                        u.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
-                                    usage.input_tokens = inp;
-                                    if let Some(cb) = callbacks.and_then(|c| c.on_usage.as_ref()) {
-                                        cb(inp, 0);
-                                    }
-                                }
-                            }
-                        }
-                        "content_block_start" => {
-                            #[allow(clippy::cast_possible_truncation)]
-                            let index =
-                                event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
-                            let content_block = event.get("content_block");
-                            let block_type = content_block
-                                .and_then(|b| b.get("type"))
-                                .and_then(Value::as_str)
-                                .unwrap_or("");
-
-                            match block_type {
-                                "text" => {
-                                    let text = content_block
-                                        .and_then(|b| b.get("text"))
-                                        .and_then(Value::as_str)
-                                        .unwrap_or("")
-                                        .to_owned();
-                                    content_block_accumulators
-                                        .insert(index, AnthropicContentAccumulator::Text { text });
-                                }
-                                "thinking" => {
-                                    let thinking = content_block
-                                        .and_then(|b| b.get("thinking"))
-                                        .or_else(|| content_block.and_then(|b| b.get("text")))
-                                        .and_then(Value::as_str)
-                                        .unwrap_or("")
-                                        .to_owned();
-                                    let signature = content_block
-                                        .and_then(|b| b.get("signature"))
-                                        .and_then(Value::as_str)
-                                        .map(ToOwned::to_owned);
-                                    content_block_accumulators.insert(
-                                        index,
-                                        AnthropicContentAccumulator::Thinking {
-                                            thinking,
-                                            signature,
-                                        },
-                                    );
-                                }
-                                "tool_use" | "server_tool_use" => {
-                                    let id = content_block
-                                        .and_then(|b| b.get("id"))
-                                        .and_then(Value::as_str)
-                                        .unwrap_or("")
-                                        .to_owned();
-                                    let name = content_block
-                                        .and_then(|b| b.get("name"))
-                                        .and_then(Value::as_str)
-                                        .unwrap_or("")
-                                        .to_owned();
-                                    if let Some(cb) =
-                                        callbacks.and_then(|c| c.on_tool_call_start.as_ref())
-                                    {
-                                        cb(&id, &name);
-                                    }
-                                    content_block_accumulators.insert(
-                                        index,
-                                        AnthropicContentAccumulator::ToolUse(
-                                            AnthropicToolUseAccumulator {
-                                                block_type: block_type.to_owned(),
-                                                id,
-                                                name,
-                                                partial_json: String::new(),
-                                            },
-                                        ),
-                                    );
-                                }
-                                _ => {}
-                            }
-                        }
-                        "content_block_delta" => {
-                            #[allow(clippy::cast_possible_truncation)]
-                            let index =
-                                event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
-                            let delta = event.get("delta");
-                            let delta_type = delta
-                                .and_then(|d| d.get("type"))
-                                .and_then(Value::as_str)
-                                .unwrap_or("");
-
-                            if delta_type == "thinking_delta"
-                                && let Some(thinking) = delta
-                                    .and_then(|d| d.get("thinking"))
-                                    .and_then(Value::as_str)
-                                && let Some(AnthropicContentAccumulator::Thinking {
-                                    thinking: existing,
-                                    ..
-                                }) = content_block_accumulators.get_mut(&index)
-                            {
-                                existing.push_str(thinking);
-                            } else if delta_type == "signature_delta"
-                                && let Some(signature) = delta
-                                    .and_then(|d| d.get("signature"))
-                                    .and_then(Value::as_str)
-                                && let Some(AnthropicContentAccumulator::Thinking {
-                                    signature: existing,
-                                    ..
-                                }) = content_block_accumulators.get_mut(&index)
-                            {
-                                *existing = Some(signature.to_owned());
-                            } else if delta_type == "text_delta"
-                                && let Some(text) =
-                                    delta.and_then(|d| d.get("text")).and_then(Value::as_str)
-                                && let Some(AnthropicContentAccumulator::Text { text: existing }) =
-                                    content_block_accumulators.get_mut(&index)
-                            {
-                                if let Some(cb) = callbacks.and_then(|c| c.on_text_delta.as_ref()) {
-                                    cb(text);
-                                }
-                                existing.push_str(text);
-                            }
-
-                            if (delta_type == "input_json_delta"
-                                || matches!(
-                                    content_block_accumulators.get(&index),
-                                    Some(AnthropicContentAccumulator::ToolUse(_))
-                                ))
-                                && let Some(partial) = delta
-                                    .and_then(|d| d.get("partial_json"))
-                                    .and_then(Value::as_str)
-                                && let Some(AnthropicContentAccumulator::ToolUse(acc)) =
-                                    content_block_accumulators.get_mut(&index)
-                            {
-                                if let Some(cb) =
-                                    callbacks.and_then(|c| c.on_tool_call_delta.as_ref())
-                                {
-                                    cb(&acc.id, partial);
-                                }
-                                acc.partial_json.push_str(partial);
-                            }
-                        }
-                        "content_block_stop" => {}
-                        "message_delta" => {
-                            if let Some(delta_val) = event.get("delta")
-                                && let Some(reason) =
-                                    delta_val.get("stop_reason").and_then(Value::as_str)
-                            {
-                                reason.clone_into(&mut stop_reason);
-                            }
-                            if let Some(u) = event.get("usage") {
-                                let out =
-                                    u.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
-                                usage.output_tokens = out;
-                                if let Some(cb) = callbacks.and_then(|c| c.on_usage.as_ref()) {
-                                    cb(usage.input_tokens, out);
-                                }
-                            }
-                        }
-                        "message_stop" => {}
-                        _ => {}
-                    }
-                }
+            for event in parse_sse_events_from_buffer(&mut sse_buffer) {
+                // Vertex does not return cache token counts.
+                process_anthropic_event(
+                    &event,
+                    &mut content_block_accumulators,
+                    &mut usage,
+                    &mut stop_reason,
+                    &mut request_id,
+                    callbacks,
+                    /* extract_cache_tokens */ false,
+                );
             }
         }
 
@@ -1429,6 +882,235 @@ impl ProviderClient {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Shared Anthropic SSE event parsing
+// ---------------------------------------------------------------------------
+
+/// Extract all complete SSE events from a text buffer.
+///
+/// Splits the buffer on `\n\n` boundaries, strips `data: ` prefixes, skips
+/// `[DONE]` signals, and returns parsed JSON values.  The buffer is drained
+/// of all consumed bytes; incomplete trailing data is left for the next call.
+fn parse_sse_events_from_buffer(sse_buffer: &mut String) -> Vec<Value> {
+    let mut events = Vec::new();
+    while let Some(event_end) = sse_buffer.find("\n\n") {
+        let event_text = sse_buffer[..event_end].to_owned();
+        sse_buffer.replace_range(..event_end + 2, "");
+
+        for line in event_text.lines() {
+            let Some(data) = line.strip_prefix("data: ") else {
+                continue;
+            };
+            let data = data.trim();
+            if data == "[DONE]" {
+                continue;
+            }
+            if let Ok(event) = serde_json::from_str::<Value>(data) {
+                events.push(event);
+            }
+        }
+    }
+    events
+}
+
+/// Process a single Anthropic-format streaming event.
+///
+/// Handles all Anthropic SSE event types: `message_start`, `content_block_start`,
+/// `content_block_delta`, `content_block_stop`, `message_delta`, `message_stop`.
+///
+/// When `extract_cache_tokens` is `true`, cache-related usage fields
+/// (`cache_read_input_tokens`, `cache_creation_input_tokens`) are extracted
+/// from `message_start` events.  This is `true` for the direct Anthropic API
+/// and `false` for Bedrock / Vertex which do not return cache token counts.
+fn process_anthropic_event(
+    event: &Value,
+    content_block_accumulators: &mut BTreeMap<usize, AnthropicContentAccumulator>,
+    usage: &mut UsageSummary,
+    stop_reason: &mut String,
+    request_id: &mut Option<String>,
+    callbacks: Option<&StreamingCallbacks>,
+    extract_cache_tokens: bool,
+) {
+    let event_type = event.get("type").and_then(Value::as_str).unwrap_or("");
+
+    match event_type {
+        "message_start" => {
+            if let Some(msg) = event.get("message") {
+                if request_id.is_none() {
+                    *request_id = msg
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned);
+                }
+                if let Some(u) = msg.get("usage") {
+                    let inp = u.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
+                    usage.input_tokens = inp;
+                    if extract_cache_tokens {
+                        usage.cache_read_input_tokens = u
+                            .get("cache_read_input_tokens")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0);
+                        usage.cache_creation_input_tokens = u
+                            .get("cache_creation_input_tokens")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0);
+                    }
+                    if let Some(cb) = callbacks.and_then(|c| c.on_usage.as_ref()) {
+                        cb(inp, 0);
+                    }
+                }
+            }
+        }
+        "content_block_start" => {
+            #[allow(clippy::cast_possible_truncation)]
+            let index = event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+            let content_block = event.get("content_block");
+            let block_type = content_block
+                .and_then(|b| b.get("type"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+
+            match block_type {
+                "text" => {
+                    let text = content_block
+                        .and_then(|b| b.get("text"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned();
+                    content_block_accumulators
+                        .insert(index, AnthropicContentAccumulator::Text { text });
+                }
+                "thinking" => {
+                    let thinking = content_block
+                        .and_then(|b| b.get("thinking"))
+                        .or_else(|| content_block.and_then(|b| b.get("text")))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned();
+                    let signature = content_block
+                        .and_then(|b| b.get("signature"))
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned);
+                    content_block_accumulators.insert(
+                        index,
+                        AnthropicContentAccumulator::Thinking {
+                            thinking,
+                            signature,
+                        },
+                    );
+                }
+                "tool_use" | "server_tool_use" => {
+                    let id = content_block
+                        .and_then(|b| b.get("id"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned();
+                    let name = content_block
+                        .and_then(|b| b.get("name"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned();
+                    // Fire on_tool_call_start callback.
+                    if let Some(cb) = callbacks.and_then(|c| c.on_tool_call_start.as_ref()) {
+                        cb(&id, &name);
+                    }
+                    content_block_accumulators.insert(
+                        index,
+                        AnthropicContentAccumulator::ToolUse(AnthropicToolUseAccumulator {
+                            block_type: block_type.to_owned(),
+                            id,
+                            name,
+                            partial_json: String::new(),
+                        }),
+                    );
+                }
+                _ => {}
+            }
+        }
+        "content_block_delta" => {
+            #[allow(clippy::cast_possible_truncation)]
+            let index = event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+            let delta = event.get("delta");
+            let delta_type = delta
+                .and_then(|d| d.get("type"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+
+            if delta_type == "thinking_delta"
+                && let Some(thinking) = delta
+                    .and_then(|d| d.get("thinking"))
+                    .and_then(Value::as_str)
+                && let Some(AnthropicContentAccumulator::Thinking {
+                    thinking: existing,
+                    ..
+                }) = content_block_accumulators.get_mut(&index)
+            {
+                existing.push_str(thinking);
+            } else if delta_type == "signature_delta"
+                && let Some(signature) = delta
+                    .and_then(|d| d.get("signature"))
+                    .and_then(Value::as_str)
+                && let Some(AnthropicContentAccumulator::Thinking {
+                    signature: existing,
+                    ..
+                }) = content_block_accumulators.get_mut(&index)
+            {
+                *existing = Some(signature.to_owned());
+            } else if delta_type == "text_delta"
+                && let Some(text) =
+                    delta.and_then(|d| d.get("text")).and_then(Value::as_str)
+                && let Some(AnthropicContentAccumulator::Text { text: existing }) =
+                    content_block_accumulators.get_mut(&index)
+            {
+                // Fire on_text_delta callback.
+                if let Some(cb) = callbacks.and_then(|c| c.on_text_delta.as_ref()) {
+                    cb(text);
+                }
+                existing.push_str(text);
+            }
+
+            if (delta_type == "input_json_delta"
+                || matches!(
+                    content_block_accumulators.get(&index),
+                    Some(AnthropicContentAccumulator::ToolUse(_))
+                ))
+                && let Some(partial) = delta
+                    .and_then(|d| d.get("partial_json"))
+                    .and_then(Value::as_str)
+                && let Some(AnthropicContentAccumulator::ToolUse(acc)) =
+                    content_block_accumulators.get_mut(&index)
+            {
+                // Fire on_tool_call_delta callback.
+                if let Some(cb) = callbacks.and_then(|c| c.on_tool_call_delta.as_ref()) {
+                    cb(&acc.id, partial);
+                }
+                acc.partial_json.push_str(partial);
+            }
+        }
+        "content_block_stop" | "message_stop" => {}
+        "message_delta" => {
+            if let Some(delta_val) = event.get("delta")
+                && let Some(reason) = delta_val.get("stop_reason").and_then(Value::as_str)
+            {
+                reason.clone_into(stop_reason);
+            }
+            if let Some(u) = event.get("usage") {
+                let out = u.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
+                usage.output_tokens = out;
+                // Fire on_usage callback with final output token count.
+                if let Some(cb) = callbacks.and_then(|c| c.on_usage.as_ref()) {
+                    cb(usage.input_tokens, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 fn is_retryable_http_status(status: u16) -> bool {
     matches!(status, 408 | 429 | 500 | 502 | 503 | 504 | 529)
@@ -1703,7 +1385,8 @@ mod tests {
     use super::{
         AnthropicContentAccumulator, AnthropicToolUseAccumulator,
         finalize_anthropic_content_blocks, is_retryable_http_status, parse_bedrock_event_type,
-        should_fallback_after_streaming_error,
+        parse_sse_events_from_buffer, process_anthropic_event,
+        should_fallback_after_streaming_error, StreamingCallbacks, UsageSummary,
     };
 
     #[test]
@@ -1824,5 +1507,178 @@ mod tests {
         header_bytes.extend_from_slice(value);
 
         assert_eq!(parse_bedrock_event_type(&header_bytes), "");
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for the shared SSE parsing helpers
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn sse_buffer_parses_single_event() {
+        let mut buf = "data: {\"type\":\"message_start\"}\n\n".to_owned();
+        let events = parse_sse_events_from_buffer(&mut buf);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["type"], "message_start");
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn sse_buffer_skips_done_signal() {
+        let mut buf = "data: [DONE]\n\n".to_owned();
+        let events = parse_sse_events_from_buffer(&mut buf);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn sse_buffer_parses_multiple_events() {
+        let mut buf = "data: {\"type\":\"message_start\"}\n\ndata: {\"type\":\"message_stop\"}\n\n"
+            .to_owned();
+        let events = parse_sse_events_from_buffer(&mut buf);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["type"], "message_start");
+        assert_eq!(events[1]["type"], "message_stop");
+    }
+
+    #[test]
+    fn sse_buffer_preserves_incomplete_trailing_data() {
+        let mut buf = "data: {\"type\":\"message_start\"}\n\ndata: incom".to_owned();
+        let events = parse_sse_events_from_buffer(&mut buf);
+        assert_eq!(events.len(), 1);
+        assert_eq!(buf, "data: incom");
+    }
+
+    #[test]
+    fn sse_buffer_ignores_non_data_lines() {
+        let mut buf = "event: ping\ndata: {\"type\":\"message_start\"}\n\n".to_owned();
+        let events = parse_sse_events_from_buffer(&mut buf);
+        assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn process_anthropic_event_extracts_text_delta() {
+        let mut accumulators = BTreeMap::new();
+        accumulators.insert(0, AnthropicContentAccumulator::Text { text: String::new() });
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+
+        let event = json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": { "type": "text_delta", "text": "hello" }
+        });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            None::<&StreamingCallbacks>,
+            false,
+        );
+
+        if let Some(AnthropicContentAccumulator::Text { text }) = accumulators.get(&0) {
+            assert_eq!(text, "hello");
+        } else {
+            panic!("expected Text accumulator");
+        }
+    }
+
+    #[test]
+    fn process_anthropic_event_extracts_cache_tokens_when_enabled() {
+        let mut accumulators = BTreeMap::new();
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+
+        let event = json!({
+            "type": "message_start",
+            "message": {
+                "id": "msg-1",
+                "usage": {
+                    "input_tokens": 100,
+                    "cache_read_input_tokens": 50,
+                    "cache_creation_input_tokens": 25
+                }
+            }
+        });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            None::<&StreamingCallbacks>,
+            true,
+        );
+
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.cache_read_input_tokens, 50);
+        assert_eq!(usage.cache_creation_input_tokens, 25);
+        assert_eq!(request_id.as_deref(), Some("msg-1"));
+    }
+
+    #[test]
+    fn process_anthropic_event_skips_cache_tokens_when_disabled() {
+        let mut accumulators = BTreeMap::new();
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+
+        let event = json!({
+            "type": "message_start",
+            "message": {
+                "id": "msg-2",
+                "usage": {
+                    "input_tokens": 100,
+                    "cache_read_input_tokens": 50,
+                    "cache_creation_input_tokens": 25
+                }
+            }
+        });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            None::<&StreamingCallbacks>,
+            false,
+        );
+
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.cache_read_input_tokens, 0);
+        assert_eq!(usage.cache_creation_input_tokens, 0);
+    }
+
+    #[test]
+    fn process_anthropic_event_extracts_message_delta_stop_reason() {
+        let mut accumulators = BTreeMap::new();
+        let mut usage = UsageSummary::default();
+        usage.input_tokens = 100;
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+
+        let event = json!({
+            "type": "message_delta",
+            "delta": { "stop_reason": "tool_use" },
+            "usage": { "output_tokens": 42 }
+        });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            None::<&StreamingCallbacks>,
+            false,
+        );
+
+        assert_eq!(stop_reason, "tool_use");
+        assert_eq!(usage.output_tokens, 42);
     }
 }
