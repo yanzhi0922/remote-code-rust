@@ -894,8 +894,13 @@ fn normalize_existing_path(path: &Path) -> Result<PathBuf> {
 }
 
 fn path_identity(path: &Path) -> String {
-    let raw = path.to_string_lossy().replace('/', "\\");
-    let normalized = raw.trim_end_matches('\\').to_owned();
+    let raw = if cfg!(windows) {
+        path.to_string_lossy().replace('/', "\\")
+    } else {
+        path.to_string_lossy().into_owned()
+    };
+    let separator = if cfg!(windows) { '\\' } else { '/' };
+    let normalized = raw.trim_end_matches(separator).to_owned();
     if cfg!(windows) {
         normalized.to_ascii_lowercase()
     } else {
@@ -2905,13 +2910,14 @@ async fn run_gui_prompt(
         )?;
 
         if response.tool_calls.is_empty() {
-            let _elapsed_ms = started.elapsed().as_millis() as u64;
+            let elapsed_ms = started.elapsed().as_millis() as u64;
             store.append_named_event(
                 config.session_id,
                 "result",
                 serde_json::json!({
-                "is_error": false,
+                    "is_error": false,
                     "stop_reason": response.stop_reason,
+                    "elapsed_ms": elapsed_ms,
                     "usage": usage_to_dto(&usage),
                     "num_turns": turn + 1,
                 }),
@@ -3148,70 +3154,65 @@ async fn send_prompt(
 
     let sid = config.session_id.to_string();
 
-    // Reject if this session already has a running prompt.
-    {
-        let running = state.running_prompts.lock().await;
-        if running.contains_key(&sid) {
-            return Err("该会话已有正在运行的提示，请等待完成或取消后再试。".to_owned());
-        }
-    }
-
     let running_prompts = Arc::clone(&state.running_prompts);
     let sid_for_cleanup = sid.clone();
 
-    let handle = tokio::spawn(async move {
-        let backend = ProviderCompatBackend::new(Arc::clone(&provider), &config.provider);
-        let result = run_gui_prompt(
-            app.clone(),
-            config.clone(),
-            &backend,
-            session_store,
-            pending_permissions,
-            &prompt,
-        )
-        .await;
-
-        match result {
-            Ok(outcome) => {
-                let _ = app.emit(
-                    APP_EVENT_PROMPT_DONE,
-                    PromptDoneDto {
-                        session_id: config.session_id.to_string(),
-                        is_error: false,
-                        error: None,
-                        result: Some(PromptResultDto {
-                            session_id: config.session_id.to_string(),
-                            text: outcome.text,
-                            tool_calls: outcome.tool_calls.iter().map(tool_call_to_dto).collect(),
-                            usage: usage_to_dto(&outcome.usage),
-                            num_turns: outcome.num_turns,
-                            stop_reason: outcome.stop_reason,
-                        }),
-                    },
-                );
-            }
-            Err(error) => {
-                let _ = app.emit(
-                    APP_EVENT_PROMPT_DONE,
-                    PromptDoneDto {
-                        session_id: config.session_id.to_string(),
-                        is_error: true,
-                        error: Some(format!("{error:#}")),
-                        result: None,
-                    },
-                );
-            }
-        }
-
-        // Clean up the running-prompts map entry.
-        {
-            let mut running = running_prompts.lock().await;
-            running.remove(&sid_for_cleanup);
-        }
-    });
-
+    // Atomically check for duplicate and reserve the slot to prevent TOCTOU races.
     {
         let mut running = state.running_prompts.lock().await;
+        if running.contains_key(&sid) {
+            return Err("该会话已有正在运行的提示，请等待完成或取消后再试。".to_owned());
+        }
+        let handle = tokio::spawn(async move {
+            let backend = ProviderCompatBackend::new(Arc::clone(&provider), &config.provider);
+            let result = run_gui_prompt(
+                app.clone(),
+                config.clone(),
+                &backend,
+                session_store,
+                pending_permissions,
+                &prompt,
+            )
+            .await;
+
+            match result {
+                Ok(outcome) => {
+                    let _ = app.emit(
+                        APP_EVENT_PROMPT_DONE,
+                        PromptDoneDto {
+                            session_id: config.session_id.to_string(),
+                            is_error: false,
+                            error: None,
+                            result: Some(PromptResultDto {
+                                session_id: config.session_id.to_string(),
+                                text: outcome.text,
+                                tool_calls: outcome.tool_calls.iter().map(tool_call_to_dto).collect(),
+                                usage: usage_to_dto(&outcome.usage),
+                                num_turns: outcome.num_turns,
+                                stop_reason: outcome.stop_reason,
+                            }),
+                        },
+                    );
+                }
+                Err(error) => {
+                    let _ = app.emit(
+                        APP_EVENT_PROMPT_DONE,
+                        PromptDoneDto {
+                            session_id: config.session_id.to_string(),
+                            is_error: true,
+                            error: Some(format!("{error:#}")),
+                            result: None,
+                        },
+                    );
+                }
+            }
+
+            // Clean up the running-prompts map entry.
+            {
+                let mut running = running_prompts.lock().await;
+                running.remove(&sid_for_cleanup);
+            }
+        });
         running.insert(sid.clone(), handle);
     }
 
@@ -3696,10 +3697,21 @@ async fn delete_provider_config(
     state: State<'_, AppState>,
     name: String,
 ) -> std::result::Result<(), String> {
-    // Remove API key from OS keychain.
+    let mut runtime = state.runtime.lock().await;
+
+    // Verify the provider exists before deleting the keychain entry.
+    let exists = runtime
+        .provider_configs
+        .providers
+        .iter()
+        .any(|provider| provider.name == name);
+    if !exists {
+        return Err(format!("unknown provider config: {name}"));
+    }
+
+    // Remove API key from OS keychain only after confirming the provider exists.
     keyring_delete(&name);
 
-    let mut runtime = state.runtime.lock().await;
     let removed_active = runtime.provider_configs.active_provider.as_deref() == Some(name.as_str());
     runtime
         .provider_configs
