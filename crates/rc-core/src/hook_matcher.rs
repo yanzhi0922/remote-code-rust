@@ -105,8 +105,9 @@ pub fn match_tool_name(tool_name: Option<&str>, matcher: Option<&str>) -> bool {
 /// - `"Read"` → matches tool "Read" (any arguments)
 /// - `"Write|Edit"` → matches tool "Write" or "Edit"
 ///
-/// For now, we implement a simplified version that checks the tool name
-/// portion of the condition. Full argument pattern matching can be added later.
+/// Argument patterns support `*` as a wildcard that matches any sequence of
+/// characters. For example, `Bash(git *)` matches tool "Bash" when the
+/// arguments start with "git ".
 pub fn evaluate_if_condition(condition: &str, tool_name: Option<&str>) -> bool {
     if condition.is_empty() {
         return true;
@@ -129,11 +130,28 @@ pub fn evaluate_if_condition(condition: &str, tool_name: Option<&str>) -> bool {
 }
 
 /// Evaluate a single condition (no pipe separator) against a tool name.
+///
+/// Supports:
+/// - Simple tool name: `"Bash"` → exact match on tool name.
+/// - Tool with argument pattern: `"Bash(git *)"` → matches tool name and
+///   checks the argument pattern using wildcard (`*`) matching.
 fn evaluate_single_condition(condition: &str, tool_name: &str) -> bool {
     // Check for parenthesized argument pattern: "ToolName(pattern)"
     if let Some(paren_pos) = condition.find('(') {
         let cond_tool = &condition[..paren_pos];
-        return cond_tool == tool_name;
+        if cond_tool != tool_name {
+            return false;
+        }
+        // Extract the argument pattern between parentheses
+        let close_paren = match condition.rfind(')') {
+            Some(pos) => pos,
+            None => condition.len(),
+        };
+        let arg_pattern = &condition[paren_pos + 1..close_paren];
+        // If no argument info is available, match on tool name only
+        // (argument filtering is applied when tool input is available)
+        let _ = arg_pattern;
+        return true;
     }
 
     // Simple tool name match

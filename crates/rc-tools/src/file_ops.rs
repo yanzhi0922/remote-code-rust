@@ -712,6 +712,11 @@ mod tests {
                 plan_file_path: Some(self.plan_file_path.clone()),
             }
         }
+
+        fn persist_plan_snapshot(&self) -> Result<()> {
+            // Stub: no-op for tests
+            Ok(())
+        }
     }
 
     #[test]

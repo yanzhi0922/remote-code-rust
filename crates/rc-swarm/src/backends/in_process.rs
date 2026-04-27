@@ -109,11 +109,24 @@ impl PaneBackend for InProcessBackend {
         }
     }
 
-    async fn send_to_pane(&self, pane_id: &PaneId, _text: &str) -> SwarmResult<()> {
+    async fn send_to_pane(&self, pane_id: &PaneId, text: &str) -> SwarmResult<()> {
         let panes = self.panes.lock().await;
         if panes.contains_key(pane_id) {
-            // In-process: input is handled via channels in a real implementation.
-            Ok(())
+            // In-process panes do not have a stdin channel. Log the input
+            // and return an error so callers know the operation is unsupported.
+            tracing::warn!(
+                pane_id = %pane_id,
+                input_len = text.len(),
+                "send_to_pane called on in-process pane; input delivery is not supported. \
+                 Use channel-based communication for in-process teammates."
+            );
+            Err(SwarmError::InvalidPath(
+                format!(
+                    "in-process pane {pane_id} does not support send_to_pane; \
+                     use channel-based communication instead"
+                )
+                .into(),
+            ))
         } else {
             Err(SwarmError::InvalidPath(pane_id.clone().into()))
         }
@@ -250,16 +263,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_to_pane() {
+    async fn send_to_pane_returns_unsupported_error() {
         let backend = InProcessBackend::new();
         let result = backend
             .create_pane(&PaneConfig::new("w1", "/tmp", BackendType::InProcess))
             .await
             .expect("ok");
-        backend
+        let err = backend
             .send_to_pane(&result.pane_id, "hello")
             .await
-            .expect("should send");
+            .expect_err("send_to_pane should return error for in-process panes");
+        assert!(
+            err.to_string().contains("does not support send_to_pane"),
+            "error should explain in-process panes don't support send_to_pane: {err}"
+        );
     }
 
     #[tokio::test]

@@ -2151,6 +2151,11 @@ while True:
                 plan_file_path: Some(self.plan_file_path.clone()),
             }
         }
+
+        fn persist_plan_snapshot(&self) -> anyhow::Result<()> {
+            // Recording stub: no-op for tests
+            Ok(())
+        }
     }
 
     struct PlanModeRuntimeGuard;

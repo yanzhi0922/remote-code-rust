@@ -114,11 +114,13 @@ pub fn estimate_savings(messages: &[Message]) -> TokenSavings {
     }
 }
 
-/// Perform an API microcompact.
+/// Perform an API microcompact (simulation mode).
 ///
-/// In a full implementation this would call the model endpoint. Here we
-/// simulate the compaction by replacing old tool results with placeholders,
-/// which mirrors the real behaviour for testing purposes.
+/// **Note**: This is currently a simulation that replaces old tool results
+/// with short placeholders rather than calling the model endpoint. A full
+/// implementation would send messages to the configured LLM API for
+/// summarisation. Set `enable_real_api_microcompact` in the configuration
+/// to use the real API path when available.
 ///
 /// # Errors
 ///
@@ -133,6 +135,12 @@ pub fn api_microcompact(
     if config.model.is_empty() {
         anyhow::bail!("model must not be empty");
     }
+
+    tracing::warn!(
+        model = %config.model,
+        max_output_tokens = config.max_output_tokens,
+        "api_microcompact running in simulation mode — tool results are replaced with placeholders, not sent to an LLM API"
+    );
 
     let savings = estimate_savings(messages);
 

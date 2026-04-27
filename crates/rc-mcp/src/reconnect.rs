@@ -256,7 +256,9 @@ impl CircuitBreakerReconnect {
 
 impl ReconnectStrategy for CircuitBreakerReconnect {
     fn next_action(&self, attempt: u32) -> ReconnectAction {
-        // This is a simplified version; the per-server logic is in the state.
+        // Delegate to the generic attempt-based logic.
+        // Per-server state is tracked via record_success / record_failure /
+        // can_retry and consulted by the caller before invoking next_action.
         if attempt > self.max_total_attempts {
             ReconnectAction::GiveUp
         } else if attempt == 1 {
@@ -326,6 +328,41 @@ impl ReconnectStrategy for CircuitBreakerReconnect {
             .get(server_name)
             .map(|s| s.total_attempts)
             .unwrap_or(0)
+    }
+}
+
+impl CircuitBreakerReconnect {
+    /// Compute the next reconnect action for a specific server, taking its
+    /// per-server circuit breaker state into account.
+    ///
+    /// If the circuit for `server_name` is open and the cooldown has not
+    /// elapsed, returns [`ReconnectAction::WaitFor`] with the remaining
+    /// cooldown. If the circuit is half-open, returns
+    /// [`ReconnectAction::ConnectNow`] for a single probe attempt.
+    /// Otherwise falls back to the attempt-based logic from
+    /// [`ReconnectStrategy::next_action`].
+    pub fn next_action_for_server(&self, server_name: &str, attempt: u32) -> ReconnectAction {
+        if let Some(state) = self.states.get(server_name) {
+            if state.given_up {
+                return ReconnectAction::GiveUp;
+            }
+            if state.is_open() {
+                // Circuit is open — check cooldown
+                if let Some(opened_at) = state.opened_at {
+                    let elapsed = opened_at.elapsed();
+                    if elapsed < self.cooldown {
+                        return ReconnectAction::WaitFor(self.cooldown - elapsed);
+                    }
+                    // Cooldown elapsed — allow a half-open probe
+                    return ReconnectAction::ConnectNow;
+                }
+            }
+            if state.half_open {
+                return ReconnectAction::ConnectNow;
+            }
+        }
+        // No per-server state or circuit is closed — use generic logic
+        self.next_action(attempt)
     }
 }
 
