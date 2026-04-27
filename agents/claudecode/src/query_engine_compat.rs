@@ -3262,7 +3262,9 @@ mod tests {
         .await;
 
         let announced = announced_deferred_tool_names(&augmented);
-        assert!(announced.contains("todo_write"));
+        // Deferred tools delta uses provider wire names (e.g. "TodoWrite"),
+        // not internal tool names (e.g. "todo_write").
+        assert!(announced.contains("TodoWrite"));
         let marker = augmented
             .iter()
             .find_map(|entry| {
