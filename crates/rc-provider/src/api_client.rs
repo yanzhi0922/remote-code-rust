@@ -723,9 +723,13 @@ fn resolve_small_model(provider: &ProviderConfig) -> String {
     current.to_owned()
 }
 
+// ---------------------------------------------------------------------------
+
 /// Truncate a string for display in error messages.
+///
+/// Delegates to [`crate::truncate`] to avoid duplication.
 fn truncate(value: &str) -> String {
-    value.chars().take(240).collect()
+    crate::truncate(value)
 }
 
 // ---------------------------------------------------------------------------

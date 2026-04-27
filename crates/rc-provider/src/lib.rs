@@ -44,6 +44,7 @@ pub use retry::{RetryConfig, RetryContext};
 pub use streaming::StreamingCallbacks;
 
 use crate::model_info::get_model_info;
+use crate::retry::{is_retryable_http_status, is_retryable_transport_error};
 use anyhow::{Context, Result, anyhow};
 use rc_config::ProviderConfig;
 use rc_core::{
@@ -55,8 +56,7 @@ use rc_tools::{
 };
 use reqwest::Client;
 use reqwest::header::{
-    ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, RETRY_AFTER,
-    USER_AGENT,
+    ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, USER_AGENT,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -723,7 +723,7 @@ impl ProviderClient {
     }
 }
 
-fn maybe_dump_request_body(label: &str, body: &Value) {
+pub(crate) fn maybe_dump_request_body(label: &str, body: &Value) {
     let Ok(dir) = std::env::var("REMOTE_CODE_DUMP_PROVIDER_REQUEST_DIR") else {
         return;
     };
@@ -734,14 +734,6 @@ fn maybe_dump_request_body(label: &str, body: &Value) {
     if let Ok(bytes) = serde_json::to_vec_pretty(body) {
         let _ = std::fs::write(path, bytes);
     }
-}
-
-fn is_retryable_http_status(status: u16) -> bool {
-    matches!(status, 408 | 429 | 500 | 502 | 503 | 504 | 529)
-}
-
-fn is_retryable_transport_error(error: &reqwest::Error) -> bool {
-    error.is_timeout() || error.is_connect()
 }
 
 fn provider_for_request(
@@ -820,41 +812,18 @@ fn compute_retry_delay(
     attempt: u32,
     retry_after: Option<Duration>,
 ) -> Duration {
-    if let Some(retry_after) = retry_after {
-        return retry_after;
-    }
-    let multiplier = 2u64.saturating_pow(attempt.min(16));
-    let base_ms = provider
-        .retry_initial_backoff_ms
-        .saturating_mul(multiplier)
-        .min(provider.retry_max_backoff_ms)
-        .max(1);
-    // Add ±25% jitter to avoid thundering herd under concurrent retries.
-    // Uses a simple deterministic hash based on attempt + base_ms to avoid
-    // needing a full RNG while still providing sufficient variance.
-    let jitter_range = base_ms / 4;
-    let jitter_offset = if jitter_range > 0 {
-        // Deterministic pseudo-random: mix attempt counter with base delay.
-        let hash = (attempt as u64).wrapping_mul(2654435761) ^ base_ms;
-        hash % (2 * jitter_range)
-    } else {
-        0
+    let config = RetryConfig {
+        max_retries: provider.max_retries,
+        base_delay_ms: provider.retry_initial_backoff_ms,
+        max_backoff_ms: provider.retry_max_backoff_ms,
+        respect_retry_after: provider.respect_retry_after,
+        ..RetryConfig::default()
     };
-    let delay_ms = base_ms
-        .saturating_sub(jitter_range)
-        .saturating_add(jitter_offset);
-    Duration::from_millis(delay_ms.max(1))
+    crate::retry::compute_retry_delay(&config, attempt, retry_after)
 }
 
 fn parse_retry_after(headers: &HeaderMap, provider: &ProviderConfig) -> Option<Duration> {
-    if !provider.respect_retry_after {
-        return None;
-    }
-    headers
-        .get(RETRY_AFTER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .map(Duration::from_secs)
+    crate::retry::parse_retry_after(headers, provider.respect_retry_after)
 }
 
 /// Load a Google Cloud OAuth2 access token for Vertex AI.
@@ -1115,19 +1084,17 @@ fn claude_code_user_agent() -> String {
 }
 
 fn env_truthy(name: &str) -> bool {
-    env::var(name).ok().is_some_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
+    env::var(name)
+        .ok()
+        .as_ref()
+        .is_some_and(|v| is_env_truthy(v))
 }
 
 fn provider_looks_first_party_anthropic(provider: &ProviderConfig) -> bool {
     provider
         .base_url
         .as_deref()
-        .is_some_and(|url| url.contains("api.anthropic.com"))
+        .is_some_and(is_first_party_anthropic_base_url)
 }
 
 fn body_uses_global_prompt_cache_scope(body: Option<&Value>) -> bool {
@@ -2411,7 +2378,7 @@ fn mock_response(conversation: &[ConversationEntry]) -> ProviderResponse {
     }
 }
 
-fn truncate(value: &str) -> String {
+pub(crate) fn truncate(value: &str) -> String {
     value.chars().take(240).collect()
 }
 
