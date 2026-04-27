@@ -13,6 +13,13 @@ use rc_core::{ConversationEntry, ProviderResponse};
 
 use crate::ProviderClient;
 
+/// Which provider operation to perform inside the failover loop.
+#[derive(Clone, Copy)]
+enum FailoverOp {
+    Complete,
+    CompleteStreaming,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct FailoverStats {
     pub attempts: HashMap<String, usize>,
@@ -65,37 +72,7 @@ impl FailoverProviderClient {
     /// # Panics
     /// Panics if the internal `active_index` mutex is poisoned.
     pub async fn complete(&self, conversation: &[ConversationEntry]) -> Result<ProviderResponse> {
-        let max_attempts = self
-            .config
-            .max_failover_attempts
-            .min(self.config.providers.len());
-        let start_index = *self.active_index.lock().unwrap_or_else(|e| e.into_inner());
-
-        let mut last_error: Option<anyhow::Error> = None;
-        for attempt in 0..max_attempts {
-            let provider_index = (start_index + attempt) % self.config.providers.len();
-            let provider = &self.config.providers[provider_index];
-
-            self.record_attempt(&provider.name);
-
-            match self.client.complete(provider, conversation).await {
-                Ok(response) => {
-                    self.mark_healthy(provider_index);
-                    return Ok(response);
-                }
-                Err(error) => {
-                    self.record_failure(&provider.name);
-                    if self.should_failover(&error) && attempt + 1 < max_attempts {
-                        self.record_failover_event();
-                        last_error = Some(error);
-                        continue;
-                    }
-                    return Err(error);
-                }
-            }
-        }
-
-        Err(last_error.unwrap_or_else(|| anyhow!("all failover providers exhausted")))
+        self.try_with_failover(FailoverOp::Complete, conversation).await
     }
 
     /// # Errors
@@ -105,6 +82,20 @@ impl FailoverProviderClient {
     /// Panics if the internal `active_index` mutex is poisoned.
     pub async fn complete_streaming(
         &self,
+        conversation: &[ConversationEntry],
+    ) -> Result<ProviderResponse> {
+        self.try_with_failover(FailoverOp::CompleteStreaming, conversation).await
+    }
+
+    /// Generic failover loop: iterate over providers starting from the active
+    /// index, dispatch `op` for each, and switch to the next provider on
+    /// transient failures.
+    ///
+    /// # Panics
+    /// Panics if the internal `active_index` mutex is poisoned.
+    async fn try_with_failover(
+        &self,
+        op: FailoverOp,
         conversation: &[ConversationEntry],
     ) -> Result<ProviderResponse> {
         let max_attempts = self
@@ -120,7 +111,14 @@ impl FailoverProviderClient {
 
             self.record_attempt(&provider.name);
 
-            match self.client.complete_streaming(provider, conversation).await {
+            let result = match op {
+                FailoverOp::Complete => self.client.complete(provider, conversation).await,
+                FailoverOp::CompleteStreaming => {
+                    self.client.complete_streaming(provider, conversation).await
+                }
+            };
+
+            match result {
                 Ok(response) => {
                     self.mark_healthy(provider_index);
                     return Ok(response);
