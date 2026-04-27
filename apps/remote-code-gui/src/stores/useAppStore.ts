@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import type {
+  AgentTypeInfo,
+  AgentType,
   BatchProgressInfo,
   ConversationEntry,
   ContextCompactedInfo,
@@ -149,6 +151,9 @@ interface AppState {
 
   pendingPermission: PermissionRequestInfo | null;
 
+  availableAgents: AgentTypeInfo[];
+  activeAgentType: AgentType | null;
+
   init: () => Promise<void>;
   refreshSessions: () => Promise<void>;
   loadArchivedSessions: () => Promise<void>;
@@ -173,6 +178,8 @@ interface AppState {
   setActiveProvider: (name: string) => Promise<void>;
   switchProfile: (providerName: string, profileName: string | null) => Promise<void>;
   resolvePermission: (resolution: boolean | tauri.PermissionResolutionRequest) => Promise<void>;
+  loadAgents: () => Promise<void>;
+  selectAgent: (agentType: AgentType | null) => void;
 }
 
 async function registerEventListeners() {
@@ -358,6 +365,14 @@ async function registerEventListeners() {
     tauri.onRuntimeStatus((event) => {
       useAppStore.setState({ runtimeStatus: event.payload });
     }),
+    tauri.onAgentStatusChanged((event) => {
+      const { agentType, newStatus } = event.payload;
+      useAppStore.setState((state) => ({
+        availableAgents: state.availableAgents.map((agent) =>
+          agent.agentType === agentType ? { ...agent, status: newStatus } : agent,
+        ),
+      }));
+    }),
   ]);
 }
 
@@ -391,6 +406,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   settingsLoading: false,
   providerConfigs: null,
   pendingPermission: null,
+  availableAgents: [],
+  activeAgentType: null,
 
   init: async () => {
     try {
@@ -413,6 +430,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         get().loadSettings(),
         get().loadProviderConfigs(),
         get().refreshRuntimeStatus(),
+        get().loadAgents(),
       ]);
 
       if (get().activeSessionId) {
@@ -484,7 +502,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!effectiveProjectPath) {
       throw new Error('请先选择项目文件夹，再新建会话。');
     }
-    const sessionId = await tauri.createSession(title, effectiveProjectPath);
+    const { activeAgentType } = get();
+    const sessionId = await tauri.createSession(title, effectiveProjectPath, activeAgentType ?? undefined);
     set({
       activeSessionId: sessionId,
       activeProjectPath: effectiveProjectPath,
@@ -724,5 +743,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       typeof resolution === 'boolean' ? { allowed: resolution } : resolution,
     );
     set({ pendingPermission: null });
+  },
+
+  loadAgents: async () => {
+    try {
+      const availableAgents = await tauri.listAvailableAgents();
+      set({ availableAgents });
+    } catch {
+      // Ignore non-fatal agent list refresh failures.
+    }
+  },
+
+  selectAgent: (agentType: AgentType | null) => {
+    set({ activeAgentType: agentType });
   },
 }));
