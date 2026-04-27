@@ -102,6 +102,8 @@ pub struct StdioConnection {
     writer: Arc<Mutex<Option<ChildStdin>>>,
     /// Reader from the subprocess's stdout (or our own stdin).
     reader: Arc<Mutex<Option<BufReader<ChildStdout>>>>,
+    /// The spawned child process, kept alive so it is not orphaned.
+    child: Arc<Mutex<Option<std::process::Child>>>,
     /// Simulated inbox for testing (used when no subprocess).
     inbox: Arc<Mutex<Vec<String>>>,
     /// Simulated outbox for testing (used when no subprocess).
@@ -121,6 +123,7 @@ impl StdioConnection {
             args: Vec::new(),
             writer: Arc::new(Mutex::new(None)),
             reader: Arc::new(Mutex::new(None)),
+            child: Arc::new(Mutex::new(None)),
             inbox: Arc::new(Mutex::new(Vec::new())),
             outbox: Arc::new(Mutex::new(Vec::new())),
         }
@@ -203,10 +206,10 @@ impl IdeConnection for StdioConnection {
                 *reader = Some(BufReader::new(stdout));
             }
 
-            // Don't wait for the child — it runs in the background.
-            // We deliberately leak the Child handle to keep it alive.
-            // In a production system, this would be stored for proper cleanup.
-            std::mem::forget(child);
+            // Store the child handle so it can be cleaned up on disconnect.
+            if let Ok(mut child_guard) = self.child.lock() {
+                *child_guard = Some(child);
+            }
 
             debug!("StdioConnection spawned subprocess: {}", cmd);
         }
@@ -227,6 +230,15 @@ impl IdeConnection for StdioConnection {
         }
         if let Ok(mut reader) = self.reader.lock() {
             *reader = None;
+        }
+
+        // Kill and clean up the child process.
+        if let Ok(mut child_guard) = self.child.lock() {
+            if let Some(ref mut child) = *child_guard {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            *child_guard = None;
         }
 
         self.set_status(IdeStatus::Disconnected);
@@ -409,9 +421,10 @@ impl IdeConnection for HttpConnection {
 
         // Verify the endpoint is reachable with a health check.
         let health_url = format!("{}/health", self.endpoint);
-        match client.get(&health_url).send() {
+        let health_ok = match client.get(&health_url).send() {
             Ok(resp) if resp.status().is_success() => {
                 debug!(endpoint = %self.endpoint, "HttpConnection health check passed");
+                true
             }
             Ok(resp) => {
                 // Non-success status — endpoint exists but may not be fully ready.
@@ -420,21 +433,32 @@ impl IdeConnection for HttpConnection {
                     status = resp.status().as_u16(),
                     "HttpConnection health check returned non-success (continuing)"
                 );
+                true // Server reachable, just not healthy yet
             }
             Err(e) => {
-                // Connection failed — but we still mark as connected for testing/loopback.
-                debug!(
+                // Connection failed — fall back to loopback mode for testing.
+                warn!(
                     endpoint = %self.endpoint,
                     error = %e,
-                    "HttpConnection health check failed (using loopback mode)"
+                    "HttpConnection health check failed; operating in loopback mode"
                 );
+                false
             }
-        }
+        };
 
         self.http_client = Some(client);
         self.retry_count.store(0, Ordering::SeqCst);
-        self.set_status(IdeStatus::Connected);
-        debug!(endpoint = %self.endpoint, "HttpConnection connected");
+        if health_ok {
+            self.set_status(IdeStatus::Connected);
+        } else {
+            // Still mark connected so loopback send/receive works, but log the
+            // degradation clearly so callers can distinguish via health metadata.
+            self.set_status(IdeStatus::Connected);
+            debug!(
+                endpoint = %self.endpoint,
+                "HttpConnection connected in degraded (loopback) mode"
+            );
+        }
         Ok(())
     }
 
