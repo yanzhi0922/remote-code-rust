@@ -36,6 +36,12 @@ pub fn to_remote_path(local_path: &str) -> String {
                 ""
             };
             let rest_unix = rest.replace('\\', "/");
+            // For drive-only paths (e.g. "C:"), produce "/c/" with a trailing
+            // slash so that `to_local_path` can unambiguously recognise it as
+            // a Windows drive path and not confuse it with a Unix path like "/a".
+            if rest_unix.is_empty() {
+                return format!("/{letter}/");
+            }
             return format!("/{letter}{rest_unix}");
         }
     }
@@ -47,9 +53,11 @@ pub fn to_remote_path(local_path: &str) -> String {
 /// Convert a remote-code path to a local IDE path.
 ///
 /// - `/c/Users/foo/bar.rs` → `C:\Users\foo\bar.rs` (on Windows)
+/// - `/c/` → `C:` (drive-only path with trailing slash)
 /// - `/home/foo/bar.rs` → `/home/foo/bar.rs` (on Unix)
 pub fn to_local_path(remote_path: &str) -> String {
-    // Check for Unix-style Windows drive path: /c/...
+    // Check for Unix-style Windows drive path: /X/...
+    // Requires len >= 3 so that "/a" (a Unix path) is NOT treated as a drive.
     if remote_path.starts_with('/') && remote_path.len() >= 3 {
         let chars: Vec<char> = remote_path.chars().collect();
         if chars.len() >= 3 && chars[0] == '/' && chars[2] == '/' {
@@ -63,7 +71,7 @@ pub fn to_local_path(remote_path: &str) -> String {
         }
     }
 
-    // Return as-is for Unix paths.
+    // Return as-is for Unix paths like /home/... or short paths like /a.
     remote_path.to_string()
 }
 
@@ -188,7 +196,24 @@ mod tests {
 
     #[test]
     fn remote_drive_only() {
-        assert_eq!(to_remote_path("C:"), "/c");
+        // Drive-only paths get a trailing slash to disambiguate from Unix paths.
+        assert_eq!(to_remote_path("C:"), "/c/");
+    }
+
+    #[test]
+    fn local_drive_only() {
+        // Drive-only remote path ("/c/") converts back to Windows drive root.
+        assert_eq!(to_local_path("/c/"), r"C:\");
+    }
+
+    #[test]
+    fn roundtrip_drive_only() {
+        // "C:\" roundtrips cleanly: "C:\" → "/c/" → "C:\"
+        let original = r"C:\";
+        let remote = to_remote_path(original);
+        assert_eq!(remote, "/c/");
+        let back = to_local_path(&remote);
+        assert_eq!(back, original);
     }
 
     #[test]

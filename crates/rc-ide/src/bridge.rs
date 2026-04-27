@@ -287,7 +287,9 @@ impl IdeBridge {
     /// Serializes the action as a JSON-RPC request, assigns a unique ID,
     /// enqueues the payload, and checks for a previously stored response
     /// with the matching ID (set via [`Self::handle_response`]).
-    /// If no response is available yet, returns an empty success response.
+    /// If no response is available yet, returns a pending response
+    /// (`success: false` with a descriptive message) so callers can
+    /// distinguish "no response yet" from a genuine success.
     pub fn request_action(&self, action: &IdeAction) -> anyhow::Result<IdeResponse> {
         if !self.is_connected() {
             warn!("Attempted to request action while disconnected");
@@ -322,10 +324,11 @@ impl IdeBridge {
             return Ok(response);
         }
 
-        // No response yet — the caller should use `handle_response` when
-        // the transport delivers the reply, then call this method again or
-        // poll `take_response(id)`.
-        Ok(IdeResponse::ok_empty())
+        // No response yet — return a pending indicator so callers can
+        // distinguish "awaiting response" from a genuine empty success.
+        // Use `take_response(id)` or `handle_response` to collect the
+        // actual reply when the transport delivers it.
+        Ok(IdeResponse::fail("response pending — not yet received from IDE"))
     }
 
     /// Serialize an action request and return the JSON-RPC envelope.
@@ -457,7 +460,7 @@ mod tests {
     }
 
     #[test]
-    fn request_action_when_connected() {
+    fn request_action_when_connected_returns_pending() {
         let bridge = IdeBridge::new(test_config());
         bridge.connect().expect("connect");
         let action = IdeAction::new(
@@ -465,7 +468,9 @@ mod tests {
             serde_json::json!({"path": "/tmp/a.rs"}),
         );
         let response = bridge.request_action(&action).expect("request");
-        assert!(response.success);
+        // Without a pre-stored response, the bridge returns a pending indicator.
+        assert!(!response.success);
+        assert!(response.data.as_ref().unwrap().as_str().unwrap().contains("pending"));
     }
 
     #[test]
