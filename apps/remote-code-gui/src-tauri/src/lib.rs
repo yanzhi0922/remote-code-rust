@@ -4260,9 +4260,7 @@ fn agent_binary_name(agent_type: &ProtocolAgentType) -> String {
 fn agent_binary_path(agent_type: &ProtocolAgentType) -> Option<PathBuf> {
     if matches!(agent_type, ProtocolAgentType::RemoteCode) {
         // RemoteCode is built-in — always available.
-        return Some(PathBuf::from(
-            std::env::current_exe().unwrap_or_default(),
-        ));
+        return Some(std::env::current_exe().unwrap_or_default());
     }
 
     let binary_name = agent_binary_name(agent_type);
