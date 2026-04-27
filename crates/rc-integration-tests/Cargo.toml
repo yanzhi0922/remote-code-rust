@@ -25,6 +25,7 @@ rc-system-prompt = { path = "../rc-system-prompt" }
 rc-tools = { path = "../rc-tools" }
 rc-mcp = { path = "../rc-mcp" }
 rc-agents = { path = "../rc-agents" }
+rc-agent-protocol = { path = "../rc-agent-protocol" }
 rc-swarm = { path = "../rc-swarm" }
 rc-transcript = { path = "../rc-transcript" }
 rc-config = { path = "../rc-config" }
