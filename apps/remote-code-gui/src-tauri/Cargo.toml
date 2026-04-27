@@ -36,6 +36,7 @@ rc-mcp = { path = "../../../crates/rc-mcp" }
 rc-plugins = { path = "../../../crates/rc-plugins" }
 rc-skills = { path = "../../../crates/rc-skills" }
 rc-agent-protocol = { path = "../../../crates/rc-agent-protocol" }
+rc-voice = { path = "../../../crates/rc-voice" }
 reqwest = { workspace = true }
 
 [dev-dependencies]

@@ -360,3 +360,12 @@ export function onAgentStatusChanged(
 ): Promise<UnlistenFn> {
   return listen<AgentStatusChangedInfo>('gui://agent-status-changed', callback);
 }
+
+// ── Voice / STT APIs ────────────────────────────────────────────────
+
+export function transcribeAudio(
+  audioData: number[],
+  mimeType: string,
+): Promise<string> {
+  return invoke<string>('transcribe_audio', { audioData, mimeType });
+}

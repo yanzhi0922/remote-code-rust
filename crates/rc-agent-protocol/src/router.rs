@@ -138,6 +138,23 @@ impl AgentRouter {
     pub fn has_session(&self, session_id: &str) -> bool {
         self.adapters.contains_key(session_id)
     }
+
+    /// Returns `true` if the adapter for the given session is alive and responsive.
+    pub fn is_adapter_alive(&self, session_id: &str) -> bool {
+        self.adapters
+            .get(session_id)
+            .map(|adapter| adapter.is_alive())
+            .unwrap_or(false)
+    }
+
+    /// Returns all session IDs whose adapter matches the given agent type.
+    pub fn session_ids_by_type(&self, agent_type: AgentType) -> Vec<String> {
+        self.adapters
+            .iter()
+            .filter(|(_, adapter)| adapter.agent_type() == agent_type)
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
 }
 
 impl Default for AgentRouter {
