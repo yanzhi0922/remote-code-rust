@@ -148,13 +148,24 @@ pub fn find_first_match<'a>(profiles: &'a [String], substring: &str) -> Option<&
 
 // ── Bedrock model ID construction ────────────────────────────────────────
 
+/// Returns `true` when `canonical_id` ends with a date suffix (`-YYYYMMDD`).
+fn has_date_suffix(canonical_id: &str) -> bool {
+    let len = canonical_id.len();
+    if len < 9 {
+        return false;
+    }
+    let suffix_start = len - 8;
+    canonical_id.as_bytes().get(suffix_start - 1) == Some(&b'-')
+        && canonical_id[suffix_start..].bytes().all(|b| b.is_ascii_digit())
+}
+
 /// Build a Bedrock model ID from a canonical first-party ID, optionally with
 /// a region prefix.
 pub fn build_bedrock_model_id(
     canonical_id: &str,
     region_prefix: Option<BedrockRegionPrefix>,
 ) -> String {
-    let base = if canonical_id.contains("2025") || canonical_id.contains("2024") {
+    let base = if has_date_suffix(canonical_id) {
         format!("anthropic.{}-v1:0", canonical_id)
     } else {
         format!("anthropic.{}-v1", canonical_id)

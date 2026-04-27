@@ -233,18 +233,20 @@ fn default_capabilities() -> ModelCapabilities {
 /// prefix for table lookup.
 fn canonicalise_for_lookup(model_id: &str) -> String {
     let lower = model_id.to_lowercase();
-    // Remove common Bedrock / Vertex prefixes
-    let lower = lower
+    // Remove common Bedrock cross-region inference prefixes
+    let stripped = lower
         .strip_prefix("us.anthropic.")
-        .unwrap_or(&lower)
-        .to_owned();
-    // Remove `-v1:0` or `-v1` suffix (Bedrock)
+        .or_else(|| lower.strip_prefix("eu.anthropic."))
+        .or_else(|| lower.strip_prefix("apac.anthropic."))
+        .or_else(|| lower.strip_prefix("global.anthropic."))
+        .unwrap_or(&lower);
 
-    lower
+    // Remove `-v1:0` or `-v1` suffix (Bedrock)
+    stripped
         .strip_suffix("-v1:0")
-        .unwrap_or(&lower)
+        .unwrap_or(stripped)
         .strip_suffix("-v1")
-        .unwrap_or(&lower)
+        .unwrap_or(stripped)
         .to_owned()
 }
 
