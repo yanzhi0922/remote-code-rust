@@ -23,7 +23,11 @@ use std::time::Duration;
 
 use crate::{
     ProviderClient, build_anthropic_request_body, build_headers, build_openai_request_body,
-    prepare_anthropic_request_surface, provider_for_request,
+    maybe_dump_request_body, prepare_anthropic_request_surface, provider_for_request,
+};
+use crate::retry::{
+    RetryConfig, is_retryable_http_status, is_retryable_transport_error,
+    compute_retry_delay as retry_compute_retry_delay, parse_retry_after as retry_parse_retry_after,
 };
 
 // ---------------------------------------------------------------------------
@@ -822,7 +826,7 @@ impl ProviderClient {
     ) -> Result<reqwest::Response> {
         let mut attempt = 0u32;
         loop {
-            maybe_dump_streaming_request_body(label, body);
+            maybe_dump_request_body(label, body);
             let response = self
                 .http
                 .post(base_url)
@@ -1112,9 +1116,6 @@ fn process_anthropic_event(
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn is_retryable_http_status(status: u16) -> bool {
-    matches!(status, 408 | 429 | 500 | 502 | 503 | 504 | 529)
-}
 
 /// Parse the `:event-type` header value from a Bedrock event stream header block.
 ///
@@ -1179,19 +1180,6 @@ fn parse_bedrock_event_type(header_bytes: &[u8]) -> String {
     String::new()
 }
 
-fn maybe_dump_streaming_request_body(label: &str, body: &Value) {
-    let Ok(dir) = std::env::var("REMOTE_CODE_DUMP_PROVIDER_REQUEST_DIR") else {
-        return;
-    };
-    let dir = std::path::PathBuf::from(dir);
-    let _ = std::fs::create_dir_all(&dir);
-    let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
-    let path = dir.join(format!("{timestamp}-{label}.json"));
-    if let Ok(bytes) = serde_json::to_vec_pretty(body) {
-        let _ = std::fs::write(path, bytes);
-    }
-}
-
 fn wrap_streaming_callbacks(
     callbacks: Option<StreamingCallbacks>,
     streamed_tool_activity: Arc<AtomicBool>,
@@ -1242,38 +1230,26 @@ fn should_fallback_after_streaming_error(
     is_streaming_error && !streamed_tool_activity
 }
 
-fn is_retryable_transport_error(error: &reqwest::Error) -> bool {
-    error.is_timeout() || error.is_connect()
-}
-
 fn compute_retry_delay(
     provider: &ProviderConfig,
     attempt: u32,
     retry_after: Option<Duration>,
 ) -> Duration {
-    if let Some(retry_after) = retry_after {
-        return retry_after;
-    }
-    let multiplier = 2u64.saturating_pow(attempt.min(16));
-    let delay_ms = provider
-        .retry_initial_backoff_ms
-        .saturating_mul(multiplier)
-        .min(provider.retry_max_backoff_ms);
-    Duration::from_millis(delay_ms.max(1))
+    let config = RetryConfig {
+        max_retries: provider.max_retries,
+        base_delay_ms: provider.retry_initial_backoff_ms,
+        max_backoff_ms: provider.retry_max_backoff_ms,
+        respect_retry_after: provider.respect_retry_after,
+        ..RetryConfig::default()
+    };
+    retry_compute_retry_delay(&config, attempt, retry_after)
 }
 
 fn parse_retry_after(
     headers: &reqwest::header::HeaderMap,
     provider: &ProviderConfig,
 ) -> Option<Duration> {
-    if !provider.respect_retry_after {
-        return None;
-    }
-    headers
-        .get(reqwest::header::RETRY_AFTER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .map(Duration::from_secs)
+    retry_parse_retry_after(headers, provider.respect_retry_after)
 }
 
 #[derive(Default)]

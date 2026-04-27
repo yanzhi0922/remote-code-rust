@@ -130,7 +130,7 @@ impl RetryConfig {
 
 /// Classify an HTTP status code as retryable or not.
 #[must_use]
-pub fn is_retryable_status(status: u16) -> bool {
+pub fn is_retryable_http_status(status: u16) -> bool {
     matches!(status, 408 | 429 | 500 | 502 | 503 | 504 | 529)
 }
 
@@ -256,6 +256,25 @@ pub fn compute_retry_delay(
         .saturating_sub(jitter_range)
         .saturating_add(jitter_offset);
     Duration::from_millis(delay_ms.max(1))
+}
+
+/// Parse the `Retry-After` header from HTTP response headers.
+///
+/// Returns `None` if `respect_retry_after` is false or the header is
+/// missing / not a valid integer (seconds).
+#[must_use]
+pub fn parse_retry_after(
+    headers: &reqwest::header::HeaderMap,
+    respect_retry_after: bool,
+) -> Option<Duration> {
+    if !respect_retry_after {
+        return None;
+    }
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
 }
 
 // ---------------------------------------------------------------------------
@@ -412,7 +431,7 @@ where
                     return Ok((status, body));
                 }
 
-                if is_retryable_status(status) && attempt < config.max_retries {
+                if is_retryable_http_status(status) && attempt < config.max_retries {
                     let delay = compute_retry_delay(config, attempt, None);
                     warn!(
                         attempt = attempt + 1,
@@ -480,15 +499,15 @@ mod tests {
     }
 
     #[test]
-    fn is_retryable_status_classifies_correctly() {
-        assert!(is_retryable_status(429));
-        assert!(is_retryable_status(500));
-        assert!(is_retryable_status(503));
-        assert!(is_retryable_status(529));
-        assert!(!is_retryable_status(200));
-        assert!(!is_retryable_status(401));
-        assert!(!is_retryable_status(403));
-        assert!(!is_retryable_status(404));
+    fn is_retryable_http_status_classifies_correctly() {
+        assert!(is_retryable_http_status(429));
+        assert!(is_retryable_http_status(500));
+        assert!(is_retryable_http_status(503));
+        assert!(is_retryable_http_status(529));
+        assert!(!is_retryable_http_status(200));
+        assert!(!is_retryable_http_status(401));
+        assert!(!is_retryable_http_status(403));
+        assert!(!is_retryable_http_status(404));
     }
 
     #[tokio::test]
