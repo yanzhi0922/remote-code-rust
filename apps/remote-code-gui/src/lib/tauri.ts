@@ -1,6 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type EventCallback, type UnlistenFn } from '@tauri-apps/api/event';
 import type {
+  AgentStatusChangedInfo,
+  AgentTypeInfo,
+  AgentType,
   BatchProgressInfo,
   ConfigScope,
   ConversationEntry,
@@ -56,10 +59,11 @@ export function getSessionTasks(sessionId: string): Promise<SessionSubtask[]> {
   return invoke<SessionSubtask[]>('get_session_tasks', { sessionId });
 }
 
-export function createSession(title?: string, projectPath?: string): Promise<string> {
+export function createSession(title?: string, projectPath?: string, agentType?: AgentType): Promise<string> {
   return invoke<string>('create_session', {
     title: title ?? null,
     projectPath: projectPath ?? null,
+    agentType: agentType ?? null,
   });
 }
 
@@ -335,4 +339,24 @@ export function onRuntimeStatus(
   callback: EventCallback<RuntimeStatusInfo>,
 ): Promise<UnlistenFn> {
   return listen<RuntimeStatusInfo>('gui://runtime-status', callback);
+}
+
+// ── Multi-Agent APIs ────────────────────────────────────────────────
+
+export function listAvailableAgents(): Promise<AgentTypeInfo[]> {
+  return invoke<AgentTypeInfo[]>('list_available_agents');
+}
+
+export function installAgent(agentType: AgentType): Promise<void> {
+  return invoke<void>('install_agent', { agentType });
+}
+
+export function uninstallAgent(agentType: AgentType): Promise<void> {
+  return invoke<void>('uninstall_agent', { agentType });
+}
+
+export function onAgentStatusChanged(
+  callback: EventCallback<AgentStatusChangedInfo>,
+): Promise<UnlistenFn> {
+  return listen<AgentStatusChangedInfo>('gui://agent-status-changed', callback);
 }

@@ -628,3 +628,25 @@ export interface MemoryUsageData {
   heapUsed: number;
   status: MemoryStatus;
 }
+
+// ── Multi-Agent ──────────────────────────────────────────────────────
+
+/** Agent 类型 */
+export type AgentType = 'remote_code' | 'roo_code' | 'codex';
+
+/** Agent 类型信息 */
+export interface AgentTypeInfo {
+  agentType: AgentType;
+  displayName: string;
+  description: string;
+  capabilities: string[];
+  installed: boolean;
+  status: string;
+}
+
+/** Agent 状态变化事件 */
+export interface AgentStatusChangedInfo {
+  agentType: AgentType;
+  oldStatus: string;
+  newStatus: string;
+}

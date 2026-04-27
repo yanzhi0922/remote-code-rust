@@ -1,5 +1,6 @@
 import { ChevronDown, Cpu, MessageSquareText, Send, Shield, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { AgentSelector } from '../agent/AgentSelector';
 import { useAppStore } from '../../stores/useAppStore';
 
 const PERMISSION_MODES = [
@@ -78,9 +79,12 @@ export function ChatInput() {
   const settings = useAppStore((state) => state.settings);
   const provider = useAppStore((state) => state.provider);
   const providerConfigs = useAppStore((state) => state.providerConfigs);
+  const availableAgents = useAppStore((state) => state.availableAgents);
+  const activeAgentType = useAppStore((state) => state.activeAgentType);
   const sendMessage = useAppStore((state) => state.sendMessage);
   const updateSettings = useAppStore((state) => state.updateSettings);
   const setActiveProvider = useAppStore((state) => state.setActiveProvider);
+  const selectAgent = useAppStore((state) => state.selectAgent);
 
   useEffect(() => {
     const element = textAreaRef.current;
@@ -170,6 +174,12 @@ export function ChatInput() {
 
           <div className="border-t border-[#f1ece3] px-4 pb-3 pt-3">
             <div className="flex flex-wrap items-center gap-2">
+              <AgentSelector
+                availableAgents={availableAgents}
+                activeAgentType={activeAgentType}
+                onSelect={selectAgent}
+              />
+
               <Dropdown
                 open={openMenu === 'provider'}
                 onToggle={() => setOpenMenu((state) => (state === 'provider' ? null : 'provider'))}
