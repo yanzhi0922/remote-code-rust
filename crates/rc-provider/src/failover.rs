@@ -210,12 +210,30 @@ impl FailoverProviderClient {
 
 fn extract_status_from_error(error: &anyhow::Error) -> Option<u16> {
     let msg = error.to_string();
-    let prefix = "provider request failed (";
-    if let Some(start) = msg.find(prefix) {
-        let rest = &msg[start + prefix.len()..];
-        if let Some(end) = rest.find(')') {
-            return rest[..end].parse::<u16>().ok();
+
+    // Pattern 1: "provider request failed (STATUS): ..."
+    let prefixes = ["provider request failed (", "request failed (", "HTTP "];
+    for prefix in &prefixes {
+        if let Some(start) = msg.find(prefix) {
+            let rest = &msg[start + prefix.len()..];
+            if let Some(end) = rest.find(|c: char| !c.is_ascii_digit()) {
+                if end > 0 {
+                    return rest[..end].parse::<u16>().ok();
+                }
+            } else if !rest.is_empty() {
+                return rest.parse::<u16>().ok();
+            }
         }
     }
+
+    // Pattern 2: try to extract from reqwest::Error in the cause chain.
+    for cause in error.chain() {
+        if let Some(reqwest_err) = cause.downcast_ref::<reqwest::Error>()
+            && let Some(status) = reqwest_err.status()
+        {
+            return Some(status.as_u16());
+        }
+    }
+
     None
 }

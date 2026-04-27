@@ -24,40 +24,54 @@ use rc_core::{ConversationEntry, ConversationRole};
 // TokenEstimator
 // ---------------------------------------------------------------------------
 
-/// Rough token estimator based on character count.
+/// Rough token estimator based on character count with CJK awareness.
 ///
 /// The estimation is deliberately conservative: it uses a lower
 /// chars-per-token ratio so that the budget is consumed faster, reducing the
 /// risk of hitting the real model limit.
+///
+/// CJK characters typically tokenize at ~1.5 chars/token while ASCII text
+/// tokenizes at ~4.0 chars/token. This estimator classifies each character
+/// and applies the appropriate ratio.
 #[derive(Debug, Clone)]
 pub struct TokenEstimator {
-    /// Average characters per token (English ≈ 4.0, Chinese ≈ 2.0).
-    /// We default to 2.5 which is a safe middle ground.
-    chars_per_token: f64,
+    /// Average characters per token for ASCII/Latin text.
+    ascii_chars_per_token: f64,
+    /// Average characters per token for CJK text.
+    cjk_chars_per_token: f64,
 }
 
 impl TokenEstimator {
-    /// Create a new estimator with the default chars-per-token ratio.
+    /// Create a new estimator with default chars-per-token ratios.
     #[must_use]
     pub fn new() -> Self {
         Self {
-            chars_per_token: 2.5,
+            ascii_chars_per_token: 4.0,
+            cjk_chars_per_token: 1.5,
         }
     }
 
     /// Roughly estimate the number of tokens in `text`.
     ///
-    /// The heuristic treats every character (including whitespace) as a
-    /// potential token fraction. For mixed English / Chinese text this gives a
-    /// reasonable upper bound.
+    /// Classifies characters into CJK and non-CJK buckets, then applies the
+    /// appropriate chars-per-token ratio to each bucket separately.
     #[must_use]
     pub fn estimate(&self, text: &str) -> u64 {
         if text.is_empty() {
             return 0;
         }
-        // Count characters (not bytes) so CJK characters are counted individually.
-        let char_count = text.chars().count() as f64;
-        (char_count / self.chars_per_token).ceil() as u64
+        let mut ascii_chars: f64 = 0.0;
+        let mut cjk_chars: f64 = 0.0;
+        for ch in text.chars() {
+            if is_cjk_code_point(ch) {
+                cjk_chars += 1.0;
+            } else {
+                ascii_chars += 1.0;
+            }
+        }
+        let ascii_tokens = ascii_chars / self.ascii_chars_per_token;
+        let cjk_tokens = cjk_chars / self.cjk_chars_per_token;
+        (ascii_tokens + cjk_tokens).ceil() as u64
     }
 
     /// Estimate the token count of a single [`ConversationEntry`].
@@ -88,6 +102,32 @@ impl Default for TokenEstimator {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Check whether a Unicode code point falls within CJK (Chinese/Japanese/Korean) ranges.
+///
+/// Covers CJK Unified Ideographs, Hiragana, Katakana, Hangul, and common
+/// CJK punctuation / compatibility ranges.
+fn is_cjk_code_point(ch: char) -> bool {
+    let cp = ch as u32;
+    // CJK Unified Ideographs
+    (0x4E00..=0x9FFF).contains(&cp)
+    // CJK Unified Ideographs Extension A
+    || (0x3400..=0x4DBF).contains(&cp)
+    // CJK Unified Ideographs Extension B
+    || (0x20000..=0x2A6DF).contains(&cp)
+    // CJK Compatibility Ideographs
+    || (0xF900..=0xFAFF).contains(&cp)
+    // Hiragana
+    || (0x3040..=0x309F).contains(&cp)
+    // Katakana
+    || (0x30A0..=0x30FF).contains(&cp)
+    // Hangul Syllables
+    || (0xAC00..=0xD7AF).contains(&cp)
+    // CJK Symbols and Punctuation
+    || (0x3000..=0x303F).contains(&cp)
+    // Fullwidth forms
+    || (0xFF00..=0xFFEF).contains(&cp)
 }
 
 // ---------------------------------------------------------------------------
@@ -979,8 +1019,8 @@ mod tests {
     fn context_window_detects_overflow() {
         let mgr = ContextWindowManager::new(100, 20);
         // Budget = 80 tokens. We need >80% of 80 = 64 tokens to trigger.
-        // Build a conversation with enough text to exceed that.
-        let long_text = "a".repeat(200); // 200 chars / 2.5 = 80 tokens
+        // ASCII chars use ~4.0 chars/token, so 300 chars ≈ 75 tokens > 64.
+        let long_text = "a".repeat(300);
         let conv = vec![
             ConversationEntry::system("short"),
             ConversationEntry::user(long_text),

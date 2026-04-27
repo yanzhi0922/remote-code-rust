@@ -102,10 +102,15 @@ fn adjust_thinking_budget(body: &mut Value, capped_max_tokens: u64) {
         if budget >= capped_max_tokens {
             // Must be at least 1 less than max_tokens.
             let adjusted = capped_max_tokens.saturating_sub(1);
-            *thinking = serde_json::json!({
-                "type": "enabled",
-                "budget_tokens": adjusted,
-            });
+            // Only update budget_tokens, preserving other fields in the thinking object.
+            if let Some(obj) = thinking.as_object_mut() {
+                obj.insert("budget_tokens".to_owned(), serde_json::json!(adjusted));
+            } else {
+                *thinking = serde_json::json!({
+                    "type": "enabled",
+                    "budget_tokens": adjusted,
+                });
+            }
         }
     }
 }

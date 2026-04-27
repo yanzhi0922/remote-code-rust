@@ -2206,8 +2206,20 @@ fn parse_openai_response(status: u16, raw_text: String) -> Result<ProviderRespon
                 .get("completion_tokens")
                 .and_then(Value::as_u64)
                 .unwrap_or_default(),
-            cache_read_input_tokens: 0,
-            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: usage
+                .get("cached_tokens")
+                .or_else(|| {
+                    usage
+                        .get("prompt_tokens_details")
+                        .and_then(|d| d.get("cached_tokens"))
+                })
+                .and_then(Value::as_u64)
+                .unwrap_or_default(),
+            cache_creation_input_tokens: usage
+                .get("prompt_tokens_details")
+                .and_then(|d| d.get("all_cached_tokens"))
+                .and_then(Value::as_u64)
+                .unwrap_or_default(),
         },
         stop_reason: payload
             .get("choices")
@@ -2504,9 +2516,13 @@ fn add_stable_cache_control(body: &mut Value, is_resume: bool) {
     }
 
     // 4. Resume scenario: tool list must remain identical to avoid cache invalidation.
-    //    The `is_resume` flag is recorded here for future use; currently the tool list
-    //    is always the full builtin set, which is inherently stable.
-    let _ = is_resume;
+    //    Currently the tool list is always the full builtin set, which is inherently stable.
+    //    When is_resume is true, we skip tool reordering above to preserve cache hits.
+    if is_resume {
+        tracing::debug!(
+            "add_stable_cache_control: resume mode — tool list kept as-is for cache stability"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
