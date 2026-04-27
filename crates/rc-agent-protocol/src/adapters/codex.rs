@@ -254,14 +254,17 @@ pub struct CodexAdapter {
     process: Option<Child>,
     /// Buffered stdin writer for sending NDJSON lines.
     stdin_writer: Option<tokio::io::BufWriter<ChildStdin>>,
-    /// Buffered stdout reader (taken by background reader on `send_message`).
-    stdout_reader: Option<tokio::io::BufReader<ChildStdout>>,
     /// Monotonic request ID counter.
     next_request_id: AtomicU64,
-    /// Event channel sender — the background reader pushes events here.
-    event_tx: Option<mpsc::Sender<UnifiedAgentEvent>>,
+    /// Shared event sender — the background reader pushes events here.
+    /// Swapped on each `send_message` call to provide a fresh receiver.
+    event_tx: Arc<tokio::sync::Mutex<mpsc::Sender<UnifiedAgentEvent>>>,
+    /// Shared pending-request map for routing JSON-RPC responses.
+    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<serde_json::Value>>>>,
     /// Current Codex session ID (set during `start` handshake).
     current_session_id: Option<String>,
+    /// Background reader task handle.
+    reader_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl CodexAdapter {
@@ -274,6 +277,8 @@ impl CodexAdapter {
         capabilities.insert(AgentCapability::Subtasks);
         capabilities.insert(AgentCapability::Permissions);
 
+        let (event_tx, _) = mpsc::channel(256);
+
         Self {
             info: AgentInfo {
                 name: "OpenAI Codex".into(),
@@ -285,10 +290,11 @@ impl CodexAdapter {
             config: None,
             process: None,
             stdin_writer: None,
-            stdout_reader: None,
             next_request_id: AtomicU64::new(1),
-            event_tx: None,
+            event_tx: Arc::new(tokio::sync::Mutex::new(event_tx)),
+            pending: Arc::new(Mutex::new(HashMap::new())),
             current_session_id: None,
+            reader_handle: None,
         }
     }
 
@@ -368,23 +374,18 @@ impl CodexAdapter {
         Ok(())
     }
 
-    /// Spawn the background reader task that continuously reads NDJSON lines
-    /// from the child's stdout and dispatches them to pending request
-    /// channels or the event stream.
-    fn spawn_reader(
-        &mut self,
+    /// Spawn the background reader task that persists for the adapter's
+    /// lifetime, reading NDJSON lines from the child's stdout.
+    ///
+    /// Events are sent through a shared sender that can be swapped on each
+    /// `send_message` call, enabling multi-turn conversations without
+    /// re-spawning the reader.
+    fn spawn_background_reader(
+        stdout: tokio::io::BufReader<ChildStdout>,
+        event_tx: Arc<tokio::sync::Mutex<mpsc::Sender<UnifiedAgentEvent>>>,
         pending: Arc<Mutex<HashMap<u64, oneshot::Sender<serde_json::Value>>>>,
-    ) -> anyhow::Result<mpsc::Receiver<UnifiedAgentEvent>> {
-        let stdout = self
-            .stdout_reader
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("no stdout available"))?;
-
-        let (event_tx, event_rx) = mpsc::channel::<UnifiedAgentEvent>(256);
-        self.event_tx = Some(event_tx.clone());
-
-        let session_id = self.current_session_id.clone().unwrap_or_default();
-
+        session_id: String,
+    ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut reader = stdout;
             loop {
@@ -416,9 +417,10 @@ impl CodexAdapter {
                                 .unwrap_or(serde_json::Value::Null);
                             let rpc_id = msg["id"].as_u64().unwrap_or(0);
 
+                            let tx = event_tx.lock().await;
                             if let Some(event) =
                                 map_codex_request(method, &params, rpc_id, &session_id)
-                                && event_tx.send(event).await.is_err()
+                                && tx.send(event).await.is_err()
                             {
                                 debug!("event channel closed, stopping reader");
                                 break;
@@ -432,9 +434,10 @@ impl CodexAdapter {
                                 .cloned()
                                 .unwrap_or(serde_json::Value::Null);
 
+                            let tx = event_tx.lock().await;
                             if let Some(event) =
                                 map_codex_notification(method, &params, &session_id)
-                                && event_tx.send(event).await.is_err()
+                                && tx.send(event).await.is_err()
                             {
                                 debug!("event channel closed, stopping reader");
                                 break;
@@ -449,9 +452,7 @@ impl CodexAdapter {
                     }
                 }
             }
-        });
-
-        Ok(event_rx)
+        })
     }
 }
 
@@ -499,9 +500,11 @@ impl AgentAdapter for CodexAdapter {
 
         self.process = Some(child);
         self.stdin_writer = Some(tokio::io::BufWriter::new(stdin));
-        self.stdout_reader = Some(tokio::io::BufReader::new(stdout));
         self.status = AgentStatus::Starting;
         self.config = Some(config.clone());
+
+        // Perform handshake using a local buffered reader.
+        let mut stdout_reader = tokio::io::BufReader::new(stdout);
 
         // ── session/create handshake ──
 
@@ -523,7 +526,7 @@ impl AgentAdapter for CodexAdapter {
         NdjsonCodec::write_line(self.stdin_writer.as_mut().expect("stdin"), &request).await?;
 
         // Read session/create response directly (before background reader).
-        let response = NdjsonCodec::read_line(self.stdout_reader.as_mut().expect("stdout")).await?;
+        let response = NdjsonCodec::read_line(&mut stdout_reader).await?;
 
         if let Some(err) = response.get("error") {
             anyhow::bail!(
@@ -542,6 +545,17 @@ impl AgentAdapter for CodexAdapter {
             .to_owned();
 
         self.current_session_id = Some(session_id);
+
+        // Spawn the persistent background reader.  It reads from stdout for
+        // the entire lifetime of the adapter, routing events through a shared
+        // sender that `send_message` swaps on each call.
+        self.reader_handle = Some(Self::spawn_background_reader(
+            stdout_reader,
+            self.event_tx.clone(),
+            self.pending.clone(),
+            self.current_session_id.clone().unwrap_or_default(),
+        ));
+
         self.status = AgentStatus::Ready;
         self.info.status = AgentStatus::Ready;
 
@@ -565,12 +579,13 @@ impl AgentAdapter for CodexAdapter {
         self.status = AgentStatus::Busy;
         self.info.status = AgentStatus::Busy;
 
-        // Shared pending-requests map for the background reader.
-        let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<serde_json::Value>>>> =
-            Arc::new(Mutex::new(HashMap::new()));
-
-        // Spawn the background reader for this session.
-        let event_rx = self.spawn_reader(pending)?;
+        // Create a fresh event channel and swap the shared sender so that
+        // the persistent background reader routes new events here.
+        let (new_tx, new_rx) = mpsc::channel(256);
+        {
+            let mut guard = self.event_tx.lock().await;
+            *guard = new_tx;
+        }
 
         // Send task/create — events arrive as Codex notifications.
         let params = serde_json::json!({
@@ -579,7 +594,7 @@ impl AgentAdapter for CodexAdapter {
         });
         self.send_notification("task/create", params).await?;
 
-        Ok(event_rx)
+        Ok(new_rx)
     }
 
     async fn cancel(&mut self, _session_id: &str) -> anyhow::Result<()> {
@@ -618,6 +633,11 @@ impl AgentAdapter for CodexAdapter {
     async fn stop(&mut self) -> anyhow::Result<()> {
         info!("CodexAdapter stopping");
 
+        // Abort the background reader task.
+        if let Some(handle) = self.reader_handle.take() {
+            handle.abort();
+        }
+
         // Try to send session/delete.
         if self.stdin_writer.is_some() {
             let _ = self
@@ -643,8 +663,6 @@ impl AgentAdapter for CodexAdapter {
 
         self.process = None;
         self.stdin_writer = None;
-        self.stdout_reader = None;
-        self.event_tx = None;
         self.status = AgentStatus::Stopped;
         self.info.status = AgentStatus::Stopped;
         Ok(())

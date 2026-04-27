@@ -16,6 +16,7 @@
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -252,6 +253,10 @@ pub fn map_notification(
 ///
 /// Launches the Roo Code binary configured in [`AgentConfig::binary_path`]
 /// and communicates over stdio using JSON-RPC 2.0 with Content-Length framing.
+///
+/// The background reader task is spawned once during [`start`](AgentAdapter::start)
+/// and persists for the adapter's lifetime, enabling multiple `send_message` calls
+/// without re-spawning the reader.
 pub struct RooCodeAdapter {
     /// Static agent metadata.
     info: AgentInfo,
@@ -261,14 +266,17 @@ pub struct RooCodeAdapter {
     process: Option<Child>,
     /// Stdin pipe for writing to the child.
     stdin: Option<ChildStdin>,
-    /// Stdout buffered reader for reading framed messages.
-    stdout: Option<tokio::io::BufReader<ChildStdout>>,
     /// Monotonic request ID counter.
     next_request_id: AtomicU64,
-    /// Event channel sender — the background reader pushes events here.
-    event_tx: Option<mpsc::Sender<UnifiedAgentEvent>>,
+    /// Shared event sender — the background reader pushes events here.
+    /// Swapped on each `send_message` call to provide a fresh receiver.
+    event_tx: Arc<tokio::sync::Mutex<mpsc::Sender<UnifiedAgentEvent>>>,
+    /// Shared pending-request map for routing JSON-RPC responses.
+    pending: Arc<std::sync::Mutex<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>>,
     /// Current session ID (set on `send_message`).
     current_session_id: Option<String>,
+    /// Background reader task handle.
+    reader_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl RooCodeAdapter {
@@ -282,6 +290,8 @@ impl RooCodeAdapter {
         capabilities.insert(AgentCapability::Subtasks);
         capabilities.insert(AgentCapability::Permissions);
 
+        let (event_tx, _) = mpsc::channel(256);
+
         Self {
             info: AgentInfo {
                 name: "Roo Code".into(),
@@ -292,10 +302,11 @@ impl RooCodeAdapter {
             status: AgentStatus::Starting,
             process: None,
             stdin: None,
-            stdout: None,
             next_request_id: AtomicU64::new(1),
-            event_tx: None,
+            event_tx: Arc::new(tokio::sync::Mutex::new(event_tx)),
+            pending: Arc::new(std::sync::Mutex::new(HashMap::new())),
             current_session_id: None,
+            reader_handle: None,
         }
     }
 
@@ -327,23 +338,18 @@ impl RooCodeAdapter {
         Ok(())
     }
 
-    /// Spawn the background reader task that reads framed messages from
-    /// the child's stdout and dispatches them to pending requests or the
-    /// event channel.
-    fn spawn_reader(
-        &mut self,
-        pending: std::sync::Arc<std::sync::Mutex<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>>,
-    ) -> anyhow::Result<mpsc::Receiver<UnifiedAgentEvent>> {
-        let stdout = self
-            .stdout
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("no stdout available"))?;
-
-        let (event_tx, event_rx) = mpsc::channel::<UnifiedAgentEvent>(256);
-        self.event_tx = Some(event_tx.clone());
-
-        let session_id = self.current_session_id.clone().unwrap_or_default();
-
+    /// Spawn the background reader task that persists for the adapter's
+    /// lifetime, reading framed messages from the child's stdout.
+    ///
+    /// Events are sent through a shared sender that can be swapped on each
+    /// `send_message` call, enabling multi-turn conversations without
+    /// re-spawning the reader.
+    fn spawn_background_reader(
+        stdout: tokio::io::BufReader<ChildStdout>,
+        event_tx: Arc<tokio::sync::Mutex<mpsc::Sender<UnifiedAgentEvent>>>,
+        pending: Arc<std::sync::Mutex<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>>,
+        session_id: String,
+    ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut reader = stdout;
             loop {
@@ -393,11 +399,13 @@ impl RooCodeAdapter {
                                     }
                                 };
 
+                            // Lock the shared event sender and send.
+                            let tx = event_tx.lock().await;
                             if let Some(event) = map_notification(
                                 &notification.method,
                                 &notification.params,
                                 &session_id,
-                            ) && event_tx.send(event).await.is_err()
+                            ) && tx.send(event).await.is_err()
                             {
                                 debug!("event channel closed, stopping reader");
                                 break;
@@ -412,9 +420,7 @@ impl RooCodeAdapter {
                     }
                 }
             }
-        });
-
-        Ok(event_rx)
+        })
     }
 }
 
@@ -464,8 +470,10 @@ impl AgentAdapter for RooCodeAdapter {
 
         self.process = Some(child);
         self.stdin = Some(stdin);
-        self.stdout = Some(tokio::io::BufReader::new(stdout));
         self.status = AgentStatus::Starting;
+
+        // Perform handshake using a local buffered reader.
+        let mut stdout_reader = tokio::io::BufReader::new(stdout);
 
         // Send `initialize` request — build payload first to avoid borrow conflicts.
         let id = self.next_id();
@@ -489,7 +497,7 @@ impl AgentAdapter for RooCodeAdapter {
         write_framed(self.stdin.as_mut().expect("stdin"), &payload).await?;
 
         // Read initialize response directly (before background reader).
-        let body = read_framed(self.stdout.as_mut().expect("stdout")).await?;
+        let body = read_framed(&mut stdout_reader).await?;
         let response: JsonRpcResponse = serde_json::from_str(&body)?;
 
         if let Some(err) = response.error {
@@ -511,6 +519,17 @@ impl AgentAdapter for RooCodeAdapter {
         let payload = serde_json::to_string(&initialized)?;
         write_framed(self.stdin.as_mut().expect("stdin"), &payload).await?;
 
+        // Spawn the persistent background reader.  It reads from stdout for
+        // the entire lifetime of the adapter, routing events through a shared
+        // sender that `send_message` swaps on each call.
+        let session_id = self.current_session_id.clone().unwrap_or_default();
+        self.reader_handle = Some(Self::spawn_background_reader(
+            stdout_reader,
+            self.event_tx.clone(),
+            self.pending.clone(),
+            session_id,
+        ));
+
         self.status = AgentStatus::Ready;
         self.info.status = AgentStatus::Ready;
         info!("RooCodeAdapter ready");
@@ -530,13 +549,13 @@ impl AgentAdapter for RooCodeAdapter {
         self.status = AgentStatus::Busy;
         self.info.status = AgentStatus::Busy;
 
-        // Shared pending-requests map for the background reader.
-        let pending: std::sync::Arc<
-            std::sync::Mutex<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>,
-        > = std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()));
-
-        // Spawn the background reader for this session.
-        let event_rx = self.spawn_reader(pending)?;
+        // Create a fresh event channel and swap the shared sender so that
+        // the persistent background reader routes new events here.
+        let (new_tx, new_rx) = mpsc::channel(256);
+        {
+            let mut guard = self.event_tx.lock().await;
+            *guard = new_tx;
+        }
 
         // Send the `roo/sendMessage` notification — events arrive as
         // roo/* notifications, not as a single JSON-RPC response.
@@ -546,7 +565,7 @@ impl AgentAdapter for RooCodeAdapter {
         });
         self.send_notification("roo/sendMessage", params).await?;
 
-        Ok(event_rx)
+        Ok(new_rx)
     }
 
     async fn cancel(&mut self, _session_id: &str) -> anyhow::Result<()> {
@@ -597,6 +616,11 @@ impl AgentAdapter for RooCodeAdapter {
     async fn stop(&mut self) -> anyhow::Result<()> {
         info!("RooCodeAdapter stopping");
 
+        // Abort the background reader task.
+        if let Some(handle) = self.reader_handle.take() {
+            handle.abort();
+        }
+
         // Try to send a shutdown notification.
         if self.stdin.is_some() {
             let _ = self
@@ -622,8 +646,6 @@ impl AgentAdapter for RooCodeAdapter {
 
         self.process = None;
         self.stdin = None;
-        self.stdout = None;
-        self.event_tx = None;
         self.status = AgentStatus::Stopped;
         self.info.status = AgentStatus::Stopped;
         Ok(())
