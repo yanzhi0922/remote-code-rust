@@ -20,6 +20,8 @@ use rc_session::session_memory::{
 };
 
 use crate::engine::create_compact_boundary_message;
+use crate::estimate_message_tokens;
+use crate::estimate_single_message_tokens;
 use crate::prompt::{build_compact_user_summary_message, rough_token_count};
 use crate::strategy::{
     CompactOptions, CompactProgressEvent, CompactStrategy, CompactStrategyType, CompactionResult,
@@ -213,7 +215,7 @@ fn create_compaction_result_from_session_memory(
     session_memory: &str,
     messages_to_keep: Vec<Message>,
 ) -> CompactionResult {
-    let pre_compact_token_count = estimate_messages_tokens(messages);
+    let pre_compact_token_count = estimate_message_tokens(messages);
     let boundary_marker = create_compact_boundary_message(
         "auto",
         pre_compact_token_count,
@@ -232,7 +234,7 @@ fn create_compaction_result_from_session_memory(
     });
 
     let post_compact_token_count =
-        rough_token_count(&summary_text) + estimate_messages_tokens(&messages_to_keep);
+        rough_token_count(&summary_text) + estimate_message_tokens(&messages_to_keep);
     let tokens_saved = pre_compact_token_count.saturating_sub(post_compact_token_count);
     let messages_removed = messages.len().saturating_sub(messages_to_keep.len());
 
@@ -277,7 +279,7 @@ fn calculate_messages_to_keep_index(
     }
 
     let mut start_index = last_summarized_index.saturating_add(1).min(messages.len());
-    let mut total_tokens = estimate_messages_tokens(&messages[start_index..]);
+    let mut total_tokens = estimate_message_tokens(&messages[start_index..]);
     let mut text_block_message_count = messages[start_index..]
         .iter()
         .filter(|message| has_text_blocks(message))
@@ -429,30 +431,6 @@ fn is_compact_boundary_message(message: &Message) -> bool {
     )
 }
 
-fn estimate_messages_tokens(messages: &[Message]) -> u64 {
-    messages.iter().map(estimate_single_message_tokens).sum()
-}
-
-fn estimate_single_message_tokens(message: &Message) -> u64 {
-    match message {
-        Message::User(message) => rough_token_count(&message.text),
-        Message::Assistant(message) => rough_token_count(&message.text),
-        Message::System(message) => rough_token_count(&message.text),
-        Message::Progress(message) => rough_token_count(&message.status),
-        Message::Attachment(message) => {
-            let mut tokens = message.label.as_deref().map_or(0, rough_token_count);
-            for attachment in &message.attachments {
-                tokens += rough_token_count(&attachment.data);
-            }
-            tokens
-        }
-        Message::HookResult(message) => rough_token_count(&message.output),
-        Message::ToolUseSummary(message) => rough_token_count(&message.summary),
-        Message::Tombstone(message) => rough_token_count(&message.summary),
-        Message::GroupedToolUse(message) => message.summary.as_deref().map_or(0, rough_token_count),
-        Message::CollapsedReadSearch(message) => rough_token_count(&message.summary),
-    }
-}
 
 #[cfg(test)]
 mod tests {

@@ -6,7 +6,7 @@
 use rc_core::Message;
 
 use crate::engine::compact_conversation;
-use crate::prompt::rough_token_count;
+use crate::estimate_message_tokens;
 use crate::strategy::{
     CompactOptions, CompactStrategy, CompactStrategyType, CompactionResult, ProgressCallback,
     SummaryProvider,
@@ -193,7 +193,7 @@ pub fn should_auto_compact(
     tracking: &AutoCompactTrackingState,
 ) -> bool {
     let strategy = AutoCompactStrategy::new(context_window_size);
-    let token_usage = estimate_messages_tokens(messages);
+    let token_usage = estimate_message_tokens(messages);
     strategy.should_auto_compact(token_usage, tracking)
 }
 
@@ -208,7 +208,7 @@ pub async fn auto_compact(
     tracking: &mut AutoCompactTrackingState,
 ) -> Result<Option<CompactionResult>, anyhow::Error> {
     let strategy = AutoCompactStrategy::new(context_window_size);
-    let token_usage = estimate_messages_tokens(messages);
+    let token_usage = estimate_message_tokens(messages);
 
     if !strategy.should_auto_compact(token_usage, tracking) {
         return Ok(None);
@@ -227,39 +227,6 @@ pub async fn auto_compact(
     }
 }
 
-/// Rough token estimation for a slice of messages.
-///
-/// Each message is estimated via [`rough_token_count`] which already includes
-/// a conservative 4/3 padding factor, so no additional padding is applied here.
-fn estimate_messages_tokens(messages: &[Message]) -> u64 {
-    let mut total: u64 = 0;
-    for msg in messages {
-        total += estimate_single_message_tokens(msg);
-    }
-    total
-}
-
-/// Estimate tokens for a single message.
-fn estimate_single_message_tokens(msg: &Message) -> u64 {
-    match msg {
-        Message::User(m) => rough_token_count(&m.text),
-        Message::Assistant(m) => rough_token_count(&m.text),
-        Message::System(m) => rough_token_count(&m.text),
-        Message::Progress(m) => rough_token_count(&m.status),
-        Message::Attachment(m) => {
-            let mut t = m.label.as_deref().map_or(0, rough_token_count);
-            for att in &m.attachments {
-                t += rough_token_count(&att.data);
-            }
-            t
-        }
-        Message::HookResult(m) => rough_token_count(&m.output),
-        Message::ToolUseSummary(m) => rough_token_count(&m.summary),
-        Message::Tombstone(m) => rough_token_count(&m.summary),
-        Message::GroupedToolUse(m) => m.summary.as_deref().map_or(0, rough_token_count),
-        Message::CollapsedReadSearch(m) => rough_token_count(&m.summary),
-    }
-}
 
 #[cfg(test)]
 mod tests {
