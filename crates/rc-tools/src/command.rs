@@ -74,20 +74,29 @@ pub(crate) async fn repl_tool(input: &Value, context: &ToolExecutionContext) -> 
             std::fs::create_dir_all(&tmp_dir)?;
             let src_path = tmp_dir.join("repl_tmp.rs");
             std::fs::write(&src_path, code)?;
-            let output = std::process::Command::new("rustc")
+
+            // Use tokio::process::Command to avoid blocking the runtime
+            let compile_output = Command::new("rustc")
                 .args(["--edition", "2021", "-o"])
                 .arg(tmp_dir.join("repl_tmp"))
                 .arg(&src_path)
-                .output()?;
-            if !output.status.success() {
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+                .await?;
+            if !compile_output.status.success() {
                 return Ok(format!(
                     "Compile error:\n{}",
-                    String::from_utf8_lossy(&output.stderr)
+                    String::from_utf8_lossy(&compile_output.stderr)
                 ));
             }
-            let run_output = std::process::Command::new(tmp_dir.join("repl_tmp"))
+
+            let run_output = Command::new(tmp_dir.join("repl_tmp"))
                 .current_dir(&context.cwd)
-                .output()?;
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+                .await?;
             return Ok(String::from_utf8_lossy(&run_output.stdout).to_string());
         }
         _ => {

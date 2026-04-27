@@ -316,7 +316,7 @@ impl StdioMcpSession {
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped()) // capture stderr for logging instead of discarding
             .kill_on_drop(true);
         if let Some(cwd) = cwd {
             process.current_dir(cwd);
@@ -344,6 +344,24 @@ impl StdioMcpSession {
                 server: server.name.clone(),
                 pipe: "stdout",
             })?;
+
+        // Spawn a background task to log stderr from the MCP server process.
+        // This ensures diagnostic output is captured rather than silently dropped.
+        if let Some(stderr) = child.stderr.take() {
+            let server_name = server.name.clone();
+            tokio::spawn(async move {
+                let reader = BufReader::new(stderr);
+                let mut lines = reader.lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    tracing::debug!(
+                        target: "rc_mcp::session::stderr",
+                        server = %server_name,
+                        "MCP server stderr: {line}"
+                    );
+                }
+            });
+        }
+
         let mut lines = BufReader::new(stdout).lines();
         let startup_timeout = server
             .startup_timeout_secs
@@ -740,6 +758,249 @@ async fn shutdown_child(child: &mut Child) {
 }
 
 // ---------------------------------------------------------------------------
+// Persistent MCP client (session reuse)
+// ---------------------------------------------------------------------------
+
+/// Inner session state for [`McpClient`].
+enum McpClientSession {
+    /// An active stdio session (child process kept alive between calls).
+    Stdio(StdioMcpSession),
+    /// An active HTTP/WebSocket session (HTTP client reused between calls).
+    Http(RemoteMcpSession),
+}
+
+/// A persistent MCP client that reuses connections across multiple calls.
+///
+/// Unlike the top-level functions ([`call_tool`], [`inspect_server`], etc.)
+/// which create a new process/connection for each invocation, `McpClient`
+/// maintains a single active session and reuses it for all operations.
+///
+/// # Example
+///
+/// ```ignore
+/// use rc_mcp::{McpClient, McpClientInfo, McpServerConfig};
+///
+/// let config: McpServerConfig = /* ... */;
+/// let client_info = McpClientInfo::new("my-app", "1.0");
+///
+/// let mut client = McpClient::connect(&config, &client_info).await?;
+/// // First call reuses the same connection
+/// let result1 = client.call_tool("search", json!({"q": "rust"})).await?;
+/// // Second call reuses the same connection — no new process spawned
+/// let result2 = client.call_tool("search", json!({"q": "tokio"})).await?;
+/// // Clean up when done
+/// client.shutdown().await;
+/// ```
+pub struct McpClient {
+    session: Option<McpClientSession>,
+    config: McpServerConfig,
+    /// Stored for potential reconnection if the session drops.
+    #[allow(dead_code)]
+    client_info: McpClientInfo,
+}
+
+impl McpClient {
+    /// Connect to an MCP server and return a persistent client.
+    ///
+    /// For stdio transport, this spawns the child process and performs the
+    /// initialization handshake. For HTTP transport, this creates an HTTP
+    /// client and performs the handshake. The connection is kept alive for
+    /// reuse across subsequent calls.
+    pub async fn connect(
+        config: &McpServerConfig,
+        client_info: &McpClientInfo,
+    ) -> Result<Self, McpRuntimeError> {
+        let session = match &config.transport {
+            McpTransportConfig::Stdio {
+                command,
+                args,
+                cwd,
+                env,
+            } => {
+                let session = StdioMcpSession::connect(
+                    config,
+                    command,
+                    args,
+                    cwd.as_deref(),
+                    env,
+                    client_info,
+                )
+                .await?;
+                McpClientSession::Stdio(session)
+            }
+            McpTransportConfig::Http { url, headers }
+            | McpTransportConfig::WebSocket { url, headers } => {
+                let session =
+                    RemoteMcpSession::connect_http(config, url, headers, client_info).await?;
+                McpClientSession::Http(session)
+            }
+        };
+
+        Ok(Self {
+            session: Some(session),
+            config: config.clone(),
+            client_info: client_info.clone(),
+        })
+    }
+
+    /// Call a tool on the MCP server using the persistent connection.
+    pub async fn call_tool(
+        &mut self,
+        tool_name: &str,
+        arguments: Value,
+    ) -> Result<McpToolCallResponse, McpRuntimeError> {
+        match self.session.as_mut() {
+            Some(McpClientSession::Stdio(session)) => session.call_tool(tool_name, arguments).await,
+            Some(McpClientSession::Http(session)) => session.call_tool(tool_name, arguments).await,
+            None => Err(McpRuntimeError::Protocol {
+                server: self.config.name.clone(),
+                phase: "call_tool",
+                message: "session is not connected".to_owned(),
+            }),
+        }
+    }
+
+    /// List tools available on the MCP server.
+    pub async fn list_tools(&mut self) -> Result<Vec<crate::types::McpToolDescriptor>, McpRuntimeError> {
+        match self.session.as_mut() {
+            Some(McpClientSession::Stdio(session)) => {
+                let request = JsonRpcRequest {
+                    jsonrpc: "2.0",
+                    id: 10,
+                    method: "tools/list",
+                    params: serde_json::json!({}),
+                };
+                write_message(
+                    &mut session.stdin,
+                    &session.server_name,
+                    "tools/list request",
+                    &request,
+                )
+                .await?;
+                let result: McpToolsListResult = wait_for_response(
+                    &mut session.lines,
+                    &session.server_name,
+                    10,
+                    "tools/list response",
+                    session.request_timeout_secs,
+                )
+                .await?;
+                Ok(result.tools)
+            }
+            Some(McpClientSession::Http(_)) => {
+                // For HTTP, we can do a fresh tools/list request
+                let rpc_id = REMOTE_RPC_ID.fetch_add(1, Ordering::Relaxed);
+                let request = JsonRpcRequest {
+                    jsonrpc: "2.0",
+                    id: rpc_id,
+                    method: "tools/list",
+                    params: serde_json::json!({}),
+                };
+                let response = match self.session.as_mut() {
+                    Some(McpClientSession::Http(session)) => {
+                        send_http_request(
+                            &session.http,
+                            &session.url,
+                            &session.headers,
+                            &request,
+                            session.request_timeout_secs,
+                            &session.server_name,
+                            "tools/list",
+                        )
+                        .await?
+                    }
+                    _ => unreachable!(),
+                };
+                let server_name = match self.session.as_ref() {
+                    Some(McpClientSession::Http(session)) => session.server_name.clone(),
+                    _ => unreachable!(),
+                };
+                let result: McpToolsListResult =
+                    parse_jsonrpc_result(&response, &server_name, "tools/list")?;
+                Ok(result.tools)
+            }
+            None => Err(McpRuntimeError::Protocol {
+                server: self.config.name.clone(),
+                phase: "list_tools",
+                message: "session is not connected".to_owned(),
+            }),
+        }
+    }
+
+    /// List resources exposed by the MCP server.
+    pub async fn list_resources(&mut self) -> Result<Vec<ServerResource>, McpRuntimeError> {
+        match self.session.as_mut() {
+            Some(McpClientSession::Stdio(session)) => session.list_resources().await,
+            Some(McpClientSession::Http(session)) => session.list_resources().await,
+            None => Err(McpRuntimeError::Protocol {
+                server: self.config.name.clone(),
+                phase: "list_resources",
+                message: "session is not connected".to_owned(),
+            }),
+        }
+    }
+
+    /// List prompts exposed by the MCP server.
+    pub async fn list_prompts(&mut self) -> Result<Vec<McpPromptDescriptor>, McpRuntimeError> {
+        match self.session.as_mut() {
+            Some(McpClientSession::Stdio(session)) => session.list_prompts().await,
+            Some(McpClientSession::Http(session)) => session.list_prompts().await,
+            None => Err(McpRuntimeError::Protocol {
+                server: self.config.name.clone(),
+                phase: "list_prompts",
+                message: "session is not connected".to_owned(),
+            }),
+        }
+    }
+
+    /// Inspect the MCP server (tools, resources, prompts).
+    pub async fn inspect(&mut self) -> Result<McpServerInspection, McpRuntimeError> {
+        match self.session.as_mut() {
+            Some(McpClientSession::Stdio(session)) => session.inspect_server().await,
+            Some(McpClientSession::Http(session)) => session.inspect_server().await,
+            None => Err(McpRuntimeError::Protocol {
+                server: self.config.name.clone(),
+                phase: "inspect",
+                message: "session is not connected".to_owned(),
+            }),
+        }
+    }
+
+    /// Check if the client has an active session.
+    pub fn is_connected(&self) -> bool {
+        self.session.is_some()
+    }
+
+    /// Shut down the persistent connection.
+    ///
+    /// For stdio transport, this kills the child process. For HTTP transport,
+    /// this is a no-op (the HTTP client is dropped when `McpClient` is dropped).
+    pub async fn shutdown(&mut self) {
+        if let Some(session) = self.session.take() {
+            match session {
+                McpClientSession::Stdio(mut s) => {
+                    s.shutdown().await;
+                }
+                McpClientSession::Http(_) => {
+                    // HTTP client is dropped automatically
+                }
+            }
+        }
+    }
+}
+
+impl Drop for McpClient {
+    fn drop(&mut self) {
+        // Best-effort cleanup: if the session hasn't been shut down, try to
+        // kill the child process synchronously. For full async cleanup,
+        // callers should call `shutdown()` before dropping.
+        if let Some(McpClientSession::Stdio(mut session)) = self.session.take() {
+            let _ = session.child.start_kill();
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Remote MCP session (SSE / HTTP Streamable)
 // ---------------------------------------------------------------------------
 
@@ -830,7 +1091,8 @@ impl RemoteMcpSession {
         })
     }
 
-    /// Inspect the server: return initialization result and tool list.
+    /// Inspect the server: return initialization result, tool list, and
+    /// optionally prompts and resources.
     async fn inspect_server(&mut self) -> Result<McpServerInspection, McpRuntimeError> {
         let rpc_id = REMOTE_RPC_ID.fetch_add(1, Ordering::Relaxed);
         let tools_request = JsonRpcRequest {
@@ -854,6 +1116,28 @@ impl RemoteMcpSession {
         let tools_result: McpToolsListResult =
             parse_jsonrpc_result(&response, &self.server_name, "tools/list")?;
 
+        // Fetch resources if the server declares the capability
+        let resources = if self.supports_resources() {
+            match self.list_resources().await {
+                Ok(resources) => resources,
+                Err(error) if is_unsupported_method_error(&error) => Vec::new(),
+                Err(error) => return Err(error),
+            }
+        } else {
+            Vec::new()
+        };
+
+        // Fetch prompts if the server declares the capability
+        let prompts = if self.supports_prompts() {
+            match self.list_prompts().await {
+                Ok(prompts) => prompts,
+                Err(error) if is_unsupported_method_error(&error) => Vec::new(),
+                Err(error) => return Err(error),
+            }
+        } else {
+            Vec::new()
+        };
+
         Ok(McpServerInspection {
             server_name: self.server_name.clone(),
             protocol_version: self.initialized.protocol_version.clone(),
@@ -861,8 +1145,8 @@ impl RemoteMcpSession {
             capabilities: self.initialized.capabilities.clone(),
             instructions: self.initialized.instructions.clone(),
             tools: tools_result.tools,
-            prompts: Vec::new(),
-            resources: Vec::new(),
+            prompts,
+            resources,
         })
     }
 
@@ -1049,6 +1333,20 @@ impl RemoteMcpSession {
             parse_jsonrpc_result(&response, &self.server_name, "resources/read")?;
 
         Ok(result.contents)
+    }
+
+    fn supports_resources(&self) -> bool {
+        self.initialized
+            .capabilities
+            .get("resources")
+            .is_some_and(|resources| !resources.is_null() && resources != false)
+    }
+
+    fn supports_prompts(&self) -> bool {
+        self.initialized
+            .capabilities
+            .get("prompts")
+            .is_some_and(|prompts| !prompts.is_null() && prompts != false)
     }
 }
 

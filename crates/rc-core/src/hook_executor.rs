@@ -10,8 +10,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::hook_types::{
-    AggregatedHookResult, HookDefinition, HookInput, HookOutput, HookResponse,
-    HookResponseDecision, HookShell,
+    AggregatedHookResult, HookDefinition, HookInput, HookOutput, HookResponse, HookShell,
 };
 
 // ── SSRF Guard ───────────────────────────────────────────────────────────
@@ -234,55 +233,40 @@ impl HookExecutor {
                 // Prompt hooks evaluate the LLM prompt before it is sent.
                 // They require access to the current conversation messages and
                 // the provider API. Since the hook executor does not hold a
-                // provider reference, prompt hooks are handled by the query
-                // engine layer instead. Returning a pass-through outcome so
-                // the pipeline continues without blocking.
+                // provider reference, prompt hooks must be handled by the query
+                // engine layer instead.
+                //
+                // IMPORTANT: We do NOT silently approve. Instead, we return a
+                // "not implemented" outcome so the caller knows this hook type
+                // requires special handling at a higher layer.
                 let duration = start.elapsed();
-                let stdout = r#"{"decision":"approve","continue":true}"#.to_string();
-                HookOutcome {
-                    hook: hook.clone(),
-                    output: HookOutput {
-                        exit_code: Some(0),
-                        stdout: stdout.clone(),
-                        stderr: String::new(),
-                        parsed_json: Some(serde_json::from_str(&stdout).unwrap_or_default()),
-                    },
-                    response: Some(HookResponse {
-                        r#continue: true,
-                        decision: Some(HookResponseDecision::Approve),
-                        reason: Some("Prompt hook deferred to query engine".to_string()),
-                        ..Default::default()
-                    }),
+                HookOutcome::failed(
+                    hook.clone(),
+                    "Prompt hook execution is not yet implemented in the hook executor. \
+                     Prompt hooks require the query engine layer which holds conversation \
+                     context and provider access. The caller should handle this hook type \
+                     separately."
+                        .to_string(),
                     duration,
-                    success: true,
-                    blocked: false,
-                }
+                )
             }
-            HookDefinition::Agent(agent_hook) => {
+            HookDefinition::Agent(_agent_hook) => {
                 // Agent hooks run an agent to verify the tool call.
                 // They require the agent runtime which is not available in the
-                // hook executor context. Returning a pass-through outcome.
+                // hook executor context.
+                //
+                // IMPORTANT: We do NOT silently approve. Instead, we return a
+                // "not implemented" outcome so the caller knows this hook type
+                // requires special handling at a higher layer.
                 let duration = start.elapsed();
-                let stdout = r#"{"decision":"approve","continue":true}"#.to_string();
-                let _ = &agent_hook; // use the variable
-                HookOutcome {
-                    hook: hook.clone(),
-                    output: HookOutput {
-                        exit_code: Some(0),
-                        stdout: stdout.clone(),
-                        stderr: String::new(),
-                        parsed_json: Some(serde_json::from_str(&stdout).unwrap_or_default()),
-                    },
-                    response: Some(HookResponse {
-                        r#continue: true,
-                        decision: Some(HookResponseDecision::Approve),
-                        reason: Some("Agent hook deferred — requires agent runtime".to_string()),
-                        ..Default::default()
-                    }),
+                HookOutcome::failed(
+                    hook.clone(),
+                    "Agent hook execution is not yet implemented in the hook executor. \
+                     Agent hooks require the agent runtime which is not available in this \
+                     context. The caller should handle this hook type separately."
+                        .to_string(),
                     duration,
-                    success: true,
-                    blocked: false,
-                }
+                )
             }
             HookDefinition::Callback(cb) => {
                 // Callback hooks are resolved by the caller

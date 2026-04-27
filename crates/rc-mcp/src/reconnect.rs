@@ -255,10 +255,19 @@ impl CircuitBreakerReconnect {
 }
 
 impl ReconnectStrategy for CircuitBreakerReconnect {
+    /// Compute the next reconnect action based on the attempt number.
+    ///
+    /// **Note:** This method only uses the attempt number and does **not**
+    /// consult per-server circuit breaker state (cooldown, half-open, etc.).
+    /// For per-server-aware reconnect decisions, use
+    /// [`CircuitBreakerReconnect::next_action_for_server`] instead, which
+    /// checks the circuit breaker state for a specific server before falling
+    /// back to this generic logic.
+    ///
+    /// Callers that track multiple servers should prefer
+    /// `next_action_for_server` to avoid reconnecting to a server whose
+    /// circuit is still in the open (cooldown) state.
     fn next_action(&self, attempt: u32) -> ReconnectAction {
-        // Delegate to the generic attempt-based logic.
-        // Per-server state is tracked via record_success / record_failure /
-        // can_retry and consulted by the caller before invoking next_action.
         if attempt > self.max_total_attempts {
             ReconnectAction::GiveUp
         } else if attempt == 1 {

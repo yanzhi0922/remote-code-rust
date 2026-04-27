@@ -29,7 +29,7 @@ use crate::tool_result_storage::{persist_tool_result_text, process_tool_result_t
 
 const MCP_RESOURCE_TOOL_MAX_RESULT_SIZE_CHARS: usize = 100_000;
 
-pub(crate) fn mcp_auth_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
+pub(crate) fn mcp_auth_tool(input: &Value, _context: &ToolExecutionContext) -> Result<String> {
     let server = input["server"]
         .as_str()
         .ok_or_else(|| anyhow!("server is required"))?;
@@ -37,44 +37,24 @@ pub(crate) fn mcp_auth_tool(input: &Value, context: &ToolExecutionContext) -> Re
         .as_str()
         .ok_or_else(|| anyhow!("action is required (login, logout, or status)"))?;
 
-    let auth_dir = context.cwd.join(".remote-code-rust").join("mcp-auth");
-    std::fs::create_dir_all(&auth_dir)?;
-    let auth_file = auth_dir.join(format!("{server}.json"));
-
+    // MCP authentication is not yet implemented. Writing a fake JSON file
+    // that claims "authenticated" would be misleading and insecure.
+    // Return an explicit error so callers know to configure credentials manually.
     match action {
-        "login" => {
-            let entry = json!({
-                "server": server,
-                "status": "authenticated",
-                "timestamp": SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|duration| duration.as_secs())
-                    .unwrap_or(0),
-            });
-            let content = serde_json::to_string_pretty(&entry)?;
-            std::fs::write(&auth_file, content)?;
-            Ok(format!("Logged in to MCP server '{server}'."))
-        }
-        "logout" => {
-            if auth_file.exists() {
-                std::fs::remove_file(&auth_file)?;
-                Ok(format!("Logged out from MCP server '{server}'."))
-            } else {
-                Ok(format!("No active session for MCP server '{server}'."))
-            }
-        }
-        "status" => {
-            if auth_file.exists() {
-                let content = std::fs::read_to_string(&auth_file)?;
-                Ok(content)
-            } else {
-                Ok(json!({
-                    "server": server,
-                    "status": "not_authenticated",
-                })
-                .to_string())
-            }
-        }
+        "login" => Err(anyhow!(
+            "MCP authentication is not yet implemented for server '{server}'. \
+             Please configure MCP server credentials manually in your MCP configuration file."
+        )),
+        "logout" => Err(anyhow!(
+            "MCP authentication is not yet implemented for server '{server}'. \
+             No session to log out from."
+        )),
+        "status" => Ok(json!({
+            "server": server,
+            "status": "not_authenticated",
+            "note": "MCP authentication is not yet implemented. Configure credentials manually."
+        })
+        .to_string()),
         _ => Err(anyhow!("action must be 'login', 'logout', or 'status'")),
     }
 }

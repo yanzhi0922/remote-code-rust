@@ -258,8 +258,21 @@ impl AppState {
     }
 
     /// Count total fields (for testing coverage).
+    ///
+    /// This must be kept in sync with the number of fields defined in
+    /// [`AppState`]. When adding or removing a field, update this constant.
     pub fn field_count() -> usize {
-        30 // matches the number of fields above
+        35 // session_id, active_agent_id, permission_mode, messages,
+           // discovered_skills, active_tools, model, queued_task_count,
+           // cwd, mcp_servers, conversation_id, total_tokens_used,
+           // total_cost_usd, api_call_count, turn_count, is_plan_mode,
+           // is_coordinator_mode, pre_plan_permission_mode,
+           // consecutive_denials, denied_tools, is_verbose,
+           // in_progress_tool_use_ids, has_interruptible_tool_in_progress,
+           // active_task_ids, completed_task_count, failed_task_count,
+           // loaded_memory_paths, output_style, theme, query_source,
+           // feature_flags, has_been_compacted, compaction_count,
+           // file_history, additional_working_directories
     }
 }
 
@@ -427,7 +440,7 @@ mod tests {
 
     #[test]
     fn field_count_matches() {
-        assert_eq!(AppState::field_count(), 30);
+        assert_eq!(AppState::field_count(), 35);
     }
 
     #[test]

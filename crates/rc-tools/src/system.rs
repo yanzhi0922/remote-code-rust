@@ -495,14 +495,18 @@ pub(crate) async fn ctx_inspect_tool(input: &Value) -> Result<String> {
 
     let specs = runtime_provider_tool_specs().await;
     match action {
+        // NOTE: Token and message counts are placeholder implementations.
+        // They require access to the conversation context and tokenizer which
+        // are not available at the tool execution layer. The "unavailable"
+        // status makes this explicit rather than returning misleading values.
         "tokens" => Ok(json!({
-            "estimated_tokens": "N/A (requires tokenizer)",
-            "note": "Token counting requires a model-specific tokenizer."
+            "estimated_tokens": "unavailable",
+            "note": "Token counting is not available in this context. It requires a model-specific tokenizer and conversation state."
         })
         .to_string()),
         "messages" => Ok(json!({
-            "message_count": 0,
-            "note": "Message count requires conversation context."
+            "message_count": "unavailable",
+            "note": "Message count is not available in this context. It requires conversation state from the active session."
         })
         .to_string()),
         "tools" => Ok(json!({

@@ -524,7 +524,9 @@ fn parse_worktree_list(text: &str) -> Vec<WorktreeInfo> {
     let mut worktrees = Vec::new();
     let mut current_path = String::new();
     let mut current_branch = String::new();
-    let mut is_main = false;
+    // The first worktree in `git worktree list --porcelain` output is the
+    // main/principal worktree. We track this with an index counter.
+    let mut worktree_index: usize = 0;
 
     for line in text.lines() {
         if let Some(path) = line.strip_prefix("worktree ") {
@@ -532,24 +534,27 @@ fn parse_worktree_list(text: &str) -> Vec<WorktreeInfo> {
                 worktrees.push(WorktreeInfo {
                     path: current_path.clone(),
                     branch: current_branch.clone(),
-                    is_main,
+                    is_main: worktree_index == 0,
                 });
             }
             current_path = path.to_owned();
             current_branch.clear();
-            is_main = false;
+            worktree_index += 1;
         } else if let Some(branch) = line.strip_prefix("branch refs/heads/") {
             current_branch = branch.to_owned();
-        } else if line == "bare" {
-            is_main = true;
         }
+        // NOTE: "bare" is intentionally ignored here. In `git worktree list
+        // --porcelain`, "bare" indicates a bare repository (no working tree),
+        // NOT the main worktree. Previously this was incorrectly treated as
+        // is_main = true, which would mark bare repos as the main worktree.
+        // The main worktree is identified by being the first entry (index 0).
     }
 
     if !current_path.is_empty() {
         worktrees.push(WorktreeInfo {
             path: current_path,
             branch: current_branch,
-            is_main,
+            is_main: worktree_index == 0,
         });
     }
     worktrees
