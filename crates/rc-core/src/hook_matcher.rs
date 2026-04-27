@@ -184,6 +184,7 @@ fn evaluate_single_condition(
 /// - `command` (Bash, shell tools)
 /// - `file_path` / `path` (file operation tools)
 /// - `pattern` (search tools)
+///
 /// Falls back to stringifying the entire input if no known field is found.
 fn extract_tool_argument(input: &serde_json::Value) -> String {
     if let Some(s) = input.get("command").and_then(|v| v.as_str()) {
@@ -455,31 +456,31 @@ mod tests {
 
     #[test]
     fn evaluate_if_empty_condition() {
-        assert!(evaluate_if_condition("", Some("Bash")));
+        assert!(evaluate_if_condition("", Some("Bash"), None));
     }
 
     #[test]
     fn evaluate_if_none_tool_name() {
-        assert!(evaluate_if_condition("Bash", None));
+        assert!(evaluate_if_condition("Bash", None, None));
     }
 
     #[test]
     fn evaluate_if_simple_tool_name() {
-        assert!(evaluate_if_condition("Bash", Some("Bash")));
-        assert!(!evaluate_if_condition("Bash", Some("Write")));
+        assert!(evaluate_if_condition("Bash", Some("Bash"), None));
+        assert!(!evaluate_if_condition("Bash", Some("Write"), None));
     }
 
     #[test]
     fn evaluate_if_parenthesized_pattern() {
-        assert!(evaluate_if_condition("Bash(git *)", Some("Bash")));
-        assert!(!evaluate_if_condition("Bash(git *)", Some("Write")));
+        assert!(evaluate_if_condition("Bash(git *)", Some("Bash"), None));
+        assert!(!evaluate_if_condition("Bash(git *)", Some("Write"), None));
     }
 
     #[test]
     fn evaluate_if_pipe_separated() {
-        assert!(evaluate_if_condition("Bash|Write", Some("Bash")));
-        assert!(evaluate_if_condition("Bash|Write", Some("Write")));
-        assert!(!evaluate_if_condition("Bash|Write", Some("Edit")));
+        assert!(evaluate_if_condition("Bash|Write", Some("Bash"), None));
+        assert!(evaluate_if_condition("Bash|Write", Some("Write"), None));
+        assert!(!evaluate_if_condition("Bash|Write", Some("Edit"), None));
     }
 
     // ── match_hooks tests ────────────────────────────────────────────────

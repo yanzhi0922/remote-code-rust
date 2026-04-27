@@ -764,9 +764,9 @@ async fn shutdown_child(child: &mut Child) {
 /// Inner session state for [`McpClient`].
 enum McpClientSession {
     /// An active stdio session (child process kept alive between calls).
-    Stdio(StdioMcpSession),
+    Stdio(Box<StdioMcpSession>),
     /// An active HTTP/WebSocket session (HTTP client reused between calls).
-    Http(RemoteMcpSession),
+    Http(Box<RemoteMcpSession>),
 }
 
 /// A persistent MCP client that reuses connections across multiple calls.
@@ -826,13 +826,13 @@ impl McpClient {
                     client_info,
                 )
                 .await?;
-                McpClientSession::Stdio(session)
+                McpClientSession::Stdio(Box::new(session))
             }
             McpTransportConfig::Http { url, headers }
             | McpTransportConfig::WebSocket { url, headers } => {
                 let session =
                     RemoteMcpSession::connect_http(config, url, headers, client_info).await?;
-                McpClientSession::Http(session)
+                McpClientSession::Http(Box::new(session))
             }
         };
 

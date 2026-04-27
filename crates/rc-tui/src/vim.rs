@@ -214,17 +214,17 @@ impl VimStateMachine {
                 return VimAction::YankLine;
             }
         }
-        if let Some(direction) = self.pending_find.take() {
-            if let KeyCode::Char(ch) = key.code {
-                let state = FindState {
-                    direction,
-                    char: ch,
-                };
-                self.last_find = Some(state);
-                return VimAction::FindChar(state);
-            }
-            // Not a char key — cancel the pending find and fall through.
+        if let Some(direction) = self.pending_find.take()
+            && let KeyCode::Char(ch) = key.code
+        {
+            let state = FindState {
+                direction,
+                char: ch,
+            };
+            self.last_find = Some(state);
+            return VimAction::FindChar(state);
         }
+        // Not a char key — cancel the pending find and fall through.
 
         match key.code {
             KeyCode::Char('h') | KeyCode::Left => VimAction::MoveLeft,
