@@ -79,6 +79,17 @@ pub fn detect_provider(config: &ProviderConfig) -> ModelProvider {
     ModelProvider::Anthropic
 }
 
+/// Returns `true` when `canonical_id` ends with a date suffix (`-YYYYMMDD`).
+fn has_date_suffix(canonical_id: &str) -> bool {
+    let len = canonical_id.len();
+    if len < 9 {
+        return false;
+    }
+    let suffix_start = len - 8;
+    canonical_id.as_bytes().get(suffix_start - 1) == Some(&b'-')
+        && canonical_id[suffix_start..].bytes().all(|b| b.is_ascii_digit())
+}
+
 /// Returns the provider-specific model ID for a given canonical first-party
 /// model ID.
 pub fn provider_model_id(canonical_id: &str, provider: &ModelProvider) -> String {
@@ -87,7 +98,7 @@ pub fn provider_model_id(canonical_id: &str, provider: &ModelProvider) -> String
         ModelProvider::AwsBedrock { .. } => {
             // Bedrock uses `us.anthropic.<canonical>-v1:0` for cross-region
             // inference profiles, or the ARN pattern for custom profiles.
-            if canonical_id.contains("2025") || canonical_id.contains("2024") {
+            if has_date_suffix(canonical_id) {
                 // Dated models: us.anthropic.claude-xxx-YYYYMMDD-v1:0
                 format!("us.anthropic.{canonical_id}-v1:0")
             } else {

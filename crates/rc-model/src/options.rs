@@ -123,8 +123,8 @@ fn opus_option(ctx: &OptionsContext) -> ModelOption {
     ModelOption {
         value,
         label: "Opus".into(),
-        description: "Opus 4.7 · Most capable for complex work".into(),
-        description_for_model: Some("Opus 4.7 - most capable for complex work".into()),
+        description: "Opus 4.6 · Most capable for complex work".into(),
+        description_for_model: Some("Opus 4.6 - most capable for complex work".into()),
     }
 }
 
@@ -171,9 +171,9 @@ fn opus_1m_option(ctx: &OptionsContext) -> ModelOption {
     ModelOption {
         value,
         label: "Opus (1M context)".into(),
-        description: "Opus 4.7 for long sessions".into(),
+        description: "Opus 4.6 for long sessions".into(),
         description_for_model: Some(
-            "Opus 4.7 with 1M context window - for long sessions with large codebases".into(),
+            "Opus 4.6 with 1M context window - for long sessions with large codebases".into(),
         ),
     }
 }
@@ -182,7 +182,7 @@ pub fn opus_plan_option() -> ModelOption {
     ModelOption {
         value: "opusplan".into(),
         label: "Opus Plan Mode".into(),
-        description: "Use Opus 4.7 in plan mode, Sonnet 4.6 otherwise".into(),
+        description: "Use Opus 4.6 in plan mode, Sonnet 4.6 otherwise".into(),
         description_for_model: None,
     }
 }
