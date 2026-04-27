@@ -3,6 +3,7 @@
 //! Handles removal of media attachments that exceed configured limits,
 //! and provides utilities for image metadata and base64 image resizing.
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -205,11 +206,11 @@ pub struct ResizeResult {
     pub estimated_size: Option<u64>,
 }
 
-/// Resize a base64-encoded image by scaling it down.
+/// Resize a base64-encoded image by decoding, scaling, and re-encoding.
 ///
-/// This performs a simple "resize" by decoding the base64, estimating the
-/// header, and returning a scaled representation. In a real implementation
-/// this would use an image processing library.
+/// Decodes the base64 data into a raster image, resizes it so that neither
+/// dimension exceeds `max_dimension` while preserving aspect ratio, then
+/// re-encodes the result as PNG back to base64.
 ///
 /// # Arguments
 ///
@@ -229,34 +230,67 @@ pub fn resize_image_base64(base64_data: &str, max_dimension: u32) -> ResizeResul
         };
     }
 
-    // Validate base64 encoding.
-    let trimmed = base64_data.trim_end_matches('=');
-    for c in trimmed.chars() {
-        if !c.is_ascii_alphanumeric() && c != '+' && c != '/' {
+    // Decode base64.
+    let raw_bytes = match base64::engine::general_purpose::STANDARD.decode(base64_data) {
+        Ok(bytes) => bytes,
+        Err(e) => {
             return ResizeResult {
                 data: None,
-                error: Some(format!("Invalid base64 character: {c}")),
+                error: Some(format!("Invalid base64: {e}")),
                 new_dimensions: None,
                 estimated_size: None,
             };
         }
-    }
+    };
 
-    // In a real implementation, we would decode the image, resize it,
-    // and re-encode. For now, we return the original data with estimated
-    // dimensions.
-    let estimated_size = (trimmed.len() as u64 * 3) / 4;
-    let dimension = if max_dimension > 0 {
+    // Decode image.
+    let mut img = match image::load_from_memory(&raw_bytes) {
+        Ok(img) => img,
+        Err(e) => {
+            return ResizeResult {
+                data: None,
+                error: Some(format!("Failed to decode image: {e}")),
+                new_dimensions: None,
+                estimated_size: Some(raw_bytes.len() as u64),
+            };
+        }
+    };
+
+    let (orig_w, orig_h) = (img.width(), img.height());
+    let max_dim = if max_dimension > 0 {
         max_dimension
     } else {
         1024
     };
 
+    // Only resize if the image exceeds the max dimension.
+    if orig_w > max_dim || orig_h > max_dim {
+        img = img.resize(max_dim, max_dim, image::imageops::FilterType::Lanczos3);
+    }
+
+    let (new_w, new_h) = (img.width(), img.height());
+
+    // Re-encode as PNG.
+    let mut png_buf = Vec::new();
+    if let Err(e) = img.write_to(
+        &mut std::io::Cursor::new(&mut png_buf),
+        image::ImageFormat::Png,
+    ) {
+        return ResizeResult {
+            data: None,
+            error: Some(format!("Failed to re-encode image: {e}")),
+            new_dimensions: Some((new_w, new_h)),
+            estimated_size: Some(raw_bytes.len() as u64),
+        };
+    }
+
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&png_buf);
+
     ResizeResult {
-        data: Some(base64_data.to_string()),
+        data: Some(encoded),
         error: None,
-        new_dimensions: Some((dimension, dimension)),
-        estimated_size: Some(estimated_size),
+        new_dimensions: Some((new_w, new_h)),
+        estimated_size: Some(png_buf.len() as u64),
     }
 }
 
@@ -468,18 +502,84 @@ mod tests {
     }
 
     #[test]
-    fn resize_image_valid_base64() {
-        let result = resize_image_base64("SGVsbG8gV29ybGQ=", 512);
+    fn resize_image_valid_png_no_resize_needed() {
+        // Create a small 10x10 PNG image.
+        let img = image::RgbImage::from_pixel(10, 10, image::Rgb([255, 0, 0]));
+        let mut buf = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+            .expect("encode png");
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&buf);
+
+        let result = resize_image_base64(&b64, 512);
         assert!(result.data.is_some());
         assert!(result.error.is_none());
-        assert_eq!(result.new_dimensions, Some((512, 512)));
+        // Image is smaller than max_dimension, dimensions unchanged.
+        assert_eq!(result.new_dimensions, Some((10, 10)));
     }
 
     #[test]
-    fn resize_image_zero_dimension() {
-        let result = resize_image_base64("SGVsbG8=", 0);
+    fn resize_image_valid_png_downscaled() {
+        // Create a 100x100 PNG and resize to max 50.
+        let img = image::RgbImage::from_pixel(100, 100, image::Rgb([0, 255, 0]));
+        let mut buf = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+            .expect("encode png");
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&buf);
+
+        let result = resize_image_base64(&b64, 50);
         assert!(result.data.is_some());
-        assert_eq!(result.new_dimensions, Some((1024, 1024)));
+        assert!(result.error.is_none());
+        let (w, h) = result.new_dimensions.expect("dimensions");
+        assert!(w <= 50);
+        assert!(h <= 50);
+    }
+
+    #[test]
+    fn resize_image_preserves_aspect_ratio() {
+        // Create a 200x100 PNG (2:1 aspect ratio).
+        let img = image::RgbImage::from_pixel(200, 100, image::Rgb([0, 0, 255]));
+        let mut buf = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+            .expect("encode png");
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&buf);
+
+        let result = resize_image_base64(&b64, 50);
+        assert!(result.data.is_some());
+        assert!(result.error.is_none());
+        let (w, h) = result.new_dimensions.expect("dimensions");
+        // Should preserve 2:1 aspect ratio within rounding.
+        assert!(w <= 50);
+        assert!(h <= 50);
+        assert!(w > h);
+    }
+
+    #[test]
+    fn resize_image_zero_dimension_defaults_to_1024() {
+        // Create a 2048x2048 PNG and pass max_dimension=0 (should default to 1024).
+        let img = image::RgbImage::from_pixel(2048, 2048, image::Rgb([128, 128, 128]));
+        let mut buf = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+            .expect("encode png");
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&buf);
+
+        let result = resize_image_base64(&b64, 0);
+        assert!(result.data.is_some());
+        assert!(result.error.is_none());
+        let (w, h) = result.new_dimensions.expect("dimensions");
+        assert_eq!((w, h), (1024, 1024));
+    }
+
+    #[test]
+    fn resize_image_non_image_data() {
+        // "SGVsbG8gV29ybGQ=" is "Hello World" — not a valid image.
+        let result = resize_image_base64("SGVsbG8gV29ybGQ=", 512);
+        assert!(result.data.is_none());
+        assert!(
+            result
+                .error
+                .as_ref()
+                .is_some_and(|e| e.contains("Failed to decode image"))
+        );
     }
 
     // --- detect_format_from_data_uri ---

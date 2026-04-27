@@ -76,9 +76,13 @@ pub fn model_supports_effort(model: &str) -> bool {
     {
         return true;
     }
+    // Strip provider prefix (e.g. "anthropic/" or "openai/") before matching.
+    let model_name = model_lower
+        .rsplit_once('/')
+        .map_or(model_lower.as_str(), |(_, name)| name);
     EFFORT_SUPPORTED_PREFIXES
         .iter()
-        .any(|prefix| model_lower.starts_with(prefix) || model_lower.contains(prefix))
+        .any(|prefix| model_name.starts_with(prefix))
 }
 
 // ---------------------------------------------------------------------------

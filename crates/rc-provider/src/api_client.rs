@@ -387,11 +387,15 @@ impl ApiClient {
 
         match response {
             Ok(resp) => {
-                let status = resp.status().as_u16();
-                if status == 401 || status == 403 {
+                let status = resp.status();
+                if status.is_success() {
+                    Ok(true)
+                } else if status.is_client_error() {
+                    // 4xx = key invalid or bad request
                     Ok(false)
                 } else {
-                    Ok(true)
+                    // 5xx = server error, cannot verify key validity
+                    Ok(false)
                 }
             }
             Err(_) => Ok(false),
