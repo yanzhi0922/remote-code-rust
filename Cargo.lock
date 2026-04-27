@@ -5290,6 +5290,7 @@ dependencies = [
  "rc-skills",
  "rc-tools",
  "rc-ui-bridge",
+ "rc-voice",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

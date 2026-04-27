@@ -50,6 +50,9 @@ use rc_tools::{
     tasks::load_persisted_ui_task_snapshots,
     ToolExecutionContext, ToolRuntimePolicy,
 };
+use rc_agent_protocol::health::{HealthChecker, HealthStatus};
+use rc_agent_protocol::restart::RestartTracker;
+use rc_voice::stt::SpeechToText;
 use rc_agent_protocol::router::AgentRouter;
 use rc_agent_protocol::types::{AgentConfig, AgentType as ProtocolAgentType};
 use rc_agent_protocol::UnifiedAgentEvent;
@@ -3083,8 +3086,20 @@ async fn run_agent_prompt(
     let mut tool_calls = Vec::new();
     let mut usage = UsageSummary::default();
 
-    while let Some(event) = receiver.recv().await {
-        match event {
+    // Health monitoring: periodic liveness checks with restart tracking.
+    let mut health_checker = HealthChecker::default();
+    let mut restart_tracker = RestartTracker::default();
+    let mut health_ticker = tokio::time::interval(health_checker.config().interval);
+    health_ticker.tick().await; // consume the first immediate tick
+
+    loop {
+        tokio::select! {
+            event_opt = receiver.recv() => {
+                let event = match event_opt {
+                    Some(e) => e,
+                    None => break,
+                };
+                match event {
             UnifiedAgentEvent::MessageDelta { delta, .. } => {
                 response_text.push_str(&delta);
                 let _ = app.emit(
@@ -3245,6 +3260,49 @@ async fn run_agent_prompt(
             }
             UnifiedAgentEvent::Stopped => {
                 break;
+            }
+                }
+            }
+            _ = health_ticker.tick() => {
+                let is_alive = {
+                    let router = agent_router.lock().await;
+                    router.is_adapter_alive(&session_id)
+                };
+                let prev_status = health_checker.status().clone();
+                let status = health_checker.check(is_alive);
+
+                if prev_status != *status {
+                    let status_str = match status {
+                        HealthStatus::Healthy => "healthy",
+                        HealthStatus::Degraded { .. } => "degraded",
+                        HealthStatus::Unhealthy { .. } => "unhealthy",
+                    };
+                    let _ = app.emit(
+                        APP_EVENT_AGENT_STATUS_CHANGED,
+                        AgentStatusChangedDto {
+                            session_id: session_id.clone(),
+                            agent_type: "external".to_owned(),
+                            status: status_str.to_owned(),
+                        },
+                    );
+                }
+
+                if matches!(status, HealthStatus::Unhealthy { .. }) {
+                    if let Some(_backoff) = restart_tracker.request_restart() {
+                        // Signal that a restart is needed.
+                        // Actual restart requires the original AgentConfig which
+                        // is not available in this context — the frontend or
+                        // session management layer should handle this event.
+                        let _ = app.emit(
+                            APP_EVENT_AGENT_STATUS_CHANGED,
+                            AgentStatusChangedDto {
+                                session_id: session_id.clone(),
+                                agent_type: "external".to_owned(),
+                                status: "restart_needed".to_owned(),
+                            },
+                        );
+                    }
+                }
             }
         }
     }
@@ -4158,47 +4216,251 @@ async fn pick_folder(app: AppHandle) -> std::result::Result<Option<String>, Stri
     Ok(Some(path.display().to_string()))
 }
 
+// ---------------------------------------------------------------------------
+// Agent binary management helpers
+// ---------------------------------------------------------------------------
+
+/// Base directory for agent installations: `~/.remote-code/agents/`.
+fn agents_base_dir() -> PathBuf {
+    directories::BaseDirs::new()
+        .map(|dirs| dirs.home_dir().join(".remote-code").join("agents"))
+        .unwrap_or_else(|| PathBuf::from(".remote-code").join("agents"))
+}
+
+/// Directory name for a given agent type (matches serde serialization).
+fn agent_type_dir_name(agent_type: &ProtocolAgentType) -> &'static str {
+    match agent_type {
+        ProtocolAgentType::RemoteCode => "remote_code",
+        ProtocolAgentType::RooCode => "roo_code",
+        ProtocolAgentType::Codex => "codex",
+    }
+}
+
+/// Expected binary name for a given agent type.
+fn agent_binary_name(agent_type: &ProtocolAgentType) -> String {
+    let name = match agent_type {
+        ProtocolAgentType::RemoteCode => "remote-code",
+        ProtocolAgentType::RooCode => "roo-code",
+        ProtocolAgentType::Codex => "codex",
+    };
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_owned()
+    }
+}
+
+/// Discover the binary path for a given agent type.
+///
+/// Checks in order:
+/// 1. `~/.remote-code/agents/<agent_type>/bin/<binary>`
+/// 2. `PATH` environment variable
+///
+/// Returns `None` when no binary is found.
+fn agent_binary_path(agent_type: &ProtocolAgentType) -> Option<PathBuf> {
+    if matches!(agent_type, ProtocolAgentType::RemoteCode) {
+        // RemoteCode is built-in — always available.
+        return Some(PathBuf::from(
+            std::env::current_exe().unwrap_or_default(),
+        ));
+    }
+
+    let binary_name = agent_binary_name(agent_type);
+
+    // 1. Standard installation path.
+    let installed_path = agents_base_dir()
+        .join(agent_type_dir_name(agent_type))
+        .join("bin")
+        .join(&binary_name);
+    if installed_path.is_file() {
+        return Some(installed_path);
+    }
+
+    // 2. Search PATH.
+    if let Ok(path_var) = env::var("PATH") {
+        let separator = if cfg!(windows) { ';' } else { ':' };
+        for dir in path_var.split(separator) {
+            let candidate = Path::new(dir).join(&binary_name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
+}
+
 #[tauri::command]
 async fn list_available_agents(
     _state: State<'_, AppState>,
 ) -> std::result::Result<Vec<AgentTypeInfoDto>, String> {
-    let agents = vec![
-        AgentTypeInfoDto {
-            agent_type: "remote_code".to_owned(),
-            display_name: "Remote Code".to_owned(),
-            available: true,
-            installed: true,
-        },
-        AgentTypeInfoDto {
-            agent_type: "roo_code".to_owned(),
-            display_name: "Roo Code".to_owned(),
-            available: true,
-            installed: false, // TODO: detect binary presence
-        },
-        AgentTypeInfoDto {
-            agent_type: "codex".to_owned(),
-            display_name: "OpenAI Codex".to_owned(),
-            available: true,
-            installed: false, // TODO: detect binary presence
-        },
+    let specs: [(ProtocolAgentType, &str); 3] = [
+        (ProtocolAgentType::RemoteCode, "Remote Code"),
+        (ProtocolAgentType::RooCode, "Roo Code"),
+        (ProtocolAgentType::Codex, "OpenAI Codex"),
     ];
+    let agents = specs
+        .iter()
+        .map(|(agent_type, display_name)| {
+            let installed = agent_binary_path(agent_type).is_some();
+            AgentTypeInfoDto {
+                agent_type: agent_type_dir_name(agent_type).to_owned(),
+                display_name: display_name.to_string(),
+                available: true,
+                installed,
+            }
+        })
+        .collect();
     Ok(agents)
 }
 
 #[tauri::command]
 async fn install_agent(
-    _agent_type: String,
+    agent_type: String,
 ) -> std::result::Result<(), String> {
-    // TODO: download and install agent binary
-    Err("尚未实现".to_owned())
+    let parsed: ProtocolAgentType = serde_json::from_str(&format!("\"{}\"", agent_type))
+        .map_err(|e| format!("无效的 agent_type: {e}"))?;
+
+    // RemoteCode is built-in — nothing to install.
+    if matches!(parsed, ProtocolAgentType::RemoteCode) {
+        return Ok(());
+    }
+
+    // Already installed?
+    if agent_binary_path(&parsed).is_some() {
+        return Ok(());
+    }
+
+    // Attempt to download from a configurable URL.
+    let env_key = format!("REMOTE_CODE_{}_DOWNLOAD_URL", agent_type.to_uppercase());
+    let download_url = env::var(&env_key).ok().or_else(|| match parsed {
+        ProtocolAgentType::RooCode => Some(
+            "https://github.com/roo-code/roo-code/releases/latest/download/roo-code-cli".to_owned(),
+        ),
+        ProtocolAgentType::Codex => Some(
+            "https://github.com/openai/codex/releases/latest/download/codex".to_owned(),
+        ),
+        _ => None,
+    });
+
+    let Some(url) = download_url else {
+        return Err(format!(
+            "未配置 {agent_type} 的下载地址。请手动安装到 ~/.remote-code/agents/{}/bin/",
+            agent_type_dir_name(&parsed)
+        ));
+    };
+
+    // Create installation directory.
+    let install_dir = agents_base_dir()
+        .join(agent_type_dir_name(&parsed))
+        .join("bin");
+    std::fs::create_dir_all(&install_dir)
+        .map_err(|e| format!("创建安装目录失败: {e}"))?;
+
+    let target_path = install_dir.join(agent_binary_name(&parsed));
+
+    // Download.
+    let response = reqwest::get(&url)
+        .await
+        .map_err(|e| format!("下载失败: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!("下载失败: HTTP {}", response.status()));
+    }
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| format!("读取下载内容失败: {e}"))?;
+
+    // Validate: must be non-empty.
+    if bytes.is_empty() {
+        return Err("下载内容为空".to_owned());
+    }
+
+    std::fs::write(&target_path, &bytes)
+        .map_err(|e| format!("写入文件失败: {e}"))?;
+
+    // Set executable permissions on Unix.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&target_path, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("设置执行权限失败: {e}"))?;
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
 async fn uninstall_agent(
-    _agent_type: String,
+    state: State<'_, AppState>,
+    agent_type: String,
 ) -> std::result::Result<(), String> {
-    // TODO: uninstall agent binary
-    Err("尚未实现".to_owned())
+    let parsed: ProtocolAgentType = serde_json::from_str(&format!("\"{}\"", agent_type))
+        .map_err(|e| format!("无效的 agent_type: {e}"))?;
+
+    // Cannot uninstall built-in agent.
+    if matches!(parsed, ProtocolAgentType::RemoteCode) {
+        return Err("无法卸载内置的 Remote Code agent".to_owned());
+    }
+
+    // Stop running agent processes for this type.
+    {
+        let mut router = state.agent_router.lock().await;
+        let session_ids = router.session_ids_by_type(parsed);
+        for sid in session_ids {
+            let _ = router.close_session(&sid).await;
+        }
+    }
+
+    // Delete the agent installation directory.
+    let agent_dir = agents_base_dir().join(agent_type_dir_name(&parsed));
+    if agent_dir.exists() {
+        std::fs::remove_dir_all(&agent_dir)
+            .map_err(|e| format!("删除 agent 目录失败: {e}"))?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn transcribe_audio(
+    _app: AppHandle,
+    _state: State<'_, AppState>,
+    audio_data: Vec<u8>,
+    mime_type: String,
+) -> std::result::Result<String, String> {
+    if audio_data.is_empty() {
+        return Err("音频数据为空".to_owned());
+    }
+
+    // Use rc-voice for transcription.
+    // Currently the MockStt implementation returns placeholder results.
+    // Replace with a real STT backend (e.g. Whisper API) when available.
+    let config = rc_voice::VoiceConfig::new("zh-CN");
+    let mut stt = rc_voice::stt::MockStt::new();
+    stt.set_config(config);
+    stt.start_listening()
+        .map_err(|e| format!("启动 STT 失败: {e}"))?;
+
+    // Inject a mock transcript based on the received audio metadata.
+    let transcript = rc_voice::types::TranscriptResult::final_result(format!(
+        "[STT 占位] 收到 {} 字节 {} 音频，等待实际 STT 后端集成",
+        audio_data.len(),
+        mime_type
+    ));
+    stt.inject_transcript(transcript);
+
+    stt.stop_listening()
+        .map_err(|e| format!("停止 STT 失败: {e}"))?;
+
+    let result = stt
+        .get_transcript()
+        .map_err(|e| format!("获取转录结果失败: {e}"))?
+        .ok_or_else(|| "未生成转录结果".to_owned())?;
+
+    Ok(result.text)
 }
 
 pub fn run() {
@@ -4253,7 +4515,8 @@ pub fn run() {
             pick_folder,
             list_available_agents,
             install_agent,
-            uninstall_agent
+            uninstall_agent,
+            transcribe_audio
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|error| panic!("error while running tauri application: {error}"));

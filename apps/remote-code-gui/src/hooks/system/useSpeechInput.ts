@@ -116,13 +116,27 @@ export function useSpeechInput(options: UseSpeechInputOptions) {
   }, []);
 
   const processAudioBlob = useCallback(
-    async (_blob: Blob) => {
+    async (blob: Blob) => {
       setStatus('transcribing');
       try {
-        // TODO: 通过 Tauri 后端调用 STT 服务 — 实际实现需要后端支持
-        setStatus('idle');
-        setErrorCode('not-configured');
-        setErrorMessage('Speech-to-text is not yet configured');
+        // Convert blob to Uint8Array for Tauri backend.
+        const arrayBuffer = await blob.arrayBuffer();
+        const audioData = Array.from(new Uint8Array(arrayBuffer));
+
+        // Dynamically import to avoid errors in non-Tauri environments.
+        const { transcribeAudio } = await import('../../lib/tauri');
+        const transcript = await transcribeAudio(audioData, blob.type);
+
+        if (transcript && transcript.trim()) {
+          onTranscriptRef.current(transcript);
+          setStatus('idle');
+          setErrorCode(null);
+          setErrorMessage(null);
+        } else {
+          setStatus('error');
+          setErrorCode('empty-transcript');
+          setErrorMessage('No transcript produced');
+        }
       } catch (error) {
         setStatus('error');
         setErrorCode('transcription-failed');
