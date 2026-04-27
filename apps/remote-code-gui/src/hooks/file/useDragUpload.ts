@@ -50,12 +50,13 @@ export function useDragUpload({
     (e: React.DragEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      if (!isFileDragging) {
+      // Drag-over fires continuously; only set state once on transition.
+      if (dragCounter.current === 0) {
+        dragCounter.current = 1;
         setIsFileDragging(true);
-        dragCounter.current += 1;
       }
     },
-    [isFileDragging],
+    [],
   );
 
   const handleDragEnter = useCallback((e: React.DragEvent) => {

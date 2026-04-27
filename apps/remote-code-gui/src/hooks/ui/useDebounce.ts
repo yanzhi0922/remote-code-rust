@@ -5,7 +5,7 @@
  * Adapted from AionUi useDebounce pattern.
  */
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useLayoutEffect } from 'react';
 
 /**
  * @param callback 需要防抖的函数
@@ -16,9 +16,16 @@ import { useCallback, useEffect, useRef } from 'react';
 export function useDebounce<T extends (...args: unknown[]) => unknown>(
   callback: T,
   delay: number,
-  deps: React.DependencyList,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept for API backward-compat; callbackRef avoids stale closures
+  _deps: React.DependencyList,
 ): T {
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const callbackRef = useRef(callback);
+
+  // Keep callback ref up-to-date synchronously to avoid stale closures.
+  useLayoutEffect(() => {
+    callbackRef.current = callback;
+  });
 
   const clearTimer = useCallback(() => {
     if (timeoutRef.current) {
@@ -37,10 +44,10 @@ export function useDebounce<T extends (...args: unknown[]) => unknown>(
     (...args: Parameters<T>) => {
       clearTimer();
       timeoutRef.current = setTimeout(() => {
-        callback(...args);
+        callbackRef.current(...args);
       }, delay);
     },
-    [delay, clearTimer, ...deps], // eslint-disable-line react-hooks/exhaustive-deps — clearTimer is stable via useRef
+    [delay, clearTimer], // eslint-disable-line react-hooks/exhaustive-deps — callbackRef avoids stale closure
   );
 
   return debouncedFunction as T;

@@ -26,7 +26,17 @@ function sessionKey(baseUrl: string): string {
  * Returns synchronously from localStorage cache (populated during initMobileRuntime).
  */
 export function resolveRemoteBaseUrl(): string | null {
-  return localStorage.getItem(STORAGE_KEY_BASE_URL);
+  const raw = localStorage.getItem(STORAGE_KEY_BASE_URL);
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return null;
+    }
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return null;
+  }
 }
 
 /**
