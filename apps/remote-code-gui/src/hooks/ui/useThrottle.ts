@@ -5,7 +5,7 @@
  * Adapted from AionUi useThrottle pattern.
  */
 
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 
 /**
  * @param callback 需要节流的函数
@@ -20,6 +20,16 @@ export function useThrottle<T extends (...args: unknown[]) => unknown>(
 ): T {
   const lastExecTime = useRef<number>(0);
   const timeoutId = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Cleanup pending timer on unmount to prevent stale callbacks.
+  useEffect(() => {
+    return () => {
+      if (timeoutId.current) {
+        clearTimeout(timeoutId.current);
+        timeoutId.current = null;
+      }
+    };
+  }, []);
 
   const throttledFunction = useCallback(
     (...args: Parameters<T>) => {

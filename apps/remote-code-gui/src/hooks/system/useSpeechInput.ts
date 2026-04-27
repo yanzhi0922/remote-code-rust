@@ -82,6 +82,7 @@ export function useSpeechInput(options: UseSpeechInputOptions) {
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const analyserRef = useRef<AnalyserNode | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
   const animFrameRef = useRef<number | null>(null);
   const onTranscriptRef = useRef(onTranscript);
   onTranscriptRef.current = onTranscript;
@@ -105,13 +106,17 @@ export function useSpeechInput(options: UseSpeechInputOptions) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
+    if (audioContextRef.current) {
+      void audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
+    }
     chunksRef.current = [];
     analyserRef.current = null;
     setAudioLevel(0);
   }, []);
 
   const processAudioBlob = useCallback(
-    async (blob: Blob) => {
+    async (_blob: Blob) => {
       setStatus('transcribing');
       try {
         // TODO: 通过 Tauri 后端调用 STT 服务 — 实际实现需要后端支持
@@ -164,6 +169,7 @@ export function useSpeechInput(options: UseSpeechInputOptions) {
 
       // 设置音频分析器
       const audioContext = new AudioContext();
+      audioContextRef.current = audioContext;
       const source = audioContext.createMediaStreamSource(stream);
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = 256;

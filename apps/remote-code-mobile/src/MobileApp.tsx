@@ -9,7 +9,7 @@
  * - Haptic feedback
  */
 
-import { useState, useEffect, useCallback, type ReactNode } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import RemoteApp from '@remote/RemoteApp';
 import { initMobileRuntime, persistRemotePairingContext } from './lib/runtime';
 import { performBiometricCheck } from './native/biometric';
@@ -25,7 +25,7 @@ import { resolveRemoteAccessToken, resolveRemoteBaseUrl } from './lib/runtime';
 
 // ─── Splash Screen ──────────────────────────────────────────────────
 
-function SplashScreen(): ReactNode {
+function SplashScreen() {
   return (
     <div className="flex h-screen w-screen items-center justify-center bg-[#f4efe4]">
       <div className="flex flex-col items-center gap-4">
@@ -43,7 +43,7 @@ function SplashScreen(): ReactNode {
 
 // ─── Error Screen ────────────────────────────────────────────────────
 
-function ErrorScreen({ error, onRetry }: { error: string; onRetry: () => void }): ReactNode {
+function ErrorScreen({ error, onRetry }: { error: string; onRetry: () => void }) {
   return (
     <div className="flex h-screen w-screen items-center justify-center bg-[#f4efe4] px-6">
       <div className="max-w-sm text-center space-y-4">
@@ -63,7 +63,7 @@ function ErrorScreen({ error, onRetry }: { error: string; onRetry: () => void })
 
 // ─── Biometric Screen ────────────────────────────────────────────────
 
-function BiometricScreen(): ReactNode {
+function BiometricScreen() {
   return (
     <div className="flex h-screen w-screen items-center justify-center bg-[#f4efe4]">
       <div className="flex flex-col items-center gap-4">
@@ -78,7 +78,7 @@ function BiometricScreen(): ReactNode {
 
 // ─── Network Banner ──────────────────────────────────────────────────
 
-function NetworkBanner({ online, connectionType }: { online: boolean; connectionType: string }): ReactNode {
+function NetworkBanner({ online, connectionType }: { online: boolean; connectionType: string }) {
   if (online) return null;
 
   return (
