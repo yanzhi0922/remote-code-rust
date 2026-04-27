@@ -128,6 +128,8 @@ pub struct VimStateMachine {
     pending_d: bool,
     /// Pending `y` for `yy`.
     pending_y: bool,
+    /// Pending `f`/`F`/`t`/`T` — waiting for the target character.
+    pending_find: Option<FindDirection>,
     /// Command buffer (`:` prefix).
     command_buffer: String,
     /// Search buffer (`/` prefix).
@@ -144,6 +146,7 @@ impl VimStateMachine {
             pending_g: false,
             pending_d: false,
             pending_y: false,
+            pending_find: None,
             command_buffer: String::new(),
             search_buffer: String::new(),
             last_find: None,
@@ -171,6 +174,7 @@ impl VimStateMachine {
         self.pending_g = false;
         self.pending_d = false;
         self.pending_y = false;
+        self.pending_find = None;
         self.command_buffer.clear();
         self.search_buffer.clear();
         self.last_find = None;
@@ -209,6 +213,17 @@ impl VimStateMachine {
             if key.code == KeyCode::Char('y') {
                 return VimAction::YankLine;
             }
+        }
+        if let Some(direction) = self.pending_find.take() {
+            if let KeyCode::Char(ch) = key.code {
+                let state = FindState {
+                    direction,
+                    char: ch,
+                };
+                self.last_find = Some(state);
+                return VimAction::FindChar(state);
+            }
+            // Not a char key — cancel the pending find and fall through.
         }
 
         match key.code {
@@ -271,9 +286,19 @@ impl VimStateMachine {
                 VimAction::EnterSearch
             }
             KeyCode::Char('f') => {
-                // Wait for next char — handled via FindChar on next key.
-                // For simplicity, we treat f + char as two separate calls.
-                // The caller should track the pending state.
+                self.pending_find = Some(FindDirection::Forward);
+                VimAction::Noop
+            }
+            KeyCode::Char('F') => {
+                self.pending_find = Some(FindDirection::Backward);
+                VimAction::Noop
+            }
+            KeyCode::Char('t') => {
+                self.pending_find = Some(FindDirection::TillForward);
+                VimAction::Noop
+            }
+            KeyCode::Char('T') => {
+                self.pending_find = Some(FindDirection::TillBackward);
                 VimAction::Noop
             }
             KeyCode::Char(';') => {
