@@ -147,14 +147,13 @@ fn parse_summaries_from_response(response: &str, expected_count: usize) -> Vec<S
     for line in response.lines() {
         let trimmed = line.trim();
         // Match lines like "#1: summary text" or "#1 - summary text"
-        if let Some(rest) = trimmed.strip_prefix('#') {
-            if let Some(colon_pos) = rest.find(|c: char| c == ':' || c == '-' || c == '.') {
-                if let Ok(_num) = rest[..colon_pos].trim().parse::<u64>() {
-                    let summary = rest[colon_pos + 1..].trim();
-                    if !summary.is_empty() {
-                        summaries.push(summary.to_owned());
-                    }
-                }
+        if let Some(rest) = trimmed.strip_prefix('#')
+            && let Some(colon_pos) = rest.find([':', '-', '.'])
+            && let Ok(_num) = rest[..colon_pos].trim().parse::<u64>()
+        {
+            let summary = rest[colon_pos + 1..].trim();
+            if !summary.is_empty() {
+                summaries.push(summary.to_owned());
             }
         }
     }

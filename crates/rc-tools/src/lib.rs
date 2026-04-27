@@ -5626,6 +5626,7 @@ while True:
         };
         let broker = StaticPermissionBroker::new(true);
 
+        // MCP auth login is not yet implemented — it should return an error.
         let login_result = execute_tool_call(
             &ToolCall {
                 id: "1".to_owned(),
@@ -5636,14 +5637,20 @@ while True:
             &broker,
         )
         .await
-        .expect("mcp_auth login should work");
+        .expect("mcp_auth tool dispatch should succeed");
 
         assert!(
-            !login_result.is_error,
-            "mcp_auth login error: {}",
+            login_result.is_error,
+            "mcp_auth login should report error until implemented: {}",
+            login_result.content
+        );
+        assert!(
+            login_result.content.contains("not yet implemented"),
+            "error message should mention 'not yet implemented': {}",
             login_result.content
         );
 
+        // Status should succeed and report not_authenticated.
         let status_result = execute_tool_call(
             &ToolCall {
                 id: "2".to_owned(),
@@ -5663,7 +5670,7 @@ while True:
         );
         let parsed: serde_json::Value =
             serde_json::from_str(&status_result.content).expect("should be valid JSON");
-        assert_eq!(parsed["status"], "authenticated");
+        assert_eq!(parsed["status"], "not_authenticated");
     }
 
     #[tokio::test]

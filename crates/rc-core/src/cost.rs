@@ -90,9 +90,9 @@ mod tests {
         tracker.record_tool_cost("bash", 0.10);
         tracker.record_tool_cost("web_search", 0.20);
 
-        assert_eq!(tracker.total_cost_usd, 0.30);
+        assert!((tracker.total_cost_usd - 0.30).abs() < 1e-9);
         assert_eq!(tracker.turn_costs_usd, vec![0.10, 0.20]);
-        assert_eq!(tracker.provider_costs_usd["anthropic"], 0.30);
+        assert!((tracker.provider_costs_usd["anthropic"] - 0.30).abs() < 1e-9);
         assert_eq!(tracker.tool_costs_usd["bash"], 0.10);
         assert_eq!(tracker.tool_costs_usd["web_search"], 0.20);
     }

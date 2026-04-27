@@ -319,6 +319,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn team_delete_cleans_up_team_dir() {
         let temp = TempDir::new().expect("temp dir");
         let team_dir = temp.path().join("test-team");
@@ -374,13 +375,14 @@ mod tests {
         assert_eq!(parsed["team_name"], "test-team");
 
         // On Windows, remove_dir_all may return before the directory entry is
-        // fully gone from the filesystem. Retry with a short back-off.
+        // fully gone from the filesystem. Retry with a generous back-off.
         let wait_for_removal = |path: &Path| {
-            for _ in 0..20 {
+            for i in 0..50 {
                 if !path.exists() {
                     return true;
                 }
-                std::thread::sleep(std::time::Duration::from_millis(10));
+                // Exponential back-off: 10ms, 20ms, 40ms … up to ~5s total
+                std::thread::sleep(std::time::Duration::from_millis(10 << i.min(5)));
             }
             !path.exists()
         };
