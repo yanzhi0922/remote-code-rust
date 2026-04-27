@@ -595,13 +595,20 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
     }
 
     fn layered_rules(&self) -> Vec<SourceAwarePermissionRule> {
+        // Clone is required by the trait API (returns owned Vec).
+        // Optimisation: avoid double-allocation when one source is empty.
         let session = self
             .session_rules
             .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let mut combined = session;
-        combined.extend(self.rules.clone());
+            .unwrap_or_else(|e| e.into_inner());
+        if session.is_empty() {
+            return self.rules.clone();
+        }
+        if self.rules.is_empty() {
+            return session.clone();
+        }
+        let mut combined = session.clone();
+        combined.extend_from_slice(&self.rules);
         combined
     }
 
@@ -621,19 +628,65 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
             .clone()
     }
 
+    /// Single-pass rule matching with priority: Deny > Ask > Allow.
+    ///
+    /// Instead of iterating all rules three times (once per action), we walk
+    /// session rules then regular rules exactly once. A Deny match returns
+    /// immediately; Ask overrides a previously recorded Allow; Allow is only
+    /// recorded when nothing else matched.
     fn matching_rule(&self, request: &PermissionRequest) -> Option<SourceAwarePermissionRule> {
-        [RuleAction::Deny, RuleAction::Ask, RuleAction::Allow]
-            .into_iter()
-            .find_map(|action| self.matching_rule_for_action(request, Some(action)))
+        let mut best: Option<SourceAwarePermissionRule> = None;
+        // Priority: Deny(3) > Ask(2) > Allow(1)
+        let mut best_priority: u8 = 0;
+
+        let mut process_rules = |rules: &[SourceAwarePermissionRule]| -> bool {
+            for rule in rules {
+                if shell_rules::rule_action_matches_request_action(
+                    &rule.tool_pattern,
+                    request,
+                    rule.action,
+                ) {
+                    match rule.action {
+                        RuleAction::Deny => {
+                            // Deny is highest priority — return immediately.
+                            best = Some(rule.clone());
+                            return true;
+                        }
+                        RuleAction::Ask => {
+                            if best_priority < 2 {
+                                best = Some(rule.clone());
+                                best_priority = 2;
+                            }
+                        }
+                        RuleAction::Allow => {
+                            if best_priority < 1 {
+                                best = Some(rule.clone());
+                                best_priority = 1;
+                            }
+                        }
+                    }
+                }
+            }
+            false
+        };
+
+        // Session rules take precedence over file-based rules.
+        {
+            let session = self.session_rules.read().unwrap_or_else(|e| e.into_inner());
+            if process_rules(&session) {
+                return best;
+            }
+        }
+
+        if process_rules(&self.rules) {
+            return best;
+        }
+
+        best
     }
 
     fn matching_rule_action(&self, request: &PermissionRequest) -> Option<RuleAction> {
-        [RuleAction::Deny, RuleAction::Ask, RuleAction::Allow]
-            .into_iter()
-            .find(|action| {
-                self.matching_rule_for_action(request, Some(*action))
-                    .is_some()
-            })
+        self.matching_rule(request).map(|rule| rule.action)
     }
 }
 

@@ -59,7 +59,8 @@ use reqwest::header::{
     ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, USER_AGENT,
 };
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
+use std::borrow::Cow;
+use std::collections::{BTreeSet, HashMap};
 use std::env;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -84,7 +85,7 @@ enum ToolSearchMode {
 pub struct ProviderClient {
     http: Client,
     /// Circuit breakers keyed by provider name.
-    breakers: Mutex<Vec<(String, CircuitBreaker)>>,
+    breakers: Mutex<HashMap<String, CircuitBreaker>>,
     /// Optional credential pool for round-robin API key rotation.
     credential_pool: Option<credential_pool::CredentialPool>,
 }
@@ -100,7 +101,7 @@ impl ProviderClient {
             .context("failed to build the provider HTTP client")?;
         Ok(Self {
             http,
-            breakers: Mutex::new(Vec::new()),
+            breakers: Mutex::new(HashMap::new()),
             credential_pool: None,
         })
     }
@@ -112,7 +113,7 @@ impl ProviderClient {
     pub fn with_credential_pool(http: Client, pool: credential_pool::CredentialPool) -> Self {
         Self {
             http,
-            breakers: Mutex::new(Vec::new()),
+            breakers: Mutex::new(HashMap::new()),
             credential_pool: Some(pool),
         }
     }
@@ -150,7 +151,7 @@ impl ProviderClient {
     /// why the request was rejected.
     fn check_circuit(&self, provider_name: &str) -> Result<()> {
         let breakers = self.breakers.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((_, breaker)) = breakers.iter().find(|(name, _)| name == provider_name) {
+        if let Some(breaker) = breakers.get(provider_name) {
             breaker.allow_request().map_err(|state| {
                 anyhow!("provider {provider_name} circuit breaker is {state:?} — skipping request")
             })?;
@@ -161,7 +162,7 @@ impl ProviderClient {
     /// Record a successful provider call in the circuit breaker.
     fn record_success(&self, provider_name: &str) {
         let mut breakers = self.breakers.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((_, breaker)) = breakers.iter_mut().find(|(name, _)| name == provider_name) {
+        if let Some(breaker) = breakers.get_mut(provider_name) {
             breaker.record_success();
         }
     }
@@ -171,13 +172,14 @@ impl ProviderClient {
     /// Lazily creates a breaker for the provider if one does not yet exist.
     fn record_failure(&self, provider_name: &str) {
         let mut breakers = self.breakers.lock().unwrap_or_else(|e| e.into_inner());
-        match breakers.iter_mut().find(|(name, _)| name == provider_name) {
-            Some((_, breaker)) => breaker.record_failure(),
-            None => {
+        use std::collections::hash_map::Entry;
+        match breakers.entry(provider_name.to_owned()) {
+            Entry::Occupied(e) => e.into_mut().record_failure(),
+            Entry::Vacant(e) => {
                 let config = Self::breaker_config_for(provider_name);
                 let breaker = CircuitBreaker::new(config);
                 breaker.record_failure();
-                breakers.push((provider_name.to_owned(), breaker));
+                e.insert(breaker);
             }
         }
     }
@@ -736,15 +738,21 @@ pub(crate) fn maybe_dump_request_body(label: &str, body: &Value) {
     }
 }
 
-fn provider_for_request(
-    provider: &ProviderConfig,
+/// Build the effective [`ProviderConfig`] for a request, applying any overrides
+/// from the [`query_source::ProviderRequestContext`].
+///
+/// Returns [`Cow::Borrowed`] when no overrides are present (avoids cloning the
+/// entire config), and [`Cow::Owned`] only when the config actually needs to be
+/// modified.
+fn provider_for_request<'a>(
+    provider: &'a ProviderConfig,
     request_context: Option<&query_source::ProviderRequestContext>,
-) -> ProviderConfig {
+) -> Cow<'a, ProviderConfig> {
     let Some(context) = request_context else {
-        return provider.clone();
+        return Cow::Borrowed(provider);
     };
     if context.model_override.is_none() && context.max_output_tokens.is_none() {
-        return provider.clone();
+        return Cow::Borrowed(provider);
     }
 
     let mut effective = provider.clone();
@@ -754,7 +762,7 @@ fn provider_for_request(
     if let Some(max_output_tokens) = context.max_output_tokens {
         effective.max_output_tokens = max_output_tokens;
     }
-    effective
+    Cow::Owned(effective)
 }
 
 async fn build_openai_request_body(
