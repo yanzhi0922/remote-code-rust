@@ -18,11 +18,29 @@ pub(crate) async fn web_fetch(input: &Value, _context: &ToolExecutionContext) ->
         .get("url")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("web_fetch requires a url"))?;
+
+    // Validate URL format before making the request
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err(anyhow!(
+            "Invalid URL format: '{}'. URL must start with http:// or https://",
+            url
+        ));
+    }
+
     let max_chars = input
         .get("max_chars")
         .and_then(Value::as_u64)
         .unwrap_or(50_000) as usize;
-    let response = reqwest::get(url).await.context("failed to fetch URL")?;
+
+    // Apply a timeout to prevent hanging on unresponsive servers
+    let response = timeout(
+        Duration::from_secs(30),
+        reqwest::get(url),
+    )
+    .await
+    .map_err(|_| anyhow!("web_fetch timed out after 30 seconds for {}", url))?
+    .context("failed to fetch URL")?;
+
     let status = response.status();
     if !status.is_success() {
         return Err(anyhow!("HTTP {} for {}", status, url));

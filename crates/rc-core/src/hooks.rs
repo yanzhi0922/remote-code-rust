@@ -58,7 +58,7 @@ pub enum HookEventKind {
     PermissionDenied,
 }
 
-/// All standard hook event kinds (26 events matching upstream HOOK_EVENTS).
+/// All standard hook event kinds (27 events matching upstream HOOK_EVENTS).
 pub const HOOK_EVENTS: [HookEventKind; 27] = [
     HookEventKind::PreToolUse,
     HookEventKind::PostToolUse,

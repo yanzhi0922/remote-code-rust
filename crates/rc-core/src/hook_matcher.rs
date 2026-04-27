@@ -31,7 +31,7 @@ pub fn match_hooks(
     matchers: &[HookMatcherEntry],
     tool_name: Option<&str>,
     input_tool_name: Option<&str>,
-    _input_tool_input: Option<&serde_json::Value>,
+    input_tool_input: Option<&serde_json::Value>,
 ) -> MatchedHooks {
     let mut hooks = Vec::new();
     let mut seen_keys = HashSet::new();
@@ -43,9 +43,9 @@ pub fn match_hooks(
         }
 
         for hook in &matcher_entry.hooks {
-            // Evaluate if_condition against the tool name
+            // Evaluate if_condition against the tool name and input
             if let Some(condition) = hook.if_condition()
-                && !evaluate_if_condition(condition, input_tool_name)
+                && !evaluate_if_condition(condition, input_tool_name, input_tool_input)
             {
                 continue;
             }
@@ -98,7 +98,7 @@ pub fn match_tool_name(tool_name: Option<&str>, matcher: Option<&str>) -> bool {
     false
 }
 
-/// Evaluate an `if` condition string against a tool name.
+/// Evaluate an `if` condition string against a tool name and optional input.
 ///
 /// The condition uses permission-rule syntax:
 /// - `"Bash(git *)"` → matches tool "Bash" with argument pattern "git *"
@@ -108,7 +108,11 @@ pub fn match_tool_name(tool_name: Option<&str>, matcher: Option<&str>) -> bool {
 /// Argument patterns support `*` as a wildcard that matches any sequence of
 /// characters. For example, `Bash(git *)` matches tool "Bash" when the
 /// arguments start with "git ".
-pub fn evaluate_if_condition(condition: &str, tool_name: Option<&str>) -> bool {
+pub fn evaluate_if_condition(
+    condition: &str,
+    tool_name: Option<&str>,
+    tool_input: Option<&serde_json::Value>,
+) -> bool {
     if condition.is_empty() {
         return true;
     }
@@ -121,7 +125,7 @@ pub fn evaluate_if_condition(condition: &str, tool_name: Option<&str>) -> bool {
     // Support pipe-separated conditions
     for cond in condition.split('|') {
         let cond = cond.trim();
-        if evaluate_single_condition(cond, name) {
+        if evaluate_single_condition(cond, name, tool_input) {
             return true;
         }
     }
@@ -129,13 +133,19 @@ pub fn evaluate_if_condition(condition: &str, tool_name: Option<&str>) -> bool {
     false
 }
 
-/// Evaluate a single condition (no pipe separator) against a tool name.
+/// Evaluate a single condition (no pipe separator) against a tool name and
+/// optional input.
 ///
 /// Supports:
 /// - Simple tool name: `"Bash"` → exact match on tool name.
 /// - Tool with argument pattern: `"Bash(git *)"` → matches tool name and
-///   checks the argument pattern using wildcard (`*`) matching.
-fn evaluate_single_condition(condition: &str, tool_name: &str) -> bool {
+///   checks the argument pattern using wildcard (`*`) matching against the
+///   tool's input arguments.
+fn evaluate_single_condition(
+    condition: &str,
+    tool_name: &str,
+    tool_input: Option<&serde_json::Value>,
+) -> bool {
     // Check for parenthesized argument pattern: "ToolName(pattern)"
     if let Some(paren_pos) = condition.find('(') {
         let cond_tool = &condition[..paren_pos];
@@ -148,14 +158,88 @@ fn evaluate_single_condition(condition: &str, tool_name: &str) -> bool {
             None => condition.len(),
         };
         let arg_pattern = &condition[paren_pos + 1..close_paren];
-        // If no argument info is available, match on tool name only
-        // (argument filtering is applied when tool input is available)
-        let _ = arg_pattern;
-        return true;
+
+        // If no tool input is available, we cannot verify the argument pattern.
+        // Fall back to matching on tool name only (conservative: allow the match
+        // so that argument filtering can be applied later when input is available).
+        let Some(input) = tool_input else {
+            return true;
+        };
+
+        // Extract the argument string from tool input.
+        // For Bash-like tools the arguments are typically in "command" field.
+        // For other tools, try "path", "file_path", "pattern", or fall back to
+        // stringifying the entire input.
+        let arg_str = extract_tool_argument(input);
+        return wildcard_match(arg_pattern, &arg_str);
     }
 
     // Simple tool name match
     condition == tool_name
+}
+
+/// Extract a representative argument string from a tool's input JSON.
+///
+/// Tries common field names used across different tool types:
+/// - `command` (Bash, shell tools)
+/// - `file_path` / `path` (file operation tools)
+/// - `pattern` (search tools)
+/// Falls back to stringifying the entire input if no known field is found.
+fn extract_tool_argument(input: &serde_json::Value) -> String {
+    if let Some(s) = input.get("command").and_then(|v| v.as_str()) {
+        return s.to_owned();
+    }
+    if let Some(s) = input.get("file_path").and_then(|v| v.as_str()) {
+        return s.to_owned();
+    }
+    if let Some(s) = input.get("path").and_then(|v| v.as_str()) {
+        return s.to_owned();
+    }
+    if let Some(s) = input.get("pattern").and_then(|v| v.as_str()) {
+        return s.to_owned();
+    }
+    // Fallback: use the entire JSON as the argument string
+    input.to_string()
+}
+
+/// Simple wildcard pattern matching where `*` matches any sequence of characters.
+///
+/// The pattern is matched against the beginning of the text (prefix match).
+/// If the pattern does not contain `*`, it is compared as a prefix of the text.
+fn wildcard_match(pattern: &str, text: &str) -> bool {
+    if pattern.is_empty() {
+        return true;
+    }
+
+    // Split the pattern by '*' and match each segment sequentially
+    let mut text_remaining = text;
+    let segments: Vec<&str> = pattern.split('*').collect();
+
+    for (i, segment) in segments.iter().enumerate() {
+        if segment.is_empty() {
+            continue;
+        }
+        match text_remaining.find(segment) {
+            Some(pos) => {
+                // For the first segment, it must match at the start (position 0)
+                // unless preceded by a '*' wildcard
+                if i == 0 && pos != 0 {
+                    return false;
+                }
+                text_remaining = &text_remaining[pos + segment.len()..];
+            }
+            None => return false,
+        }
+    }
+
+    // If the pattern doesn't end with '*', the match must consume to the end
+    // of the text — unless the last segment is empty (pattern ends with '*')
+    if !pattern.ends_with('*') && !text_remaining.is_empty() {
+        // Allow partial match: the pattern is a prefix of the text
+        // This handles cases like "git *" where the text is "git commit -m 'msg'"
+    }
+
+    true
 }
 
 /// Deduplicate a list of hooks by their dedup keys.
