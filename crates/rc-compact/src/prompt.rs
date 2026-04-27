@@ -393,10 +393,13 @@ pub fn build_compact_user_summary_message(
 }
 
 /// Rough token estimation: ~4 characters per token (conservative default).
+///
+/// Formula: `chars / 4` gives the base estimate, then padded by 4/3 for
+/// conservatism, yielding `chars / 3` overall.
 pub fn rough_token_count(text: &str) -> u64 {
     let len = text.len() as u64;
-    // Pad by 4/3 to be conservative
-    (len * 4).div_ceil(3)
+    // ~4 chars per token, padded by 4/3 for conservatism → chars / 3
+    len.div_ceil(3)
 }
 
 #[cfg(test)]
@@ -447,7 +450,7 @@ mod tests {
 
     #[test]
     fn rough_token_count_basic() {
-        // "hello" = 5 chars → (5*4+2)/3 = 22/3 = 7 tokens
-        assert_eq!(rough_token_count("hello"), 7);
+        // "hello" = 5 chars → ceil(5/3) = 2 tokens
+        assert_eq!(rough_token_count("hello"), 2);
     }
 }

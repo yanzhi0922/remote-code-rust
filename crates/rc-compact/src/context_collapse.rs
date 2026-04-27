@@ -381,10 +381,12 @@ impl ContextCollapseEngine {
             let total = collapsed.len();
             let start = total.saturating_sub(self.config.preserve_recent_messages);
 
-            // Preserve system messages from the beginning
+            // Preserve system messages from the beginning (before the recent tail).
+            // System messages inside the recent tail are already included below,
+            // so we only collect those that would otherwise be dropped.
             let mut preserved: Vec<rc_core::Message> = Vec::new();
             if self.config.preserve_system_messages {
-                for msg in &collapsed {
+                for msg in collapsed.iter().take(start) {
                     if Self::is_system_message(msg) {
                         preserved.push(msg.clone());
                     }
