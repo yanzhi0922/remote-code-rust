@@ -12,6 +12,14 @@ pub struct HealthCheckConfig {
     /// Interval between health checks.
     pub interval: Duration,
     /// Timeout after which a lack of response is considered unhealthy.
+    ///
+    /// # Note
+    ///
+    /// This field is currently defined but **not used** by [`HealthChecker::check`].
+    /// The health check currently relies on the caller providing a boolean
+    /// `is_alive` result, which the caller should obtain with its own timeout
+    /// logic. A future refactor may integrate this timeout directly into the
+    /// checker.
     pub timeout: Duration,
     /// Number of consecutive failures before marking as [`HealthStatus::Unhealthy`].
     pub max_failures: u32,

@@ -159,6 +159,13 @@ impl AgentAdapter for RemoteCodeAdapter {
         session_id: &str,
         message: &str,
     ) -> anyhow::Result<mpsc::Receiver<UnifiedAgentEvent>> {
+        // #22: The callback is a synchronous blocking function. This means the
+        // entire agent computation runs on the current tokio task, blocking
+        // other tasks on the same thread. For short-lived operations this is
+        // acceptable, but long-running agent calls should use
+        // `tokio::task::spawn_blocking` to avoid starving the runtime.
+        // This is a known limitation that will be addressed when the callback
+        // signature is changed to async in a future refactor.
         let callback = self
             .on_send_message
             .as_ref()

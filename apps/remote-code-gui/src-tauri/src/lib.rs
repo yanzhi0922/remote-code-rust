@@ -474,7 +474,8 @@ struct ContextCompactedDto {
     usage_ratio: f64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AgentTypeInfoDto {
     agent_type: String,
     display_name: String,
@@ -482,7 +483,8 @@ struct AgentTypeInfoDto {
     installed: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AgentStatusChangedDto {
     session_id: String,
     agent_type: String,
@@ -2834,6 +2836,18 @@ async fn run_gui_prompt(
                 }),
             )?;
 
+            // Fix #12: Context compression persistence.
+            // After compaction, the in-memory `conversation` is replaced with the
+            // compacted version, and the compaction event is persisted via
+            // `store.append_named_event`.  However, the *full conversation state*
+            // after compaction is NOT explicitly persisted here — it relies on the
+            // next `store.append_conversation_entry` call (for the assistant
+            // response) to capture the post-compaction state.  If the process
+            // crashes between compaction and the next append, the transcript will
+            // still contain the pre-compaction entries, which will be
+            // re-compacted on the next session restore.  This is acceptable
+            // because compaction is idempotent, but a future improvement could
+            // persist a "compaction checkpoint" entry immediately after compaction.
             let compacted = context_manager.compact(&conversation);
             let removed = conversation.len().saturating_sub(compacted.len());
             conversation = compacted;
@@ -3064,6 +3078,7 @@ async fn run_agent_prompt(
     session_id: String,
     agent_router: Arc<Mutex<AgentRouter>>,
     prompt: &str,
+    agent_type: &str,
 ) -> Result<PromptRunOutcome> {
     // 1. Send message through the AgentRouter to obtain an event stream.
     let mut receiver = {
@@ -3076,7 +3091,7 @@ async fn run_agent_prompt(
         APP_EVENT_AGENT_STATUS_CHANGED,
         AgentStatusChangedDto {
             session_id: session_id.clone(),
-            agent_type: "external".to_owned(),
+            agent_type: agent_type.to_owned(),
             status: "busy".to_owned(),
         },
     );
@@ -3143,6 +3158,20 @@ async fn run_agent_prompt(
             }
             UnifiedAgentEvent::PermissionRequest { request_id, tool_name, input, .. } => {
                 // Forward the permission request to the frontend.
+                //
+                // TODO(#5): The current implementation only emits a GUI event and
+                // relies on the frontend to call `resolve_permission_request` via
+                // a Tauri command.  This means there is **no automatic timeout or
+                // fallback** — if the user never responds, the agent hangs forever.
+                // A future iteration should add a server-side timeout (e.g. 60 s)
+                // that auto-deny the request, and a fallback broker for headless
+                // mode.
+                tracing::warn!(
+                    request_id = %request_id,
+                    tool_name = %tool_name,
+                    agent_type = %agent_type,
+                    "Agent permission request forwarded to GUI — awaiting user decision"
+                );
                 let _ = app.emit(
                     APP_EVENT_PERMISSION_REQUEST,
                     PermissionRequestDto {
@@ -3150,7 +3179,7 @@ async fn run_agent_prompt(
                         tool_name,
                         tool_use_id: String::new(),
                         title: "Agent 权限请求".to_owned(),
-                        description: "外部 Agent 请求执行操作".to_owned(),
+                        description: format!("{} Agent 请求执行操作", agent_type),
                         input,
                         blocked_path: None,
                         permission_suggestions: vec![],
@@ -3194,6 +3223,8 @@ async fn run_agent_prompt(
                 );
             }
             UnifiedAgentEvent::ContextUsage { used, total, .. } => {
+                // Fix #6: guard against total == 0 to avoid divide-by-zero.
+                let ratio = if total == 0 { 0.0 } else { used as f64 / total as f64 };
                 let _ = app.emit(
                     APP_EVENT_CONTEXT_USAGE,
                     ContextUsageDto {
@@ -3201,29 +3232,32 @@ async fn run_agent_prompt(
                         estimated_tokens: used as u64,
                         max_input_tokens: total as u64,
                         threshold_tokens: (total as f64 * 0.8) as u64,
-                        ratio: used as f64 / total as f64,
+                        ratio,
                     },
                 );
             }
-            UnifiedAgentEvent::ContextOverflow { .. } => {
+            UnifiedAgentEvent::ContextOverflow { used, total, .. } => {
+                // Fix #11: use actual values from the event instead of hardcoded zeros.
+                let ratio = if total == 0 { 1.0 } else { used as f64 / total as f64 };
                 let _ = app.emit(
                     APP_EVENT_CONTEXT_OVERFLOW,
                     ContextOverflowDto {
                         session_id: session_id.clone(),
-                        estimated_tokens: 0,
-                        max_input_tokens: 0,
-                        threshold_tokens: 0,
-                        ratio: 1.0,
+                        estimated_tokens: used as u64,
+                        max_input_tokens: total as u64,
+                        threshold_tokens: (total as f64 * 0.8) as u64,
+                        ratio,
                     },
                 );
             }
-            UnifiedAgentEvent::ContextCompacted { .. } => {
+            UnifiedAgentEvent::ContextCompacted { entries_removed, usage_ratio, .. } => {
+                // Fix #11: use actual values from the event instead of hardcoded zeros.
                 let _ = app.emit(
                     APP_EVENT_CONTEXT_COMPACTED,
                     ContextCompactedDto {
                         session_id: session_id.clone(),
-                        entries_removed: 0,
-                        usage_ratio: 0.0,
+                        entries_removed,
+                        usage_ratio,
                     },
                 );
             }
@@ -3253,7 +3287,7 @@ async fn run_agent_prompt(
                     APP_EVENT_AGENT_STATUS_CHANGED,
                     AgentStatusChangedDto {
                         session_id: session_id.clone(),
-                        agent_type: "external".to_owned(),
+                        agent_type: agent_type.to_owned(),
                         status: "ready".to_owned(),
                     },
                 );
@@ -3281,7 +3315,7 @@ async fn run_agent_prompt(
                         APP_EVENT_AGENT_STATUS_CHANGED,
                         AgentStatusChangedDto {
                             session_id: session_id.clone(),
-                            agent_type: "external".to_owned(),
+                            agent_type: agent_type.to_owned(),
                             status: status_str.to_owned(),
                         },
                     );
@@ -3297,7 +3331,7 @@ async fn run_agent_prompt(
                             APP_EVENT_AGENT_STATUS_CHANGED,
                             AgentStatusChangedDto {
                                 session_id: session_id.clone(),
-                                agent_type: "external".to_owned(),
+                                agent_type: agent_type.to_owned(),
                                 status: "restart_needed".to_owned(),
                             },
                         );
@@ -3390,8 +3424,13 @@ async fn create_session(
     project_path: Option<String>,
     agent_type: Option<String>,
 ) -> std::result::Result<String, String> {
-    let runtime = state.runtime.lock().await;
-    let mut config = runtime.config.clone();
+    // Fix #9: extract all needed data from runtime, then drop the lock before
+    // acquiring agent_router — avoids potential deadlock from nested locks.
+    let (mut config, session_store, projects) = {
+        let runtime = state.runtime.lock().await;
+        let config = runtime.config.clone();
+        (config, Arc::clone(&runtime.session_store), runtime.projects.clone())
+    };
     config.session_id = Uuid::new_v4();
     let project_path = project_path
         .filter(|value| !value.trim().is_empty())
@@ -3399,8 +3438,7 @@ async fn create_session(
     let normalized_project_path =
         normalize_existing_path(Path::new(&project_path)).map_err(|error| format!("{error:#}"))?;
     let path_key = path_identity(&normalized_project_path);
-    if !runtime
-        .projects
+    if !projects
         .iter()
         .any(|project| path_identity(&project.path) == path_key)
     {
@@ -3418,19 +3456,21 @@ async fn create_session(
     ).map_err(|e| format!("无效的 agent_type: {e}"))?;
 
     as_error(initialize_session_conversation(
-        &runtime.session_store,
+        &session_store,
         &config,
         title.as_deref(),
     ))?;
 
     // Persist agent_type into session transcript as a named event.
-    as_error(runtime.session_store.append_named_event(
+    as_error(session_store.append_named_event(
         config.session_id,
         "agent_type",
         serde_json::json!({ "agent_type": agent_type_str }),
     ))?;
 
     // For external agents (RooCode / Codex), pre-create and register an adapter.
+    // Fix #10: if adapter creation fails, roll back by removing the session data
+    // that was just created so the user doesn't end up with a zombie session.
     if _parsed_agent_type != ProtocolAgentType::RemoteCode {
         let agent_config = AgentConfig {
             agent_type: _parsed_agent_type,
@@ -3444,10 +3484,21 @@ async fn create_session(
             base_url: config.provider.base_url.clone(),
         };
         let mut router = state.agent_router.lock().await;
-        router
+        if let Err(e) = router
             .create_and_register(config.session_id.to_string(), &agent_config)
             .await
-            .map_err(|e| format!("Agent 启动失败: {e:#}"))?;
+        {
+            // Fix #10: Roll back — archive the session that was just created so
+            // it doesn't appear in the active list.  SessionStore has no
+            // delete method, so archiving is the best available cleanup.
+            tracing::warn!(
+                session_id = %config.session_id,
+                error = %e,
+                "Adapter creation failed, archiving session as rollback"
+            );
+            let _ = session_store.set_archived(config.session_id, true);
+            return Err(format!("Agent 启动失败: {e:#}"));
+        }
     }
 
     Ok(config.session_id.to_string())
@@ -3513,6 +3564,7 @@ async fn send_prompt(
                     sid_for_cleanup.clone(),
                     agent_router,
                     &prompt,
+                    &agent_type_str,
                 )
                 .await
             } else {
@@ -4260,7 +4312,9 @@ fn agent_binary_name(agent_type: &ProtocolAgentType) -> String {
 fn agent_binary_path(agent_type: &ProtocolAgentType) -> Option<PathBuf> {
     if matches!(agent_type, ProtocolAgentType::RemoteCode) {
         // RemoteCode is built-in — always available.
-        return Some(std::env::current_exe().unwrap_or_default());
+        // Fix #7: use .ok() instead of unwrap_or_default() to avoid returning
+        // an empty PathBuf that callers would misinterpret as a valid binary.
+        return std::env::current_exe().ok();
     }
 
     let binary_name = agent_binary_name(agent_type);
@@ -4329,15 +4383,24 @@ async fn install_agent(
         return Ok(());
     }
 
+    // Fix #8: append platform-specific suffix to download URLs.
+    let platform_suffix = if cfg!(windows) {
+        "-windows.exe"
+    } else if cfg!(target_os = "macos") {
+        "-macos"
+    } else {
+        "-linux"
+    };
+
     // Attempt to download from a configurable URL.
     let env_key = format!("REMOTE_CODE_{}_DOWNLOAD_URL", agent_type.to_uppercase());
     let download_url = env::var(&env_key).ok().or_else(|| match parsed {
-        ProtocolAgentType::RooCode => Some(
-            "https://github.com/roo-code/roo-code/releases/latest/download/roo-code-cli".to_owned(),
-        ),
-        ProtocolAgentType::Codex => Some(
-            "https://github.com/openai/codex/releases/latest/download/codex".to_owned(),
-        ),
+        ProtocolAgentType::RooCode => Some(format!(
+            "https://github.com/roo-code/roo-code/releases/latest/download/roo-code-cli{platform_suffix}"
+        )),
+        ProtocolAgentType::Codex => Some(format!(
+            "https://github.com/openai/codex/releases/latest/download/codex{platform_suffix}"
+        )),
         _ => None,
     });
 

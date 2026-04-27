@@ -123,7 +123,12 @@ pub struct AgentConfig {
     #[serde(default)]
     pub provider: Option<String>,
     /// Optional API key (passed via environment variable to sub-processes).
-    #[serde(default)]
+    ///
+    /// # Security
+    ///
+    /// This field is **not** serialized to prevent accidental leakage of API
+    /// keys in logs, debug output, or persisted configurations.
+    #[serde(default, skip_serializing)]
     pub api_key: Option<String>,
     /// Optional base URL override for the provider API.
     #[serde(default)]

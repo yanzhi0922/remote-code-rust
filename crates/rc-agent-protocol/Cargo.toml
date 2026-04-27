@@ -18,7 +18,6 @@ uuid = { workspace = true, features = ["v4", "serde"] }
 chrono = { workspace = true, features = ["serde"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-futures = { workspace = true }
 
 [lints]
 workspace = true

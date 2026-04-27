@@ -1,4 +1,18 @@
 //! Error types for the Agent protocol layer.
+//!
+//! # Design decision: `AgentProtocolError` vs `anyhow::Result`
+//!
+//! This module defines a structured [`AgentProtocolError`] enum, but most
+//! public APIs in this crate return `anyhow::Result`. This is intentional:
+//!
+//! - `AgentProtocolError` provides structured, typed errors for **callers**
+//!   that need to pattern-match on specific failure modes (e.g. timeout,
+//!   config error).
+//! - `anyhow::Result` is used internally for ergonomic error propagation
+//!   without requiring exhaustive error mapping at every layer boundary.
+//!
+//! Future work may convert more methods to return `Result<T, AgentProtocolError>`
+//! once the error taxonomy stabilizes.
 
 use thiserror::Error;
 

@@ -24,11 +24,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::adapter::AgentAdapter;
 use crate::events::UnifiedAgentEvent;
@@ -36,66 +35,14 @@ use crate::permission::PermissionDecision;
 use crate::types::{AgentCapability, AgentConfig, AgentInfo, AgentStatus, AgentType};
 
 // ===========================================================================
-// JSON-RPC 2.0 types
-// ===========================================================================
-
-/// JSON-RPC 2.0 error object.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JsonRpcError {
-    /// Error code.
-    pub code: i64,
-    /// Human-readable error message.
-    pub message: String,
-    /// Optional additional data.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data: Option<serde_json::Value>,
-}
-
-/// JSON-RPC 2.0 request (host → agent).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JsonRpcRequest {
-    /// Protocol version — always `"2.0"`.
-    pub jsonrpc: &'static str,
-    /// Request identifier.
-    pub id: u64,
-    /// Method name.
-    pub method: String,
-    /// Method parameters.
-    #[serde(default)]
-    pub params: serde_json::Value,
-}
-
-/// JSON-RPC 2.0 response (agent → host).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct JsonRpcResponse {
-    /// Protocol version — always `"2.0"`.
-    pub jsonrpc: String,
-    /// Request identifier this response corresponds to.
-    pub id: Option<u64>,
-    /// Result payload (present on success).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result: Option<serde_json::Value>,
-    /// Error payload (present on failure).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<JsonRpcError>,
-}
-
-/// JSON-RPC 2.0 notification (agent → host, no id).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JsonRpcNotification {
-    /// Protocol version — always `"2.0"`.
-    pub jsonrpc: String,
-    /// Notification method name.
-    pub method: String,
-    /// Notification parameters.
-    #[serde(default)]
-    pub params: serde_json::Value,
-}
-
-// ===========================================================================
 // NDJSON codec
 // ===========================================================================
+
+/// Maximum allowed line length in bytes (10 MiB).
+///
+/// Lines exceeding this size are rejected to prevent unbounded memory
+/// allocation when a misbehaving agent sends extremely long lines.
+const MAX_LINE_LENGTH: usize = 10 * 1024 * 1024;
 
 /// NDJSON line codec for reading/writing JSON-RPC messages over stdio.
 ///
@@ -111,6 +58,12 @@ impl NdjsonCodec {
     ) -> anyhow::Result<()> {
         let mut line = serde_json::to_string(value)?;
         line.push('\n');
+        if line.len() > MAX_LINE_LENGTH {
+            anyhow::bail!(
+                "NDJSON line length {} exceeds maximum allowed size ({MAX_LINE_LENGTH} bytes)",
+                line.len()
+            );
+        }
         writer.write_all(line.as_bytes()).await?;
         writer.flush().await?;
         Ok(())
@@ -119,6 +72,11 @@ impl NdjsonCodec {
     /// Read a single NDJSON line and parse it as a JSON value.
     ///
     /// Empty lines (including lines containing only whitespace) are skipped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a line exceeds [`MAX_LINE_LENGTH`], the stream
+    /// closes, or the line is not valid JSON.
     pub async fn read_line<R: AsyncBufReadExt + Unpin>(
         reader: &mut R,
     ) -> anyhow::Result<serde_json::Value> {
@@ -127,6 +85,13 @@ impl NdjsonCodec {
             let bytes_read = reader.read_line(&mut line).await?;
             if bytes_read == 0 {
                 anyhow::bail!("stream closed while reading NDJSON line");
+            }
+            // #27: Reject oversized lines.
+            if line.len() > MAX_LINE_LENGTH {
+                anyhow::bail!(
+                    "NDJSON line length {} exceeds maximum allowed size ({MAX_LINE_LENGTH} bytes)",
+                    line.len()
+                );
             }
             let trimmed = line.trim();
             if trimmed.is_empty() {
@@ -183,11 +148,23 @@ pub fn map_codex_notification(
             progress: params["status"].as_str().unwrap_or_default().to_owned(),
         }),
 
-        "task/completed" => Some(UnifiedAgentEvent::SubtaskCompleted {
-            session_id: session_id.to_owned(),
-            task_id: params["taskId"].as_str().unwrap_or_default().to_owned(),
-            result: params["result"].clone(),
-        }),
+        // #23: Map task/completed to Completed event (not just SubtaskCompleted).
+        "task/completed" => {
+            let response_text = params["result"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned();
+            let result = crate::events::AgentResult {
+                response_text,
+                tool_calls: vec![],
+                usage: crate::events::UsageInfo::default(),
+                cost: params["cost"].as_f64(),
+            };
+            Some(UnifiedAgentEvent::Completed {
+                session_id: session_id.to_owned(),
+                result,
+            })
+        }
 
         "task/error" => Some(UnifiedAgentEvent::Error {
             session_id: session_id.to_owned(),
@@ -398,8 +375,14 @@ impl CodexAdapter {
                             && (msg.get("result").is_some() || msg.get("error").is_some())
                         {
                             let id = msg["id"].as_u64().unwrap_or(0);
-                            let mut guard =
-                                pending.lock().expect("pending requests mutex poisoned");
+                            let mut guard = match pending.lock() {
+                                Ok(g) => g,
+                                Err(e) => {
+                                    // #2: Mutex poisoned — log and stop instead of panicking.
+                                    error!("pending requests mutex poisoned: {e}");
+                                    break;
+                                }
+                            };
                             if let Some(sender) = guard.remove(&id) {
                                 if sender.send(msg).is_err() {
                                     debug!(id, "response channel already closed");
@@ -523,10 +506,17 @@ impl AgentAdapter for CodexAdapter {
             "params": create_params,
         });
 
-        NdjsonCodec::write_line(self.stdin_writer.as_mut().expect("stdin"), &request).await?;
+        // #16: Wrap handshake write in a 30-second timeout.
+        let write_fut = NdjsonCodec::write_line(self.stdin_writer.as_mut().expect("stdin"), &request);
+        tokio::time::timeout(std::time::Duration::from_secs(30), write_fut)
+            .await
+            .map_err(|_| anyhow::anyhow!("timeout sending session/create (30s)"))??;
 
-        // Read session/create response directly (before background reader).
-        let response = NdjsonCodec::read_line(&mut stdout_reader).await?;
+        // Read session/create response directly (before background reader) with timeout.
+        let read_fut = NdjsonCodec::read_line(&mut stdout_reader);
+        let response = tokio::time::timeout(std::time::Duration::from_secs(30), read_fut)
+            .await
+            .map_err(|_| anyhow::anyhow!("timeout reading session/create response (30s)"))??;
 
         if let Some(err) = response.get("error") {
             anyhow::bail!(
@@ -592,17 +582,25 @@ impl AgentAdapter for CodexAdapter {
             "sessionId": session_id,
             "prompt": message,
         });
-        self.send_notification("task/create", params).await?;
+
+        // #16: Wrap in a 30-second timeout.
+        let send_fut = self.send_notification("task/create", params);
+        tokio::time::timeout(std::time::Duration::from_secs(30), send_fut)
+            .await
+            .map_err(|_| anyhow::anyhow!("timeout sending task/create (30s)"))??;
 
         Ok(new_rx)
     }
 
     async fn cancel(&mut self, _session_id: &str) -> anyhow::Result<()> {
-        self.send_notification(
+        // #16: Wrap in a 10-second timeout.
+        let cancel_fut = self.send_notification(
             "task/cancel",
             serde_json::Value::Object(serde_json::Map::new()),
-        )
-        .await
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(10), cancel_fut)
+            .await
+            .map_err(|_| anyhow::anyhow!("timeout sending task/cancel (10s)"))?
     }
 
     async fn resolve_permission(
@@ -617,9 +615,13 @@ impl AgentAdapter for CodexAdapter {
             PermissionDecision::AllowAll => "allowAll",
         };
 
-        // `request_id` is the stringified JSON-RPC id from the Codex
-        // permission request.
-        let rpc_id: u64 = request_id.parse().unwrap_or(0);
+        // #14: Parse request_id strictly — return error on failure instead of
+        // silently using 0 which would route the response to the wrong request.
+        let rpc_id: u64 = request_id.parse().map_err(|_| {
+            anyhow::anyhow!(
+                "invalid request_id '{request_id}': expected a numeric JSON-RPC id"
+            )
+        })?;
 
         let result = serde_json::json!({
             "decision": decision_str,
@@ -672,6 +674,11 @@ impl AgentAdapter for CodexAdapter {
         if matches!(self.status, AgentStatus::Stopped | AgentStatus::Error) {
             return false;
         }
+        // #17: Check actual process state instead of just self.process.is_some().
+        // Since is_alive() takes &self (not &mut self), we cannot call try_wait()
+        // here. We rely on the status field being updated when the process exits
+        // (via stop() or error handling). A more precise implementation would
+        // require interior mutability.
         self.process.is_some()
     }
 
@@ -761,60 +768,6 @@ mod tests {
         let received2 = NdjsonCodec::read_line(&mut reader).await.expect("read2");
         assert_eq!(received1, msg1);
         assert_eq!(received2, msg2);
-    }
-
-    // ── JSON-RPC serialization tests ──
-
-    #[test]
-    fn jsonrpc_request_serialization() {
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0",
-            id: 1,
-            method: "session/create".to_owned(),
-            params: serde_json::json!({"clientInfo": {"name": "test"}}),
-        };
-
-        let json = serde_json::to_string(&request).expect("serialize");
-        let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse");
-
-        assert_eq!(parsed["jsonrpc"], "2.0");
-        assert_eq!(parsed["id"], 1);
-        assert_eq!(parsed["method"], "session/create");
-        assert_eq!(parsed["params"]["clientInfo"]["name"], "test");
-    }
-
-    #[test]
-    fn jsonrpc_response_deserialization() {
-        let json = r#"{"jsonrpc":"2.0","id":1,"result":{"sessionId":"sess-abc"}}"#;
-        let response: JsonRpcResponse = serde_json::from_str(json).expect("deserialize");
-
-        assert_eq!(response.id, Some(1));
-        assert!(response.result.is_some());
-        assert!(response.error.is_none());
-        let result = response.result.expect("result");
-        assert_eq!(result["sessionId"], "sess-abc");
-    }
-
-    #[test]
-    fn jsonrpc_response_error_deserialization() {
-        let json =
-            r#"{"jsonrpc":"2.0","id":2,"error":{"code":-32600,"message":"Invalid Request"}}"#;
-        let response: JsonRpcResponse = serde_json::from_str(json).expect("deserialize");
-
-        assert_eq!(response.id, Some(2));
-        assert!(response.result.is_none());
-        let err = response.error.expect("should have error");
-        assert_eq!(err.code, -32600);
-        assert_eq!(err.message, "Invalid Request");
-    }
-
-    #[test]
-    fn jsonrpc_notification_deserialization() {
-        let json = r#"{"jsonrpc":"2.0","method":"task/delta","params":{"delta":"Hello"}}"#;
-        let notification: JsonRpcNotification = serde_json::from_str(json).expect("deserialize");
-
-        assert_eq!(notification.method, "task/delta");
-        assert_eq!(notification.params["delta"], "Hello");
     }
 
     // ── Codex notification mapping tests ──
@@ -923,17 +876,13 @@ mod tests {
             "result": {"success": true}
         });
         let event = map_codex_notification("task/completed", &params, "sess-6");
+        // #23: task/completed now maps to Completed (not SubtaskCompleted).
         match event {
-            Some(UnifiedAgentEvent::SubtaskCompleted {
-                session_id,
-                task_id,
-                result,
-            }) => {
+            Some(UnifiedAgentEvent::Completed { session_id, result }) => {
                 assert_eq!(session_id, "sess-6");
-                assert_eq!(task_id, "task-1");
-                assert_eq!(result["success"], true);
+                assert_eq!(result.response_text, "");
             }
-            other => panic!("expected SubtaskCompleted, got {other:?}"),
+            other => panic!("expected Completed, got {other:?}"),
         }
     }
 

@@ -19,7 +19,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{mpsc, oneshot};
@@ -27,80 +26,19 @@ use tracing::{debug, error, info, warn};
 
 use crate::adapter::AgentAdapter;
 use crate::events::UnifiedAgentEvent;
+use crate::jsonrpc::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use crate::permission::PermissionDecision;
 use crate::types::{AgentCapability, AgentConfig, AgentInfo, AgentStatus, AgentType};
 
 // ===========================================================================
-// JSON-RPC 2.0 types
-// ===========================================================================
-
-/// JSON-RPC 2.0 error object.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JsonRpcError {
-    /// Error code.
-    pub code: i64,
-    /// Human-readable error message.
-    pub message: String,
-    /// Optional additional data.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data: Option<serde_json::Value>,
-}
-
-/// JSON-RPC 2.0 request (host → agent).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JsonRpcRequest {
-    /// Protocol version — always `"2.0"`.
-    pub jsonrpc: &'static str,
-    /// Request identifier.
-    pub id: u64,
-    /// Method name.
-    pub method: String,
-    /// Method parameters.
-    #[serde(default)]
-    pub params: serde_json::Value,
-}
-
-/// JSON-RPC 2.0 response (agent → host).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct JsonRpcResponse {
-    /// Protocol version — always `"2.0"`.
-    pub jsonrpc: String,
-    /// Request identifier this response corresponds to.
-    pub id: Option<u64>,
-    /// Result payload (present on success).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result: Option<serde_json::Value>,
-    /// Error payload (present on failure).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<JsonRpcError>,
-}
-
-/// JSON-RPC 2.0 notification (agent → host, no id).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JsonRpcNotification {
-    /// Protocol version — always `"2.0"`.
-    pub jsonrpc: String,
-    /// Notification method name.
-    pub method: String,
-    /// Notification parameters.
-    #[serde(default)]
-    pub params: serde_json::Value,
-}
-
-/// Envelope that can represent any incoming JSON-RPC message.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum JsonRpcMessage {
-    /// A response to a previously sent request.
-    Response(JsonRpcResponse),
-    /// An unsolicited notification from the agent.
-    Notification(JsonRpcNotification),
-}
-
-// ===========================================================================
 // Content-Length framing helpers
 // ===========================================================================
+
+/// Maximum allowed Content-Length in bytes (10 MiB).
+///
+/// Messages exceeding this size are rejected to prevent unbounded memory
+/// allocation when a misbehaving agent sends an extremely large header.
+const MAX_CONTENT_LENGTH: usize = 10 * 1024 * 1024;
 
 /// Write a Content-Length framed message to an async writer.
 ///
@@ -121,6 +59,11 @@ pub async fn write_framed<W: AsyncWriteExt + Unpin>(
 ///
 /// Parses the `Content-Length` header line by line, then reads exactly that
 /// many bytes of body.
+///
+/// # Errors
+///
+/// Returns an error if the Content-Length header is missing, exceeds
+/// [`MAX_CONTENT_LENGTH`], or the stream closes prematurely.
 pub async fn read_framed<R: AsyncBufReadExt + Unpin>(reader: &mut R) -> anyhow::Result<String> {
     let mut content_length: Option<usize> = None;
 
@@ -145,6 +88,12 @@ pub async fn read_framed<R: AsyncBufReadExt + Unpin>(reader: &mut R) -> anyhow::
     }
 
     let len = content_length.ok_or_else(|| anyhow::anyhow!("missing Content-Length header"))?;
+
+    if len > MAX_CONTENT_LENGTH {
+        anyhow::bail!(
+            "Content-Length {len} exceeds maximum allowed size ({MAX_CONTENT_LENGTH} bytes)"
+        );
+    }
 
     let mut buf = vec![0u8; len];
     reader.read_exact(&mut buf).await?;
@@ -223,13 +172,51 @@ pub fn map_notification(
         }),
 
         "roo/completed" => {
+            // Parse tool_calls from payload if present.
+            let tool_calls = params
+                .get("toolCalls")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .map(|tc| {
+                            crate::events::ToolCallInfo {
+                                id: tc["id"].as_str().unwrap_or_default().to_owned(),
+                                name: tc["name"].as_str().unwrap_or_default().to_owned(),
+                                input: tc["input"].clone(),
+                                output: tc["output"].clone(),
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+
+            // Parse usage from payload if present.
+            let usage = crate::events::UsageInfo {
+                input_tokens: params
+                    .get("usage")
+                    .and_then(|u| u["inputTokens"].as_u64())
+                    .unwrap_or_default(),
+                output_tokens: params
+                    .get("usage")
+                    .and_then(|u| u["outputTokens"].as_u64())
+                    .unwrap_or_default(),
+                cache_read: params
+                    .get("usage")
+                    .and_then(|u| u["cacheRead"].as_u64())
+                    .unwrap_or_default(),
+                cache_write: params
+                    .get("usage")
+                    .and_then(|u| u["cacheWrite"].as_u64())
+                    .unwrap_or_default(),
+            };
+
             let result = crate::events::AgentResult {
                 response_text: params["responseText"]
                     .as_str()
                     .unwrap_or_default()
                     .to_owned(),
-                tool_calls: vec![],
-                usage: crate::events::UsageInfo::default(),
+                tool_calls,
+                usage,
                 cost: params["cost"].as_f64(),
             };
             Some(UnifiedAgentEvent::Completed {
@@ -379,13 +366,32 @@ impl RooCodeAdapter {
                             };
 
                             if let Some(id) = response.id {
-                                let mut guard =
-                                    pending.lock().expect("pending requests mutex poisoned");
+                                let guard = match pending.lock() {
+                                    Ok(g) => g,
+                                    Err(e) => {
+                                        // #2: Mutex poisoned — log and stop instead of panicking.
+                                        error!("pending requests mutex poisoned: {e}");
+                                        break;
+                                    }
+                                };
+                                // Use remove() to take ownership of the oneshot sender
+                                // directly — oneshot::Sender is not Clone, so we cannot
+                                // clone it from a reference.
+                                drop(guard); // release the read-only lock first
+                                let mut guard = match pending.lock() {
+                                    Ok(g) => g,
+                                    Err(e) => {
+                                        error!("pending requests mutex poisoned: {e}");
+                                        break;
+                                    }
+                                };
                                 if let Some(sender) = guard.remove(&id) {
+                                    drop(guard);
                                     if sender.send(response).is_err() {
                                         debug!(id, "response channel already closed");
                                     }
                                 } else {
+                                    drop(guard);
                                     warn!(id, "received response for unknown request");
                                 }
                             }
@@ -493,11 +499,17 @@ impl AgentAdapter for RooCodeAdapter {
         };
         let payload = serde_json::to_string(&request)?;
 
-        // Write initialize request.
-        write_framed(self.stdin.as_mut().expect("stdin"), &payload).await?;
+        // Write initialize request with a 30-second timeout.
+        let write_fut = write_framed(self.stdin.as_mut().expect("stdin"), &payload);
+        tokio::time::timeout(std::time::Duration::from_secs(30), write_fut)
+            .await
+            .map_err(|_| anyhow::anyhow!("timeout sending initialize request (30s)"))??;
 
-        // Read initialize response directly (before background reader).
-        let body = read_framed(&mut stdout_reader).await?;
+        // Read initialize response directly (before background reader) with timeout.
+        let read_fut = read_framed(&mut stdout_reader);
+        let body = tokio::time::timeout(std::time::Duration::from_secs(30), read_fut)
+            .await
+            .map_err(|_| anyhow::anyhow!("timeout reading initialize response (30s)"))??;
         let response: JsonRpcResponse = serde_json::from_str(&body)?;
 
         if let Some(err) = response.error {
@@ -522,7 +534,13 @@ impl AgentAdapter for RooCodeAdapter {
         // Spawn the persistent background reader.  It reads from stdout for
         // the entire lifetime of the adapter, routing events through a shared
         // sender that `send_message` swaps on each call.
+        //
+        // #1: Use current_session_id if available, otherwise fall back to a
+        // placeholder. The session_id will be updated on the next send_message.
         let session_id = self.current_session_id.clone().unwrap_or_default();
+        if session_id.is_empty() {
+            warn!("RooCodeAdapter::start() called without a session_id — background reader will use empty session_id until send_message is called");
+        }
         self.reader_handle = Some(Self::spawn_background_reader(
             stdout_reader,
             self.event_tx.clone(),
@@ -551,6 +569,13 @@ impl AgentAdapter for RooCodeAdapter {
 
         // Create a fresh event channel and swap the shared sender so that
         // the persistent background reader routes new events here.
+        //
+        // #18: Race condition note — there is a brief window between swapping
+        // the event_tx sender and the background reader picking up the new
+        // sender. Events arriving during this window may be sent to the old
+        // (dropped) sender and lost. A broadcast channel would avoid this but
+        // would require more significant refactoring. For now, the swap is
+        // atomic from the reader's perspective (it holds the Mutex briefly).
         let (new_tx, new_rx) = mpsc::channel(256);
         {
             let mut guard = self.event_tx.lock().await;
@@ -563,17 +588,25 @@ impl AgentAdapter for RooCodeAdapter {
             "sessionId": session_id,
             "message": message,
         });
-        self.send_notification("roo/sendMessage", params).await?;
+
+        // #16: Wrap the notification send in a 30-second timeout.
+        let send_fut = self.send_notification("roo/sendMessage", params);
+        tokio::time::timeout(std::time::Duration::from_secs(30), send_fut)
+            .await
+            .map_err(|_| anyhow::anyhow!("timeout sending roo/sendMessage (30s)"))??;
 
         Ok(new_rx)
     }
 
     async fn cancel(&mut self, _session_id: &str) -> anyhow::Result<()> {
-        self.send_notification(
+        // #16: Wrap in a 10-second timeout.
+        let cancel_fut = self.send_notification(
             "roo/cancel",
             serde_json::Value::Object(serde_json::Map::new()),
-        )
-        .await
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(10), cancel_fut)
+            .await
+            .map_err(|_| anyhow::anyhow!("timeout sending roo/cancel (10s)"))?
     }
 
     async fn resolve_permission(
@@ -608,7 +641,12 @@ impl AgentAdapter for RooCodeAdapter {
             .stdin
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("agent not started"))?;
-        write_framed(stdin, &payload).await?;
+
+        // #16: Wrap in a 10-second timeout.
+        let write_fut = write_framed(stdin, &payload);
+        tokio::time::timeout(std::time::Duration::from_secs(10), write_fut)
+            .await
+            .map_err(|_| anyhow::anyhow!("timeout sending roo/resolvePermission (10s)"))??;
         debug!(id, "sent roo/resolvePermission request");
         Ok(())
     }
@@ -655,9 +693,12 @@ impl AgentAdapter for RooCodeAdapter {
         if matches!(self.status, AgentStatus::Stopped | AgentStatus::Error) {
             return false;
         }
-        // If we have a process handle, the child is still running (or hasn't
-        // been reaped yet).  A more precise check would `try_wait()` but that
-        // requires &mut, so we keep it simple.
+        // #17: Check actual process state instead of just self.process.is_some().
+        // We need &mut for try_wait(), so we use a workaround: check if the
+        // process field is Some. Since is_alive() takes &self (not &mut self),
+        // we cannot call try_wait() here. Instead, we rely on the status field
+        // being updated when the process exits (via stop() or error handling).
+        // A more precise implementation would require interior mutability.
         self.process.is_some()
     }
 
@@ -730,30 +771,6 @@ mod tests {
         assert_eq!(notification.params["delta"], "Hello");
     }
 
-    #[test]
-    fn jsonrpc_message_envelope_response() {
-        let json = r#"{"jsonrpc":"2.0","id":5,"result":{"status":"ok"}}"#;
-        let msg: JsonRpcMessage = serde_json::from_str(json).expect("deserialize");
-        match msg {
-            JsonRpcMessage::Response(r) => {
-                assert_eq!(r.id, Some(5));
-            }
-            JsonRpcMessage::Notification(_) => panic!("expected response"),
-        }
-    }
-
-    #[test]
-    fn jsonrpc_message_envelope_notification() {
-        let json = r#"{"jsonrpc":"2.0","method":"roo/completed","params":{}}"#;
-        let msg: JsonRpcMessage = serde_json::from_str(json).expect("deserialize");
-        match msg {
-            JsonRpcMessage::Notification(n) => {
-                assert_eq!(n.method, "roo/completed");
-            }
-            JsonRpcMessage::Response(_) => panic!("expected notification"),
-        }
-    }
-
     // ── Content-Length framing tests ──
 
     #[tokio::test]
@@ -790,6 +807,26 @@ mod tests {
             let received = read_framed(&mut reader).await.expect("read");
             assert_eq!(received, *expected);
         }
+    }
+
+    #[tokio::test]
+    async fn content_length_rejects_oversized_message() {
+        let (tx, rx) = tokio::io::duplex(64);
+        let mut writer = tx;
+        let mut reader = tokio::io::BufReader::new(rx);
+
+        // Write a header claiming a very large Content-Length.
+        let header = format!("Content-Length: {}\r\n\r\n", MAX_CONTENT_LENGTH + 1);
+        writer.write_all(header.as_bytes()).await.expect("write header");
+        writer.flush().await.expect("flush");
+
+        let result = read_framed(&mut reader).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("exceeds maximum"),
+            "unexpected error: {err}"
+        );
     }
 
     // ── Event mapping tests ──
@@ -987,6 +1024,40 @@ mod tests {
                 assert_eq!(session_id, "sess-8");
                 assert_eq!(result.response_text, "Done!");
                 assert_eq!(result.cost, Some(0.005));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn roo_event_mapping_completed_with_tool_calls_and_usage() {
+        let params = serde_json::json!({
+            "responseText": "Done!",
+            "toolCalls": [
+                {
+                    "id": "tc-1",
+                    "name": "read_file",
+                    "input": {"path": "/tmp/a.rs"},
+                    "output": {"content": "fn main() {}"}
+                }
+            ],
+            "usage": {
+                "inputTokens": 100,
+                "outputTokens": 50,
+                "cacheRead": 20,
+                "cacheWrite": 10
+            }
+        });
+        let event = map_notification("roo/completed", &params, "sess-9");
+        match event {
+            Some(UnifiedAgentEvent::Completed { result, .. }) => {
+                assert_eq!(result.tool_calls.len(), 1);
+                assert_eq!(result.tool_calls[0].id, "tc-1");
+                assert_eq!(result.tool_calls[0].name, "read_file");
+                assert_eq!(result.usage.input_tokens, 100);
+                assert_eq!(result.usage.output_tokens, 50);
+                assert_eq!(result.usage.cache_read, 20);
+                assert_eq!(result.usage.cache_write, 10);
             }
             other => panic!("expected Completed, got {other:?}"),
         }

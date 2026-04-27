@@ -634,19 +634,17 @@ export interface MemoryUsageData {
 /** Agent 类型 */
 export type AgentType = 'remote_code' | 'roo_code' | 'codex';
 
-/** Agent 类型信息 */
+/** Agent 类型信息 — 与 Rust AgentTypeInfoDto 对齐 (serde rename_all = camelCase) */
 export interface AgentTypeInfo {
-  agentType: AgentType;
+  agentType: string;
   displayName: string;
-  description: string;
-  capabilities: string[];
+  available: boolean;
   installed: boolean;
-  status: string;
 }
 
-/** Agent 状态变化事件 */
+/** Agent 状态变化事件 — 与 Rust AgentStatusChangedDto 对齐 */
 export interface AgentStatusChangedInfo {
-  agentType: AgentType;
-  oldStatus: string;
-  newStatus: string;
+  sessionId: string;
+  agentType: string;
+  status: string;
 }

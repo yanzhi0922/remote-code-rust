@@ -7,11 +7,11 @@ import { shouldUseRemoteMode } from './lib/runtime';
 import RemoteApp from './remote/RemoteApp';
 import { useAppStore } from './stores/useAppStore';
 
-function App() {
-  if (shouldUseRemoteMode()) {
-    return <RemoteApp />;
-  }
-
+/**
+ * Fix #5: Extract the local-mode logic into its own component so that React
+ * hooks are always called in the same order regardless of `shouldUseRemoteMode()`.
+ */
+function LocalApp() {
   const initialised = useAppStore((s) => s.initialised);
   const initError = useAppStore((s) => s.initError);
   const init = useAppStore((s) => s.init);
@@ -60,6 +60,13 @@ function App() {
       <PermissionModal />
     </>
   );
+}
+
+function App() {
+  if (shouldUseRemoteMode()) {
+    return <RemoteApp />;
+  }
+  return <LocalApp />;
 }
 
 export default App;

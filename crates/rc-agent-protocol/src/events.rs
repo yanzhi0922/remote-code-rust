@@ -78,9 +78,25 @@ pub enum UnifiedAgentEvent {
         total: usize,
     },
     /// Context window overflow detected.
-    ContextOverflow { session_id: String },
+    ContextOverflow {
+        session_id: String,
+        /// Estimated tokens at the time of overflow (0 if unknown).
+        #[serde(default)]
+        used: usize,
+        /// Maximum context window size (0 if unknown).
+        #[serde(default)]
+        total: usize,
+    },
     /// Context has been compacted to free up space.
-    ContextCompacted { session_id: String },
+    ContextCompacted {
+        session_id: String,
+        /// Number of conversation entries removed during compaction.
+        #[serde(default)]
+        entries_removed: usize,
+        /// Usage ratio after compaction (0.0 if unknown).
+        #[serde(default)]
+        usage_ratio: f64,
+    },
 
     // ── Terminal states ──
     /// An error occurred during Agent operation.

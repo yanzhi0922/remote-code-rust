@@ -36,7 +36,19 @@ impl AgentRouter {
     }
 
     /// Register a pre-built adapter under the given session ID.
-    pub fn register(&mut self, session_id: String, adapter: Box<dyn AgentAdapter>) {
+    ///
+    /// If an adapter was already registered under the same session ID, it is
+    /// stopped before being replaced.
+    pub async fn register(&mut self, session_id: String, adapter: Box<dyn AgentAdapter>) {
+        if let Some(mut old) = self.adapters.remove(&session_id) {
+            // #3: Stop the old adapter before replacing it.
+            // Note: We cannot use Arc::get_mut here because the adapter is
+            // owned by a Box<dyn AgentAdapter>. Instead, we own the Box
+            // directly and can call stop() on it.
+            if let Err(e) = old.stop().await {
+                warn!(session_id = %session_id, error = %e, "failed to stop old adapter during register");
+            }
+        }
         self.adapters.insert(session_id, adapter);
     }
 

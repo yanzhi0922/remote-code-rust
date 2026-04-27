@@ -153,6 +153,8 @@ interface AppState {
 
   availableAgents: AgentTypeInfo[];
   activeAgentType: AgentType | null;
+  /** Fix #4: tracks per-agent status from AgentStatusChanged events */
+  agentStatuses: Record<string, string>;
 
   init: () => Promise<void>;
   refreshSessions: () => Promise<void>;
@@ -182,7 +184,21 @@ interface AppState {
   selectAgent: (agentType: AgentType | null) => void;
 }
 
-async function registerEventListeners() {
+/**
+ * Fix #9: stored cleanup functions for registered event listeners.
+ * Written during init; can be invoked via {@link cleanupEventListeners}.
+ */
+let listenerCleanupFns: (() => void)[] | null = null;
+
+/** Tear down all registered Tauri event listeners (useful for HMR / tests). */
+export function cleanupEventListeners(): void {
+  if (listenerCleanupFns) {
+    listenerCleanupFns.forEach((fn) => fn());
+    listenerCleanupFns = null;
+  }
+}
+
+async function registerEventListeners(): Promise<(() => void)[]> {
   const refreshActiveConversation = () => {
     const activeSessionId = useAppStore.getState().activeSessionId;
     if (!activeSessionId) return;
@@ -198,7 +214,7 @@ async function registerEventListeners() {
       });
   };
 
-  await Promise.all([
+  const unlistenFns = await Promise.all([
     tauri.onPermissionRequest((event) => {
       useAppStore.setState({ pendingPermission: event.payload });
     }),
@@ -229,9 +245,10 @@ async function registerEventListeners() {
     }),
     tauri.onStreamingDelta((event) => {
       const { session_id, delta } = event.payload;
-      const activeSessionId = useAppStore.getState().activeSessionId;
-      if (session_id !== activeSessionId) return;
+      // Fix #10: verify activeSessionId inside setState callback to close
+      // the race window between the guard check and the actual mutation.
       useAppStore.setState((state) => {
+        if (state.activeSessionId !== session_id) return state;
         const conversation = [...state.conversation];
         const lastEntry = conversation[conversation.length - 1];
         if (lastEntry && lastEntry.role === 'assistant') {
@@ -366,14 +383,18 @@ async function registerEventListeners() {
       useAppStore.setState({ runtimeStatus: event.payload });
     }),
     tauri.onAgentStatusChanged((event) => {
-      const { agentType, newStatus } = event.payload;
+      // Fix #4: Rust sends { sessionId, agentType, status }, not { oldStatus, newStatus }.
+      const { agentType, status } = event.payload;
       useAppStore.setState((state) => ({
-        availableAgents: state.availableAgents.map((agent) =>
-          agent.agentType === agentType ? { ...agent, status: newStatus } : agent,
-        ),
+        agentStatuses: {
+          ...state.agentStatuses,
+          [agentType]: status,
+        },
       }));
     }),
   ]);
+  // Return the UnlistenFn array so callers can tear down listeners later.
+  return unlistenFns;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -408,11 +429,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   pendingPermission: null,
   availableAgents: [],
   activeAgentType: null,
+  agentStatuses: {},
 
   init: async () => {
     try {
       if (!get().listenersRegistered) {
-        await registerEventListeners();
+        // Fix #9: store cleanup functions so listeners can be torn down later.
+        const unlistenFns = await registerEventListeners();
+        listenerCleanupFns = unlistenFns;
         set({ listenersRegistered: true });
       }
 
@@ -474,10 +498,13 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   selectSession: async (sessionId: string) => {
     const activeProjectPath = getProjectPathForSession(sessionId, get().sessions, get().projects);
+    // Fix #8: clear tool state when switching sessions to avoid stale data.
     set({
       activeSessionId: sessionId,
       activeProjectPath,
       conversationLoading: true,
+      liveToolProgress: [],
+      liveToolResults: [],
     });
     try {
       const [conversation, tasks] = await Promise.all([

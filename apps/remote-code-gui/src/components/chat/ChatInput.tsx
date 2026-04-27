@@ -1,4 +1,4 @@
-import { ChevronDown, Cpu, MessageSquareText, Send, Shield, Sparkles } from 'lucide-react';
+import { ChevronDown, Cpu, MessageSquareText, Mic, Send, Shield, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { AgentSelector } from '../agent/AgentSelector';
 import { useAppStore } from '../../stores/useAppStore';
@@ -71,6 +71,7 @@ export function ChatInput() {
   const [input, setInput] = useState('');
   const [modelDraft, setModelDraft] = useState('');
   const [openMenu, setOpenMenu] = useState<'provider' | 'permission' | null>(null);
+  const [voiceToast, setVoiceToast] = useState(false);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
 
   const sending = useAppStore((state) => state.sending);
@@ -156,6 +157,25 @@ export function ChatInput() {
               placeholder="输入需求，直接在 GUI 中运行、改代码、调用工具。Shift+Enter 换行。"
               className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-1 text-[15px] leading-6 text-slate-800 outline-none placeholder:text-slate-400 disabled:cursor-not-allowed"
             />
+
+            {/* Fix #11: Voice input UI entry point — shows "coming soon" toast */}
+            <div className="relative">
+              <button
+                title="语音输入"
+                onClick={() => {
+                  setVoiceToast(true);
+                  setTimeout(() => setVoiceToast(false), 2500);
+                }}
+                className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[#dfd9cd] bg-[#fcfaf5] text-slate-500 transition-colors hover:bg-[#f3efe7] hover:text-slate-700"
+              >
+                <Mic size={17} />
+              </button>
+              {voiceToast && (
+                <div className="absolute bottom-full right-0 mb-2 whitespace-nowrap rounded-lg bg-slate-800 px-3 py-1.5 text-xs text-white shadow-lg">
+                  🎤 语音输入功能即将推出
+                </div>
+              )}
+            </div>
 
             <button
               onClick={() => {
