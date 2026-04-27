@@ -228,13 +228,15 @@ pub async fn auto_compact(
 }
 
 /// Rough token estimation for a slice of messages.
+///
+/// Each message is estimated via [`rough_token_count`] which already includes
+/// a conservative 4/3 padding factor, so no additional padding is applied here.
 fn estimate_messages_tokens(messages: &[Message]) -> u64 {
     let mut total: u64 = 0;
     for msg in messages {
         total += estimate_single_message_tokens(msg);
     }
-    // Pad by 4/3 to be conservative
-    (total * 4).div_ceil(3)
+    total
 }
 
 /// Estimate tokens for a single message.
