@@ -17,6 +17,7 @@ async-trait.workspace = true
 chrono.workspace = true
 rc-core = { path = "../rc-core" }
 rc-config = { path = "../rc-config" }
+rc-provider = { path = "../rc-provider" }
 rc-session = { path = "../rc-session" }
 serde.workspace = true
 serde_json.workspace = true

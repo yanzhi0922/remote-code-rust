@@ -392,14 +392,14 @@ pub fn build_compact_user_summary_message(
     base
 }
 
-/// Rough token estimation: ~4 characters per token (conservative default).
+/// Rough token estimation using CJK/ASCII dual-ratio estimation.
 ///
-/// Formula: `chars / 4` gives the base estimate, then padded by 4/3 for
-/// conservatism, yielding `chars / 3` overall.
+/// Delegates to [`rc_provider::dual_ratio_estimate`] which classifies each
+/// character as CJK (~1.5 chars/token) or ASCII (~4.0 chars/token) and
+/// sums the estimates.  This is more accurate than the previous `len / 3`
+/// heuristic, especially for mixed-language text.
 pub fn rough_token_count(text: &str) -> u64 {
-    let len = text.len() as u64;
-    // ~4 chars per token, padded by 4/3 for conservatism → chars / 3
-    len.div_ceil(3)
+    rc_provider::dual_ratio_estimate(text)
 }
 
 #[cfg(test)]

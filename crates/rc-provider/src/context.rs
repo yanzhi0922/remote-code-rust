@@ -104,6 +104,16 @@ impl Default for TokenEstimator {
     }
 }
 
+/// Standalone CJK/ASCII dual-ratio token estimation.
+///
+/// Convenience wrapper around [`TokenEstimator::estimate`] for callers that
+/// do not need a persistent estimator instance.  Uses the default ratios:
+/// ASCII ≈ 4.0 chars/token, CJK ≈ 1.5 chars/token.
+#[must_use]
+pub fn dual_ratio_estimate(text: &str) -> u64 {
+    TokenEstimator::new().estimate(text)
+}
+
 /// Check whether a Unicode code point falls within CJK (Chinese/Japanese/Korean) ranges.
 ///
 /// Covers CJK Unified Ideographs, Hiragana, Katakana, Hangul, and common
