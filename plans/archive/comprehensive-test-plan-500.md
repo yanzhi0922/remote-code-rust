@@ -1,0 +1,722 @@
+# Remote Code Rust — Comprehensive E2E Test Plan (500+ Tests)
+
+## Test Environment
+- **Binary**: `target/release/remote-code.exe`
+- **Test Directory**: `C:\Users\Yanzh\Desktop\cli-stress-test`
+- **Provider**: MiniMax (minimax-m2.7, Anthropic protocol)
+- **API Key**: `$MINIMAX_API_KEY`
+- **Base URL**: `https://api.minimaxi.com/anthropic`
+- **Permission Mode**: `bypass-permissions` (for automated testing)
+
+## Test Categories & Count
+
+### Batch 1: Provider/LLM Communication (60 tests)
+- [ ] T1.1 Simple query — single sentence response
+- [ ] T1.2 Simple query — multi-paragraph response
+- [ ] T1.3 Simple query — code generation (Python)
+- [ ] T1.4 Simple query — code generation (Rust)
+- [ ] T1.5 Simple query — code generation (TypeScript)
+- [ ] T1.6 Simple query — code generation (Go)
+- [ ] T1.7 Simple query — math calculation
+- [ ] T1.8 Simple query — JSON generation
+- [ ] T1.9 Simple query — markdown formatting
+- [ ] T1.10 Simple query — list generation
+- [ ] T1.11 Multi-turn conversation — follow-up question
+- [ ] T1.12 Multi-turn conversation — context retention
+- [ ] T1.13 Multi-turn conversation — topic switch
+- [ ] T1.14 Streaming response — partial messages
+- [ ] T1.15 Streaming response — long output (>1000 tokens)
+- [ ] T1.16 Tool call — ListDirectory
+- [ ] T1.17 Tool call — ReadFile
+- [ ] T1.18 Tool call — WriteFile (new file)
+- [ ] T1.19 Tool call — WriteFile (overwrite existing)
+- [ ] T1.20 Tool call — EditFile
+- [ ] T1.21 Tool call — ReplaceInFile
+- [ ] T1.22 Tool call — Bash command
+- [ ] T1.23 Tool call — PowerShell command
+- [ ] T1.24 Tool call — Glob pattern
+- [ ] T1.25 Tool call — Grep search
+- [ ] T1.26 Tool call — WebFetch
+- [ ] T1.27 Tool call — SearchText
+- [ ] T1.28 Multiple tool calls in sequence
+- [ ] T1.29 Multiple tool calls — parallel safe tools
+- [ ] T1.30 Tool call with large input
+- [ ] T1.31 Tool call with Unicode content
+- [ ] T1.32 Tool call with special characters in path
+- [ ] T1.33 Error handling — invalid tool name
+- [ ] T1.34 Error handling — tool execution failure
+- [ ] T1.35 Error handling — model retry on transient error
+- [ ] T1.36 Response format — stop_reason: "end_turn"
+- [ ] T1.37 Response format — usage tracking (input/output tokens)
+- [ ] T1.38 Response format — model_usage object
+- [ ] T1.39 Response format — duration_ms tracking
+- [ ] T1.40 Response format — cost calculation ($0.00 for MiniMax)
+- [ ] T1.41 Context window — estimated_tokens reporting
+- [ ] T1.42 Context window — max_input_tokens reporting
+- [ ] T1.43 Context window — ratio calculation
+- [ ] T1.44 Context window — threshold_tokens
+- [ ] T1.45 API key — via --api-key flag
+- [ ] T1.46 API key — via REMOTE_CODE_API_KEY env
+- [ ] T1.47 API key — missing key error handling
+- [ ] T1.48 Model — via --model flag
+- [ ] T1.49 Model — via REMOTE_CODE_MODEL env
+- [ ] T1.50 Protocol — Anthropic vs OpenAI
+- [ ] T1.51 Base URL — via --base-url flag
+- [ ] T1.52 Base URL — via ANTHROPIC_BASE_URL env
+- [ ] T1.53 Max turns — --max-turns 1
+- [ ] T1.54 Max turns — --max-turns 5
+- [ ] T1.55 Max turns — default (12)
+- [ ] T1.56 Verbose mode — -v flag
+- [ ] T1.57 Session ID — custom via --session-id
+- [ ] T1.58 CWD — via --cwd flag
+- [ ] T1.59 Provider — via --provider flag
+- [ ] T1.60 Request ID — present in model_usage
+
+### Batch 2: File Operations (80 tests)
+- [ ] T2.1 WriteFile — create new file with simple content
+- [ ] T2.2 WriteFile — create file in subdirectory
+- [ ] T2.3 WriteFile — create file with Unicode content (Chinese)
+- [ ] T2.4 WriteFile — create file with Unicode content (Japanese)
+- [ ] T2.5 WriteFile — create file with Unicode content (Emoji)
+- [ ] T2.6 WriteFile — create file with special characters
+- [ ] T2.7 WriteFile — create file with JSON content
+- [ ] T2.8 WriteFile — create file with XML content
+- [ ] T2.9 WriteFile — create file with YAML content
+- [ ] T2.10 WriteFile — create file with TOML content
+- [ ] T2.11 WriteFile — create file with multi-line content
+- [ ] T2.12 WriteFile — create file with empty content
+- [ ] T2.13 WriteFile — create file with very long line (>10K chars)
+- [ ] T2.14 WriteFile — create file with binary-like content
+- [ ] T2.15 WriteFile — overwrite existing file
+- [ ] T2.16 WriteFile — append to existing file
+- [ ] T2.17 WriteFile — path traversal prevention (../etc/passwd)
+- [ ] T2.18 WriteFile — path traversal prevention (absolute path outside workspace)
+- [ ] T2.19 WriteFile — create nested directories
+- [ ] T2.20 WriteFile — create file with same name as existing directory
+- [ ] T2.21 ReadFile — read existing file
+- [ ] T2.22 ReadFile — read file with line numbers
+- [ ] T2.23 ReadFile — read file with offset
+- [ ] T2.24 ReadFile — read file with limit
+- [ ] T2.25 ReadFile — read large file (>100KB)
+- [ ] T2.26 ReadFile — read file with Unicode content
+- [ ] T2.27 ReadFile — read file with special characters
+- [ ] T2.28 ReadFile — read non-existent file (error)
+- [ ] T2.29 ReadFile — read directory (error)
+- [ ] T2.30 ReadFile — read file in subdirectory
+- [ ] T2.31 ReadFile — read file with relative path
+- [ ] T2.32 EditFile — simple text replacement
+- [ ] T2.33 EditFile — multi-line replacement
+- [ ] T2.34 EditFile — replace all occurrences
+- [ ] T2.35 EditFile — replace with regex
+- [ ] T2.36 EditFile — replace in specific line range
+- [ ] T2.37 EditFile — replace non-existent text (error)
+- [ ] T2.38 EditFile — replace in non-existent file (error)
+- [ ] T2.39 EditFile — replace with empty string (deletion)
+- [ ] T2.40 EditFile — replace with longer string
+- [ ] T2.41 EditFile — replace with shorter string
+- [ ] T2.42 ReplaceInFile — simple replacement
+- [ ] T2.43 ReplaceInFile — multiple hunks
+- [ ] T2.44 ReplaceInFile — add lines at end
+- [ ] T2.45 ReplaceInFile — add lines at beginning
+- [ ] T2.46 ReplaceInFile — delete lines
+- [ ] T2.47 ListDirectory — list current directory
+- [ ] T2.48 ListDirectory — list subdirectory
+- [ ] T2.49 ListDirectory — list with recursive flag
+- [ ] T2.50 ListDirectory — list empty directory
+- [ ] T2.51 ListDirectory — list non-existent directory (error)
+- [ ] T2.52 ListDirectory — list with file count
+- [ ] T2.53 Glob — simple pattern (*.txt)
+- [ ] T2.54 Glob — recursive pattern (**/*.rs)
+- [ ] T2.55 Glob — multiple extensions (*.{rs,toml})
+- [ ] T2.56 Glob — no matches
+- [ ] T2.57 Glob — directory pattern
+- [ ] T2.58 Grep — simple text search
+- [ ] T2.59 Grep — regex pattern
+- [ ] T2.60 Grep — case-insensitive search
+- [ ] T2.61 Grep — search with file pattern
+- [ ] T2.62 Grep — search with context lines
+- [ ] T2.63 Grep — search in subdirectory
+- [ ] T2.64 Grep — no matches
+- [ ] T2.65 Grep — search with line numbers
+- [ ] T2.66 SearchText — full-text search
+- [ ] T2.67 SearchText — search with max results
+- [ ] T2.68 SearchText — search with file filter
+- [ ] T2.69 File creation + read verification
+- [ ] T2.70 File creation + edit + read verification
+- [ ] T2.71 File creation + replace + read verification
+- [ ] T2.72 Multiple file creation in sequence
+- [ ] T2.73 Directory listing after file creation
+- [ ] T2.74 Glob after file creation
+- [ ] T2.75 Grep after file creation
+- [ ] T2.76 File with Windows line endings (CRLF)
+- [ ] T2.77 File with Unix line endings (LF)
+- [ ] T2.78 File with mixed line endings
+- [ ] T2.79 File with BOM (Byte Order Mark)
+- [ ] T2.80 File with very long filename
+
+### Batch 3: Shell/Bash/PowerShell (50 tests)
+- [ ] T3.1 Bash — simple echo command
+- [ ] T3.2 Bash — list files (ls/dir)
+- [ ] T3.3 Bash — print working directory
+- [ ] T3.4 Bash — environment variable access
+- [ ] T3.5 Bash — create file via command
+- [ ] T3.6 Bash — read file via command
+- [ ] T3.7 Bash — delete file via command
+- [ ] T3.8 Bash — rename file via command
+- [ ] T3.9 Bash — copy file via command
+- [ ] T3.10 Bash — move file via command
+- [ ] T3.11 Bash — create directory via command
+- [ ] T3.12 Bash — remove directory via command
+- [ ] T3.13 Bash — pipe commands
+- [ ] T3.14 Bash — redirect output to file
+- [ ] T3.15 Bash — append output to file
+- [ ] T3.16 Bash — command with arguments
+- [ ] T3.17 Bash — command with quoted arguments
+- [ ] T3.18 Bash — command with special characters
+- [ ] T3.19 Bash — command with exit code 0
+- [ ] T3.20 Bash — command with non-zero exit code
+- [ ] T3.21 Bash — command timeout (long-running)
+- [ ] T3.22 Bash — CWD parameter (run in specific directory)
+- [ ] T3.23 Bash — description parameter
+- [ ] T3.24 PowerShell — simple command
+- [ ] T3.25 PowerShell — Get-ChildItem
+- [ ] T3.26 PowerShell — Get-Content
+- [ ] T3.27 PowerShell — Set-Content
+- [ ] T3.28 PowerShell — Remove-Item
+- [ ] T3.29 PowerShell — New-Item (file)
+- [ ] T3.30 PowerShell — New-Item (directory)
+- [ ] T3.31 PowerShell — pipeline
+- [ ] T3.32 PowerShell — variable assignment
+- [ ] T3.33 PowerShell — hashtable
+- [ ] T3.34 PowerShell — array
+- [ ] T3.35 PowerShell — conditional (if/else)
+- [ ] T3.36 PowerShell — loop (foreach)
+- [ ] T3.37 PowerShell — function definition
+- [ ] T3.38 PowerShell — try/catch error handling
+- [ ] T3.39 PowerShell — Get-Process
+- [ ] T3.40 PowerShell — Test-Path
+- [ ] T3.41 Shell — command with Unicode output
+- [ ] T3.42 Shell — command with large output (>10KB)
+- [ ] T3.43 Shell — command with stderr output
+- [ ] T3.44 Shell — command with mixed stdout/stderr
+- [ ] T3.45 Shell — multiple sequential commands
+- [ ] T3.46 Shell — command result summarization
+- [ ] T3.47 Shell — command result truncation
+- [ ] T3.48 Shell — background process
+- [ ] T3.49 Shell — git status command
+- [ ] T3.50 Shell — git log command
+
+### Batch 4: Permission System (50 tests)
+- [ ] T4.1 Permission mode — default (prompts for write)
+- [ ] T4.2 Permission mode — bypass-permissions (auto-allow all)
+- [ ] T4.3 Permission mode — dont-ask (auto-allow based on class)
+- [ ] T4.4 Permission mode — accept-edits (auto-allow file edits)
+- [ ] T4.5 Permission mode — plan (deny all tool execution)
+- [ ] T4.6 Tool classification — read_file is Read class
+- [ ] T4.7 Tool classification — write_file is Write class
+- [ ] T4.8 Tool classification — bash is Execute class
+- [ ] T4.9 Tool classification — edit_file is Edit class
+- [ ] T4.10 Tool classification — list_directory is Read class
+- [ ] T4.11 Permission rules — allow specific tool
+- [ ] T4.12 Permission rules — deny specific tool
+- [ ] T4.13 Permission rules — wildcard pattern matching
+- [ ] T4.14 Permission rules — glob pattern matching
+- [ ] T4.15 Permission rules — priority ordering
+- [ ] T4.16 Permission rules — session rules override
+- [ ] T4.17 Permission rules — clear session rules
+- [ ] T4.18 Permission rules — layered broker fallback
+- [ ] T4.19 Permission rules — shadowed detection
+- [ ] T4.20 Permission rules — source priority (project > user)
+- [ ] T4.21 Path validation — workspace-relative path allowed
+- [ ] T4.22 Path validation — absolute path inside workspace allowed
+- [ ] T4.23 Path validation — path traversal blocked
+- [ ] T4.24 Path validation — absolute path outside workspace blocked
+- [ ] T4.25 Path validation — symlink handling
+- [ ] T4.26 Permission audit — decision tracking
+- [ ] T4.27 Permission audit — denial tracking
+- [ ] T4.28 Permission audit — session summary
+- [ ] T4.29 Dangerous patterns — command injection detection
+- [ ] T4.30 Dangerous patterns — path traversal detection
+- [ ] T4.31 Dangerous patterns — sensitive file access detection
+- [ ] T4.32 Shell matching — exact command match
+- [ ] T4.33 Shell matching — prefix match
+- [ ] T4.34 Shell matching — glob match
+- [ ] T4.35 Shell matching — no match (allow)
+- [ ] T4.36 Bypass killswitch — disable bypass mode
+- [ ] T4.37 Auto mode — cycle through modes
+- [ ] T4.38 Permission setup — default rules generation
+- [ ] T4.39 Permission setup — initialization
+- [ ] T4.40 Permission setup — next mode cycling
+- [ ] T4.41 Rule parser — parse allow rule
+- [ ] T4.42 Rule parser — parse deny rule
+- [ ] T4.43 Rule parser — parse with tool pattern
+- [ ] T4.44 Rule parser — parse with path pattern
+- [ ] T4.45 Rule parser — parse with command pattern
+- [ ] T4.46 Rule parser — invalid rule handling
+- [ ] T4.47 Rule parser — comment handling
+- [ ] T4.48 Rule parser — empty line handling
+- [ ] T4.49 Filesystem permissions — read access check
+- [ ] T4.50 Filesystem permissions — write access check
+
+### Batch 5: Protocol/Stream-JSON (40 tests)
+- [ ] T5.1 Init event — required fields present
+- [ ] T5.2 Init event — tools list populated
+- [ ] T5.3 Init event — session_id is UUID
+- [ ] T5.4 Init event — version matches
+- [ ] T5.5 Init event — cwd matches test directory
+- [ ] T5.6 Init event — permission_mode matches
+- [ ] T5.7 State event — idle after init
+- [ ] T5.8 State event — running during processing
+- [ ] T5.9 State event — idle after completion
+- [ ] T5.10 Status snapshot — provider info
+- [ ] T5.11 Status snapshot — MCP server status
+- [ ] T5.12 Status snapshot — setting sources
+- [ ] T5.13 Assistant message — text content
+- [ ] T5.14 Assistant message — role field
+- [ ] T5.15 Message delta — partial content
+- [ ] T5.16 Message committed — final content
+- [ ] T5.17 Tool started event — tool name and ID
+- [ ] T5.18 Tool progress event — input delta
+- [ ] T5.19 Tool finished event — success
+- [ ] T5.20 Tool finished event — error
+- [ ] T5.21 Context usage event — token estimation
+- [ ] T5.22 Result event — success payload
+- [ ] T5.23 Result event — error payload
+- [ ] T5.24 Result event — stop_reason
+- [ ] T5.25 Result event — duration_ms
+- [ ] T5.26 Result event — usage tokens
+- [ ] T5.27 Result event — model_usage
+- [ ] T5.28 Result event — permission_denials
+- [ ] T5.29 Runtime error event
+- [ ] T5.30 Permission request event (default mode)
+- [ ] T5.31 Permission cancelled event
+- [ ] T5.32 Input parsing — user message
+- [ ] T5.33 Input parsing — control response (allow)
+- [ ] T5.34 Input parsing — control response (deny)
+- [ ] T5.35 Input parsing — interrupt
+- [ ] T5.36 Input parsing — invalid JSON
+- [ ] T5.37 Output format — stream-json
+- [ ] T5.38 Output format — text
+- [ ] T5.39 UUID format — all UUIDs are valid
+- [ ] T5.40 Session ID — consistent across events
+
+### Batch 6: Session Management (40 tests)
+- [ ] T6.1 Session creation — new session ID generated
+- [ ] T6.2 Session creation — custom session ID via flag
+- [ ] T6.3 Session persistence — transcript saved
+- [ ] T6.4 Session persistence — conversation history saved
+- [ ] T6.5 Session resume — --continue flag
+- [ ] T6.6 Session resume — conversation context preserved
+- [ ] T6.7 Session resume — tool history preserved
+- [ ] T6.8 Session name — --name flag
+- [ ] T6.9 Session transcript — entry types
+- [ ] T6.10 Session transcript — boundary markers
+- [ ] T6.11 Session memory — save session memory
+- [ ] T6.12 Session memory — load session memory
+- [ ] T6.13 Session memory — custom instructions
+- [ ] T6.14 Profile directory — custom via --profile-dir
+- [ ] T6.15 Profile directory — default location
+- [ ] T6.16 Settings files — --settings flag
+- [ ] T6.17 Settings sources — --setting-sources flag
+- [ ] T6.18 Session store — open/create
+- [ ] T6.19 Session store — load transcript
+- [ ] T6.20 Session store — save transcript
+- [ ] T6.21 Conversation entry — user role
+- [ ] T6.22 Conversation entry — assistant role
+- [ ] T6.23 Conversation entry — tool_use role
+- [ ] T6.24 Conversation entry — tool_result role
+- [ ] T6.25 Conversation entry — system role
+- [ ] T6.26 Replay — --replay-user-messages flag
+- [ ] T6.27 Include partial — --include-partial-messages flag
+- [ ] T6.28 Session state transitions — idle → running → idle
+- [ ] T6.29 Session state transitions — idle → running → requires_action → running → idle
+- [ ] T6.30 Multiple prompts — sequential processing
+- [ ] T6.31 Session cleanup — temp files
+- [ ] T6.32 Session isolation — separate sessions don't interfere
+- [ ] T6.33 Session resume state — preserved across restart
+- [ ] T6.34 Session export — export command
+- [ ] T6.35 Session list — sessions command
+- [ ] T6.36 Session resume — resume command
+- [ ] T6.37 Conversation backend — provider compat
+- [ ] T6.38 Conversation backend — streaming callbacks
+- [ ] T6.39 Conversation backend — sub-agent completion
+- [ ] T6.40 Conversation backend — usage summary
+
+### Batch 7: Hook System (40 tests)
+- [ ] T7.1 Hook events — PreToolUse
+- [ ] T7.2 Hook events — PostToolUse
+- [ ] T7.3 Hook events — Notification
+- [ ] T7.4 Hook events — Stop
+- [ ] T7.5 Hook events — SessionStart
+- [ ] T7.6 Hook events — SessionEnd
+- [ ] T7.7 Hook events — PreCompact
+- [ ] T7.8 Hook events — PostCompact
+- [ ] T7.9 Hook types — BashCommand
+- [ ] T7.10 Hook types — Prompt
+- [ ] T7.11 Hook types — Agent
+- [ ] T7.12 Hook types — Http
+- [ ] T7.13 Hook shell — platform default
+- [ ] T7.14 Hook shell — bash
+- [ ] T7.15 Hook shell — sh
+- [ ] T7.16 Hook execution — success
+- [ ] T7.17 Hook execution — failure
+- [ ] T7.18 Hook execution — timeout
+- [ ] T7.19 Hook matching — tool name pattern
+- [ ] T7.20 Hook matching — wildcard pattern
+- [ ] T7.21 Hook matching — no pattern (all tools)
+- [ ] T7.22 Hook settings — serialization
+- [ ] T7.23 Hook settings — deserialization
+- [ ] T7.24 Hook settings — multiple events
+- [ ] T7.25 Hook settings — total count
+- [ ] T7.26 Hook context — CWD propagation
+- [ ] T7.27 Hook context — timeout configuration
+- [ ] T7.28 Hook registry — load from settings
+- [ ] T7.29 Hook registry — empty registry
+- [ ] T7.30 Hook registry — multiple hooks per event
+- [ ] T7.31 Session start hooks — execution
+- [ ] T7.32 Session end hooks — execution
+- [ ] T7.33 Stop hooks — execution
+- [ ] T7.34 Notification hooks — execution
+- [ ] T7.35 Pre-compact hooks — execution
+- [ ] T7.36 Post-compact hooks — execution
+- [ ] T7.37 Hook discovery — runtime hooks
+- [ ] T7.38 Hook run state — persistence
+- [ ] T7.39 Hook command config — bash command
+- [ ] T7.40 Hook command config — prompt command
+
+### Batch 8: Agent/Multi-Agent (40 tests)
+- [ ] T8.1 Agent definition — built-in agents load
+- [ ] T8.2 Agent definition — general purpose agent
+- [ ] T8.3 Agent definition — explore agent
+- [ ] T8.4 Agent definition — plan agent
+- [ ] T8.5 Agent definition — verification agent
+- [ ] T8.6 Agent definition — claude_code_guide agent
+- [ ] T8.7 Agent definition — statusline_setup agent
+- [ ] T8.8 Agent types — unique type IDs
+- [ ] T8.9 Agent tools — allowlist filtering
+- [ ] T8.10 Agent tools — denylist filtering
+- [ ] T8.11 Agent tools — wildcard
+- [ ] T8.12 Agent model — inherit from config
+- [ ] T8.13 Agent model — override from definition
+- [ ] T8.14 Agent max turns — from definition
+- [ ] T8.15 Agent max turns — override from config
+- [ ] T8.16 Agent system prompt — from definition
+- [ ] T8.17 Agent system prompt — default when empty
+- [ ] T8.18 Agent runner — resolve tools
+- [ ] T8.19 Agent runner — build system prompt
+- [ ] T8.20 Agent runner — resolve model
+- [ ] T8.21 Agent runner — resolve max turns
+- [ ] T8.22 Agent runner — enhance system prompt with env
+- [ ] T8.23 Fork agent — definition type
+- [ ] T8.24 Fork agent — is_fork_child detection
+- [ ] T8.25 Fork agent — build fork messages
+- [ ] T8.26 Fork agent — build child message
+- [ ] T8.27 Fork agent — build worktree notice
+- [ ] T8.28 Fork agent — validate directive
+- [ ] T8.29 Fork agent — replace tool results with placeholder
+- [ ] T8.30 Fork agent — count tool uses
+- [ ] T8.31 Fork agent — extract tool use IDs
+- [ ] T8.32 Agent scheduler — register agent
+- [ ] T8.33 Agent scheduler — add task
+- [ ] T8.34 Agent scheduler — queue instruction
+- [ ] T8.35 Agent scheduler — send message
+- [ ] T8.36 Agent scheduler — drain mailbox
+- [ ] T8.37 Agent scheduler — assign task
+- [ ] T8.38 Agent scheduler — complete task
+- [ ] T8.39 Agent scheduler — fail task
+- [ ] T8.40 Agent scheduler — snapshot and events
+
+### Batch 9: Context/Compact (30 tests)
+- [ ] T9.1 Compact strategy — session memory
+- [ ] T9.2 Compact strategy — microcompact
+- [ ] T9.3 Compact strategy — auto compact
+- [ ] T9.4 Compact strategy — reactive compact
+- [ ] T9.5 Compact strategy — fork compact
+- [ ] T9.6 Compact engine — should compact
+- [ ] T9.7 Compact engine — compact execution
+- [ ] T9.8 Compact config — default values
+- [ ] T9.9 Compact config — custom values
+- [ ] T9.10 Session memory compact — config default
+- [ ] T9.11 Session memory compact — has text blocks
+- [ ] T9.12 Session memory compact — find split point
+- [ ] T9.13 Session memory compact — estimate tokens
+- [ ] T9.14 Microcompact — config
+- [ ] T9.15 Microcompact — estimate savings
+- [ ] T9.16 Microcompact — token savings calculation
+- [ ] T9.17 Fork compact — config
+- [ ] T9.18 Fork compact — should compact for fork
+- [ ] T9.19 MC config — strategy selection
+- [ ] T9.20 MC config — time-based config
+- [ ] T9.21 MC config — cached config
+- [ ] T9.22 Context collapse — message grouping
+- [ ] T9.23 Context collapse — boundary detection
+- [ ] T9.24 Compact warning — threshold
+- [ ] T9.25 Compact warning — message generation
+- [ ] T9.26 Post compact — summary generation
+- [ ] T9.27 Post compact — hook execution
+- [ ] T9.28 Snip — message snipping
+- [ ] T9.29 Attachment — file attachment handling
+- [ ] T9.30 Compact prompt — system prompt for compact
+
+### Batch 10: Search/Grep/Glob (40 tests)
+- [ ] T10.1 Glob — *.txt pattern
+- [ ] T10.2 Glob — **/*.rs recursive pattern
+- [ ] T10.3 Glob — *.{rs,toml} multiple extensions
+- [ ] T10.4 Glob — specific filename
+- [ ] T10.5 Glob — directory-only pattern
+- [ ] T10.6 Glob — hidden files (.*)
+- [ ] T10.7 Glob — no matches (empty result)
+- [ ] T10.8 Glob — large directory (>100 files)
+- [ ] T10.9 Grep — simple text search
+- [ ] T10.10 Grep — case-sensitive search
+- [ ] T10.11 Grep — case-insensitive search
+- [ ] T10.12 Grep — regex pattern
+- [ ] T10.13 Grep — file pattern filter
+- [ ] T10.14 Grep — context lines (before/after)
+- [ ] T10.15 Grep — max results limit
+- [ ] T10.16 Grep — search in subdirectory
+- [ ] T10.17 Grep — no matches
+- [ ] T10.18 Grep — binary file handling
+- [ ] T10.19 Grep — Unicode content search
+- [ ] T10.20 Grep — multi-line match
+- [ ] T10.21 SearchText — full-text search
+- [ ] T10.22 SearchText — max results
+- [ ] T10.23 SearchText — file filter
+- [ ] T10.24 SearchText — ranking
+- [ ] T10.25 SearchText — snippet generation
+- [ ] T10.26 Tool search — BM25 ranking
+- [ ] T10.27 Tool search — TF-IDF scoring
+- [ ] T10.28 Tool search — query parsing
+- [ ] T10.29 Tool search — result formatting
+- [ ] T10.30 Code indexing — file indexing
+- [ ] T10.31 Code indexing — symbol extraction
+- [ ] T10.32 Code indexing — incremental update
+- [ ] T10.33 Diff — unified diff parsing
+- [ ] T10.34 Diff — hunk counting
+- [ ] T10.35 Diff — stats calculation
+- [ ] T10.36 Diff — added/removed counts
+- [ ] T10.37 Diff — escape/unescape
+- [ ] T10.38 Diff — empty diff
+- [ ] T10.39 Diff — multi-hunk diff
+- [ ] T10.40 Diff — serialization roundtrip
+
+### Batch 11: Settings/Config (30 tests)
+- [ ] T11.1 Settings loader — default settings
+- [ ] T11.2 Settings loader — user settings
+- [ ] T11.3 Settings loader — project settings
+- [ ] T11.4 Settings loader — local settings
+- [ ] T11.5 Settings merge — layer priority
+- [ ] T11.6 Settings merge — deep merge
+- [ ] T11.7 Settings merge — array merge
+- [ ] T11.8 Settings validation — valid config
+- [ ] T11.9 Settings validation — invalid config
+- [ ] T11.10 Settings validation — schema validation
+- [ ] T11.11 MCP config — server definition
+- [ ] T11.12 MCP config — multiple servers
+- [ ] T11.13 MCP config — server args
+- [ ] T11.14 MCP config — server env
+- [ ] T11.15 MCP config — disabled server
+- [ ] T11.16 Provider config — model selection
+- [ ] T11.17 Provider config — protocol selection
+- [ ] T11.18 Provider config — base URL
+- [ ] T11.19 Provider config — API key
+- [ ] T11.20 Provider config — fallback model
+- [ ] T11.21 Hook config — event hooks
+- [ ] T11.22 Hook config — command config
+- [ ] T11.23 Hook config — matcher config
+- [ ] T11.24 Permission config — rules
+- [ ] T11.25 Permission config — mode
+- [ ] T11.26 Sandbox config — enabled/disabled
+- [ ] T11.27 Worktree config — settings
+- [ ] T11.28 Attribution — source tracking
+- [ ] T11.29 Tool filters — allowed tools
+- [ ] T11.30 Tool filters — disallowed tools
+
+### Batch 12: Error Recovery (30 tests)
+- [ ] T12.1 Provider error — 401 authentication
+- [ ] T12.2 Provider error — 404 model not found
+- [ ] T12.3 Provider error — 429 rate limit
+- [ ] T12.4 Provider error — 500 server error
+- [ ] T12.5 Provider error — 503 service unavailable
+- [ ] T12.6 Provider error — network timeout
+- [ ] T12.7 Provider error — DNS resolution failure
+- [ ] T12.8 Provider error — connection refused
+- [ ] T12.9 Provider error — SSL/TLS error
+- [ ] T12.10 Provider retry — retryable status codes
+- [ ] T12.11 Provider retry — non-retryable status codes
+- [ ] T12.12 Provider retry — exponential backoff
+- [ ] T12.13 Provider retry — max retries
+- [ ] T12.14 Circuit breaker — closed state
+- [ ] T12.15 Circuit breaker — open state
+- [ ] T12.16 Circuit breaker — half-open state
+- [ ] T12.17 Circuit breaker — recovery
+- [ ] T12.18 Error classification — rate limit
+- [ ] T12.19 Error classification — authentication
+- [ ] T12.20 Error classification — server error
+- [ ] T12.21 Error classification — network error
+- [ ] T12.22 Error classification — context length
+- [ ] T12.23 Error classification — quota exceeded
+- [ ] T12.24 Recovery action — retry
+- [ ] T12.25 Recovery action — reauth
+- [ ] T12.26 Recovery action — reduce context
+- [ ] T12.27 Recovery action — abort
+- [ ] T12.28 Failover — primary failure → fallback
+- [ ] T12.29 Failover — all providers fail
+- [ ] T12.30 Failover — credential pool rotation
+
+### Batch 13: Security (30 tests)
+- [ ] T13.1 Path validation — workspace boundary enforcement
+- [ ] T13.2 Path validation — Windows UNC prefix handling
+- [ ] T13.3 Path validation — symlink resolution
+- [ ] T13.4 Path validation — case sensitivity
+- [ ] T13.5 Path validation — trailing slash
+- [ ] T13.6 Path validation — dot-dot in path
+- [ ] T13.7 Secret scanner — API key detection
+- [ ] T13.8 Secret scanner — password detection
+- [ ] T13.9 Secret scanner — token detection
+- [ ] T13.10 Secret scanner — private key detection
+- [ ] T13.11 Secret scanner — false positive handling
+- [ ] T13.12 Dangerous patterns — command injection
+- [ ] T13.13 Dangerous patterns — path traversal
+- [ ] T13.14 Dangerous patterns — sensitive file access
+- [ ] T13.15 Dangerous patterns — network access
+- [ ] T13.16 Sandbox — enabled mode
+- [ ] T13.17 Sandbox — disabled mode
+- [ ] T13.18 Workspace lint — unsafe_code forbidden
+- [ ] T13.19 Workspace lint — dbg_macro denied
+- [ ] T13.20 Workspace lint — todo_macro denied
+- [ ] T13.21 Workspace lint — unwrap_used denied
+- [ ] T13.22 Permission bypass killswitch
+- [ ] T13.23 Security check — managed settings
+- [ ] T13.24 Security check — MDM profile
+- [ ] T13.25 Input sanitization — prompt injection
+- [ ] T13.26 Input sanitization — tool input validation
+- [ ] T13.27 Output sanitization — sensitive data masking
+- [ ] T13.28 Secure storage — keychain integration
+- [ ] T13.29 API key — secure storage
+- [ ] T13.30 API key — environment variable
+
+### Batch 14: CLI Flags & Commands (40 tests)
+- [ ] T14.1 --help flag
+- [ ] T14.2 --version flag
+- [ ] T14.3 --print flag with prompt
+- [ ] T14.4 --input-format text
+- [ ] T14.5 --input-format stream-json
+- [ ] T14.6 --output-format text
+- [ ] T14.7 --output-format stream-json
+- [ ] T14.8 --permission-mode default
+- [ ] T14.9 --permission-mode bypass-permissions
+- [ ] T14.10 --permission-mode dont-ask
+- [ ] T14.11 --permission-mode accept-edits
+- [ ] T14.12 --permission-mode plan
+- [ ] T14.13 --cwd flag
+- [ ] T14.14 --profile-dir flag
+- [ ] T14.15 --session-id flag
+- [ ] T14.16 --continue flag
+- [ ] T14.17 --name flag
+- [ ] T14.18 --settings flag
+- [ ] T14.19 --setting-sources flag
+- [ ] T14.20 --allowed-tools flag
+- [ ] T14.21 --disallowed-tools flag
+- [ ] T14.22 --provider flag
+- [ ] T14.23 --base-url flag
+- [ ] T14.24 --api-key flag
+- [ ] T14.25 --model flag
+- [ ] T14.26 --protocol anthropic
+- [ ] T14.27 --protocol open-ai
+- [ ] T14.28 --max-turns flag
+- [ ] T14.29 -v/--verbose flag
+- [ ] T14.30 --replay-user-messages flag
+- [ ] T14.31 --include-partial-messages flag
+- [ ] T14.32 doctor subcommand
+- [ ] T14.33 status subcommand
+- [ ] T14.34 hooks subcommand
+- [ ] T14.35 sessions subcommand
+- [ ] T14.36 agents subcommand
+- [ ] T14.37 plugins subcommand
+- [ ] T14.38 mcp subcommand
+- [ ] T14.39 skills subcommand
+- [ ] T14.40 update subcommand
+
+### Batch 15: System Prompt (30 tests)
+- [ ] T15.1 System prompt — intro section
+- [ ] T15.2 System prompt — doing tasks section
+- [ ] T15.3 System prompt — using tools section
+- [ ] T15.4 System prompt — agent section
+- [ ] T15.5 System prompt — coordinator section
+- [ ] T15.6 System prompt — language section (conditional)
+- [ ] T15.7 System prompt — output style section (conditional)
+- [ ] T15.8 System prompt — MCP instructions section (conditional)
+- [ ] T15.9 System prompt — memory section
+- [ ] T15.10 System prompt — hooks section
+- [ ] T15.11 System prompt — env info section
+- [ ] T15.12 System prompt — proactive section
+- [ ] T15.13 System prompt — scratchpad section
+- [ ] T15.14 System prompt — session guidance section
+- [ ] T15.15 System prompt — system reminders section
+- [ ] T15.16 System prompt — token budget section
+- [ ] T15.17 System prompt — tone style section
+- [ ] T15.18 System prompt — tool result section
+- [ ] T15.19 System prompt — output efficiency section
+- [ ] T15.20 System prompt — actions section
+- [ ] T15.21 System prompt — boundary marker
+- [ ] T15.22 System prompt — cache breakpoint
+- [ ] T15.23 System prompt — custom section
+- [ ] T15.24 System prompt — section ordering
+- [ ] T15.25 System prompt — conditional sections absent
+- [ ] T15.26 System prompt — full prompt contains all sections
+- [ ] T15.27 System prompt — default values
+- [ ] T15.28 System prompt builder — add/remove sections
+- [ ] T15.29 System prompt builder — clear cache
+- [ ] T15.30 System prompt builder — test context
+
+### Batch 16: Integration/E2E Workflows (40 tests)
+- [ ] T16.1 Full workflow — create project structure
+- [ ] T16.2 Full workflow — read → analyze → modify file
+- [ ] T16.3 Full workflow — search → read → fix bug
+- [ ] T16.4 Full workflow — create → test → iterate
+- [ ] T16.5 Full workflow — multi-file refactoring
+- [ ] T16.6 Full workflow — code review and suggestions
+- [ ] T16.7 Full workflow — generate documentation
+- [ ] T16.8 Full workflow — generate tests
+- [ ] T16.9 Full workflow — fix compilation errors
+- [ ] T16.10 Full workflow — optimize code
+- [ ] T16.11 Full workflow — add feature to existing code
+- [ ] T16.12 Full workflow — debug and fix issue
+- [ ] T16.13 Full workflow — create Rust module
+- [ ] T16.14 Full workflow — create Python script
+- [ ] T16.15 Full workflow — create TypeScript project
+- [ ] T16.16 Full workflow — git operations
+- [ ] T16.17 Full workflow — file comparison
+- [ ] T16.18 Full workflow — batch file operations
+- [ ] T16.19 Full workflow — data processing pipeline
+- [ ] T16.20 Full workflow — configuration management
+- [ ] T16.21 Complex task — implement data structure (HashMap)
+- [ ] T16.22 Complex task — implement algorithm (quicksort)
+- [ ] T16.23 Complex task — implement API client
+- [ ] T16.24 Complex task — implement CLI tool
+- [ ] T16.25 Complex task — implement parser
+- [ ] T16.26 Complex task — implement validator
+- [ ] T16.27 Complex task — implement serializer
+- [ ] T16.28 Complex task — multi-file project scaffolding
+- [ ] T16.29 Complex task — dependency analysis
+- [ ] T16.30 Complex task — code migration (JS → TS)
+- [ ] T16.31 Stress test — many small files (>50)
+- [ ] T16.32 Stress test — large file (>1MB)
+- [ ] T16.33 Stress test — many tool calls (>20)
+- [ ] T16.34 Stress test — deep directory nesting (>10 levels)
+- [ ] T16.35 Stress test — Unicode-heavy content
+- [ ] T16.36 Stress test — concurrent operations
+- [ ] T16.37 Stress test — long-running session
+- [ ] T16.38 Stress test — rapid sequential prompts
+- [ ] T16.39 Stress test — error recovery loop
+- [ ] T16.40 Stress test — context window pressure
+
+## Total: 630 Tests
+
+## Execution Strategy
+- **Batch size**: 50-80 tests per subtask
+- **Subtask count**: ~8-10 subtasks
+- **Test type mix**: Unit tests (existing) + E2E tests (new) + Integration tests
+- **Parallel execution**: Where possible, run independent test batches concurrently
+- **Reporting**: Each subtask reports pass/fail/skip counts
