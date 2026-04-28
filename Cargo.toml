@@ -48,6 +48,32 @@ members = [
     # Codex Stage 11: login-dependent crates
     "crates/codex/feedback",
     "crates/codex/models-manager",
+    # Codex Stage 12: model-provider (key unlocker)
+    "crates/codex/model-provider",
+    # Codex Stage 13: exec-server, shell-escalation, backend-client
+    "crates/codex/exec-server",
+    "crates/codex/shell-escalation",
+    "crates/codex/backend-client",
+    # Codex Stage 14: exec-server-dependent crates
+    "crates/codex/apply-patch",
+    "crates/codex/git-utils",
+    "crates/codex/rmcp-client",
+    "crates/codex/utils/plugins",
+    # Codex Stage 15: cloud-tasks-client, plugin, secrets, state
+    "crates/codex/cloud-tasks-client",
+    "crates/codex/plugin",
+    "crates/codex/secrets",
+    "crates/codex/state",
+    # Codex Stage 16: analytics, cloud-tasks-mock-client, codex-mcp, rollout
+    "crates/codex/analytics",
+    "crates/codex/cloud-tasks-mock-client",
+    "crates/codex/codex-mcp",
+    "crates/codex/rollout",
+    # Codex Stage 17: core-skills, thread-store
+    "crates/codex/core-skills",
+    "crates/codex/thread-store",
+    # Codex Stage 18: core-plugins
+    "crates/codex/core-plugins",
     # Codex utils leaf crates
     "crates/codex/utils/absolute-path",
     "crates/codex/utils/cache",
@@ -86,6 +112,7 @@ rust-version = "1.93"
 
 [workspace.dependencies]
 # ── Shared deps (rc-* + codex) ──────────────────────────────────
+age = "0.11.1"
 anyhow = "1"
 async-trait = "0.1.89"
 axum = { version = "0.8", default-features = false, features = ["macros", "ws"] }
@@ -108,6 +135,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 rusqlite = { version = "0.32.0", features = ["bundled", "chrono", "serde_json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = "0.9"
 sha2 = "0.10"
 tempfile = "3"
 thiserror = "2"
@@ -122,6 +150,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"]
 uuid = { version = "1", features = ["serde", "v4"] }
 walkdir = "2.5.0"
 serial_test = "3"
+test-case = "3.3.1"
+arc-swap = "1.9.0"
+socket2 = "0.6.1"
+oauth2 = "5"
+sse-stream = "0.2.1"
+gix = { version = "0.81.0", default-features = false, features = ["sha1"] }
 
 # ── Codex-only external deps ────────────────────────────────────
 async-channel = "2.3.1"
@@ -135,6 +169,7 @@ tungstenite = { version = "0.27.0", features = ["deflate"] }
 which = "8"
 wiremock = "0.6"
 encoding_rs = "0.8.35"
+diffy = "0.4.2"
 icu_decimal = "2.1"
 icu_locale_core = "2.1"
 icu_provider = { version = "2.1", features = ["sync"] }
@@ -197,6 +232,7 @@ log = "0.4"
 lru = "0.16"
 multimap = "0.10"
 nucleo = { git = "https://github.com/helix-editor/nucleo.git", rev = "4253de9faabb4e5c6d81d946a5e35a90f87347ee" }
+owo-colors = "4.3.0"
 p256 = "0.13.2"
 path-absolutize = "3.1"
 include_dir = "0.7"
@@ -204,6 +240,16 @@ portable-pty = "0.9.0"
 pretty_assertions = "1.4"
 regex-lite = "0.1"
 shlex = "1"
+sqlx = { version = "0.8.6", default-features = false, features = [
+    "chrono",
+    "json",
+    "macros",
+    "migrate",
+    "runtime-tokio-rustls",
+    "sqlite",
+    "time",
+    "uuid",
+] }
 runfiles = { git = "https://github.com/dzbarsky/rules_rust", rev = "b56cbaa8465e74127f1ea216f813cd377295ad81" }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 schemars = "0.8"
@@ -217,6 +263,7 @@ url = "2"
 tiny_http = "0.12"
 v8 = "=146.4.0"
 zeroize = "1.8"
+zip = "2.4.2"
 # rama (network proxy framework)
 rama-core = "=0.3.0-alpha.4"
 rama-http = "=0.3.0-alpha.4"
@@ -299,6 +346,25 @@ codex-login = { path = "crates/codex/login" }
 # Stage 11 internal deps
 codex-feedback = { path = "crates/codex/feedback" }
 codex-models-manager = { path = "crates/codex/models-manager" }
+codex-model-provider = { path = "crates/codex/model-provider" }
+codex-exec-server = { path = "crates/codex/exec-server" }
+codex-shell-escalation = { path = "crates/codex/shell-escalation" }
+codex-backend-client = { path = "crates/codex/backend-client" }
+codex-apply-patch = { path = "crates/codex/apply-patch" }
+codex-git-utils = { path = "crates/codex/git-utils" }
+codex-rmcp-client = { path = "crates/codex/rmcp-client" }
+codex-utils-plugins = { path = "crates/codex/utils/plugins" }
+codex-cloud-tasks-client = { path = "crates/codex/cloud-tasks-client" }
+codex-plugin = { path = "crates/codex/plugin" }
+codex-secrets = { path = "crates/codex/secrets" }
+codex-state = { path = "crates/codex/state" }
+codex-analytics = { path = "crates/codex/analytics" }
+codex-cloud-tasks-mock-client = { path = "crates/codex/cloud-tasks-mock-client" }
+codex-mcp = { path = "crates/codex/codex-mcp" }
+codex-rollout = { path = "crates/codex/rollout" }
+codex-core-skills = { path = "crates/codex/core-skills" }
+codex-thread-store = { path = "crates/codex/thread-store" }
+codex-core-plugins = { path = "crates/codex/core-plugins" }
 
 [patch.crates-io]
 # Codex patches — needed for tungstenite features (deflate, proxy) and tokio-tungstenite compat

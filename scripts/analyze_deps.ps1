@@ -32,7 +32,23 @@ $migratedPkgs = @(
     # Stage 9
     'codex-config',
     # Stage 10
-    'codex-hooks','codex-login'
+    'codex-hooks','codex-login',
+    # Stage 11
+    'codex-feedback','codex-models-manager',
+    # Stage 12
+    'codex-model-provider',
+    # Stage 13
+    'codex-exec-server','codex-shell-escalation','codex-backend-client',
+    # Stage 14
+    'codex-apply-patch','codex-git-utils','codex-rmcp-client','codex-utils-plugins',
+    # Stage 15
+    'codex-cloud-tasks-client','codex-plugin','codex-secrets','codex-state',
+    # Stage 16
+    'codex-analytics','codex-cloud-tasks-mock-client','codex-mcp','codex-rollout',
+    # Stage 17
+    'codex-core-skills','codex-thread-store',
+    # Stage 18
+    'codex-core-plugins'
 )
 
 $migratedDirs = @(
@@ -45,14 +61,22 @@ $migratedDirs = @(
     'agent-identity','sandboxing','shell-command',
     'codex-api','app-server-protocol',
     'connectors','debug-client','model-provider-info','otel','response-debug-context',
-    'features','config','hooks','login'
+    'features','config','hooks','login',
+    'feedback','models-manager',
+    'model-provider','exec-server','shell-escalation','backend-client',
+    'apply-patch','git-utils','rmcp-client',
+    'cloud-tasks-client','plugin','secrets','state',
+    'analytics','cloud-tasks-mock-client','codex-mcp','rollout',
+    'core-skills','thread-store',
+    'core-plugins'
 )
 
 $migratedUtils = @(
     'absolute-path','cache','cargo-bin','elapsed','fuzzy-match','json-to-toml',
     'pty','readiness','rustls-provider','sleep-inhibitor','stream-parser',
     'string','template','home-dir','path-utils','image',
-    'approval-presets','cli','output-truncation'
+    'approval-presets','cli','output-truncation',
+    'plugins'
 )
 
 $codexRoot = 'agents\codex\codex-rs'
