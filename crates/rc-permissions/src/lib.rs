@@ -597,10 +597,7 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
     fn layered_rules(&self) -> Vec<SourceAwarePermissionRule> {
         // Clone is required by the trait API (returns owned Vec).
         // Optimisation: avoid double-allocation when one source is empty.
-        let session = self
-            .session_rules
-            .read()
-            .unwrap_or_else(|e| e.into_inner());
+        let session = self.session_rules.read().unwrap_or_else(|e| e.into_inner());
         if session.is_empty() {
             return self.rules.clone();
         }

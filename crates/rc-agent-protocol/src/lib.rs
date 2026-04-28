@@ -14,6 +14,7 @@
 
 pub mod adapter;
 pub mod adapters;
+pub mod bridge_proto;
 pub mod error;
 pub mod events;
 pub mod health;
@@ -25,7 +26,9 @@ pub mod types;
 
 // Re-export core types at crate root for convenience.
 pub use adapter::AgentAdapter;
-pub use adapters::{InProcessAdapter, RemoteClaudeAdapter, RemoteCodexAdapter, RemoteRooAdapter};
+pub use adapters::{
+    InProcessAdapter, RemoteClaudeAdapter, RemoteCodexAdapter, RemoteRooAdapter, SubprocessAdapter,
+};
 pub use error::AgentProtocolError;
 pub use events::{AgentResult, ToolCallInfo, UnifiedAgentEvent, UsageInfo};
 pub use permission::{PermissionDecision, PermissionRequest};

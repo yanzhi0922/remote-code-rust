@@ -5292,6 +5292,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "remote-code-codex-bridge"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rc-agent-protocol",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "remote-code-control-plane"
 version = "0.1.0"
 dependencies = [
@@ -5351,6 +5363,18 @@ dependencies = [
  "rc-session",
  "rc-telemetry",
  "serde_json",
+]
+
+[[package]]
+name = "remote-code-roo-bridge"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rc-agent-protocol",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -227,7 +227,6 @@ pub async fn auto_compact(
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

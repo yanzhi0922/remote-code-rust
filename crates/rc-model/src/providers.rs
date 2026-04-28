@@ -87,7 +87,9 @@ fn has_date_suffix(canonical_id: &str) -> bool {
     }
     let suffix_start = len - 8;
     canonical_id.as_bytes().get(suffix_start - 1) == Some(&b'-')
-        && canonical_id[suffix_start..].bytes().all(|b| b.is_ascii_digit())
+        && canonical_id[suffix_start..]
+            .bytes()
+            .all(|b| b.is_ascii_digit())
 }
 
 /// Returns the provider-specific model ID for a given canonical first-party

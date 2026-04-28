@@ -431,7 +431,6 @@ fn is_compact_boundary_message(message: &Message) -> bool {
     )
 }
 
-
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};

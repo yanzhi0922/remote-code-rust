@@ -112,7 +112,11 @@ fn build_micro_compact_user_prompt(messages: &[Message]) -> String {
             idx += 1;
             // Truncate very long summaries in the prompt to avoid blowing up context
             let content_preview = if ts.summary.len() > 2000 {
-                format!("{} [... truncated, {} chars total]", &ts.summary[..2000], ts.summary.len())
+                format!(
+                    "{} [... truncated, {} chars total]",
+                    &ts.summary[..2000],
+                    ts.summary.len()
+                )
             } else {
                 ts.summary.clone()
             };

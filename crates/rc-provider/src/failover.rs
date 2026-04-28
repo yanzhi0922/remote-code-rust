@@ -72,7 +72,8 @@ impl FailoverProviderClient {
     /// # Panics
     /// Panics if the internal `active_index` mutex is poisoned.
     pub async fn complete(&self, conversation: &[ConversationEntry]) -> Result<ProviderResponse> {
-        self.try_with_failover(FailoverOp::Complete, conversation).await
+        self.try_with_failover(FailoverOp::Complete, conversation)
+            .await
     }
 
     /// # Errors
@@ -84,7 +85,8 @@ impl FailoverProviderClient {
         &self,
         conversation: &[ConversationEntry],
     ) -> Result<ProviderResponse> {
-        self.try_with_failover(FailoverOp::CompleteStreaming, conversation).await
+        self.try_with_failover(FailoverOp::CompleteStreaming, conversation)
+            .await
     }
 
     /// Generic failover loop: iterate over providers starting from the active

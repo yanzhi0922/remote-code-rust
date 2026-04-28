@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use rc_config::RuntimeConfig;
 use rc_core::{
@@ -26,33 +26,31 @@ use rc_permissions::PermissionDecision;
 use rc_provider::context::ContextWindowManager;
 use rc_provider::ConversationBackend;
 use rc_query_engine::{
-    ProcessUserInputContext, ProviderInvocationMode, QueryEngine, QueryEngineConfig,
-    QueryObserver, QueryObserverEvent, ToolRunResult, ToolRunner,
+    ProcessUserInputContext, ProviderInvocationMode, QueryEngine, QueryEngineConfig, QueryObserver,
+    QueryObserverEvent, ToolRunResult, ToolRunner,
 };
 use rc_session::SessionStore;
 use rc_tools::{
-    FileStateCache,
     agent::parse_delegate_progress_event,
     execute_tool_call,
     git::apply_worktree_tool_result_to_runtime,
     runtime_plan_mode::{
         inject_plan_mode_runtime_messages, install_plan_mode_runtime, RuntimePlanModeController,
     },
-    runtime_provider_tool_spec,
+    runtime_provider_tool_spec, FileStateCache,
 };
 use serde_json::json;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{oneshot, Mutex};
 use uuid::Uuid;
 
 use crate::{
+    BatchProgressDto, ContextCompactedDto, ContextOverflowDto, ContextUsageDto, StreamingDeltaDto,
+    SubtaskCompletedDto, SubtaskProgressDto, SubtaskStartedDto, ToolProgressDto, ToolResultDto,
     APP_EVENT_BATCH_PROGRESS, APP_EVENT_CONTEXT_COMPACTED, APP_EVENT_CONTEXT_OVERFLOW,
     APP_EVENT_CONTEXT_USAGE, APP_EVENT_STREAMING_DELTA, APP_EVENT_SUBTASK_COMPLETED,
     APP_EVENT_SUBTASK_PROGRESS, APP_EVENT_SUBTASK_STARTED, APP_EVENT_TOOL_PROGRESS,
     APP_EVENT_TOOL_RESULT, APP_EVENT_TOOL_START,
-    BatchProgressDto, ContextCompactedDto, ContextOverflowDto, ContextUsageDto,
-    StreamingDeltaDto, SubtaskCompletedDto, SubtaskProgressDto, SubtaskStartedDto, ToolProgressDto,
-    ToolResultDto,
 };
 
 // ─── GuiToolRunner ──────────────────────────────────────────────────────────
@@ -145,17 +143,16 @@ impl ToolRunner for GuiToolRunner {
         };
 
         // 4. Execute tool.
-        let tool_result = match execute_tool_call(tool_call, &tool_context, self.broker.as_ref())
-            .await
-        {
-            Ok(result) => result,
-            Err(error) => ToolResult {
-                content: format!("Tool execution error: {error}"),
-                is_error: true,
-                content_blocks: Vec::new(),
-                follow_up_user_blocks: Vec::new(),
-            },
-        };
+        let tool_result =
+            match execute_tool_call(tool_call, &tool_context, self.broker.as_ref()).await {
+                Ok(result) => result,
+                Err(error) => ToolResult {
+                    content: format!("Tool execution error: {error}"),
+                    is_error: true,
+                    content_blocks: Vec::new(),
+                    follow_up_user_blocks: Vec::new(),
+                },
+            };
 
         // 5. Handle worktree updates.
         {
@@ -187,8 +184,9 @@ impl ToolRunner for GuiToolRunner {
         // 6. Handle follow-up user blocks as post_messages.
         let mut post_messages = Vec::new();
         if !tool_result.follow_up_user_blocks.is_empty() {
-            let follow_up_entry =
-                ConversationEntry::user_with_content_blocks(tool_result.follow_up_user_blocks.clone());
+            let follow_up_entry = ConversationEntry::user_with_content_blocks(
+                tool_result.follow_up_user_blocks.clone(),
+            );
             post_messages.push(Message::from(follow_up_entry));
         }
 
@@ -570,8 +568,7 @@ pub(crate) async fn run_unified_prompt_with_provider(
         .unwrap_or_else(|| "unknown".to_owned());
 
     // 1. Session initialization (same as run_gui_prompt).
-    let mut conversation =
-        crate::initialize_session_conversation(&store, &config, Some(prompt))?;
+    let mut conversation = crate::initialize_session_conversation(&store, &config, Some(prompt))?;
     let plan_mode_controller = RuntimePlanModeController::load(&config, store.as_ref())?;
     let _plan_mode_runtime_guard = install_plan_mode_runtime(plan_mode_controller.clone())?;
     inject_plan_mode_runtime_messages(store.as_ref(), session_id, &mut conversation)?;
@@ -604,9 +601,10 @@ pub(crate) async fn run_unified_prompt_with_provider(
     let context_manager = ContextWindowManager::for_model(&model);
 
     // 4. Create the backend (Arc-wrapped).
-    let backend: Arc<dyn ConversationBackend> = Arc::new(
-        rc_provider::ProviderCompatBackend::new(Arc::clone(&provider), &config.provider),
-    );
+    let backend: Arc<dyn ConversationBackend> = Arc::new(rc_provider::ProviderCompatBackend::new(
+        Arc::clone(&provider),
+        &config.provider,
+    ));
 
     // 5. Build GUI tool runner.
     let tool_runner = Arc::new(GuiToolRunner::new(
@@ -643,19 +641,13 @@ pub(crate) async fn run_unified_prompt_with_provider(
     query_config.max_turns = max_turns;
 
     // 8. Convert existing conversation to Messages for QueryEngine.
-    let existing_messages: Vec<Message> = conversation
-        .into_iter()
-        .map(Message::from)
-        .collect();
+    let existing_messages: Vec<Message> = conversation.into_iter().map(Message::from).collect();
 
     // 9. Create QueryEngine and submit.
     let mut engine = QueryEngine::new(query_config, existing_messages);
 
-    let context = ProcessUserInputContext::new(
-        SessionId::from(session_id),
-        config.permission_mode,
-        &model,
-    );
+    let context =
+        ProcessUserInputContext::new(SessionId::from(session_id), config.permission_mode, &model);
 
     let user_message = vec![Message::from(ConversationEntry::user(prompt))];
     let result = engine.submit_message(user_message, context).await?;

@@ -1,4 +1,4 @@
-﻿//! Agent system integration tests.
+//! Agent system integration tests.
 //!
 //! Validates that rc-agents types flow correctly through the agent pipeline:
 //! definition 鈫?runner 鈫?execution config, fork, coordinator/worker,
@@ -562,16 +562,15 @@ fn context_slice_default_and_serialization() {
 // Phase 6.1 鈥?rc-agent-protocol integration tests
 // 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
 
-use std::collections::HashSet;
-use rc_agent_protocol::{
-    AgentAdapter, AgentRouter, AgentType,
-    UnifiedAgentEvent, AgentResult, UsageInfo, ToolCallInfo,
-    PermissionDecision,
-};
 use rc_agent_protocol::adapters::RemoteClaudeAdapter;
-use rc_agent_protocol::types::{AgentConfig, AgentCapability, AgentInfo, AgentStatus};
-use rc_agent_protocol::health::{HealthChecker, HealthCheckConfig, HealthStatus};
-use rc_agent_protocol::restart::{RestartTracker, RestartPolicy};
+use rc_agent_protocol::health::{HealthCheckConfig, HealthChecker, HealthStatus};
+use rc_agent_protocol::restart::{RestartPolicy, RestartTracker};
+use rc_agent_protocol::types::{AgentCapability, AgentConfig, AgentInfo, AgentStatus};
+use rc_agent_protocol::{
+    AgentAdapter, AgentResult, AgentRouter, AgentType, PermissionDecision, ToolCallInfo,
+    UnifiedAgentEvent, UsageInfo,
+};
+use std::collections::HashSet;
 
 /// Helper: minimal RemoteClaude AgentConfig for tests.
 fn protocol_test_config() -> AgentConfig {
@@ -783,13 +782,19 @@ async fn remotecode_adapter_info_has_correct_metadata() {
 
 #[tokio::test]
 async fn remotecode_adapter_resolve_permission_delegates() {
-    let resolved = Arc::new(Mutex::new(Vec::<(String, String, PermissionDecision)>::new()));
+    let resolved = Arc::new(Mutex::new(
+        Vec::<(String, String, PermissionDecision)>::new(),
+    ));
     let resolved_clone = resolved.clone();
 
-    let adapter = RemoteClaudeAdapter::new_claude().with_resolve_permission(move |sid, rid, dec| {
-        resolved_clone.lock().unwrap().push((sid.to_string(), rid.to_string(), dec));
-        Ok(())
-    });
+    let adapter =
+        RemoteClaudeAdapter::new_claude().with_resolve_permission(move |sid, rid, dec| {
+            resolved_clone
+                .lock()
+                .unwrap()
+                .push((sid.to_string(), rid.to_string(), dec));
+            Ok(())
+        });
 
     let mut adapter = adapter;
     adapter.start(&protocol_test_config()).await.unwrap();
@@ -906,19 +911,14 @@ fn all_unified_agent_event_variants_roundtrip() {
     ];
 
     for event in &events {
-        let json = serde_json::to_string(event).unwrap_or_else(|e| {
-            panic!("failed to serialize {event:?}: {e}")
-        });
-        let back: UnifiedAgentEvent = serde_json::from_str(&json).unwrap_or_else(|e| {
-            panic!("failed to deserialize {json}: {e}")
-        });
+        let json = serde_json::to_string(event)
+            .unwrap_or_else(|e| panic!("failed to serialize {event:?}: {e}"));
+        let back: UnifiedAgentEvent = serde_json::from_str(&json)
+            .unwrap_or_else(|e| panic!("failed to deserialize {json}: {e}"));
 
         // Re-serialize the deserialized value and compare JSON strings.
         let json2 = serde_json::to_string(&back).unwrap();
-        assert_eq!(
-            json, json2,
-            "roundtrip mismatch for {event:?}"
-        );
+        assert_eq!(json, json2, "roundtrip mismatch for {event:?}");
     }
 }
 
@@ -1122,4 +1122,3 @@ fn restart_tracker_zero_max_never_allows() {
     assert!(tracker.request_restart().is_none());
     assert!(!tracker.can_restart());
 }
-

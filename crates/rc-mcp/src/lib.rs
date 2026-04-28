@@ -89,8 +89,8 @@ pub use error::{McpConfigError, McpRuntimeError};
 
 // Session functions and persistent client
 pub use session::{
-    call_tool, discover_mcp_configs, get_prompt, inspect_server, list_prompts, list_resources,
-    load_discovered_mcp_configs, read_resource, resolve_stdio_command, McpClient,
+    McpClient, call_tool, discover_mcp_configs, get_prompt, inspect_server, list_prompts,
+    list_resources, load_discovered_mcp_configs, read_resource, resolve_stdio_command,
 };
 
 // Resource types

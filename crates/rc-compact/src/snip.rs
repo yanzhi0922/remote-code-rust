@@ -326,7 +326,6 @@ fn snip_message_content(msg: &mut Message) {
 // Token estimation helpers
 // ---------------------------------------------------------------------------
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

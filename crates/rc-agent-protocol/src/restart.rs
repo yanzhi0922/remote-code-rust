@@ -74,7 +74,8 @@ impl RestartTracker {
 
         // Compute the next backoff, capped at `max_backoff`.
         let next_secs = self.next_backoff.as_secs_f64() * self.policy.backoff_multiplier;
-        self.next_backoff = Duration::from_secs_f64(next_secs.min(self.policy.max_backoff.as_secs_f64()));
+        self.next_backoff =
+            Duration::from_secs_f64(next_secs.min(self.policy.max_backoff.as_secs_f64()));
 
         Some(backoff)
     }

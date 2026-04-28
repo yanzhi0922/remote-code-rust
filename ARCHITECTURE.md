@@ -427,6 +427,78 @@ graph TB
 4. Permission requests from all agents are routed through the same GUI approval flow
 5. QueryEngine provides a unified execution path shared by all three agents
 
+## Three-Agent Independent Binary Architecture
+
+### 概览
+
+三个 Agent 各自编译为独立的可执行文件：
+
+| Agent | Binary Name | 通信方式 | 源码位置 |
+|-------|-------------|---------|---------|
+| Claude Code | `remote-code` | 进程内（InProcessAdapter） | `agents/claudecode/` |
+| Codex | `codex` | 子进程（SubprocessAdapter + Bridge） | `agents/codex/codex-rs/` |
+| Roo-code | `roo` | 子进程（SubprocessAdapter + Bridge） | `agents/roo-code/` |
+
+### SubprocessAdapter
+
+Codex 和 Roo-code 通过 `SubprocessAdapter` 与主进程通信：
+
+1. 主进程启动 Bridge Binary（`remote-code-codex-bridge` 或 `remote-code-roo-bridge`）
+2. Bridge Binary 通过 JSON-RPC over stdio 与主进程通信
+3. Bridge Binary 启动实际的 Codex/Roo-code 二进制并翻译 I/O
+
+```mermaid
+graph TB
+    subgraph Main Process
+        GUI[GUI / CLI]
+        ROUTER[AgentRouter]
+        IPA[InProcessAdapter<br/>Claude Code]
+        SA_CX[SubprocessAdapter<br/>Codex]
+        SA_ROO[SubprocessAdapter<br/>Roo-code]
+    end
+
+    subgraph Bridge Binaries
+        CX_BRIDGE[codex-bridge<br/>JSON-RPC stdio]
+        ROO_BRIDGE[roo-bridge<br/>JSON-RPC stdio]
+    end
+
+    subgraph External Agents
+        CX_BIN[codex binary]
+        ROO_BIN[roo-code binary]
+    end
+
+    GUI --> ROUTER
+    ROUTER --> IPA
+    ROUTER --> SA_CX
+    ROUTER --> SA_ROO
+
+    SA_CX -->|spawn| CX_BRIDGE
+    SA_ROO -->|spawn| ROO_BRIDGE
+
+    CX_BRIDGE -->|spawn + translate| CX_BIN
+    ROO_BRIDGE -->|spawn + translate| ROO_BIN
+```
+
+### Bridge Protocol
+
+定义在 `crates/rc-agent-protocol/src/bridge_proto.rs`：
+
+- 请求方法：`initialize`, `send_message`, `cancel`, `shutdown`, `resolve_permission`
+- 通知方法：`started`, `ready`, `message_delta`, `tool_call_started`, `done`, `error` 等
+
+### Bridge Binary
+
+| Binary | Crate | 职责 |
+|--------|-------|------|
+| `remote-code-codex-bridge` | `apps/remote-code-codex-bridge/` | 启动 Codex 二进制，翻译 JSON-RPC ↔ Codex I/O |
+| `remote-code-roo-bridge` | `apps/remote-code-roo-bridge/` | 启动 Roo-code 二进制，翻译 JSON-RPC ↔ Roo-code I/O |
+
+### 构建系统
+
+- `Makefile` — GNU Make 统一构建入口
+- `scripts/build-agents.ps1` — PowerShell 构建脚本（Windows）
+- `scripts/build-agents.sh` — Bash 构建脚本（Linux/macOS）
+
 ## QueryEngine Unified Execution Path
 
 `rc-query-engine` provides a single execution path for all agent types, eliminating the previous dual-path architecture:

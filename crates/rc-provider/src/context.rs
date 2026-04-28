@@ -1656,7 +1656,10 @@ mod tests {
 
         let result = mgr.auto_compact(&conv);
         // Should be shorter than original due to compaction.
-        assert!(result.len() < conv.len(), "auto_compact should reduce conversation size");
+        assert!(
+            result.len() < conv.len(),
+            "auto_compact should reduce conversation size"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1772,7 +1775,9 @@ mod tests {
         let mut conv = vec![ConversationEntry::system("sys")];
         for i in 0..20 {
             conv.push(ConversationEntry::user(&format!("user msg {i}")));
-            conv.push(ConversationEntry::assistant(&format!("assistant reply {i}")));
+            conv.push(ConversationEntry::assistant(&format!(
+                "assistant reply {i}"
+            )));
         }
 
         let result = mgr.sliding_window_compact(&conv);
@@ -1894,11 +1899,14 @@ mod tests {
     fn token_estimate_entry_with_history_text() {
         let est = TokenEstimator::new();
         let mut entry = ConversationEntry::assistant("short");
-        entry.history_text = Some("this is a much longer history text that should be used for estimation".to_owned());
+        entry.history_text = Some(
+            "this is a much longer history text that should be used for estimation".to_owned(),
+        );
         let tokens = est.estimate_entry(&entry);
         // Should use the longer of text vs history_text.
         let text_tokens = est.estimate("short");
-        let history_tokens = est.estimate("this is a much longer history text that should be used for estimation");
+        let history_tokens =
+            est.estimate("this is a much longer history text that should be used for estimation");
         assert_eq!(tokens, history_tokens);
         assert!(tokens > text_tokens);
     }
@@ -1952,6 +1960,10 @@ mod tests {
             .collect();
         assert_eq!(summary_entries.len(), 1);
         // Should mention the number of compacted messages.
-        assert!(summary_entries[0].text.contains("earlier messages compacted"));
+        assert!(
+            summary_entries[0]
+                .text
+                .contains("earlier messages compacted")
+        );
     }
 }

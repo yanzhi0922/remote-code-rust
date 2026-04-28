@@ -1,108 +1,102 @@
-# build-agents.ps1 — Build agent binaries for multi-agent architecture
-# Usage: powershell -ExecutionPolicy Bypass -File scripts/build-agents.ps1 [roo-code|codex|all]
+#Requires -Version 7.0
+<#
+.SYNOPSIS
+    Build all three Agent binaries for the multi-agent architecture.
+
+.DESCRIPTION
+    Builds Claude Code Agent, Codex Agent, and Roo-code Agent, then copies
+    the resulting binaries into a unified output directory.
+
+.EXAMPLE
+    ./scripts/build-agents.ps1
+    ./scripts/build-agents.ps1 -Release
+    ./scripts/build-agents.ps1 -Debug
+#>
+
 param(
-    [ValidateSet("roo-code", "codex", "all")]
-    [string]$Agent = "all"
+    [switch]$Release = $true,
+    [switch]$Debug = $false
 )
 
 $ErrorActionPreference = "Stop"
-$ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
-$AgentsDir = Join-Path $ProjectRoot "agents"
-$OutputBase = Join-Path $ProjectRoot "target" "agent-binaries"
 
-function Build-RooCode {
-    Write-Host "`n=== Building Roo Code Agent ===" -ForegroundColor Cyan
-    $RooDir = Join-Path $AgentsDir "roo-code"
-    if (-not (Test-Path $RooDir)) {
-        Write-Error "Roo Code source not found at $RooDir. Clone it first: git clone <roo-code-url> agents/roo-code"
-        return $false
-    }
+# Determine build profile
+$Profile = if ($Debug) { "debug" } else { "release" }
+$ProfileFlag = if ($Debug) { "" } else { "--release" }
 
-    Push-Location $RooDir
+# Output directory for unified binaries
+$OutputDir = Join-Path $PSScriptRoot ".." "target" "agent-binaries"
+if (-not (Test-Path $OutputDir)) {
+    New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+}
+
+$Results = @()
+
+function Build-Agent {
+    param(
+        [string]$Name,
+        [scriptblock]$BuildCmd,
+        [string]$BinaryName,
+        [string]$SourcePath
+    )
+
+    Write-Host "`n=== Building $Name ===" -ForegroundColor Cyan
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+
     try {
-        Write-Host "  Compiling roo-server (release)..."
-        cargo build --release -p roo-server 2>&1 | Write-Host
+        & $BuildCmd
         if ($LASTEXITCODE -ne 0) {
-            Write-Error "Failed to build roo-server"
-            return $false
+            throw "Build failed with exit code $LASTEXITCODE"
+        }
+        $sw.Stop()
+
+        # Copy binary to output directory
+        if (Test-Path $SourcePath) {
+            Copy-Item -Path $SourcePath -Destination $OutputDir -Force
+            $binaryDest = Join-Path $OutputDir $BinaryName
+            Write-Host "  Copied: $binaryDest" -ForegroundColor Green
+        } else {
+            Write-Host "  Warning: Binary not found at $SourcePath" -ForegroundColor Yellow
         }
 
-        # Copy binary to output
-        $BinSrc = Join-Path $RooDir "target" "release" "roo-server.exe"
-        $OutDir = Join-Path $OutputBase "roo-code"
-        if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Path $OutDir -Force | Out-Null }
-        Copy-Item $BinSrc $OutDir -Force
-        Write-Host "  -> Copied to $OutDir\roo-server.exe" -ForegroundColor Green
-        return $true
-    }
-    finally {
-        Pop-Location
-    }
-}
-
-function Build-Codex {
-    Write-Host "`n=== Building Codex Agent ===" -ForegroundColor Cyan
-    $CodexDir = Join-Path $AgentsDir "codex"
-    if (-not (Test-Path $CodexDir)) {
-        Write-Error "Codex source not found at $CodexDir. Clone it first: gh repo clone openai/codex agents/codex"
-        return $false
-    }
-
-    $CodexRsDir = Join-Path $CodexDir "codex-rs"
-    if (-not (Test-Path $CodexRsDir)) {
-        Write-Error "codex-rs directory not found at $CodexRsDir"
-        return $false
-    }
-
-    Push-Location $CodexRsDir
-    try {
-        Write-Host "  Compiling codex-rs/app-server (release)..."
-        cargo build --release -p codex-app-server 2>&1 | Write-Host
-        if ($LASTEXITCODE -ne 0) {
-            Write-Error "Failed to build codex-app-server"
-            return $false
+        $Results += [PSCustomObject]@{
+            Agent   = $Name
+            Status  = "OK"
+            Duration = $sw.Elapsed.ToString("mm\:ss")
         }
-
-        # Copy binary to output
-        $BinSrc = Join-Path $CodexRsDir "target" "release" "codex-app-server.exe"
-        if (-not (Test-Path $BinSrc)) {
-            # Try alternative binary name
-            $BinSrc = Join-Path $CodexRsDir "target" "release" "codex.exe"
+    }
+    catch {
+        $sw.Stop()
+        Write-Host "  FAILED: $_" -ForegroundColor Red
+        $Results += [PSCustomObject]@{
+            Agent   = $Name
+            Status  = "FAILED"
+            Duration = $sw.Elapsed.ToString("mm\:ss")
         }
-        $OutDir = Join-Path $OutputBase "codex"
-        if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Path $OutDir -Force | Out-Null }
-        Copy-Item $BinSrc $OutDir -Force
-        Write-Host "  -> Copied to $OutDir" -ForegroundColor Green
-        return $true
-    }
-    finally {
-        Pop-Location
     }
 }
 
-# Main
-Write-Host "Remote Code — Agent Binary Builder" -ForegroundColor Yellow
-Write-Host "Project root: $ProjectRoot"
-Write-Host "Output:       $OutputBase"
+# ── 1. Claude Code Agent ──
+Build-Agent -Name "Claude Code Agent" `
+    -BuildCmd { cargo build --package remote-code $ProfileFlag } `
+    -BinaryName "remote-code.exe" `
+    -SourcePath (Join-Path $PSScriptRoot ".." "target" $Profile "remote-code.exe")
 
-if (-not (Test-Path $OutputBase)) {
-    New-Item -ItemType Directory -Path $OutputBase -Force | Out-Null
-}
+# ── 2. Codex Agent ──
+Build-Agent -Name "Codex Agent" `
+    -BuildCmd { Push-Location (Join-Path $PSScriptRoot ".." "agents" "codex" "codex-rs"); cargo build --package codex-cli $ProfileFlag; Pop-Location } `
+    -BinaryName "codex.exe" `
+    -SourcePath (Join-Path $PSScriptRoot ".." "agents" "codex" "codex-rs" "target" $Profile "codex.exe")
 
-$success = $true
-switch ($Agent) {
-    "roo-code" { $success = Build-RooCode }
-    "codex"    { $success = Build-Codex }
-    "all"      {
-        $r = Build-RooCode
-        $c = Build-Codex
-        $success = ($r -and $c)
-    }
-}
+# ── 3. Roo-code Agent ──
+Build-Agent -Name "Roo-code Agent" `
+    -BuildCmd { Push-Location (Join-Path $PSScriptRoot ".." "agents" "roo-code"); cargo build --package roo-cli $ProfileFlag; Pop-Location } `
+    -BinaryName "roo.exe" `
+    -SourcePath (Join-Path $PSScriptRoot ".." "agents" "roo-code" "target" $Profile "roo.exe")
 
-if ($success) {
-    Write-Host "`n✓ All requested agents built successfully!" -ForegroundColor Green
-} else {
-    Write-Host "`n✗ Some builds failed." -ForegroundColor Red
-    exit 1
-}
+# ── Summary ──
+Write-Host "`n========================================" -ForegroundColor White
+Write-Host "  Build Summary (Profile: $Profile)" -ForegroundColor White
+Write-Host "========================================" -ForegroundColor White
+$Results | Format-Table -AutoSize
+Write-Host "Output directory: $OutputDir`n" -ForegroundColor Cyan
