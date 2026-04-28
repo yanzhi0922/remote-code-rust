@@ -37,6 +37,8 @@ rc-plugins = { path = "../../../crates/rc-plugins" }
 rc-skills = { path = "../../../crates/rc-skills" }
 rc-agent-protocol = { path = "../../../crates/rc-agent-protocol" }
 rc-voice = { path = "../../../crates/rc-voice" }
+rc-query-engine = { path = "../../../crates/rc-query-engine" }
+rc-engine-events = { path = "../../../crates/rc-engine-events" }
 reqwest = { workspace = true }
 tracing = { workspace = true }
 
