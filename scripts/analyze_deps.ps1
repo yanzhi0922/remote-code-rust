@@ -18,7 +18,19 @@ $migratedPkgs = @(
     'codex-client','codex-execpolicy','codex-utils-image',
     'codex-install-context','codex-network-proxy',
     # Stage 4
-    'codex-protocol'
+    'codex-protocol',
+    # Stage 5
+    'codex-agent-identity','codex-sandboxing','codex-shell-command',
+    'codex-utils-approval-presets','codex-utils-cli','codex-utils-output-truncation',
+    # Stage 6
+    'codex-api','codex-app-server-protocol',
+    # Stage 7
+    'codex-connectors','codex-debug-client','codex-model-provider-info',
+    'codex-otel','codex-response-debug-context',
+    # Stage 8
+    'codex-features',
+    # Stage 9
+    'codex-config'
 )
 
 $migratedDirs = @(
@@ -27,13 +39,18 @@ $migratedDirs = @(
     'device-key','execpolicy-legacy','file-search','keyring-store',
     'process-hardening','realtime-webrtc','terminal-detection','uds','v8-poc',
     'responses-api-proxy','skills','stdio-to-uds',
-    'codex-client','execpolicy','install-context','network-proxy','protocol'
+    'codex-client','execpolicy','install-context','network-proxy','protocol',
+    'agent-identity','sandboxing','shell-command',
+    'codex-api','app-server-protocol',
+    'connectors','debug-client','model-provider-info','otel','response-debug-context',
+    'features','config'
 )
 
 $migratedUtils = @(
     'absolute-path','cache','cargo-bin','elapsed','fuzzy-match','json-to-toml',
     'pty','readiness','rustls-provider','sleep-inhibitor','stream-parser',
-    'string','template','home-dir','path-utils','image'
+    'string','template','home-dir','path-utils','image',
+    'approval-presets','cli','output-truncation'
 )
 
 $codexRoot = 'agents\codex\codex-rs'

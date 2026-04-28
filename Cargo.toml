@@ -27,9 +27,24 @@ members = [
     "crates/codex/protocol",
     # Codex Stage 5: protocol-dependent crates
     "crates/codex/agent-identity",
-    # "crates/codex/codex-api",  # needs tungstenite patch from Codex
+    "crates/codex/codex-api",
     "crates/codex/sandboxing",
     "crates/codex/shell-command",
+    # Codex Stage 6: app-server-protocol + codex-api (unblocked by tungstenite patch)
+    "crates/codex/app-server-protocol",
+    # Codex Stage 7: api/protocol-dependent crates
+    "crates/codex/connectors",
+    "crates/codex/debug-client",
+    "crates/codex/model-provider-info",
+    "crates/codex/otel",
+    "crates/codex/response-debug-context",
+    # Codex Stage 8: features (feature flags)
+    "crates/codex/features",
+    # Codex Stage 9: config (key crate — unlocks hooks, login, exec-server)
+    "crates/codex/config",
+    # Codex Stage 10: config-dependent crates
+    "crates/codex/hooks",
+    "crates/codex/login",
     # Codex utils leaf crates
     "crates/codex/utils/absolute-path",
     "crates/codex/utils/cache",
@@ -95,7 +110,7 @@ tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
-tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.28.0", features = ["proxy", "rustls-tls-native-roots"] }
 tokio-util = "0.7"
 toml = "0.9"
 tower-http = { version = "0.6", features = ["cors"] }
@@ -113,7 +128,7 @@ ed25519-dalek = { version = "2.2.0", features = ["pkcs8"] }
 tokio-test = "0.4"
 tree-sitter = "0.25.10"
 tree-sitter-bash = "0.25"
-tungstenite = "0.27.0"
+tungstenite = { version = "0.27.0", features = ["deflate"] }
 which = "8"
 wiremock = "0.6"
 encoding_rs = "0.8.35"
@@ -136,6 +151,25 @@ rustls-pki-types = "1.14.0"
 tracing-opentelemetry = "0.32.0"
 zstd = "0.13"
 allocative = "0.3.3"
+inventory = "0.3.19"
+rmcp = { version = "0.15.0", default-features = false }
+similar = "2.7.0"
+urlencoding = "2.1"
+maplit = "1.0.2"
+gethostname = "1.1.0"
+opentelemetry-appender-tracing = "0.31.0"
+opentelemetry-otlp = "0.31.0"
+opentelemetry-semantic-conventions = "0.31.0"
+os_info = "3.12.0"
+serde_path_to_error = "0.1.20"
+toml_edit = "0.24.0"
+wildmatch = "2.6.1"
+dns-lookup = "3.0.1"
+winapi-util = "0.1.11"
+tonic = "0.14.5"
+tonic-prost = "0.14.5"
+prost = "0.14.3"
+webbrowser = "1.0"
 ansi-to-tui = "7.0.0"
 assert_cmd = "2"
 assert_matches = "1.5.0"
@@ -243,6 +277,28 @@ codex-shell-command = { path = "crates/codex/shell-command" }
 codex-utils-approval-presets = { path = "crates/codex/utils/approval-presets" }
 codex-utils-cli = { path = "crates/codex/utils/cli" }
 codex-utils-output-truncation = { path = "crates/codex/utils/output-truncation" }
+# Stage 6 internal deps
+codex-app-server-protocol = { path = "crates/codex/app-server-protocol" }
+# Stage 7 internal deps
+codex-connectors = { path = "crates/codex/connectors" }
+codex-debug-client = { path = "crates/codex/debug-client" }
+codex-model-provider-info = { path = "crates/codex/model-provider-info" }
+codex-otel = { path = "crates/codex/otel" }
+codex-response-debug-context = { path = "crates/codex/response-debug-context" }
+# Stage 8 internal deps
+codex-features = { path = "crates/codex/features" }
+# Stage 9 internal deps
+codex-config = { path = "crates/codex/config" }
+# Stage 10 internal deps
+codex-hooks = { path = "crates/codex/hooks" }
+codex-login = { path = "crates/codex/login" }
+
+[patch.crates-io]
+# Codex patches — needed for tungstenite features (deflate, proxy) and tokio-tungstenite compat
+tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }
+tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "132f5b39c862e3a970f731d709608b3e6276d5f6" }
+crossterm = { git = "https://github.com/nornagon/crossterm", rev = "87db8bfa6dc99427fd3b071681b07fc31c6ce995" }
+ratatui = { git = "https://github.com/nornagon/ratatui", rev = "9b2ad1298408c45918ee9f8241a6f95498cdbed2" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
