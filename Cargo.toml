@@ -95,6 +95,11 @@ members = [
     "crates/codex/utils/approval-presets",
     "crates/codex/utils/cli",
     "crates/codex/utils/output-truncation",
+    # Codex Stage 19: code-mode stub (V8 stub), rollout-trace, tools, core
+    "crates/codex/code-mode",
+    "crates/codex/rollout-trace",
+    "crates/codex/tools",
+    "crates/codex/core",
 ]
 exclude = [
     "apps/remote-code-gui",
@@ -224,6 +229,17 @@ derive_more = "2"
 dirs = "6"
 dunce = "1.0"
 env_logger = "0.11"
+bm25 = "2.3.2"
+csv = "1.3.1"
+env-flags = "0.1.1"
+iana-time-zone = "0.1.64"
+insta = "1.46.3"
+notify = "8.2.0"
+openssl-sys = "*"
+predicates = "3"
+test-log = "0.2.17"
+tracing-test = "0.2.5"
+whoami = "1.6.1"
 http = "1"
 keyring = { version = "3.6", default-features = false }
 lazy_static = "1"
@@ -365,6 +381,10 @@ codex-rollout = { path = "crates/codex/rollout" }
 codex-core-skills = { path = "crates/codex/core-skills" }
 codex-thread-store = { path = "crates/codex/thread-store" }
 codex-core-plugins = { path = "crates/codex/core-plugins" }
+codex-code-mode = { path = "crates/codex/code-mode" }
+codex-rollout-trace = { path = "crates/codex/rollout-trace" }
+codex-tools = { path = "crates/codex/tools" }
+codex-core = { path = "crates/codex/core" }
 
 [patch.crates-io]
 # Codex patches — needed for tungstenite features (deflate, proxy) and tokio-tungstenite compat
