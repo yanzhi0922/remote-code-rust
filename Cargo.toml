@@ -23,6 +23,8 @@ members = [
     # Codex Stage 3 crates (depend on stage 2)
     "crates/codex/install-context",
     "crates/codex/network-proxy",
+    # Codex Stage 4: protocol (key crate — unlocks ~40 crates)
+    "crates/codex/protocol",
     # Codex utils leaf crates
     "crates/codex/utils/absolute-path",
     "crates/codex/utils/cache",
@@ -95,6 +97,17 @@ walkdir = "2.5.0"
 serial_test = "3"
 
 # ── Codex-only external deps ────────────────────────────────────
+chardetng = "0.1.17"
+encoding_rs = "0.8.35"
+icu_decimal = "2.1"
+icu_locale_core = "2.1"
+icu_provider = { version = "2.1", features = ["sync"] }
+landlock = "0.4.4"
+quick-xml = { version = "0.38.4", features = ["serialize"] }
+seccompiler = "0.5.0"
+strum = "0.27.2"
+strum_macros = "0.28.0"
+sys-locale = "0.3.2"
 eventsource-stream = "0.2.3"
 image = { version = "0.25", default-features = false }
 mime_guess = "2.0.5"
@@ -142,7 +155,7 @@ serde_with = "3"
 sha1 = "0.10"
 starlark = "0.13"
 time = "0.3"
-ts-rs = "11"
+ts-rs = { version = "11", features = ["uuid-impl", "serde-json-impl", "no-serde-warnings"] }
 uds_windows = "1.1"
 url = "2"
 tiny_http = "0.12"
@@ -202,6 +215,8 @@ codex-utils-path = { path = "crates/codex/utils/path-utils" }
 # Stage 3 internal deps
 codex-install-context = { path = "crates/codex/install-context" }
 codex-network-proxy = { path = "crates/codex/network-proxy" }
+# Stage 4 internal deps
+codex-protocol = { path = "crates/codex/protocol" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
