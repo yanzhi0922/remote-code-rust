@@ -8,7 +8,7 @@
 |------|------|
 | 应用程序 | 6 个 |
 | 库 Crate | 38 个 |
-| 内置工具 | 38+ |
+| 内置工具 | 65+ |
 | 单元测试 | 860+ |
 | Clippy 警告 | 0 |
 | `unsafe` 代码 | 禁止（`forbid`） |
@@ -20,15 +20,16 @@
 - 🦀 **纯 Rust 实现** — 内存安全、零成本抽象、高性能异步运行时（Tokio）
 - 🤖 **多 Provider 支持** — OpenAI、Anthropic、GLM/ZhipuAI、AWS Bedrock、Google Vertex AI
 - 🔄 **自动故障转移** — 多 Provider 健康追踪 + 熔断器 + 指数退避重试
-- 🔧 **38+ 内置工具** — 文件操作、代码搜索、Web 搜索、LSP、后台任务、代理系统
-- 🧠 **智能上下文管理** — 自动 Token 估算、上下文压缩、Anthropic Prompt Cache 优化
+- 🔧 **65+ 内置工具** — 文件操作、代码搜索、Web 搜索、LSP、后台任务、代理系统
+- 🧠 **智能上下文管理** — 自动 Token 估算、5 种压缩策略、Anthropic Prompt Cache 优化
 - 🔒 **细粒度权限系统** — 5 种模式 + 规则引擎 + 通配符匹配 + 审计日志
 - 🏗️ **分布式架构** — Control Plane + Runner + WebSocket 实时流
 - 🔌 **MCP 协议** — stdio / HTTP / WebSocket 三种传输层
 - 📦 **插件系统** — JSON-RPC stdio 协议，隔离进程运行
 - 🧩 **Skills 系统** — Markdown frontmatter 技能发现与索引
 - 🤝 **多代理系统（Swarm）** — AgentScheduler + 并行执行 + 邮箱消息传递
-- 🌐 **多 Agent 统一管理** — Remote Code / Roo Code / OpenAI Codex 三引擎适配器架构
+- 🌐 **多 Agent 统一管理** — Remote Code / Roo Code / OpenAI Codex 三引擎共享 `InProcessAdapter` 进程内回调架构
+- ⚡ **QueryEngine 统一执行路径** — 三个 Agent 共享同一条查询执行路径，消除双路径分歧
 - 💾 **记忆系统** — RC.md 持久化记忆（全局 / 项目双作用域）
 - 🛡️ **沙箱执行** — Seatbelt (macOS) / Landlock (Linux) / Windows 策略
 - 📊 **成本追踪** — 多模型 Token 使用统计 + 费用累计
@@ -59,10 +60,21 @@ remote-code-rust/
 │   ├── remote-code-control-plane/ # 控制平面
 │   ├── remote-code-runner/        # 远程 Runner
 │   └── remote-code-migrate/       # 数据迁移
-├── crates/                        # 库 Crate（39 个）
+├── crates/                        # 库 Crate（38 个）
+│   ├── rc-agent-protocol/         # 多 Agent 协议抽象层
+│   │   └── src/adapters/
+│   │       ├── in_process.rs      # 统一 InProcessAdapter 实现
+│   │       ├── remote_claude.rs   # RemoteClaudeAdapter 类型别名
+│   │       ├── remote_roo.rs      # RemoteRooAdapter 类型别名
+│   │       └── remote_codex.rs    # RemoteCodexAdapter 类型别名
+│   ├── rc-query-engine/           # QueryEngine 统一执行路径
+│   ├── rc-core/                   # 核心运行时类型
+│   ├── rc-provider/               # Provider 标准化与流式
+│   └── ...                        # 其他 34 个 crate
 ├── plans/                         # 设计文档
-│   ├── multi-agent-architecture.md  # 多 Agent 架构设计
-│   └── archive/                   # 归档文档
+│   ├── multi-agent-architecture.md  # 多 Agent 架构设计（当前）
+│   ├── PROJECT_STATUS.md            # 项目状态
+│   └── archive/                     # 归档文档
 ├── scripts/                       # 构建与工具脚本
 ├── deploy/                        # 部署配置
 └── fixtures/                      # 测试固件
@@ -88,7 +100,7 @@ remote-code-rust/
 | `rc-core` | 共享运行时类型、错误、会话模型、Hook 类型 |
 | `rc-config` | CLI 解析、环境变量、配置优先级、Provider 配置、遗留导入 |
 | `rc-provider` | Provider 标准化、请求构建、传输、重试、SSE 流、故障转移、成本追踪 |
-| `rc-tools` | 38+ 内置工具、工具注册、权限检查、BM25 搜索、延迟加载 |
+| `rc-tools` | 65+ 内置工具、工具注册、权限检查、BM25 搜索、延迟加载 |
 | `rc-permissions` | 5 种权限模式、审批请求、规则引擎、审计记录 |
 | `rc-session` | 会话持久化（SQLite + NDJSON）、索引、导出、恢复、重放 |
 | `rc-mcp` | MCP 客户端/服务器生命周期、JSON-RPC 传输、工具投影 |
@@ -98,8 +110,8 @@ remote-code-rust/
 | `rc-agents` | 调度器、邮箱、任务生命周期、并行执行 |
 | `rc-swarm` | 多代理类型系统、Team 文件、权限请求、消息传递 |
 | `rc-tui` | ratatui 界面、Vim 键绑定、视口状态、渲染 |
-| `rc-compact` | 上下文压缩策略、Session Memory 压缩 |
-| `rc-query-engine` | 查询循环、状态机、流式执行器、Token 预算 |
+| `rc-compact` | 上下文压缩策略（5 种）、Session Memory 压缩 |
+| `rc-query-engine` | 统一查询循环、状态机、流式执行器、Token 预算 |
 | `rc-system-prompt` | 系统提示词构建、缓存、各段落模块化 |
 | `rc-runtime-prompt` | 运行时提示词、自动记忆注入 |
 | `rc-engine-events` | 引擎事件类型、流处理 |
@@ -111,7 +123,7 @@ remote-code-rust/
 | `rc-auth` | API Key、OAuth2、订阅验证 |
 | `rc-context` | Effort 级别、Fast Mode、运行时身份 |
 | `rc-model` | 模型信息与元数据 |
-| `rc-voice` | 语音转文字（STT）、文字转语音（TTS） |
+| `rc-voice` | 语音转文字（STT）、文字转语音（TTS Mock） |
 | `rc-telemetry` | 追踪设置、结构化日志、Token 估算 |
 | `rc-teleport` | Teleport 远程环境 API |
 | `rc-transcript` | 会话转录、边界标记、存储 |
@@ -123,7 +135,7 @@ remote-code-rust/
 | `rc-runner` | Runner 协议、HTTP API、心跳 |
 | `rc-control-plane` | API 模型、Runner 注册、WebSocket 扇出 |
 | `rc-utils` | 工具函数（Git、Diff、Markdown、图片、Cron 等） |
-| `rc-agent-protocol` | 多代理协议抽象层：AgentAdapter trait、UnifiedAgentEvent、AgentRouter |
+| `rc-agent-protocol` | 多 Agent 协议抽象层：`InProcessAdapter`、`UnifiedAgentEvent`、`AgentRouter` |
 
 ### 数据流
 
@@ -139,7 +151,7 @@ Provider 响应 → 解析工具调用
 重复直到 Provider 发出纯文本响应（无工具调用）
 ```
 
-## 内置工具（38+）
+## 内置工具（65+）
 
 ### 文件操作
 `read_file` · `write_file` · `edit_file` · `replace_in_file` · `list_directory`
@@ -148,13 +160,13 @@ Provider 响应 → 解析工具调用
 `search_text` · `glob` · `grep` · `lsp`（简化 LSP）
 
 ### 执行
-`bash_command`（带沙箱支持）
+`bash_command`（带沙箱支持） · `powershell` · `repl` · `monitor` · `terminal_capture`
 
 ### Web
 `web_search` · `web_fetch` · `web_browser`
 
 ### 代理系统
-`agent` · `send_message` · `team_create` · `team_status`
+`agent` · `send_message` · `team_create` · `team_status` · `team_delete` · `team_list`
 
 ### 任务管理
 `task_create` · `task_get` · `task_list` · `task_stop` · `task_update` · `todo_write`
@@ -163,7 +175,7 @@ Provider 响应 → 解析工具调用
 `memory_read` · `memory_write`
 
 ### 其他
-`ask_user` · `config_read` · `sleep` · `snip` · `skill_discover` · `tool_search` · `verify_plan` · `terminal_capture` · `notebook_edit` · `enter_plan_mode` · `exit_plan_mode`
+`ask_user` · `config_read` · `sleep` · `snip` · `skill_discover` · `tool_search` · `verify_plan` · `terminal_capture` · `notebook_edit` · `enter_plan_mode` · `exit_plan_mode` · `brief` · `review_artifact` · `send_user_file` · `discover_skills`
 
 ## 快速开始
 
@@ -306,26 +318,55 @@ ls deploy/tencent-cloud/
 
 ## 多 Agent 架构
 
-Remote Code GUI 支持三种 AI Agent 引擎，通过统一的 `AgentAdapter` trait 实现：
+Remote Code GUI 支持三种 AI Agent 引擎，通过统一的 `InProcessAdapter` 进程内回调架构实现：
 
 | Agent | 通信方式 | 说明 |
 |-------|----------|------|
-| **Claude Code** | 进程内（Tauri IPC） | 默认引擎，基于 Claude Code 的 Rust 重写 |
-| **Roo Code** | 子进程 stdio（JSON-RPC 2.0 + Content-Length） | `roo-server` 二进制 |
-| **OpenAI Codex** | 子进程 stdio（JSON-RPC v2 + 行分隔 JSON） | `codex-app-server` 二进制 |
+| **Remote Code** | 进程内回调（`InProcessAdapter`） | 默认引擎，基于 Claude Code 的 Rust 重写 |
+| **Roo Code** | 进程内回调（`InProcessAdapter`） | 共享统一适配器，注入 Roo 专用回调 |
+| **OpenAI Codex** | 进程内回调（`InProcessAdapter`） | 共享统一适配器，注入 Codex 专用回调 |
+
+### 统一执行路径
+
+三个 Agent 共享同一条 `QueryEngine` 执行路径：
+
+```mermaid
+graph LR
+    UI[前端 send_prompt] --> QE[QueryEngine 统一路径]
+    QE --> IPA[InProcessAdapter]
+    IPA -->|回调注入| RC[Remote Code 回调]
+    IPA -->|回调注入| ROO[Roo Code 回调]
+    IPA -->|回调注入| CX[Codex 回调]
+    RC --> CORE[rc-provider / rc-tools / rc-session]
+    ROO --> CORE
+    CX --> CORE
+```
+
+**核心优势**：
+- 零子进程开销 — 不启动外部进程
+- 统一事件模型 — `UnifiedAgentEvent` 标准化所有 Agent 事件
+- 回调注入 — 通过 `with_send_message()` / `with_cancel()` / `with_resolve_permission()` 灵活注入行为
+- 统一权限流程 — 所有 Agent 共享 GUI 审批界面
 
 详细设计见 [plans/multi-agent-architecture.md](plans/multi-agent-architecture.md)。
+
+## 已知限制
+
+| 限制 | 说明 |
+|------|------|
+| TTS 为 Mock 实现 | `rc-voice::tts` 目前返回占位响应，未接入真实 TTS 服务 |
+| 外部 Agent 回调为 Stub | Roo Code / Codex 的回调函数目前返回硬编码响应，需接入真实实现 |
 
 ## 项目文档
 
 | 文档 | 说明 |
 |------|------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 完整架构设计文档 |
-| [ACCEPTANCE_AUDIT_REPORT.md](ACCEPTANCE_AUDIT_REPORT.md) | 验收审计报告 |
 | [COMPATIBILITY.md](COMPATIBILITY.md) | 兼容性说明 |
 | [PROVENANCE.md](PROVENANCE.md) | 来源证明 |
 | [ROADMAP.md](ROADMAP.md) | 路线图 |
 | [plans/multi-agent-architecture.md](plans/multi-agent-architecture.md) | 多 Agent 架构设计 |
+| [plans/PROJECT_STATUS.md](plans/PROJECT_STATUS.md) | 项目状态与路线图 |
 | [plans/](plans/) | 全部设计文档 |
 
 ## 许可证

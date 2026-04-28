@@ -13,8 +13,8 @@ The workspace is split into agent engines under `agents/`, application binaries 
 The `agents/` directory contains the AI agent engines:
 
 - `agents/claudecode/`: **Claude Code Agent** — the Rust rewrite of Claude Code (formerly `apps/remote-code/`). This is the primary agent engine with CLI, TUI, headless, and interactive modes. It is a full workspace member.
-- `agents/codex/`: OpenAI Codex source (`codex-rs/app-server`) — JSON-RPC v2 over stdio. Independent Git repository.
-- `agents/roo-code/`: Roo Code source (`crates/roo-server`) — JSON-RPC 2.0 with Content-Length framing over stdio. Independent Git repository.
+- `agents/codex/`: OpenAI Codex source (`codex-rs/app-server`) — independent Git repository.
+- `agents/roo-code/`: Roo Code source (`crates/roo-server`) — independent Git repository.
 
 The codex and roo-code directories are excluded from the main repo via `.gitignore`. Build scripts in `scripts/` compile external agent binaries to `target/agent-binaries/`.
 
@@ -32,7 +32,7 @@ The codex and roo-code directories are excluded from the main repo via `.gitigno
 - `rc-protocol`: typed runtime events plus compatibility serializers for `stream-json`
 - `rc-provider`: provider normalization, request shaping, transport, retries, streaming (SSE), failover, cost tracking, context management
 - `rc-session`: session persistence (SQLite + NDJSON), indexes, exports, transcript appenders, resume loading, replay, memory system
-- `rc-tools`: typed tool registry, 38+ built-in tools, tool execution with permission checks, BM25 search engine, lazy loading, sandbox execution
+- `rc-tools`: typed tool registry, 65+ built-in tools, tool execution with permission checks, BM25 search engine, lazy loading, sandbox execution
 - `rc-permissions`: permission policies (5 modes), approval requests, tool classification, rule engine with wildcard matching, audit records
 - `rc-mcp`: MCP client/server lifecycle, stdio/HTTP/WebSocket JSON-RPC transport, config discovery, tool projection
 - `rc-skills`: `SKILL.md` discovery, TOML frontmatter parsing, indexing, lock file support
@@ -42,7 +42,8 @@ The codex and roo-code directories are excluded from the main repo via `.gitigno
 - `rc-runner`: runner protocol, HTTP API, workspace registration, heartbeat, session/approval management
 - `rc-control-plane`: API models, runner registry, realtime fan-out (WebSocket), approvals, artifact routes, timeline events
 - `rc-telemetry`: tracing setup, structured logging, JSON output, cost telemetry
-- `rc-agent-protocol`: multi-agent protocol abstraction layer — `AgentAdapter` trait, `UnifiedAgentEvent` enum, `AgentRouter` for routing messages to different agent backends; includes `RemoteCodeAdapter` (in-process callback), `RooCodeAdapter` (subprocess JSON-RPC 2.0 + Content-Length framing), and `CodexAdapter` (subprocess NDJSON line-delimited)
+- `rc-agent-protocol`: multi-agent protocol abstraction layer — unified `InProcessAdapter` with callback injection, `UnifiedAgentEvent` enum, `AgentRouter` for routing messages to different agent backends. All three agents (Remote Code, Roo Code, Codex) share the same `InProcessAdapter` implementation via type aliases (`RemoteClaudeAdapter`, `RemoteRooAdapter`, `RemoteCodexAdapter`)
+- `rc-query-engine`: unified query loop, state machine, streaming executor, token budget — shared execution path for all three agents
 
 ## Process Model
 
@@ -158,6 +159,15 @@ Externally, the compatibility layer re-exposes:
 
 The compatibility serializer is the only place where loosely structured legacy shapes are produced.
 
+### Multi-Agent Protocol Boundary
+
+All three agents (Remote Code, Roo Code, Codex) communicate via **in-process callbacks** — not subprocess JSON-RPC:
+
+- `InProcessAdapter` receives injected callback functions at construction time
+- Callbacks are invoked directly within the Tauri process
+- Events flow through `mpsc::Receiver<UnifiedAgentEvent>` channels
+- No external process spawning, no IPC overhead, no subprocess lifecycle management
+
 ## Provider Architecture
 
 `rc-provider` standardizes provider access around a common request model:
@@ -208,7 +218,7 @@ The streaming subsystem provides real-time callbacks:
 
 ## Tool System Architecture
 
-`rc-tools` defines typed capability interfaces with 38+ built-in tools.
+`rc-tools` defines typed capability interfaces with 65+ built-in tools.
 
 ### Tool Categories
 
@@ -347,29 +357,100 @@ When context approaches the window limit:
 
 ### Multi-Agent Adapter Architecture
 
-The GUI supports multiple AI agent backends through a unified adapter pattern. See [plans/multi-agent-architecture.md](plans/multi-agent-architecture.md) for the full design.
+The GUI supports multiple AI agent backends through a unified in-process adapter pattern. See [plans/multi-agent-architecture.md](plans/multi-agent-architecture.md) for the full design.
+
+**Unified InProcessAdapter Architecture:**
+
+All three agents share the same `InProcessAdapter` implementation, differing only in the callback functions injected at construction time:
+
+```mermaid
+graph TB
+    subgraph Frontend
+        UI[React UI]
+    end
+
+    subgraph Tauri Backend
+        CMD[Tauri Commands]
+        ROUTER[AgentRouter]
+        
+        subgraph InProcessAdapter
+            RCA[RemoteClaudeAdapter<br/>callback: rc-query-engine]
+            RA[RemoteRooAdapter<br/>callback: roo-logic]
+            CA[RemoteCodexAdapter<br/>callback: codex-logic]
+        end
+
+        QE[QueryEngine<br/>统一执行路径]
+    end
+
+    subgraph Core Runtime
+        PROVIDER[rc-provider]
+        TOOLS[rc-tools]
+        SESSION[rc-session]
+    end
+
+    UI --> CMD
+    CMD --> ROUTER
+    ROUTER --> RCA
+    ROUTER --> RA
+    ROUTER --> CA
+    
+    RCA --> QE
+    RA --> QE
+    CA --> QE
+    
+    QE --> PROVIDER
+    QE --> TOOLS
+    QE --> SESSION
+```
 
 **Supported Agents:**
 
-| Agent | Transport | Protocol | Entry Point |
-|-------|-----------|----------|-------------|
-| Claude Code | In-process (Tauri IPC) | Direct Rust calls | `rc-provider`, `rc-tools`, etc. |
-| Roo Code | Subprocess stdio | JSON-RPC 2.0 + Content-Length framing | `roo-server` binary |
-| OpenAI Codex | Subprocess stdio | JSON-RPC v2 + line-delimited JSON | `codex-app-server` binary |
+| Agent | Transport | Protocol | Implementation |
+|-------|-----------|----------|----------------|
+| Remote Code | In-process callback | Direct Rust calls | `InProcessAdapter` + rc-query-engine callbacks |
+| Roo Code | In-process callback | Callback injection | `InProcessAdapter` + roo-specific callbacks |
+| OpenAI Codex | In-process callback | Callback injection | `InProcessAdapter` + codex-specific callbacks |
 
 **Core Abstractions:**
 
-- `AgentAdapter` trait — unified interface: `start()`, `send_message()`, `cancel()`, `resolve_permission()`, `stop()`, `is_alive()`
+- `InProcessAdapter` — unified adapter with builder-pattern callback injection (`with_send_message()`, `with_cancel()`, `with_resolve_permission()`)
+- `AgentAdapter` trait — async interface: `start()`, `send_message()`, `cancel()`, `resolve_permission()`, `stop()`, `is_alive()`
 - `AgentRouter` — routes sessions to the correct adapter based on `agent_type`
-- `UnifiedAgentEvent` — normalized event model translating all agent protocols to common events
-- `rc-agent-protocol` (new crate) — shared types, adapter trait, event definitions
+- `UnifiedAgentEvent` — normalized event model for all agent protocols
+- `rc-agent-protocol` — shared types, adapter trait, event definitions, type aliases
 
 **Key Design Decisions:**
 
-1. Agent binaries are isolated in `~/.remote-code/agents/{name}/bin/` — not system-installed
-2. Agent cores are never modified — only adapters are built
+1. All agents run in-process — no subprocess spawning, no IPC overhead
+2. Callback injection differentiates agent behavior — same struct, different closures
 3. Sessions are bound to a single agent type at creation time
 4. Permission requests from all agents are routed through the same GUI approval flow
+5. QueryEngine provides a unified execution path shared by all three agents
+
+## QueryEngine Unified Execution Path
+
+`rc-query-engine` provides a single execution path for all agent types, eliminating the previous dual-path architecture:
+
+```mermaid
+graph LR
+    A[AgentAdapter.send_message] --> B[QueryEngine.run]
+    B --> C[Provider Request]
+    C --> D[Parse Response]
+    D --> E{Has Tool Calls?}
+    E -->|Yes| F[Permission Check]
+    F --> G[Execute Tool]
+    G --> H[Append Result]
+    H --> C
+    E -->|No| I[Emit Completed Event]
+```
+
+**Key properties:**
+
+- Single state machine for all agent types
+- Streaming event emission via `mpsc::Receiver<UnifiedAgentEvent>`
+- Token budget tracking and context window management
+- Observer pattern for checkpoint and recovery
+- Shared tool execution loop with permission broker
 
 ## MCP, Skills, and Plugins
 
@@ -431,6 +512,7 @@ apps/* → rc-* crates
 UI-facing crates → core crates (not the reverse)
 remote crates → protocol, config, session, telemetry
 compatibility code → internal typed models (not the reverse)
+rc-agent-protocol → rc-core (shared types only)
 ```
 
 Examples of allowed direction:
@@ -439,12 +521,15 @@ Examples of allowed direction:
 - `rc-control-plane → rc-runner, rc-config`
 - `rc-provider → rc-core, rc-config, rc-tools`
 - `rc-plugins → rc-mcp, rc-skills`
+- `rc-agent-protocol → rc-core` (shared types, events)
+- `rc-query-engine → rc-provider, rc-tools, rc-session` (unified execution)
 
 Examples of disallowed direction:
 
 - `rc-core → rc-tui`
 - `rc-permissions → apps/remote-code`
 - `rc-session → rc-control-plane`
+- `rc-core → rc-agent-protocol`
 
 ## CI Expectations
 
@@ -457,3 +542,10 @@ CI enforces on every push and PR:
 - platform-specific path and process tests do not regress
 
 Release builds are triggered by tags and produce binaries for 5 platforms.
+
+## Known Limitations
+
+| Limitation | Description |
+|------------|-------------|
+| TTS Mock | `rc-voice::tts` returns placeholder responses, not connected to a real TTS service |
+| External Agent Callbacks | Roo Code / Codex callbacks currently return stub responses, awaiting real implementation |
