@@ -30,7 +30,9 @@ $migratedPkgs = @(
     # Stage 8
     'codex-features',
     # Stage 9
-    'codex-config'
+    'codex-config',
+    # Stage 10
+    'codex-hooks','codex-login'
 )
 
 $migratedDirs = @(
@@ -43,7 +45,7 @@ $migratedDirs = @(
     'agent-identity','sandboxing','shell-command',
     'codex-api','app-server-protocol',
     'connectors','debug-client','model-provider-info','otel','response-debug-context',
-    'features','config'
+    'features','config','hooks','login'
 )
 
 $migratedUtils = @(

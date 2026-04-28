@@ -45,6 +45,9 @@ members = [
     # Codex Stage 10: config-dependent crates
     "crates/codex/hooks",
     "crates/codex/login",
+    # Codex Stage 11: login-dependent crates
+    "crates/codex/feedback",
+    "crates/codex/models-manager",
     # Codex utils leaf crates
     "crates/codex/utils/absolute-path",
     "crates/codex/utils/cache",
@@ -170,6 +173,7 @@ tonic = "0.14.5"
 tonic-prost = "0.14.5"
 prost = "0.14.3"
 webbrowser = "1.0"
+sentry = "0.46"
 ansi-to-tui = "7.0.0"
 assert_cmd = "2"
 assert_matches = "1.5.0"
@@ -292,6 +296,9 @@ codex-config = { path = "crates/codex/config" }
 # Stage 10 internal deps
 codex-hooks = { path = "crates/codex/hooks" }
 codex-login = { path = "crates/codex/login" }
+# Stage 11 internal deps
+codex-feedback = { path = "crates/codex/feedback" }
+codex-models-manager = { path = "crates/codex/models-manager" }
 
 [patch.crates-io]
 # Codex patches — needed for tungstenite features (deflate, proxy) and tokio-tungstenite compat
