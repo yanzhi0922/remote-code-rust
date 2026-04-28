@@ -14,6 +14,10 @@ members = [
     "crates/codex/process-hardening",
     "crates/codex/terminal-detection",
     "crates/codex/uds",
+    # Codex Stage 2 crates (depend on leaf crates)
+    "crates/codex/responses-api-proxy",
+    "crates/codex/skills",
+    "crates/codex/stdio-to-uds",
     # Codex utils leaf crates
     "crates/codex/utils/absolute-path",
     "crates/codex/utils/cache",
@@ -27,6 +31,9 @@ members = [
     "crates/codex/utils/stream-parser",
     "crates/codex/utils/string",
     "crates/codex/utils/template",
+    # Codex utils Stage 2
+    "crates/codex/utils/home-dir",
+    "crates/codex/utils/path-utils",
 ]
 exclude = [
     "apps/remote-code-gui",
@@ -92,6 +99,7 @@ aws-credential-types = "1"
 aws-sigv4 = "1"
 aws-types = "1"
 bytes = "1"
+ctor = "0.6"
 crossbeam-channel = "0.5"
 derive_more = "2"
 dirs = "6"
@@ -107,9 +115,11 @@ multimap = "0.10"
 nucleo = { git = "https://github.com/helix-editor/nucleo.git", rev = "4253de9faabb4e5c6d81d946a5e35a90f87347ee" }
 p256 = "0.13.2"
 path-absolutize = "3.1"
+include_dir = "0.7"
 portable-pty = "0.9.0"
 pretty_assertions = "1.4"
 regex-lite = "0.1"
+shlex = "1"
 runfiles = { git = "https://github.com/dzbarsky/rules_rust", rev = "b56cbaa8465e74127f1ea216f813cd377295ad81" }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 schemars = "0.8"
@@ -120,7 +130,9 @@ time = "0.3"
 ts-rs = "11"
 uds_windows = "1.1"
 url = "2"
+tiny_http = "0.12"
 v8 = "=146.4.0"
+zeroize = "1.8"
 
 # ── Internal crate path dependencies (rc-*) ────────────────────
 rc-agent-protocol = { path = "crates/rc-agent-protocol" }
@@ -154,6 +166,12 @@ codex-utils-sleep-inhibitor = { path = "crates/codex/utils/sleep-inhibitor" }
 codex-utils-stream-parser = { path = "crates/codex/utils/stream-parser" }
 codex-utils-string = { path = "crates/codex/utils/string" }
 codex-utils-template = { path = "crates/codex/utils/template" }
+# Stage 2 internal deps
+codex-responses-api-proxy = { path = "crates/codex/responses-api-proxy" }
+codex-skills = { path = "crates/codex/skills" }
+codex-stdio-to-uds = { path = "crates/codex/stdio-to-uds" }
+codex-utils-home-dir = { path = "crates/codex/utils/home-dir" }
+codex-utils-path = { path = "crates/codex/utils/path-utils" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
