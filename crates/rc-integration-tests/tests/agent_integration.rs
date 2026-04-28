@@ -1,7 +1,7 @@
-//! Agent system integration tests.
+﻿//! Agent system integration tests.
 //!
 //! Validates that rc-agents types flow correctly through the agent pipeline:
-//! definition → runner → execution config, fork, coordinator/worker,
+//! definition 鈫?runner 鈫?execution config, fork, coordinator/worker,
 //! resume checkpoint, and built-in agent registry.
 
 use std::collections::BTreeMap;
@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 
-// ─── Helpers ──────────────────────────────────────────────────────────────
+// 鈹€鈹€鈹€ Helpers 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 fn ok<T, E: std::fmt::Display>(result: Result<T, E>) -> T {
     match result {
@@ -19,7 +19,7 @@ fn ok<T, E: std::fmt::Display>(result: Result<T, E>) -> T {
     }
 }
 
-// ─── AgentDefinition → serialization round-trip ───────────────────────────
+// 鈹€鈹€鈹€ AgentDefinition 鈫?serialization round-trip 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 #[test]
 fn agent_definition_round_trips_via_json() {
@@ -74,7 +74,7 @@ fn agent_source_display_variants() {
     );
 }
 
-// ─── Built-in agents registry ─────────────────────────────────────────────
+// 鈹€鈹€鈹€ Built-in agents registry 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 #[test]
 fn built_in_agents_returns_default_gated_set() {
@@ -115,7 +115,7 @@ fn explore_agent_is_read_only() {
     assert!(explore.omit_claude_md);
 }
 
-// ─── AgentRunner → tool resolution ────────────────────────────────────────
+// 鈹€鈹€鈹€ AgentRunner 鈫?tool resolution 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 #[test]
 fn runner_resolves_wildcard_tools() {
@@ -268,7 +268,7 @@ async fn runner_executes_via_mock_executor_with_resolved_request() {
     assert!(!request.tools.contains(&"Edit".to_owned()));
 }
 
-// ─── Fork configuration ──────────────────────────────────────────────────
+// 鈹€鈹€鈹€ Fork configuration 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 #[test]
 fn fork_config_default_inherits_context() {
@@ -349,7 +349,7 @@ fn build_fork_messages_with_tool_use_blocks() {
     assert_eq!(last.role, "user");
 }
 
-// ─── Coordinator mode ────────────────────────────────────────────────────
+// 鈹€鈹€鈹€ Coordinator mode 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 #[test]
 fn coordinator_mode_display() {
@@ -376,7 +376,7 @@ fn coordinator_reset_override_cleans_state() {
     // (unless env var is set, which we don't control in tests)
 }
 
-// ─── Worker lifecycle ────────────────────────────────────────────────────
+// 鈹€鈹€鈹€ Worker lifecycle 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 #[test]
 fn worker_agent_lifecycle_transitions() {
@@ -436,7 +436,7 @@ fn worker_config_serialization_round_trip() {
     assert!(decoded.simple_mode);
 }
 
-// ─── Resume checkpoint save/load ─────────────────────────────────────────
+// 鈹€鈹€鈹€ Resume checkpoint save/load 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 #[test]
 fn checkpoint_save_and_load_round_trip() {
@@ -480,7 +480,7 @@ fn checkpoint_total_tokens() {
     assert_eq!(cp.total_tokens(), 150);
 }
 
-// ─── Cross-crate: Agent types → JSON → rc-settings compatible ────────────
+// 鈹€鈹€鈹€ Cross-crate: Agent types 鈫?JSON 鈫?rc-settings compatible 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 #[test]
 fn agent_definition_source_compatible_with_settings() {
@@ -558,9 +558,9 @@ fn context_slice_default_and_serialization() {
     assert_eq!(decoded.token_estimate, 42);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Phase 6.1 — rc-agent-protocol integration tests
-// ═══════════════════════════════════════════════════════════════════════════
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
+// Phase 6.1 鈥?rc-agent-protocol integration tests
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
 
 use std::collections::HashSet;
 use rc_agent_protocol::{
@@ -588,13 +588,13 @@ fn protocol_test_config() -> AgentConfig {
     }
 }
 
-// ─── AgentRouter routing tests ─────────────────────────────────────────────
+// 鈹€鈹€鈹€ AgentRouter routing tests 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 #[tokio::test]
 async fn router_register_and_send_message_routes_correctly() {
     let mut router = AgentRouter::new();
 
-    let adapter = RemoteClaudeAdapter::new().with_send_message(|_sid, msg| {
+    let adapter = RemoteClaudeAdapter::new_claude().with_send_message(|_sid, msg| {
         Ok(vec![UnifiedAgentEvent::MessageDelta {
             session_id: "sess-1".into(),
             delta: format!("echo: {msg}"),
@@ -623,7 +623,7 @@ async fn router_multiple_sessions_route_independently() {
     let mut router = AgentRouter::new();
 
     // Session A
-    let adapter_a = RemoteClaudeAdapter::new().with_send_message(|_sid, msg| {
+    let adapter_a = RemoteClaudeAdapter::new_claude().with_send_message(|_sid, msg| {
         Ok(vec![UnifiedAgentEvent::MessageDelta {
             session_id: "sess-a".into(),
             delta: format!("A:{msg}"),
@@ -634,7 +634,7 @@ async fn router_multiple_sessions_route_independently() {
     router.register("sess-a".into(), boxed_a).await;
 
     // Session B
-    let adapter_b = RemoteClaudeAdapter::new().with_send_message(|_sid, msg| {
+    let adapter_b = RemoteClaudeAdapter::new_claude().with_send_message(|_sid, msg| {
         Ok(vec![UnifiedAgentEvent::MessageDelta {
             session_id: "sess-b".into(),
             delta: format!("B:{msg}"),
@@ -667,7 +667,7 @@ async fn router_multiple_sessions_route_independently() {
 async fn router_close_session_removes_adapter() {
     let mut router = AgentRouter::new();
 
-    let adapter = RemoteClaudeAdapter::new().with_send_message(|_sid, _msg| Ok(vec![]));
+    let adapter = RemoteClaudeAdapter::new_claude().with_send_message(|_sid, _msg| Ok(vec![]));
     let mut boxed: Box<dyn AgentAdapter> = Box::new(adapter);
     boxed.start(&protocol_test_config()).await.unwrap();
     router.register("sess-x".into(), boxed).await;
@@ -683,7 +683,7 @@ async fn router_cancel_delegates_to_adapter() {
     let canceled = Arc::new(Mutex::new(false));
     let canceled_clone = canceled.clone();
 
-    let adapter = RemoteClaudeAdapter::new()
+    let adapter = RemoteClaudeAdapter::new_claude()
         .with_send_message(|_sid, _msg| Ok(vec![]))
         .with_cancel(move |_sid| {
             *canceled_clone.lock().unwrap() = true;
@@ -699,14 +699,14 @@ async fn router_cancel_delegates_to_adapter() {
     assert!(*canceled.lock().unwrap());
 }
 
-// ─── RemoteClaudeAdapter integration tests ───────────────────────────────────
+// 鈹€鈹€鈹€ RemoteClaudeAdapter integration tests 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 #[tokio::test]
 async fn remotecode_adapter_lifecycle_start_send_stop() {
     let messages_received = Arc::new(Mutex::new(Vec::<String>::new()));
     let messages_clone = messages_received.clone();
 
-    let adapter = RemoteClaudeAdapter::new().with_send_message(move |_sid, msg| {
+    let adapter = RemoteClaudeAdapter::new_claude().with_send_message(move |_sid, msg| {
         messages_clone.lock().unwrap().push(msg.to_string());
         Ok(vec![
             UnifiedAgentEvent::Ready,
@@ -728,7 +728,7 @@ async fn remotecode_adapter_lifecycle_start_send_stop() {
 
     let mut adapter = adapter;
 
-    // Before start — alive (status is Starting)
+    // Before start 鈥?alive (status is Starting)
     assert!(adapter.is_alive());
 
     // Start
@@ -759,7 +759,7 @@ async fn remotecode_adapter_lifecycle_start_send_stop() {
 
 #[tokio::test]
 async fn remotecode_adapter_is_alive_state_changes() {
-    let mut adapter = RemoteClaudeAdapter::new();
+    let mut adapter = RemoteClaudeAdapter::new_claude();
     assert!(adapter.is_alive()); // Starting
 
     adapter.start(&protocol_test_config()).await.unwrap();
@@ -771,7 +771,7 @@ async fn remotecode_adapter_is_alive_state_changes() {
 
 #[tokio::test]
 async fn remotecode_adapter_info_has_correct_metadata() {
-    let adapter = RemoteClaudeAdapter::new();
+    let adapter = RemoteClaudeAdapter::new_claude();
     let info = adapter.info();
 
     assert_eq!(info.name, "Remote Claude");
@@ -786,7 +786,7 @@ async fn remotecode_adapter_resolve_permission_delegates() {
     let resolved = Arc::new(Mutex::new(Vec::<(String, String, PermissionDecision)>::new()));
     let resolved_clone = resolved.clone();
 
-    let adapter = RemoteClaudeAdapter::new().with_resolve_permission(move |sid, rid, dec| {
+    let adapter = RemoteClaudeAdapter::new_claude().with_resolve_permission(move |sid, rid, dec| {
         resolved_clone.lock().unwrap().push((sid.to_string(), rid.to_string(), dec));
         Ok(())
     });
@@ -806,7 +806,7 @@ async fn remotecode_adapter_resolve_permission_delegates() {
     assert_eq!(lock[0].2, PermissionDecision::Allow);
 }
 
-// ─── Event translation / serialization tests ──────────────────────────────
+// 鈹€鈹€鈹€ Event translation / serialization tests 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 #[test]
 fn all_unified_agent_event_variants_roundtrip() {
@@ -924,7 +924,7 @@ fn all_unified_agent_event_variants_roundtrip() {
 
 #[tokio::test]
 async fn events_flow_from_adapter_through_router() {
-    let adapter = RemoteClaudeAdapter::new().with_send_message(|_sid, msg| {
+    let adapter = RemoteClaudeAdapter::new_claude().with_send_message(|_sid, msg| {
         Ok(vec![
             UnifiedAgentEvent::MessageDelta {
                 session_id: "sess-flow".into(),
@@ -966,7 +966,7 @@ async fn events_flow_from_adapter_through_router() {
     assert!(rx.recv().await.is_none(), "channel should be closed");
 }
 
-// ─── Error handling tests ──────────────────────────────────────────────────
+// 鈹€鈹€鈹€ Error handling tests 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 #[tokio::test]
 async fn router_send_message_unregistered_session_returns_error() {
@@ -994,7 +994,7 @@ async fn router_cancel_unregistered_session_returns_error() {
 
 #[tokio::test]
 async fn adapter_send_message_without_callback_returns_error() {
-    let mut adapter = RemoteClaudeAdapter::new();
+    let mut adapter = RemoteClaudeAdapter::new_claude();
     adapter.start(&protocol_test_config()).await.unwrap();
 
     let result = adapter.send_message("s1", "hello").await;
@@ -1008,7 +1008,7 @@ async fn adapter_send_message_without_callback_returns_error() {
 
 #[tokio::test]
 async fn adapter_cancel_without_callback_returns_error() {
-    let mut adapter = RemoteClaudeAdapter::new();
+    let mut adapter = RemoteClaudeAdapter::new_claude();
     adapter.start(&protocol_test_config()).await.unwrap();
 
     let result = adapter.cancel("s1").await;
@@ -1036,7 +1036,7 @@ async fn router_resolve_permission_unregistered_returns_error() {
     assert!(result.is_err());
 }
 
-// ─── Health check integration tests ────────────────────────────────────────
+// 鈹€鈹€鈹€ Health check integration tests 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 #[test]
 fn health_checker_tracks_adapter_liveness() {
@@ -1073,7 +1073,7 @@ fn health_checker_reset_after_adapter_restart() {
     checker.check(false);
     assert!(matches!(checker.status(), HealthStatus::Unhealthy { .. }));
 
-    // Simulate adapter restart → reset health
+    // Simulate adapter restart 鈫?reset health
     checker.reset();
     assert_eq!(checker.status(), &HealthStatus::Healthy);
 
@@ -1081,7 +1081,7 @@ fn health_checker_reset_after_adapter_restart() {
     assert_eq!(checker.status(), &HealthStatus::Healthy);
 }
 
-// ─── Restart strategy integration tests ────────────────────────────────────
+// 鈹€鈹€鈹€ Restart strategy integration tests 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 #[test]
 fn restart_tracker_allows_backoff_and_reset() {
@@ -1104,7 +1104,7 @@ fn restart_tracker_allows_backoff_and_reset() {
     // Exhausted
     assert!(tracker.request_restart().is_none());
 
-    // After successful run → reset
+    // After successful run 鈫?reset
     tracker.reset();
     assert!(tracker.can_restart());
     let b_after = tracker.request_restart().unwrap();
@@ -1122,3 +1122,4 @@ fn restart_tracker_zero_max_never_allows() {
     assert!(tracker.request_restart().is_none());
     assert!(!tracker.can_restart());
 }
+

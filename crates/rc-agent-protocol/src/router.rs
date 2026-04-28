@@ -58,15 +58,15 @@ impl AgentRouter {
     pub fn create_adapter(config: &AgentConfig) -> anyhow::Result<Box<dyn AgentAdapter>> {
         match config.agent_type {
             AgentType::RemoteClaude => {
-                let adapter = RemoteClaudeAdapter::new();
+                let adapter = RemoteClaudeAdapter::new_claude();
                 Ok(Box::new(adapter))
             }
             AgentType::RemoteRoo => {
-                let adapter = RemoteRooAdapter::new();
+                let adapter = RemoteRooAdapter::new_roo();
                 Ok(Box::new(adapter))
             }
             AgentType::RemoteCodex => {
-                let adapter = RemoteCodexAdapter::new();
+                let adapter = RemoteCodexAdapter::new_codex();
                 Ok(Box::new(adapter))
             }
         }
