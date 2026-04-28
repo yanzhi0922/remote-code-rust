@@ -48,7 +48,9 @@ $migratedPkgs = @(
     # Stage 17
     'codex-core-skills','codex-thread-store',
     # Stage 18
-    'codex-core-plugins'
+    'codex-core-plugins',
+    # Stage 19
+    'codex-code-mode','codex-rollout-trace','codex-tools','codex-core'
 )
 
 $migratedDirs = @(
@@ -68,7 +70,8 @@ $migratedDirs = @(
     'cloud-tasks-client','plugin','secrets','state',
     'analytics','cloud-tasks-mock-client','codex-mcp','rollout',
     'core-skills','thread-store',
-    'core-plugins'
+    'core-plugins',
+    'code-mode','rollout-trace','tools','core'
 )
 
 $migratedUtils = @(
