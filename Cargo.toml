@@ -1,6 +1,37 @@
 [workspace]
-members = ["apps/*", "crates/*", "apps/remote-code-gui/src-tauri", "agents/claudecode"]
-exclude = ["apps/remote-code-gui", "apps/remote-code-mobile"]
+members = [
+    "apps/*",
+    "crates/rc-*",
+    "apps/remote-code-gui/src-tauri",
+    "agents/claudecode",
+    # Codex leaf crates (Stage 1) — listed explicitly to avoid glob issues
+    "crates/codex/ansi-escape",
+    "crates/codex/async-utils",
+    "crates/codex/codex-backend-openapi-models",
+    "crates/codex/codex-experimental-api-macros",
+    "crates/codex/collaboration-mode-templates",
+    "crates/codex/device-key",
+    "crates/codex/process-hardening",
+    "crates/codex/terminal-detection",
+    "crates/codex/uds",
+    # Codex utils leaf crates
+    "crates/codex/utils/absolute-path",
+    "crates/codex/utils/cache",
+    "crates/codex/utils/elapsed",
+    "crates/codex/utils/fuzzy-match",
+    "crates/codex/utils/json-to-toml",
+    "crates/codex/utils/pty",
+    "crates/codex/utils/readiness",
+    "crates/codex/utils/rustls-provider",
+    "crates/codex/utils/sleep-inhibitor",
+    "crates/codex/utils/stream-parser",
+    "crates/codex/utils/string",
+    "crates/codex/utils/template",
+]
+exclude = [
+    "apps/remote-code-gui",
+    "apps/remote-code-mobile",
+]
 resolver = "2"
 
 [workspace.package]
@@ -12,44 +43,117 @@ repository = "https://github.com/yanzhi0922/remote-code-rust"
 rust-version = "1.93"
 
 [workspace.dependencies]
-anyhow = "1.0.100"
+# ── Shared deps (rc-* + codex) ──────────────────────────────────
+anyhow = "1"
 async-trait = "0.1.89"
-axum = { version = "0.8.6", features = ["macros", "ws"] }
+axum = { version = "0.8", default-features = false, features = ["macros", "ws"] }
 base64 = "0.22.1"
-chrono = { version = "0.4.42", features = ["clock", "serde"] }
-getrandom = "0.3"
-hmac = "0.12"
-sha2 = "0.10"
-clap = { version = "4.5.50", features = ["derive", "env"] }
+chrono = { version = "0.4", features = ["clock", "serde"] }
+clap = { version = "4", features = ["derive", "env"] }
 crossterm = "0.29.0"
 directories = "6.0.0"
-futures = "0.3.31"
-globset = "0.4.17"
-ignore = "0.4.24"
+futures = { version = "0.3", default-features = false }
+getrandom = "0.3"
+globset = "0.4"
+hmac = "0.12"
+ignore = "0.4"
 indexmap = { version = "2.12.0", features = ["serde"] }
-once_cell = "1.21.3"
+once_cell = "1"
 rand = "0.9"
 ratatui = "0.29.0"
-regex = "1.12.2"
-reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls", "stream", "http2"] }
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "http2"] }
 rusqlite = { version = "0.32.0", features = ["bundled", "chrono", "serde_json"] }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.145"
-thiserror = "2.0.17"
-tempfile = "3.23.0"
-tokio = { version = "1.48.0", features = ["full"] }
-tokio-stream = "0.1.17"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
 tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-webpki-roots"] }
-tower-http = { version = "0.6.8", features = ["cors"] }
-toml = "0.9.8"
-tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "json"] }
-serial_test = "3"
-uuid = { version = "1.18.1", features = ["serde", "v4"] }
+tokio-util = "0.7"
+toml = "0.9"
+tower-http = { version = "0.6", features = ["cors"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+uuid = { version = "1", features = ["serde", "v4"] }
 walkdir = "2.5.0"
+serial_test = "3"
 
-# Internal crate path dependencies
+# ── Codex-only external deps ────────────────────────────────────
+allocative = "0.3.3"
+ansi-to-tui = "7.0.0"
+assert_cmd = "2"
+assert_matches = "1.5.0"
+async-io = "2.6.0"
+aws-config = "1"
+aws-credential-types = "1"
+aws-sigv4 = "1"
+aws-types = "1"
+bytes = "1"
+crossbeam-channel = "0.5"
+derive_more = "2"
+dirs = "6"
+dunce = "1.0"
+env_logger = "0.11"
+http = "1"
+keyring = { version = "3.6", default-features = false }
+lazy_static = "1"
+libc = "0.2"
+log = "0.4"
+lru = "0.16"
+multimap = "0.10"
+nucleo = { git = "https://github.com/helix-editor/nucleo.git", rev = "4253de9faabb4e5c6d81d946a5e35a90f87347ee" }
+p256 = "0.13.2"
+path-absolutize = "3.1"
+portable-pty = "0.9.0"
+pretty_assertions = "1.4"
+regex-lite = "0.1"
+runfiles = { git = "https://github.com/dzbarsky/rules_rust", rev = "b56cbaa8465e74127f1ea216f813cd377295ad81" }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+schemars = "0.8"
+serde_with = "3"
+sha1 = "0.10"
+starlark = "0.13"
+time = "0.3"
+ts-rs = "11"
+uds_windows = "1.1"
+url = "2"
+v8 = "=146.4.0"
+
+# ── Internal crate path dependencies (rc-*) ────────────────────
 rc-agent-protocol = { path = "crates/rc-agent-protocol" }
+
+# ── Internal crate path dependencies (codex leaf crates) ────────
+codex-ansi-escape = { path = "crates/codex/ansi-escape" }
+codex-async-utils = { path = "crates/codex/async-utils" }
+codex-aws-auth = { path = "crates/codex/aws-auth" }
+codex-backend-openapi-models = { path = "crates/codex/codex-backend-openapi-models" }
+codex-collaboration-mode-templates = { path = "crates/codex/collaboration-mode-templates" }
+codex-device-key = { path = "crates/codex/device-key" }
+codex-experimental-api-macros = { path = "crates/codex/codex-experimental-api-macros" }
+codex-execpolicy-legacy = { path = "crates/codex/execpolicy-legacy" }
+codex-file-search = { path = "crates/codex/file-search" }
+codex-keyring-store = { path = "crates/codex/keyring-store" }
+codex-process-hardening = { path = "crates/codex/process-hardening" }
+codex-realtime-webrtc = { path = "crates/codex/realtime-webrtc" }
+codex-terminal-detection = { path = "crates/codex/terminal-detection" }
+codex-uds = { path = "crates/codex/uds" }
+codex-v8-poc = { path = "crates/codex/v8-poc" }
+codex-utils-absolute-path = { path = "crates/codex/utils/absolute-path" }
+codex-utils-cache = { path = "crates/codex/utils/cache" }
+codex-utils-cargo-bin = { path = "crates/codex/utils/cargo-bin" }
+codex-utils-elapsed = { path = "crates/codex/utils/elapsed" }
+codex-utils-fuzzy-match = { path = "crates/codex/utils/fuzzy-match" }
+codex-utils-json-to-toml = { path = "crates/codex/utils/json-to-toml" }
+codex-utils-pty = { path = "crates/codex/utils/pty" }
+codex-utils-readiness = { path = "crates/codex/utils/readiness" }
+codex-utils-rustls-provider = { path = "crates/codex/utils/rustls-provider" }
+codex-utils-sleep-inhibitor = { path = "crates/codex/utils/sleep-inhibitor" }
+codex-utils-stream-parser = { path = "crates/codex/utils/stream-parser" }
+codex-utils-string = { path = "crates/codex/utils/string" }
+codex-utils-template = { path = "crates/codex/utils/template" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
