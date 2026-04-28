@@ -25,6 +25,11 @@ members = [
     "crates/codex/network-proxy",
     # Codex Stage 4: protocol (key crate — unlocks ~40 crates)
     "crates/codex/protocol",
+    # Codex Stage 5: protocol-dependent crates
+    "crates/codex/agent-identity",
+    # "crates/codex/codex-api",  # needs tungstenite patch from Codex
+    "crates/codex/sandboxing",
+    "crates/codex/shell-command",
     # Codex utils leaf crates
     "crates/codex/utils/absolute-path",
     "crates/codex/utils/cache",
@@ -42,6 +47,10 @@ members = [
     "crates/codex/utils/home-dir",
     "crates/codex/utils/image",
     "crates/codex/utils/path-utils",
+    # Codex utils Stage 3
+    "crates/codex/utils/approval-presets",
+    "crates/codex/utils/cli",
+    "crates/codex/utils/output-truncation",
 ]
 exclude = [
     "apps/remote-code-gui",
@@ -97,7 +106,16 @@ walkdir = "2.5.0"
 serial_test = "3"
 
 # ── Codex-only external deps ────────────────────────────────────
+async-channel = "2.3.1"
 chardetng = "0.1.17"
+crypto_box = { version = "0.9.1", features = ["seal"] }
+ed25519-dalek = { version = "2.2.0", features = ["pkcs8"] }
+tokio-test = "0.4"
+tree-sitter = "0.25.10"
+tree-sitter-bash = "0.25"
+tungstenite = "0.27.0"
+which = "8"
+wiremock = "0.6"
 encoding_rs = "0.8.35"
 icu_decimal = "2.1"
 icu_locale_core = "2.1"
@@ -217,6 +235,14 @@ codex-install-context = { path = "crates/codex/install-context" }
 codex-network-proxy = { path = "crates/codex/network-proxy" }
 # Stage 4 internal deps
 codex-protocol = { path = "crates/codex/protocol" }
+# Stage 5 internal deps
+codex-agent-identity = { path = "crates/codex/agent-identity" }
+codex-api = { path = "crates/codex/codex-api" }
+codex-sandboxing = { path = "crates/codex/sandboxing" }
+codex-shell-command = { path = "crates/codex/shell-command" }
+codex-utils-approval-presets = { path = "crates/codex/utils/approval-presets" }
+codex-utils-cli = { path = "crates/codex/utils/cli" }
+codex-utils-output-truncation = { path = "crates/codex/utils/output-truncation" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -11,11 +11,14 @@ $migratedPkgs = @(
     'codex-utils-pty','codex-utils-readiness','codex-utils-rustls-provider',
     'codex-utils-sleep-inhibitor','codex-utils-stream-parser',
     'codex-utils-string','codex-utils-template',
-    # Stage 2: first wave
+    # Stage 2
     'codex-responses-api-proxy','codex-skills','codex-stdio-to-uds',
     'codex-utils-home-dir','codex-utils-path',
-    # Stage 3: second wave
-    'codex-client','codex-execpolicy','codex-utils-image'
+    # Stage 3
+    'codex-client','codex-execpolicy','codex-utils-image',
+    'codex-install-context','codex-network-proxy',
+    # Stage 4
+    'codex-protocol'
 )
 
 $migratedDirs = @(
@@ -24,7 +27,7 @@ $migratedDirs = @(
     'device-key','execpolicy-legacy','file-search','keyring-store',
     'process-hardening','realtime-webrtc','terminal-detection','uds','v8-poc',
     'responses-api-proxy','skills','stdio-to-uds',
-    'codex-client','execpolicy'
+    'codex-client','execpolicy','install-context','network-proxy','protocol'
 )
 
 $migratedUtils = @(
@@ -50,7 +53,6 @@ foreach ($crate in $dirs) {
     $pkgMatch = [regex]::Match($content, 'name\s*=\s*"([^"]+)"')
     $pkgName = $pkgMatch.Groups[1].Value
 
-    # Find all codex-* references
     $allCodexRefs = [regex]::Matches($content, 'codex-[\w-]+') | ForEach-Object { $_.Value } | Sort-Object -Unique
     $intDeps = $allCodexRefs | Where-Object { $_ -ne $pkgName }
 
@@ -66,7 +68,6 @@ foreach ($crate in $dirs) {
     }
 }
 
-# Also check utils/ subdirs
 $utilsDirs = Get-ChildItem -Path (Join-Path $codexRoot 'utils') -Directory -ErrorAction SilentlyContinue
 foreach ($crate in $utilsDirs) {
     $tomlPath = Join-Path $crate.FullName 'Cargo.toml'
