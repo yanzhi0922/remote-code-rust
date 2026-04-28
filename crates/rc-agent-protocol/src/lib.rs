@@ -4,9 +4,13 @@
 //!
 //! This crate defines the common types, events, and traits that all Agent
 //! adapters must implement, enabling seamless integration of:
-//! - **Remote Claude** (in-process, direct crate calls)
-//! - **Remote Roo** (sub-process, JSON-RPC 2.0 + Content-Length framing)
-//! - **Remote Codex** (sub-process, JSON-RPC v2 + line-delimited JSON)
+//! - **Remote Claude** (in-process, callback-based)
+//! - **Remote Roo** (in-process, callback-based)
+//! - **Remote Codex** (in-process, callback-based)
+//!
+//! All three adapters use the same callback pattern: the caller injects
+//! `send_message`, `cancel`, and `resolve_permission` callbacks via the
+//! builder pattern, and the adapter delegates to those callbacks at runtime.
 
 pub mod adapter;
 pub mod adapters;

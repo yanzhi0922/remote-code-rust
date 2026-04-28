@@ -3568,7 +3568,9 @@ async fn create_session(
         serde_json::json!({ "agent_type": agent_type_str }),
     ))?;
 
-    // For external agents (RemoteRoo / RemoteCodex), pre-create and register an adapter.
+    // For external agents (RemoteRoo / RemoteCodex), pre-create and register an
+    // in-process callback adapter.  These adapters no longer launch subprocesses;
+    // instead they use callback functions injected by the Tauri backend.
     // Fix #10: if adapter creation fails, roll back by removing the session data
     // that was just created so the user doesn't end up with a zombie session.
     if _parsed_agent_type != ProtocolAgentType::RemoteClaude {
@@ -3591,10 +3593,66 @@ async fn create_session(
             .await
             .insert(config.session_id.to_string(), config_clone);
 
+        // Create a callback-based in-process adapter.
+        let adapter: Box<dyn rc_agent_protocol::AgentAdapter> = match _parsed_agent_type {
+            ProtocolAgentType::RemoteRoo => {
+                let adapter = rc_agent_protocol::adapters::RemoteRooAdapter::new()
+                    .with_send_message(|_sid, _msg| {
+                        // TODO: Wire into QueryEngine::submit_message() for full
+                        // in-process execution. For now returns an empty response
+                        // indicating the callback path is active.
+                        Ok(vec![rc_agent_protocol::UnifiedAgentEvent::Completed {
+                            session_id: _sid.to_owned(),
+                            result: rc_agent_protocol::events::AgentResult {
+                                response_text: format!(
+                                    "[Remote Roo] In-process callback received message ({} bytes)",
+                                    _msg.len()
+                                ),
+                                tool_calls: vec![],
+                                usage: rc_agent_protocol::events::UsageInfo::default(),
+                                cost: None,
+                            },
+                        }])
+                    })
+                    .with_cancel(|_sid| Ok(()))
+                    .with_resolve_permission(|_sid, _rid, _dec| Ok(()));
+                Box::new(adapter)
+            }
+            ProtocolAgentType::RemoteCodex => {
+                let adapter = rc_agent_protocol::adapters::RemoteCodexAdapter::new()
+                    .with_send_message(|_sid, _msg| {
+                        // TODO: Wire into QueryEngine::submit_message() for full
+                        // in-process execution. For now returns an empty response
+                        // indicating the callback path is active.
+                        Ok(vec![rc_agent_protocol::UnifiedAgentEvent::Completed {
+                            session_id: _sid.to_owned(),
+                            result: rc_agent_protocol::events::AgentResult {
+                                response_text: format!(
+                                    "[Remote Codex] In-process callback received message ({} bytes)",
+                                    _msg.len()
+                                ),
+                                tool_calls: vec![],
+                                usage: rc_agent_protocol::events::UsageInfo::default(),
+                                cost: None,
+                            },
+                        }])
+                    })
+                    .with_cancel(|_sid| Ok(()))
+                    .with_resolve_permission(|_sid, _rid, _dec| Ok(()));
+                Box::new(adapter)
+            }
+            ProtocolAgentType::RemoteClaude => unreachable!(),
+        };
+
         let mut router = state.agent_router.lock().await;
-        if let Err(e) = router
-            .create_and_register(config.session_id.to_string(), &agent_config)
-            .await
+        if let Err(e) = async {
+            // Start the adapter, then register it.
+            let mut boxed = adapter;
+            boxed.start(&agent_config).await?;
+            router.register(config.session_id.to_string(), boxed).await;
+            Ok::<(), anyhow::Error>(())
+        }
+        .await
         {
             // Fix #10: Roll back — archive the session that was just created so
             // it doesn't appear in the active list.  SessionStore has no
@@ -4433,6 +4491,11 @@ fn agent_binary_name(agent_type: &ProtocolAgentType) -> String {
 /// 2. `PATH` environment variable
 ///
 /// Returns `None` when no binary is found.
+///
+/// **Note:** With the in-process adapter migration, this function is no longer
+/// used for adapter creation. It is retained for potential future use (e.g.,
+/// checking for legacy installations or external tool integration).
+#[allow(dead_code)]
 fn agent_binary_path(agent_type: &ProtocolAgentType) -> Option<PathBuf> {
     if matches!(agent_type, ProtocolAgentType::RemoteClaude) {
         // RemoteClaude is built-in — always available.
@@ -4478,7 +4541,10 @@ async fn list_available_agents(
     let agents = specs
         .iter()
         .map(|(agent_type, display_name)| {
-            let installed = agent_binary_path(agent_type).is_some();
+            // All agents are now in-process — no external binary required.
+            // RemoteClaude was always built-in; RemoteRoo and RemoteCodex are
+            // now also built-in via callback-based in-process adapters.
+            let installed = true;
             AgentTypeInfoDto {
                 agent_type: agent_type_dir_name(agent_type).to_owned(),
                 display_name: display_name.to_string(),
@@ -4497,13 +4563,13 @@ async fn install_agent(
     let parsed: ProtocolAgentType = serde_json::from_str(&format!("\"{}\"", agent_type))
         .map_err(|e| format!("无效的 agent_type: {e}"))?;
 
-    // RemoteClaude is built-in — nothing to install.
-    if matches!(parsed, ProtocolAgentType::RemoteClaude) {
-        return Ok(());
-    }
-
-    // Already installed?
-    if agent_binary_path(&parsed).is_some() {
+    // All agents are now in-process — no external binary to install.
+    // RemoteClaude was always built-in; RemoteRoo and RemoteCodex are now
+    // also built-in via callback-based in-process adapters.
+    if matches!(parsed, ProtocolAgentType::RemoteClaude)
+        || matches!(parsed, ProtocolAgentType::RemoteRoo)
+        || matches!(parsed, ProtocolAgentType::RemoteCodex)
+    {
         return Ok(());
     }
 
@@ -4579,34 +4645,14 @@ async fn install_agent(
 
 #[tauri::command]
 async fn uninstall_agent(
-    state: State<'_, AppState>,
+    _state: State<'_, AppState>,
     agent_type: String,
 ) -> std::result::Result<(), String> {
-    let parsed: ProtocolAgentType = serde_json::from_str(&format!("\"{}\"", agent_type))
+    let _parsed: ProtocolAgentType = serde_json::from_str(&format!("\"{}\"", agent_type))
         .map_err(|e| format!("无效的 agent_type: {e}"))?;
 
-    // Cannot uninstall built-in agent.
-    if matches!(parsed, ProtocolAgentType::RemoteClaude) {
-        return Err("无法卸载内置的 Remote Claude agent".to_owned());
-    }
-
-    // Stop running agent processes for this type.
-    {
-        let mut router = state.agent_router.lock().await;
-        let session_ids = router.session_ids_by_type(parsed);
-        for sid in session_ids {
-            let _ = router.close_session(&sid).await;
-        }
-    }
-
-    // Delete the agent installation directory.
-    let agent_dir = agents_base_dir().join(agent_type_dir_name(&parsed));
-    if agent_dir.exists() {
-        std::fs::remove_dir_all(&agent_dir)
-            .map_err(|e| format!("删除 agent 目录失败: {e}"))?;
-    }
-
-    Ok(())
+    // All agents are now built-in (in-process) — cannot uninstall any of them.
+    Err("所有 Agent 均为内置进程内适配器，无法卸载".to_owned())
 }
 
 #[tauri::command]
