@@ -24,4 +24,5 @@ pub mod stt;
 pub mod tts;
 pub mod types;
 
+pub use stt::WhisperStt;
 pub use types::{VoiceConfig, VoiceEvent, VoiceState};

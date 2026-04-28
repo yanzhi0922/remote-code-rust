@@ -123,9 +123,16 @@ export function useSpeechInput(options: UseSpeechInputOptions) {
         const arrayBuffer = await blob.arrayBuffer();
         const audioData = new Uint8Array(arrayBuffer);
 
+        // Derive the audio format from the MIME type for the Whisper API.
+        const mimeType = blob.type;
+        const format = mimeType.includes('webm') ? 'webm'
+          : mimeType.includes('mp4') ? 'mp4'
+          : mimeType.includes('ogg') ? 'ogg'
+          : 'wav';
+
         // Dynamically import to avoid errors in non-Tauri environments.
         const { transcribeAudio } = await import('../../lib/tauri');
-        const transcript = await transcribeAudio(audioData, blob.type);
+        const transcript = await transcribeAudio(audioData, format);
 
         if (transcript && transcript.trim()) {
           onTranscriptRef.current(transcript);

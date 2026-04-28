@@ -52,7 +52,6 @@ use rc_tools::{
 };
 use rc_agent_protocol::health::{HealthChecker, HealthStatus};
 use rc_agent_protocol::restart::RestartTracker;
-use rc_voice::stt::SpeechToText;
 use rc_agent_protocol::router::AgentRouter;
 use rc_agent_protocol::types::{AgentConfig, AgentType as ProtocolAgentType};
 use rc_agent_protocol::UnifiedAgentEvent;
@@ -777,6 +776,10 @@ struct AppState {
     pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
     running_prompts: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
     agent_router: Arc<Mutex<AgentRouter>>,
+    /// Oneshot channels for bridging Agent permission requests to the GUI and back.
+    agent_permission_channels: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
+    /// Stored AgentConfigs keyed by session ID, used for health-check auto-restart.
+    agent_configs: Arc<Mutex<HashMap<String, AgentConfig>>>,
 }
 
 fn gui_storage_path(paths: &AppPaths, file_name: &str) -> PathBuf {
@@ -3056,7 +3059,7 @@ fn as_error<T>(result: Result<T>) -> std::result::Result<T, String> {
 }
 
 /// Read the agent_type stored in session metadata.
-/// Returns `"remote_code"` when no agent_type has been set (the default path).
+/// Returns `"remote_claude"` when no agent_type has been set (the default path).
 fn get_session_agent_type(store: &SessionStore, session_id: Uuid) -> String {
     store
         .load_transcript(session_id)
@@ -3066,7 +3069,7 @@ fn get_session_agent_type(store: &SessionStore, session_id: Uuid) -> String {
                 .latest_named_event_payload("agent_type")
                 .and_then(|val| val.get("agent_type").and_then(|v| v.as_str()).map(String::from))
         })
-        .unwrap_or_else(|| "remote_code".to_owned())
+        .unwrap_or_else(|| "remote_claude".to_owned())
 }
 
 /// Run a prompt through an external Agent adapter (RooCode / Codex).
@@ -3079,6 +3082,8 @@ async fn run_agent_prompt(
     agent_router: Arc<Mutex<AgentRouter>>,
     prompt: &str,
     agent_type: &str,
+    agent_permission_channels: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
+    agent_configs: Arc<Mutex<HashMap<String, AgentConfig>>>,
 ) -> Result<PromptRunOutcome> {
     // 1. Send message through the AgentRouter to obtain an event stream.
     let mut receiver = {
@@ -3157,25 +3162,30 @@ async fn run_agent_prompt(
                 );
             }
             UnifiedAgentEvent::PermissionRequest { request_id, tool_name, input, .. } => {
-                // Forward the permission request to the frontend.
-                //
-                // TODO(#5): The current implementation only emits a GUI event and
-                // relies on the frontend to call `resolve_permission_request` via
-                // a Tauri command.  This means there is **no automatic timeout or
-                // fallback** — if the user never responds, the agent hangs forever.
-                // A future iteration should add a server-side timeout (e.g. 60 s)
-                // that auto-deny the request, and a fallback broker for headless
-                // mode.
-                tracing::warn!(
+                // Bidirectional bridge: create a oneshot channel so the
+                // frontend's response (via `resolve_permission_request`) can be
+                // forwarded back to the Agent adapter.
+                let bridge_id = format!("agent_perm_{}", Uuid::new_v4());
+                let (tx, rx) = oneshot::channel::<bool>();
+
+                // Store the sender so `resolve_permission_request` can complete it.
+                {
+                    let mut channels = agent_permission_channels.lock().await;
+                    channels.insert(bridge_id.clone(), tx);
+                }
+
+                tracing::info!(
+                    bridge_id = %bridge_id,
                     request_id = %request_id,
                     tool_name = %tool_name,
                     agent_type = %agent_type,
-                    "Agent permission request forwarded to GUI — awaiting user decision"
+                    "Agent permission request — bridging to GUI"
                 );
+
                 let _ = app.emit(
                     APP_EVENT_PERMISSION_REQUEST,
                     PermissionRequestDto {
-                        request_id,
+                        request_id: bridge_id.clone(),
                         tool_name,
                         tool_use_id: String::new(),
                         title: "Agent 权限请求".to_owned(),
@@ -3185,6 +3195,46 @@ async fn run_agent_prompt(
                         permission_suggestions: vec![],
                     },
                 );
+
+                // Wait for the frontend response with a 120 s timeout.
+                match timeout(Duration::from_secs(120), rx).await {
+                    Ok(Ok(approved)) => {
+                        // Forward the decision to the Agent adapter.
+                        let mut router = agent_router.lock().await;
+                        let decision = if approved {
+                            rc_agent_protocol::permission::PermissionDecision::Allow
+                        } else {
+                            rc_agent_protocol::permission::PermissionDecision::Deny
+                        };
+                        if let Err(e) = router
+                            .resolve_permission(&session_id, &request_id, decision)
+                            .await
+                        {
+                            tracing::warn!(
+                                error = %e,
+                                "Failed to resolve agent permission"
+                            );
+                        }
+                    }
+                    _ => {
+                        tracing::warn!(
+                            bridge_id = %bridge_id,
+                            "Agent permission request timed out or cancelled — auto-denying"
+                        );
+                        // Auto-deny on timeout.
+                        let mut router = agent_router.lock().await;
+                        let _ = router
+                            .resolve_permission(
+                                &session_id,
+                                &request_id,
+                                rc_agent_protocol::permission::PermissionDecision::Deny,
+                            )
+                            .await;
+                        // Cleanup stale channel entry.
+                        let mut channels = agent_permission_channels.lock().await;
+                        channels.remove(&bridge_id);
+                    }
+                }
             }
             UnifiedAgentEvent::SubtaskStarted { task_id, description, .. } => {
                 let _ = app.emit(
@@ -3323,18 +3373,68 @@ async fn run_agent_prompt(
 
                 if matches!(status, HealthStatus::Unhealthy { .. }) {
                     if let Some(_backoff) = restart_tracker.request_restart() {
-                        // Signal that a restart is needed.
-                        // Actual restart requires the original AgentConfig which
-                        // is not available in this context — the frontend or
-                        // session management layer should handle this event.
-                        let _ = app.emit(
-                            APP_EVENT_AGENT_STATUS_CHANGED,
-                            AgentStatusChangedDto {
-                                session_id: session_id.clone(),
-                                agent_type: agent_type.to_owned(),
-                                status: "restart_needed".to_owned(),
-                            },
-                        );
+                        // Attempt automatic restart using the stored AgentConfig.
+                        let config_opt = agent_configs
+                            .lock()
+                            .await
+                            .get(&session_id)
+                            .cloned();
+
+                        if let Some(config) = config_opt {
+                            tracing::warn!(
+                                session_id = %session_id,
+                                "Agent unhealthy — attempting automatic restart"
+                            );
+
+                            let mut router = agent_router.lock().await;
+                            // Stop the old adapter (ignore errors — it may be dead already).
+                            let _ = router.close_session(&session_id).await;
+
+                            match router.create_and_register(session_id.clone(), &config).await {
+                                Ok(()) => {
+                                    tracing::info!(
+                                        session_id = %session_id,
+                                        "Agent restarted successfully"
+                                    );
+                                    let _ = app.emit(
+                                        APP_EVENT_AGENT_STATUS_CHANGED,
+                                        AgentStatusChangedDto {
+                                            session_id: session_id.clone(),
+                                            agent_type: agent_type.to_owned(),
+                                            status: "restarted".to_owned(),
+                                        },
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        session_id = %session_id,
+                                        error = %e,
+                                        "Agent restart failed"
+                                    );
+                                    let _ = app.emit(
+                                        APP_EVENT_AGENT_STATUS_CHANGED,
+                                        AgentStatusChangedDto {
+                                            session_id: session_id.clone(),
+                                            agent_type: agent_type.to_owned(),
+                                            status: "restart_failed".to_owned(),
+                                        },
+                                    );
+                                }
+                            }
+                        } else {
+                            tracing::warn!(
+                                session_id = %session_id,
+                                "No AgentConfig stored — cannot auto-restart, signaling frontend"
+                            );
+                            let _ = app.emit(
+                                APP_EVENT_AGENT_STATUS_CHANGED,
+                                AgentStatusChangedDto {
+                                    session_id: session_id.clone(),
+                                    agent_type: agent_type.to_owned(),
+                                    status: "restart_needed".to_owned(),
+                                },
+                            );
+                        }
                     }
                 }
             }
@@ -3446,10 +3546,10 @@ async fn create_session(
     }
     config.cwd = normalized_project_path.clone();
 
-    // Parse and validate agent_type; default to "remote_code" when not provided.
+    // Parse and validate agent_type; default to "remote_claude" when not provided.
     let agent_type_str = agent_type
         .as_deref()
-        .unwrap_or("remote_code")
+        .unwrap_or("remote_claude")
         .to_owned();
     let _parsed_agent_type: ProtocolAgentType = serde_json::from_str(
         &format!("\"{}\"", agent_type_str),
@@ -3468,10 +3568,10 @@ async fn create_session(
         serde_json::json!({ "agent_type": agent_type_str }),
     ))?;
 
-    // For external agents (RooCode / Codex), pre-create and register an adapter.
+    // For external agents (RemoteRoo / RemoteCodex), pre-create and register an adapter.
     // Fix #10: if adapter creation fails, roll back by removing the session data
     // that was just created so the user doesn't end up with a zombie session.
-    if _parsed_agent_type != ProtocolAgentType::RemoteCode {
+    if _parsed_agent_type != ProtocolAgentType::RemoteClaude {
         let agent_config = AgentConfig {
             agent_type: _parsed_agent_type,
             binary_path: None,
@@ -3483,6 +3583,14 @@ async fn create_session(
             api_key: None,
             base_url: config.provider.base_url.clone(),
         };
+        // Store the AgentConfig for health-check auto-restart (Phase 10.3).
+        let config_clone = agent_config.clone();
+        state
+            .agent_configs
+            .lock()
+            .await
+            .insert(config.session_id.to_string(), config_clone);
+
         let mut router = state.agent_router.lock().await;
         if let Err(e) = router
             .create_and_register(config.session_id.to_string(), &agent_config)
@@ -3496,6 +3604,8 @@ async fn create_session(
                 error = %e,
                 "Adapter creation failed, archiving session as rollback"
             );
+            // Also remove the stored config since the adapter failed to start.
+            state.agent_configs.lock().await.remove(&config.session_id.to_string());
             let _ = session_store.set_archived(config.session_id, true);
             return Err(format!("Agent 启动失败: {e:#}"));
         }
@@ -3539,7 +3649,7 @@ async fn send_prompt(
         )
     };
 
-    let is_external_agent = agent_type_str != "remote_code";
+    let is_external_agent = agent_type_str != "remote_claude";
 
     apply_provider_credentials_from_configs(&mut config.provider, &provider_configs);
     configure_runtime_policy_for_config(&config).map_err(|error| format!("{error:#}"))?;
@@ -3548,6 +3658,8 @@ async fn send_prompt(
 
     let running_prompts = Arc::clone(&state.running_prompts);
     let agent_router = Arc::clone(&state.agent_router);
+    let agent_permission_channels = Arc::clone(&state.agent_permission_channels);
+    let agent_configs = Arc::clone(&state.agent_configs);
     let sid_for_cleanup = sid.clone();
 
     // Atomically check for duplicate and reserve the slot to prevent TOCTOU races.
@@ -3565,6 +3677,8 @@ async fn send_prompt(
                     agent_router,
                     &prompt,
                     &agent_type_str,
+                    agent_permission_channels,
+                    agent_configs,
                 )
                 .await
             } else {
@@ -4230,6 +4344,16 @@ async fn resolve_permission_request(
     feedback: Option<String>,
     content_blocks: Option<Vec<serde_json::Value>>,
 ) -> std::result::Result<bool, String> {
+    // Phase 10.2: check agent permission channels first (bidirectional bridge).
+    {
+        let mut channels = state.agent_permission_channels.lock().await;
+        if let Some(tx) = channels.remove(&request_id) {
+            let _ = tx.send(allowed);
+            return Ok(true);
+        }
+    }
+
+    // Fall through to existing GUI permission broker logic.
     let sender = {
         let mut pending = state.pending_permissions.lock().await;
         pending.remove(&request_id)
@@ -4282,18 +4406,18 @@ fn agents_base_dir() -> PathBuf {
 /// Directory name for a given agent type (matches serde serialization).
 fn agent_type_dir_name(agent_type: &ProtocolAgentType) -> &'static str {
     match agent_type {
-        ProtocolAgentType::RemoteCode => "remote_code",
-        ProtocolAgentType::RooCode => "roo_code",
-        ProtocolAgentType::Codex => "codex",
+        ProtocolAgentType::RemoteClaude => "remote_claude",
+        ProtocolAgentType::RemoteRoo => "remote_roo",
+        ProtocolAgentType::RemoteCodex => "remote_codex",
     }
 }
 
 /// Expected binary name for a given agent type.
 fn agent_binary_name(agent_type: &ProtocolAgentType) -> String {
     let name = match agent_type {
-        ProtocolAgentType::RemoteCode => "remote-code",
-        ProtocolAgentType::RooCode => "roo-code",
-        ProtocolAgentType::Codex => "codex",
+        ProtocolAgentType::RemoteClaude => "remote-claude",
+        ProtocolAgentType::RemoteRoo => "remote-roo",
+        ProtocolAgentType::RemoteCodex => "remote-codex",
     };
     if cfg!(windows) {
         format!("{name}.exe")
@@ -4310,8 +4434,8 @@ fn agent_binary_name(agent_type: &ProtocolAgentType) -> String {
 ///
 /// Returns `None` when no binary is found.
 fn agent_binary_path(agent_type: &ProtocolAgentType) -> Option<PathBuf> {
-    if matches!(agent_type, ProtocolAgentType::RemoteCode) {
-        // RemoteCode is built-in — always available.
+    if matches!(agent_type, ProtocolAgentType::RemoteClaude) {
+        // RemoteClaude is built-in — always available.
         // Fix #7: use .ok() instead of unwrap_or_default() to avoid returning
         // an empty PathBuf that callers would misinterpret as a valid binary.
         return std::env::current_exe().ok();
@@ -4347,9 +4471,9 @@ async fn list_available_agents(
     _state: State<'_, AppState>,
 ) -> std::result::Result<Vec<AgentTypeInfoDto>, String> {
     let specs: [(ProtocolAgentType, &str); 3] = [
-        (ProtocolAgentType::RemoteCode, "Remote Code"),
-        (ProtocolAgentType::RooCode, "Roo Code"),
-        (ProtocolAgentType::Codex, "OpenAI Codex"),
+        (ProtocolAgentType::RemoteClaude, "Remote Claude"),
+        (ProtocolAgentType::RemoteRoo, "Remote Roo"),
+        (ProtocolAgentType::RemoteCodex, "Remote Codex"),
     ];
     let agents = specs
         .iter()
@@ -4373,8 +4497,8 @@ async fn install_agent(
     let parsed: ProtocolAgentType = serde_json::from_str(&format!("\"{}\"", agent_type))
         .map_err(|e| format!("无效的 agent_type: {e}"))?;
 
-    // RemoteCode is built-in — nothing to install.
-    if matches!(parsed, ProtocolAgentType::RemoteCode) {
+    // RemoteClaude is built-in — nothing to install.
+    if matches!(parsed, ProtocolAgentType::RemoteClaude) {
         return Ok(());
     }
 
@@ -4395,10 +4519,10 @@ async fn install_agent(
     // Attempt to download from a configurable URL.
     let env_key = format!("REMOTE_CODE_{}_DOWNLOAD_URL", agent_type.to_uppercase());
     let download_url = env::var(&env_key).ok().or_else(|| match parsed {
-        ProtocolAgentType::RooCode => Some(format!(
+        ProtocolAgentType::RemoteRoo => Some(format!(
             "https://github.com/roo-code/roo-code/releases/latest/download/roo-code-cli{platform_suffix}"
         )),
-        ProtocolAgentType::Codex => Some(format!(
+        ProtocolAgentType::RemoteCodex => Some(format!(
             "https://github.com/openai/codex/releases/latest/download/codex{platform_suffix}"
         )),
         _ => None,
@@ -4462,8 +4586,8 @@ async fn uninstall_agent(
         .map_err(|e| format!("无效的 agent_type: {e}"))?;
 
     // Cannot uninstall built-in agent.
-    if matches!(parsed, ProtocolAgentType::RemoteCode) {
-        return Err("无法卸载内置的 Remote Code agent".to_owned());
+    if matches!(parsed, ProtocolAgentType::RemoteClaude) {
+        return Err("无法卸载内置的 Remote Claude agent".to_owned());
     }
 
     // Stop running agent processes for this type.
@@ -4488,40 +4612,32 @@ async fn uninstall_agent(
 #[tauri::command]
 async fn transcribe_audio(
     _app: AppHandle,
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     audio_data: Vec<u8>,
-    mime_type: String,
+    audio_format: Option<String>,
 ) -> std::result::Result<String, String> {
     if audio_data.is_empty() {
         return Err("音频数据为空".to_owned());
     }
 
-    // Use rc-voice for transcription.
-    // Currently the MockStt implementation returns placeholder results.
-    // Replace with a real STT backend (e.g. Whisper API) when available.
-    let config = rc_voice::VoiceConfig::new("zh-CN");
-    let mut stt = rc_voice::stt::MockStt::new();
-    stt.set_config(config);
-    stt.start_listening()
-        .map_err(|e| format!("启动 STT 失败: {e}"))?;
+    // Obtain the API key from the active provider configuration.
+    let api_key = {
+        let runtime = state.runtime.lock().await;
+        runtime.config.provider.api_key.clone()
+    };
 
-    // Inject a mock transcript based on the received audio metadata.
-    let transcript = rc_voice::types::TranscriptResult::final_result(format!(
-        "[STT 占位] 收到 {} 字节 {} 音频，等待实际 STT 后端集成",
-        audio_data.len(),
-        mime_type
-    ));
-    stt.inject_transcript(transcript);
+    let api_key = api_key.ok_or_else(|| "未配置 API key，无法使用语音转录".to_string())?;
 
-    stt.stop_listening()
-        .map_err(|e| format!("停止 STT 失败: {e}"))?;
+    let stt = rc_voice::WhisperStt::new(api_key);
+    let format = audio_format.as_deref().unwrap_or("webm");
 
-    let result = stt
-        .get_transcript()
-        .map_err(|e| format!("获取转录结果失败: {e}"))?
-        .ok_or_else(|| "未生成转录结果".to_owned())?;
-
-    Ok(result.text)
+    match stt.transcribe(&audio_data, format).await {
+        Ok(result) => Ok(result.text),
+        Err(e) => {
+            tracing::error!("STT transcription failed: {e}");
+            Err(format!("语音转录失败: {e}"))
+        }
+    }
 }
 
 pub fn run() {
@@ -4540,6 +4656,8 @@ pub fn run() {
             pending_permissions,
             running_prompts,
             agent_router,
+            agent_permission_channels: Arc::new(Mutex::new(HashMap::new())),
+            agent_configs: Arc::new(Mutex::new(HashMap::new())),
         })
         .invoke_handler(tauri::generate_handler![
             init_app,

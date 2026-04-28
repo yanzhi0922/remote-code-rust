@@ -4,9 +4,9 @@
 //!
 //! This crate defines the common types, events, and traits that all Agent
 //! adapters must implement, enabling seamless integration of:
-//! - **Remote Code** (in-process, direct crate calls)
-//! - **Roo Code** (sub-process, JSON-RPC 2.0 + Content-Length framing)
-//! - **OpenAI Codex** (sub-process, JSON-RPC v2 + line-delimited JSON)
+//! - **Remote Claude** (in-process, direct crate calls)
+//! - **Remote Roo** (sub-process, JSON-RPC 2.0 + Content-Length framing)
+//! - **Remote Codex** (sub-process, JSON-RPC v2 + line-delimited JSON)
 
 pub mod adapter;
 pub mod adapters;
@@ -21,7 +21,7 @@ pub mod types;
 
 // Re-export core types at crate root for convenience.
 pub use adapter::AgentAdapter;
-pub use adapters::{CodexAdapter, RemoteCodeAdapter, RooCodeAdapter};
+pub use adapters::{RemoteClaudeAdapter, RemoteCodexAdapter, RemoteRooAdapter};
 pub use error::AgentProtocolError;
 pub use events::{AgentResult, ToolCallInfo, UnifiedAgentEvent, UsageInfo};
 pub use permission::{PermissionDecision, PermissionRequest};

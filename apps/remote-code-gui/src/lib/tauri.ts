@@ -364,19 +364,20 @@ export function onAgentStatusChanged(
 // ── Voice / STT APIs ────────────────────────────────────────────────
 
 /**
- * Transcribe audio data via the Rust STT backend.
+ * Transcribe audio data via the Rust STT backend (OpenAI Whisper API).
  *
  * @param audioData - Raw audio bytes (0–255).  Accepts `Uint8Array` for type
  *   safety; the data is spread into a plain array before crossing the
  *   Tauri bridge because the command expects `Vec<u8>`.
- * @param mimeType - MIME type of the audio (e.g. `"audio/webm"`).
+ * @param audioFormat - Audio container format (e.g. `"webm"`, `"mp4"`, `"ogg"`, `"wav"`).
+ *   Derived from the MIME type when omitted.
  */
 export function transcribeAudio(
   audioData: Uint8Array,
-  mimeType: string,
+  audioFormat?: string,
 ): Promise<string> {
   return invoke<string>('transcribe_audio', {
     audioData: Array.from(audioData),
-    mimeType,
+    audioFormat: audioFormat || 'webm',
   });
 }

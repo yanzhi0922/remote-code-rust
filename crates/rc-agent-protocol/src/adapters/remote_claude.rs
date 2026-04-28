@@ -1,6 +1,6 @@
-//! Remote Code in-process adapter.
+//! Remote Claude in-process adapter.
 //!
-//! [`RemoteCodeAdapter`] wraps the existing rc-* crates as an in-process Agent.
+//! [`RemoteClaudeAdapter`] wraps the existing rc-* crates as an in-process Agent.
 //! To avoid heavy compile-time dependencies, it communicates with the outside
 //! world through **callback functions** (trait objects) that the caller injects
 //! via the builder pattern.
@@ -27,10 +27,10 @@ type ResolvePermissionFn =
     Box<dyn Fn(&str, &str, PermissionDecision) -> anyhow::Result<()> + Send + Sync>;
 
 // ---------------------------------------------------------------------------
-// RemoteCodeAdapter
+// RemoteClaudeAdapter
 // ---------------------------------------------------------------------------
 
-/// Remote Code in-process adapter.
+/// Remote Claude in-process adapter.
 ///
 /// Uses callback functions to interact with the existing rc-* crates,
 /// avoiding the need to depend on those crates directly within
@@ -39,16 +39,16 @@ type ResolvePermissionFn =
 /// # Example
 ///
 /// ```ignore
-/// use rc_agent_protocol::adapters::RemoteCodeAdapter;
+/// use rc_agent_protocol::adapters::RemoteClaudeAdapter;
 /// use rc_agent_protocol::AgentAdapter;
 ///
-/// let adapter = RemoteCodeAdapter::new()
+/// let adapter = RemoteClaudeAdapter::new()
 ///     .with_send_message(|session_id, msg| {
 ///         // Bridge into rc-* crates here …
 ///         Ok(vec![])
 ///     });
 /// ```
-pub struct RemoteCodeAdapter {
+pub struct RemoteClaudeAdapter {
     /// Static agent metadata.
     info: AgentInfo,
     /// Runtime status.
@@ -65,8 +65,8 @@ pub struct RemoteCodeAdapter {
 // Construction
 // -----
 
-impl RemoteCodeAdapter {
-    /// Create a new `RemoteCodeAdapter` in the **Starting** state with no
+impl RemoteClaudeAdapter {
+    /// Create a new `RemoteClaudeAdapter` in the **Starting** state with no
     /// callbacks configured.
     ///
     /// Use the `with_*` builder methods to attach callbacks, then call
@@ -82,7 +82,7 @@ impl RemoteCodeAdapter {
 
         Self {
             info: AgentInfo {
-                name: "Remote Code".into(),
+                name: "Remote Claude".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
                 capabilities,
                 status: AgentStatus::Starting,
@@ -135,7 +135,7 @@ impl RemoteCodeAdapter {
     }
 }
 
-impl Default for RemoteCodeAdapter {
+impl Default for RemoteClaudeAdapter {
     fn default() -> Self {
         Self::new()
     }
@@ -146,9 +146,9 @@ impl Default for RemoteCodeAdapter {
 // -----
 
 #[async_trait]
-impl AgentAdapter for RemoteCodeAdapter {
+impl AgentAdapter for RemoteClaudeAdapter {
     async fn start(&mut self, _config: &AgentConfig) -> anyhow::Result<()> {
-        info!("RemoteCodeAdapter starting");
+        info!("RemoteClaudeAdapter starting");
         self.status = AgentStatus::Ready;
         self.info.status = AgentStatus::Ready;
         Ok(())
@@ -211,7 +211,7 @@ impl AgentAdapter for RemoteCodeAdapter {
     }
 
     async fn stop(&mut self) -> anyhow::Result<()> {
-        info!("RemoteCodeAdapter stopping");
+        info!("RemoteClaudeAdapter stopping");
         self.status = AgentStatus::Stopped;
         self.info.status = AgentStatus::Stopped;
         Ok(())
@@ -226,7 +226,7 @@ impl AgentAdapter for RemoteCodeAdapter {
     }
 
     fn agent_type(&self) -> AgentType {
-        AgentType::RemoteCode
+        AgentType::RemoteClaude
     }
 }
 
@@ -242,7 +242,7 @@ mod tests {
     /// Helper: a minimal config for tests.
     fn test_config() -> AgentConfig {
         AgentConfig {
-            agent_type: AgentType::RemoteCode,
+            agent_type: AgentType::RemoteClaude,
             binary_path: None,
             args: vec![],
             env: vec![],
@@ -255,14 +255,14 @@ mod tests {
     }
 
     #[test]
-    fn new_adapter_has_remote_code_type() {
-        let adapter = RemoteCodeAdapter::new();
-        assert_eq!(adapter.agent_type(), AgentType::RemoteCode);
+    fn new_adapter_has_remote_claude_type() {
+        let adapter = RemoteClaudeAdapter::new();
+        assert_eq!(adapter.agent_type(), AgentType::RemoteClaude);
     }
 
     #[tokio::test]
     async fn start_sets_status_to_ready() {
-        let mut adapter = RemoteCodeAdapter::new();
+        let mut adapter = RemoteClaudeAdapter::new();
         assert_eq!(adapter.status, AgentStatus::Starting);
 
         adapter.start(&test_config()).await.unwrap();
@@ -272,7 +272,7 @@ mod tests {
 
     #[tokio::test]
     async fn send_message_without_callback_returns_error() {
-        let mut adapter = RemoteCodeAdapter::new();
+        let mut adapter = RemoteClaudeAdapter::new();
         adapter.start(&test_config()).await.unwrap();
 
         let result = adapter.send_message("sess-1", "hello").await;
@@ -286,7 +286,7 @@ mod tests {
 
     #[tokio::test]
     async fn send_message_with_callback_returns_events() {
-        let adapter = RemoteCodeAdapter::new().with_send_message(|_sid, msg| {
+        let adapter = RemoteClaudeAdapter::new().with_send_message(|_sid, msg| {
             Ok(vec![
                 UnifiedAgentEvent::MessageDelta {
                     session_id: "sess-1".into(),
@@ -324,7 +324,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_without_callback_returns_error() {
-        let mut adapter = RemoteCodeAdapter::new();
+        let mut adapter = RemoteClaudeAdapter::new();
         adapter.start(&test_config()).await.unwrap();
 
         let result = adapter.cancel("sess-1").await;
@@ -338,7 +338,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_with_callback_succeeds() {
-        let adapter = RemoteCodeAdapter::new().with_cancel(|_sid| Ok(()));
+        let adapter = RemoteClaudeAdapter::new().with_cancel(|_sid| Ok(()));
 
         let mut adapter = adapter;
         adapter.start(&test_config()).await.unwrap();
@@ -349,7 +349,7 @@ mod tests {
 
     #[tokio::test]
     async fn stop_sets_status_to_stopped() {
-        let mut adapter = RemoteCodeAdapter::new();
+        let mut adapter = RemoteClaudeAdapter::new();
         adapter.start(&test_config()).await.unwrap();
         assert_eq!(adapter.status, AgentStatus::Ready);
 
@@ -360,7 +360,7 @@ mod tests {
 
     #[test]
     fn is_alive_reflects_status() {
-        let mut adapter = RemoteCodeAdapter::new();
+        let mut adapter = RemoteClaudeAdapter::new();
         // Starting → alive
         assert!(adapter.is_alive());
 
@@ -387,12 +387,12 @@ mod tests {
 
     #[test]
     fn builder_pattern_works() {
-        let adapter = RemoteCodeAdapter::new()
+        let adapter = RemoteClaudeAdapter::new()
             .with_send_message(|_sid, _msg| Ok(vec![]))
             .with_cancel(|_sid| Ok(()))
             .with_resolve_permission(|_sid, _rid, _dec| Ok(()));
 
-        assert_eq!(adapter.agent_type(), AgentType::RemoteCode);
+        assert_eq!(adapter.agent_type(), AgentType::RemoteClaude);
         assert!(adapter.on_send_message.is_some());
         assert!(adapter.on_cancel.is_some());
         assert!(adapter.on_resolve_permission.is_some());
@@ -400,18 +400,18 @@ mod tests {
 
     #[test]
     fn default_equals_new() {
-        let new_adapter = RemoteCodeAdapter::new();
-        let default_adapter = RemoteCodeAdapter::default();
+        let new_adapter = RemoteClaudeAdapter::new();
+        let default_adapter = RemoteClaudeAdapter::default();
         assert_eq!(new_adapter.agent_type(), default_adapter.agent_type());
         assert_eq!(new_adapter.status, default_adapter.status);
     }
 
     #[test]
     fn info_has_all_capabilities() {
-        let adapter = RemoteCodeAdapter::new();
+        let adapter = RemoteClaudeAdapter::new();
         let info = adapter.info();
 
-        assert_eq!(info.name, "Remote Code");
+        assert_eq!(info.name, "Remote Claude");
         assert!(info.capabilities.contains(&AgentCapability::Streaming));
         assert!(info.capabilities.contains(&AgentCapability::ToolUse));
         assert!(info.capabilities.contains(&AgentCapability::McpSupport));

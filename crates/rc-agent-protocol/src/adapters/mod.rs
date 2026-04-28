@@ -3,10 +3,10 @@
 //! This module contains concrete implementations of the [`AgentAdapter`](crate::AgentAdapter)
 //! trait for each supported Agent type.
 
-pub mod codex;
-pub mod remote_code;
-pub mod roo_code;
+pub mod remote_claude;
+pub mod remote_codex;
+pub mod remote_roo;
 
-pub use codex::CodexAdapter;
-pub use remote_code::RemoteCodeAdapter;
-pub use roo_code::RooCodeAdapter;
+pub use remote_claude::RemoteClaudeAdapter;
+pub use remote_codex::RemoteCodexAdapter;
+pub use remote_roo::RemoteRooAdapter;
