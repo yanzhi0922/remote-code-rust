@@ -25,7 +25,7 @@ pub mod types;
 
 // Re-export core types at crate root for convenience.
 pub use adapter::AgentAdapter;
-pub use adapters::{RemoteClaudeAdapter, RemoteCodexAdapter, RemoteRooAdapter};
+pub use adapters::{InProcessAdapter, RemoteClaudeAdapter, RemoteCodexAdapter, RemoteRooAdapter};
 pub use error::AgentProtocolError;
 pub use events::{AgentResult, ToolCallInfo, UnifiedAgentEvent, UsageInfo};
 pub use permission::{PermissionDecision, PermissionRequest};

@@ -537,8 +537,7 @@ impl QueryObserver for GuiQueryObserver {
 
 // ─── UnifiedPromptOutcome ───────────────────────────────────────────────────
 
-/// Outcome returned by [`run_unified_prompt_with_provider`], mirroring the
-/// existing `PromptRunOutcome` from `lib.rs`.
+/// Outcome returned by [`run_unified_prompt_with_provider`].
 #[derive(Debug)]
 pub(crate) struct UnifiedPromptOutcome {
     pub(crate) text: String,
