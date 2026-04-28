@@ -13,11 +13,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentType {
-    /// In-process Agent — directly calls rc-* crates.
+    /// In-process Agent — directly calls rc-* crates via callbacks.
     RemoteClaude,
-    /// Remote Roo — sub-process communicating via JSON-RPC 2.0 (Content-Length framing).
+    /// In-process Agent — callback-based adapter (formerly subprocess JSON-RPC).
     RemoteRoo,
-    /// Remote Codex — sub-process communicating via JSON-RPC v2 (line-delimited JSON).
+    /// In-process Agent — callback-based adapter (formerly subprocess NDJSON).
     RemoteCodex,
 }
 
