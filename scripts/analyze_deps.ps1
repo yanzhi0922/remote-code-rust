@@ -1,4 +1,5 @@
 $migratedPkgs = @(
+    # Stage 1: leaf crates
     'codex-ansi-escape','codex-async-utils','codex-aws-auth',
     'codex-backend-openapi-models','codex-experimental-api-macros',
     'codex-collaboration-mode-templates','codex-device-key',
@@ -9,14 +10,27 @@ $migratedPkgs = @(
     'codex-utils-elapsed','codex-utils-fuzzy-match','codex-utils-json-to-toml',
     'codex-utils-pty','codex-utils-readiness','codex-utils-rustls-provider',
     'codex-utils-sleep-inhibitor','codex-utils-stream-parser',
-    'codex-utils-string','codex-utils-template'
+    'codex-utils-string','codex-utils-template',
+    # Stage 2: first wave
+    'codex-responses-api-proxy','codex-skills','codex-stdio-to-uds',
+    'codex-utils-home-dir','codex-utils-path',
+    # Stage 3: second wave
+    'codex-client','codex-execpolicy','codex-utils-image'
 )
 
 $migratedDirs = @(
     'ansi-escape','async-utils','aws-auth','codex-backend-openapi-models',
     'codex-experimental-api-macros','collaboration-mode-templates',
     'device-key','execpolicy-legacy','file-search','keyring-store',
-    'process-hardening','realtime-webrtc','terminal-detection','uds','v8-poc'
+    'process-hardening','realtime-webrtc','terminal-detection','uds','v8-poc',
+    'responses-api-proxy','skills','stdio-to-uds',
+    'codex-client','execpolicy'
+)
+
+$migratedUtils = @(
+    'absolute-path','cache','cargo-bin','elapsed','fuzzy-match','json-to-toml',
+    'pty','readiness','rustls-provider','sleep-inhibitor','stream-parser',
+    'string','template','home-dir','path-utils','image'
 )
 
 $codexRoot = 'agents\codex\codex-rs'
@@ -54,7 +68,6 @@ foreach ($crate in $dirs) {
 
 # Also check utils/ subdirs
 $utilsDirs = Get-ChildItem -Path (Join-Path $codexRoot 'utils') -Directory -ErrorAction SilentlyContinue
-$migratedUtils = @('absolute-path','cache','cargo-bin','elapsed','fuzzy-match','json-to-toml','pty','readiness','rustls-provider','sleep-inhibitor','stream-parser','string','template')
 foreach ($crate in $utilsDirs) {
     $tomlPath = Join-Path $crate.FullName 'Cargo.toml'
     $hasToml = Test-Path $tomlPath

@@ -15,9 +15,14 @@ members = [
     "crates/codex/terminal-detection",
     "crates/codex/uds",
     # Codex Stage 2 crates (depend on leaf crates)
+    "crates/codex/codex-client",
+    "crates/codex/execpolicy",
     "crates/codex/responses-api-proxy",
     "crates/codex/skills",
     "crates/codex/stdio-to-uds",
+    # Codex Stage 3 crates (depend on stage 2)
+    "crates/codex/install-context",
+    "crates/codex/network-proxy",
     # Codex utils leaf crates
     "crates/codex/utils/absolute-path",
     "crates/codex/utils/cache",
@@ -33,6 +38,7 @@ members = [
     "crates/codex/utils/template",
     # Codex utils Stage 2
     "crates/codex/utils/home-dir",
+    "crates/codex/utils/image",
     "crates/codex/utils/path-utils",
 ]
 exclude = [
@@ -69,7 +75,7 @@ once_cell = "1"
 rand = "0.9"
 ratatui = "0.29.0"
 regex = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "http2"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "http2", "cookies"] }
 rusqlite = { version = "0.32.0", features = ["bundled", "chrono", "serde_json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -89,6 +95,15 @@ walkdir = "2.5.0"
 serial_test = "3"
 
 # ── Codex-only external deps ────────────────────────────────────
+eventsource-stream = "0.2.3"
+image = { version = "0.25", default-features = false }
+mime_guess = "2.0.5"
+opentelemetry = "0.31.0"
+opentelemetry_sdk = "0.31.0"
+rustls-native-certs = "0.8.3"
+rustls-pki-types = "1.14.0"
+tracing-opentelemetry = "0.32.0"
+zstd = "0.13"
 allocative = "0.3.3"
 ansi-to-tui = "7.0.0"
 assert_cmd = "2"
@@ -133,6 +148,15 @@ url = "2"
 tiny_http = "0.12"
 v8 = "=146.4.0"
 zeroize = "1.8"
+# rama (network proxy framework)
+rama-core = "=0.3.0-alpha.4"
+rama-http = "=0.3.0-alpha.4"
+rama-http-backend = { version = "=0.3.0-alpha.4", features = ["tls"] }
+rama-net = { version = "=0.3.0-alpha.4", features = ["http", "tls"] }
+rama-socks5 = "=0.3.0-alpha.4"
+rama-tcp = { version = "=0.3.0-alpha.4", features = ["http"] }
+rama-tls-rustls = { version = "=0.3.0-alpha.4", features = ["http"] }
+rama-unix = "=0.3.0-alpha.4"
 
 # ── Internal crate path dependencies (rc-*) ────────────────────
 rc-agent-protocol = { path = "crates/rc-agent-protocol" }
@@ -167,11 +191,17 @@ codex-utils-stream-parser = { path = "crates/codex/utils/stream-parser" }
 codex-utils-string = { path = "crates/codex/utils/string" }
 codex-utils-template = { path = "crates/codex/utils/template" }
 # Stage 2 internal deps
+codex-client = { path = "crates/codex/codex-client" }
+codex-execpolicy = { path = "crates/codex/execpolicy" }
 codex-responses-api-proxy = { path = "crates/codex/responses-api-proxy" }
 codex-skills = { path = "crates/codex/skills" }
 codex-stdio-to-uds = { path = "crates/codex/stdio-to-uds" }
 codex-utils-home-dir = { path = "crates/codex/utils/home-dir" }
+codex-utils-image = { path = "crates/codex/utils/image" }
 codex-utils-path = { path = "crates/codex/utils/path-utils" }
+# Stage 3 internal deps
+codex-install-context = { path = "crates/codex/install-context" }
+codex-network-proxy = { path = "crates/codex/network-proxy" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
