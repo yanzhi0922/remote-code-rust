@@ -861,7 +861,9 @@ impl McpClient {
     }
 
     /// List tools available on the MCP server.
-    pub async fn list_tools(&mut self) -> Result<Vec<crate::types::McpToolDescriptor>, McpRuntimeError> {
+    pub async fn list_tools(
+        &mut self,
+    ) -> Result<Vec<crate::types::McpToolDescriptor>, McpRuntimeError> {
         match self.session.as_mut() {
             Some(McpClientSession::Stdio(session)) => {
                 let request = JsonRpcRequest {

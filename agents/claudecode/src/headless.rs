@@ -1141,10 +1141,7 @@ mod tests {
                     drop(emitter);
                     let events = read_protocol_events(output.path());
                     assert_eq!(backend.complete_calls.load(Ordering::SeqCst), 0);
-                    assert_eq!(
-                        backend.complete_streaming_calls.load(Ordering::SeqCst),
-                        1
-                    );
+                    assert_eq!(backend.complete_streaming_calls.load(Ordering::SeqCst), 1);
 
                     let running_index = events
                         .iter()
@@ -1152,8 +1149,7 @@ mod tests {
                             event.get("type").and_then(Value::as_str) == Some("system")
                                 && event.get("subtype").and_then(Value::as_str)
                                     == Some("session_state_changed")
-                                && event.get("state").and_then(Value::as_str)
-                                    == Some("running")
+                                && event.get("state").and_then(Value::as_str) == Some("running")
                         })
                         .expect("running state event");
                     let context_index = index_of_event(&events, "context_usage");
@@ -1251,8 +1247,9 @@ mod tests {
                 rt.block_on(async {
                     let (_tempdir, mut config, store) = mock_config_and_store();
                     config.include_partial_messages = true;
-                    let mut conversation = initialize_conversation(&store, &config, Some("streaming"))
-                        .expect("conversation");
+                    let mut conversation =
+                        initialize_conversation(&store, &config, Some("streaming"))
+                            .expect("conversation");
                     let mut hook_state =
                         HookRunState::load(&store, config.session_id).expect("hook state");
                     let output = NamedTempFile::new().expect("protocol output");
@@ -1361,8 +1358,9 @@ mod tests {
                     let outside = config.cwd.parent().expect("parent").join("outside.txt");
                     fs::write(&outside, "secret").expect("outside file");
                     config.include_partial_messages = true;
-                    let mut conversation = initialize_conversation(&store, &config, Some("streaming"))
-                        .expect("conversation");
+                    let mut conversation =
+                        initialize_conversation(&store, &config, Some("streaming"))
+                            .expect("conversation");
                     let mut hook_state =
                         HookRunState::load(&store, config.session_id).expect("hook state");
                     let output = NamedTempFile::new().expect("protocol output");

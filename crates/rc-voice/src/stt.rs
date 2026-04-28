@@ -264,11 +264,7 @@ impl WhisperStt {
         }
 
         let result: serde_json::Value = response.json().await?;
-        let text = result["text"]
-            .as_str()
-            .unwrap_or("")
-            .trim()
-            .to_string();
+        let text = result["text"].as_str().unwrap_or("").trim().to_string();
 
         Ok(TranscriptResult::final_result(text))
     }

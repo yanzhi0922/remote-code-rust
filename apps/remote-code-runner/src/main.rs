@@ -709,10 +709,7 @@ fn map_runtime_session_state(
             RunnerSessionState::Completed,
             ControlPlaneSessionState::Completed,
         )),
-        "failed" | "error" => Some((
-            RunnerSessionState::Failed,
-            ControlPlaneSessionState::Failed,
-        )),
+        "failed" | "error" => Some((RunnerSessionState::Failed, ControlPlaneSessionState::Failed)),
         "requires_action" => None,
         _ => None,
     }

@@ -725,7 +725,6 @@ fn normalize_prompt(prompt: String) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-    use serial_test::serial;
     use clap::Parser;
     use rc_control_plane::{
         ArtifactCreateRequest, ArtifactRecord, ControlPlaneMeta as RemoteControlPlaneMeta,
@@ -738,6 +737,7 @@ mod tests {
         ApprovalRequestRecord as RemoteApprovalRecord, ListResponse as RemoteListResponse,
         RunnerSnapshot as RemoteRunnerSnapshot,
     };
+    use serial_test::serial;
 
     use crate::agents::{default_task_for_objective, parse_agent_spec, parse_task_spec};
     use crate::cli::{McpCallArgs, McpListArgs, RemoteEventKindValue};

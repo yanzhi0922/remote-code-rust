@@ -8,6 +8,9 @@ use std::time::Instant;
 
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
+use rc_agent_protocol::adapters::subprocess::SubprocessAdapter;
+use rc_agent_protocol::types::AgentType as ProtocolAgentType;
+use rc_agent_protocol::AgentAdapter;
 use rc_config::{
     discover_env_providers, load_runtime_config, normalize_base_url, validate_provider_config,
     AppPaths, ProviderConfig as RuntimeProviderConfig, ProviderOverrides, RuntimeConfig,
@@ -44,7 +47,6 @@ use rc_tools::{
     tasks::load_persisted_ui_task_snapshots,
     ToolRuntimePolicy,
 };
-use rc_agent_protocol::types::AgentType as ProtocolAgentType;
 use rc_ui_bridge::{
     UiProviderStatusSnapshot, UiRuntimeMcpInventorySummary, UiRuntimeMcpServerStatus,
     UiRuntimeStatusSnapshot,
@@ -756,6 +758,8 @@ struct AppState {
     runtime: Mutex<RuntimeState>,
     pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
     running_prompts: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
+    /// Active subprocess adapters keyed by session ID (for Codex / Roo-code agents).
+    active_subprocess_adapters: Arc<Mutex<HashMap<String, SubprocessAdapter>>>,
 }
 
 fn gui_storage_path(paths: &AppPaths, file_name: &str) -> PathBuf {
@@ -2629,9 +2633,357 @@ fn get_session_agent_type(store: &SessionStore, session_id: Uuid) -> String {
         .and_then(|transcript| {
             transcript
                 .latest_named_event_payload("agent_type")
-                .and_then(|val| val.get("agent_type").and_then(|v| v.as_str()).map(String::from))
+                .and_then(|val| {
+                    val.get("agent_type")
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
+                })
         })
         .unwrap_or_else(|| "remote_claude".to_owned())
+}
+
+// ---------------------------------------------------------------------------
+// Bridge binary path lookup
+// ---------------------------------------------------------------------------
+
+/// Resolve the bridge binary name for the given agent type.
+fn bridge_binary_name(agent_type: &ProtocolAgentType) -> Option<&'static str> {
+    match agent_type {
+        ProtocolAgentType::RemoteCodex => Some("remote-code-codex-bridge"),
+        ProtocolAgentType::RemoteRoo => Some("remote-code-roo-bridge"),
+        _ => None,
+    }
+}
+
+/// Locate the bridge binary on disk.
+///
+/// Search order:
+/// 1. Same directory as the current executable (with and without `.exe` on Windows).
+/// 2. `PATH` environment variable via `which`/`where`.
+fn bridge_binary_path(agent_type: &ProtocolAgentType) -> Option<PathBuf> {
+    let binary_name = bridge_binary_name(agent_type)?;
+
+    // 1. Check alongside the current executable.
+    if let Some(exe_dir) = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|p| p.to_path_buf()))
+    {
+        let path = exe_dir.join(binary_name);
+        if path.exists() {
+            return Some(path);
+        }
+        // Windows: try with .exe suffix
+        let path_exe = exe_dir.join(format!("{binary_name}.exe"));
+        if path_exe.exists() {
+            return Some(path_exe);
+        }
+    }
+
+    // 2. Search PATH using the platform-appropriate command.
+    let lookup_cmd = if cfg!(windows) { "where" } else { "which" };
+    if let Ok(output) = std::process::Command::new(lookup_cmd)
+        .arg(binary_name)
+        .output()
+    {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(first_line) = stdout.lines().next() {
+                let p = PathBuf::from(first_line.trim());
+                if p.exists() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+// ---------------------------------------------------------------------------
+// Subprocess prompt execution (Codex / Roo-code agents)
+// ---------------------------------------------------------------------------
+
+/// Execute a prompt via a subprocess bridge binary.
+///
+/// This creates a [`SubprocessAdapter`], starts the bridge process, sends the
+/// user message, and forwards events to the frontend via Tauri emissions.
+async fn run_subprocess_prompt(
+    app: &AppHandle,
+    active_adapters: &Arc<Mutex<HashMap<String, SubprocessAdapter>>>,
+    session_id: &str,
+    prompt: &str,
+    agent_type: ProtocolAgentType,
+    working_dir: Option<PathBuf>,
+    api_key: Option<String>,
+) -> std::result::Result<String, String> {
+    let bridge_path = bridge_binary_path(&agent_type).ok_or_else(|| {
+        format!(
+            "未找到 {} 的 bridge 二进制文件。请确保已编译 {} 并放置在可执行文件目录或 PATH 中。",
+            agent_type.display_name(),
+            bridge_binary_name(&agent_type).unwrap_or("unknown"),
+        )
+    })?;
+
+    tracing::info!(
+        agent = %agent_type.display_name(),
+        binary = %bridge_path.display(),
+        "starting subprocess adapter for prompt"
+    );
+
+    // Build the adapter config.
+    let config = rc_agent_protocol::types::AgentConfig {
+        agent_type,
+        binary_path: Some(bridge_path.clone()),
+        args: vec![],
+        env: vec![],
+        working_dir: working_dir.clone(),
+        model: None,
+        provider: None,
+        api_key: api_key.clone(),
+        base_url: None,
+    };
+
+    // Create and start the adapter.
+    let mut adapter = SubprocessAdapter::new(agent_type, bridge_path);
+    adapter
+        .start(&config)
+        .await
+        .map_err(|e| format!("启动 {} 子进程失败: {e:#}", agent_type.display_name()))?;
+
+    // Send the message and obtain the event channel.
+    let mut rx = adapter
+        .send_message(session_id, prompt)
+        .await
+        .map_err(|e| format!("发送消息到 {} 失败: {e:#}", agent_type.display_name()))?;
+
+    // Store the adapter so cancel_prompt() can reach it.
+    {
+        let mut adapters = active_adapters.lock().await;
+        adapters.insert(session_id.to_owned(), adapter);
+    }
+
+    // Process the event stream and forward to the frontend.
+    let mut final_text = String::new();
+    let mut tool_calls: Vec<ToolCallDto> = Vec::new();
+    let mut usage_info: rc_agent_protocol::events::UsageInfo = Default::default();
+    let mut stop_reason = "completed".to_owned();
+
+    while let Some(event) = rx.recv().await {
+        match event {
+            rc_agent_protocol::events::UnifiedAgentEvent::MessageDelta { delta, .. } => {
+                final_text.push_str(&delta);
+                let _ = app.emit(
+                    APP_EVENT_STREAMING_DELTA,
+                    StreamingDeltaDto {
+                        session_id: session_id.to_owned(),
+                        delta,
+                    },
+                );
+            }
+            rc_agent_protocol::events::UnifiedAgentEvent::ToolCallStarted { tool_name, .. } => {
+                tracing::info!(tool = %tool_name, "subprocess tool call started");
+            }
+            rc_agent_protocol::events::UnifiedAgentEvent::ToolCallCompleted {
+                tool_name,
+                result,
+                ..
+            } => {
+                tool_calls.push(ToolCallDto {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    name: tool_name,
+                    input: serde_json::Value::Null,
+                });
+                let _ = result; // acknowledge
+            }
+            rc_agent_protocol::events::UnifiedAgentEvent::PermissionRequest {
+                request_id,
+                tool_name,
+                input,
+                ..
+            } => {
+                // Forward to the frontend as a permission request event.
+                // The frontend will show a dialog and call resolve_permission.
+                let _ = app.emit(
+                    APP_EVENT_PERMISSION_REQUEST,
+                    PermissionRequestDto {
+                        request_id,
+                        tool_name: tool_name.clone(),
+                        tool_use_id: String::new(),
+                        title: format!("{} 请求权限", agent_type.display_name()),
+                        description: format!("工具 {} 需要您的授权才能执行。", tool_name),
+                        input,
+                        blocked_path: None,
+                        permission_suggestions: vec![],
+                    },
+                );
+            }
+            rc_agent_protocol::events::UnifiedAgentEvent::SubtaskStarted {
+                task_id,
+                description,
+                ..
+            } => {
+                let _ = app.emit(
+                    APP_EVENT_SUBTASK_STARTED,
+                    SubtaskStartedDto {
+                        session_id: session_id.to_owned(),
+                        task_id,
+                        parent_task_id: None,
+                        description,
+                        depth: 0,
+                    },
+                );
+            }
+            rc_agent_protocol::events::UnifiedAgentEvent::SubtaskProgress {
+                task_id,
+                progress,
+                ..
+            } => {
+                let _ = app.emit(
+                    APP_EVENT_SUBTASK_PROGRESS,
+                    SubtaskProgressDto {
+                        session_id: session_id.to_owned(),
+                        task_id,
+                        turn: 0,
+                        max_turns: 0,
+                        summary: progress,
+                    },
+                );
+            }
+            rc_agent_protocol::events::UnifiedAgentEvent::SubtaskCompleted {
+                task_id,
+                result,
+                ..
+            } => {
+                let output_preview = result.to_string();
+                let _ = app.emit(
+                    APP_EVENT_SUBTASK_COMPLETED,
+                    SubtaskCompletedDto {
+                        session_id: session_id.to_owned(),
+                        task_id,
+                        success: true,
+                        output_preview,
+                        turns_used: 0,
+                    },
+                );
+            }
+            rc_agent_protocol::events::UnifiedAgentEvent::ContextUsage { used, total, .. } => {
+                let _ = app.emit(
+                    APP_EVENT_CONTEXT_USAGE,
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "used": used,
+                        "total": total,
+                    }),
+                );
+            }
+            rc_agent_protocol::events::UnifiedAgentEvent::ContextOverflow {
+                used, total, ..
+            } => {
+                let _ = app.emit(
+                    APP_EVENT_CONTEXT_OVERFLOW,
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "used": used,
+                        "total": total,
+                    }),
+                );
+            }
+            rc_agent_protocol::events::UnifiedAgentEvent::ContextCompacted {
+                entries_removed,
+                usage_ratio,
+                ..
+            } => {
+                let _ = app.emit(
+                    APP_EVENT_CONTEXT_COMPACTED,
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "entries_removed": entries_removed,
+                        "usage_ratio": usage_ratio,
+                    }),
+                );
+            }
+            rc_agent_protocol::events::UnifiedAgentEvent::Error {
+                message,
+                recoverable,
+                ..
+            } => {
+                if !recoverable {
+                    tracing::error!(error = %message, "subprocess agent error (unrecoverable)");
+                    // Clean up the adapter.
+                    {
+                        let mut adapters = active_adapters.lock().await;
+                        if let Some(mut a) = adapters.remove(session_id) {
+                            let _ = a.stop().await;
+                        }
+                    }
+                    return Err(format!("{} 执行出错: {message}", agent_type.display_name()));
+                }
+                tracing::warn!(error = %message, "subprocess agent error (recoverable)");
+            }
+            rc_agent_protocol::events::UnifiedAgentEvent::Completed { result, .. } => {
+                final_text = result.response_text;
+                tool_calls = result
+                    .tool_calls
+                    .into_iter()
+                    .map(|tc| ToolCallDto {
+                        id: tc.id,
+                        name: tc.name,
+                        input: tc.input,
+                    })
+                    .collect();
+                usage_info = result.usage;
+                if let Some(cost) = result.cost {
+                    tracing::info!(cost = %cost, "subprocess agent completed");
+                }
+                break;
+            }
+            rc_agent_protocol::events::UnifiedAgentEvent::Stopped => {
+                stop_reason = "stopped".to_owned();
+                break;
+            }
+            rc_agent_protocol::events::UnifiedAgentEvent::Started(_) => {
+                tracing::info!("subprocess agent started");
+            }
+            rc_agent_protocol::events::UnifiedAgentEvent::Ready => {
+                tracing::info!("subprocess agent ready");
+            }
+            rc_agent_protocol::events::UnifiedAgentEvent::ToolCallProgress { .. } => {
+                // Ignore progress events for now.
+            }
+        }
+    }
+
+    // Clean up the adapter.
+    {
+        let mut adapters = active_adapters.lock().await;
+        if let Some(mut a) = adapters.remove(session_id) {
+            let _ = a.stop().await;
+        }
+    }
+
+    // Emit the final prompt-done event.
+    let _ = app.emit(
+        APP_EVENT_PROMPT_DONE,
+        PromptDoneDto {
+            session_id: session_id.to_owned(),
+            is_error: false,
+            error: None,
+            result: Some(PromptResultDto {
+                session_id: session_id.to_owned(),
+                text: final_text.clone(),
+                tool_calls,
+                usage: UsageDto {
+                    input_tokens: usage_info.input_tokens,
+                    output_tokens: usage_info.output_tokens,
+                    total_tokens: usage_info.input_tokens + usage_info.output_tokens,
+                },
+                num_turns: 1,
+                stop_reason,
+            }),
+        },
+    );
+
+    Ok(final_text)
 }
 
 #[tauri::command]
@@ -2713,7 +3065,11 @@ async fn create_session(
     let (mut config, session_store, projects) = {
         let runtime = state.runtime.lock().await;
         let config = runtime.config.clone();
-        (config, Arc::clone(&runtime.session_store), runtime.projects.clone())
+        (
+            config,
+            Arc::clone(&runtime.session_store),
+            runtime.projects.clone(),
+        )
     };
     config.session_id = Uuid::new_v4();
     let project_path = project_path
@@ -2731,13 +3087,10 @@ async fn create_session(
     config.cwd = normalized_project_path.clone();
 
     // Parse and validate agent_type; default to "remote_claude" when not provided.
-    let agent_type_str = agent_type
-        .as_deref()
-        .unwrap_or("remote_claude")
-        .to_owned();
-    let _parsed_agent_type: ProtocolAgentType = serde_json::from_str(
-        &format!("\"{}\"", agent_type_str),
-    ).map_err(|e| format!("无效的 agent_type: {e}"))?;
+    let agent_type_str = agent_type.as_deref().unwrap_or("remote_claude").to_owned();
+    let _parsed_agent_type: ProtocolAgentType =
+        serde_json::from_str(&format!("\"{}\"", agent_type_str))
+            .map_err(|e| format!("无效的 agent_type: {e}"))?;
 
     as_error(initialize_session_conversation(
         &session_store,
@@ -2773,7 +3126,14 @@ async fn send_prompt(
         return Err("prompt cannot be empty".to_owned());
     }
 
-    let (mut config, provider, session_store, pending_permissions, provider_configs, agent_type_str) = {
+    let (
+        mut config,
+        provider,
+        session_store,
+        pending_permissions,
+        provider_configs,
+        agent_type_str,
+    ) = {
         let runtime = state.runtime.lock().await;
         let mut config = runtime.config.clone();
         let selected_provider = config.provider.clone();
@@ -2796,8 +3156,6 @@ async fn send_prompt(
         )
     };
 
-    let _agent_type_str = agent_type_str; // used for logging only
-
     apply_provider_credentials_from_configs(&mut config.provider, &provider_configs);
     configure_runtime_policy_for_config(&config).map_err(|error| format!("{error:#}"))?;
 
@@ -2812,58 +3170,113 @@ async fn send_prompt(
         if running.contains_key(&sid) {
             return Err("该会话已有正在运行的提示，请等待完成或取消后再试。".to_owned());
         }
-        let handle = tokio::spawn(async move {
-            // Unified execution path: all Agent types (RemoteClaude, RemoteRoo,
-            // RemoteCodex) now share a single path through QueryEngine.
-            let result = query_engine_gui::run_unified_prompt_with_provider(
-                &app,
-                config.clone(),
-                provider,
-                session_store,
-                pending_permissions,
-                &prompt,
-            )
-            .await;
 
-            match result {
-                Ok(outcome) => {
-                    let _ = app.emit(
-                        APP_EVENT_PROMPT_DONE,
-                        PromptDoneDto {
-                            session_id: config.session_id.to_string(),
-                            is_error: false,
-                            error: None,
-                            result: Some(PromptResultDto {
-                                session_id: config.session_id.to_string(),
-                                text: outcome.text,
-                                tool_calls: outcome.tool_calls.iter().map(tool_call_to_dto).collect(),
-                                usage: usage_to_dto(&outcome.usage),
-                                num_turns: outcome.num_turns,
-                                stop_reason: outcome.stop_reason,
-                            }),
-                        },
-                    );
-                }
-                Err(error) => {
-                    let _ = app.emit(
-                        APP_EVENT_PROMPT_DONE,
-                        PromptDoneDto {
-                            session_id: config.session_id.to_string(),
-                            is_error: true,
-                            error: Some(format!("{error:#}")),
-                            result: None,
-                        },
-                    );
-                }
-            }
+        // ── Branch based on agent_type ──────────────────────────────────
+        match agent_type_str.as_str() {
+            "remote_codex" | "remote_roo" => {
+                // Subprocess path: Codex / Roo-code agents use bridge binaries.
+                let protocol_agent_type = if agent_type_str == "remote_codex" {
+                    ProtocolAgentType::RemoteCodex
+                } else {
+                    ProtocolAgentType::RemoteRoo
+                };
+                let active_adapters = Arc::clone(&state.active_subprocess_adapters);
+                let sid_clone = sid.clone();
+                let prompt_owned = prompt.clone();
+                let working_dir = Some(config.cwd.clone());
+                let api_key = config.provider.api_key.clone();
 
-            // Clean up the running-prompts map entry.
-            {
-                let mut running = running_prompts.lock().await;
-                running.remove(&sid_for_cleanup);
+                let handle = tokio::spawn(async move {
+                    let result = run_subprocess_prompt(
+                        &app,
+                        &active_adapters,
+                        &sid_clone,
+                        &prompt_owned,
+                        protocol_agent_type,
+                        working_dir,
+                        api_key,
+                    )
+                    .await;
+
+                    if let Err(error) = result {
+                        let _ = app.emit(
+                            APP_EVENT_PROMPT_DONE,
+                            PromptDoneDto {
+                                session_id: sid_clone.clone(),
+                                is_error: true,
+                                error: Some(error),
+                                result: None,
+                            },
+                        );
+                    }
+
+                    // Clean up the running-prompts map entry.
+                    {
+                        let mut running = running_prompts.lock().await;
+                        running.remove(&sid_for_cleanup);
+                    }
+                });
+                running.insert(sid.clone(), handle);
             }
-        });
-        running.insert(sid.clone(), handle);
+            _ => {
+                // Default path: Claude Code Agent (remote_claude / empty) uses
+                // the in-process QueryEngine.
+                let handle = tokio::spawn(async move {
+                    let result = query_engine_gui::run_unified_prompt_with_provider(
+                        &app,
+                        config.clone(),
+                        provider,
+                        session_store,
+                        pending_permissions,
+                        &prompt,
+                    )
+                    .await;
+
+                    match result {
+                        Ok(outcome) => {
+                            let _ = app.emit(
+                                APP_EVENT_PROMPT_DONE,
+                                PromptDoneDto {
+                                    session_id: config.session_id.to_string(),
+                                    is_error: false,
+                                    error: None,
+                                    result: Some(PromptResultDto {
+                                        session_id: config.session_id.to_string(),
+                                        text: outcome.text,
+                                        tool_calls: outcome
+                                            .tool_calls
+                                            .iter()
+                                            .map(tool_call_to_dto)
+                                            .collect(),
+                                        usage: usage_to_dto(&outcome.usage),
+                                        num_turns: outcome.num_turns,
+                                        stop_reason: outcome.stop_reason,
+                                    }),
+                                },
+                            );
+                        }
+                        Err(error) => {
+                            let _ = app.emit(
+                                APP_EVENT_PROMPT_DONE,
+                                PromptDoneDto {
+                                    session_id: config.session_id.to_string(),
+                                    is_error: true,
+                                    error: Some(format!("{error:#}")),
+                                    result: None,
+                                },
+                            );
+                        }
+                    }
+
+                    // Clean up the running-prompts map entry.
+                    {
+                        let mut running = running_prompts.lock().await;
+                        running.remove(&sid_for_cleanup);
+                    }
+                });
+                running.insert(sid.clone(), handle);
+            }
+        }
     }
 
     Ok(sid)
@@ -2875,6 +3288,15 @@ async fn cancel_prompt(
     state: State<'_, AppState>,
     session_id: String,
 ) -> std::result::Result<bool, String> {
+    // If a subprocess adapter is active for this session, cancel it.
+    {
+        let mut adapters = state.active_subprocess_adapters.lock().await;
+        if let Some(adapter) = adapters.get_mut(&session_id) {
+            tracing::info!(session_id = %session_id, "cancelling subprocess adapter");
+            let _ = adapter.cancel(&session_id).await;
+        }
+    }
+
     let mut running = state.running_prompts.lock().await;
     if let Some(handle) = running.remove(&session_id) {
         handle.abort();
@@ -3574,9 +3996,7 @@ async fn list_available_agents(
 }
 
 #[tauri::command]
-async fn install_agent(
-    agent_type: String,
-) -> std::result::Result<(), String> {
+async fn install_agent(agent_type: String) -> std::result::Result<(), String> {
     let parsed: ProtocolAgentType = serde_json::from_str(&format!("\"{}\"", agent_type))
         .map_err(|e| format!("无效的 agent_type: {e}"))?;
 
@@ -3622,8 +4042,7 @@ async fn install_agent(
     let install_dir = agents_base_dir()
         .join(agent_type_dir_name(&parsed))
         .join("bin");
-    std::fs::create_dir_all(&install_dir)
-        .map_err(|e| format!("创建安装目录失败: {e}"))?;
+    std::fs::create_dir_all(&install_dir).map_err(|e| format!("创建安装目录失败: {e}"))?;
 
     let target_path = install_dir.join(agent_binary_name(&parsed));
 
@@ -3646,8 +4065,7 @@ async fn install_agent(
         return Err("下载内容为空".to_owned());
     }
 
-    std::fs::write(&target_path, &bytes)
-        .map_err(|e| format!("写入文件失败: {e}"))?;
+    std::fs::write(&target_path, &bytes).map_err(|e| format!("写入文件失败: {e}"))?;
 
     // Set executable permissions on Unix.
     #[cfg(unix)]
@@ -3709,6 +4127,7 @@ pub fn run() {
     });
     let pending_permissions = Arc::new(Mutex::new(HashMap::new()));
     let running_prompts = Arc::new(Mutex::new(HashMap::new()));
+    let active_subprocess_adapters = Arc::new(Mutex::new(HashMap::new()));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -3717,6 +4136,7 @@ pub fn run() {
             runtime: Mutex::new(runtime_state),
             pending_permissions,
             running_prompts,
+            active_subprocess_adapters,
         })
         .invoke_handler(tauri::generate_handler![
             init_app,

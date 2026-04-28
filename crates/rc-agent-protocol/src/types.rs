@@ -141,7 +141,11 @@ mod tests {
 
     #[test]
     fn agent_type_serde_roundtrip() {
-        let types = [AgentType::RemoteClaude, AgentType::RemoteRoo, AgentType::RemoteCodex];
+        let types = [
+            AgentType::RemoteClaude,
+            AgentType::RemoteRoo,
+            AgentType::RemoteCodex,
+        ];
         for t in &types {
             let json = serde_json::to_string(t).expect("serialize");
             let back: AgentType = serde_json::from_str(&json).expect("deserialize");

@@ -56,7 +56,9 @@ impl std::fmt::Display for HealthStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Healthy => write!(f, "healthy"),
-            Self::Degraded { consecutive_failures } => {
+            Self::Degraded {
+                consecutive_failures,
+            } => {
                 write!(f, "degraded ({consecutive_failures} failures)")
             }
             Self::Unhealthy { .. } => write!(f, "unhealthy"),

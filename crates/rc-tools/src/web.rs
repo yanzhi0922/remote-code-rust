@@ -33,13 +33,10 @@ pub(crate) async fn web_fetch(input: &Value, _context: &ToolExecutionContext) ->
         .unwrap_or(50_000) as usize;
 
     // Apply a timeout to prevent hanging on unresponsive servers
-    let response = timeout(
-        Duration::from_secs(30),
-        reqwest::get(url),
-    )
-    .await
-    .map_err(|_| anyhow!("web_fetch timed out after 30 seconds for {}", url))?
-    .context("failed to fetch URL")?;
+    let response = timeout(Duration::from_secs(30), reqwest::get(url))
+        .await
+        .map_err(|_| anyhow!("web_fetch timed out after 30 seconds for {}", url))?
+        .context("failed to fetch URL")?;
 
     let status = response.status();
     if !status.is_success() {

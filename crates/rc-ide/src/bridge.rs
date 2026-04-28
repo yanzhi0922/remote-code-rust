@@ -328,7 +328,9 @@ impl IdeBridge {
         // distinguish "awaiting response" from a genuine empty success.
         // Use `take_response(id)` or `handle_response` to collect the
         // actual reply when the transport delivers it.
-        Ok(IdeResponse::fail("response pending — not yet received from IDE"))
+        Ok(IdeResponse::fail(
+            "response pending — not yet received from IDE",
+        ))
     }
 
     /// Serialize an action request and return the JSON-RPC envelope.
@@ -470,7 +472,15 @@ mod tests {
         let response = bridge.request_action(&action).expect("request");
         // Without a pre-stored response, the bridge returns a pending indicator.
         assert!(!response.success);
-        assert!(response.data.as_ref().unwrap().as_str().unwrap().contains("pending"));
+        assert!(
+            response
+                .data
+                .as_ref()
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .contains("pending")
+        );
     }
 
     #[test]

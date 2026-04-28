@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use tracing::warn;
 
 use crate::adapter::AgentAdapter;
-use crate::adapters::{RemoteClaudeAdapter, RemoteCodexAdapter, RemoteRooAdapter};
+use crate::adapters::{InProcessAdapter, SubprocessAdapter};
 use crate::error::AgentProtocolError;
 use crate::events::UnifiedAgentEvent;
 use crate::permission::PermissionDecision;
@@ -54,19 +54,38 @@ impl AgentRouter {
 
     /// Create an adapter based on the [`AgentType`] specified in `config`.
     ///
-    /// All three agent types are supported: RemoteClaude, RemoteRoo, and RemoteCodex.
+    /// - **RemoteClaude** → in-process adapter (callback-based).
+    /// - **RemoteCodex** / **RemoteRoo** → subprocess adapter (JSON-RPC over stdio).
+    ///
+    /// For subprocess adapters, `config.binary_path` **must** be set.
     pub fn create_adapter(config: &AgentConfig) -> anyhow::Result<Box<dyn AgentAdapter>> {
         match config.agent_type {
             AgentType::RemoteClaude => {
-                let adapter = RemoteClaudeAdapter::new_claude();
-                Ok(Box::new(adapter))
-            }
-            AgentType::RemoteRoo => {
-                let adapter = RemoteRooAdapter::new_roo();
+                let adapter = InProcessAdapter::new_claude();
                 Ok(Box::new(adapter))
             }
             AgentType::RemoteCodex => {
-                let adapter = RemoteCodexAdapter::new_codex();
+                let binary_path =
+                    config
+                        .binary_path
+                        .clone()
+                        .ok_or_else(|| AgentProtocolError::ConfigError {
+                            message: "binary_path is required for RemoteCodex subprocess adapter"
+                                .into(),
+                        })?;
+                let adapter = SubprocessAdapter::new(AgentType::RemoteCodex, binary_path);
+                Ok(Box::new(adapter))
+            }
+            AgentType::RemoteRoo => {
+                let binary_path =
+                    config
+                        .binary_path
+                        .clone()
+                        .ok_or_else(|| AgentProtocolError::ConfigError {
+                            message: "binary_path is required for RemoteRoo subprocess adapter"
+                                .into(),
+                        })?;
+                let adapter = SubprocessAdapter::new(AgentType::RemoteRoo, binary_path);
                 Ok(Box::new(adapter))
             }
         }

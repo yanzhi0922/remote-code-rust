@@ -9,12 +9,12 @@ use rc_core::{
     Message, MessageBase, MessageOrigin, SystemMessage, SystemMessageSubtype, UserMessage,
 };
 
+use crate::estimate_message_tokens;
 use crate::prompt::{
     COMPACT_SYSTEM_PROMPT, PartialCompactDirection, build_compact_prompt,
     build_compact_user_summary_message, build_partial_compact_prompt, format_compact_summary,
     rough_token_count,
 };
-use crate::estimate_message_tokens;
 use crate::strategy::{
     CompactOptions, CompactProgressEvent, CompactStrategy, CompactStrategyType, CompactionResult,
     PreservedSegment, ProgressCallback, SummaryProvider,
@@ -506,7 +506,6 @@ fn emit_progress(sink: &Option<&ProgressCallback>, event: CompactProgressEvent) 
         sink(event);
     }
 }
-
 
 /// Attempt to truncate the oldest messages to recover from a prompt-too-long
 /// error during compaction.

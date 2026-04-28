@@ -1,81 +1,110 @@
 #!/usr/bin/env bash
-# build-agents.sh — Build agent binaries for multi-agent architecture
-# Usage: ./scripts/build-agents.sh [roo-code|codex|all]
+#
+# Build all three Agent binaries for the multi-agent architecture.
+#
+# Usage:
+#   ./scripts/build-agents.sh          # Release build (default)
+#   ./scripts/build-agents.sh --debug  # Debug build
+
 set -euo pipefail
 
-AGENT="${1:-all}"
-PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-AGENTS_DIR="$PROJECT_ROOT/agents"
-OUTPUT_BASE="$PROJECT_ROOT/target/agent-binaries"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-build_roo_code() {
-    echo -e "\n=== Building Roo Code Agent ==="
-    local roo_dir="$AGENTS_DIR/roo-code"
-    if [[ ! -d "$roo_dir" ]]; then
-        echo "ERROR: Roo Code source not found at $roo_dir" >&2
-        return 1
+# Parse arguments
+PROFILE="release"
+PROFILE_FLAG="--release"
+for arg in "$@"; do
+    case "$arg" in
+        --debug)
+            PROFILE="debug"
+            PROFILE_FLAG=""
+            ;;
+        --release)
+            PROFILE="release"
+            PROFILE_FLAG="--release"
+            ;;
+        *)
+            echo "Unknown argument: $arg"
+            echo "Usage: $0 [--debug|--release]"
+            exit 1
+            ;;
+    esac
+done
+
+# Output directory for unified binaries
+OUTPUT_DIR="$ROOT_DIR/target/agent-binaries"
+mkdir -p "$OUTPUT_DIR"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
+# Build results
+declare -a RESULTS
+
+build_agent() {
+    local name="$1"
+    local build_cmd="$2"
+    local binary_name="$3"
+    local source_path="$4"
+
+    echo -e "\n${CYAN}=== Building $name ===${NC}"
+    local start_time
+    start_time=$(date +%s)
+
+    if eval "$build_cmd"; then
+        local end_time
+        end_time=$(date +%s)
+        local duration=$((end_time - start_time))
+
+        # Copy binary to output directory
+        if [ -f "$source_path" ]; then
+            cp -f "$source_path" "$OUTPUT_DIR/"
+            echo -e "  ${GREEN}Copied: $OUTPUT_DIR/$binary_name${NC}"
+        else
+            echo -e "  ${RED}Warning: Binary not found at $source_path${NC}"
+        fi
+
+        RESULTS+=("$name | OK | ${duration}s")
+    else
+        local end_time
+        end_time=$(date +%s)
+        local duration=$((end_time - start_time))
+        echo -e "  ${RED}FAILED${NC}"
+        RESULTS+=("$name | FAILED | ${duration}s")
     fi
-
-    pushd "$roo_dir" >/dev/null
-    echo "  Compiling roo-server (release)..."
-    cargo build --release -p roo-server
-    local bin_src="$roo_dir/target/release/roo-server"
-    local out_dir="$OUTPUT_BASE/roo-code"
-    mkdir -p "$out_dir"
-    cp "$bin_src" "$out_dir/"
-    echo "  -> Copied to $out_dir/roo-server"
-    popd >/dev/null
-    return 0
 }
 
-build_codex() {
-    echo -e "\n=== Building Codex Agent ==="
-    local codex_dir="$AGENTS_DIR/codex"
-    if [[ ! -d "$codex_dir" ]]; then
-        echo "ERROR: Codex source not found at $codex_dir" >&2
-        return 1
-    fi
+# ── 1. Claude Code Agent ──
+build_agent "Claude Code Agent" \
+    "cd $ROOT_DIR && cargo build --package remote-code $PROFILE_FLAG" \
+    "remote-code" \
+    "$ROOT_DIR/target/$PROFILE/remote-code"
 
-    local codex_rs_dir="$codex_dir/codex-rs"
-    if [[ ! -d "$codex_rs_dir" ]]; then
-        echo "ERROR: codex-rs directory not found at $codex_rs_dir" >&2
-        return 1
-    fi
+# ── 2. Codex Agent ──
+build_agent "Codex Agent" \
+    "cd $ROOT_DIR/agents/codex/codex-rs && cargo build --package codex-cli $PROFILE_FLAG" \
+    "codex" \
+    "$ROOT_DIR/agents/codex/codex-rs/target/$PROFILE/codex"
 
-    pushd "$codex_rs_dir" >/dev/null
-    echo "  Compiling codex-rs/app-server (release)..."
-    cargo build --release -p codex-app-server || cargo build --release -p codex-exec
-    local bin_src
-    bin_src=$(find "$codex_rs_dir/target/release" -maxdepth 1 -type f -executable -name "codex*" | head -1)
-    if [[ -z "$bin_src" ]]; then
-        echo "ERROR: Could not find codex binary" >&2
-        popd >/dev/null
-        return 1
-    fi
-    local out_dir="$OUTPUT_BASE/codex"
-    mkdir -p "$out_dir"
-    cp "$bin_src" "$out_dir/"
-    echo "  -> Copied to $out_dir/$(basename "$bin_src")"
-    popd >/dev/null
-    return 0
-}
+# ── 3. Roo-code Agent ──
+build_agent "Roo-code Agent" \
+    "cd $ROOT_DIR/agents/roo-code && cargo build --package roo-cli $PROFILE_FLAG" \
+    "roo" \
+    "$ROOT_DIR/agents/roo-code/target/$PROFILE/roo"
 
-echo "Remote Code — Agent Binary Builder"
-echo "Project root: $PROJECT_ROOT"
-echo "Output:       $OUTPUT_BASE"
-mkdir -p "$OUTPUT_BASE"
-
-case "$AGENT" in
-    roo-code) build_roo_code ;;
-    codex)    build_codex ;;
-    all)
-        build_roo_code
-        build_codex
-        ;;
-    *)
-        echo "Usage: $0 [roo-code|codex|all]" >&2
-        exit 1
-        ;;
-esac
-
-echo -e "\n✓ All requested agents built successfully!"
+# ── Summary ──
+echo -e "\n========================================"
+echo -e "  Build Summary (Profile: $PROFILE)"
+echo -e "========================================"
+printf "%-25s %-10s %-10s\n" "Agent" "Status" "Duration"
+printf "%-25s %-10s %-10s\n" "-----" "------" "--------"
+for result in "${RESULTS[@]}"; do
+    echo "$result" | awk -F'|' '{printf "%-25s %-10s %-10s\n", $1, $2, $3}'
+done
+echo ""
+echo -e "${CYAN}Output directory: $OUTPUT_DIR${NC}"
+echo ""

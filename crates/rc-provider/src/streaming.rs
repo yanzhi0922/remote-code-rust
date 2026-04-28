@@ -21,13 +21,13 @@ use std::sync::{
 };
 use std::time::Duration;
 
+use crate::retry::{
+    RetryConfig, compute_retry_delay as retry_compute_retry_delay, is_retryable_http_status,
+    is_retryable_transport_error, parse_retry_after as retry_parse_retry_after,
+};
 use crate::{
     ProviderClient, build_anthropic_request_body, build_headers, build_openai_request_body,
     maybe_dump_request_body, prepare_anthropic_request_surface, provider_for_request,
-};
-use crate::retry::{
-    RetryConfig, is_retryable_http_status, is_retryable_transport_error,
-    compute_retry_delay as retry_compute_retry_delay, parse_retry_after as retry_parse_retry_after,
 };
 
 // ---------------------------------------------------------------------------
@@ -942,10 +942,7 @@ fn process_anthropic_event(
         "message_start" => {
             if let Some(msg) = event.get("message") {
                 if request_id.is_none() {
-                    *request_id = msg
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .map(ToOwned::to_owned);
+                    *request_id = msg.get("id").and_then(Value::as_str).map(ToOwned::to_owned);
                 }
                 if let Some(u) = msg.get("usage") {
                     let inp = u.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
@@ -1046,8 +1043,7 @@ fn process_anthropic_event(
                     .and_then(|d| d.get("thinking"))
                     .and_then(Value::as_str)
                 && let Some(AnthropicContentAccumulator::Thinking {
-                    thinking: existing,
-                    ..
+                    thinking: existing, ..
                 }) = content_block_accumulators.get_mut(&index)
             {
                 existing.push_str(thinking);
@@ -1062,8 +1058,7 @@ fn process_anthropic_event(
             {
                 *existing = Some(signature.to_owned());
             } else if delta_type == "text_delta"
-                && let Some(text) =
-                    delta.and_then(|d| d.get("text")).and_then(Value::as_str)
+                && let Some(text) = delta.and_then(|d| d.get("text")).and_then(Value::as_str)
                 && let Some(AnthropicContentAccumulator::Text { text: existing }) =
                     content_block_accumulators.get_mut(&index)
             {
@@ -1115,7 +1110,6 @@ fn process_anthropic_event(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
 
 /// Parse the `:event-type` header value from a Bedrock event stream header block.
 ///
@@ -1359,10 +1353,10 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{
-        AnthropicContentAccumulator, AnthropicToolUseAccumulator,
+        AnthropicContentAccumulator, AnthropicToolUseAccumulator, StreamingCallbacks, UsageSummary,
         finalize_anthropic_content_blocks, is_retryable_http_status, parse_bedrock_event_type,
         parse_sse_events_from_buffer, process_anthropic_event,
-        should_fallback_after_streaming_error, StreamingCallbacks, UsageSummary,
+        should_fallback_after_streaming_error,
     };
 
     #[test]
@@ -1533,7 +1527,12 @@ mod tests {
     #[test]
     fn process_anthropic_event_extracts_text_delta() {
         let mut accumulators = BTreeMap::new();
-        accumulators.insert(0, AnthropicContentAccumulator::Text { text: String::new() });
+        accumulators.insert(
+            0,
+            AnthropicContentAccumulator::Text {
+                text: String::new(),
+            },
+        );
         let mut usage = UsageSummary::default();
         let mut stop_reason = "end_turn".to_owned();
         let mut request_id: Option<String> = None;
@@ -1721,7 +1720,8 @@ mod tests {
     fn sse_buffer_multiple_data_lines_in_one_event() {
         // SSE spec: multiple data: lines within one event are joined with newlines.
         // Our parser treats each data: line as a separate parse attempt.
-        let mut buf = "data: {\"type\":\"message_start\"}\ndata: {\"type\":\"ping\"}\n\n".to_owned();
+        let mut buf =
+            "data: {\"type\":\"message_start\"}\ndata: {\"type\":\"ping\"}\n\n".to_owned();
         let events = parse_sse_events_from_buffer(&mut buf);
         // Both data lines are parsed as separate JSON events.
         assert_eq!(events.len(), 2);
@@ -1936,7 +1936,12 @@ mod tests {
     #[test]
     fn process_anthropic_event_content_block_delta_text_accumulates() {
         let mut accumulators = BTreeMap::new();
-        accumulators.insert(0, AnthropicContentAccumulator::Text { text: "Hello ".to_owned() });
+        accumulators.insert(
+            0,
+            AnthropicContentAccumulator::Text {
+                text: "Hello ".to_owned(),
+            },
+        );
         let mut usage = UsageSummary::default();
         let mut stop_reason = "end_turn".to_owned();
         let mut request_id: Option<String> = None;
@@ -2285,7 +2290,12 @@ mod tests {
     #[test]
     fn finalize_single_text_block() {
         let mut accumulators = BTreeMap::new();
-        accumulators.insert(0, AnthropicContentAccumulator::Text { text: "Hello".to_owned() });
+        accumulators.insert(
+            0,
+            AnthropicContentAccumulator::Text {
+                text: "Hello".to_owned(),
+            },
+        );
 
         let (raw_text, thinking_text, content_blocks, tool_calls) =
             finalize_anthropic_content_blocks(accumulators);
@@ -2300,7 +2310,12 @@ mod tests {
     #[test]
     fn finalize_empty_text_block_is_skipped() {
         let mut accumulators = BTreeMap::new();
-        accumulators.insert(0, AnthropicContentAccumulator::Text { text: String::new() });
+        accumulators.insert(
+            0,
+            AnthropicContentAccumulator::Text {
+                text: String::new(),
+            },
+        );
 
         let (raw_text, thinking_text, content_blocks, tool_calls) =
             finalize_anthropic_content_blocks(accumulators);

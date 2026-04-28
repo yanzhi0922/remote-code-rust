@@ -329,7 +329,10 @@ mod tests {
         let mut adapter = InProcessAdapter::new_claude();
         assert_eq!(adapter.status, AgentStatus::Starting);
 
-        adapter.start(&test_config(AgentType::RemoteClaude)).await.unwrap();
+        adapter
+            .start(&test_config(AgentType::RemoteClaude))
+            .await
+            .unwrap();
         assert_eq!(adapter.status, AgentStatus::Ready);
         assert_eq!(adapter.info().status, AgentStatus::Ready);
     }
@@ -337,7 +340,10 @@ mod tests {
     #[tokio::test]
     async fn send_message_without_callback_returns_error() {
         let mut adapter = InProcessAdapter::new_claude();
-        adapter.start(&test_config(AgentType::RemoteClaude)).await.unwrap();
+        adapter
+            .start(&test_config(AgentType::RemoteClaude))
+            .await
+            .unwrap();
 
         let result = adapter.send_message("sess-1", "hello").await;
         assert!(result.is_err());
@@ -369,7 +375,10 @@ mod tests {
         });
 
         let mut adapter = adapter;
-        adapter.start(&test_config(AgentType::RemoteClaude)).await.unwrap();
+        adapter
+            .start(&test_config(AgentType::RemoteClaude))
+            .await
+            .unwrap();
 
         let mut rx = adapter.send_message("sess-1", "hello world").await.unwrap();
 
@@ -386,7 +395,10 @@ mod tests {
     #[tokio::test]
     async fn cancel_without_callback_returns_error() {
         let mut adapter = InProcessAdapter::new_claude();
-        adapter.start(&test_config(AgentType::RemoteClaude)).await.unwrap();
+        adapter
+            .start(&test_config(AgentType::RemoteClaude))
+            .await
+            .unwrap();
 
         let result = adapter.cancel("sess-1").await;
         assert!(result.is_err());
@@ -402,7 +414,10 @@ mod tests {
         let adapter = InProcessAdapter::new_claude().with_cancel(|_sid| Ok(()));
 
         let mut adapter = adapter;
-        adapter.start(&test_config(AgentType::RemoteClaude)).await.unwrap();
+        adapter
+            .start(&test_config(AgentType::RemoteClaude))
+            .await
+            .unwrap();
 
         let result = adapter.cancel("sess-1").await;
         assert!(result.is_ok());
@@ -411,7 +426,10 @@ mod tests {
     #[tokio::test]
     async fn stop_sets_status_to_stopped() {
         let mut adapter = InProcessAdapter::new_claude();
-        adapter.start(&test_config(AgentType::RemoteClaude)).await.unwrap();
+        adapter
+            .start(&test_config(AgentType::RemoteClaude))
+            .await
+            .unwrap();
         assert_eq!(adapter.status, AgentStatus::Ready);
 
         adapter.stop().await.unwrap();
