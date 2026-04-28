@@ -1,3 +1,5 @@
+mod query_engine_gui;
+
 use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::path::{Path, PathBuf};
@@ -27,7 +29,7 @@ use rc_plugins::{discover_plugins_including_disabled, PluginBundle};
 use rc_provider::context::ContextWindowManager;
 use rc_provider::model_info::{get_model_info, ModelCapability};
 use rc_provider::streaming::StreamingCallbacks;
-use rc_provider::{ConversationBackend, ProviderClient, ProviderCompatBackend};
+use rc_provider::{ConversationBackend, ProviderClient};
 use rc_session::runtime_context::{
     persist_runtime_config_session_context, restore_runtime_config_session_context,
 };
@@ -81,6 +83,7 @@ const APP_EVENT_TASK_SNAPSHOT: &str = "gui://task-snapshot";
 const APP_EVENT_CONTEXT_USAGE: &str = "gui://context-usage";
 const APP_EVENT_CONTEXT_OVERFLOW: &str = "gui://context-overflow";
 const APP_EVENT_CONTEXT_COMPACTED: &str = "gui://context-compacted";
+#[allow(dead_code)] // Preserved for future out-of-process agent support
 const APP_EVENT_AGENT_STATUS_CHANGED: &str = "gui://agent-status-changed";
 const APP_EVENT_RUNTIME_STATUS: &str = "gui://runtime-status";
 const PROJECTS_FILE_NAME: &str = "gui-projects.json";
@@ -483,6 +486,7 @@ struct AgentTypeInfoDto {
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[allow(dead_code)] // Preserved for future out-of-process agent support
 #[serde(rename_all = "camelCase")]
 struct AgentStatusChangedDto {
     session_id: String,
@@ -775,10 +779,12 @@ struct AppState {
     runtime: Mutex<RuntimeState>,
     pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
     running_prompts: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
+    #[allow(dead_code)] // Preserved for future out-of-process agent support
     agent_router: Arc<Mutex<AgentRouter>>,
     /// Oneshot channels for bridging Agent permission requests to the GUI and back.
     agent_permission_channels: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
     /// Stored AgentConfigs keyed by session ID, used for health-check auto-restart.
+    #[allow(dead_code)] // Preserved for future out-of-process agent support
     agent_configs: Arc<Mutex<HashMap<String, AgentConfig>>>,
 }
 
@@ -2640,6 +2646,7 @@ impl PermissionBroker for GuiRuntimePermissionBroker {
     }
 }
 
+#[allow(dead_code)] // Legacy fallback — kept for reference until unified path is validated
 #[derive(Debug)]
 struct PromptRunOutcome {
     text: String,
@@ -2649,6 +2656,7 @@ struct PromptRunOutcome {
     stop_reason: String,
 }
 
+#[allow(dead_code)] // Legacy fallback — kept for reference until unified path is validated
 async fn run_gui_prompt(
     app: AppHandle,
     mut config: RuntimeConfig,
@@ -3076,6 +3084,7 @@ fn get_session_agent_type(store: &SessionStore, session_id: Uuid) -> String {
 ///
 /// Translates [`UnifiedAgentEvent`]s from the adapter into existing GUI events
 /// so the frontend can handle them uniformly.
+#[allow(dead_code)] // Legacy fallback — kept for reference until unified path is validated
 async fn run_agent_prompt(
     app: AppHandle,
     session_id: String,
@@ -3568,106 +3577,11 @@ async fn create_session(
         serde_json::json!({ "agent_type": agent_type_str }),
     ))?;
 
-    // For external agents (RemoteRoo / RemoteCodex), pre-create and register an
-    // in-process callback adapter.  These adapters no longer launch subprocesses;
-    // instead they use callback functions injected by the Tauri backend.
-    // Fix #10: if adapter creation fails, roll back by removing the session data
-    // that was just created so the user doesn't end up with a zombie session.
-    if _parsed_agent_type != ProtocolAgentType::RemoteClaude {
-        let agent_config = AgentConfig {
-            agent_type: _parsed_agent_type,
-            binary_path: None,
-            args: vec![],
-            env: vec![],
-            working_dir: Some(normalized_project_path),
-            model: config.provider.model.clone(),
-            provider: Some(config.provider.name.clone()),
-            api_key: None,
-            base_url: config.provider.base_url.clone(),
-        };
-        // Store the AgentConfig for health-check auto-restart (Phase 10.3).
-        let config_clone = agent_config.clone();
-        state
-            .agent_configs
-            .lock()
-            .await
-            .insert(config.session_id.to_string(), config_clone);
-
-        // Create a callback-based in-process adapter.
-        let adapter: Box<dyn rc_agent_protocol::AgentAdapter> = match _parsed_agent_type {
-            ProtocolAgentType::RemoteRoo => {
-                let adapter = rc_agent_protocol::adapters::RemoteRooAdapter::new()
-                    .with_send_message(|_sid, _msg| {
-                        // TODO: Wire into QueryEngine::submit_message() for full
-                        // in-process execution. For now returns an empty response
-                        // indicating the callback path is active.
-                        Ok(vec![rc_agent_protocol::UnifiedAgentEvent::Completed {
-                            session_id: _sid.to_owned(),
-                            result: rc_agent_protocol::events::AgentResult {
-                                response_text: format!(
-                                    "[Remote Roo] In-process callback received message ({} bytes)",
-                                    _msg.len()
-                                ),
-                                tool_calls: vec![],
-                                usage: rc_agent_protocol::events::UsageInfo::default(),
-                                cost: None,
-                            },
-                        }])
-                    })
-                    .with_cancel(|_sid| Ok(()))
-                    .with_resolve_permission(|_sid, _rid, _dec| Ok(()));
-                Box::new(adapter)
-            }
-            ProtocolAgentType::RemoteCodex => {
-                let adapter = rc_agent_protocol::adapters::RemoteCodexAdapter::new()
-                    .with_send_message(|_sid, _msg| {
-                        // TODO: Wire into QueryEngine::submit_message() for full
-                        // in-process execution. For now returns an empty response
-                        // indicating the callback path is active.
-                        Ok(vec![rc_agent_protocol::UnifiedAgentEvent::Completed {
-                            session_id: _sid.to_owned(),
-                            result: rc_agent_protocol::events::AgentResult {
-                                response_text: format!(
-                                    "[Remote Codex] In-process callback received message ({} bytes)",
-                                    _msg.len()
-                                ),
-                                tool_calls: vec![],
-                                usage: rc_agent_protocol::events::UsageInfo::default(),
-                                cost: None,
-                            },
-                        }])
-                    })
-                    .with_cancel(|_sid| Ok(()))
-                    .with_resolve_permission(|_sid, _rid, _dec| Ok(()));
-                Box::new(adapter)
-            }
-            ProtocolAgentType::RemoteClaude => unreachable!(),
-        };
-
-        let mut router = state.agent_router.lock().await;
-        if let Err(e) = async {
-            // Start the adapter, then register it.
-            let mut boxed = adapter;
-            boxed.start(&agent_config).await?;
-            router.register(config.session_id.to_string(), boxed).await;
-            Ok::<(), anyhow::Error>(())
-        }
-        .await
-        {
-            // Fix #10: Roll back — archive the session that was just created so
-            // it doesn't appear in the active list.  SessionStore has no
-            // delete method, so archiving is the best available cleanup.
-            tracing::warn!(
-                session_id = %config.session_id,
-                error = %e,
-                "Adapter creation failed, archiving session as rollback"
-            );
-            // Also remove the stored config since the adapter failed to start.
-            state.agent_configs.lock().await.remove(&config.session_id.to_string());
-            let _ = session_store.set_archived(config.session_id, true);
-            return Err(format!("Agent 启动失败: {e:#}"));
-        }
-    }
+    // All Agent types now share the unified QueryEngine execution path.
+    // No stub adapter creation is needed — `send_prompt()` routes all
+    // agents through `query_engine_gui::run_unified_prompt_with_provider()`.
+    // The AgentRouter and adapter infrastructure are preserved for future
+    // out-of-process agent support but are not used in the current path.
 
     Ok(config.session_id.to_string())
 }
@@ -3707,7 +3621,7 @@ async fn send_prompt(
         )
     };
 
-    let is_external_agent = agent_type_str != "remote_claude";
+    let _agent_type_str = agent_type_str; // used for logging only
 
     apply_provider_credentials_from_configs(&mut config.provider, &provider_configs);
     configure_runtime_policy_for_config(&config).map_err(|error| format!("{error:#}"))?;
@@ -3715,9 +3629,6 @@ async fn send_prompt(
     let sid = config.session_id.to_string();
 
     let running_prompts = Arc::clone(&state.running_prompts);
-    let agent_router = Arc::clone(&state.agent_router);
-    let agent_permission_channels = Arc::clone(&state.agent_permission_channels);
-    let agent_configs = Arc::clone(&state.agent_configs);
     let sid_for_cleanup = sid.clone();
 
     // Atomically check for duplicate and reserve the slot to prevent TOCTOU races.
@@ -3727,31 +3638,17 @@ async fn send_prompt(
             return Err("该会话已有正在运行的提示，请等待完成或取消后再试。".to_owned());
         }
         let handle = tokio::spawn(async move {
-            let result = if is_external_agent {
-                // External Agent path (RooCode / Codex)
-                run_agent_prompt(
-                    app.clone(),
-                    sid_for_cleanup.clone(),
-                    agent_router,
-                    &prompt,
-                    &agent_type_str,
-                    agent_permission_channels,
-                    agent_configs,
-                )
-                .await
-            } else {
-                // Default RemoteCode path (zero-change)
-                let backend = ProviderCompatBackend::new(Arc::clone(&provider), &config.provider);
-                run_gui_prompt(
-                    app.clone(),
-                    config.clone(),
-                    &backend,
-                    session_store,
-                    pending_permissions,
-                    &prompt,
-                )
-                .await
-            };
+            // Unified execution path: all Agent types (RemoteClaude, RemoteRoo,
+            // RemoteCodex) now share a single path through QueryEngine.
+            let result = query_engine_gui::run_unified_prompt_with_provider(
+                &app,
+                config.clone(),
+                provider,
+                session_store,
+                pending_permissions,
+                &prompt,
+            )
+            .await;
 
             match result {
                 Ok(outcome) => {
