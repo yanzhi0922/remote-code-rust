@@ -632,7 +632,7 @@ export interface MemoryUsageData {
 // ── Multi-Agent ──────────────────────────────────────────────────────
 
 /** Agent 类型 */
-export type AgentType = 'remote_code' | 'roo_code' | 'codex';
+export type AgentType = 'remote_claude' | 'remote_roo' | 'remote_codex';
 
 /** Agent 类型信息 — 与 Rust AgentTypeInfoDto 对齐 (serde rename_all = camelCase) */
 export interface AgentTypeInfo {

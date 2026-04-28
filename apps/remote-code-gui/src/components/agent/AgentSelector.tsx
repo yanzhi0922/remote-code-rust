@@ -4,9 +4,9 @@ import type { AgentTypeInfo, AgentType } from '../../lib/types';
 
 /** Agent 类型对应的默认显示信息（后端未返回时用作 fallback） */
 const AGENT_DEFAULTS: Record<AgentType, { displayName: string; description: string }> = {
-  remote_code: { displayName: 'Remote Code', description: '内置 Agent，直接调用 provider API' },
-  roo_code: { displayName: 'Roo Code', description: 'Roo Code 外部 Agent 适配器' },
-  codex: { displayName: 'Codex', description: 'OpenAI Codex 外部 Agent 适配器' },
+  remote_claude: { displayName: 'Remote Claude', description: '内置 Agent，直接调用 provider API' },
+  remote_roo: { displayName: 'Remote Roo', description: 'Remote Roo 外部 Agent 适配器' },
+  remote_codex: { displayName: 'Remote Codex', description: 'Remote Codex 外部 Agent 适配器' },
 };
 
 interface AgentSelectorProps {
@@ -39,8 +39,8 @@ export function AgentSelector({ availableAgents, activeAgentType, onSelect }: Ag
 
   const activeLabel =
     activeAgentType === null
-      ? 'Remote Code'
-      : agentEntries.find((entry) => entry.agentType === activeAgentType)?.displayName ?? 'Remote Code';
+      ? 'Remote Claude'
+      : agentEntries.find((entry) => entry.agentType === activeAgentType)?.displayName ?? 'Remote Claude';
 
   return (
     <div className="relative">
@@ -63,7 +63,7 @@ export function AgentSelector({ availableAgents, activeAgentType, onSelect }: Ag
           />
           <div className="absolute bottom-full left-0 z-20 mb-2 min-w-[260px] overflow-hidden rounded-2xl border border-[#dedad2] bg-white shadow-[0_18px_42px_rgba(24,29,33,0.16)]">
             <div className="max-h-72 overflow-y-auto p-1.5">
-              {/* 默认选项：Remote Code（null） */}
+              {/* 默认选项：Remote Claude（null） */}
               <button
                 className={`flex w-full items-start gap-2 rounded-xl px-3 py-2 text-left transition-colors ${
                   activeAgentType === null
@@ -76,14 +76,14 @@ export function AgentSelector({ availableAgents, activeAgentType, onSelect }: Ag
                 }}
               >
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-medium">Remote Code（默认）</div>
+                  <div className="truncate text-sm font-medium">Remote Claude（默认）</div>
                   <div className="mt-0.5 text-xs text-slate-500">内置 Agent，直接调用 provider API</div>
                 </div>
               </button>
 
               {/* 其他 Agent 选项 */}
               {agentEntries
-                .filter((entry) => entry.agentType !== 'remote_code')
+                .filter((entry) => entry.agentType !== 'remote_claude')
                 .map((entry) => (
                   <button
                     key={entry.agentType}

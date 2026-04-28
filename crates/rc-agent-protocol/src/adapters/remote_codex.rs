@@ -1,6 +1,6 @@
-//! Codex sub-process adapter — JSON-RPC 2.0 over stdio with NDJSON framing.
+//! Remote Codex sub-process adapter — JSON-RPC 2.0 over stdio with NDJSON framing.
 //!
-//! [`CodexAdapter`] launches an OpenAI Codex binary as a child process and
+//! [`RemoteCodexAdapter`] launches an OpenAI Codex binary as a child process and
 //! communicates with it over stdin/stdout using **NDJSON** (newline-delimited
 //! JSON) where each line is a complete JSON-RPC 2.0 message.
 //!
@@ -11,7 +11,7 @@
 //! Agent → Host (stdout): {"jsonrpc":"2.0","method":"...","params":{...}}\n
 //! ```
 //!
-//! # Key differences from [`RooCodeAdapter`](super::roo_code::RooCodeAdapter)
+//! # Key differences from [`RemoteRooAdapter`](super::remote_roo::RemoteRooAdapter)
 //!
 //! - Uses **NDJSON** (newline-delimited JSON) instead of Content-Length framing.
 //! - Codex methods: `session/create`, `task/create`, `task/cancel`, `session/delete`.
@@ -186,7 +186,7 @@ pub fn map_codex_notification(
 ///
 /// The `rpc_id` is the numeric JSON-RPC request id from Codex.  It is
 /// stringified and used as the `request_id` in the resulting event so that
-/// [`CodexAdapter::resolve_permission`] can map it back when the host
+/// [`RemoteCodexAdapter::resolve_permission`] can map it back when the host
 /// responds.
 pub fn map_codex_request(
     method: &str,
@@ -212,7 +212,7 @@ pub fn map_codex_request(
 }
 
 // ===========================================================================
-// CodexAdapter
+// RemoteCodexAdapter
 // ===========================================================================
 
 /// Sub-process adapter for OpenAI Codex.
@@ -220,7 +220,7 @@ pub fn map_codex_request(
 /// Launches the Codex binary configured in [`AgentConfig::binary_path`]
 /// and communicates over stdio using JSON-RPC 2.0 with NDJSON framing
 /// (one JSON object per newline-terminated line).
-pub struct CodexAdapter {
+pub struct RemoteCodexAdapter {
     /// Static agent metadata.
     info: AgentInfo,
     /// Runtime status.
@@ -244,8 +244,8 @@ pub struct CodexAdapter {
     reader_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
-impl CodexAdapter {
-    /// Create a new `CodexAdapter` in the **Starting** state.
+impl RemoteCodexAdapter {
+    /// Create a new `RemoteCodexAdapter` in the **Starting** state.
     #[must_use]
     pub fn new() -> Self {
         let mut capabilities = std::collections::HashSet::new();
@@ -258,7 +258,7 @@ impl CodexAdapter {
 
         Self {
             info: AgentInfo {
-                name: "OpenAI Codex".into(),
+                name: "Remote Codex".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
                 capabilities,
                 status: AgentStatus::Starting,
@@ -439,7 +439,7 @@ impl CodexAdapter {
     }
 }
 
-impl Default for CodexAdapter {
+impl Default for RemoteCodexAdapter {
     fn default() -> Self {
         Self::new()
     }
@@ -450,18 +450,18 @@ impl Default for CodexAdapter {
 // ===========================================================================
 
 #[async_trait]
-impl AgentAdapter for CodexAdapter {
+impl AgentAdapter for RemoteCodexAdapter {
     async fn start(&mut self, config: &AgentConfig) -> anyhow::Result<()> {
         let binary_path = config
             .binary_path
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("binary_path is required for CodexAdapter"))?;
+            .ok_or_else(|| anyhow::anyhow!("binary_path is required for RemoteCodexAdapter"))?;
 
         if !binary_path.exists() {
-            anyhow::bail!("Codex binary not found at: {}", binary_path.display());
+            anyhow::bail!("Remote Codex binary not found at: {}", binary_path.display());
         }
 
-        info!(path = %binary_path.display(), "starting Codex subprocess");
+        info!(path = %binary_path.display(), "starting Remote Codex subprocess");
 
         let mut cmd = Command::new(binary_path);
         cmd.args(&config.args)
@@ -550,7 +550,7 @@ impl AgentAdapter for CodexAdapter {
         self.info.status = AgentStatus::Ready;
 
         info!(
-            "CodexAdapter ready (session: {})",
+            "RemoteCodexAdapter ready (session: {})",
             self.current_session_id.as_deref().unwrap_or("?")
         );
         Ok(())
@@ -633,7 +633,7 @@ impl AgentAdapter for CodexAdapter {
     }
 
     async fn stop(&mut self) -> anyhow::Result<()> {
-        info!("CodexAdapter stopping");
+        info!("RemoteCodexAdapter stopping");
 
         // Abort the background reader task.
         if let Some(handle) = self.reader_handle.take() {
@@ -687,7 +687,7 @@ impl AgentAdapter for CodexAdapter {
     }
 
     fn agent_type(&self) -> AgentType {
-        AgentType::Codex
+        AgentType::RemoteCodex
     }
 }
 
@@ -982,27 +982,27 @@ mod tests {
     // ── Adapter lifecycle tests ──
 
     #[test]
-    fn new_adapter_has_codex_type() {
-        let adapter = CodexAdapter::new();
-        assert_eq!(adapter.agent_type(), AgentType::Codex);
+    fn new_adapter_has_remote_codex_type() {
+        let adapter = RemoteCodexAdapter::new();
+        assert_eq!(adapter.agent_type(), AgentType::RemoteCodex);
     }
 
     #[test]
     fn new_adapter_is_starting() {
-        let adapter = CodexAdapter::new();
+        let adapter = RemoteCodexAdapter::new();
         assert_eq!(adapter.status, AgentStatus::Starting);
         assert_eq!(adapter.info().status, AgentStatus::Starting);
     }
 
     #[test]
     fn new_adapter_info_has_name() {
-        let adapter = CodexAdapter::new();
-        assert_eq!(adapter.info().name, "OpenAI Codex");
+        let adapter = RemoteCodexAdapter::new();
+        assert_eq!(adapter.info().name, "Remote Codex");
     }
 
     #[test]
     fn new_adapter_has_all_capabilities() {
-        let adapter = CodexAdapter::new();
+        let adapter = RemoteCodexAdapter::new();
         let info = adapter.info();
         assert!(info.capabilities.contains(&AgentCapability::Streaming));
         assert!(info.capabilities.contains(&AgentCapability::ToolUse));
@@ -1013,9 +1013,9 @@ mod tests {
 
     #[tokio::test]
     async fn start_without_binary_returns_error() {
-        let mut adapter = CodexAdapter::new();
+        let mut adapter = RemoteCodexAdapter::new();
         let config = AgentConfig {
-            agent_type: AgentType::Codex,
+            agent_type: AgentType::RemoteCodex,
             binary_path: None,
             args: vec![],
             env: vec![],
@@ -1036,9 +1036,9 @@ mod tests {
 
     #[tokio::test]
     async fn start_with_nonexistent_binary_returns_error() {
-        let mut adapter = CodexAdapter::new();
+        let mut adapter = RemoteCodexAdapter::new();
         let config = AgentConfig {
-            agent_type: AgentType::Codex,
+            agent_type: AgentType::RemoteCodex,
             binary_path: Some(std::path::PathBuf::from("/nonexistent/codex-binary")),
             args: vec![],
             env: vec![],
@@ -1056,7 +1056,7 @@ mod tests {
 
     #[tokio::test]
     async fn stop_when_not_started_is_ok() {
-        let mut adapter = CodexAdapter::new();
+        let mut adapter = RemoteCodexAdapter::new();
         let result = adapter.stop().await;
         assert!(result.is_ok());
         assert_eq!(adapter.status, AgentStatus::Stopped);
@@ -1065,21 +1065,21 @@ mod tests {
 
     #[test]
     fn default_equals_new() {
-        let new_adapter = CodexAdapter::new();
-        let default_adapter = CodexAdapter::default();
+        let new_adapter = RemoteCodexAdapter::new();
+        let default_adapter = RemoteCodexAdapter::default();
         assert_eq!(new_adapter.agent_type(), default_adapter.agent_type());
         assert_eq!(new_adapter.status, default_adapter.status);
     }
 
     #[test]
     fn is_alive_when_not_started_is_false() {
-        let adapter = CodexAdapter::new();
+        let adapter = RemoteCodexAdapter::new();
         assert!(!adapter.is_alive());
     }
 
     #[test]
     fn next_id_is_monotonic() {
-        let adapter = CodexAdapter::new();
+        let adapter = RemoteCodexAdapter::new();
         let id1 = adapter.next_id();
         let id2 = adapter.next_id();
         let id3 = adapter.next_id();

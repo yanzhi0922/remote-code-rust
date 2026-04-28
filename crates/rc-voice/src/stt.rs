@@ -1,10 +1,14 @@
-//! Speech-to-Text (STT) trait and mock implementation.
+//! Speech-to-Text (STT) trait and implementations.
 //!
-//! Provides the [`SpeechToText`] trait for speech recognition and a
-//! [`MockStt`] implementation for testing.
+//! Provides the [`SpeechToText`] trait for speech recognition, a
+//! [`MockStt`] implementation for testing, and a [`WhisperStt`]
+//! implementation that calls the OpenAI Whisper API.
+
+use std::sync::Mutex;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use tracing;
 
 use crate::types::{TranscriptResult, VoiceConfig, VoiceState};
 
@@ -153,6 +157,147 @@ impl SpeechToText for MockStt {
 
     fn set_config(&mut self, config: VoiceConfig) {
         self.config = config;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WhisperStt — OpenAI Whisper API implementation
+// ---------------------------------------------------------------------------
+
+/// STT backend using the OpenAI Whisper API.
+///
+/// This is a one-shot transcription backend (not streaming). Audio data is
+/// sent to the Whisper API via `multipart/form-data` and the transcribed text
+/// is returned.
+pub struct WhisperStt {
+    api_key: String,
+    model: String,
+    state: Mutex<VoiceState>,
+    language: Option<String>,
+}
+
+impl WhisperStt {
+    /// Create a new Whisper STT client with the given API key.
+    pub fn new(api_key: String) -> Self {
+        Self {
+            api_key,
+            model: "whisper-1".to_string(),
+            state: Mutex::new(VoiceState::Idle),
+            language: None,
+        }
+    }
+
+    /// Set the language hint for transcription (e.g. `"en"`, `"zh"`).
+    #[must_use]
+    pub fn with_language(mut self, lang: String) -> Self {
+        self.language = Some(lang);
+        self
+    }
+
+    /// Override the model name (default: `"whisper-1"`).
+    #[must_use]
+    pub fn with_model(mut self, model: String) -> Self {
+        self.model = model;
+        self
+    }
+
+    /// Transcribe audio data using the OpenAI Whisper API.
+    ///
+    /// `audio_data` — raw audio bytes.
+    /// `format` — file extension / container format (e.g. `"webm"`, `"wav"`,
+    ///   `"mp4"`, `"ogg"`).
+    pub async fn transcribe(&self, audio_data: &[u8], format: &str) -> Result<TranscriptResult> {
+        let client = reqwest::Client::new();
+
+        // Build the file part with an appropriate MIME type.
+        let mime = match format {
+            "webm" => "audio/webm",
+            "mp4" | "m4a" => "audio/mp4",
+            "ogg" => "audio/ogg",
+            "flac" => "audio/flac",
+            _ => "audio/wav",
+        };
+
+        let file_part = reqwest::multipart::Part::bytes(audio_data.to_vec())
+            .file_name(format!("audio.{format}"))
+            .mime_str(mime)
+            .unwrap_or_else(|_| {
+                // Fallback: omit MIME type if the string is invalid.
+                reqwest::multipart::Part::bytes(audio_data.to_vec())
+                    .file_name(format!("audio.{format}"))
+            });
+
+        let mut form = reqwest::multipart::Form::new()
+            .text("model", self.model.clone())
+            .part("file", file_part);
+
+        if let Some(ref lang) = self.language {
+            form = form.text("language", lang.clone());
+        }
+
+        // Set state to Processing while the request is in flight.
+        {
+            let mut st = self.state.lock().expect("WhisperStt state lock");
+            *st = VoiceState::Processing;
+        }
+
+        let response = client
+            .post("https://api.openai.com/v1/audio/transcriptions")
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .multipart(form)
+            .send()
+            .await;
+
+        // Reset state to Idle.
+        {
+            let mut st = self.state.lock().expect("WhisperStt state lock");
+            *st = VoiceState::Idle;
+        }
+
+        let response = response?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            tracing::error!("Whisper API error {status}: {body}");
+            anyhow::bail!("Whisper API error {status}: {body}");
+        }
+
+        let result: serde_json::Value = response.json().await?;
+        let text = result["text"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+
+        Ok(TranscriptResult::final_result(text))
+    }
+}
+
+impl SpeechToText for WhisperStt {
+    fn start_listening(&mut self) -> Result<()> {
+        let mut st = self.state.lock().expect("WhisperStt state lock");
+        *st = VoiceState::Listening;
+        Ok(())
+    }
+
+    fn stop_listening(&mut self) -> Result<()> {
+        let mut st = self.state.lock().expect("WhisperStt state lock");
+        *st = VoiceState::Idle;
+        Ok(())
+    }
+
+    fn get_transcript(&self) -> Result<Option<TranscriptResult>> {
+        // Whisper is one-shot, not streaming — use `transcribe()` instead.
+        Ok(None)
+    }
+
+    fn state(&self) -> VoiceState {
+        *self.state.lock().expect("WhisperStt state lock")
+    }
+
+    fn set_config(&mut self, _config: VoiceConfig) {
+        // Configuration is handled through the builder methods.
     }
 }
 

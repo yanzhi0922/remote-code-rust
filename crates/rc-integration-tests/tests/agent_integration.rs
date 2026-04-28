@@ -568,15 +568,15 @@ use rc_agent_protocol::{
     UnifiedAgentEvent, AgentResult, UsageInfo, ToolCallInfo,
     PermissionDecision,
 };
-use rc_agent_protocol::adapters::RemoteCodeAdapter;
+use rc_agent_protocol::adapters::RemoteClaudeAdapter;
 use rc_agent_protocol::types::{AgentConfig, AgentCapability, AgentInfo, AgentStatus};
 use rc_agent_protocol::health::{HealthChecker, HealthCheckConfig, HealthStatus};
 use rc_agent_protocol::restart::{RestartTracker, RestartPolicy};
 
-/// Helper: minimal RemoteCode AgentConfig for tests.
+/// Helper: minimal RemoteClaude AgentConfig for tests.
 fn protocol_test_config() -> AgentConfig {
     AgentConfig {
-        agent_type: AgentType::RemoteCode,
+        agent_type: AgentType::RemoteClaude,
         binary_path: None,
         args: vec![],
         env: vec![],
@@ -594,7 +594,7 @@ fn protocol_test_config() -> AgentConfig {
 async fn router_register_and_send_message_routes_correctly() {
     let mut router = AgentRouter::new();
 
-    let adapter = RemoteCodeAdapter::new().with_send_message(|_sid, msg| {
+    let adapter = RemoteClaudeAdapter::new().with_send_message(|_sid, msg| {
         Ok(vec![UnifiedAgentEvent::MessageDelta {
             session_id: "sess-1".into(),
             delta: format!("echo: {msg}"),
@@ -623,7 +623,7 @@ async fn router_multiple_sessions_route_independently() {
     let mut router = AgentRouter::new();
 
     // Session A
-    let adapter_a = RemoteCodeAdapter::new().with_send_message(|_sid, msg| {
+    let adapter_a = RemoteClaudeAdapter::new().with_send_message(|_sid, msg| {
         Ok(vec![UnifiedAgentEvent::MessageDelta {
             session_id: "sess-a".into(),
             delta: format!("A:{msg}"),
@@ -634,7 +634,7 @@ async fn router_multiple_sessions_route_independently() {
     router.register("sess-a".into(), boxed_a).await;
 
     // Session B
-    let adapter_b = RemoteCodeAdapter::new().with_send_message(|_sid, msg| {
+    let adapter_b = RemoteClaudeAdapter::new().with_send_message(|_sid, msg| {
         Ok(vec![UnifiedAgentEvent::MessageDelta {
             session_id: "sess-b".into(),
             delta: format!("B:{msg}"),
@@ -667,7 +667,7 @@ async fn router_multiple_sessions_route_independently() {
 async fn router_close_session_removes_adapter() {
     let mut router = AgentRouter::new();
 
-    let adapter = RemoteCodeAdapter::new().with_send_message(|_sid, _msg| Ok(vec![]));
+    let adapter = RemoteClaudeAdapter::new().with_send_message(|_sid, _msg| Ok(vec![]));
     let mut boxed: Box<dyn AgentAdapter> = Box::new(adapter);
     boxed.start(&protocol_test_config()).await.unwrap();
     router.register("sess-x".into(), boxed).await;
@@ -683,7 +683,7 @@ async fn router_cancel_delegates_to_adapter() {
     let canceled = Arc::new(Mutex::new(false));
     let canceled_clone = canceled.clone();
 
-    let adapter = RemoteCodeAdapter::new()
+    let adapter = RemoteClaudeAdapter::new()
         .with_send_message(|_sid, _msg| Ok(vec![]))
         .with_cancel(move |_sid| {
             *canceled_clone.lock().unwrap() = true;
@@ -699,14 +699,14 @@ async fn router_cancel_delegates_to_adapter() {
     assert!(*canceled.lock().unwrap());
 }
 
-// ─── RemoteCodeAdapter integration tests ───────────────────────────────────
+// ─── RemoteClaudeAdapter integration tests ───────────────────────────────────
 
 #[tokio::test]
 async fn remotecode_adapter_lifecycle_start_send_stop() {
     let messages_received = Arc::new(Mutex::new(Vec::<String>::new()));
     let messages_clone = messages_received.clone();
 
-    let adapter = RemoteCodeAdapter::new().with_send_message(move |_sid, msg| {
+    let adapter = RemoteClaudeAdapter::new().with_send_message(move |_sid, msg| {
         messages_clone.lock().unwrap().push(msg.to_string());
         Ok(vec![
             UnifiedAgentEvent::Ready,
@@ -759,7 +759,7 @@ async fn remotecode_adapter_lifecycle_start_send_stop() {
 
 #[tokio::test]
 async fn remotecode_adapter_is_alive_state_changes() {
-    let mut adapter = RemoteCodeAdapter::new();
+    let mut adapter = RemoteClaudeAdapter::new();
     assert!(adapter.is_alive()); // Starting
 
     adapter.start(&protocol_test_config()).await.unwrap();
@@ -771,14 +771,14 @@ async fn remotecode_adapter_is_alive_state_changes() {
 
 #[tokio::test]
 async fn remotecode_adapter_info_has_correct_metadata() {
-    let adapter = RemoteCodeAdapter::new();
+    let adapter = RemoteClaudeAdapter::new();
     let info = adapter.info();
 
-    assert_eq!(info.name, "Remote Code");
+    assert_eq!(info.name, "Remote Claude");
     assert!(!info.version.is_empty());
     assert!(info.capabilities.contains(&AgentCapability::Streaming));
     assert!(info.capabilities.contains(&AgentCapability::ToolUse));
-    assert_eq!(adapter.agent_type(), AgentType::RemoteCode);
+    assert_eq!(adapter.agent_type(), AgentType::RemoteClaude);
 }
 
 #[tokio::test]
@@ -786,7 +786,7 @@ async fn remotecode_adapter_resolve_permission_delegates() {
     let resolved = Arc::new(Mutex::new(Vec::<(String, String, PermissionDecision)>::new()));
     let resolved_clone = resolved.clone();
 
-    let adapter = RemoteCodeAdapter::new().with_resolve_permission(move |sid, rid, dec| {
+    let adapter = RemoteClaudeAdapter::new().with_resolve_permission(move |sid, rid, dec| {
         resolved_clone.lock().unwrap().push((sid.to_string(), rid.to_string(), dec));
         Ok(())
     });
@@ -924,7 +924,7 @@ fn all_unified_agent_event_variants_roundtrip() {
 
 #[tokio::test]
 async fn events_flow_from_adapter_through_router() {
-    let adapter = RemoteCodeAdapter::new().with_send_message(|_sid, msg| {
+    let adapter = RemoteClaudeAdapter::new().with_send_message(|_sid, msg| {
         Ok(vec![
             UnifiedAgentEvent::MessageDelta {
                 session_id: "sess-flow".into(),
@@ -994,7 +994,7 @@ async fn router_cancel_unregistered_session_returns_error() {
 
 #[tokio::test]
 async fn adapter_send_message_without_callback_returns_error() {
-    let mut adapter = RemoteCodeAdapter::new();
+    let mut adapter = RemoteClaudeAdapter::new();
     adapter.start(&protocol_test_config()).await.unwrap();
 
     let result = adapter.send_message("s1", "hello").await;
@@ -1008,7 +1008,7 @@ async fn adapter_send_message_without_callback_returns_error() {
 
 #[tokio::test]
 async fn adapter_cancel_without_callback_returns_error() {
-    let mut adapter = RemoteCodeAdapter::new();
+    let mut adapter = RemoteClaudeAdapter::new();
     adapter.start(&protocol_test_config()).await.unwrap();
 
     let result = adapter.cancel("s1").await;

@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use tracing::warn;
 
 use crate::adapter::AgentAdapter;
-use crate::adapters::{CodexAdapter, RemoteCodeAdapter, RooCodeAdapter};
+use crate::adapters::{RemoteClaudeAdapter, RemoteCodexAdapter, RemoteRooAdapter};
 use crate::error::AgentProtocolError;
 use crate::events::UnifiedAgentEvent;
 use crate::permission::PermissionDecision;
@@ -54,19 +54,19 @@ impl AgentRouter {
 
     /// Create an adapter based on the [`AgentType`] specified in `config`.
     ///
-    /// All three agent types are supported: RemoteCode, RooCode, and Codex.
+    /// All three agent types are supported: RemoteClaude, RemoteRoo, and RemoteCodex.
     pub fn create_adapter(config: &AgentConfig) -> anyhow::Result<Box<dyn AgentAdapter>> {
         match config.agent_type {
-            AgentType::RemoteCode => {
-                let adapter = RemoteCodeAdapter::new();
+            AgentType::RemoteClaude => {
+                let adapter = RemoteClaudeAdapter::new();
                 Ok(Box::new(adapter))
             }
-            AgentType::RooCode => {
-                let adapter = RooCodeAdapter::new();
+            AgentType::RemoteRoo => {
+                let adapter = RemoteRooAdapter::new();
                 Ok(Box::new(adapter))
             }
-            AgentType::Codex => {
-                let adapter = CodexAdapter::new();
+            AgentType::RemoteCodex => {
+                let adapter = RemoteCodexAdapter::new();
                 Ok(Box::new(adapter))
             }
         }

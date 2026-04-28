@@ -14,20 +14,20 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum AgentType {
     /// In-process Agent — directly calls rc-* crates.
-    RemoteCode,
-    /// Roo Code — sub-process communicating via JSON-RPC 2.0 (Content-Length framing).
-    RooCode,
-    /// OpenAI Codex — sub-process communicating via JSON-RPC v2 (line-delimited JSON).
-    Codex,
+    RemoteClaude,
+    /// Remote Roo — sub-process communicating via JSON-RPC 2.0 (Content-Length framing).
+    RemoteRoo,
+    /// Remote Codex — sub-process communicating via JSON-RPC v2 (line-delimited JSON).
+    RemoteCodex,
 }
 
 impl AgentType {
     /// Returns a human-readable display name.
     pub fn display_name(&self) -> &str {
         match self {
-            Self::RemoteCode => "Remote Code",
-            Self::RooCode => "Roo Code",
-            Self::Codex => "OpenAI Codex",
+            Self::RemoteClaude => "Remote Claude",
+            Self::RemoteRoo => "Remote Roo",
+            Self::RemoteCodex => "Remote Codex",
         }
     }
 }
@@ -141,7 +141,7 @@ mod tests {
 
     #[test]
     fn agent_type_serde_roundtrip() {
-        let types = [AgentType::RemoteCode, AgentType::RooCode, AgentType::Codex];
+        let types = [AgentType::RemoteClaude, AgentType::RemoteRoo, AgentType::RemoteCodex];
         for t in &types {
             let json = serde_json::to_string(t).expect("serialize");
             let back: AgentType = serde_json::from_str(&json).expect("deserialize");
@@ -152,16 +152,16 @@ mod tests {
     #[test]
     fn agent_type_serde_values() {
         assert_eq!(
-            serde_json::to_string(&AgentType::RemoteCode).expect("serialize"),
-            "\"remote_code\""
+            serde_json::to_string(&AgentType::RemoteClaude).expect("serialize"),
+            "\"remote_claude\""
         );
         assert_eq!(
-            serde_json::to_string(&AgentType::RooCode).expect("serialize"),
-            "\"roo_code\""
+            serde_json::to_string(&AgentType::RemoteRoo).expect("serialize"),
+            "\"remote_roo\""
         );
         assert_eq!(
-            serde_json::to_string(&AgentType::Codex).expect("serialize"),
-            "\"codex\""
+            serde_json::to_string(&AgentType::RemoteCodex).expect("serialize"),
+            "\"remote_codex\""
         );
     }
 
@@ -201,7 +201,7 @@ mod tests {
         caps.insert(AgentCapability::ToolUse);
 
         let info = AgentInfo {
-            name: "Remote Code".into(),
+            name: "Remote Claude".into(),
             version: "0.1.0".into(),
             capabilities: caps.clone(),
             status: AgentStatus::Ready,
@@ -218,7 +218,7 @@ mod tests {
     #[test]
     fn agent_config_serde() {
         let config = AgentConfig {
-            agent_type: AgentType::RooCode,
+            agent_type: AgentType::RemoteRoo,
             binary_path: Some(PathBuf::from("/usr/local/bin/roo-server")),
             args: vec!["--verbose".into()],
             env: vec![("ROO_API_KEY".into(), "sk-test".into())],
@@ -239,9 +239,9 @@ mod tests {
 
     #[test]
     fn agent_type_display() {
-        assert_eq!(AgentType::RemoteCode.to_string(), "Remote Code");
-        assert_eq!(AgentType::RooCode.to_string(), "Roo Code");
-        assert_eq!(AgentType::Codex.to_string(), "OpenAI Codex");
+        assert_eq!(AgentType::RemoteClaude.to_string(), "Remote Claude");
+        assert_eq!(AgentType::RemoteRoo.to_string(), "Remote Roo");
+        assert_eq!(AgentType::RemoteCodex.to_string(), "Remote Codex");
     }
 
     #[test]

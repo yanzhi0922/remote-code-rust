@@ -1,6 +1,6 @@
-//! Roo Code sub-process adapter — JSON-RPC 2.0 over stdio with Content-Length framing.
+//! Remote Roo sub-process adapter — JSON-RPC 2.0 over stdio with Content-Length framing.
 //!
-//! [`RooCodeAdapter`] launches a Roo Code binary as a child process and
+//! [`RemoteRooAdapter`] launches a Remote Roo binary as a child process and
 //! communicates with it over stdin/stdout using the LSP-style Content-Length
 //! framing protocol. All messages are JSON-RPC 2.0.
 //!
@@ -102,10 +102,10 @@ pub async fn read_framed<R: AsyncBufReadExt + Unpin>(reader: &mut R) -> anyhow::
 }
 
 // ===========================================================================
-// Roo Code notification → UnifiedAgentEvent mapping
+// Remote Roo notification → UnifiedAgentEvent mapping
 // ===========================================================================
 
-/// Convert a Roo Code JSON-RPC notification into a [`UnifiedAgentEvent`].
+/// Convert a Remote Roo JSON-RPC notification into a [`UnifiedAgentEvent`].
 ///
 /// The `session_id` is injected by the caller (the adapter tracks it).
 pub fn map_notification(
@@ -226,25 +226,25 @@ pub fn map_notification(
         }
 
         _ => {
-            debug!(method, "unhandled Roo Code notification");
+            debug!(method, "unhandled Remote Roo notification");
             None
         }
     }
 }
 
 // ===========================================================================
-// RooCodeAdapter
+// RemoteRooAdapter
 // ===========================================================================
 
-/// Sub-process adapter for Roo Code.
+/// Sub-process adapter for Remote Roo.
 ///
-/// Launches the Roo Code binary configured in [`AgentConfig::binary_path`]
+/// Launches the Remote Roo binary configured in [`AgentConfig::binary_path`]
 /// and communicates over stdio using JSON-RPC 2.0 with Content-Length framing.
 ///
 /// The background reader task is spawned once during [`start`](AgentAdapter::start)
 /// and persists for the adapter's lifetime, enabling multiple `send_message` calls
 /// without re-spawning the reader.
-pub struct RooCodeAdapter {
+pub struct RemoteRooAdapter {
     /// Static agent metadata.
     info: AgentInfo,
     /// Runtime status.
@@ -266,8 +266,8 @@ pub struct RooCodeAdapter {
     reader_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
-impl RooCodeAdapter {
-    /// Create a new `RooCodeAdapter` in the **Starting** state.
+impl RemoteRooAdapter {
+    /// Create a new `RemoteRooAdapter` in the **Starting** state.
     #[must_use]
     pub fn new() -> Self {
         let mut capabilities = std::collections::HashSet::new();
@@ -281,7 +281,7 @@ impl RooCodeAdapter {
 
         Self {
             info: AgentInfo {
-                name: "Roo Code".into(),
+                name: "Remote Roo".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
                 capabilities,
                 status: AgentStatus::Starting,
@@ -430,7 +430,7 @@ impl RooCodeAdapter {
     }
 }
 
-impl Default for RooCodeAdapter {
+impl Default for RemoteRooAdapter {
     fn default() -> Self {
         Self::new()
     }
@@ -441,18 +441,18 @@ impl Default for RooCodeAdapter {
 // ===========================================================================
 
 #[async_trait]
-impl AgentAdapter for RooCodeAdapter {
+impl AgentAdapter for RemoteRooAdapter {
     async fn start(&mut self, config: &AgentConfig) -> anyhow::Result<()> {
         let binary_path = config
             .binary_path
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("binary_path is required for RooCodeAdapter"))?;
+            .ok_or_else(|| anyhow::anyhow!("binary_path is required for RemoteRooAdapter"))?;
 
         if !binary_path.exists() {
-            anyhow::bail!("Roo Code binary not found at: {}", binary_path.display());
+            anyhow::bail!("Remote Roo binary not found at: {}", binary_path.display());
         }
 
-        info!(path = %binary_path.display(), "starting Roo Code subprocess");
+        info!(path = %binary_path.display(), "starting Remote Roo subprocess");
 
         let mut cmd = Command::new(binary_path);
         cmd.args(&config.args)
@@ -520,7 +520,7 @@ impl AgentAdapter for RooCodeAdapter {
             );
         }
 
-        info!("Roo Code initialize handshake succeeded");
+        info!("Remote Roo initialize handshake succeeded");
 
         // Send `initialized` notification.
         let initialized = JsonRpcNotification {
@@ -539,7 +539,7 @@ impl AgentAdapter for RooCodeAdapter {
         // placeholder. The session_id will be updated on the next send_message.
         let session_id = self.current_session_id.clone().unwrap_or_default();
         if session_id.is_empty() {
-            warn!("RooCodeAdapter::start() called without a session_id — background reader will use empty session_id until send_message is called");
+            warn!("RemoteRooAdapter::start() called without a session_id — background reader will use empty session_id until send_message is called");
         }
         self.reader_handle = Some(Self::spawn_background_reader(
             stdout_reader,
@@ -550,7 +550,7 @@ impl AgentAdapter for RooCodeAdapter {
 
         self.status = AgentStatus::Ready;
         self.info.status = AgentStatus::Ready;
-        info!("RooCodeAdapter ready");
+        info!("RemoteRooAdapter ready");
         Ok(())
     }
 
@@ -652,7 +652,7 @@ impl AgentAdapter for RooCodeAdapter {
     }
 
     async fn stop(&mut self) -> anyhow::Result<()> {
-        info!("RooCodeAdapter stopping");
+        info!("RemoteRooAdapter stopping");
 
         // Abort the background reader task.
         if let Some(handle) = self.reader_handle.take() {
@@ -707,7 +707,7 @@ impl AgentAdapter for RooCodeAdapter {
     }
 
     fn agent_type(&self) -> AgentType {
-        AgentType::RooCode
+        AgentType::RemoteRoo
     }
 }
 
@@ -1073,27 +1073,27 @@ mod tests {
     // ── Adapter lifecycle tests ──
 
     #[test]
-    fn new_adapter_has_roo_code_type() {
-        let adapter = RooCodeAdapter::new();
-        assert_eq!(adapter.agent_type(), AgentType::RooCode);
+    fn new_adapter_has_remote_roo_type() {
+        let adapter = RemoteRooAdapter::new();
+        assert_eq!(adapter.agent_type(), AgentType::RemoteRoo);
     }
 
     #[test]
     fn new_adapter_is_starting() {
-        let adapter = RooCodeAdapter::new();
+        let adapter = RemoteRooAdapter::new();
         assert_eq!(adapter.status, AgentStatus::Starting);
         assert_eq!(adapter.info().status, AgentStatus::Starting);
     }
 
     #[test]
     fn new_adapter_info_has_name() {
-        let adapter = RooCodeAdapter::new();
-        assert_eq!(adapter.info().name, "Roo Code");
+        let adapter = RemoteRooAdapter::new();
+        assert_eq!(adapter.info().name, "Remote Roo");
     }
 
     #[test]
     fn new_adapter_has_all_capabilities() {
-        let adapter = RooCodeAdapter::new();
+        let adapter = RemoteRooAdapter::new();
         let info = adapter.info();
         assert!(info.capabilities.contains(&AgentCapability::Streaming));
         assert!(info.capabilities.contains(&AgentCapability::ToolUse));
@@ -1105,9 +1105,9 @@ mod tests {
 
     #[tokio::test]
     async fn start_without_binary_returns_error() {
-        let mut adapter = RooCodeAdapter::new();
+        let mut adapter = RemoteRooAdapter::new();
         let config = AgentConfig {
-            agent_type: AgentType::RooCode,
+            agent_type: AgentType::RemoteRoo,
             binary_path: None,
             args: vec![],
             env: vec![],
@@ -1128,9 +1128,9 @@ mod tests {
 
     #[tokio::test]
     async fn start_with_nonexistent_binary_returns_error() {
-        let mut adapter = RooCodeAdapter::new();
+        let mut adapter = RemoteRooAdapter::new();
         let config = AgentConfig {
-            agent_type: AgentType::RooCode,
+            agent_type: AgentType::RemoteRoo,
             binary_path: Some(std::path::PathBuf::from("/nonexistent/roo-binary")),
             args: vec![],
             env: vec![],
@@ -1148,7 +1148,7 @@ mod tests {
 
     #[tokio::test]
     async fn stop_when_not_started_is_ok() {
-        let mut adapter = RooCodeAdapter::new();
+        let mut adapter = RemoteRooAdapter::new();
         let result = adapter.stop().await;
         assert!(result.is_ok());
         assert_eq!(adapter.status, AgentStatus::Stopped);
@@ -1157,21 +1157,21 @@ mod tests {
 
     #[test]
     fn default_equals_new() {
-        let new_adapter = RooCodeAdapter::new();
-        let default_adapter = RooCodeAdapter::default();
+        let new_adapter = RemoteRooAdapter::new();
+        let default_adapter = RemoteRooAdapter::default();
         assert_eq!(new_adapter.agent_type(), default_adapter.agent_type());
         assert_eq!(new_adapter.status, default_adapter.status);
     }
 
     #[test]
     fn is_alive_when_not_started_is_false() {
-        let adapter = RooCodeAdapter::new();
+        let adapter = RemoteRooAdapter::new();
         assert!(!adapter.is_alive());
     }
 
     #[test]
     fn next_id_is_monotonic() {
-        let adapter = RooCodeAdapter::new();
+        let adapter = RemoteRooAdapter::new();
         let id1 = adapter.next_id();
         let id2 = adapter.next_id();
         let id3 = adapter.next_id();
