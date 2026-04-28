@@ -1,0 +1,27 @@
+[package]
+name = "codex-backend-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls"] }
+codex-backend-openapi-models = { workspace = true }
+codex-api = { workspace = true }
+codex-client = { workspace = true }
+codex-login = { workspace = true }
+codex-model-provider = { workspace = true }
+codex-protocol = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
