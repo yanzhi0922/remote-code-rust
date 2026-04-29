@@ -1,0 +1,6 @@
+[build]
+target-dir = "D:\\roo-code-rust-target"
+
+[env]
+TMP = "D:\\roo-code-rust-tmp"
+TEMP = "D:\\roo-code-rust-tmp"

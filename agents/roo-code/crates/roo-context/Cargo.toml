@@ -1,0 +1,20 @@
+[package]
+name = "roo-context"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Context management for Roo Code Rust"
+
+[dependencies]
+roo-types = { workspace = true }
+roo-condense = { workspace = true }
+roo-provider = { workspace = true }
+roo-telemetry = { path = "../roo-telemetry" }
+tokio = { workspace = true }
+uuid = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+futures = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }

@@ -1,0 +1,11 @@
+[package]
+name = "roo-protect"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "File write protection for Roo configuration files"
+
+[dependencies]
+thiserror = { workspace = true }
+glob = { workspace = true }

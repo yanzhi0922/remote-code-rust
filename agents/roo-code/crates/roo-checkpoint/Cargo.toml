@@ -1,0 +1,21 @@
+[package]
+name = "roo-checkpoint"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shadow git checkpoint service for Roo Code Rust"
+
+[dependencies]
+roo-types = { workspace = true }
+git2 = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "process", "io-util"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros", "fs", "process"] }
+tempfile = "3"

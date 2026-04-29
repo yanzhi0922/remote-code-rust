@@ -1,0 +1,15 @@
+[package]
+name = "roo-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Tool registration, definition, validation, and filtering for Roo Code"
+
+[dependencies]
+roo-types = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+regex = { workspace = true }

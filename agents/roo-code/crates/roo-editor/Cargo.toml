@@ -1,0 +1,23 @@
+[package]
+name = "roo-editor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Editor integration for Roo Code Rust — diff view, file editing, and undo stack"
+
+[dependencies]
+roo-types = { path = "../roo-types" }
+tokio = { workspace = true, features = ["fs", "io-util"] }
+thiserror = { workspace = true }
+similar = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+calamine = { version = "0.26", features = ["dates"] }
+base64 = "0.22"
+regex-lite = "0.1"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["fs", "rt", "macros"] }
+tempfile = "3"

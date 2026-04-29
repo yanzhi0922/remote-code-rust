@@ -1,0 +1,19 @@
+[package]
+name = "roo-provider-google"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Google Gemini provider for Roo Code Rust"
+
+[dependencies]
+roo-types = { path = "../roo-types" }
+roo-provider = { path = "../roo-provider" }
+async-trait = { workspace = true }
+reqwest = { workspace = true, features = ["json", "stream"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+eventsource-stream = { workspace = true }
+thiserror = { workspace = true }
