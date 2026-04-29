@@ -33,7 +33,7 @@
 
 #### P1-01: `post_failure_hook` 忽略所有参数 — 空实现
 
-- **文件**: [`crates/rc-tools/src/tool_hooks.rs`](crates/rc-tools/src/tool_hooks.rs:124)
+- **文件**: [`crates/claude/rc-tools/src/tool_hooks.rs`](crates/claude/rc-tools/src/tool_hooks.rs:124)
 - **代码**:
   ```rust
   let _ = (tool_name, tool_input, error);
@@ -44,7 +44,7 @@
 
 #### P1-02: `SessionMemoryCompactor::compact()` 忽略关键参数
 
-- **文件**: [`crates/rc-compact/src/session_memory.rs`](crates/rc-compact/src/session_memory.rs:96)
+- **文件**: [`crates/claude/rc-compact/src/session_memory.rs`](crates/claude/rc-compact/src/session_memory.rs:96)
 - **代码**:
   ```rust
   let _ = options;
@@ -56,17 +56,17 @@
 #### P1-03: TUI 命令处理函数大量忽略 `config` 参数
 
 - **文件与行号**:
-  - [`crates/rc-tui/src/commands/keybindings.rs`](crates/rc-tui/src/commands/keybindings.rs:70) — `dispatch()` 中 `let _ = config`
-  - [`crates/rc-tui/src/commands/misc_commands.rs`](crates/rc-tui/src/commands/misc_commands.rs:19) — `render_ide()` 中 `let _ = config`
-  - [`crates/rc-tui/src/commands/mode_commands.rs`](crates/rc-tui/src/commands/mode_commands.rs:243) — `let _ = config`
-  - [`crates/rc-tui/src/commands/mode_commands.rs`](crates/rc-tui/src/commands/mode_commands.rs:283) — `let _ = config`
-  - [`crates/rc-tui/src/commands/security.rs`](crates/rc-tui/src/commands/security.rs:59) — `let _ = config`
+  - [`crates/claude/rc-tui/src/commands/keybindings.rs`](crates/claude/rc-tui/src/commands/keybindings.rs:70) — `dispatch()` 中 `let _ = config`
+  - [`crates/claude/rc-tui/src/commands/misc_commands.rs`](crates/claude/rc-tui/src/commands/misc_commands.rs:19) — `render_ide()` 中 `let _ = config`
+  - [`crates/claude/rc-tui/src/commands/mode_commands.rs`](crates/claude/rc-tui/src/commands/mode_commands.rs:243) — `let _ = config`
+  - [`crates/claude/rc-tui/src/commands/mode_commands.rs`](crates/claude/rc-tui/src/commands/mode_commands.rs:283) — `let _ = config`
+  - [`crates/claude/rc-tui/src/commands/security.rs`](crates/claude/rc-tui/src/commands/security.rs:59) — `let _ = config`
 - **影响**: TUI 命令无法读取运行时配置（如 IDE 连接状态、权限模式等），显示的信息可能不准确
 - **建议**: 各命令函数应使用 `config` 获取运行时状态并展示给用户
 
 #### P1-04: `handle_resize` 中 `width` 参数未使用
 
-- **文件**: [`crates/rc-tui/src/event.rs`](crates/rc-tui/src/event.rs:180)
+- **文件**: [`crates/claude/rc-tui/src/event.rs`](crates/claude/rc-tui/src/event.rs:180)
 - **代码**:
   ```rust
   fn handle_resize(app: &mut App, width: u16, height: u16) {
@@ -87,10 +87,10 @@
 
 | 文件 | 行号 | 警告类型 | 数量 |
 |------|------|----------|------|
-| [`crates/rc-utils/src/session_restore.rs`](crates/rc-utils/src/session_restore.rs) | 213, 218, 236, 269 | `collapsible_if`、borrowed expression | 4 |
-| [`crates/rc-skill-search/src/remote_loader.rs`](crates/rc-skill-search/src/remote_loader.rs) | 206 | `is_multiple_of` | 3 |
-| [`crates/rc-ide/src/bridge.rs`](crates/rc-ide/src/bridge.rs) | 319, 369 | `collapsible_if` | 2 |
-| [`crates/rc-ide/src/connection.rs`](crates/rc-ide/src/connection.rs) | 214, 230, 256, 263, 476, 519 | `collapsible_if`、borrowed expression、char comparison | 6 |
+| [`crates/claude/rc-utils/src/session_restore.rs`](crates/claude/rc-utils/src/session_restore.rs) | 213, 218, 236, 269 | `collapsible_if`、borrowed expression | 4 |
+| [`crates/claude/rc-skill-search/src/remote_loader.rs`](crates/claude/rc-skill-search/src/remote_loader.rs) | 206 | `is_multiple_of` | 3 |
+| [`crates/claude/rc-ide/src/bridge.rs`](crates/claude/rc-ide/src/bridge.rs) | 319, 369 | `collapsible_if` | 2 |
+| [`crates/claude/rc-ide/src/connection.rs`](crates/claude/rc-ide/src/connection.rs) | 214, 230, 256, 263, 476, 519 | `collapsible_if`、borrowed expression、char comparison | 6 |
 
 - **影响**: 代码不够规范，可读性降低
 - **建议**: 运行 `cargo clippy --fix` 自动修复大部分
@@ -127,14 +127,14 @@
 
 #### P2-05: Linux Landlock 沙箱未集成
 
-- **文件**: [`crates/rc-tools/src/sandbox.rs`](crates/rc-tools/src/sandbox.rs:65)
+- **文件**: [`crates/claude/rc-tools/src/sandbox.rs`](crates/claude/rc-tools/src/sandbox.rs:65)
 - **代码**: `let _ = workspace;` 在非 macos/linux/windows 平台分支
 - **影响**: Linux 平台的 Landlock 沙箱策略定义了但未在执行路径中使用（`execute_basic` 而非 Landlock 专用路径）
 - **建议**: 集成 Landlock Linux 内核特性，或明确文档说明当前 Linux 仅使用基础沙箱
 
 #### P2-06: `DatadogExporter` 和 `FirstPartyExporter` 无真实 HTTP 发送
 
-- **文件**: [`crates/rc-analytics/src/exporter.rs`](crates/rc-analytics/src/exporter.rs:64)
+- **文件**: [`crates/claude/rc-analytics/src/exporter.rs`](crates/claude/rc-analytics/src/exporter.rs:64)
 - **现状**: `DatadogExporter::export()` 和 `FirstPartyExporter::export()` 使用 `reqwest::Client` 发送请求，但测试中未验证真实端点可达性
 - **影响**: 分析事件导出功能在生产环境可能静默失败
 - **建议**: 添加导出失败的告警机制和重试逻辑
@@ -149,11 +149,11 @@
 
 | 文件 | 行号 | 丢弃内容 | 风险评估 |
 |------|------|----------|----------|
-| [`crates/rc-tools/src/misc.rs`](crates/rc-tools/src/misc.rs:913) | 913-914 | `std::fs::remove_file` 语音临时文件 | 低 — 临时文件未清理 |
-| [`crates/rc-tools/src/hooks.rs`](crates/rc-tools/src/hooks.rs) | 多处 | hook 执行结果 | 低 — 错误已通过 stderr 输出 |
-| [`crates/rc-utils/src/chrome_extension.rs`](crates/rc-utils/src/chrome_extension.rs:259) | 259 | `cmdkey /delete` 结果 | 低 — 卸载时清理 |
-| [`crates/rc-provider/src/lib.rs`](crates/rc-provider/src/lib.rs:730) | 730-734 | 调试 dump 文件写入 | 低 — 调试功能 |
-| [`crates/rc-provider/src/streaming.rs`](crates/rc-provider/src/streaming.rs:737) | 737-741 | 流式响应 dump | 低 — 调试功能 |
+| [`crates/claude/rc-tools/src/misc.rs`](crates/claude/rc-tools/src/misc.rs:913) | 913-914 | `std::fs::remove_file` 语音临时文件 | 低 — 临时文件未清理 |
+| [`crates/claude/rc-tools/src/hooks.rs`](crates/claude/rc-tools/src/hooks.rs) | 多处 | hook 执行结果 | 低 — 错误已通过 stderr 输出 |
+| [`crates/claude/rc-utils/src/chrome_extension.rs`](crates/claude/rc-utils/src/chrome_extension.rs:259) | 259 | `cmdkey /delete` 结果 | 低 — 卸载时清理 |
+| [`crates/claude/rc-provider/src/lib.rs`](crates/claude/rc-provider/src/lib.rs:730) | 730-734 | 调试 dump 文件写入 | 低 — 调试功能 |
+| [`crates/claude/rc-provider/src/streaming.rs`](crates/claude/rc-provider/src/streaming.rs:737) | 737-741 | 流式响应 dump | 低 — 调试功能 |
 
 #### P3-02: 命令注入防护 — 已有但需持续关注
 
@@ -189,7 +189,7 @@
 | 指标 | 数据 |
 |------|------|
 | Rust 测试模块数 | **249 个** `#[cfg(test)] mod tests` |
-| 集成测试文件 | **12 个**（`crates/rc-integration-tests/tests/`） |
+| 集成测试文件 | **12 个**（`crates/claude/rc-integration-tests/tests/`） |
 | 前端测试文件 | **19 个** `.test.ts` / `.test.tsx` |
 | 总测试用例数 | **862+**（`cargo test` 通过） |
 
@@ -199,9 +199,9 @@
 
 | 模块 | 说明 |
 |------|------|
-| `crates/rc-tools/src/sandbox.rs` | 沙箱执行 — 有基础测试但缺少 Landlock/Seatbelt 集成测试 |
-| `crates/rc-tools/src/web_browser.rs` | 浏览器截图 — 依赖外部浏览器，难以单元测试 |
-| `crates/rc-voice/src/stt.rs` / `tts.rs` | 语音识别/合成 — 依赖外部 Whisper/系统 TTS |
+| `crates/claude/rc-tools/src/sandbox.rs` | 沙箱执行 — 有基础测试但缺少 Landlock/Seatbelt 集成测试 |
+| `crates/claude/rc-tools/src/web_browser.rs` | 浏览器截图 — 依赖外部浏览器，难以单元测试 |
+| `crates/claude/rc-voice/src/stt.rs` / `tts.rs` | 语音识别/合成 — 依赖外部 Whisper/系统 TTS |
 | `apps/remote-code-gui/src/remote/` | 远程连接 — 多数有测试但覆盖不完整 |
 | `apps/remote-code-mobile/src/native/` | 原生桥接 — 依赖 Capacitor 插件 |
 

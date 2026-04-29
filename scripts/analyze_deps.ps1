@@ -50,7 +50,26 @@ $migratedPkgs = @(
     # Stage 18
     'codex-core-plugins',
     # Stage 19
-    'codex-code-mode','codex-rollout-trace','codex-tools','codex-core'
+    'codex-code-mode','codex-rollout-trace','codex-tools','codex-core',
+    # Stage 20
+    'codex-app-server-test-client','codex-chatgpt','codex-cloud-requirements',
+    'codex-linux-sandbox','codex-lmstudio','codex-ollama','codex-utils-sandbox-summary',
+    # Stage 21
+    'codex-arg0','codex-utils-oss',
+    # Stage 22
+    'codex-mcp-server','codex-test-binary-support',
+    # Stage 23
+    'codex-app-server',
+    # Stage 24
+    'codex-app-server-client',
+    # Stage 25
+    'codex-exec',
+    # Stage 26
+    'codex-windows-sandbox',
+    # Internal bin targets
+    'codex-windows-sandbox-setup','codex-command-runner',
+    # Internal bin targets (not separate crates)
+    'codex-app-server-test-notify-capture'
 )
 
 $migratedDirs = @(
@@ -71,7 +90,10 @@ $migratedDirs = @(
     'analytics','cloud-tasks-mock-client','codex-mcp','rollout',
     'core-skills','thread-store',
     'core-plugins',
-    'code-mode','rollout-trace','tools','core'
+    'code-mode','rollout-trace','tools','core',
+    'app-server-test-client','chatgpt','cloud-requirements',
+    'linux-sandbox','lmstudio','ollama',
+    'arg0','mcp-server','test-binary-support','app-server','app-server-client','exec','windows-sandbox-rs'
 )
 
 $migratedUtils = @(
@@ -79,7 +101,7 @@ $migratedUtils = @(
     'pty','readiness','rustls-provider','sleep-inhibitor','stream-parser',
     'string','template','home-dir','path-utils','image',
     'approval-presets','cli','output-truncation',
-    'plugins'
+    'plugins','sandbox-summary','oss'
 )
 
 $codexRoot = 'agents\codex\codex-rs'
@@ -91,7 +113,7 @@ foreach ($crate in $dirs) {
     $tomlPath = Join-Path $crate.FullName 'Cargo.toml'
     $hasToml = Test-Path $tomlPath
     $isMigrated = $migratedDirs -contains $crate.Name
-    $isSpecial = $crate.Name -in @('target','.git','utils','app-server')
+    $isSpecial = $crate.Name -in @('target','.git','utils')
 
     if (-not $hasToml -or $isMigrated -or $isSpecial) { continue }
 

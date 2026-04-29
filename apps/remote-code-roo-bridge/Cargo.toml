@@ -1,4 +1,4 @@
-[package]
+﻿[package]
 name = "remote-code-roo-bridge"
 version.workspace = true
 edition.workspace = true
@@ -9,7 +9,7 @@ serde_json = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 anyhow = { workspace = true }
 tracing = { workspace = true }
-rc-agent-protocol = { path = "../../crates/rc-agent-protocol" }
+rc-agent-protocol = { path = "../../crates/claude/rc-agent-protocol" }
 
 [lints]
 workspace = true

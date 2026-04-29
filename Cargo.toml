@@ -1,7 +1,47 @@
 [workspace]
 members = [
     "apps/*",
-    "crates/rc-*",
+    # Remote Code (claude) crates — all 40 crates under crates/claude/
+    "crates/claude/rc-agents",
+    "crates/claude/rc-compact",
+    "crates/claude/rc-control-plane",
+    "crates/claude/rc-ide",
+    "crates/claude/rc-integration-tests",
+    "crates/claude/rc-provider",
+    "crates/claude/rc-query-engine",
+    "crates/claude/rc-runner",
+    "crates/claude/rc-runtime-prompt",
+    "crates/claude/rc-session",
+    "crates/claude/rc-skill-search",
+    "crates/claude/rc-skills",
+    "crates/claude/rc-swarm",
+    "crates/claude/rc-system-prompt",
+    "crates/claude/rc-teleport",
+    "crates/claude/rc-tools",
+    "crates/claude/rc-transcript",
+    "crates/claude/rc-tui",
+    "crates/claude/rc-ui-bridge",
+    "crates/claude/rc-agent-protocol",
+    "crates/claude/rc-analytics",
+    "crates/claude/rc-auth",
+    "crates/claude/rc-codex-adapter",
+    "crates/claude/rc-config",
+    "crates/claude/rc-context",
+    "crates/claude/rc-core",
+    "crates/claude/rc-engine-events",
+    "crates/claude/rc-event-bus",
+    "crates/claude/rc-file-history",
+    "crates/claude/rc-lsp",
+    "crates/claude/rc-managed-settings",
+    "crates/claude/rc-mcp",
+    "crates/claude/rc-model",
+    "crates/claude/rc-permissions",
+    "crates/claude/rc-plugins",
+    "crates/claude/rc-protocol",
+    "crates/claude/rc-settings",
+    "crates/claude/rc-telemetry",
+    "crates/claude/rc-utils",
+    "crates/claude/rc-voice",
     "apps/remote-code-gui/src-tauri",
     "agents/claudecode",
     # Codex leaf crates (Stage 1) — listed explicitly to avoid glob issues
@@ -100,6 +140,33 @@ members = [
     "crates/codex/rollout-trace",
     "crates/codex/tools",
     "crates/codex/core",
+    # Codex Stage 20: core-dependent crates
+    "crates/codex/app-server-test-client",
+    "crates/codex/chatgpt",
+    "crates/codex/cloud-requirements",
+    "crates/codex/linux-sandbox",
+    "crates/codex/lmstudio",
+    "crates/codex/ollama",
+    "crates/codex/utils/cargo-bin",
+    "crates/codex/utils/sandbox-summary",
+    # Codex Stage 21: arg0, utils/oss
+    "crates/codex/arg0",
+    "crates/codex/utils/oss",
+    # Codex Stage 22: mcp-server, test-binary-support
+    "crates/codex/mcp-server",
+    "crates/codex/test-binary-support",
+    # Codex Stage 23: app-server
+    "crates/codex/app-server",
+    # Codex Stage 24: app-server-client
+    "crates/codex/app-server-client",
+    # Codex Stage 25: exec
+    "crates/codex/exec",
+    # Codex Stage 26: windows-sandbox-rs
+    "crates/codex/windows-sandbox-rs",
+    # Codex Stage 27: cloud-tasks, tui, cli (final crates — circular deps)
+    "crates/codex/cloud-tasks",
+    "crates/codex/tui",
+    "crates/codex/cli",
 ]
 exclude = [
     "apps/remote-code-gui",
@@ -119,15 +186,19 @@ rust-version = "1.93"
 # ── Shared deps (rc-* + codex) ──────────────────────────────────
 age = "0.11.1"
 anyhow = "1"
+async-stream = "0.3.6"
 async-trait = "0.1.89"
-axum = { version = "0.8", default-features = false, features = ["macros", "ws"] }
+semver = "1.0"
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "macros", "query", "tokio", "ws"] }
 base64 = "0.22.1"
 chrono = { version = "0.4", features = ["clock", "serde"] }
 clap = { version = "4", features = ["derive", "env"] }
-crossterm = "0.29.0"
+crossterm = "0.28.1"
 directories = "6.0.0"
+dotenvy = "0.15.7"
 futures = { version = "0.3", default-features = false }
 getrandom = "0.3"
+glob = "0.3"
 globset = "0.4"
 hmac = "0.12"
 ignore = "0.4"
@@ -153,7 +224,15 @@ tower-http = { version = "0.6", features = ["cors"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 uuid = { version = "1", features = ["serde", "v4"] }
+os_info = "3.12.0"
+schemars = "0.8.22"
+shlex = "1.3.0"
 walkdir = "2.5.0"
+winres = "0.1"
+constant_time_eq = "0.3.1"
+gethostname = "1.1.0"
+jsonwebtoken = "9.3.1"
+owo-colors = { version = "4.3.0", features = ["supports-colors"] }
 serial_test = "3"
 test-case = "3.3.1"
 arc-swap = "1.9.0"
@@ -183,6 +262,7 @@ quick-xml = { version = "0.38.4", features = ["serialize"] }
 seccompiler = "0.5.0"
 strum = "0.27.2"
 strum_macros = "0.28.0"
+supports-color = "3.0.2"
 sys-locale = "0.3.2"
 eventsource-stream = "0.2.3"
 image = { version = "0.25", default-features = false }
@@ -199,11 +279,9 @@ rmcp = { version = "0.15.0", default-features = false }
 similar = "2.7.0"
 urlencoding = "2.1"
 maplit = "1.0.2"
-gethostname = "1.1.0"
 opentelemetry-appender-tracing = "0.31.0"
 opentelemetry-otlp = "0.31.0"
 opentelemetry-semantic-conventions = "0.31.0"
-os_info = "3.12.0"
 serde_path_to_error = "0.1.20"
 toml_edit = "0.24.0"
 wildmatch = "2.6.1"
@@ -225,8 +303,9 @@ aws-types = "1"
 bytes = "1"
 ctor = "0.6"
 crossbeam-channel = "0.5"
-derive_more = "2"
+derive_more = { version = "2", features = ["is_variant"] }
 dirs = "6"
+dirs-next = "2.0"
 dunce = "1.0"
 env_logger = "0.11"
 bm25 = "2.3.2"
@@ -240,6 +319,19 @@ predicates = "3"
 test-log = "0.2.17"
 tracing-test = "0.2.5"
 whoami = "1.6.1"
+# Stage 27 deps (tui, cli, cloud-tasks)
+arboard = { version = "3", features = ["wayland-data-control"] }
+clap_complete = "4"
+color-eyre = "0.6.3"
+itertools = "0.14.0"
+pathdiff = "0.2"
+pulldown-cmark = "0.10"
+ratatui-macros = "0.6.0"
+textwrap = "0.16.2"
+tracing-appender = "0.2.3"
+unicode-segmentation = "1.12.0"
+unicode-width = "0.2"
+vt100 = "0.16.2"
 http = "1"
 keyring = { version = "3.6", default-features = false }
 lazy_static = "1"
@@ -248,14 +340,12 @@ log = "0.4"
 lru = "0.16"
 multimap = "0.10"
 nucleo = { git = "https://github.com/helix-editor/nucleo.git", rev = "4253de9faabb4e5c6d81d946a5e35a90f87347ee" }
-owo-colors = "4.3.0"
 p256 = "0.13.2"
 path-absolutize = "3.1"
 include_dir = "0.7"
 portable-pty = "0.9.0"
 pretty_assertions = "1.4"
 regex-lite = "0.1"
-shlex = "1"
 sqlx = { version = "0.8.6", default-features = false, features = [
     "chrono",
     "json",
@@ -268,7 +358,6 @@ sqlx = { version = "0.8.6", default-features = false, features = [
 ] }
 runfiles = { git = "https://github.com/dzbarsky/rules_rust", rev = "b56cbaa8465e74127f1ea216f813cd377295ad81" }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
-schemars = "0.8"
 serde_with = "3"
 sha1 = "0.10"
 starlark = "0.13"
@@ -291,7 +380,7 @@ rama-tls-rustls = { version = "=0.3.0-alpha.4", features = ["http"] }
 rama-unix = "=0.3.0-alpha.4"
 
 # ── Internal crate path dependencies (rc-*) ────────────────────
-rc-agent-protocol = { path = "crates/rc-agent-protocol" }
+rc-agent-protocol = { path = "crates/claude/rc-agent-protocol" }
 
 # ── Internal crate path dependencies (codex leaf crates) ────────
 codex-ansi-escape = { path = "crates/codex/ansi-escape" }
@@ -385,6 +474,25 @@ codex-code-mode = { path = "crates/codex/code-mode" }
 codex-rollout-trace = { path = "crates/codex/rollout-trace" }
 codex-tools = { path = "crates/codex/tools" }
 codex-core = { path = "crates/codex/core" }
+codex-app-server-test-client = { path = "crates/codex/app-server-test-client" }
+codex-chatgpt = { path = "crates/codex/chatgpt" }
+codex-cloud-requirements = { path = "crates/codex/cloud-requirements" }
+codex-linux-sandbox = { path = "crates/codex/linux-sandbox" }
+codex-lmstudio = { path = "crates/codex/lmstudio" }
+codex-ollama = { path = "crates/codex/ollama" }
+codex-utils-sandbox-summary = { path = "crates/codex/utils/sandbox-summary" }
+codex-arg0 = { path = "crates/codex/arg0" }
+codex-utils-oss = { path = "crates/codex/utils/oss" }
+codex-mcp-server = { path = "crates/codex/mcp-server" }
+codex-test-binary-support = { path = "crates/codex/test-binary-support" }
+codex-app-server = { path = "crates/codex/app-server" }
+codex-app-server-client = { path = "crates/codex/app-server-client" }
+codex-exec = { path = "crates/codex/exec" }
+codex-windows-sandbox = { path = "crates/codex/windows-sandbox-rs" }
+# Stage 27 internal deps (cloud-tasks, tui, cli)
+codex-cloud-tasks = { path = "crates/codex/cloud-tasks" }
+codex-tui = { path = "crates/codex/tui" }
+codex-cli = { path = "crates/codex/cli" }
 
 [patch.crates-io]
 # Codex patches — needed for tungstenite features (deflate, proxy) and tokio-tungstenite compat

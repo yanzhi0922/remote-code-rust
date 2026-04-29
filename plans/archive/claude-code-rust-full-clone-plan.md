@@ -16,26 +16,26 @@
 
 本轮已将计划从“研究态”推进到“可编译、可测试的主干骨架”：
 
-- 已在 [`rc-core`](../crates/rc-core/src/lib.rs) 落地 v2 基础类型层：`SessionId` / `AgentId`、`Message` 联合类型、`AppState`、`ToolPermissionContext`、`FileHistoryState`、`UsageAccumulator`、`CostTracker`、扩展 hook 响应类型。
-- 已在 [`rc-engine-events`](../crates/rc-engine-events/src/lib.rs) 落地 Phase 1 事件层：保留现有 `RuntimeEventDetail` 兼容面，同时新增 `EngineEvent`、`ContentBlockType`、`ContentBlockDelta`、`EventStream`。
-- 已新增 [`rc-transcript`](../crates/rc-transcript/src/lib.rs) crate，完成 `TranscriptEntry` / `CompactBoundary` / `TranscriptStorage` 的 JSONL 持久化与 round-trip 测试。
-- 已为 [`rc-session`](../crates/rc-session/src/lib.rs) 接入 transcript V2 兼容层：新增 `append_transcript_entry()`、`load_transcript_v2()`、`transcript_storage()`，保持现有 `StoredEvent` 主路径不破坏。
-- 已新增 [`rc-query-engine`](../crates/rc-query-engine/src/lib.rs) compat 内核，先抽出“回合推进 + budget + tool loop + legacy backend seam”，并通过最小闭环测试。
-- 已为 [`rc-query-engine`](../crates/rc-query-engine/src/lib.rs) 补齐 host observer / checkpoint seam：新增 `QueryObserver`、`QueryObserverEvent`、`QueryCheckpoint`，query loop 现在会显式发出消息追加、budget 评估/超限、context compaction、assistant commit、tool batch checkpoint create/clear 等生命周期事件。
-- 已为 [`rc-query-engine`](../crates/rc-query-engine/src/lib.rs) 补齐默认关闭的 provider streaming seam：新增 `ProviderInvocationMode::{Buffered, Streaming}`；opt-in 后 query loop 会走 `complete_with_streaming_observer(...)`，并向宿主发出 `StreamingTextDelta`、`StreamingToolCallStarted`、`StreamingToolCallDelta`、`StreamingUsageUpdated`。
+- 已在 [`rc-core`](../crates/claude/rc-core/src/lib.rs) 落地 v2 基础类型层：`SessionId` / `AgentId`、`Message` 联合类型、`AppState`、`ToolPermissionContext`、`FileHistoryState`、`UsageAccumulator`、`CostTracker`、扩展 hook 响应类型。
+- 已在 [`rc-engine-events`](../crates/claude/rc-engine-events/src/lib.rs) 落地 Phase 1 事件层：保留现有 `RuntimeEventDetail` 兼容面，同时新增 `EngineEvent`、`ContentBlockType`、`ContentBlockDelta`、`EventStream`。
+- 已新增 [`rc-transcript`](../crates/claude/rc-transcript/src/lib.rs) crate，完成 `TranscriptEntry` / `CompactBoundary` / `TranscriptStorage` 的 JSONL 持久化与 round-trip 测试。
+- 已为 [`rc-session`](../crates/claude/rc-session/src/lib.rs) 接入 transcript V2 兼容层：新增 `append_transcript_entry()`、`load_transcript_v2()`、`transcript_storage()`，保持现有 `StoredEvent` 主路径不破坏。
+- 已新增 [`rc-query-engine`](../crates/claude/rc-query-engine/src/lib.rs) compat 内核，先抽出“回合推进 + budget + tool loop + legacy backend seam”，并通过最小闭环测试。
+- 已为 [`rc-query-engine`](../crates/claude/rc-query-engine/src/lib.rs) 补齐 host observer / checkpoint seam：新增 `QueryObserver`、`QueryObserverEvent`、`QueryCheckpoint`，query loop 现在会显式发出消息追加、budget 评估/超限、context compaction、assistant commit、tool batch checkpoint create/clear 等生命周期事件。
+- 已为 [`rc-query-engine`](../crates/claude/rc-query-engine/src/lib.rs) 补齐默认关闭的 provider streaming seam：新增 `ProviderInvocationMode::{Buffered, Streaming}`；opt-in 后 query loop 会走 `complete_with_streaming_observer(...)`，并向宿主发出 `StreamingTextDelta`、`StreamingToolCallStarted`、`StreamingToolCallDelta`、`StreamingUsageUpdated`。
 - 已继续把 [`apps/remote-code/src/conversation.rs`](../apps/remote-code/src/conversation.rs) 迁移到 app 层 compat adapter：新增 [`query_engine_compat.rs`](../apps/remote-code/src/query_engine_compat.rs)，当前 `run_prompt()` 默认已切到 compat path；当存在 `event_sink` 时，compat adapter 会将 `rc-query-engine` 切到 `ProviderInvocationMode::Streaming`，并把 streaming observer 事件翻译回 `PromptStreamEvent`，同时继续由 app 层承担 transcript、named events、resume boundary、hook/tool side effects 映射。
 - 当前 cutover 策略已进一步推进：`conversation.rs` 默认走 `rc-query-engine` compat adapter，legacy prompt loop 仅作为 `REMOTE_CODE_FORCE_LEGACY_PROMPT_LOOP` 回退开关保留；[`apps/remote-code/src/headless.rs`](../apps/remote-code/src/headless.rs) 已通过同一 `run_prompt()` 进入 compat path，并继续保留 `ChannelPermissionBroker` 审批链路与 `stream-json` 事件发射。
 - 当前验证结果：`cargo test -p rc-query-engine`、`cargo test -p remote-code`、`cargo test --workspace` 均通过；使用 MiniMax anthropic-compatible provider 实测 `--print` 路径返回 `OK`，`--output-format stream-json --include-partial-messages` 路径成功发出 `message_delta` / `message_committed` 并返回预期结果。
 - 当前 tranche 已继续补上几项直接影响官方行为拟合度的 hardening：headless error result 复用 compat 落盘元数据；approval 响应后显式回到 `running`；compat error 路径保留最近一次 streaming usage；`permission_denials` 带上 `tool_input`；provider streaming 在工具活动已开始后不再自动 fallback 到 non-streaming 重跑。
-- 当前 tranche 也已补上安全的 request continuity 基础设施：[`rc-config`](../crates/rc-config/src/lib.rs) 会生成可扩展的 `request_metadata`；[`rc-provider`](../crates/rc-provider/src/lib.rs) / [`streaming.rs`](../crates/rc-provider/src/streaming.rs) 会在 Anthropic-compatible 请求中写入 `metadata.user_id`，并从 OpenAI / Anthropic 的 buffered 与 streaming 响应中提取 `request_id`；[`apps/remote-code/src/query_engine_compat.rs`](../apps/remote-code/src/query_engine_compat.rs) 会把该 `request_id` 持久化到 `assistant_turn` / `result` / `model_usage`。
+- 当前 tranche 也已补上安全的 request continuity 基础设施：[`rc-config`](../crates/claude/rc-config/src/lib.rs) 会生成可扩展的 `request_metadata`；[`rc-provider`](../crates/claude/rc-provider/src/lib.rs) / [`streaming.rs`](../crates/claude/rc-provider/src/streaming.rs) 会在 Anthropic-compatible 请求中写入 `metadata.user_id`，并从 OpenAI / Anthropic 的 buffered 与 streaming 响应中提取 `request_id`；[`apps/remote-code/src/query_engine_compat.rs`](../apps/remote-code/src/query_engine_compat.rs) 会把该 `request_id` 持久化到 `assistant_turn` / `result` / `model_usage`。
 - 相关回归测试已补齐：provider 侧新增 `metadata.user_id` 编码与 `request_id` 解析测试；compat 侧新增 `mock-request-id` 持久化断言；当前 `cargo test -p rc-provider`、`cargo test -p remote-code`、`cargo test --workspace` 全部通过。
-- 当前 tranche 也已继续把启动期 settings/auth/source-policy 往主干推进：[`rc-config`](../crates/rc-config/src/settings_layers.rs) 在未显式传 `--settings` 时会自动发现 `legacy-import -> profile -> workspace -> local` 四层 runtime settings，并将其装配进 runtime config；显式 `--settings` 仍保持权威优先级并关闭自动发现；`--setting-sources` 也已可把 startup discovery 收窄到 `user/project/local` 指定范围。更关键的是，这个 source policy 现在不再只停留在 settings 层：[`apps/remote-code/src/hooks.rs`](../apps/remote-code/src/hooks.rs)、[`apps/remote-code/src/runtime_hooks.rs`](../apps/remote-code/src/runtime_hooks.rs)、[`apps/remote-code/src/conversation.rs`](../apps/remote-code/src/conversation.rs)、[`apps/remote-code/src/mcp_cli.rs`](../apps/remote-code/src/mcp_cli.rs) 都已接入统一 gating，因此 runtime hooks、doctor/headless 的 hook 统计、runtime extensions，以及 `mcp list/get/call/serve` 的隐式配置发现都会 obey 同一套 `allowed_setting_sources`。本轮又继续把剩余启动期可见面往同一语义收口：`skills_cli`、TUI `/skills`、TUI `/mcp`、TUI `/plugins`、GUI doctor、GUI MCP list 已补齐对应 gating，不再绕过 `config.allowed_setting_sources` 直接统计 user/project 侧 skills、plugins、managed MCP、plugin MCP 或对应 scope 的 MCP 列表；同时插件可见性也已进一步分层：默认 runtime discovery 会跳过带 `.remote-code-disabled` marker 的插件，避免 disabled 插件继续参与 runtime hooks / runtime extensions / skills / plugin MCP 等启动期 surface，但 `/plugins`、TUI `/plugins`、GUI doctor 等管理面仍保留 disabled 插件可见性，并把 disabled 与 enabled 统计分离；其中 `plugins --connect` / `plugins inspect` 对 disabled 插件会显式跳过 runtime inspection，`plugins invoke` 则直接拒绝执行。`first_run_wizard` 也已从“旁路 profile JSON 写盘”收口到 active settings 语义：它现在会写出与 `rc-config` loader 一致的嵌套 provider schema，优先写入 explicit `--settings` target，否则按当前允许的 local -> project -> user precedence 选择 settings 文件，并在当前进程里同步更新 normalized base URL、`auth_source`、`settings_files` 与 `setting_sources`。共享 runtime status / UI snapshot / doctor runtime 也已开始显式暴露 `allowed_setting_sources`，`--show-setting-sources`、CLI doctor text、TUI `/status`、GUI OperationsTab 现在也会把 `settings_files` 与 disabled plugin 统计一并展示，便于解释某些 surface 为什么被 source policy、explicit settings mode 或 disabled marker 隐藏。[`apps/remote-code/src/headless.rs`](../apps/remote-code/src/headless.rs) 与 runtime status 现也会直接复用解析后的 `auth_source` / `setting_sources`，同时 provider-aware env auth/source 识别已扩展到 MiniMax / GLM / 腾讯 / 百炼等现有路径。本轮又把 MCP startup/runtime discovery plan 进一步收口到共享主干：runtime MCP inventory/resolve 契约现已正式沉到 [`crates/rc-tools/src/mcp_runtime.rs`](../crates/rc-tools/src/mcp_runtime.rs)，`mcp_cli`、`discover_runtime_extensions()`、headless init、CLI doctor，以及 GUI 进程内 `ToolRuntimePolicy` 注入都会复用同一份运行时 inventory；startup surfaces 只暴露 enabled MCP 名称，doctor 同时显式统计 disabled MCP 数量，并新增 config-path 去重与显式路径 warning 的回归测试。随后又把工具执行面最明显的绕路彻底收口：[`crates/rc-tools/src/mcp_tools.rs`](../crates/rc-tools/src/mcp_tools.rs) 的内置 `mcp_call` 已改成只消费 runtime policy 注入的共享 MCP inventory，没有 inventory 会直接报错，disabled/ambiguous server 也会被拒绝；并新增缺失 inventory、disabled server、重名歧义三类回归测试。在此基础上，本轮又把共享 runtime MCP inventory 明确接入到共享 status 面：[`crates/rc-ui-bridge/src/lib.rs`](../crates/rc-ui-bridge/src/lib.rs) 的 `UiRuntimeStatusSnapshot`、[`apps/remote-code/src/status.rs`](../apps/remote-code/src/status.rs) 的 CLI `status`，以及 GUI 运行时状态桥接现在都会带上 `mcp` inventory summary（至少 `total/enabled/disabled/ambiguous/warnings` 与 `cwd/profile/explicit/plugin` 来源计数）；[`apps/remote-code-gui/src/components/layout/McpTab.tsx`](../apps/remote-code-gui/src/components/layout/McpTab.tsx) 也新增了与 managed-config CRUD 分层的 `Runtime-discovered inventory` 只读视图，用来展示当前进程真实纳入 runtime policy 的 server、来源与可选 live inspection，并补了 GUI 侧“runtime inventory 加载失败不拖垮 managed MCP 管理面”的回归测试。这表明启动期 settings/auth source 分层已经前进一步，但还不等价于官方 startup parity 已完成：按 `.research/claude-code-rev` 暴露的行为矩阵，后续仍需继续补 runtime inventory 的连接状态/生命周期、interactive 非阻塞与 headless eager-init 分叉、plugin cache / external plugin fetch、MCP preconnect、完整 source precedence matrix，以及 GUI 侧从 inventory parity 走向真正 lifecycle parity 的后续切片。
-- 新 tranche 又继续把“runtime inventory parity”推进到真正的跨-surface observability 收口：[`crates/rc-ui-bridge/src/lib.rs`](../crates/rc-ui-bridge/src/lib.rs) 现已为 shared MCP summary 补齐 canonical `status_counts`（`connected / failed / needs-auth / pending / disabled`）；[`apps/remote-code/src/doctor/checks.rs`](../apps/remote-code/src/doctor/checks.rs) 与 [`apps/remote-code/src/doctor/mod.rs`](../apps/remote-code/src/doctor/mod.rs) 现已新增 read-only `MCP Runtime` section，并通过 `--probe-mcp` 复用 [`crates/rc-tools/src/mcp_runtime.rs`](../crates/rc-tools/src/mcp_runtime.rs) 的 `observe_runtime_mcp_servers(...)` 输出 connect-aware summary/server rows；[`apps/remote-code-gui/src-tauri/src/lib.rs`](../apps/remote-code-gui/src-tauri/src/lib.rs) 的 GUI doctor 与 GUI runtime inventory 也已停止各自直接 `discover + inspect + fake pending/disabled`，转而统一消费同一份 shared observation，并把 `status_counts` 暴露给 [`apps/remote-code-gui/src/components/layout/OperationsTab.tsx`](../apps/remote-code-gui/src/components/layout/OperationsTab.tsx) / [`apps/remote-code-gui/src/components/layout/McpTab.tsx`](../apps/remote-code-gui/src/components/layout/McpTab.tsx)；[`crates/rc-tui/src/commands/mcp.rs`](../crates/rc-tui/src/commands/mcp.rs) 与 [`crates/rc-tui/src/commands/status.rs`](../crates/rc-tui/src/commands/status.rs) 也已改为复用共享 runtime discovery/summary，不再自建一套 MCP 发现逻辑。这个 tranche 明确只做 runtime observability parity，而不伪造官方 lifecycle 细节：`needs-auth` 虽然已进入共享类型/计数，但在缺少真实 auth/OAuth 证据时仍不会被伪造；preconnect/reconnect/OAuth/elicitation 仍属于后续 MCP lifecycle tranche。
-- 2026-04-17 又补了一条直接影响真实 coding 工作流的 MCP/provider 执行链路：[`crates/rc-tools/src/mcp_catalog.rs`](../crates/rc-tools/src/mcp_catalog.rs) 已把 runtime inspection 结果转成真实 `mcp__server__tool` catalog；[`crates/rc-tools/src/lib.rs`](../crates/rc-tools/src/lib.rs)、[`apps/remote-code/src/query_engine_compat.rs`](../apps/remote-code/src/query_engine_compat.rs)、[`apps/remote-code/src/conversation.rs`](../apps/remote-code/src/conversation.rs)、[`apps/remote-code-gui/src-tauri/src/lib.rs`](../apps/remote-code-gui/src-tauri/src/lib.rs) 与 [`apps/remote-code/src/headless.rs`](../apps/remote-code/src/headless.rs) 现已统一通过 runtime provider tool 视图校验/执行工具，不再把动态 MCP 工具错判成“unknown tool”；headless `init` 事件也会显式暴露这些直连 MCP 工具。
-- 同一 tranche 继续把 provider/system prompt 端接上真实 runtime MCP 工具与 MCP 指令：[`crates/rc-provider/src/lib.rs`](../crates/rc-provider/src/lib.rs) / [`crates/rc-provider/src/streaming.rs`](../crates/rc-provider/src/streaming.rs) 现会在 OpenAI / Anthropic / Bedrock / Vertex 路径下使用 runtime provider tool specs，并接受 Anthropic `server_tool_use`；[`apps/remote-code/src/query_engine_compat.rs`](../apps/remote-code/src/query_engine_compat.rs) 现会在 compat run 前用 [`rc-system-prompt`](../crates/rc-system-prompt/src/lib.rs) 生成带 MCP client instructions 与 Claude 风格工具别名的 system prompt。
+- 当前 tranche 也已继续把启动期 settings/auth/source-policy 往主干推进：[`rc-config`](../crates/claude/rc-config/src/settings_layers.rs) 在未显式传 `--settings` 时会自动发现 `legacy-import -> profile -> workspace -> local` 四层 runtime settings，并将其装配进 runtime config；显式 `--settings` 仍保持权威优先级并关闭自动发现；`--setting-sources` 也已可把 startup discovery 收窄到 `user/project/local` 指定范围。更关键的是，这个 source policy 现在不再只停留在 settings 层：[`apps/remote-code/src/hooks.rs`](../apps/remote-code/src/hooks.rs)、[`apps/remote-code/src/runtime_hooks.rs`](../apps/remote-code/src/runtime_hooks.rs)、[`apps/remote-code/src/conversation.rs`](../apps/remote-code/src/conversation.rs)、[`apps/remote-code/src/mcp_cli.rs`](../apps/remote-code/src/mcp_cli.rs) 都已接入统一 gating，因此 runtime hooks、doctor/headless 的 hook 统计、runtime extensions，以及 `mcp list/get/call/serve` 的隐式配置发现都会 obey 同一套 `allowed_setting_sources`。本轮又继续把剩余启动期可见面往同一语义收口：`skills_cli`、TUI `/skills`、TUI `/mcp`、TUI `/plugins`、GUI doctor、GUI MCP list 已补齐对应 gating，不再绕过 `config.allowed_setting_sources` 直接统计 user/project 侧 skills、plugins、managed MCP、plugin MCP 或对应 scope 的 MCP 列表；同时插件可见性也已进一步分层：默认 runtime discovery 会跳过带 `.remote-code-disabled` marker 的插件，避免 disabled 插件继续参与 runtime hooks / runtime extensions / skills / plugin MCP 等启动期 surface，但 `/plugins`、TUI `/plugins`、GUI doctor 等管理面仍保留 disabled 插件可见性，并把 disabled 与 enabled 统计分离；其中 `plugins --connect` / `plugins inspect` 对 disabled 插件会显式跳过 runtime inspection，`plugins invoke` 则直接拒绝执行。`first_run_wizard` 也已从“旁路 profile JSON 写盘”收口到 active settings 语义：它现在会写出与 `rc-config` loader 一致的嵌套 provider schema，优先写入 explicit `--settings` target，否则按当前允许的 local -> project -> user precedence 选择 settings 文件，并在当前进程里同步更新 normalized base URL、`auth_source`、`settings_files` 与 `setting_sources`。共享 runtime status / UI snapshot / doctor runtime 也已开始显式暴露 `allowed_setting_sources`，`--show-setting-sources`、CLI doctor text、TUI `/status`、GUI OperationsTab 现在也会把 `settings_files` 与 disabled plugin 统计一并展示，便于解释某些 surface 为什么被 source policy、explicit settings mode 或 disabled marker 隐藏。[`apps/remote-code/src/headless.rs`](../apps/remote-code/src/headless.rs) 与 runtime status 现也会直接复用解析后的 `auth_source` / `setting_sources`，同时 provider-aware env auth/source 识别已扩展到 MiniMax / GLM / 腾讯 / 百炼等现有路径。本轮又把 MCP startup/runtime discovery plan 进一步收口到共享主干：runtime MCP inventory/resolve 契约现已正式沉到 [`crates/claude/rc-tools/src/mcp_runtime.rs`](../crates/claude/rc-tools/src/mcp_runtime.rs)，`mcp_cli`、`discover_runtime_extensions()`、headless init、CLI doctor，以及 GUI 进程内 `ToolRuntimePolicy` 注入都会复用同一份运行时 inventory；startup surfaces 只暴露 enabled MCP 名称，doctor 同时显式统计 disabled MCP 数量，并新增 config-path 去重与显式路径 warning 的回归测试。随后又把工具执行面最明显的绕路彻底收口：[`crates/claude/rc-tools/src/mcp_tools.rs`](../crates/claude/rc-tools/src/mcp_tools.rs) 的内置 `mcp_call` 已改成只消费 runtime policy 注入的共享 MCP inventory，没有 inventory 会直接报错，disabled/ambiguous server 也会被拒绝；并新增缺失 inventory、disabled server、重名歧义三类回归测试。在此基础上，本轮又把共享 runtime MCP inventory 明确接入到共享 status 面：[`crates/claude/rc-ui-bridge/src/lib.rs`](../crates/claude/rc-ui-bridge/src/lib.rs) 的 `UiRuntimeStatusSnapshot`、[`apps/remote-code/src/status.rs`](../apps/remote-code/src/status.rs) 的 CLI `status`，以及 GUI 运行时状态桥接现在都会带上 `mcp` inventory summary（至少 `total/enabled/disabled/ambiguous/warnings` 与 `cwd/profile/explicit/plugin` 来源计数）；[`apps/remote-code-gui/src/components/layout/McpTab.tsx`](../apps/remote-code-gui/src/components/layout/McpTab.tsx) 也新增了与 managed-config CRUD 分层的 `Runtime-discovered inventory` 只读视图，用来展示当前进程真实纳入 runtime policy 的 server、来源与可选 live inspection，并补了 GUI 侧“runtime inventory 加载失败不拖垮 managed MCP 管理面”的回归测试。这表明启动期 settings/auth source 分层已经前进一步，但还不等价于官方 startup parity 已完成：按 `.research/claude-code-rev` 暴露的行为矩阵，后续仍需继续补 runtime inventory 的连接状态/生命周期、interactive 非阻塞与 headless eager-init 分叉、plugin cache / external plugin fetch、MCP preconnect、完整 source precedence matrix，以及 GUI 侧从 inventory parity 走向真正 lifecycle parity 的后续切片。
+- 新 tranche 又继续把“runtime inventory parity”推进到真正的跨-surface observability 收口：[`crates/claude/rc-ui-bridge/src/lib.rs`](../crates/claude/rc-ui-bridge/src/lib.rs) 现已为 shared MCP summary 补齐 canonical `status_counts`（`connected / failed / needs-auth / pending / disabled`）；[`apps/remote-code/src/doctor/checks.rs`](../apps/remote-code/src/doctor/checks.rs) 与 [`apps/remote-code/src/doctor/mod.rs`](../apps/remote-code/src/doctor/mod.rs) 现已新增 read-only `MCP Runtime` section，并通过 `--probe-mcp` 复用 [`crates/claude/rc-tools/src/mcp_runtime.rs`](../crates/claude/rc-tools/src/mcp_runtime.rs) 的 `observe_runtime_mcp_servers(...)` 输出 connect-aware summary/server rows；[`apps/remote-code-gui/src-tauri/src/lib.rs`](../apps/remote-code-gui/src-tauri/src/lib.rs) 的 GUI doctor 与 GUI runtime inventory 也已停止各自直接 `discover + inspect + fake pending/disabled`，转而统一消费同一份 shared observation，并把 `status_counts` 暴露给 [`apps/remote-code-gui/src/components/layout/OperationsTab.tsx`](../apps/remote-code-gui/src/components/layout/OperationsTab.tsx) / [`apps/remote-code-gui/src/components/layout/McpTab.tsx`](../apps/remote-code-gui/src/components/layout/McpTab.tsx)；[`crates/claude/rc-tui/src/commands/mcp.rs`](../crates/claude/rc-tui/src/commands/mcp.rs) 与 [`crates/claude/rc-tui/src/commands/status.rs`](../crates/claude/rc-tui/src/commands/status.rs) 也已改为复用共享 runtime discovery/summary，不再自建一套 MCP 发现逻辑。这个 tranche 明确只做 runtime observability parity，而不伪造官方 lifecycle 细节：`needs-auth` 虽然已进入共享类型/计数，但在缺少真实 auth/OAuth 证据时仍不会被伪造；preconnect/reconnect/OAuth/elicitation 仍属于后续 MCP lifecycle tranche。
+- 2026-04-17 又补了一条直接影响真实 coding 工作流的 MCP/provider 执行链路：[`crates/claude/rc-tools/src/mcp_catalog.rs`](../crates/claude/rc-tools/src/mcp_catalog.rs) 已把 runtime inspection 结果转成真实 `mcp__server__tool` catalog；[`crates/claude/rc-tools/src/lib.rs`](../crates/claude/rc-tools/src/lib.rs)、[`apps/remote-code/src/query_engine_compat.rs`](../apps/remote-code/src/query_engine_compat.rs)、[`apps/remote-code/src/conversation.rs`](../apps/remote-code/src/conversation.rs)、[`apps/remote-code-gui/src-tauri/src/lib.rs`](../apps/remote-code-gui/src-tauri/src/lib.rs) 与 [`apps/remote-code/src/headless.rs`](../apps/remote-code/src/headless.rs) 现已统一通过 runtime provider tool 视图校验/执行工具，不再把动态 MCP 工具错判成“unknown tool”；headless `init` 事件也会显式暴露这些直连 MCP 工具。
+- 同一 tranche 继续把 provider/system prompt 端接上真实 runtime MCP 工具与 MCP 指令：[`crates/claude/rc-provider/src/lib.rs`](../crates/claude/rc-provider/src/lib.rs) / [`crates/claude/rc-provider/src/streaming.rs`](../crates/claude/rc-provider/src/streaming.rs) 现会在 OpenAI / Anthropic / Bedrock / Vertex 路径下使用 runtime provider tool specs，并接受 Anthropic `server_tool_use`；[`apps/remote-code/src/query_engine_compat.rs`](../apps/remote-code/src/query_engine_compat.rs) 现会在 compat run 前用 [`rc-system-prompt`](../crates/claude/rc-system-prompt/src/lib.rs) 生成带 MCP client instructions 与 Claude 风格工具别名的 system prompt。
 - 这条链路已经完成自动化与真实回归双重验证：新增 `compat_run_accepts_dynamic_mcp_tools` 回归测试；`cargo test -p rc-tools --lib`、`cargo test -p rc-provider --lib`、`cargo test -p remote-code`、`cargo test --workspace --quiet` 当前全部通过；并已在 `C:\Users\Yanzh\Desktop\cli-stress-test\task2-refactor` 用 MiniMax `minimax-m2.7` + Anthropic 协议实测 `mcp__context7__resolve-library-id` / `mcp__context7__query-docs` 真实成功调用，随后又在同一目录完成了一次真实文件编辑 + `cargo check` 的 coding 回归。
-- 2026-04-17 同一主线又把 `rc-agents` 从“可编译骨架”推进到宿主真实执行：[`crates/rc-agents/src/runner.rs`](../crates/rc-agents/src/runner.rs) 新增 `AgentExecutionRequest` / `AgentExecutor` / `run_with_executor()`，`run()` 会在没有宿主 executor 时显式拒绝假执行；[`apps/remote-code/src/agents.rs`](../apps/remote-code/src/agents.rs) 新增 `RemoteCodeAgentExecutor`，复用 `ProviderCompatBackend`、`SessionStore`、runtime hooks 与 [`apps/remote-code/src/query_engine_compat.rs`](../apps/remote-code/src/query_engine_compat.rs) 的 override seam，把 `agents plan` 接到真实 query-engine compat runtime，而不是停留在 scheduler-only 占位实现；相应 integration tests 也已补到 [`crates/rc-integration-tests/tests/agent_integration.rs`](../crates/rc-integration-tests/tests/agent_integration.rs)。
-- 同一 tranche 还修掉了两处直接导致 MiniMax Anthropic 兼容路径 400 的 transcript/tool-result 真缺陷：[`crates/rc-tools/src/delegate.rs`](../crates/rc-tools/src/delegate.rs) 现在会在 delegated conversation 中保留 assistant 原始 `history_text` / `content_blocks` / `tool_calls`，避免 tool result 引用失配；[`crates/rc-provider/src/lib.rs`](../crates/rc-provider/src/lib.rs) 现在会把连续 `tool` entry 聚合成单个 Anthropic `user.content[]` 中的多 `tool_result` block，符合 `.research/claude-code-rev` 对 user-message tool-result pairing 的处理方式，并新增对应回归测试。
+- 2026-04-17 同一主线又把 `rc-agents` 从“可编译骨架”推进到宿主真实执行：[`crates/claude/rc-agents/src/runner.rs`](../crates/claude/rc-agents/src/runner.rs) 新增 `AgentExecutionRequest` / `AgentExecutor` / `run_with_executor()`，`run()` 会在没有宿主 executor 时显式拒绝假执行；[`apps/remote-code/src/agents.rs`](../apps/remote-code/src/agents.rs) 新增 `RemoteCodeAgentExecutor`，复用 `ProviderCompatBackend`、`SessionStore`、runtime hooks 与 [`apps/remote-code/src/query_engine_compat.rs`](../apps/remote-code/src/query_engine_compat.rs) 的 override seam，把 `agents plan` 接到真实 query-engine compat runtime，而不是停留在 scheduler-only 占位实现；相应 integration tests 也已补到 [`crates/claude/rc-integration-tests/tests/agent_integration.rs`](../crates/claude/rc-integration-tests/tests/agent_integration.rs)。
+- 同一 tranche 还修掉了两处直接导致 MiniMax Anthropic 兼容路径 400 的 transcript/tool-result 真缺陷：[`crates/claude/rc-tools/src/delegate.rs`](../crates/claude/rc-tools/src/delegate.rs) 现在会在 delegated conversation 中保留 assistant 原始 `history_text` / `content_blocks` / `tool_calls`，避免 tool result 引用失配；[`crates/claude/rc-provider/src/lib.rs`](../crates/claude/rc-provider/src/lib.rs) 现在会把连续 `tool` entry 聚合成单个 Anthropic `user.content[]` 中的多 `tool_result` block，符合 `.research/claude-code-rev` 对 user-message tool-result pairing 的处理方式，并新增对应回归测试。
 - `agents plan` 也已补上真实项目可用的默认工作目录 ownership：[`apps/remote-code/src/agents.rs`](../apps/remote-code/src/agents.rs) 现在会注入拥有当前 `cwd` 的 `workspace` implementer，避免在外部工程上只生成 `pending` snapshot 而没有可执行 agent。基于这套修复，已经在 `C:\Users\Yanzh\Desktop\cli-stress-test` 完成三组真实 MiniMax 回归：1) 直接 `agent` 工具 repro 不再出现 `tool result's tool id not found (2013)`；2) `agents plan` 在 `task2-refactor` 上真实完成只读分析；3) 在 `task2-refactor-agent-e2e` 副本上通过 `agents plan` 完成 `src/manager.rs:get_statistics()` 单次重构，随后独立 `cargo check` 与 `cargo run` 均通过。
 
 这意味着 Phase 1 的契约冻结与 Phase 2 的最小可运行引擎都已进入主干骨架阶段；当前主线重点已经从“搭骨架”进入“默认 compat + parity hardening”：
@@ -63,15 +63,15 @@
 | 维度 | 当前 Rust | Claude Code | 差距等级 |
 |------|----------|-------------|---------|
 | 查询引擎 | 单主循环 + 已接入 streaming callbacks / session store / context manager ([`conversation.rs`](apps/remote-code/src/conversation.rs) 1,288 行) | 状态机 + AsyncGenerator ([`QueryEngine.ts`](.research/claude-code-rev/src/QueryEngine.ts) 1,296 行 + [`query.ts`](.research/claude-code-rev/src/query.ts) 1,730 行 = 3,026 行) | 🔴 **根本性** |
-| API 客户端 | 已有 `complete()` + `complete_streaming_with_callbacks()` + fallback ([`rc-provider`](crates/rc-provider/src/lib.rs), [`streaming.rs`](crates/rc-provider/src/streaming.rs)) | 流式 streaming + cache + betas ([`claude.ts`](.research/claude-code-rev/src/services/api/claude.ts) 3,420 行) | 🔴 **根本性，但已有基础** |
-| 上下文压缩 | 已有 compact/reactive/collapse/microcompact，多策略但未达到 Claude 级 cache-boundary / auto / snip ([`context.rs`](crates/rc-provider/src/context.rs)) | 5 种策略 (auto/micro/snip/reactive/collapse) | 🔴 **根本性** |
-| 工具执行 | 已有 30+ built-in tools + runtime policy + tool search ([`rc-tools`](crates/rc-tools/src/)) | 流式并行执行 + 进度流 + 动态 prompt | 🔴 **根本性** |
-| System Prompt | 硬编码字符串 ([`default_system_prompt()`](crates/rc-core/src/lib.rs:548)) | 动态构建 + 缓存断点 ([`prompts.ts`](.research/claude-code-rev/src/constants/prompts.ts) 915 行) | 🟡 **重大** |
+| API 客户端 | 已有 `complete()` + `complete_streaming_with_callbacks()` + fallback ([`rc-provider`](crates/claude/rc-provider/src/lib.rs), [`streaming.rs`](crates/claude/rc-provider/src/streaming.rs)) | 流式 streaming + cache + betas ([`claude.ts`](.research/claude-code-rev/src/services/api/claude.ts) 3,420 行) | 🔴 **根本性，但已有基础** |
+| 上下文压缩 | 已有 compact/reactive/collapse/microcompact，多策略但未达到 Claude 级 cache-boundary / auto / snip ([`context.rs`](crates/claude/rc-provider/src/context.rs)) | 5 种策略 (auto/micro/snip/reactive/collapse) | 🔴 **根本性** |
+| 工具执行 | 已有 30+ built-in tools + runtime policy + tool search ([`rc-tools`](crates/claude/rc-tools/src/)) | 流式并行执行 + 进度流 + 动态 prompt | 🔴 **根本性** |
+| System Prompt | 硬编码字符串 ([`default_system_prompt()`](crates/claude/rc-core/src/lib.rs:548)) | 动态构建 + 缓存断点 ([`prompts.ts`](.research/claude-code-rev/src/constants/prompts.ts) 915 行) | 🟡 **重大** |
 | 权限系统 | 简单 PermissionBroker | 分类器 + 自动模式 + 拒绝追踪 (204 行 hook) | 🟡 **重大** |
-| TUI | 已有 ratatui 交互 TUI / Vim / slash commands ([`rc-tui`](crates/rc-tui/src/lib.rs)) | 完整 React/Ink TUI (407 组件) | 🔴 **根本性** |
+| TUI | 已有 ratatui 交互 TUI / Vim / slash commands ([`rc-tui`](crates/claude/rc-tui/src/lib.rs)) | 完整 React/Ink TUI (407 组件) | 🔴 **根本性** |
 | Agent 系统 | 简单 SubAgent | Fork + Subagent + Built-in agents (14 文件) | 🟡 **重大** |
 | MCP | 基础 stdio 连接 | 动态连接 + OAuth + Elicitation (25 文件) | 🟡 **重大** |
-| 会话存储 | SQLite metadata + NDJSON transcript ([`rc-session`](crates/rc-session/src/lib.rs)) | transcript boundary + cache-aware state + migration set | 🟡 **重大** |
+| 会话存储 | SQLite metadata + NDJSON transcript ([`rc-session`](crates/claude/rc-session/src/lib.rs)) | transcript boundary + cache-aware state + migration set | 🟡 **重大** |
 | 斜杠命令 / 应用面 | 已有 CLI/TUI/GUI/mobile/control-plane/runner 多入口 | 80+ 命令 + CLI/TUI/bridge/remote 深度整合 | 🟡 **重大** |
 
 ### 0.1A 现有资产更正（不降低复刻范围）
@@ -137,7 +137,7 @@ for turn_index in 0..max_turns {
 
 ### 0.3 API 客户端差距（20+ 目标能力，当前已有流式基础）
 
-当前 [`rc-provider`](crates/rc-provider/src/lib.rs) 已有 `complete()`、`complete_streaming_with_callbacks()` 以及流式失败回退，但仍缺失：
+当前 [`rc-provider`](crates/claude/rc-provider/src/lib.rs) 已有 `complete()`、`complete_streaming_with_callbacks()` 以及流式失败回退，但仍缺失：
 
 | # | 缺失能力 | Claude Code 实现 |
 |---|---------|-----------------|
@@ -168,21 +168,21 @@ for turn_index in 0..max_turns {
 
 | Crate | 决策 | 原因 |
 |-------|------|------|
-| [`rc-core`](crates/rc-core/src/lib.rs) | **新增 v2 类型层并渐进替换导出面** | 类型系统需要升级到 Message/SDKMessage/Tool trait 级别，但现有基础类型和兼容导出可复用 |
-| [`rc-provider`](crates/rc-provider/src/lib.rs) | **深度重构，复用现有流式/回退资产** | 缺少缓存、thinking blocks 等 20+ 能力，但不应丢弃现有 streaming parser / callback / fallback 资产 |
-| [`rc-tools`](crates/rc-tools/src/) | **深度重构并扩展** | 现有工具基座可复用，但需补齐 Claude 级 tool trait、prompt、tool search、runtime orchestration |
+| [`rc-core`](crates/claude/rc-core/src/lib.rs) | **新增 v2 类型层并渐进替换导出面** | 类型系统需要升级到 Message/SDKMessage/Tool trait 级别，但现有基础类型和兼容导出可复用 |
+| [`rc-provider`](crates/claude/rc-provider/src/lib.rs) | **深度重构，复用现有流式/回退资产** | 缺少缓存、thinking blocks 等 20+ 能力，但不应丢弃现有 streaming parser / callback / fallback 资产 |
+| [`rc-tools`](crates/claude/rc-tools/src/) | **深度重构并扩展** | 现有工具基座可复用，但需补齐 Claude 级 tool trait、prompt、tool search、runtime orchestration |
 | [`conversation.rs`](apps/remote-code/src/conversation.rs) | **冻结旧循环，新增兼容适配层，最终退役** | 由 `rc-query-engine` 接管主路径，但要保留兼容适配直到 cutover 完成 |
-| [`rc-mcp`](crates/rc-mcp/src/lib.rs) | **深度重构** | 现有 stdio 路径可保留为底层 transport，向上补齐动态连接、OAuth、Elicitation |
-| [`rc-agents`](crates/rc-agents/src/lib.rs) | **深度重构** | 现有 SubAgent 是起点，但需扩展为 Fork/Built-in/Agent catalog |
-| [`rc-tui`](crates/rc-tui/src/) | **保留现有 ratatui 骨架并分层替换** | 当前已有交互式 TUI；目标是补齐 Claude 级组件树、状态管理、快捷键和 bridge 行为 |
+| [`rc-mcp`](crates/claude/rc-mcp/src/lib.rs) | **深度重构** | 现有 stdio 路径可保留为底层 transport，向上补齐动态连接、OAuth、Elicitation |
+| [`rc-agents`](crates/claude/rc-agents/src/lib.rs) | **深度重构** | 现有 SubAgent 是起点，但需扩展为 Fork/Built-in/Agent catalog |
+| [`rc-tui`](crates/claude/rc-tui/src/) | **保留现有 ratatui 骨架并分层替换** | 当前已有交互式 TUI；目标是补齐 Claude 级组件树、状态管理、快捷键和 bridge 行为 |
 | [`rc-hooks`](apps/remote-code/src/hooks.rs) | **深度重构并复用现有接缝** | 生命周期远不完整，但现有 hook integration points 有价值 |
-| [`rc-skills`](crates/rc-skills/src/lib.rs) | **深度重构并补齐 bundled skills** | 基础框架可保留，需扩成 Claude 级 discovery / bundled / MCP skill 路线 |
-| [`rc-session`](crates/rc-session/src/lib.rs) | **保留增强** | 现有 SQLite + NDJSON 基础很好，应升级为 transcript V2 / boundary-aware store |
-| [`rc-permissions`](crates/rc-permissions/src/) | **保留增强** | 基础可用，需要增强分类器/自动模式/拒绝追踪 |
-| [`rc-config`](crates/rc-config/src/lib.rs) | **保留增强** | 基础可用，需要增加更多参数与迁移逻辑 |
-| [`rc-event-bus`](crates/rc-event-bus/src/lib.rs) | **保留增强** | 基础可用，需要增加 EngineEvent / TUI / Hook / Bridge 统一事件流 |
-| [`rc-protocol`](crates/rc-protocol/src/lib.rs) | **保留增强** | 基础可用，需要增加 SDKMessage / content blocks / transcript boundaries |
-| [`rc-ui-bridge`](crates/rc-ui-bridge/src/lib.rs) | **保留增强并对齐 upstream bridge** | 现有桥接层是资产，需要扩成 Claude Code 级 bridge/* 能力 |
+| [`rc-skills`](crates/claude/rc-skills/src/lib.rs) | **深度重构并补齐 bundled skills** | 基础框架可保留，需扩成 Claude 级 discovery / bundled / MCP skill 路线 |
+| [`rc-session`](crates/claude/rc-session/src/lib.rs) | **保留增强** | 现有 SQLite + NDJSON 基础很好，应升级为 transcript V2 / boundary-aware store |
+| [`rc-permissions`](crates/claude/rc-permissions/src/) | **保留增强** | 基础可用，需要增强分类器/自动模式/拒绝追踪 |
+| [`rc-config`](crates/claude/rc-config/src/lib.rs) | **保留增强** | 基础可用，需要增加更多参数与迁移逻辑 |
+| [`rc-event-bus`](crates/claude/rc-event-bus/src/lib.rs) | **保留增强** | 基础可用，需要增加 EngineEvent / TUI / Hook / Bridge 统一事件流 |
+| [`rc-protocol`](crates/claude/rc-protocol/src/lib.rs) | **保留增强** | 基础可用，需要增加 SDKMessage / content blocks / transcript boundaries |
+| [`rc-ui-bridge`](crates/claude/rc-ui-bridge/src/lib.rs) | **保留增强并对齐 upstream bridge** | 现有桥接层是资产，需要扩成 Claude Code 级 bridge/* 能力 |
 
 ---
 
@@ -1500,13 +1500,13 @@ rc-skills/src/
 **目标**: 建立所有核心类型定义、统一事件模型和状态管理
 
 **产出文件**:
-- `crates/rc-engine-events/src/lib.rs` - 统一事件类型
-- `crates/rc-engine-events/src/types.rs` - EngineEvent 枚举
-- `crates/rc-transcript/src/lib.rs` - Transcript 结构
-- `crates/rc-transcript/src/entry.rs` - TranscriptEntry
-- `crates/rc-transcript/src/boundary.rs` - CompactBoundary
-- `crates/rc-transcript/src/storage.rs` - 持久化
-- `crates/rc-core/src/state.rs` - AppState
+- `crates/claude/rc-engine-events/src/lib.rs` - 统一事件类型
+- `crates/claude/rc-engine-events/src/types.rs` - EngineEvent 枚举
+- `crates/claude/rc-transcript/src/lib.rs` - Transcript 结构
+- `crates/claude/rc-transcript/src/entry.rs` - TranscriptEntry
+- `crates/claude/rc-transcript/src/boundary.rs` - CompactBoundary
+- `crates/claude/rc-transcript/src/storage.rs` - 持久化
+- `crates/claude/rc-core/src/state.rs` - AppState
 
 **关键类型**: EngineEvent, Transcript, AppState, Message, AssistantContentBlock
 
@@ -2530,14 +2530,14 @@ pub enum HookSpecificOutput {
 #### 1.1 新建文件清单
 
 ```
-crates/rc-engine-events/
+crates/claude/rc-engine-events/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs              # pub mod types, stream
 │   ├── types.rs            # EngineEvent 枚举 (§16.7)
 │   └── stream.rs           # EventStream (tokio broadcast channel)
 
-crates/rc-transcript/
+crates/claude/rc-transcript/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs              # pub mod entry, boundary, storage
@@ -2545,7 +2545,7 @@ crates/rc-transcript/
 │   ├── boundary.rs         # CompactBoundary (压缩边界标记)
 │   └── storage.rs          # 文件持久化 (JSONL 格式)
 
-crates/rc-core/src/          # 增强
+crates/claude/rc-core/src/          # 增强
 ├── ids.rs                   # 🆕 SessionId, AgentId (§16.1)
 ├── message.rs               # 🆕 Message 类型系统 (§16.2)
 ├── state.rs                 # 🆕 AppState (§7.1)
@@ -2598,7 +2598,7 @@ impl TranscriptStorage {
 #### 2.1 新建文件清单
 
 ```
-crates/rc-query-engine/
+crates/claude/rc-query-engine/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs              # pub mod engine, query_loop, config, budget
@@ -2712,7 +2712,7 @@ pub async fn query_loop(
 #### 3.1 文件清单
 
 ```
-crates/rc-tools/src/
+crates/claude/rc-tools/src/
 ├── tool_trait.rs            # 🆕 Tool trait (§16.3)
 ├── tool_registry.rs         # 🆕 工具注册表
 ├── tool_executor.rs         # 🆕 工具执行器（流式并行）
@@ -2764,7 +2764,7 @@ crates/rc-tools/src/
 │   ├── config.rs            # ConfigTool
 │   └── lsp.rs               # LSPTool
 
-crates/rc-tool-prompts/src/
+crates/claude/rc-tool-prompts/src/
 ├── lib.rs                   # prompt 注册表
 ├── bash.rs                  # BashTool prompt (370 行 TS → Rust)
 ├── write.rs                 # FileWriteTool prompt
@@ -2800,7 +2800,7 @@ crates/rc-tool-prompts/src/
 #### 4.1 文件清单
 
 ```
-crates/rc-system-prompt/src/
+crates/claude/rc-system-prompt/src/
 ├── lib.rs                   # SystemPromptBuilder (§3.2)
 ├── sections/
 │   ├── mod.rs
@@ -2820,7 +2820,7 @@ crates/rc-system-prompt/src/
 │   └── scratchpad.rs        # Scratchpad Section
 └── cache.rs                 # Cache control 断点管理
 
-crates/rc-compact/src/
+crates/claude/rc-compact/src/
 ├── lib.rs                   # CompactEngine
 ├── strategy.rs              # CompactStrategy trait (§16.5)
 ├── auto.rs                  # AutoCompact (LLM 摘要)
@@ -2836,7 +2836,7 @@ crates/rc-compact/src/
 ├── config.rs                # 压缩配置
 └── attachments.rs           # 压缩后附件处理
 
-crates/rc-context/src/
+crates/claude/rc-context/src/
 ├── lib.rs                   # 上下文管理入口
 ├── window.rs                # 上下文窗口 (对应 utils/context.ts)
 ├── analysis.rs              # 上下文分析
@@ -3231,7 +3231,7 @@ Fork 是一种特殊的子代理，在后台运行，工具输出不污染主上
 - 系统提示词中有专门的 fork 指导："If you ARE the fork — execute directly; do not re-delegate."
 
 remote-code **部分覆盖**：
-- ✅ [`crates/rc-agents/src/fork.rs`](../crates/rc-agents/src/fork.rs) 已有 fork transcript / content block 基础契约
+- ✅ [`crates/claude/rc-agents/src/fork.rs`](../crates/claude/rc-agents/src/fork.rs) 已有 fork transcript / content block 基础契约
 - ❌ app/CLI 层后台 fork 执行、主线程继续交互、完成后 `<task-notification>` 回流等行为仍缺
 
 #### 21.4.3 Verification Agent
@@ -4135,7 +4135,7 @@ remote-code **缺失**以下 QueryEngine/QueryLoop 关键能力（共 50+ 项）
 
 #### 21.9.7 Tools 工具实现缺失（50+ 子目录）
 
-Claude Code 的每个工具都有独立子目录，包含实现、Prompt、类型定义。remote-code 的工具实现集中在 `crates/rc-tools/src/` 的平面文件中。
+Claude Code 的每个工具都有独立子目录，包含实现、Prompt、类型定义。remote-code 的工具实现集中在 `crates/claude/rc-tools/src/` 的平面文件中。
 
 **完全缺失的工具子目录（remote-code 无对应实现）：**
 
@@ -4261,10 +4261,10 @@ Claude Code 的每个工具都有独立子目录，包含实现、Prompt、类�
 
 ### 22.2 核心 Rust 文件映射（按子系统）
 
-#### 22.2.1 认证系统 → `crates/rc-auth/`
+#### 22.2.1 认证系统 → `crates/claude/rc-auth/`
 
 ```
-crates/rc-auth/
+crates/claude/rc-auth/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs                    # 公共 API 导出
@@ -4318,10 +4318,10 @@ pub trait SecureStorage: Send + Sync {
 }
 ```
 
-#### 22.2.2 模型管理 → `crates/rc-model/`
+#### 22.2.2 模型管理 → `crates/claude/rc-model/`
 
 ```
-crates/rc-model/
+crates/claude/rc-model/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs                    # 公共 API
@@ -4369,10 +4369,10 @@ pub enum EffortLevel {
 }
 ```
 
-#### 22.2.3 权限系统 V2 → `crates/rc-permissions-v2/`
+#### 22.2.3 权限系统 V2 → `crates/claude/rc-permissions-v2/`
 
 ```
-crates/rc-permissions-v2/
+crates/claude/rc-permissions-v2/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs
@@ -4408,10 +4408,10 @@ crates/rc-permissions-v2/
 │       └── swarm_worker.rs       # Swarm Worker 处理
 ```
 
-#### 22.2.4 Compact 引擎 → `crates/rc-compact/`
+#### 22.2.4 Compact 引擎 → `crates/claude/rc-compact/`
 
 ```
-crates/rc-compact/
+crates/claude/rc-compact/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs
@@ -4457,10 +4457,10 @@ pub struct CompactContext {
 }
 ```
 
-#### 22.2.5 插件系统 → `crates/rc-plugins/`
+#### 22.2.5 插件系统 → `crates/claude/rc-plugins/`
 
 ```
-crates/rc-plugins/
+crates/claude/rc-plugins/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs
@@ -4509,10 +4509,10 @@ crates/rc-plugins/
 │   └── lsp_integration.rs        # LSP 集成
 ```
 
-#### 22.2.6 Swarm 系统 → `crates/rc-swarm/`
+#### 22.2.6 Swarm 系统 → `crates/claude/rc-swarm/`
 
 ```
-crates/rc-swarm/
+crates/claude/rc-swarm/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs
@@ -4540,10 +4540,10 @@ crates/rc-swarm/
 │       └── teammate_snapshot.rs  # Teammate 模式快照
 ```
 
-#### 22.2.7 设置管理 → `crates/rc-settings/`
+#### 22.2.7 设置管理 → `crates/claude/rc-settings/`
 
 ```
-crates/rc-settings/
+crates/claude/rc-settings/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs
@@ -4568,10 +4568,10 @@ crates/rc-settings/
 │       └── profile.rs            # MDM Profile
 ```
 
-#### 22.2.8 API 客户端增强 → `crates/rc-provider/` 扩展
+#### 22.2.8 API 客户端增强 → `crates/claude/rc-provider/` 扩展
 
 ```
-crates/rc-provider/src/
+crates/claude/rc-provider/src/
 ├── ... (existing files)
 ├── api_client.rs                 # 新增：完整 API 客户端（对应 claude.ts 3,420 行）
 ├── effort.rs                     # 新增：Effort Level 请求参数构建
@@ -4604,29 +4604,29 @@ crates/rc-provider/src/
 
 | 文件 | 对应 Claude Code | 功能 |
 |------|-----------------|------|
-| `crates/rc-auth/src/lib.rs` | `utils/auth.ts` | 认证系统入口 |
-| `crates/rc-auth/src/oauth/client.rs` | `services/oauth/client.ts` | OAuth 客户端 |
-| `crates/rc-auth/src/oauth/pkce.rs` | `services/oauth/crypto.ts` | PKCE |
-| `crates/rc-auth/src/oauth/auth_code_listener.rs` | `services/oauth/auth-code-listener.ts` | 授权码监听 |
-| `crates/rc-auth/src/oauth/types.rs` | `services/oauth/types.ts` | OAuth 类型 |
-| `crates/rc-auth/src/secure_storage/mod.rs` | `utils/secureStorage/index.ts` | 安全存储 trait |
-| `crates/rc-auth/src/secure_storage/keychain.rs` | `utils/secureStorage/macOsKeychainStorage.ts` | macOS Keychain |
-| `crates/rc-auth/src/provider_auth.rs` | `utils/auth.ts:100-200` | Provider 认证分发 |
-| `crates/rc-auth/src/subscription.rs` | `utils/auth.ts` 部分 | 订阅等级 |
-| `crates/rc-model/src/lib.rs` | `utils/model/` | 模型管理入口 |
-| `crates/rc-model/src/model.rs` | `utils/model/model.ts` | 模型选择 |
-| `crates/rc-model/src/capabilities.rs` | `utils/model/modelCapabilities.ts` | 能力查询 |
-| `crates/rc-model/src/providers.rs` | `utils/model/providers.ts` | Provider 检测 |
-| `crates/rc-model/src/aliases.rs` | `utils/model/aliases.ts` | 模型别名 |
-| `crates/rc-model/src/validate.rs` | `utils/model/validateModel.ts` | 校验 |
-| `crates/rc-model/src/allowlist.rs` | `utils/model/modelAllowlist.ts` | 白名单 |
-| `crates/rc-model/src/check_1m.rs` | `utils/model/check1mAccess.ts` | 1M 权限 |
-| `crates/rc-context/src/lib.rs` | `utils/context.ts` | 上下文管理 |
-| `crates/rc-context/src/window.rs` | `utils/context.ts:51-98` | 窗口计算 |
-| `crates/rc-context/src/effort.rs` | `utils/effort.ts` | Effort Level |
-| `crates/rc-context/src/fast_mode.rs` | `utils/fastMode.ts` | Fast Mode |
-| `crates/rc-core/src/ids.rs` 更新 | `types/ids.ts` | Branded SessionId/AgentId |
-| `crates/rc-core/src/message.rs` 更新 | `types/message.ts` | 20+ 消息类型 |
+| `crates/claude/rc-auth/src/lib.rs` | `utils/auth.ts` | 认证系统入口 |
+| `crates/claude/rc-auth/src/oauth/client.rs` | `services/oauth/client.ts` | OAuth 客户端 |
+| `crates/claude/rc-auth/src/oauth/pkce.rs` | `services/oauth/crypto.ts` | PKCE |
+| `crates/claude/rc-auth/src/oauth/auth_code_listener.rs` | `services/oauth/auth-code-listener.ts` | 授权码监听 |
+| `crates/claude/rc-auth/src/oauth/types.rs` | `services/oauth/types.ts` | OAuth 类型 |
+| `crates/claude/rc-auth/src/secure_storage/mod.rs` | `utils/secureStorage/index.ts` | 安全存储 trait |
+| `crates/claude/rc-auth/src/secure_storage/keychain.rs` | `utils/secureStorage/macOsKeychainStorage.ts` | macOS Keychain |
+| `crates/claude/rc-auth/src/provider_auth.rs` | `utils/auth.ts:100-200` | Provider 认证分发 |
+| `crates/claude/rc-auth/src/subscription.rs` | `utils/auth.ts` 部分 | 订阅等级 |
+| `crates/claude/rc-model/src/lib.rs` | `utils/model/` | 模型管理入口 |
+| `crates/claude/rc-model/src/model.rs` | `utils/model/model.ts` | 模型选择 |
+| `crates/claude/rc-model/src/capabilities.rs` | `utils/model/modelCapabilities.ts` | 能力查询 |
+| `crates/claude/rc-model/src/providers.rs` | `utils/model/providers.ts` | Provider 检测 |
+| `crates/claude/rc-model/src/aliases.rs` | `utils/model/aliases.ts` | 模型别名 |
+| `crates/claude/rc-model/src/validate.rs` | `utils/model/validateModel.ts` | 校验 |
+| `crates/claude/rc-model/src/allowlist.rs` | `utils/model/modelAllowlist.ts` | 白名单 |
+| `crates/claude/rc-model/src/check_1m.rs` | `utils/model/check1mAccess.ts` | 1M 权限 |
+| `crates/claude/rc-context/src/lib.rs` | `utils/context.ts` | 上下文管理 |
+| `crates/claude/rc-context/src/window.rs` | `utils/context.ts:51-98` | 窗口计算 |
+| `crates/claude/rc-context/src/effort.rs` | `utils/effort.ts` | Effort Level |
+| `crates/claude/rc-context/src/fast_mode.rs` | `utils/fastMode.ts` | Fast Mode |
+| `crates/claude/rc-core/src/ids.rs` 更新 | `types/ids.ts` | Branded SessionId/AgentId |
+| `crates/claude/rc-core/src/message.rs` 更新 | `types/message.ts` | 20+ 消息类型 |
 
 **Phase 1 验证标准：**
 - [ ] OAuth PKCE 流程可完成认证
@@ -4643,23 +4643,23 @@ crates/rc-provider/src/
 
 | 文件 | 对应 Claude Code | 功能 |
 |------|-----------------|------|
-| `crates/rc-compact/src/engine.rs` | `services/compact/compact.ts` (1,706 行) | Compact 主引擎 |
-| `crates/rc-compact/src/strategy.rs` | Compact Strategy trait | 策略接口 |
-| `crates/rc-compact/src/auto.rs` | `services/compact/autoCompact.ts` | Auto Compact |
-| `crates/rc-compact/src/micro.rs` | `services/compact/microCompact.ts` | Micro Compact |
-| `crates/rc-compact/src/snip.rs` | `services/compact/snipCompact.ts` | Snip Compact |
-| `crates/rc-compact/src/reactive.rs` | `services/compact/reactiveCompact.ts` | Reactive Compact |
-| `crates/rc-compact/src/session_memory.rs` | `services/compact/sessionMemoryCompact.ts` | Session Memory |
-| `crates/rc-compact/src/prompt.rs` | `services/compact/prompt.ts` | Compact Prompt |
-| `crates/rc-compact/src/forked_agent.rs` | `utils/forkedAgent.ts` | Forked Agent |
-| `crates/rc-provider/src/api_client.rs` | `services/api/claude.ts` (3,420 行) | 完整 API 客户端 |
-| `crates/rc-provider/src/effort.rs` | Effort 请求参数 | |
-| `crates/rc-provider/src/max_tokens.rs` | Token 升级逻辑 | |
-| `crates/rc-provider/src/cache_headers.rs` | Cache Headers | |
-| `crates/rc-provider/src/fingerprint.rs` | 消息指纹 | |
-| `crates/rc-provider/src/attribution.rs` | Attribution Header | |
-| `crates/rc-provider/src/beta_headers.rs` | Beta Headers | |
-| `crates/rc-provider/src/retry.rs` | 重试逻辑 | |
+| `crates/claude/rc-compact/src/engine.rs` | `services/compact/compact.ts` (1,706 行) | Compact 主引擎 |
+| `crates/claude/rc-compact/src/strategy.rs` | Compact Strategy trait | 策略接口 |
+| `crates/claude/rc-compact/src/auto.rs` | `services/compact/autoCompact.ts` | Auto Compact |
+| `crates/claude/rc-compact/src/micro.rs` | `services/compact/microCompact.ts` | Micro Compact |
+| `crates/claude/rc-compact/src/snip.rs` | `services/compact/snipCompact.ts` | Snip Compact |
+| `crates/claude/rc-compact/src/reactive.rs` | `services/compact/reactiveCompact.ts` | Reactive Compact |
+| `crates/claude/rc-compact/src/session_memory.rs` | `services/compact/sessionMemoryCompact.ts` | Session Memory |
+| `crates/claude/rc-compact/src/prompt.rs` | `services/compact/prompt.ts` | Compact Prompt |
+| `crates/claude/rc-compact/src/forked_agent.rs` | `utils/forkedAgent.ts` | Forked Agent |
+| `crates/claude/rc-provider/src/api_client.rs` | `services/api/claude.ts` (3,420 行) | 完整 API 客户端 |
+| `crates/claude/rc-provider/src/effort.rs` | Effort 请求参数 | |
+| `crates/claude/rc-provider/src/max_tokens.rs` | Token 升级逻辑 | |
+| `crates/claude/rc-provider/src/cache_headers.rs` | Cache Headers | |
+| `crates/claude/rc-provider/src/fingerprint.rs` | 消息指纹 | |
+| `crates/claude/rc-provider/src/attribution.rs` | Attribution Header | |
+| `crates/claude/rc-provider/src/beta_headers.rs` | Beta Headers | |
+| `crates/claude/rc-provider/src/retry.rs` | 重试逻辑 | |
 
 **Phase 2 验证标准：**
 - [ ] Auto Compact 可在 token 超限时自动触发
@@ -4677,13 +4677,13 @@ crates/rc-provider/src/
 
 | 文件 | 对应 Claude Code | 功能 |
 |------|-----------------|------|
-| `crates/rc-permissions-v2/src/` (25+ 文件) | `utils/permissions/` | 完整权限系统 V2 |
-| `crates/rc-settings/src/` (15+ 文件) | `utils/settings/` | 设置管理 |
-| `crates/rc-plugins/src/` (40+ 文件) | `utils/plugins/` | 插件系统 |
-| `crates/rc-file-history/src/lib.rs` | `utils/fileHistory.ts` (1,116 行) | 文件检查点 |
-| `crates/rc-file-history/src/snapshot.rs` | FileHistorySnapshot | 快照管理 |
-| `crates/rc-file-history/src/backup.rs` | FileHistoryBackup | 备份管理 |
-| `crates/rc-file-history/src/diff_stats.rs` | DiffStats | Diff 统计 |
+| `crates/claude/rc-permissions-v2/src/` (25+ 文件) | `utils/permissions/` | 完整权限系统 V2 |
+| `crates/claude/rc-settings/src/` (15+ 文件) | `utils/settings/` | 设置管理 |
+| `crates/claude/rc-plugins/src/` (40+ 文件) | `utils/plugins/` | 插件系统 |
+| `crates/claude/rc-file-history/src/lib.rs` | `utils/fileHistory.ts` (1,116 行) | 文件检查点 |
+| `crates/claude/rc-file-history/src/snapshot.rs` | FileHistorySnapshot | 快照管理 |
+| `crates/claude/rc-file-history/src/backup.rs` | FileHistoryBackup | 备份管理 |
+| `crates/claude/rc-file-history/src/diff_stats.rs` | DiffStats | Diff 统计 |
 
 **Phase 3 验证标准：**
 - [ ] 7 种 Permission Mode 全部可用
@@ -4702,11 +4702,11 @@ crates/rc-provider/src/
 
 | 文件 | 对应 Claude Code | 功能 |
 |------|-----------------|------|
-| `crates/rc-swarm/src/` (20+ 文件) | `utils/swarm/` + `backends/` | Swarm 系统 |
-| `crates/rc-teleport/src/lib.rs` | `utils/teleport.tsx` (1,226 行) | Session 传送 |
-| `crates/rc-teleport/src/git_bundle.rs` | `utils/teleport/gitBundle.ts` | Git Bundle |
-| `crates/rc-teleport/src/environments.rs` | `utils/teleport/environments.ts` | 环境选择 |
-| `crates/rc-teleport/src/api.rs` | `utils/teleport/api.ts` | Teleport API |
+| `crates/claude/rc-swarm/src/` (20+ 文件) | `utils/swarm/` + `backends/` | Swarm 系统 |
+| `crates/claude/rc-teleport/src/lib.rs` | `utils/teleport.tsx` (1,226 行) | Session 传送 |
+| `crates/claude/rc-teleport/src/git_bundle.rs` | `utils/teleport/gitBundle.ts` | Git Bundle |
+| `crates/claude/rc-teleport/src/environments.rs` | `utils/teleport/environments.ts` | 环境选择 |
+| `crates/claude/rc-teleport/src/api.rs` | `utils/teleport/api.ts` | Teleport API |
 | System Prompt 23 个 section | `constants/prompts.ts` (915 行) | 完整系统提示词 |
 
 **Phase 4 验证标准：**
@@ -4754,7 +4754,7 @@ crates/rc-provider/src/
 
 #### 22.4.1 MiniMax Provider 测试配置
 
-在 `crates/rc-config/src/lib.rs` 或环境变量中配置：
+在 `crates/claude/rc-config/src/lib.rs` 或环境变量中配置：
 
 ```toml
 # .remote-code-profile/test-minimax.toml
@@ -4896,7 +4896,7 @@ gh api repos/yanzhi0922/remote-code-rust
 gh api repos/yanzhi0922/remote-code-rust/commits/main --jq '{sha: .sha, message: .commit.message, date: .commit.committer.date}'
 
 # 列出目录内容
-gh api "repos/yanzhi0922/remote-code-rust/contents/crates/rc-tools/src" --jq '.[].name'
+gh api "repos/yanzhi0922/remote-code-rust/contents/crates/claude/rc-tools/src" --jq '.[].name'
 
 # 获取文件内容（文本）
 gh api repos/yanzhi0922/remote-code-rust/contents/Cargo.toml --jq '.content' | `

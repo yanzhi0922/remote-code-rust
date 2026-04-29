@@ -25,20 +25,20 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 directories = { workspace = true }
 keyring = "2"
-rc-core = { path = "../../../crates/rc-core" }
-rc-config = { path = "../../../crates/rc-config" }
-rc-tools = { path = "../../../crates/rc-tools" }
-rc-provider = { path = "../../../crates/rc-provider" }
-rc-session = { path = "../../../crates/rc-session" }
-rc-ui-bridge = { path = "../../../crates/rc-ui-bridge" }
-rc-permissions = { path = "../../../crates/rc-permissions" }
-rc-mcp = { path = "../../../crates/rc-mcp" }
-rc-plugins = { path = "../../../crates/rc-plugins" }
-rc-skills = { path = "../../../crates/rc-skills" }
-rc-agent-protocol = { path = "../../../crates/rc-agent-protocol" }
-rc-voice = { path = "../../../crates/rc-voice" }
-rc-query-engine = { path = "../../../crates/rc-query-engine" }
-rc-engine-events = { path = "../../../crates/rc-engine-events" }
+rc-core = { path = "../../../crates/claude/rc-core" }
+rc-config = { path = "../../../crates/claude/rc-config" }
+rc-tools = { path = "../../../crates/claude/rc-tools" }
+rc-provider = { path = "../../../crates/claude/rc-provider" }
+rc-session = { path = "../../../crates/claude/rc-session" }
+rc-ui-bridge = { path = "../../../crates/claude/rc-ui-bridge" }
+rc-permissions = { path = "../../../crates/claude/rc-permissions" }
+rc-mcp = { path = "../../../crates/claude/rc-mcp" }
+rc-plugins = { path = "../../../crates/claude/rc-plugins" }
+rc-skills = { path = "../../../crates/claude/rc-skills" }
+rc-agent-protocol = { path = "../../../crates/claude/rc-agent-protocol" }
+rc-voice = { path = "../../../crates/claude/rc-voice" }
+rc-query-engine = { path = "../../../crates/claude/rc-query-engine" }
+rc-engine-events = { path = "../../../crates/claude/rc-engine-events" }
 reqwest = { workspace = true }
 tracing = { workspace = true }
 

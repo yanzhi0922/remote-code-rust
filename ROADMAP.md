@@ -190,7 +190,7 @@ Objective: convert RooCode/Codex from subprocess JSON-RPC to in-process callback
 
 Deliverables:
 
-- ✅ `InProcessAdapter` unified implementation in `crates/rc-agent-protocol/src/adapters/in_process.rs`
+- ✅ `InProcessAdapter` unified implementation in `crates/claude/rc-agent-protocol/src/adapters/in_process.rs`
 - ✅ Type aliases: `RemoteClaudeAdapter`, `RemoteRooAdapter`, `RemoteCodexAdapter`
 - ✅ Builder-pattern callback injection (`with_send_message`, `with_cancel`, `with_resolve_permission`)
 - ✅ Subprocess management code removed

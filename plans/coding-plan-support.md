@@ -223,7 +223,7 @@ KIMI_CODING_PLAN_API_KEY=xxx
 
 ### 步骤 2: 实现 Claude Code 请求伪装
 
-**修改文件**: `crates/rc-provider/src/lib.rs`
+**修改文件**: `crates/claude/rc-provider/src/lib.rs`
 
 在 `build_headers()` 函数中：
 
@@ -267,7 +267,7 @@ fn build_headers(provider: &ProviderConfig) -> Result<HeaderMap> {
 
 ### 步骤 3: 更新 rc-config Coding Plan 配置
 
-**修改文件**: `crates/rc-config/src/lib.rs`
+**修改文件**: `crates/claude/rc-config/src/lib.rs`
 
 **3a. 新增阿里云百炼 Coding Plan**:
 ```rust
@@ -367,10 +367,10 @@ const RESERVED_PROVIDER_HEADER_NAMES: &[&str] = &[
 
 | 文件 | 修改类型 | 说明 |
 |------|----------|------|
-| `crates/rc-provider/src/model_info.rs` | 重构 | 移除过时模型，添加新模型，修正参数 |
-| `crates/rc-provider/src/lib.rs` | 修改 | `build_headers()` Claude Code 伪装 |
-| `crates/rc-config/src/lib.rs` | 修改 | 新增阿里云，更新腾讯云/百度千帆为 Anthropic |
-| `crates/rc-provider/src/streaming.rs` | 无变更 | Anthropic streaming 已支持 |
+| `crates/claude/rc-provider/src/model_info.rs` | 重构 | 移除过时模型，添加新模型，修正参数 |
+| `crates/claude/rc-provider/src/lib.rs` | 修改 | `build_headers()` Claude Code 伪装 |
+| `crates/claude/rc-config/src/lib.rs` | 修改 | 新增阿里云，更新腾讯云/百度千帆为 Anthropic |
+| `crates/claude/rc-provider/src/streaming.rs` | 无变更 | Anthropic streaming 已支持 |
 
 ## 六、测试计划
 

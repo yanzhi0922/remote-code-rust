@@ -319,7 +319,7 @@ graph TB
 
 ### 5.3 SubprocessAdapter 设计
 
-新增 `crates/rc-agent-protocol/src/adapters/subprocess.rs`：
+新增 `crates/claude/rc-agent-protocol/src/adapters/subprocess.rs`：
 
 ```rust
 //! Subprocess-based Agent adapter using JSON-RPC over stdio.
@@ -346,7 +346,7 @@ pub struct SubprocessAdapter {
 
 ### 5.4 JSON-RPC 协议定义
 
-复用现有 `crates/rc-agent-protocol/src/jsonrpc.rs` 中的类型，定义以下方法：
+复用现有 `crates/claude/rc-agent-protocol/src/jsonrpc.rs` 中的类型，定义以下方法：
 
 #### 5.4.1 Host → Agent 请求
 
@@ -425,7 +425,7 @@ async fn main() {
 在 `crates/` 下创建 `rc-agent-wrapper` crate，作为通用的 stdio 服务端 wrapper：
 
 ```
-crates/rc-agent-wrapper/
+crates/claude/rc-agent-wrapper/
 ├── Cargo.toml
 └── src/
     └── main.rs    # 读取 stdin JSON-RPC，调用 Agent 逻辑，写 stdout

@@ -481,7 +481,7 @@ graph TB
 
 ### Bridge Protocol
 
-定义在 `crates/rc-agent-protocol/src/bridge_proto.rs`：
+定义在 `crates/claude/rc-agent-protocol/src/bridge_proto.rs`：
 
 - 请求方法：`initialize`, `send_message`, `cancel`, `shutdown`, `resolve_permission`
 - 通知方法：`started`, `ready`, `message_delta`, `tool_call_started`, `done`, `error` 等
