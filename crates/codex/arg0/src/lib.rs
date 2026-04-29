@@ -149,6 +149,19 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
     }
 }
 
+/// Dispatch Codex helper aliases using an explicit `CODEX_HOME`.
+///
+/// This must be called before any other threads are created. It exists for
+/// embedders that intentionally isolate Codex state from the default
+/// `~/.codex` directory while still using Codex's arg0 helper mechanism.
+pub fn arg0_dispatch_with_codex_home(codex_home: &Path) -> Option<Arg0PathEntryGuard> {
+    std::fs::create_dir_all(codex_home).ok()?;
+    unsafe {
+        std::env::set_var("CODEX_HOME", codex_home);
+    }
+    arg0_dispatch()
+}
+
 /// While we want to deploy the Codex CLI as a single executable for simplicity,
 /// we also want to expose some of its functionality as distinct CLIs, so we use
 /// the "arg0 trick" to determine which CLI to dispatch. This effectively allows
@@ -174,7 +187,7 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
 /// in this workspace that depends on these helper CLIs.
 pub fn arg0_dispatch_or_else<F, Fut>(main_fn: F) -> anyhow::Result<()>
 where
-    F: FnOnce(Arg0DispatchPaths) -> Fut,
+    F: FnOnce(Arg0DispatchPaths) -> Fut + Send + 'static,
     Fut: Future<Output = anyhow::Result<()>>,
 {
     // Retain the TempDir so it exists for the lifetime of the invocation of
@@ -182,14 +195,37 @@ where
     // would be nice to avoid leaving temporary directories behind, if possible.
     let path_entry_guard = arg0_dispatch();
 
-    // Regular invocation – create a Tokio runtime and execute the provided
-    // async entry-point.
-    let runtime = build_runtime()?;
-    runtime.block_on(run_main_with_arg0_guard(
-        path_entry_guard,
-        std::env::current_exe().ok(),
-        main_fn,
-    ))
+    // Build and poll the async CLI future on an explicitly sized stack. The
+    // future captures a large clap command graph; on Windows the default main
+    // thread stack can overflow before the first poll.
+    std::thread::Builder::new()
+        .name("codex-main".to_owned())
+        .stack_size(TOKIO_WORKER_STACK_SIZE_BYTES)
+        .spawn(move || {
+            let runtime = build_runtime()?;
+            runtime.block_on(run_main_with_arg0_guard(
+                path_entry_guard,
+                std::env::current_exe().ok(),
+                main_fn,
+            ))
+        })?
+        .join()
+        .map_err(|panic| {
+            anyhow::anyhow!(
+                "Codex main thread panicked: {}",
+                panic_payload_to_string(panic.as_ref())
+            )
+        })?
+}
+
+fn panic_payload_to_string(panic: &(dyn std::any::Any + Send)) -> String {
+    if let Some(message) = panic.downcast_ref::<&str>() {
+        (*message).to_owned()
+    } else if let Some(message) = panic.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic payload".to_owned()
+    }
 }
 
 async fn run_main_with_arg0_guard<F, Fut>(

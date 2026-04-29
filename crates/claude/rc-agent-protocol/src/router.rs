@@ -55,7 +55,10 @@ impl AgentRouter {
     /// Create an adapter based on the [`AgentType`] specified in `config`.
     ///
     /// - **RemoteClaude** → in-process adapter (callback-based).
-    /// - **RemoteCodex** / **RemoteRoo** → subprocess adapter (JSON-RPC over stdio).
+    /// - **RemoteCodex** → error — use [`register`](AgentRouter::register) with a
+    ///   pre-built `CodexInProcessAdapter` from `rc-codex-adapter` (async initialization
+    ///   is required for the in-process Codex runtime).
+    /// - **RemoteRoo** → subprocess adapter (JSON-RPC over stdio).
     ///
     /// For subprocess adapters, `config.binary_path` **must** be set.
     pub fn create_adapter(config: &AgentConfig) -> anyhow::Result<Box<dyn AgentAdapter>> {
@@ -64,18 +67,11 @@ impl AgentRouter {
                 let adapter = InProcessAdapter::new_claude();
                 Ok(Box::new(adapter))
             }
-            AgentType::RemoteCodex => {
-                let binary_path =
-                    config
-                        .binary_path
-                        .clone()
-                        .ok_or_else(|| AgentProtocolError::ConfigError {
-                            message: "binary_path is required for RemoteCodex subprocess adapter"
-                                .into(),
-                        })?;
-                let adapter = SubprocessAdapter::new(AgentType::RemoteCodex, binary_path);
-                Ok(Box::new(adapter))
-            }
+            AgentType::RemoteCodex => Err(anyhow::anyhow!(
+                "RemoteCodex requires async initialization. \
+                 Use CodexInProcessAdapter::start_in_process() from rc-codex-adapter, \
+                 then register the adapter via AgentRouter::register()."
+            )),
             AgentType::RemoteRoo => {
                 let binary_path =
                     config

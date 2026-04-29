@@ -9,6 +9,8 @@ const DEFAULT_SETTINGS = {
   provider_base_url: 'https://open.bigmodel.cn/api/anthropic',
   provider_protocol: 'anthropic',
   provider_api_key_set: true,
+  max_output_tokens: 4096,
+  thinking_budget: null,
   max_retries: 3,
   timeout_ms: 60_000,
   retry_initial_backoff_ms: 500,
@@ -16,6 +18,14 @@ const DEFAULT_SETTINGS = {
   respect_retry_after: true,
   permission_mode: 'default',
   verbose: false,
+  max_turns: 128,
+  codex_model_provider: null,
+  codex_approval_policy: null,
+  codex_sandbox_mode: null,
+  codex_persist_extended_history: true,
+  codex_memories_enabled: true,
+  codex_thread_store_endpoint: null,
+  codex_config_overrides: {},
 };
 
 describe('ChatInput', () => {

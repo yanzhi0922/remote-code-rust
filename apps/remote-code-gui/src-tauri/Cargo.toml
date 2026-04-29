@@ -36,9 +36,12 @@ rc-mcp = { path = "../../../crates/claude/rc-mcp" }
 rc-plugins = { path = "../../../crates/claude/rc-plugins" }
 rc-skills = { path = "../../../crates/claude/rc-skills" }
 rc-agent-protocol = { path = "../../../crates/claude/rc-agent-protocol" }
+rc-codex-adapter = { path = "../../../crates/claude/rc-codex-adapter" }
 rc-voice = { path = "../../../crates/claude/rc-voice" }
 rc-query-engine = { path = "../../../crates/claude/rc-query-engine" }
 rc-engine-events = { path = "../../../crates/claude/rc-engine-events" }
+codex-app-server-protocol = { workspace = true }
+codex-arg0 = { workspace = true }
 reqwest = { workspace = true }
 tracing = { workspace = true }
 

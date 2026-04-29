@@ -318,13 +318,13 @@ ls deploy/tencent-cloud/
 
 ## 多 Agent 架构
 
-Remote Code GUI 支持三种 AI Agent 引擎，采用独立 Binary 架构：
+Remote Code GUI 支持三种 AI Agent 引擎，采用统一的进程内适配器架构：
 
-| Agent | Binary | 通信方式 | 说明 |
+| Agent | 适配器 | 通信方式 | 说明 |
 |-------|--------|----------|------|
-| **Remote Code** | `remote-code` | 进程内（`InProcessAdapter`） | 默认引擎，基于 Claude Code 的 Rust 重写 |
-| **OpenAI Codex** | `remote-code-codex-bridge` | 子进程（`SubprocessAdapter`） | Bridge Binary 翻译 JSON-RPC ↔ Codex I/O |
-| **Roo Code** | `remote-code-roo-bridge` | 子进程（`SubprocessAdapter`） | Bridge Binary 翻译 JSON-RPC ↔ Roo-code I/O |
+| **Remote Code** | `InProcessAdapter` | 进程内回调注入 | 默认引擎，基于 Claude Code 的 Rust 重写 |
+| **OpenAI Codex** | `CodexInProcessAdapter` | 进程内事件泵 | 原生 Codex AppServerClient，无子进程 |
+| **Roo Code** | `SubprocessAdapter` | 子进程 Bridge（JSON-RPC over stdio） | Bridge Binary 翻译 JSON-RPC ↔ Roo-code I/O |
 
 ### 架构概览
 
@@ -334,29 +334,27 @@ graph TB
         UI[前端 send_prompt]
         ROUTER[AgentRouter]
         IPA[InProcessAdapter<br/>Claude Code]
-        SA_CX[SubprocessAdapter<br/>Codex]
+        CXA[CodexInProcessAdapter<br/>Codex]
         SA_ROO[SubprocessAdapter<br/>Roo-code]
     end
 
-    subgraph Bridge Binaries
-        CX_BRIDGE[codex-bridge]
+    subgraph Bridge Binary
         ROO_BRIDGE[roo-bridge]
     end
 
     UI --> ROUTER
     ROUTER --> IPA
-    ROUTER --> SA_CX
+    ROUTER --> CXA
     ROUTER --> SA_ROO
-    SA_CX -->|JSON-RPC stdio| CX_BRIDGE
     SA_ROO -->|JSON-RPC stdio| ROO_BRIDGE
 ```
 
 **核心优势**：
-- 独立 Binary — 每个 Agent 独立编译，互不干扰
+- 进程内运行 — Codex 和 Claude Code 均在主进程内运行，无 IPC 开销
 - 统一事件模型 — `UnifiedAgentEvent` 标准化所有 Agent 事件
-- Bridge 协议 — JSON-RPC over stdio，支持 `initialize` / `send_message` / `cancel` / `shutdown` 等方法
+- Bridge 协议 — Roo-code 通过 JSON-RPC over stdio 通信
 - 统一权限流程 — 所有 Agent 共享 GUI 审批界面
-- 统一构建 — `Makefile` + `scripts/build-agents.{ps1,sh}` 一键构建三个 Agent
+- 统一构建 — `Makefile` + `scripts/build-agents.{ps1,sh}` 一键构建
 
 详细设计见 [plans/three-agent-integration.md](plans/three-agent-integration.md) 和 [plans/multi-agent-architecture.md](plans/multi-agent-architecture.md)。
 

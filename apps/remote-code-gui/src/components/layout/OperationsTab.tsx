@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { DoctorReportInfo, SessionExportFormat, SessionSummary } from '../../lib/types';
 import * as tauri from '../../lib/tauri';
 import { useAppStore } from '../../stores/useAppStore';
+import { CodexOperationsPanel } from './CodexOperationsPanel';
 
 const EXPORT_FORMATS: Array<{ value: SessionExportFormat; label: string }> = [
   { value: 'json', label: 'JSON bundle' },
@@ -133,6 +134,8 @@ export function OperationsTab() {
 
   return (
     <div className="space-y-6">
+      <CodexOperationsPanel />
+
       <section className="space-y-4">
         <div className="flex items-start justify-between gap-4">
           <div>

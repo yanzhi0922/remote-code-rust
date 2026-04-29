@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Info, Palette, Settings, Shield, Terminal, X } from 'lucide-react';
+import { Bot, Info, Palette, Settings, Shield, Terminal, X } from 'lucide-react';
 import type { FullSettings } from '../../lib/types';
 import { useAppStore } from '../../stores/useAppStore';
 import { AboutPanel } from './AboutPanel';
+import { CodexSettings } from './CodexSettings';
 import { GeneralSettings } from './GeneralSettings';
 import { HooksSettings, type HookConfig } from './HooksSettings';
 import { OutputStylePicker } from './OutputStylePicker';
@@ -14,11 +15,12 @@ export interface SettingsPanelProps {
   onClose: () => void;
 }
 
-type SettingsTab = 'general' | 'provider' | 'permissions' | 'appearance' | 'hooks' | 'about';
+type SettingsTab = 'general' | 'provider' | 'codex' | 'permissions' | 'appearance' | 'hooks' | 'about';
 
 const TABS: Array<{ key: SettingsTab; label: string; icon: typeof Settings }> = [
   { key: 'general', label: '通用', icon: Settings },
   { key: 'provider', label: '提供商', icon: Terminal },
+  { key: 'codex', label: 'Codex', icon: Bot },
   { key: 'permissions', label: '权限', icon: Shield },
   { key: 'appearance', label: '外观', icon: Palette },
   { key: 'hooks', label: 'Hooks', icon: Terminal },
@@ -137,6 +139,9 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                 )}
                 {activeTab === 'provider' && (
                   <ProviderSettings settings={current} onUpdate={handleUpdate} />
+                )}
+                {activeTab === 'codex' && (
+                  <CodexSettings settings={current} onUpdate={handleUpdate} />
                 )}
                 {activeTab === 'permissions' && (
                   <PermissionSettings settings={current} onUpdate={handleUpdate} />

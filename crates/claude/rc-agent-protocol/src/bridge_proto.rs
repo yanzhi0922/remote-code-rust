@@ -1,8 +1,8 @@
-//! Bridge protocol definitions for the Codex/Roo-code bridge binaries.
+//! Bridge protocol definitions for the Roo-code bridge binary.
 //!
 //! This module defines the JSON-RPC method names, notification names, and
-//! parameter types used by the bridge layer. Both the bridge binaries
-//! (`remote-code-codex-bridge`, `remote-code-roo-bridge`) and the
+//! parameter types used by the bridge layer. Both the bridge binary
+//! (`remote-code-roo-bridge`) and the
 //! [`SubprocessAdapter`](crate::adapters::SubprocessAdapter) use these
 //! constants so the wire protocol stays in sync.
 

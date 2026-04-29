@@ -11935,12 +11935,19 @@ dependencies = [
  "async-trait",
  "codex-app-server-client",
  "codex-app-server-protocol",
+ "codex-arg0",
+ "codex-core",
+ "codex-exec-server",
+ "codex-feedback",
  "codex-protocol",
+ "directories 6.0.0",
  "rc-agent-protocol",
  "serde",
  "serde_json",
  "tokio",
+ "toml 0.9.12+spec-1.1.0",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
@@ -12709,18 +12716,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "remote-code-codex-bridge"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "rc-agent-protocol",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "remote-code-control-plane"
 version = "0.1.0"
 dependencies = [
@@ -12740,9 +12735,12 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "codex-app-server-protocol",
+ "codex-arg0",
  "directories 6.0.0",
  "keyring 2.3.3",
  "rc-agent-protocol",
+ "rc-codex-adapter",
  "rc-config",
  "rc-core",
  "rc-engine-events",

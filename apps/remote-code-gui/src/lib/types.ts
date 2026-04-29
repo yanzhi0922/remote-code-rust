@@ -329,6 +329,13 @@ export interface FullSettings {
   permission_mode: string;
   max_turns: number;
   verbose: boolean;
+  codex_model_provider: string | null;
+  codex_approval_policy: string | null;
+  codex_sandbox_mode: string | null;
+  codex_persist_extended_history: boolean;
+  codex_memories_enabled: boolean;
+  codex_thread_store_endpoint: string | null;
+  codex_config_overrides: Record<string, string>;
 }
 
 export interface UpdateProviderRequest {
@@ -350,6 +357,218 @@ export interface UpdateProviderRequest {
   respect_retry_after?: boolean;
   permission_mode?: string;
   verbose?: boolean;
+  codex_model_provider?: string | null;
+  codex_approval_policy?: string | null;
+  codex_sandbox_mode?: string | null;
+  codex_persist_extended_history?: boolean;
+  codex_memories_enabled?: boolean;
+  codex_thread_store_endpoint?: string | null;
+  codex_config_overrides?: Record<string, string>;
+}
+
+export interface CodexThreadListRequest {
+  cursor?: string | null;
+  limit?: number | null;
+  sortKey?: 'created_at' | 'updated_at' | 'createdAt' | 'updatedAt' | null;
+  sortDirection?: 'asc' | 'desc' | null;
+  modelProviders?: string[] | null;
+  sourceKinds?: string[] | null;
+  archived?: boolean | null;
+  cwd?: string | string[] | null;
+  useStateDbOnly?: boolean;
+  searchTerm?: string | null;
+}
+
+export interface CodexThreadRefRequest {
+  sessionId?: string | null;
+  threadId: string;
+  includeTurns?: boolean;
+}
+
+export interface CodexThreadArchiveRequest {
+  sessionId?: string | null;
+  threadId: string;
+}
+
+export interface CodexExecRequest {
+  command: string[];
+  processId?: string | null;
+  tty?: boolean;
+  streamStdin?: boolean;
+  streamStdoutStderr?: boolean;
+  outputBytesCap?: number | null;
+  disableOutputCap?: boolean;
+  disableTimeout?: boolean;
+  timeoutMs?: number | null;
+  cwd?: string | null;
+  env?: Record<string, string | null> | null;
+  sandboxPolicy?: unknown;
+  permissionProfile?: unknown;
+}
+
+export interface CodexAppServerRequest {
+  sessionId?: string | null;
+  method: string;
+  params?: unknown;
+}
+
+export type CodexJsonValue = object | unknown[] | string | number | boolean | null;
+
+export interface CodexExecWriteRequest {
+  sessionId?: string | null;
+  processId: string;
+  deltaBase64?: string | null;
+  closeStdin?: boolean;
+}
+
+export interface CodexExecResizeRequest {
+  sessionId?: string | null;
+  processId: string;
+  rows: number;
+  cols: number;
+}
+
+export interface CodexMcpStatusRequest {
+  sessionId?: string | null;
+  detail?: 'full' | 'toolsAndAuthOnly' | null;
+  cursor?: string | null;
+  limit?: number | null;
+}
+
+export interface CodexMcpResourceReadRequest {
+  sessionId?: string | null;
+  server: string;
+  uri: string;
+}
+
+export interface CodexMcpToolCallRequest {
+  sessionId?: string | null;
+  threadId: string;
+  server: string;
+  tool: string;
+  arguments?: unknown;
+  meta?: unknown;
+}
+
+export interface CodexConfigValueWriteRequest {
+  keyPath: string;
+  value: unknown;
+  mergeStrategy?: 'replace' | 'upsert' | null;
+  filePath?: string | null;
+  expectedVersion?: string | null;
+}
+
+export interface CodexConfigBatchEditRequest {
+  keyPath: string;
+  value: unknown;
+  mergeStrategy?: 'replace' | 'upsert' | null;
+}
+
+export interface CodexConfigBatchWriteRequest {
+  edits: CodexConfigBatchEditRequest[];
+  filePath?: string | null;
+  expectedVersion?: string | null;
+  reloadUserConfig?: boolean;
+}
+
+export interface CodexFeedbackRequest {
+  classification: string;
+  reason?: string | null;
+  threadId?: string | null;
+  includeLogs?: boolean;
+  extraLogFiles?: string[] | null;
+  tags?: Record<string, string> | null;
+}
+
+export interface CodexMemoryModeRequest {
+  sessionId?: string | null;
+  threadId: string;
+  enabled: boolean;
+}
+
+export interface CodexThreadSummary {
+  id: string;
+  forkedFromId?: string | null;
+  preview: string;
+  ephemeral?: boolean;
+  modelProvider: string;
+  createdAt: number;
+  updatedAt: number;
+  status: string | Record<string, unknown>;
+  path?: string | null;
+  cwd: string;
+  cliVersion?: string;
+  source?: string | Record<string, unknown>;
+  agentNickname?: string | null;
+  agentRole?: string | null;
+  gitInfo?: unknown | null;
+  name: string | null;
+  turns?: unknown[];
+}
+
+export interface CodexThreadListResponse {
+  data: CodexThreadSummary[];
+  nextCursor?: string | null;
+}
+
+export interface CodexThreadReadResponse {
+  thread: CodexThreadSummary;
+}
+
+export interface CodexThreadSessionResponse extends CodexThreadReadResponse {
+  model: string;
+  modelProvider: string;
+  serviceTier: unknown | null;
+  cwd: string;
+  instructionSources: string[];
+  approvalPolicy: string | Record<string, unknown>;
+  approvalsReviewer: string | Record<string, unknown>;
+  sandbox: unknown;
+  permissionProfile: unknown | null;
+  reasoningEffort: string | null;
+}
+
+export type CodexThreadArchiveResponse = Record<string, never>;
+
+export interface CodexExecResponse {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+export type CodexEmptyResponse = Record<string, never>;
+
+export interface CodexMcpStatusResponse {
+  data: unknown[];
+  nextCursor: string | null;
+}
+
+export interface CodexMcpResourceReadResponse {
+  contents: unknown[];
+}
+
+export interface CodexMcpToolCallResponse {
+  content: unknown[];
+  structuredContent?: unknown;
+  isError?: boolean;
+  _meta?: unknown;
+}
+
+export interface CodexConfigReadResponse {
+  config: Record<string, unknown>;
+  origins: Record<string, unknown>;
+  layers: unknown[] | null;
+}
+
+export interface CodexConfigWriteResponse {
+  status: string;
+  version: string;
+  filePath: string;
+  overriddenMetadata: unknown | null;
+}
+
+export interface CodexFeedbackResponse {
+  threadId: string;
 }
 
 export interface ModelProfile {
