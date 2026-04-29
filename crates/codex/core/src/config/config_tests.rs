@@ -69,10 +69,10 @@ use serde::Deserialize;
 use tempfile::tempdir;
 
 use super::*;
-use core_test_support::PathBufExt;
-use core_test_support::PathExt;
-use core_test_support::TempDirExt;
-use core_test_support::test_absolute_path;
+use codex_core_test_support::PathBufExt;
+use codex_core_test_support::PathExt;
+use codex_core_test_support::TempDirExt;
+use codex_core_test_support::test_absolute_path;
 use pretty_assertions::assert_eq;
 
 use std::collections::BTreeMap;

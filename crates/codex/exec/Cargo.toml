@@ -60,8 +60,8 @@ uuid = { workspace = true }
 [dev-dependencies]
 assert_cmd = { workspace = true }
 codex-apply-patch = { workspace = true }
+codex-core-test-support = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
-# core_test_support = { workspace = true }  # TODO: uncomment when migrated
 libc = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }

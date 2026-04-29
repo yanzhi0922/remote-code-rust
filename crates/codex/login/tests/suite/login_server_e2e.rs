@@ -10,7 +10,7 @@ use base64::Engine;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::ServerOptions;
 use codex_login::run_login_server;
-use core_test_support::skip_if_no_network;
+use codex_core_test_support::skip_if_no_network;
 use tempfile::tempdir;
 
 // See spawn.rs for details

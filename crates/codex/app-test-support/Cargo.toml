@@ -1,0 +1,39 @@
+[package]
+name = "codex-app-test-support"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+expect_used = "allow"
+
+[dependencies]
+anyhow = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true }
+codex-app-server-protocol = { workspace = true }
+codex-config = { workspace = true }
+codex-core = { workspace = true }
+codex-core-test-support = { workspace = true }
+codex-features = { workspace = true }
+codex-login = { workspace = true }
+codex-models-manager = { workspace = true }
+codex-protocol = { workspace = true }
+codex-utils-cargo-bin = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+] }
+uuid = { workspace = true }
+wiremock = { workspace = true }
+shlex = { workspace = true }

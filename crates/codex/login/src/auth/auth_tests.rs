@@ -1,3 +1,5 @@
+#![allow(unsafe_code)]
+
 use super::*;
 use crate::auth::storage::FileAuthStorage;
 use crate::auth::storage::get_auth_file;

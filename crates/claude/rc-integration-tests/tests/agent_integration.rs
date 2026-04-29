@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use rc_context::{RuntimeFeatureGates, RuntimeIdentityContext};
 
 // 鈹€鈹€鈹€ Helpers 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
@@ -76,15 +77,26 @@ fn agent_source_display_variants() {
 
 // 鈹€鈹€鈹€ Built-in agents registry 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
+fn test_context() -> RuntimeIdentityContext {
+    RuntimeIdentityContext {
+        features: RuntimeFeatureGates {
+            explore_plan_agents_enabled: true,
+            code_guide_enabled: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
 #[test]
 fn built_in_agents_returns_default_gated_set() {
-    let agents = rc_agents::builtins::get_built_in_agents();
+    let agents = rc_agents::builtins::get_built_in_agents_with_context(&test_context());
     assert_eq!(agents.len(), 5);
 }
 
 #[test]
 fn built_in_agents_have_correct_types() {
-    let agents = rc_agents::builtins::get_built_in_agents();
+    let agents = rc_agents::builtins::get_built_in_agents_with_context(&test_context());
     let types: Vec<&str> = agents.iter().map(|a| a.agent_type.as_str()).collect();
     assert!(types.contains(&"general-purpose"));
     assert!(types.contains(&"statusline-setup"));
@@ -96,7 +108,7 @@ fn built_in_agents_have_correct_types() {
 
 #[test]
 fn built_in_agents_all_have_system_prompts() {
-    let agents = rc_agents::builtins::get_built_in_agents();
+    let agents = rc_agents::builtins::get_built_in_agents_with_context(&test_context());
     for agent in &agents {
         assert!(
             agent.system_prompt.is_some(),

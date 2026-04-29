@@ -142,6 +142,8 @@ members = [
     "crates/codex/core",
     # Codex Stage 20: core-dependent crates
     "crates/codex/app-server-test-client",
+    "crates/codex/app-test-support",
+    "crates/codex/core-test-support",
     "crates/codex/chatgpt",
     "crates/codex/cloud-requirements",
     "crates/codex/linux-sandbox",
@@ -474,6 +476,8 @@ codex-code-mode = { path = "crates/codex/code-mode" }
 codex-rollout-trace = { path = "crates/codex/rollout-trace" }
 codex-tools = { path = "crates/codex/tools" }
 codex-core = { path = "crates/codex/core" }
+codex-core-test-support = { path = "crates/codex/core-test-support" }
+codex-app-test-support = { path = "crates/codex/app-test-support" }
 codex-app-server-test-client = { path = "crates/codex/app-server-test-client" }
 codex-chatgpt = { path = "crates/codex/chatgpt" }
 codex-cloud-requirements = { path = "crates/codex/cloud-requirements" }
@@ -502,7 +506,7 @@ crossterm = { git = "https://github.com/nornagon/crossterm", rev = "87db8bfa6dc9
 ratatui = { git = "https://github.com/nornagon/ratatui", rev = "9b2ad1298408c45918ee9f8241a6f95498cdbed2" }
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 dbg_macro = "deny"

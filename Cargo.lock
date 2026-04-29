@@ -2146,6 +2146,7 @@ dependencies = [
  "codex-analytics",
  "codex-api",
  "codex-app-server-protocol",
+ "codex-app-test-support",
  "codex-arg0",
  "codex-backend-client",
  "codex-chatgpt",
@@ -2153,6 +2154,7 @@ dependencies = [
  "codex-config",
  "codex-core",
  "codex-core-plugins",
+ "codex-core-test-support",
  "codex-device-key",
  "codex-exec-server",
  "codex-features",
@@ -2282,6 +2284,30 @@ dependencies = [
  "tungstenite",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "codex-app-test-support"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "codex-app-server-protocol",
+ "codex-config",
+ "codex-core",
+ "codex-core-test-support",
+ "codex-features",
+ "codex-login",
+ "codex-models-manager",
+ "codex-protocol",
+ "codex-utils-cargo-bin",
+ "serde",
+ "serde_json",
+ "shlex",
+ "tokio",
+ "uuid",
+ "wiremock",
 ]
 
 [[package]]
@@ -2654,6 +2680,7 @@ dependencies = [
  "codex-connectors",
  "codex-core-plugins",
  "codex-core-skills",
+ "codex-core-test-support",
  "codex-exec-server",
  "codex-execpolicy",
  "codex-features",
@@ -2683,6 +2710,7 @@ dependencies = [
  "codex-tools",
  "codex-utils-absolute-path",
  "codex-utils-cache",
+ "codex-utils-cargo-bin",
  "codex-utils-home-dir",
  "codex-utils-image",
  "codex-utils-output-truncation",
@@ -2814,6 +2842,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-core-test-support"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "base64 0.22.1",
+ "codex-arg0",
+ "codex-core",
+ "codex-exec-server",
+ "codex-features",
+ "codex-login",
+ "codex-model-provider-info",
+ "codex-models-manager",
+ "codex-protocol",
+ "codex-utils-absolute-path",
+ "codex-utils-cargo-bin",
+ "ctor 0.6.3",
+ "futures",
+ "notify",
+ "opentelemetry",
+ "opentelemetry_sdk",
+ "pretty_assertions",
+ "regex-lite",
+ "reqwest 0.12.28",
+ "serde_json",
+ "shlex",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "walkdir",
+ "wiremock",
+ "zstd",
+]
+
+[[package]]
 name = "codex-debug-client"
 version = "0.1.0"
 dependencies = [
@@ -2854,6 +2920,7 @@ dependencies = [
  "codex-arg0",
  "codex-cloud-requirements",
  "codex-core",
+ "codex-core-test-support",
  "codex-feedback",
  "codex-git-utils",
  "codex-login",
@@ -3096,6 +3163,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-client",
  "codex-config",
+ "codex-core-test-support",
  "codex-keyring-store",
  "codex-model-provider-info",
  "codex-otel",

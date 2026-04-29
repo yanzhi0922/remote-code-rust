@@ -1,3 +1,5 @@
+#![allow(unsafe_code)]
+
 use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
@@ -14,7 +16,7 @@ use codex_login::save_auth;
 use codex_login::token_data::IdTokenInfo;
 use codex_login::token_data::TokenData;
 use codex_protocol::auth::RefreshTokenFailedReason;
-use core_test_support::skip_if_no_network;
+use codex_core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use serde::Serialize;
 use serde_json::json;

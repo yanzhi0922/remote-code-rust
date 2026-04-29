@@ -6,7 +6,7 @@
 use crate::coordinator::is_coordinator_mode;
 use crate::definition::{AgentDefinition, AgentSource};
 use crate::worker::worker_agent_definition;
-use rc_context::{RuntimeIdentityContext, RuntimeUserType};
+use rc_context::{RuntimeFeatureGates, RuntimeIdentityContext, RuntimeUserType};
 
 /// Returns all built-in agent definitions.
 ///
@@ -648,15 +648,32 @@ Guidelines:
 mod tests {
     use super::*;
 
+    /// Returns all built-in agents with a context that enables all standard features.
+    fn test_context() -> RuntimeIdentityContext {
+        RuntimeIdentityContext {
+            features: RuntimeFeatureGates {
+                explore_plan_agents_enabled: true,
+                code_guide_enabled: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// Returns all built-in agents with a clean context (no env var interference).
+    fn all_built_in_agents() -> Vec<AgentDefinition> {
+        get_built_in_agents_with_context(&test_context())
+    }
+
     #[test]
     fn all_six_built_in_agents_load() {
-        let agents = get_built_in_agents();
+        let agents = all_built_in_agents();
         assert_eq!(agents.len(), 5);
     }
 
     #[test]
     fn all_built_in_agents_have_unique_types() {
-        let agents = get_built_in_agents();
+        let agents = all_built_in_agents();
         let types: std::collections::HashSet<&str> =
             agents.iter().map(|a| a.agent_type.as_str()).collect();
         assert_eq!(types.len(), 5);
@@ -664,7 +681,7 @@ mod tests {
 
     #[test]
     fn all_built_in_agents_are_builtin_source() {
-        let agents = get_built_in_agents();
+        let agents = all_built_in_agents();
         for agent in &agents {
             assert_eq!(
                 agent.source,

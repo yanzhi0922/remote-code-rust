@@ -677,18 +677,30 @@ mod tests {
     fn memory_dir_user_scope() {
         let base = PathBuf::from("/project");
         let config = PathBuf::from("/home/.claude");
+        // When CLAUDE_CONFIG_DIR is set, it overrides config_home for User scope.
+        // Use the env var value in the assertion if set.
+        let expected_config = std::env::var_os("CLAUDE_CONFIG_DIR")
+            .map(PathBuf::from)
+            .unwrap_or(config.clone());
         let dir = get_agent_memory_dir("test", AgentMemoryScope::User, &base, &config);
-        assert_eq!(dir, PathBuf::from("/home/.claude/agent-memory/test"));
+        assert_eq!(dir, expected_config.join("agent-memory").join("test"));
     }
 
     #[test]
     fn is_agent_memory_path_check() {
         let base = PathBuf::from("/project");
         let config = PathBuf::from("/home/.claude");
+
+        // Project-scope path should always work (not affected by env vars)
         let project_mem = PathBuf::from("/project/.claude/agent-memory/test/MEMORY.md");
         assert!(is_agent_memory_path(&project_mem, &base, &config));
 
-        let user_mem = PathBuf::from("/home/.claude/agent-memory/test/MEMORY.md");
+        // User-scope path depends on CLAUDE_CONFIG_DIR or CLAUDE_CODE_REMOTE_MEMORY_DIR
+        let user_config = std::env::var_os("CLAUDE_CODE_REMOTE_MEMORY_DIR")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from))
+            .unwrap_or_else(|| config.clone());
+        let user_mem = user_config.join("agent-memory").join("test").join("MEMORY.md");
         assert!(is_agent_memory_path(&user_mem, &base, &config));
 
         let random = PathBuf::from("/tmp/other.md");

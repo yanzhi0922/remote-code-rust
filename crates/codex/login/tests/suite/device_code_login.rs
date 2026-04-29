@@ -19,7 +19,7 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-use core_test_support::skip_if_no_network;
+use codex_core_test_support::skip_if_no_network;
 
 // ---------- Small helpers  ----------
 
