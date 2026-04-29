@@ -1,8 +1,8 @@
 use super::*;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_sandboxing::SandboxType;
-use core_test_support::PathBufExt;
-use core_test_support::PathExt;
+use codex_core_test_support::PathBufExt;
+use codex_core_test_support::PathExt;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::time::Duration;

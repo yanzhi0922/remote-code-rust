@@ -402,6 +402,7 @@ pub fn get_tools_description(agent: &AgentDefinition) -> String {
 mod tests {
     use super::*;
     use crate::definition::AgentDefinition;
+    use rc_context::{RuntimeFeatureGates, RuntimeIdentityContext};
 
     #[test]
     fn format_agent_line_basic() {
@@ -599,7 +600,15 @@ mod tests {
 
     #[test]
     fn full_prompt_with_builtins() {
-        let agents = crate::builtins::get_built_in_agents();
+        let ctx = RuntimeIdentityContext {
+            features: RuntimeFeatureGates {
+                explore_plan_agents_enabled: true,
+                code_guide_enabled: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let agents = crate::builtins::get_built_in_agents_with_context(&ctx);
         let prompt = build_agent_prompt(&agents, false, false, None);
         assert!(prompt.contains("general-purpose"));
         assert!(prompt.contains("Explore"));

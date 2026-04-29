@@ -111,7 +111,6 @@ pub mod legacy_core {
         pub use codex_core::review_prompts::*;
     }
 
-    #[cfg(test)]
     pub mod test_support {
         pub use codex_core::test_support::*;
     }

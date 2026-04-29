@@ -44,7 +44,7 @@ webbrowser = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
-# core_test_support = { workspace = true }  # TODO: uncomment after core migration
+codex-core-test-support = { workspace = true }
 keyring = { workspace = true }
 pretty_assertions = { workspace = true }
 regex-lite = { workspace = true }

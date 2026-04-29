@@ -34,7 +34,7 @@ use codex_tools::ZshForkConfig;
 use codex_tools::mcp_call_tool_result_output_schema;
 use codex_tools::mcp_tool_to_deferred_responses_api_tool;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use core_test_support::assert_regex_match;
+use codex_core_test_support::assert_regex_match;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::path::PathBuf;

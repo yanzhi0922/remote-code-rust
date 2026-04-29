@@ -67,7 +67,7 @@ pub(crate) async fn resolve_installation_id(codex_home: &AbsolutePathBuf) -> Res
 mod tests {
     use super::INSTALLATION_ID_FILENAME;
     use super::resolve_installation_id;
-    use core_test_support::PathExt;
+    use codex_core_test_support::PathExt;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
     use uuid::Uuid;

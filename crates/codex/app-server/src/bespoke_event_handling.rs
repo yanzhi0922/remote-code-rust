@@ -3148,7 +3148,7 @@ mod tests {
     use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
-    use core_test_support::load_default_config_for_test;
+    use codex_core_test_support::load_default_config_for_test;
     use pretty_assertions::assert_eq;
     use rmcp::model::Content;
     use serde_json::Value as JsonValue;

@@ -151,10 +151,8 @@ assert_matches = { workspace = true }
 codex-otel = { workspace = true }
 # TODO: codex-test-binary-support has circular dependency (needs arg0 → linux-sandbox → core)
 # codex-test-binary-support = { workspace = true }
-# TODO: codex-utils-cargo-bin not yet migrated
-# codex-utils-cargo-bin = { workspace = true }
-# TODO: core_test_support is in tests/common/ which needs core
-# core_test_support = { workspace = true }
+codex-core-test-support = { workspace = true }
+codex-utils-cargo-bin = { workspace = true }
 ctor = { workspace = true }
 insta = { workspace = true }
 maplit = { workspace = true }

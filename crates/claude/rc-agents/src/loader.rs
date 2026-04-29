@@ -8,7 +8,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
-use rc_context::RuntimeIdentityContext;
+use rc_context::{RuntimeFeatureGates, RuntimeIdentityContext};
 use serde::Deserialize;
 use walkdir::WalkDir;
 
@@ -737,7 +737,15 @@ mod tests {
         let json = r#"{"custom": {"description": "Custom", "prompt": "Do stuff"}}"#;
         fs::write(dir.path().join("agents.json"), json).expect("write");
 
-        let result = load_all_agents(Some(dir.path()), None);
+        let ctx = RuntimeIdentityContext {
+            features: RuntimeFeatureGates {
+                explore_plan_agents_enabled: true,
+                code_guide_enabled: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let result = load_all_agents_with_context(Some(dir.path()), None, &ctx);
         // Should have built-in agents + custom
         assert!(result.active_agents.len() > 5);
         assert!(
