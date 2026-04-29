@@ -74,7 +74,7 @@ graph TB
 所有三个 Agent 共享同一个适配器实现：
 
 ```rust
-// crates/rc-agent-protocol/src/adapters/in_process.rs
+// crates/claude/rc-agent-protocol/src/adapters/in_process.rs
 
 pub struct InProcessAdapter {
     pub(crate) info: AgentInfo,
@@ -117,20 +117,20 @@ impl InProcessAdapter {
 每个 Agent 类型是 `InProcessAdapter` 的类型别名：
 
 ```rust
-// crates/rc-agent-protocol/src/adapters/remote_claude.rs
+// crates/claude/rc-agent-protocol/src/adapters/remote_claude.rs
 pub type RemoteClaudeAdapter = InProcessAdapter;
 
-// crates/rc-agent-protocol/src/adapters/remote_roo.rs
+// crates/claude/rc-agent-protocol/src/adapters/remote_roo.rs
 pub type RemoteRooAdapter = InProcessAdapter;
 
-// crates/rc-agent-protocol/src/adapters/remote_codex.rs
+// crates/claude/rc-agent-protocol/src/adapters/remote_codex.rs
 pub type RemoteCodexAdapter = InProcessAdapter;
 ```
 
 ### 2.3 AgentAdapter Trait
 
 ```rust
-// crates/rc-agent-protocol/src/adapter.rs
+// crates/claude/rc-agent-protocol/src/adapter.rs
 
 #[async_trait]
 pub trait AgentAdapter: Send + Sync {
@@ -148,7 +148,7 @@ pub trait AgentAdapter: Send + Sync {
 ### 2.4 统一的 Agent 事件
 
 ```rust
-// crates/rc-agent-protocol/src/events.rs
+// crates/claude/rc-agent-protocol/src/events.rs
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UnifiedAgentEvent {
@@ -222,7 +222,7 @@ let adapter = RemoteClaudeAdapter::new_claude()
 ## 4. AgentRouter
 
 ```rust
-// crates/rc-agent-protocol/src/router.rs
+// crates/claude/rc-agent-protocol/src/router.rs
 
 pub struct AgentRouter {
     adapters: HashMap<String, Box<dyn AgentAdapter>>,
@@ -376,7 +376,7 @@ async fn list_agents(state: State<'_, AppState>) -> Result<Vec<AgentInfoDto>, St
 ### 8.1 健康检查
 
 ```rust
-// crates/rc-agent-protocol/src/health.rs
+// crates/claude/rc-agent-protocol/src/health.rs
 
 pub struct HealthChecker {
     // 健康状态追踪
@@ -391,7 +391,7 @@ impl HealthChecker {
 ### 8.2 重启策略
 
 ```rust
-// crates/rc-agent-protocol/src/restart.rs
+// crates/claude/rc-agent-protocol/src/restart.rs
 
 pub struct RestartTracker {
     max_restarts: usize,

@@ -78,7 +78,7 @@
   - `WebSocket + after cursor` 订阅实时事件
 - 证据：
   - [apps/remote-code-gui/src/remote/api.ts](../apps/remote-code-gui/src/remote/api.ts) 的 `buildSessionEventsStreamUrl()` 会构造 `ws://` / `wss://`
-  - [crates/rc-control-plane/src/handlers.rs](../crates/rc-control-plane/src/handlers.rs) 使用 `WebSocketUpgrade`
+  - [crates/claude/rc-control-plane/src/handlers.rs](../crates/claude/rc-control-plane/src/handlers.rs) 使用 `WebSocketUpgrade`
 - 因此，**v2 不允许再把远程适配器写成 SSE 方案**，除非未来明确决定重构协议。
 
 ### 1.5 事件模型真实状态
@@ -93,8 +93,8 @@
   - `approval_requested`
   - `artifact_created`
 - 证据：
-  - [crates/rc-ui-bridge/src/lib.rs](../crates/rc-ui-bridge/src/lib.rs)
-  - [crates/rc-protocol/src/lib.rs](../crates/rc-protocol/src/lib.rs)
+  - [crates/claude/rc-ui-bridge/src/lib.rs](../crates/claude/rc-ui-bridge/src/lib.rs)
+  - [crates/claude/rc-protocol/src/lib.rs](../crates/claude/rc-protocol/src/lib.rs)
   - [apps/remote-code-gui/src/stores/useAppStore.ts](../apps/remote-code-gui/src/stores/useAppStore.ts)
 - 所以 v2 必须基于**当前事件真实名称和字段**来设计任务树与时间线，而不是重新假设另一套事件语言。
 

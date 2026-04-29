@@ -27,32 +27,32 @@ tracing.workspace = true
 uuid.workspace = true
 directories.workspace = true
 tempfile.workspace = true
-rc-config = { path = "../../crates/rc-config" }
-rc-compact = { path = "../../crates/rc-compact" }
-rc-context = { path = "../../crates/rc-context" }
-rc-control-plane = { path = "../../crates/rc-control-plane" }
-rc-core = { path = "../../crates/rc-core" }
-rc-engine-events = { path = "../../crates/rc-engine-events" }
-rc-agents = { path = "../../crates/rc-agents" }
-rc-auth = { path = "../../crates/rc-auth" }
-rc-mcp = { path = "../../crates/rc-mcp" }
-rc-model = { path = "../../crates/rc-model" }
-rc-permissions = { path = "../../crates/rc-permissions" }
-rc-plugins = { path = "../../crates/rc-plugins" }
-rc-protocol = { path = "../../crates/rc-protocol" }
-rc-provider = { path = "../../crates/rc-provider" }
-rc-query-engine = { path = "../../crates/rc-query-engine" }
-rc-runtime-prompt = { path = "../../crates/rc-runtime-prompt" }
-rc-runner = { path = "../../crates/rc-runner" }
-rc-session = { path = "../../crates/rc-session" }
-rc-skills = { path = "../../crates/rc-skills" }
-rc-swarm = { path = "../../crates/rc-swarm" }
-rc-system-prompt = { path = "../../crates/rc-system-prompt" }
-rc-telemetry = { path = "../../crates/rc-telemetry" }
-rc-tools = { path = "../../crates/rc-tools" }
-rc-transcript = { path = "../../crates/rc-transcript" }
-rc-tui = { path = "../../crates/rc-tui" }
-rc-ui-bridge = { path = "../../crates/rc-ui-bridge" }
+rc-config = { path = "../../crates/claude/rc-config" }
+rc-compact = { path = "../../crates/claude/rc-compact" }
+rc-context = { path = "../../crates/claude/rc-context" }
+rc-control-plane = { path = "../../crates/claude/rc-control-plane" }
+rc-core = { path = "../../crates/claude/rc-core" }
+rc-engine-events = { path = "../../crates/claude/rc-engine-events" }
+rc-agents = { path = "../../crates/claude/rc-agents" }
+rc-auth = { path = "../../crates/claude/rc-auth" }
+rc-mcp = { path = "../../crates/claude/rc-mcp" }
+rc-model = { path = "../../crates/claude/rc-model" }
+rc-permissions = { path = "../../crates/claude/rc-permissions" }
+rc-plugins = { path = "../../crates/claude/rc-plugins" }
+rc-protocol = { path = "../../crates/claude/rc-protocol" }
+rc-provider = { path = "../../crates/claude/rc-provider" }
+rc-query-engine = { path = "../../crates/claude/rc-query-engine" }
+rc-runtime-prompt = { path = "../../crates/claude/rc-runtime-prompt" }
+rc-runner = { path = "../../crates/claude/rc-runner" }
+rc-session = { path = "../../crates/claude/rc-session" }
+rc-skills = { path = "../../crates/claude/rc-skills" }
+rc-swarm = { path = "../../crates/claude/rc-swarm" }
+rc-system-prompt = { path = "../../crates/claude/rc-system-prompt" }
+rc-telemetry = { path = "../../crates/claude/rc-telemetry" }
+rc-tools = { path = "../../crates/claude/rc-tools" }
+rc-transcript = { path = "../../crates/claude/rc-transcript" }
+rc-tui = { path = "../../crates/claude/rc-tui" }
+rc-ui-bridge = { path = "../../crates/claude/rc-ui-bridge" }
 chrono.workspace = true
 
 [dev-dependencies]

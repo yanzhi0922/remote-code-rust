@@ -405,18 +405,18 @@ async fn run_unified_prompt(
 |------|---------|---------|
 | [`apps/remote-code-gui/src-tauri/src/lib.rs`](apps/remote-code-gui/src-tauri/src/lib.rs) | 1. `send_prompt()` 改为调用 `run_unified_prompt()` 2. 删除 `run_gui_prompt()` 3. 删除 `run_agent_prompt()` 4. 简化 `create_session()` — 不再为外部 agent 创建 stub adapter 5. 添加 `mod query_engine_gui;` | **大改** — 删除约 800 行手写循环和事件翻译代码 |
 | [`apps/remote-code-gui/src-tauri/Cargo.toml`](apps/remote-code-gui/src-tauri/Cargo.toml) | 添加 `rc-query-engine` 依赖 | 小改 |
-| [`crates/rc-query-engine/src/config.rs`](crates/rc-query-engine/src/config.rs) | 可能需要扩展 `ToolRunResult` 以支持 worktree 更新回调 | 小改 |
-| [`crates/rc-agent-protocol/src/adapters/remote_roo.rs`](crates/rc-agent-protocol/src/adapters/remote_roo.rs) | 保留但标记为 deprecated（未来用于真正的外部 Agent） | 无功能变更 |
-| [`crates/rc-agent-protocol/src/adapters/remote_codex.rs`](crates/rc-agent-protocol/src/adapters/remote_codex.rs) | 同上 | 无功能变更 |
+| [`crates/claude/rc-query-engine/src/config.rs`](crates/claude/rc-query-engine/src/config.rs) | 可能需要扩展 `ToolRunResult` 以支持 worktree 更新回调 | 小改 |
+| [`crates/claude/rc-agent-protocol/src/adapters/remote_roo.rs`](crates/claude/rc-agent-protocol/src/adapters/remote_roo.rs) | 保留但标记为 deprecated（未来用于真正的外部 Agent） | 无功能变更 |
+| [`crates/claude/rc-agent-protocol/src/adapters/remote_codex.rs`](crates/claude/rc-agent-protocol/src/adapters/remote_codex.rs) | 同上 | 无功能变更 |
 
 ### 6.3 不需要修改的文件
 
 | 文件 | 原因 |
 |------|------|
-| [`crates/rc-query-engine/src/engine.rs`](crates/rc-query-engine/src/engine.rs) | QueryEngine 本身无需修改 |
-| [`crates/rc-query-engine/src/query_loop.rs`](crates/rc-query-engine/src/query_loop.rs) | 查询循环逻辑无需修改 |
-| [`crates/rc-query-engine/src/observer.rs`](crates/rc-query-engine/src/observer.rs) | Observer trait 无需修改 |
-| [`crates/rc-engine-events/src/types.rs`](crates/rc-engine-events/src/types.rs) | EngineEvent 类型无需修改 |
+| [`crates/claude/rc-query-engine/src/engine.rs`](crates/claude/rc-query-engine/src/engine.rs) | QueryEngine 本身无需修改 |
+| [`crates/claude/rc-query-engine/src/query_loop.rs`](crates/claude/rc-query-engine/src/query_loop.rs) | 查询循环逻辑无需修改 |
+| [`crates/claude/rc-query-engine/src/observer.rs`](crates/claude/rc-query-engine/src/observer.rs) | Observer trait 无需修改 |
+| [`crates/claude/rc-engine-events/src/types.rs`](crates/claude/rc-engine-events/src/types.rs) | EngineEvent 类型无需修改 |
 | [`agents/claudecode/src/query_engine_compat.rs`](agents/claudecode/src/query_engine_compat.rs) | CLI 路径保持独立 |
 
 ---

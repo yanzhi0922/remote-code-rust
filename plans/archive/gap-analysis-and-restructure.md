@@ -112,7 +112,7 @@ query() {
 
 ### 2.2 API 客户端：rc-provider vs services/api/claude.ts
 
-**当前 Rust** (`crates/rc-provider/src/lib.rs`, 1,657 行):
+**当前 Rust** (`crates/claude/rc-provider/src/lib.rs`, 1,657 行):
 
 - `complete()` → 非流式请求
 - `complete_streaming_with_callbacks()` → 流式请求（简单回调）
@@ -171,7 +171,7 @@ query() {
 
 ### 2.3 工具运行时：rc-tools vs tools/*
 
-**当前 Rust** (`crates/rc-tools/src/`, ~3,000 行):
+**当前 Rust** (`crates/claude/rc-tools/src/`, ~3,000 行):
 
 - `specs.rs` (1,041 行) → 工具 JSON Schema 定义
 - `shell/mod.rs` (500 行) → Shell 执行
@@ -208,7 +208,7 @@ query() {
 
 ### 2.4 核心类型：rc-core vs types/*
 
-**当前 Rust** (`crates/rc-core/src/lib.rs`, 591 行):
+**当前 Rust** (`crates/claude/rc-core/src/lib.rs`, 591 行):
 
 - `PermissionMode` (6 变体)
 - `ProviderProtocol` (4 变体)
@@ -236,7 +236,7 @@ query() {
 
 ### 2.5 权限系统：rc-permissions vs useCanUseTool.tsx
 
-**当前 Rust** (`crates/rc-permissions/src/`, ~500 行):
+**当前 Rust** (`crates/claude/rc-permissions/src/`, ~500 行):
 
 - `PermissionBroker` trait → 简单 decide() 方法
 - `PermissionMode` → 6 种模式
