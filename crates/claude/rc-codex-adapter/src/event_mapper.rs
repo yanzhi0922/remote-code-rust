@@ -4,8 +4,6 @@
 //! specialized event types. This module translates the subset relevant to
 //! the unified agent protocol into [`UnifiedAgentEvent`] variants.
 
-#![allow(dead_code)]
-
 use rc_agent_protocol::events::{AgentResult, UnifiedAgentEvent, UsageInfo};
 
 use codex_app_server_client::AppServerEvent;
