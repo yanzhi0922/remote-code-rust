@@ -42,7 +42,7 @@ The codex and roo-code directories are excluded from the main repo via `.gitigno
 - `rc-runner`: runner protocol, HTTP API, workspace registration, heartbeat, session/approval management
 - `rc-control-plane`: API models, runner registry, realtime fan-out (WebSocket), approvals, artifact routes, timeline events
 - `rc-telemetry`: tracing setup, structured logging, JSON output, cost telemetry
-- `rc-agent-protocol`: multi-agent protocol abstraction layer — unified `InProcessAdapter` with callback injection, `UnifiedAgentEvent` enum, `AgentRouter` for routing messages to different agent backends. All three agents (Remote Code, Roo Code, Codex) share the same `InProcessAdapter` implementation via type aliases (`RemoteClaudeAdapter`, `RemoteRooAdapter`, `RemoteCodexAdapter`)
+- `rc-agent-protocol`: multi-agent protocol abstraction layer — `InProcessAdapter` for Claude/Roo (callback injection), `CodexInProcessAdapter` for Codex (native AppServerClient event pump), `SubprocessAdapter` fallback, `UnifiedAgentEvent` enum, `AgentRouter` for routing messages to different agent backends
 - `rc-query-engine`: unified query loop, state machine, streaming executor, token budget — shared execution path for all three agents
 
 ## Process Model
@@ -161,10 +161,10 @@ The compatibility serializer is the only place where loosely structured legacy s
 
 ### Multi-Agent Protocol Boundary
 
-All three agents (Remote Code, Roo Code, Codex) communicate via **in-process callbacks** — not subprocess JSON-RPC:
+Agents communicate via in-process adapters — no subprocess spawning or IPC overhead:
 
-- `InProcessAdapter` receives injected callback functions at construction time
-- Callbacks are invoked directly within the Tauri process
+- **Claude Code & Roo Code**: `InProcessAdapter` receives injected callback functions at construction time
+- **Codex**: `CodexInProcessAdapter` wraps the Codex `AppServerClient` with a background event pump for real-time streaming
 - Events flow through `mpsc::Receiver<UnifiedAgentEvent>` channels
 - No external process spawning, no IPC overhead, no subprocess lifecycle management
 
@@ -409,15 +409,18 @@ graph TB
 |-------|-----------|----------|----------------|
 | Remote Code | In-process callback | Direct Rust calls | `InProcessAdapter` + rc-query-engine callbacks |
 | Roo Code | In-process callback | Callback injection | `InProcessAdapter` + roo-specific callbacks |
-| OpenAI Codex | In-process callback | Callback injection | `InProcessAdapter` + codex-specific callbacks |
+| OpenAI Codex | In-process event pump | Codex AppServerClient | `CodexInProcessAdapter` + event_mapper |
 
 **Core Abstractions:**
 
-- `InProcessAdapter` — unified adapter with builder-pattern callback injection (`with_send_message()`, `with_cancel()`, `with_resolve_permission()`)
+- `InProcessAdapter` — unified adapter with builder-pattern callback injection (`with_send_message()`, `with_cancel()`, `with_resolve_permission()`) for Claude and Roo
+- `CodexInProcessAdapter` — native Codex adapter wrapping `AppServerClient` with background event pump and `event_mapper` for real-time streaming
+- `SubprocessAdapter` — legacy fallback using bridge binaries (JSON-RPC over stdio)
 - `AgentAdapter` trait — async interface: `start()`, `send_message()`, `cancel()`, `resolve_permission()`, `stop()`, `is_alive()`
 - `AgentRouter` — routes sessions to the correct adapter based on `agent_type`
 - `UnifiedAgentEvent` — normalized event model for all agent protocols
 - `rc-agent-protocol` — shared types, adapter trait, event definitions, type aliases
+- `rc-codex-adapter` — Codex-specific adapter with event_mapper (AppServerEvent → UnifiedAgentEvent)
 
 **Key Design Decisions:**
 
@@ -431,53 +434,76 @@ graph TB
 
 ### 概览
 
-三个 Agent 各自编译为独立的可执行文件：
+三个 Agent 各自编译为独立的可执行文件，通过统一的 `AgentAdapter` trait 与主进程通信：
 
 | Agent | Binary Name | 通信方式 | 源码位置 |
 |-------|-------------|---------|---------|
-| Claude Code | `remote-code` | 进程内（InProcessAdapter） | `agents/claudecode/` |
-| Codex | `codex` | 子进程（SubprocessAdapter + Bridge） | `agents/codex/codex-rs/` |
-| Roo-code | `roo` | 子进程（SubprocessAdapter + Bridge） | `agents/roo-code/` |
+| Claude Code | `remote-code` | 进程内（InProcessAdapter + 回调注入） | `agents/claudecode/` |
+| Codex | `codex` | 进程内（CodexInProcessAdapter + 事件泵） | `agents/codex/codex-rs/` |
+| Roo-code | `roo` | 进程内（InProcessAdapter + 回调注入） | `agents/roo-code/` |
 
-### SubprocessAdapter
+### In-Process Adapters
 
-Codex 和 Roo-code 通过 `SubprocessAdapter` 与主进程通信：
-
-1. 主进程启动 Bridge Binary（`remote-code-codex-bridge` 或 `remote-code-roo-bridge`）
-2. Bridge Binary 通过 JSON-RPC over stdio 与主进程通信
-3. Bridge Binary 启动实际的 Codex/Roo-code 二进制并翻译 I/O
+所有三个 Agent 都通过进程内适配器与主进程通信，无需子进程桥接：
 
 ```mermaid
 graph TB
     subgraph Main Process
         GUI[GUI / CLI]
         ROUTER[AgentRouter]
-        IPA[InProcessAdapter<br/>Claude Code]
-        SA_CX[SubprocessAdapter<br/>Codex]
-        SA_ROO[SubprocessAdapter<br/>Roo-code]
+        IPA[InProcessAdapter<br/>Claude Code<br/>callback injection]
+        CXA[CodexInProcessAdapter<br/>Codex<br/>AppServerClient event pump]
+        ROA[InProcessAdapter<br/>Roo Code<br/>callback injection]
     end
 
-    subgraph Bridge Binaries
-        CX_BRIDGE[codex-bridge<br/>JSON-RPC stdio]
-        ROO_BRIDGE[roo-bridge<br/>JSON-RPC stdio]
-    end
-
-    subgraph External Agents
-        CX_BIN[codex binary]
-        ROO_BIN[roo-code binary]
+    subgraph Agent Runtimes
+        RC_RT[rc-query-engine]
+        CX_RT[Codex AppServerClient]
+        RO_RT[roo-logic]
     end
 
     GUI --> ROUTER
     ROUTER --> IPA
-    ROUTER --> SA_CX
-    ROUTER --> SA_ROO
+    ROUTER --> CXA
+    ROUTER --> ROA
 
-    SA_CX -->|spawn| CX_BRIDGE
-    SA_ROO -->|spawn| ROO_BRIDGE
-
-    CX_BRIDGE -->|spawn + translate| CX_BIN
-    ROO_BRIDGE -->|spawn + translate| ROO_BIN
+    IPA --> RC_RT
+    CXA --> CX_RT
+    ROA --> RO_RT
 ```
+
+### CodexInProcessAdapter Architecture
+
+`CodexInProcessAdapter` 直接包装 Codex 的 `AppServerClient`，通过后台事件泵实现实时流式传输：
+
+```text
+┌──────────────────────────────────────────────┐
+│  CodexInProcessAdapter                       │
+│  ┌──────────────┐  ┌───────────────────────┐ │
+│  │ request_handle│  │ event_pump (bg task)  │ │
+│  │ (Clone)       │  │ owns AppServerClient  │ │
+│  │               │  │ loops next_event()    │ │
+│  │ - request()   │  │ maps via event_mapper │ │
+│  │ - resolve()   │  │ forwards to event_tx  │ │
+│  │ - reject()    │  └───────────┬───────────┘ │
+│  └──────┬───────┘              │             │
+│         │          ┌───────────▼───────────┐ │
+│         │          │ Arc<Mutex<Option<tx>>> │ │
+│         │          │ (shared event router)  │ │
+│         │          └───────────┬───────────┘ │
+│  send_message() installs new rx│             │
+│  cancel() sends TurnInterrupt  │             │
+│  resolve_permission() resolves │             │
+└──────────────────────────────────────────────┘
+```
+
+### Legacy SubprocessAdapter (Fallback)
+
+SubprocessAdapter 仍可作为备用方案，通过 Bridge Binary 以 JSON-RPC over stdio 通信：
+
+1. 主进程启动 Bridge Binary（`remote-code-codex-bridge` 或 `remote-code-roo-bridge`）
+2. Bridge Binary 通过 JSON-RPC over stdio 与主进程通信
+3. Bridge Binary 启动实际的 Agent 二进制并翻译 I/O
 
 ### Bridge Protocol
 
@@ -620,4 +646,6 @@ Release builds are triggered by tags and produce binaries for 5 platforms.
 | Limitation | Description |
 |------------|-------------|
 | TTS Mock | `rc-voice::tts` returns placeholder responses, not connected to a real TTS service |
-| External Agent Callbacks | Roo Code / Codex callbacks currently return stub responses, awaiting real implementation |
+| Roo Code Callbacks | Roo Code callbacks currently return stub responses, awaiting real implementation |
+| Bridge Binary Duplication | `remote-code-codex-bridge` and `remote-code-roo-bridge` share ~95% identical code; should be merged into a parameterized single binary |
+| Alpha Dependencies | `rama-*` crates pinned to `0.3.0-alpha.4` — pre-release quality, will need migration when stable releases |
