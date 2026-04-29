@@ -38,6 +38,7 @@ node_modules/
 .research/
 output/
 
-# Agent source subdirectories (separate git repos)
-agents/codex/
-agents/roo-code/
+# Agent source — exclude git internals and research artifacts only
+agents/codex/.git/
+agents/roo-code/.git/
+agents/roo-code/.research/

@@ -1,0 +1,23 @@
+[package]
+name = "roo-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "MCP (Model Context Protocol) client for Roo Code Rust"
+
+[dependencies]
+roo-types = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+eventsource-stream = { workspace = true }
+tokio-stream = { workspace = true }
+notify = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+url = { workspace = true }

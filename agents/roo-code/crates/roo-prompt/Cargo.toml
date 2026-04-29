@@ -1,0 +1,14 @@
+[package]
+name = "roo-prompt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "System prompt generation for Roo Code Rust"
+
+[dependencies]
+roo-types = { path = "../roo-types" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+similar = { workspace = true }
