@@ -4,20 +4,220 @@
 //! specialized event types. This module translates the subset relevant to
 //! the unified agent protocol into [`UnifiedAgentEvent`] variants.
 
-use rc_agent_protocol::events::{AgentResult, UnifiedAgentEvent, UsageInfo};
+use rc_agent_protocol::events::{AgentResult, ToolCallInfo, UnifiedAgentEvent, UsageInfo};
 
 use codex_app_server_client::AppServerEvent;
-use codex_app_server_protocol::{ServerNotification, ServerRequest, ThreadItem};
+use codex_app_server_protocol::{
+    CommandExecutionStatus, DynamicToolCallStatus, McpToolCallStatus, PatchApplyStatus,
+    ServerNotification, ServerRequest, ThreadItem,
+};
+
+fn progress_event(
+    session_id: &str,
+    tool_name: impl Into<String>,
+    progress: impl Into<String>,
+) -> Vec<UnifiedAgentEvent> {
+    vec![UnifiedAgentEvent::ToolCallProgress {
+        session_id: session_id.to_owned(),
+        tool_name: tool_name.into(),
+        progress: progress.into(),
+    }]
+}
+
+fn json_progress_event(
+    session_id: &str,
+    tool_name: impl Into<String>,
+    payload: impl serde::Serialize,
+) -> Vec<UnifiedAgentEvent> {
+    progress_event(
+        session_id,
+        tool_name,
+        serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_owned()),
+    )
+}
+
+fn official_event(
+    session_id: &str,
+    method: &'static str,
+    payload: impl serde::Serialize,
+) -> Vec<UnifiedAgentEvent> {
+    json_progress_event(
+        session_id,
+        "codex_app_server_event",
+        serde_json::json!({
+            "method": method,
+            "params": payload,
+        }),
+    )
+}
+
+fn non_negative_i64_to_usize(value: i64) -> usize {
+    usize::try_from(value).unwrap_or(0)
+}
+
+fn thread_item_tool_call(item: &ThreadItem) -> Option<ToolCallInfo> {
+    match item {
+        ThreadItem::CommandExecution {
+            id,
+            command,
+            cwd,
+            process_id,
+            source,
+            status,
+            command_actions,
+            aggregated_output,
+            exit_code,
+            duration_ms,
+        } if *status != CommandExecutionStatus::InProgress => Some(ToolCallInfo {
+            id: id.clone(),
+            name: "command_execution".to_owned(),
+            input: serde_json::json!({
+                "command": command,
+                "cwd": cwd,
+                "processId": process_id,
+                "source": source,
+                "commandActions": command_actions,
+            }),
+            output: serde_json::json!({
+                "status": status,
+                "aggregatedOutput": aggregated_output,
+                "exitCode": exit_code,
+                "durationMs": duration_ms,
+            }),
+        }),
+        ThreadItem::FileChange {
+            id,
+            changes,
+            status,
+        } if *status != PatchApplyStatus::InProgress => Some(ToolCallInfo {
+            id: id.clone(),
+            name: "file_change".to_owned(),
+            input: serde_json::json!({
+                "changes": changes,
+            }),
+            output: serde_json::json!({
+                "status": status,
+            }),
+        }),
+        ThreadItem::McpToolCall {
+            id,
+            server,
+            tool,
+            status,
+            arguments,
+            mcp_app_resource_uri,
+            result,
+            error,
+            duration_ms,
+        } if *status != McpToolCallStatus::InProgress => Some(ToolCallInfo {
+            id: id.clone(),
+            name: format!("mcp/{server}/{tool}"),
+            input: serde_json::json!({
+                "server": server,
+                "tool": tool,
+                "arguments": arguments,
+                "mcpAppResourceUri": mcp_app_resource_uri,
+            }),
+            output: serde_json::json!({
+                "status": status,
+                "result": result,
+                "error": error,
+                "durationMs": duration_ms,
+            }),
+        }),
+        ThreadItem::DynamicToolCall {
+            id,
+            namespace,
+            tool,
+            arguments,
+            status,
+            content_items,
+            success,
+            duration_ms,
+        } if *status != DynamicToolCallStatus::InProgress => Some(ToolCallInfo {
+            id: id.clone(),
+            name: namespace
+                .as_ref()
+                .map(|namespace| format!("dynamic/{namespace}/{tool}"))
+                .unwrap_or_else(|| format!("dynamic/{tool}")),
+            input: serde_json::json!({
+                "namespace": namespace,
+                "tool": tool,
+                "arguments": arguments,
+            }),
+            output: serde_json::json!({
+                "status": status,
+                "contentItems": content_items,
+                "success": success,
+                "durationMs": duration_ms,
+            }),
+        }),
+        ThreadItem::CollabAgentToolCall {
+            id,
+            tool,
+            status,
+            sender_thread_id,
+            receiver_thread_ids,
+            prompt,
+            model,
+            reasoning_effort,
+            agents_states,
+        } => Some(ToolCallInfo {
+            id: id.clone(),
+            name: "collab_agent".to_owned(),
+            input: serde_json::json!({
+                "tool": tool,
+                "senderThreadId": sender_thread_id,
+                "receiverThreadIds": receiver_thread_ids,
+                "prompt": prompt,
+                "model": model,
+                "reasoningEffort": reasoning_effort,
+            }),
+            output: serde_json::json!({
+                "status": status,
+                "agentsStates": agents_states,
+            }),
+        }),
+        ThreadItem::WebSearch { id, query, action } => Some(ToolCallInfo {
+            id: id.clone(),
+            name: "web_search".to_owned(),
+            input: serde_json::json!({ "query": query }),
+            output: serde_json::json!({ "action": action }),
+        }),
+        ThreadItem::ImageView { id, path } => Some(ToolCallInfo {
+            id: id.clone(),
+            name: "image_view".to_owned(),
+            input: serde_json::json!({ "path": path }),
+            output: serde_json::json!({ "path": path }),
+        }),
+        ThreadItem::ImageGeneration {
+            id,
+            status,
+            revised_prompt,
+            result,
+            saved_path,
+        } => Some(ToolCallInfo {
+            id: id.clone(),
+            name: "image_generation".to_owned(),
+            input: serde_json::json!({
+                "revisedPrompt": revised_prompt,
+            }),
+            output: serde_json::json!({
+                "status": status,
+                "result": result,
+                "savedPath": saved_path,
+            }),
+        }),
+        _ => None,
+    }
+}
 
 /// Map a Codex [`AppServerEvent`] into zero or more [`UnifiedAgentEvent`]s.
 ///
 /// Most Codex events map 1:1 to a unified event, but some (like `Lagged`)
 /// are silently consumed, and some may produce multiple unified events in
 /// the future.
-pub fn map_app_server_event(
-    event: AppServerEvent,
-    session_id: &str,
-) -> Vec<UnifiedAgentEvent> {
+pub fn map_app_server_event(event: AppServerEvent, session_id: &str) -> Vec<UnifiedAgentEvent> {
     match event {
         AppServerEvent::Lagged { skipped: _ } => {
             // Backpressure signal — silently consumed.
@@ -28,9 +228,7 @@ pub fn map_app_server_event(
             map_server_notification(notification, session_id)
         }
 
-        AppServerEvent::ServerRequest(request) => {
-            map_server_request(request, session_id)
-        }
+        AppServerEvent::ServerRequest(request) => map_server_request(request, session_id),
 
         AppServerEvent::Disconnected { message } => {
             vec![UnifiedAgentEvent::Error {
@@ -78,11 +276,20 @@ fn map_server_notification(
             }]
         }
 
+        ServerNotification::PlanDelta(delta) => progress_event(session_id, "plan", delta.delta),
+
+        ServerNotification::ReasoningSummaryTextDelta(delta) => {
+            progress_event(session_id, "reasoning_summary", delta.delta)
+        }
+
+        ServerNotification::ReasoningTextDelta(delta) => {
+            progress_event(session_id, "reasoning", delta.delta)
+        }
+
         // ── Tool / item lifecycle ──
         ServerNotification::ItemStarted(item) => {
             let tool_name = thread_item_kind(&item.item).to_owned();
-            let tool_input =
-                serde_json::to_value(&item.item).unwrap_or(serde_json::Value::Null);
+            let tool_input = serde_json::to_value(&item.item).unwrap_or(serde_json::Value::Null);
             vec![UnifiedAgentEvent::ToolCallStarted {
                 session_id: session_id.to_owned(),
                 tool_name,
@@ -92,8 +299,7 @@ fn map_server_notification(
 
         ServerNotification::ItemCompleted(item) => {
             let tool_name = thread_item_kind(&item.item).to_owned();
-            let result =
-                serde_json::to_value(&item.item).unwrap_or(serde_json::Value::Null);
+            let result = serde_json::to_value(&item.item).unwrap_or(serde_json::Value::Null);
             vec![UnifiedAgentEvent::ToolCallCompleted {
                 session_id: session_id.to_owned(),
                 tool_name,
@@ -103,34 +309,85 @@ fn map_server_notification(
 
         // ── Command output streaming ──
         ServerNotification::CommandExecutionOutputDelta(delta) => {
-            vec![UnifiedAgentEvent::ToolCallProgress {
-                session_id: session_id.to_owned(),
-                tool_name: "command_execution".to_owned(),
-                progress: delta.delta,
-            }]
+            progress_event(session_id, "command_execution", delta.delta)
         }
 
         ServerNotification::CommandExecOutputDelta(delta) => {
-            vec![UnifiedAgentEvent::ToolCallProgress {
-                session_id: session_id.to_owned(),
-                tool_name: "command_exec".to_owned(),
-                progress: delta.delta_base64,
-            }]
+            json_progress_event(session_id, "command_exec", delta)
+        }
+
+        ServerNotification::TerminalInteraction(notification) => {
+            json_progress_event(session_id, "terminal_interaction", notification)
         }
 
         // ── File change output ──
         ServerNotification::FileChangeOutputDelta(delta) => {
-            vec![UnifiedAgentEvent::ToolCallProgress {
-                session_id: session_id.to_owned(),
-                tool_name: "file_change".to_owned(),
-                progress: delta.delta,
-            }]
+            progress_event(session_id, "file_change", delta.delta)
+        }
+
+        ServerNotification::FileChangePatchUpdated(notification) => {
+            json_progress_event(session_id, "file_change_patch", notification)
+        }
+
+        ServerNotification::McpToolCallProgress(notification) => {
+            progress_event(session_id, "mcp_tool_call", notification.message)
+        }
+
+        ServerNotification::ServerRequestResolved(notification) => {
+            json_progress_event(session_id, "server_request_resolved", notification)
         }
 
         // ── Turn lifecycle ──
-        ServerNotification::TurnStarted(_notification) => {
-            // Internal lifecycle event — not surfaced to the unified protocol.
-            Vec::new()
+        ServerNotification::ThreadStarted(notification) => {
+            json_progress_event(session_id, "thread_started", notification.thread)
+        }
+
+        ServerNotification::ThreadStatusChanged(notification) => {
+            json_progress_event(session_id, "thread_status", notification)
+        }
+
+        ServerNotification::ThreadArchived(notification) => {
+            json_progress_event(session_id, "thread_archived", notification)
+        }
+
+        ServerNotification::ThreadUnarchived(notification) => {
+            json_progress_event(session_id, "thread_unarchived", notification)
+        }
+
+        ServerNotification::ThreadClosed(notification) => {
+            json_progress_event(session_id, "thread_closed", notification)
+        }
+
+        ServerNotification::SkillsChanged(notification) => {
+            official_event(session_id, "skills/changed", notification)
+        }
+
+        ServerNotification::ThreadNameUpdated(notification) => {
+            json_progress_event(session_id, "thread_name_updated", notification)
+        }
+
+        ServerNotification::ThreadGoalUpdated(notification) => {
+            official_event(session_id, "thread/goal/updated", notification)
+        }
+
+        ServerNotification::ThreadGoalCleared(notification) => {
+            official_event(session_id, "thread/goal/cleared", notification)
+        }
+
+        ServerNotification::TurnStarted(notification) => {
+            json_progress_event(session_id, "turn_started", notification)
+        }
+
+        ServerNotification::HookStarted(notification) => {
+            official_event(session_id, "hook/started", notification)
+        }
+
+        ServerNotification::TurnPlanUpdated(notification) => {
+            json_progress_event(session_id, "turn_plan", notification)
+        }
+
+        ServerNotification::TurnDiffUpdated(notification) => {
+            progress_event(session_id, "turn_diff", notification.diff)
         }
 
         ServerNotification::TurnCompleted(notification) => {
@@ -144,31 +401,47 @@ fn map_server_notification(
                 })
                 .collect::<Vec<_>>()
                 .join("");
+            let tool_calls = notification
+                .turn
+                .items
+                .iter()
+                .filter_map(thread_item_tool_call)
+                .collect();
 
             vec![UnifiedAgentEvent::Completed {
                 session_id: session_id.to_owned(),
                 result: AgentResult {
                     response_text,
-                    tool_calls: Vec::new(),
+                    tool_calls,
                     usage: UsageInfo::default(),
                     cost: None,
                 },
             }]
         }
 
+        ServerNotification::HookCompleted(notification) => {
+            official_event(session_id, "hook/completed", notification)
+        }
+
         // ── Context management ──
         ServerNotification::ThreadTokenUsageUpdated(notification) => {
-            let used = notification.token_usage.total.input_tokens as usize;
+            let used = non_negative_i64_to_usize(notification.token_usage.total.total_tokens);
             let total = notification
                 .token_usage
                 .model_context_window
-                .map(|t| t as usize)
+                .map(non_negative_i64_to_usize)
                 .unwrap_or(0);
-            vec![UnifiedAgentEvent::ContextUsage {
+            let mut events = vec![UnifiedAgentEvent::ContextUsage {
                 session_id: session_id.to_owned(),
                 used,
                 total,
-            }]
+            }];
+            events.extend(json_progress_event(
+                session_id,
+                "codex_token_usage",
+                notification,
+            ));
+            events
         }
 
         ServerNotification::ContextCompacted(_notification) => {
@@ -179,6 +452,132 @@ fn map_server_notification(
             }]
         }
 
+        ServerNotification::McpServerStatusUpdated(notification) => {
+            json_progress_event(session_id, "mcp_server_status", notification)
+        }
+
+        ServerNotification::McpServerOauthLoginCompleted(notification) => {
+            json_progress_event(session_id, "mcp_oauth_login", notification)
+        }
+
+        ServerNotification::AccountUpdated(notification) => {
+            official_event(session_id, "account/updated", notification)
+        }
+
+        ServerNotification::AccountRateLimitsUpdated(notification) => {
+            official_event(session_id, "account/rateLimits/updated", notification)
+        }
+
+        ServerNotification::AppListUpdated(notification) => {
+            official_event(session_id, "app/list/updated", notification)
+        }
+
+        ServerNotification::ExternalAgentConfigImportCompleted(notification) => official_event(
+            session_id,
+            "externalAgentConfig/import/completed",
+            notification,
+        ),
+
+        ServerNotification::FsChanged(notification) => {
+            official_event(session_id, "fs/changed", notification)
+        }
+
+        ServerNotification::ReasoningSummaryPartAdded(notification) => {
+            official_event(session_id, "item/reasoning/summaryPartAdded", notification)
+        }
+
+        ServerNotification::RawResponseItemCompleted(notification) => {
+            official_event(session_id, "rawResponseItem/completed", notification)
+        }
+
+        ServerNotification::ItemGuardianApprovalReviewStarted(notification) => {
+            official_event(session_id, "item/autoApprovalReview/started", notification)
+        }
+
+        ServerNotification::ItemGuardianApprovalReviewCompleted(notification) => official_event(
+            session_id,
+            "item/autoApprovalReview/completed",
+            notification,
+        ),
+
+        ServerNotification::Warning(notification) => {
+            progress_event(session_id, "warning", notification.message)
+        }
+
+        ServerNotification::GuardianWarning(notification) => {
+            json_progress_event(session_id, "guardian_warning", notification)
+        }
+
+        ServerNotification::ConfigWarning(notification) => {
+            json_progress_event(session_id, "config_warning", notification)
+        }
+
+        ServerNotification::ModelRerouted(notification) => {
+            json_progress_event(session_id, "model_rerouted", notification)
+        }
+
+        ServerNotification::ModelVerification(notification) => {
+            official_event(session_id, "model/verification", notification)
+        }
+
+        ServerNotification::DeprecationNotice(notification) => {
+            official_event(session_id, "deprecationNotice", notification)
+        }
+
+        ServerNotification::FuzzyFileSearchSessionUpdated(notification) => {
+            official_event(session_id, "fuzzyFileSearch/sessionUpdated", notification)
+        }
+
+        ServerNotification::FuzzyFileSearchSessionCompleted(notification) => {
+            official_event(session_id, "fuzzyFileSearch/sessionCompleted", notification)
+        }
+
+        ServerNotification::ThreadRealtimeStarted(notification) => {
+            official_event(session_id, "thread/realtime/started", notification)
+        }
+
+        ServerNotification::ThreadRealtimeItemAdded(notification) => {
+            official_event(session_id, "thread/realtime/itemAdded", notification)
+        }
+
+        ServerNotification::ThreadRealtimeTranscriptDelta(notification) => {
+            official_event(session_id, "thread/realtime/transcript/delta", notification)
+        }
+
+        ServerNotification::ThreadRealtimeTranscriptDone(notification) => {
+            official_event(session_id, "thread/realtime/transcript/done", notification)
+        }
+
+        ServerNotification::ThreadRealtimeOutputAudioDelta(notification) => official_event(
+            session_id,
+            "thread/realtime/outputAudio/delta",
+            notification,
+        ),
+
+        ServerNotification::ThreadRealtimeSdp(notification) => {
+            official_event(session_id, "thread/realtime/sdp", notification)
+        }
+
+        ServerNotification::ThreadRealtimeError(notification) => {
+            official_event(session_id, "thread/realtime/error", notification)
+        }
+
+        ServerNotification::ThreadRealtimeClosed(notification) => {
+            official_event(session_id, "thread/realtime/closed", notification)
+        }
+
+        ServerNotification::WindowsWorldWritableWarning(notification) => {
+            official_event(session_id, "windows/worldWritableWarning", notification)
+        }
+
+        ServerNotification::WindowsSandboxSetupCompleted(notification) => {
+            official_event(session_id, "windowsSandbox/setupCompleted", notification)
+        }
+
+        ServerNotification::AccountLoginCompleted(notification) => {
+            official_event(session_id, "account/login/completed", notification)
+        }
+
         // ── Errors ──
         ServerNotification::Error(notification) => {
             vec![UnifiedAgentEvent::Error {
@@ -187,23 +586,11 @@ fn map_server_notification(
                 recoverable: notification.will_retry,
             }]
         }
-
-        // ── All other notifications: silently consumed ──
-        other => {
-            tracing::debug!(
-                notification = ?other,
-                "Codex notification not mapped to unified event"
-            );
-            Vec::new()
-        }
     }
 }
 
 /// Map a Codex [`ServerRequest`] (permission request) into a unified event.
-fn map_server_request(
-    request: ServerRequest,
-    session_id: &str,
-) -> Vec<UnifiedAgentEvent> {
+fn map_server_request(request: ServerRequest, session_id: &str) -> Vec<UnifiedAgentEvent> {
     let (tool_name, input) = match &request {
         ServerRequest::CommandExecutionRequestApproval { params, .. } => (
             "command_execution".to_owned(),
@@ -237,10 +624,9 @@ fn map_server_request(
             "dynamic_tool".to_owned(),
             serde_json::to_value(params).unwrap_or(serde_json::Value::Null),
         ),
-        ServerRequest::ChatgptAuthTokensRefresh { .. } => (
-            "chatgpt_auth_refresh".to_owned(),
-            serde_json::Value::Null,
-        ),
+        ServerRequest::ChatgptAuthTokensRefresh { .. } => {
+            ("chatgpt_auth_refresh".to_owned(), serde_json::Value::Null)
+        }
     };
 
     vec![UnifiedAgentEvent::PermissionRequest {

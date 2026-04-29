@@ -1,11 +1,11 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resetAppStore } from '../../test/appStoreTestUtils';
 
 vi.mock('../../lib/tauri', () => ({
   listSessions: vi.fn<() => Promise<import('../../lib/types').SessionSummary[]>>(() => Promise.resolve([])),
   exportSessionBundle: vi.fn(() => Promise.resolve('/tmp/export.json')),
-  runDoctorReport: vi.fn(() => Promise.resolve({ status: 'healthy', checks: [] } as import('../../lib/types').DoctorReportInfo)),
+  runDoctorReport: vi.fn(() => Promise.resolve({ status: 'healthy', checks: [] } as unknown as import('../../lib/types').DoctorReportInfo)),
 }));
 
 afterEach(() => { cleanup(); });

@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use rc_config::RuntimeConfig;
 use rc_core::{
@@ -23,34 +23,35 @@ use rc_core::{
 };
 use rc_engine_events::EventStream;
 use rc_permissions::PermissionDecision;
-use rc_provider::context::ContextWindowManager;
 use rc_provider::ConversationBackend;
+use rc_provider::context::ContextWindowManager;
 use rc_query_engine::{
     ProcessUserInputContext, ProviderInvocationMode, QueryEngine, QueryEngineConfig, QueryObserver,
     QueryObserverEvent, ToolRunResult, ToolRunner,
 };
 use rc_session::SessionStore;
 use rc_tools::{
+    FileStateCache,
     agent::parse_delegate_progress_event,
     execute_tool_call,
     git::apply_worktree_tool_result_to_runtime,
     runtime_plan_mode::{
-        inject_plan_mode_runtime_messages, install_plan_mode_runtime, RuntimePlanModeController,
+        RuntimePlanModeController, inject_plan_mode_runtime_messages, install_plan_mode_runtime,
     },
-    runtime_provider_tool_spec, FileStateCache,
+    runtime_provider_tool_spec,
 };
 use serde_json::json;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 use uuid::Uuid;
 
 use crate::{
-    BatchProgressDto, ContextCompactedDto, ContextOverflowDto, ContextUsageDto, StreamingDeltaDto,
-    SubtaskCompletedDto, SubtaskProgressDto, SubtaskStartedDto, ToolProgressDto, ToolResultDto,
     APP_EVENT_BATCH_PROGRESS, APP_EVENT_CONTEXT_COMPACTED, APP_EVENT_CONTEXT_OVERFLOW,
     APP_EVENT_CONTEXT_USAGE, APP_EVENT_STREAMING_DELTA, APP_EVENT_SUBTASK_COMPLETED,
     APP_EVENT_SUBTASK_PROGRESS, APP_EVENT_SUBTASK_STARTED, APP_EVENT_TOOL_PROGRESS,
-    APP_EVENT_TOOL_RESULT, APP_EVENT_TOOL_START,
+    APP_EVENT_TOOL_RESULT, APP_EVENT_TOOL_START, BatchProgressDto, ContextCompactedDto,
+    ContextOverflowDto, ContextUsageDto, StreamingDeltaDto, SubtaskCompletedDto,
+    SubtaskProgressDto, SubtaskStartedDto, ToolProgressDto, ToolResultDto,
 };
 
 // ─── GuiToolRunner ──────────────────────────────────────────────────────────

@@ -2,50 +2,61 @@ mod query_engine_gui;
 
 use std::collections::{BTreeMap, HashMap};
 use std::env;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
-use rc_agent_protocol::adapters::subprocess::SubprocessAdapter;
-use rc_agent_protocol::types::AgentType as ProtocolAgentType;
+use codex_app_server_protocol::{
+    CommandExecResizeParams, CommandExecTerminalSize, CommandExecWriteParams,
+    ConfigBatchWriteParams, ConfigEdit, ConfigValueWriteParams, McpServerStatusDetail,
+    MergeStrategy,
+};
 use rc_agent_protocol::AgentAdapter;
+use rc_agent_protocol::adapters::subprocess::SubprocessAdapter;
+use rc_agent_protocol::permission::PermissionDecision as AgentPermissionDecision;
+use rc_agent_protocol::types::AgentType as ProtocolAgentType;
+use rc_codex_adapter::{
+    CodexAdapterOptions, CodexExecRequest, CodexFeedbackRequest, CodexInProcessAdapter,
+    CodexThreadListRequest,
+};
 use rc_config::{
-    discover_env_providers, load_runtime_config, normalize_base_url, validate_provider_config,
     AppPaths, ProviderConfig as RuntimeProviderConfig, ProviderOverrides, RuntimeConfig,
-    RuntimeOverrides, SettingSource,
+    RuntimeOverrides, SettingSource, discover_env_providers, load_runtime_config,
+    normalize_base_url, validate_provider_config,
 };
 use rc_core::{
     ConversationEntry, ConversationRole, PermissionMode, ProviderProtocol, ToolCall, UsageSummary,
 };
 use rc_mcp::{
-    inspect_server, McpClientInfo, McpConfig, McpServerConfig, McpServerInspection, McpTransport,
-    McpTransportConfig, DEFAULT_MCP_CONFIG_FILE,
+    DEFAULT_MCP_CONFIG_FILE, McpClientInfo, McpConfig, McpServerConfig, McpServerInspection,
+    McpTransport, McpTransportConfig, inspect_server,
 };
 use rc_permissions::{
-    auto_allows, classify_tool, load_layered_rules, rules::summarize_rule_sources,
     LayeredPermissionBroker, PermissionBroker, PermissionClass, PermissionDecision,
-    PermissionRequest,
+    PermissionRequest, PermissionUpdate, PermissionUpdateDestination, auto_allows, classify_tool,
+    load_layered_rules, rules::summarize_rule_sources,
 };
-use rc_plugins::{discover_plugins_including_disabled, PluginBundle};
-use rc_provider::model_info::{get_model_info, ModelCapability};
+use rc_plugins::{PluginBundle, discover_plugins_including_disabled};
 use rc_provider::ProviderClient;
+use rc_provider::model_info::{ModelCapability, get_model_info};
 use rc_session::runtime_context::{
     persist_runtime_config_session_context, restore_runtime_config_session_context,
 };
-use rc_session::{conversation::ensure_conversation_initialized, SessionStore, SessionSummary};
+use rc_session::{SessionStore, SessionSummary, conversation::ensure_conversation_initialized};
 use rc_skills::discover_skills;
 use rc_tools::shell::ShellExecutionPolicy;
 use rc_tools::{
-    configure_tool_runtime_policy,
+    ToolRuntimePolicy, configure_tool_runtime_policy,
     mcp_runtime::{
-        observe_runtime_mcp_servers, runtime_mcp_inventory_summary, runtime_mcp_policy_entries,
-        RuntimeMcpServerObservation,
+        RuntimeMcpServerObservation, observe_runtime_mcp_servers, runtime_mcp_inventory_summary,
+        runtime_mcp_policy_entries,
     },
     runtime_plan_mode::RuntimePlanModeController,
     tasks::load_persisted_ui_task_snapshots,
-    ToolRuntimePolicy,
 };
 use rc_ui_bridge::{
     UiProviderStatusSnapshot, UiRuntimeMcpInventorySummary, UiRuntimeMcpServerStatus,
@@ -54,10 +65,11 @@ use rc_ui_bridge::{
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_dialog::DialogExt;
-use tokio::sync::{oneshot, Mutex};
-use tokio::time::{timeout, Duration};
+use tokio::sync::{Mutex, oneshot};
+use tokio::time::{Duration, timeout};
 use uuid::Uuid;
 
+const CODEX_GLOBAL_ADAPTER_KEY: &str = "__codex_global__";
 const APP_EVENT_PERMISSION_REQUEST: &str = "gui://permission-request";
 const APP_EVENT_PERMISSION_RESOLVED: &str = "gui://permission-resolved";
 const APP_EVENT_TOOL_START: &str = "gui://tool-start";
@@ -179,6 +191,20 @@ struct GuiSettingsFile {
     permission_mode: Option<String>,
     #[serde(default)]
     verbose: Option<bool>,
+    #[serde(default)]
+    codex_model_provider: Option<String>,
+    #[serde(default)]
+    codex_approval_policy: Option<String>,
+    #[serde(default)]
+    codex_sandbox_mode: Option<String>,
+    #[serde(default)]
+    codex_persist_extended_history: Option<bool>,
+    #[serde(default)]
+    codex_memories_enabled: Option<bool>,
+    #[serde(default)]
+    codex_thread_store_endpoint: Option<String>,
+    #[serde(default)]
+    codex_config_overrides: BTreeMap<String, String>,
 }
 
 impl Default for GuiSettingsFile {
@@ -197,6 +223,13 @@ impl Default for GuiSettingsFile {
             respect_retry_after: None,
             permission_mode: None,
             verbose: Some(false),
+            codex_model_provider: None,
+            codex_approval_policy: None,
+            codex_sandbox_mode: None,
+            codex_persist_extended_history: Some(true),
+            codex_memories_enabled: Some(true),
+            codex_thread_store_endpoint: None,
+            codex_config_overrides: BTreeMap::new(),
         }
     }
 }
@@ -279,6 +312,13 @@ struct FullSettingsDto {
     permission_mode: String,
     max_turns: usize,
     verbose: bool,
+    codex_model_provider: Option<String>,
+    codex_approval_policy: Option<String>,
+    codex_sandbox_mode: Option<String>,
+    codex_persist_extended_history: bool,
+    codex_memories_enabled: bool,
+    codex_thread_store_endpoint: Option<String>,
+    codex_config_overrides: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -319,6 +359,20 @@ struct UpdateProviderRequest {
     permission_mode: Option<String>,
     #[serde(default)]
     verbose: Option<bool>,
+    #[serde(default)]
+    codex_model_provider: Option<String>,
+    #[serde(default)]
+    codex_approval_policy: Option<String>,
+    #[serde(default)]
+    codex_sandbox_mode: Option<String>,
+    #[serde(default)]
+    codex_persist_extended_history: Option<bool>,
+    #[serde(default)]
+    codex_memories_enabled: Option<bool>,
+    #[serde(default)]
+    codex_thread_store_endpoint: Option<String>,
+    #[serde(default)]
+    codex_config_overrides: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -745,6 +799,139 @@ struct McpMutationResultDto {
     enabled: Option<bool>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexThreadRefRequest {
+    #[serde(default)]
+    session_id: Option<String>,
+    thread_id: String,
+    #[serde(default = "default_true")]
+    include_turns: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexThreadArchiveRequest {
+    #[serde(default)]
+    session_id: Option<String>,
+    thread_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexExecWriteRequest {
+    #[serde(default)]
+    session_id: Option<String>,
+    process_id: String,
+    #[serde(default)]
+    delta_base64: Option<String>,
+    #[serde(default)]
+    close_stdin: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexExecResizeRequest {
+    #[serde(default)]
+    session_id: Option<String>,
+    process_id: String,
+    rows: u16,
+    cols: u16,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexMcpStatusRequest {
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    detail: Option<String>,
+    #[serde(default)]
+    cursor: Option<String>,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexMcpResourceReadRequest {
+    #[serde(default)]
+    session_id: Option<String>,
+    server: String,
+    uri: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexMcpToolCallRequest {
+    #[serde(default)]
+    session_id: Option<String>,
+    thread_id: String,
+    server: String,
+    tool: String,
+    #[serde(default)]
+    arguments: Option<serde_json::Value>,
+    #[serde(default)]
+    meta: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexConfigValueWriteRequest {
+    key_path: String,
+    value: serde_json::Value,
+    #[serde(default)]
+    merge_strategy: Option<String>,
+    #[serde(default)]
+    file_path: Option<String>,
+    #[serde(default)]
+    expected_version: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexConfigBatchEditRequest {
+    key_path: String,
+    value: serde_json::Value,
+    #[serde(default)]
+    merge_strategy: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexConfigBatchWriteRequest {
+    edits: Vec<CodexConfigBatchEditRequest>,
+    #[serde(default)]
+    file_path: Option<String>,
+    #[serde(default)]
+    expected_version: Option<String>,
+    #[serde(default)]
+    reload_user_config: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexMemoryModeRequest {
+    #[serde(default)]
+    session_id: Option<String>,
+    thread_id: String,
+    enabled: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexAppServerRequest {
+    #[serde(default)]
+    session_id: Option<String>,
+    method: String,
+    #[serde(default)]
+    params: Option<serde_json::Value>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
 struct RuntimeState {
     config: RuntimeConfig,
     provider: Arc<ProviderClient>,
@@ -757,9 +944,69 @@ struct RuntimeState {
 struct AppState {
     runtime: Mutex<RuntimeState>,
     pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
+    pending_codex_permissions: Arc<Mutex<HashMap<String, CodexPendingPermission>>>,
     running_prompts: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
     /// Active subprocess adapters keyed by session ID (for Codex / Roo-code agents).
     active_subprocess_adapters: Arc<Mutex<HashMap<String, SubprocessAdapter>>>,
+    /// Codex in-process adapters (session_id → adapter).
+    active_codex_adapters: Arc<Mutex<HashMap<String, CodexInProcessAdapter>>>,
+}
+
+#[derive(Debug, Clone)]
+struct CodexPendingPermission {
+    session_id: String,
+    request_id: String,
+}
+
+fn codex_permission_decision(
+    allowed: bool,
+    permission_updates: &[PermissionUpdate],
+) -> AgentPermissionDecision {
+    if !allowed {
+        return AgentPermissionDecision::Deny;
+    }
+
+    let session_scoped = permission_updates.iter().any(|update| match update {
+        PermissionUpdate::AddRules { destination, .. }
+        | PermissionUpdate::ReplaceRules { destination, .. }
+        | PermissionUpdate::RemoveRules { destination, .. }
+        | PermissionUpdate::SetMode { destination, .. }
+        | PermissionUpdate::AddDirectories { destination, .. }
+        | PermissionUpdate::RemoveDirectories { destination, .. } => {
+            *destination == PermissionUpdateDestination::Session
+        }
+    });
+
+    if session_scoped {
+        AgentPermissionDecision::AllowAll
+    } else {
+        AgentPermissionDecision::Allow
+    }
+}
+
+fn usage_info_from_codex_token_usage(
+    value: &serde_json::Value,
+) -> Option<rc_agent_protocol::events::UsageInfo> {
+    let params = value.get("params").unwrap_or(value);
+    let total = params.get("tokenUsage")?.get("total")?;
+    Some(rc_agent_protocol::events::UsageInfo {
+        input_tokens: total
+            .get("inputTokens")
+            .and_then(serde_json::Value::as_i64)
+            .and_then(|value| u64::try_from(value).ok())
+            .unwrap_or(0),
+        output_tokens: total
+            .get("outputTokens")
+            .and_then(serde_json::Value::as_i64)
+            .and_then(|value| u64::try_from(value).ok())
+            .unwrap_or(0),
+        cache_read: total
+            .get("cachedInputTokens")
+            .and_then(serde_json::Value::as_i64)
+            .and_then(|value| u64::try_from(value).ok())
+            .unwrap_or(0),
+        cache_write: 0,
+    })
 }
 
 fn gui_storage_path(paths: &AppPaths, file_name: &str) -> PathBuf {
@@ -1880,11 +2127,7 @@ fn toggle_managed_mcp_server_at_path(
     } else {
         server.enabled = enabled;
         mcp_config.save(config_path)?;
-        if enabled {
-            "enabled"
-        } else {
-            "disabled"
-        }
+        if enabled { "enabled" } else { "disabled" }
     };
 
     Ok(McpMutationResultDto {
@@ -2129,6 +2372,13 @@ fn full_settings_from_runtime(
         permission_mode: config.permission_mode.as_legacy_str().to_owned(),
         max_turns: config.max_turns,
         verbose: gui_settings.verbose.unwrap_or(config.verbose),
+        codex_model_provider: gui_settings.codex_model_provider.clone(),
+        codex_approval_policy: gui_settings.codex_approval_policy.clone(),
+        codex_sandbox_mode: gui_settings.codex_sandbox_mode.clone(),
+        codex_persist_extended_history: gui_settings.codex_persist_extended_history.unwrap_or(true),
+        codex_memories_enabled: gui_settings.codex_memories_enabled.unwrap_or(true),
+        codex_thread_store_endpoint: gui_settings.codex_thread_store_endpoint.clone(),
+        codex_config_overrides: gui_settings.codex_config_overrides.clone(),
     }
 }
 
@@ -2399,6 +2649,260 @@ fn store_provider_selection(state: &mut RuntimeState, config: &RuntimeProviderCo
     state.gui_settings.provider_protocol = Some(config.protocol.as_str().to_owned());
 }
 
+fn codex_provider_id(provider: &RuntimeProviderConfig, gui_settings: &GuiSettingsFile) -> String {
+    gui_settings
+        .codex_model_provider
+        .clone()
+        .or_else(|| {
+            Some(format!(
+                "remote-code-{}",
+                provider.name.to_ascii_lowercase()
+            ))
+        })
+        .map(|value| {
+            value
+                .chars()
+                .map(|ch| {
+                    if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                        ch.to_ascii_lowercase()
+                    } else {
+                        '-'
+                    }
+                })
+                .collect::<String>()
+                .trim_matches('-')
+                .to_owned()
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "remote-code-provider".to_owned())
+}
+
+fn codex_approval_policy_from_permission_mode(mode: PermissionMode) -> String {
+    match mode {
+        PermissionMode::BypassPermissions => "never",
+        PermissionMode::Default | PermissionMode::AcceptEdits | PermissionMode::DontAsk => {
+            "on-request"
+        }
+        PermissionMode::Plan => "never",
+    }
+    .to_owned()
+}
+
+fn codex_sandbox_from_permission_mode(mode: PermissionMode) -> String {
+    match mode {
+        PermissionMode::BypassPermissions => "danger-full-access",
+        PermissionMode::Plan => "read-only",
+        PermissionMode::Default | PermissionMode::AcceptEdits | PermissionMode::DontAsk => {
+            "workspace-write"
+        }
+    }
+    .to_owned()
+}
+
+fn codex_mcp_server_overrides(config: &RuntimeConfig) -> HashMap<String, serde_json::Value> {
+    let mut servers = HashMap::new();
+    for entry in runtime_mcp_policy_entries(config, &config.mcp_config_paths) {
+        if !entry.server.enabled {
+            continue;
+        }
+        let mut server = serde_json::Map::new();
+        server.insert("enabled".to_owned(), serde_json::Value::Bool(true));
+        if let Some(timeout) = entry.server.startup_timeout_secs {
+            server.insert("startup_timeout_sec".to_owned(), serde_json::json!(timeout));
+        }
+        if let Some(timeout) = entry.server.request_timeout_secs {
+            server.insert("tool_timeout_sec".to_owned(), serde_json::json!(timeout));
+        }
+
+        match entry.server.transport {
+            McpTransportConfig::Stdio {
+                command,
+                args,
+                cwd,
+                env,
+            } => {
+                server.insert("command".to_owned(), serde_json::json!(command));
+                if !args.is_empty() {
+                    server.insert("args".to_owned(), serde_json::json!(args));
+                }
+                if let Some(cwd) = cwd {
+                    server.insert("cwd".to_owned(), serde_json::json!(cwd));
+                }
+                if !env.is_empty() {
+                    server.insert("env".to_owned(), serde_json::json!(env));
+                }
+            }
+            McpTransportConfig::Http { url, headers }
+            | McpTransportConfig::WebSocket { url, headers } => {
+                server.insert("url".to_owned(), serde_json::json!(url));
+                if !headers.is_empty() {
+                    server.insert("http_headers".to_owned(), serde_json::json!(headers));
+                }
+            }
+        }
+
+        servers.insert(entry.server.name, serde_json::Value::Object(server));
+    }
+    servers
+}
+
+fn codex_adapter_options_from_runtime(
+    config: &RuntimeConfig,
+    gui_settings: &GuiSettingsFile,
+) -> CodexAdapterOptions {
+    let mut config_overrides = gui_settings
+        .codex_config_overrides
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<HashMap<_, _>>();
+    if let Some(effort) = config.effort.clone() {
+        config_overrides
+            .entry("model_reasoning_effort".to_owned())
+            .or_insert(effort);
+    }
+
+    CodexAdapterOptions {
+        cwd: config.cwd.clone(),
+        model: config
+            .provider
+            .model
+            .clone()
+            .or_else(|| config.fallback_model.clone()),
+        model_provider: Some(codex_provider_id(&config.provider, gui_settings)),
+        api_key: config.provider.api_key.clone(),
+        base_url: config.provider.base_url.clone(),
+        approval_policy: gui_settings.codex_approval_policy.clone().or_else(|| {
+            Some(codex_approval_policy_from_permission_mode(
+                config.permission_mode,
+            ))
+        }),
+        sandbox_mode: gui_settings
+            .codex_sandbox_mode
+            .clone()
+            .or_else(|| Some(codex_sandbox_from_permission_mode(config.permission_mode))),
+        permission_profile: None,
+        service_tier: None,
+        persist_extended_history: gui_settings.codex_persist_extended_history.unwrap_or(true),
+        ephemeral: None,
+        memories_enabled: gui_settings.codex_memories_enabled.or(Some(true)),
+        thread_store_endpoint: gui_settings.codex_thread_store_endpoint.clone(),
+        config_overrides,
+        cli_overrides: Vec::new(),
+        mcp_servers: codex_mcp_server_overrides(config),
+        enable_codex_api_key_env: true,
+        client_name: Some("remote-code-gui".to_owned()),
+        client_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
+        exec_server_url: env::var("CODEX_EXEC_SERVER_URL").ok(),
+        channel_capacity: Some(1024),
+        feedback_capture_enabled: true,
+    }
+}
+
+fn codex_agent_config_from_options(
+    options: &CodexAdapterOptions,
+) -> rc_agent_protocol::types::AgentConfig {
+    rc_agent_protocol::types::AgentConfig {
+        agent_type: ProtocolAgentType::RemoteCodex,
+        binary_path: None,
+        args: Vec::new(),
+        env: Vec::new(),
+        working_dir: Some(options.cwd.clone()),
+        model: options.model.clone(),
+        provider: None,
+        api_key: None,
+        base_url: None,
+    }
+}
+
+async fn codex_options_snapshot(
+    state: &State<'_, AppState>,
+) -> std::result::Result<CodexAdapterOptions, String> {
+    let mut config = {
+        let runtime = state.runtime.lock().await;
+        let mut config = runtime.config.clone();
+        apply_provider_credentials_from_configs(&mut config.provider, &runtime.provider_configs);
+        codex_adapter_options_from_runtime(&config, &runtime.gui_settings)
+    };
+    if config.cwd.as_os_str().is_empty() {
+        config.cwd = env::current_dir().map_err(|error| error.to_string())?;
+    }
+    Ok(config)
+}
+
+async fn ensure_codex_adapter(
+    state: &State<'_, AppState>,
+    key: &str,
+) -> std::result::Result<(), String> {
+    let options = codex_options_snapshot(state).await?;
+    let mut adapters = state.active_codex_adapters.lock().await;
+    let needs_create = adapters
+        .get(key)
+        .map(|adapter| !adapter.is_alive())
+        .unwrap_or(true);
+    if needs_create {
+        let agent_config = codex_agent_config_from_options(&options);
+        let mut adapter = CodexInProcessAdapter::start_in_process_with_options(options)
+            .await
+            .map_err(|error| format!("Failed to start Codex runtime: {error:#}"))?;
+        adapter
+            .start(&agent_config)
+            .await
+            .map_err(|error| format!("Failed to initialize Codex adapter: {error:#}"))?;
+        adapters.insert(key.to_owned(), adapter);
+    }
+    Ok(())
+}
+
+fn codex_adapter_key(session_id: Option<String>) -> String {
+    session_id
+        .and_then(|value| trimmed_option(Some(value)))
+        .unwrap_or_else(|| CODEX_GLOBAL_ADAPTER_KEY.to_owned())
+}
+
+async fn with_codex_adapter_value<F>(
+    state: &State<'_, AppState>,
+    session_id: Option<String>,
+    operation: F,
+) -> std::result::Result<serde_json::Value, String>
+where
+    F: for<'a> FnOnce(
+        &'a mut CodexInProcessAdapter,
+    ) -> Pin<
+        Box<dyn Future<Output = anyhow::Result<serde_json::Value>> + Send + 'a>,
+    >,
+{
+    let key = codex_adapter_key(session_id);
+    ensure_codex_adapter(state, &key).await?;
+    let mut adapters = state.active_codex_adapters.lock().await;
+    let adapter = adapters
+        .get_mut(&key)
+        .ok_or_else(|| "Codex adapter was not initialized".to_owned())?;
+    operation(adapter)
+        .await
+        .map_err(|error| format!("{error:#}"))
+}
+
+fn parse_codex_mcp_detail(value: Option<&str>) -> Option<McpServerStatusDetail> {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value)
+            if value.eq_ignore_ascii_case("toolsAndAuthOnly")
+                || value.eq_ignore_ascii_case("tools_and_auth_only")
+                || value.eq_ignore_ascii_case("tools-auth") =>
+        {
+            Some(McpServerStatusDetail::ToolsAndAuthOnly)
+        }
+        Some(value) if value.eq_ignore_ascii_case("full") => Some(McpServerStatusDetail::Full),
+        _ => None,
+    }
+}
+
+fn parse_codex_merge_strategy(value: Option<&str>) -> MergeStrategy {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) if value.eq_ignore_ascii_case("upsert") => MergeStrategy::Upsert,
+        _ => MergeStrategy::Replace,
+    }
+}
+
 #[derive(Debug)]
 struct GuiPermissionFallbackBroker {
     controller: Arc<RuntimePlanModeController>,
@@ -2647,9 +3151,10 @@ fn get_session_agent_type(store: &SessionStore, session_id: Uuid) -> String {
 // ---------------------------------------------------------------------------
 
 /// Resolve the bridge binary name for the given agent type.
+///
+/// Only Roo-code uses the bridge binary — Codex uses native in-process integration.
 fn bridge_binary_name(agent_type: &ProtocolAgentType) -> Option<&'static str> {
     match agent_type {
-        ProtocolAgentType::RemoteCodex => Some("remote-code-codex-bridge"),
         ProtocolAgentType::RemoteRoo => Some("remote-code-roo-bridge"),
         _ => None,
     }
@@ -2700,7 +3205,318 @@ fn bridge_binary_path(agent_type: &ProtocolAgentType) -> Option<PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
-// Subprocess prompt execution (Codex / Roo-code agents)
+// In-process Codex prompt execution
+// ---------------------------------------------------------------------------
+
+/// Execute a prompt via the native Codex in-process adapter.
+///
+/// Creates or reuses a [`CodexInProcessAdapter`] with isolated storage,
+/// sends the user message, and forwards events to the frontend via Tauri emissions.
+async fn run_codex_in_process_prompt(
+    app: &AppHandle,
+    codex_adapters: &Arc<Mutex<HashMap<String, CodexInProcessAdapter>>>,
+    pending_codex_permissions: &Arc<Mutex<HashMap<String, CodexPendingPermission>>>,
+    session_id: &str,
+    prompt: &str,
+    options: CodexAdapterOptions,
+) -> std::result::Result<String, String> {
+    let working_dir = options.cwd.clone();
+    let model = options.model.clone();
+    // Ensure the adapter exists for this session.
+    {
+        let mut adapters = codex_adapters.lock().await;
+        if !adapters.contains_key(session_id) {
+            tracing::info!(session_id, "Creating new CodexInProcessAdapter");
+            let adapter = CodexInProcessAdapter::start_in_process_with_options(options)
+                .await
+                .map_err(|e| format!("Failed to start Codex in-process runtime: {e}"))?;
+            adapters.insert(session_id.to_string(), adapter);
+        }
+    }
+
+    // Get the adapter and send the message.
+    let mut adapters = codex_adapters.lock().await;
+    let adapter = adapters
+        .get_mut(session_id)
+        .ok_or_else(|| "Codex adapter not found".to_string())?;
+
+    // Start the adapter if not yet started.
+    if !adapter.is_alive() {
+        let agent_config = rc_agent_protocol::types::AgentConfig {
+            agent_type: ProtocolAgentType::RemoteCodex,
+            binary_path: None,
+            args: Vec::new(),
+            env: Vec::new(),
+            working_dir: Some(working_dir.clone()),
+            model,
+            provider: None,
+            api_key: None,
+            base_url: None,
+        };
+        adapter
+            .start(&agent_config)
+            .await
+            .map_err(|e| format!("CodexInProcessAdapter::start failed: {e}"))?;
+    }
+
+    let mut rx = adapter
+        .send_message(session_id, prompt)
+        .await
+        .map_err(|e| format!("CodexInProcessAdapter::send_message failed: {e}"))?;
+
+    // Forward events to the frontend. Drop the lock before streaming.
+    drop(adapters);
+
+    let mut final_text = String::new();
+    let mut tool_calls: Vec<ToolCallDto> = Vec::new();
+    let mut usage_info: rc_agent_protocol::events::UsageInfo = Default::default();
+    let mut stop_reason = "completed".to_owned();
+    while let Some(event) = rx.recv().await {
+        use rc_agent_protocol::events::UnifiedAgentEvent;
+        match event {
+            UnifiedAgentEvent::MessageDelta { delta, .. } => {
+                final_text.push_str(&delta);
+                let _ = app.emit(
+                    APP_EVENT_STREAMING_DELTA,
+                    StreamingDeltaDto {
+                        session_id: session_id.to_string(),
+                        delta,
+                    },
+                );
+            }
+            UnifiedAgentEvent::ToolCallStarted {
+                tool_name,
+                tool_input,
+                ..
+            } => {
+                let tool_call_id = Uuid::new_v4().to_string();
+                tool_calls.push(ToolCallDto {
+                    id: tool_call_id.clone(),
+                    name: tool_name.clone(),
+                    input: tool_input,
+                });
+                let _ = app.emit(
+                    APP_EVENT_TOOL_START,
+                    ToolProgressDto {
+                        tool_call_id,
+                        tool_name,
+                        message: "started".to_owned(),
+                    },
+                );
+            }
+            UnifiedAgentEvent::ToolCallProgress {
+                tool_name,
+                progress,
+                ..
+            } => {
+                if tool_name == "codex_token_usage" {
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&progress) {
+                        if let Some(next_usage) = usage_info_from_codex_token_usage(&value) {
+                            usage_info = next_usage;
+                        }
+                    }
+                }
+                let _ = app.emit(
+                    APP_EVENT_TOOL_PROGRESS,
+                    ToolProgressDto {
+                        tool_call_id: String::new(),
+                        tool_name,
+                        message: progress,
+                    },
+                );
+            }
+            UnifiedAgentEvent::ToolCallCompleted {
+                tool_name, result, ..
+            } => {
+                let _ = app.emit(
+                    APP_EVENT_TOOL_RESULT,
+                    ToolResultDto {
+                        tool_call_id: String::new(),
+                        tool_name,
+                        is_error: false,
+                        output: result.to_string(),
+                    },
+                );
+            }
+            UnifiedAgentEvent::PermissionRequest {
+                request_id,
+                tool_name,
+                input,
+                ..
+            } => {
+                let gui_request_id = Uuid::new_v4().to_string();
+                {
+                    let mut pending = pending_codex_permissions.lock().await;
+                    pending.insert(
+                        gui_request_id.clone(),
+                        CodexPendingPermission {
+                            session_id: session_id.to_string(),
+                            request_id,
+                        },
+                    );
+                }
+                let _ = app.emit(
+                    APP_EVENT_PERMISSION_REQUEST,
+                    PermissionRequestDto {
+                        request_id: gui_request_id,
+                        tool_name: tool_name.clone(),
+                        tool_use_id: String::new(),
+                        title: "Codex 请求权限".to_owned(),
+                        description: format!("工具 {tool_name} 需要授权才能执行。"),
+                        input,
+                        blocked_path: None,
+                        permission_suggestions: vec![],
+                    },
+                );
+            }
+            UnifiedAgentEvent::SubtaskStarted {
+                task_id,
+                description,
+                ..
+            } => {
+                let _ = app.emit(
+                    APP_EVENT_SUBTASK_STARTED,
+                    SubtaskStartedDto {
+                        session_id: session_id.to_string(),
+                        task_id,
+                        parent_task_id: None,
+                        description,
+                        depth: 0,
+                    },
+                );
+            }
+            UnifiedAgentEvent::SubtaskProgress {
+                task_id, progress, ..
+            } => {
+                let _ = app.emit(
+                    APP_EVENT_SUBTASK_PROGRESS,
+                    SubtaskProgressDto {
+                        session_id: session_id.to_string(),
+                        task_id,
+                        turn: 0,
+                        max_turns: 0,
+                        summary: progress,
+                    },
+                );
+            }
+            UnifiedAgentEvent::SubtaskCompleted {
+                task_id, result, ..
+            } => {
+                let _ = app.emit(
+                    APP_EVENT_SUBTASK_COMPLETED,
+                    SubtaskCompletedDto {
+                        session_id: session_id.to_string(),
+                        task_id,
+                        success: true,
+                        output_preview: result.to_string(),
+                        turns_used: 0,
+                    },
+                );
+            }
+            UnifiedAgentEvent::ContextUsage { used, total, .. } => {
+                let _ = app.emit(
+                    APP_EVENT_CONTEXT_USAGE,
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "used": used,
+                        "total": total,
+                    }),
+                );
+            }
+            UnifiedAgentEvent::ContextOverflow { used, total, .. } => {
+                let _ = app.emit(
+                    APP_EVENT_CONTEXT_OVERFLOW,
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "used": used,
+                        "total": total,
+                    }),
+                );
+            }
+            UnifiedAgentEvent::ContextCompacted {
+                entries_removed,
+                usage_ratio,
+                ..
+            } => {
+                let _ = app.emit(
+                    APP_EVENT_CONTEXT_COMPACTED,
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "entries_removed": entries_removed,
+                        "usage_ratio": usage_ratio,
+                    }),
+                );
+            }
+            UnifiedAgentEvent::Completed { result, .. } => {
+                if !result.response_text.is_empty() {
+                    final_text = result.response_text;
+                }
+                if !result.tool_calls.is_empty() {
+                    tool_calls = result
+                        .tool_calls
+                        .into_iter()
+                        .map(|tc| ToolCallDto {
+                            id: tc.id,
+                            name: tc.name,
+                            input: tc.input,
+                        })
+                        .collect();
+                }
+                if result.usage.input_tokens > 0
+                    || result.usage.output_tokens > 0
+                    || result.usage.cache_read > 0
+                    || result.usage.cache_write > 0
+                {
+                    usage_info = result.usage;
+                }
+                break;
+            }
+            UnifiedAgentEvent::Error {
+                message,
+                recoverable,
+                ..
+            } => {
+                tracing::warn!(error = %message, "Codex error event");
+                if !recoverable {
+                    return Err(message);
+                }
+            }
+            UnifiedAgentEvent::Stopped => {
+                stop_reason = "stopped".to_owned();
+                break;
+            }
+            UnifiedAgentEvent::Started(_) | UnifiedAgentEvent::Ready => {
+                tracing::debug!(event = ?event, "Codex lifecycle event");
+            }
+        }
+    }
+
+    let _ = app.emit(
+        APP_EVENT_PROMPT_DONE,
+        PromptDoneDto {
+            session_id: session_id.to_string(),
+            is_error: false,
+            error: None,
+            result: Some(PromptResultDto {
+                session_id: session_id.to_string(),
+                text: final_text.clone(),
+                tool_calls,
+                usage: UsageDto {
+                    input_tokens: usage_info.input_tokens,
+                    output_tokens: usage_info.output_tokens,
+                    total_tokens: usage_info.input_tokens + usage_info.output_tokens,
+                },
+                num_turns: 1,
+                stop_reason,
+            }),
+        },
+    );
+
+    Ok(final_text)
+}
+
+// ---------------------------------------------------------------------------
+// Subprocess prompt execution (Roo-code agent)
 // ---------------------------------------------------------------------------
 
 /// Execute a prompt via a subprocess bridge binary.
@@ -3132,6 +3948,7 @@ async fn send_prompt(
         session_store,
         pending_permissions,
         provider_configs,
+        gui_settings,
         agent_type_str,
     ) = {
         let runtime = state.runtime.lock().await;
@@ -3152,6 +3969,7 @@ async fn send_prompt(
             Arc::clone(&runtime.session_store),
             Arc::clone(&state.pending_permissions),
             runtime.provider_configs.clone(),
+            runtime.gui_settings.clone(),
             agent_type_str,
         )
     };
@@ -3173,13 +3991,48 @@ async fn send_prompt(
 
         // ── Branch based on agent_type ──────────────────────────────────
         match agent_type_str.as_str() {
-            "remote_codex" | "remote_roo" => {
-                // Subprocess path: Codex / Roo-code agents use bridge binaries.
-                let protocol_agent_type = if agent_type_str == "remote_codex" {
-                    ProtocolAgentType::RemoteCodex
-                } else {
-                    ProtocolAgentType::RemoteRoo
-                };
+            "remote_codex" => {
+                // Native in-process path: Codex uses CodexInProcessAdapter
+                // with isolated storage (no bridge binary needed).
+                let codex_adapters = Arc::clone(&state.active_codex_adapters);
+                let pending_codex_permissions = Arc::clone(&state.pending_codex_permissions);
+                let sid_clone = sid.clone();
+                let prompt_owned = prompt.clone();
+                let codex_options = codex_adapter_options_from_runtime(&config, &gui_settings);
+
+                let handle = tokio::spawn(async move {
+                    let result = run_codex_in_process_prompt(
+                        &app,
+                        &codex_adapters,
+                        &pending_codex_permissions,
+                        &sid_clone,
+                        &prompt_owned,
+                        codex_options,
+                    )
+                    .await;
+
+                    if let Err(error) = result {
+                        let _ = app.emit(
+                            APP_EVENT_PROMPT_DONE,
+                            PromptDoneDto {
+                                session_id: sid_clone.clone(),
+                                is_error: true,
+                                error: Some(error),
+                                result: None,
+                            },
+                        );
+                    }
+
+                    // Clean up the running-prompts map entry.
+                    {
+                        let mut running = running_prompts.lock().await;
+                        running.remove(&sid_for_cleanup);
+                    }
+                });
+                running.insert(sid.clone(), handle);
+            }
+            "remote_roo" => {
+                // Subprocess path: Roo-code uses bridge binary.
                 let active_adapters = Arc::clone(&state.active_subprocess_adapters);
                 let sid_clone = sid.clone();
                 let prompt_owned = prompt.clone();
@@ -3192,7 +4045,7 @@ async fn send_prompt(
                         &active_adapters,
                         &sid_clone,
                         &prompt_owned,
-                        protocol_agent_type,
+                        ProtocolAgentType::RemoteRoo,
                         working_dir,
                         api_key,
                     )
@@ -3473,6 +4326,383 @@ async fn get_settings(state: State<'_, AppState>) -> std::result::Result<FullSet
 }
 
 #[tauri::command]
+async fn codex_list_threads(
+    state: State<'_, AppState>,
+    params: Option<CodexThreadListRequest>,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, None, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.list_threads(params).await?).map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_read_thread(
+    state: State<'_, AppState>,
+    request: CodexThreadRefRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(
+                adapter
+                    .read_thread(request.thread_id, request.include_turns)
+                    .await?,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_resume_thread(
+    state: State<'_, AppState>,
+    request: CodexThreadRefRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(
+                adapter
+                    .resume_thread(request.thread_id, request.include_turns)
+                    .await?,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_fork_thread(
+    state: State<'_, AppState>,
+    request: CodexThreadRefRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(
+                adapter
+                    .fork_thread(request.thread_id, request.include_turns)
+                    .await?,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_archive_thread(
+    state: State<'_, AppState>,
+    request: CodexThreadArchiveRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.archive_thread(request.thread_id).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_unarchive_thread(
+    state: State<'_, AppState>,
+    request: CodexThreadArchiveRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.unarchive_thread(request.thread_id).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_exec(
+    state: State<'_, AppState>,
+    request: CodexExecRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, None, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.exec_command(request).await?).map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_app_server_request(
+    state: State<'_, AppState>,
+    request: CodexAppServerRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    if request.method.trim().is_empty() {
+        return Err("Codex app-server method cannot be empty".to_owned());
+    }
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            adapter
+                .app_server_request(request.method, request.params)
+                .await
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_exec_write(
+    state: State<'_, AppState>,
+    request: CodexExecWriteRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(
+                adapter
+                    .exec_write(CommandExecWriteParams {
+                        process_id: request.process_id,
+                        delta_base64: request.delta_base64,
+                        close_stdin: request.close_stdin,
+                    })
+                    .await?,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_exec_terminate(
+    state: State<'_, AppState>,
+    session_id: Option<String>,
+    process_id: String,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.exec_terminate(process_id).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_exec_resize(
+    state: State<'_, AppState>,
+    request: CodexExecResizeRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(
+                adapter
+                    .exec_resize(CommandExecResizeParams {
+                        process_id: request.process_id,
+                        size: CommandExecTerminalSize {
+                            rows: request.rows,
+                            cols: request.cols,
+                        },
+                    })
+                    .await?,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_mcp_refresh(
+    state: State<'_, AppState>,
+    session_id: Option<String>,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.refresh_mcp().await?).map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_mcp_status(
+    state: State<'_, AppState>,
+    request: CodexMcpStatusRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let detail = parse_codex_mcp_detail(request.detail.as_deref());
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(
+                adapter
+                    .list_mcp_status(detail, request.cursor, request.limit)
+                    .await?,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_mcp_read_resource(
+    state: State<'_, AppState>,
+    request: CodexMcpResourceReadRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(
+                adapter
+                    .read_mcp_resource(request.server, request.uri)
+                    .await?,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_mcp_call_tool(
+    state: State<'_, AppState>,
+    request: CodexMcpToolCallRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(
+                adapter
+                    .call_mcp_tool(
+                        request.thread_id,
+                        request.server,
+                        request.tool,
+                        request.arguments,
+                        request.meta,
+                    )
+                    .await?,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_read_config(
+    state: State<'_, AppState>,
+    include_layers: Option<bool>,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, None, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.read_config(include_layers.unwrap_or(false)).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_write_config_value(
+    state: State<'_, AppState>,
+    request: CodexConfigValueWriteRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, None, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(
+                adapter
+                    .write_config_value(ConfigValueWriteParams {
+                        key_path: request.key_path,
+                        value: request.value,
+                        merge_strategy: parse_codex_merge_strategy(
+                            request.merge_strategy.as_deref(),
+                        ),
+                        file_path: request.file_path,
+                        expected_version: request.expected_version,
+                    })
+                    .await?,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_write_config_batch(
+    state: State<'_, AppState>,
+    request: CodexConfigBatchWriteRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let edits = request
+        .edits
+        .into_iter()
+        .map(|edit| ConfigEdit {
+            key_path: edit.key_path,
+            value: edit.value,
+            merge_strategy: parse_codex_merge_strategy(edit.merge_strategy.as_deref()),
+        })
+        .collect();
+    with_codex_adapter_value(&state, None, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(
+                adapter
+                    .write_config_batch(ConfigBatchWriteParams {
+                        edits,
+                        file_path: request.file_path,
+                        expected_version: request.expected_version,
+                        reload_user_config: request.reload_user_config,
+                    })
+                    .await?,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_upload_feedback(
+    state: State<'_, AppState>,
+    request: CodexFeedbackRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, None, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.upload_feedback(request).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_set_thread_memory_mode(
+    state: State<'_, AppState>,
+    request: CodexMemoryModeRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(
+                adapter
+                    .set_thread_memory_mode(request.thread_id, request.enabled)
+                    .await?,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_reset_memories(
+    state: State<'_, AppState>,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, None, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.reset_memories().await?).map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
 async fn update_provider(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -3562,6 +4792,35 @@ async fn update_provider(
     if let Some(verbose) = request.verbose {
         runtime.config.verbose = verbose;
         runtime.gui_settings.verbose = Some(verbose);
+    }
+    if request.codex_model_provider.is_some() {
+        runtime.gui_settings.codex_model_provider = request
+            .codex_model_provider
+            .and_then(|value| trimmed_option(Some(value)));
+    }
+    if request.codex_approval_policy.is_some() {
+        runtime.gui_settings.codex_approval_policy = request
+            .codex_approval_policy
+            .and_then(|value| trimmed_option(Some(value)));
+    }
+    if request.codex_sandbox_mode.is_some() {
+        runtime.gui_settings.codex_sandbox_mode = request
+            .codex_sandbox_mode
+            .and_then(|value| trimmed_option(Some(value)));
+    }
+    if let Some(value) = request.codex_persist_extended_history {
+        runtime.gui_settings.codex_persist_extended_history = Some(value);
+    }
+    if let Some(value) = request.codex_memories_enabled {
+        runtime.gui_settings.codex_memories_enabled = Some(value);
+    }
+    if request.codex_thread_store_endpoint.is_some() {
+        runtime.gui_settings.codex_thread_store_endpoint = request
+            .codex_thread_store_endpoint
+            .and_then(|value| trimmed_option(Some(value)));
+    }
+    if let Some(overrides) = request.codex_config_overrides {
+        runtime.gui_settings.codex_config_overrides = overrides;
     }
 
     if let Some(thinking_budget) = runtime.config.provider.thinking_budget {
@@ -3887,6 +5146,7 @@ async fn switch_profile(
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 async fn resolve_permission_request(
+    app: AppHandle,
     state: State<'_, AppState>,
     request_id: String,
     allowed: bool,
@@ -3896,31 +5156,78 @@ async fn resolve_permission_request(
     feedback: Option<String>,
     content_blocks: Option<Vec<serde_json::Value>>,
 ) -> std::result::Result<bool, String> {
+    let mut decision = if allowed {
+        PermissionDecision::allow()
+    } else {
+        PermissionDecision::deny(
+            message
+                .clone()
+                .unwrap_or_else(|| "Permission denied by GUI.".to_owned()),
+        )
+    };
+    if allowed {
+        decision.message = message.clone();
+    }
+    decision.updated_input = updated_input.clone();
+    decision.permission_updates = permission_updates.clone().unwrap_or_default();
+    decision.feedback = feedback.clone();
+    decision.content_blocks = content_blocks.clone().unwrap_or_default();
+
     let sender = {
         let mut pending = state.pending_permissions.lock().await;
         pending.remove(&request_id)
     };
     if let Some(sender) = sender {
-        let mut decision = if allowed {
-            PermissionDecision::allow()
-        } else {
-            PermissionDecision::deny(
-                message
-                    .clone()
-                    .unwrap_or_else(|| "Permission denied by GUI.".to_owned()),
-            )
-        };
-        if allowed {
-            decision.message = message;
-        }
-        decision.updated_input = updated_input;
-        decision.permission_updates = permission_updates.unwrap_or_default();
-        decision.feedback = feedback;
-        decision.content_blocks = content_blocks.unwrap_or_default();
         let _ = sender.send(decision);
         Ok(true)
     } else {
-        Ok(false)
+        let pending_codex = {
+            let pending = state.pending_codex_permissions.lock().await;
+            pending.get(&request_id).cloned()
+        };
+        let Some(pending_codex) = pending_codex else {
+            return Ok(false);
+        };
+
+        let permission_updates_for_emit = permission_updates.unwrap_or_default();
+        let codex_decision = codex_permission_decision(allowed, &permission_updates_for_emit);
+
+        {
+            let mut adapters = state.active_codex_adapters.lock().await;
+            let adapter = adapters
+                .get_mut(&pending_codex.session_id)
+                .ok_or_else(|| "Codex adapter not found for permission request".to_owned())?;
+            adapter
+                .resolve_permission(
+                    &pending_codex.session_id,
+                    &pending_codex.request_id,
+                    codex_decision,
+                )
+                .await
+                .map_err(|error| {
+                    format!("Failed to resolve Codex permission request: {error:#}")
+                })?;
+        }
+
+        {
+            let mut pending = state.pending_codex_permissions.lock().await;
+            pending.remove(&request_id);
+        }
+
+        let _ = app.emit(
+            APP_EVENT_PERMISSION_RESOLVED,
+            PermissionDecisionDto {
+                request_id,
+                allowed,
+                message,
+                updated_input,
+                permission_updates: permission_updates_for_emit,
+                feedback,
+                content_blocks: content_blocks.unwrap_or_default(),
+            },
+        );
+
+        Ok(true)
     }
 }
 
@@ -4126,8 +5433,10 @@ pub fn run() {
         panic!("failed to initialize remote-code-gui runtime: {error:#}");
     });
     let pending_permissions = Arc::new(Mutex::new(HashMap::new()));
+    let pending_codex_permissions = Arc::new(Mutex::new(HashMap::new()));
     let running_prompts = Arc::new(Mutex::new(HashMap::new()));
     let active_subprocess_adapters = Arc::new(Mutex::new(HashMap::new()));
+    let active_codex_adapters = Arc::new(Mutex::new(HashMap::new()));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -4135,8 +5444,10 @@ pub fn run() {
         .manage(AppState {
             runtime: Mutex::new(runtime_state),
             pending_permissions,
+            pending_codex_permissions,
             running_prompts,
             active_subprocess_adapters,
+            active_codex_adapters,
         })
         .invoke_handler(tauri::generate_handler![
             init_app,
@@ -4157,6 +5468,27 @@ pub fn run() {
             reset_mcp_servers,
             create_session,
             get_settings,
+            codex_list_threads,
+            codex_read_thread,
+            codex_resume_thread,
+            codex_fork_thread,
+            codex_archive_thread,
+            codex_unarchive_thread,
+            codex_exec,
+            codex_app_server_request,
+            codex_exec_write,
+            codex_exec_terminate,
+            codex_exec_resize,
+            codex_mcp_refresh,
+            codex_mcp_status,
+            codex_mcp_read_resource,
+            codex_mcp_call_tool,
+            codex_read_config,
+            codex_write_config_value,
+            codex_write_config_batch,
+            codex_upload_feedback,
+            codex_set_thread_memory_mode,
+            codex_reset_memories,
             update_provider,
             list_projects,
             add_project,
@@ -4327,6 +5659,56 @@ mod tests {
     }
 
     #[test]
+    fn codex_permission_decision_preserves_session_scope() {
+        let session_update = PermissionUpdate::SetMode {
+            destination: PermissionUpdateDestination::Session,
+            mode: rc_permissions::ExtendedPermissionMode::AcceptEdits,
+        };
+        let user_update = PermissionUpdate::SetMode {
+            destination: PermissionUpdateDestination::UserSettings,
+            mode: rc_permissions::ExtendedPermissionMode::AcceptEdits,
+        };
+
+        assert_eq!(
+            codex_permission_decision(true, &[session_update]),
+            AgentPermissionDecision::AllowAll
+        );
+        assert_eq!(
+            codex_permission_decision(true, &[user_update]),
+            AgentPermissionDecision::Allow
+        );
+        assert_eq!(
+            codex_permission_decision(false, &[]),
+            AgentPermissionDecision::Deny
+        );
+    }
+
+    #[test]
+    fn usage_info_from_codex_token_usage_handles_progress_payload() {
+        let payload = json!({
+            "method": "thread/tokenUsage/updated",
+            "params": {
+                "tokenUsage": {
+                    "total": {
+                        "inputTokens": 12,
+                        "cachedInputTokens": 3,
+                        "outputTokens": 5,
+                        "totalTokens": 20,
+                        "reasoningOutputTokens": 0
+                    }
+                }
+            }
+        });
+
+        let usage = usage_info_from_codex_token_usage(&payload).expect("usage should parse");
+
+        assert_eq!(usage.input_tokens, 12);
+        assert_eq!(usage.output_tokens, 5);
+        assert_eq!(usage.cache_read, 3);
+        assert_eq!(usage.cache_write, 0);
+    }
+
+    #[test]
     fn provider_config_sanitizer_trims_blank_fields() {
         let config = normalize_provider_config(ProviderConfig {
             name: "  minimax  ".to_owned(),
@@ -4432,28 +5814,36 @@ mod tests {
         assert_eq!(inventory.summary.status_counts.pending, 3);
         assert_eq!(inventory.summary.status_counts.disabled, 1);
         assert_eq!(inventory.servers.len(), 4);
-        assert!(inventory
-            .servers
-            .iter()
-            .any(|server| server.name == "project-demo"
-                && server.status == "pending"
-                && server.origin_kind == "cwd"));
-        assert!(inventory
-            .servers
-            .iter()
-            .any(|server| server.name == "disabled-demo"
-                && server.status == "disabled"
-                && server.origin_kind == "cwd"));
-        assert!(inventory
-            .servers
-            .iter()
-            .any(|server| server.name == "profile-demo" && server.origin_kind == "profile"));
-        assert!(inventory
-            .servers
-            .iter()
-            .any(|server| server.name == "plugin-demo"
-                && server.origin_kind == "plugin"
-                && server.origin_name == "sample"));
+        assert!(
+            inventory
+                .servers
+                .iter()
+                .any(|server| server.name == "project-demo"
+                    && server.status == "pending"
+                    && server.origin_kind == "cwd")
+        );
+        assert!(
+            inventory
+                .servers
+                .iter()
+                .any(|server| server.name == "disabled-demo"
+                    && server.status == "disabled"
+                    && server.origin_kind == "cwd")
+        );
+        assert!(
+            inventory
+                .servers
+                .iter()
+                .any(|server| server.name == "profile-demo" && server.origin_kind == "profile")
+        );
+        assert!(
+            inventory
+                .servers
+                .iter()
+                .any(|server| server.name == "plugin-demo"
+                    && server.origin_kind == "plugin"
+                    && server.origin_name == "sample")
+        );
 
         let snapshot = runtime_status_snapshot_from_config(&config);
         assert_eq!(snapshot.mcp.total_servers, 2);
@@ -4521,12 +5911,14 @@ mod tests {
             names,
             std::collections::BTreeSet::from(["plugin-demo", "profile-demo", "project-demo"])
         );
-        assert!(policy
-            .mcp_servers
-            .iter()
-            .any(|entry| entry.server.name == "plugin-demo"
-                && entry.origin_kind == "plugin"
-                && entry.origin_name == "sample"));
+        assert!(
+            policy
+                .mcp_servers
+                .iter()
+                .any(|entry| entry.server.name == "plugin-demo"
+                    && entry.origin_kind == "plugin"
+                    && entry.origin_name == "sample")
+        );
 
         rc_tools::configure_tool_runtime_policy(original_policy)
             .expect("runtime policy should restore");

@@ -499,11 +499,11 @@ graph TB
 
 ### Legacy SubprocessAdapter (Fallback)
 
-SubprocessAdapter 仍可作为备用方案，通过 Bridge Binary 以 JSON-RPC over stdio 通信：
+SubprocessAdapter 仍可作为 Roo-code 的备用方案，通过 Bridge Binary 以 JSON-RPC over stdio 通信：
 
-1. 主进程启动 Bridge Binary（`remote-code-codex-bridge` 或 `remote-code-roo-bridge`）
+1. 主进程启动 Bridge Binary（`remote-code-roo-bridge`）
 2. Bridge Binary 通过 JSON-RPC over stdio 与主进程通信
-3. Bridge Binary 启动实际的 Agent 二进制并翻译 I/O
+3. Bridge Binary 启动实际的 Roo-code 二进制并翻译 I/O
 
 ### Bridge Protocol
 
@@ -516,7 +516,6 @@ SubprocessAdapter 仍可作为备用方案，通过 Bridge Binary 以 JSON-RPC o
 
 | Binary | Crate | 职责 |
 |--------|-------|------|
-| `remote-code-codex-bridge` | `apps/remote-code-codex-bridge/` | 启动 Codex 二进制，翻译 JSON-RPC ↔ Codex I/O |
 | `remote-code-roo-bridge` | `apps/remote-code-roo-bridge/` | 启动 Roo-code 二进制，翻译 JSON-RPC ↔ Roo-code I/O |
 
 ### 构建系统
@@ -647,5 +646,4 @@ Release builds are triggered by tags and produce binaries for 5 platforms.
 |------------|-------------|
 | TTS Mock | `rc-voice::tts` returns placeholder responses, not connected to a real TTS service |
 | Roo Code Callbacks | Roo Code callbacks currently return stub responses, awaiting real implementation |
-| Bridge Binary Duplication | `remote-code-codex-bridge` and `remote-code-roo-bridge` share ~95% identical code; should be merged into a parameterized single binary |
 | Alpha Dependencies | `rama-*` crates pinned to `0.3.0-alpha.4` — pre-release quality, will need migration when stable releases |

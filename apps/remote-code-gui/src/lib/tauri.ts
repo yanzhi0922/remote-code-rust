@@ -6,6 +6,33 @@ import type {
   AgentType,
   BatchProgressInfo,
   ConfigScope,
+  CodexAppServerRequest,
+  CodexConfigBatchWriteRequest,
+  CodexConfigReadResponse,
+  CodexConfigValueWriteRequest,
+  CodexConfigWriteResponse,
+  CodexEmptyResponse,
+  CodexExecRequest,
+  CodexExecResizeRequest,
+  CodexExecResponse,
+  CodexExecWriteRequest,
+  CodexFeedbackResponse,
+  CodexFeedbackRequest,
+  CodexJsonValue,
+  CodexMcpResourceReadResponse,
+  CodexMcpResourceReadRequest,
+  CodexMcpStatusResponse,
+  CodexMcpStatusRequest,
+  CodexMcpToolCallResponse,
+  CodexMcpToolCallRequest,
+  CodexMemoryModeRequest,
+  CodexThreadArchiveRequest,
+  CodexThreadArchiveResponse,
+  CodexThreadListRequest,
+  CodexThreadListResponse,
+  CodexThreadReadResponse,
+  CodexThreadRefRequest,
+  CodexThreadSessionResponse,
   ConversationEntry,
   ContextCompactedInfo,
   ContextOverflowInfo,
@@ -185,6 +212,118 @@ export function getSettings(): Promise<FullSettings> {
 
 export function updateProvider(request: UpdateProviderRequest): Promise<void> {
   return invoke('update_provider', { request });
+}
+
+export function codexListThreads(
+  params?: CodexThreadListRequest | null,
+): Promise<CodexThreadListResponse> {
+  return invoke<CodexThreadListResponse>('codex_list_threads', { params: params ?? null });
+}
+
+export function codexReadThread(request: CodexThreadRefRequest): Promise<CodexThreadReadResponse> {
+  return invoke<CodexThreadReadResponse>('codex_read_thread', { request });
+}
+
+export function codexResumeThread(
+  request: CodexThreadRefRequest,
+): Promise<CodexThreadSessionResponse> {
+  return invoke<CodexThreadSessionResponse>('codex_resume_thread', { request });
+}
+
+export function codexForkThread(
+  request: CodexThreadRefRequest,
+): Promise<CodexThreadSessionResponse> {
+  return invoke<CodexThreadSessionResponse>('codex_fork_thread', { request });
+}
+
+export function codexArchiveThread(
+  request: CodexThreadArchiveRequest,
+): Promise<CodexThreadArchiveResponse> {
+  return invoke<CodexThreadArchiveResponse>('codex_archive_thread', { request });
+}
+
+export function codexUnarchiveThread(
+  request: CodexThreadArchiveRequest,
+): Promise<CodexThreadReadResponse> {
+  return invoke<CodexThreadReadResponse>('codex_unarchive_thread', { request });
+}
+
+export function codexExec(request: CodexExecRequest): Promise<CodexExecResponse> {
+  return invoke<CodexExecResponse>('codex_exec', { request });
+}
+
+export function codexAppServerRequest(request: CodexAppServerRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_app_server_request', { request });
+}
+
+export function codexExecWrite(request: CodexExecWriteRequest): Promise<CodexEmptyResponse> {
+  return invoke<CodexEmptyResponse>('codex_exec_write', { request });
+}
+
+export function codexExecTerminate(
+  processId: string,
+  sessionId?: string | null,
+): Promise<CodexEmptyResponse> {
+  return invoke<CodexEmptyResponse>('codex_exec_terminate', {
+    processId,
+    sessionId: sessionId ?? null,
+  });
+}
+
+export function codexExecResize(request: CodexExecResizeRequest): Promise<CodexEmptyResponse> {
+  return invoke<CodexEmptyResponse>('codex_exec_resize', { request });
+}
+
+export function codexMcpRefresh(sessionId?: string | null): Promise<CodexEmptyResponse> {
+  return invoke<CodexEmptyResponse>('codex_mcp_refresh', { sessionId: sessionId ?? null });
+}
+
+export function codexMcpStatus(
+  request: CodexMcpStatusRequest = {},
+): Promise<CodexMcpStatusResponse> {
+  return invoke<CodexMcpStatusResponse>('codex_mcp_status', { request });
+}
+
+export function codexMcpReadResource(
+  request: CodexMcpResourceReadRequest,
+): Promise<CodexMcpResourceReadResponse> {
+  return invoke<CodexMcpResourceReadResponse>('codex_mcp_read_resource', { request });
+}
+
+export function codexMcpCallTool(
+  request: CodexMcpToolCallRequest,
+): Promise<CodexMcpToolCallResponse> {
+  return invoke<CodexMcpToolCallResponse>('codex_mcp_call_tool', { request });
+}
+
+export function codexReadConfig(includeLayers = false): Promise<CodexConfigReadResponse> {
+  return invoke<CodexConfigReadResponse>('codex_read_config', { includeLayers });
+}
+
+export function codexWriteConfigValue(
+  request: CodexConfigValueWriteRequest,
+): Promise<CodexConfigWriteResponse> {
+  return invoke<CodexConfigWriteResponse>('codex_write_config_value', { request });
+}
+
+export function codexWriteConfigBatch(
+  request: CodexConfigBatchWriteRequest,
+): Promise<CodexConfigWriteResponse> {
+  return invoke<CodexConfigWriteResponse>('codex_write_config_batch', { request });
+}
+
+export function codexUploadFeedback(request: CodexFeedbackRequest): Promise<CodexFeedbackResponse> {
+  return invoke<CodexFeedbackResponse>('codex_upload_feedback', { request });
+}
+
+export function codexSetThreadMemoryMode(
+  request: CodexMemoryModeRequest,
+): Promise<CodexEmptyResponse> {
+  return invoke<CodexEmptyResponse>('codex_set_thread_memory_mode', { request });
+}
+
+export function codexResetMemories(): Promise<CodexEmptyResponse> {
+  return invoke<CodexEmptyResponse>('codex_reset_memories');
 }
 
 export function listProjects(): Promise<ProjectInfo[]> {

@@ -2,6 +2,7 @@ import { ArchiveRestore, Check, Eye, EyeOff, Pencil, Plus, Power, Trash2, X } fr
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FullSettings, ModelProfile, ProviderConfig, SessionSummary } from '../../lib/types';
 import { useAppStore } from '../../stores/useAppStore';
+import { CodexSettings } from '../settings/CodexSettings';
 import { McpTab } from './McpTab';
 import { OperationsTab } from './OperationsTab';
 
@@ -10,11 +11,12 @@ interface SettingsPanelProps {
   onClose: () => void;
 }
 
-type SettingsTab = 'provider' | 'runtime' | 'mcp' | 'operations' | 'archive';
+type SettingsTab = 'provider' | 'runtime' | 'codex' | 'mcp' | 'operations' | 'archive';
 
 const TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: 'provider', label: 'Provider' },
   { key: 'runtime', label: '运行参数' },
+  { key: 'codex', label: 'Codex' },
   { key: 'mcp', label: 'MCP' },
   { key: 'operations', label: '操作面' },
   { key: 'archive', label: '归档' },
@@ -144,6 +146,11 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               <ProviderTab />
             ) : activeTab === 'mcp' ? (
               <McpTab />
+            ) : activeTab === 'codex' ? (
+              <CodexSettings
+                settings={current}
+                onUpdate={(updates) => setDraft((state) => ({ ...state, ...updates }))}
+              />
             ) : activeTab === 'operations' ? (
               <OperationsTab />
             ) : activeTab === 'archive' ? (
