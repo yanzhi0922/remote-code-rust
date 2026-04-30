@@ -544,6 +544,7 @@ mod tests {
                 startup_timeout_secs: None,
                 request_timeout_secs: None,
                 metadata: BTreeMap::new(),
+                oauth: None,
             },
             ConfigScope::Local,
         )

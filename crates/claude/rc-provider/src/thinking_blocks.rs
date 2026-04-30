@@ -47,13 +47,35 @@ impl ThinkingConfig {
         }
     }
 
+    /// Create an adaptive thinking configuration.
+    ///
+    /// Adaptive thinking lets the model decide how much thinking to do.
+    /// This is the default for Claude 4+ models.
+    #[must_use]
+    pub fn adaptive() -> Self {
+        Self {
+            budget_tokens: 0,
+            thinking_type: "adaptive".to_string(),
+        }
+    }
+
     /// Convert to a JSON value suitable for the API request body.
     #[must_use]
     pub fn to_api_value(&self) -> Value {
-        json!({
-            "type": self.thinking_type,
-            "budget_tokens": self.budget_tokens,
-        })
+        if self.thinking_type == "adaptive" {
+            json!({
+                "type": "adaptive"
+            })
+        } else if self.thinking_type == "disabled" {
+            json!({
+                "type": "disabled"
+            })
+        } else {
+            json!({
+                "type": "enabled",
+                "budget_tokens": self.budget_tokens,
+            })
+        }
     }
 }
 
@@ -235,6 +257,19 @@ pub fn extract_thinking_text(blocks: &[Value]) -> String {
         .join("")
 }
 
+/// Determine whether a model should use adaptive thinking.
+///
+/// Returns true for Claude 4+ models that support adaptive thinking.
+#[must_use]
+pub fn should_use_adaptive_thinking(model: &str) -> bool {
+    let model_lower = model.to_ascii_lowercase();
+    model_lower.contains("claude-opus-4")
+        || model_lower.contains("claude-sonnet-4")
+        || model_lower.contains("claude-haiku-4")
+        || model_lower.contains("claude-4")
+        || model_lower.contains("minimax")
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -272,6 +307,31 @@ mod tests {
         let val = config.to_api_value();
         assert_eq!(val["type"], "enabled");
         assert_eq!(val["budget_tokens"], 8000);
+    }
+
+    #[test]
+    fn thinking_config_adaptive() {
+        let config = ThinkingConfig::adaptive();
+        assert_eq!(config.budget_tokens, 0);
+        assert_eq!(config.thinking_type, "adaptive");
+    }
+
+    #[test]
+    fn thinking_config_adaptive_to_api_value() {
+        let config = ThinkingConfig::adaptive();
+        let val = config.to_api_value();
+        assert_eq!(val["type"], "adaptive");
+        assert!(val.get("budget_tokens").is_none());
+    }
+
+    #[test]
+    fn should_use_adaptive_thinking_claude4() {
+        assert!(should_use_adaptive_thinking("claude-opus-4-7"));
+        assert!(should_use_adaptive_thinking("claude-sonnet-4-6"));
+        assert!(should_use_adaptive_thinking("claude-haiku-4-5"));
+        assert!(should_use_adaptive_thinking("minimax-m2.7"));
+        assert!(!should_use_adaptive_thinking("gpt-4o"));
+        assert!(!should_use_adaptive_thinking("claude-3-5-sonnet"));
     }
 
     #[test]

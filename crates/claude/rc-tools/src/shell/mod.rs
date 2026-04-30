@@ -67,6 +67,7 @@ pub struct ShellExecutionRequest {
     pub cwd: std::path::PathBuf,
     pub timeout_ms: u64,
     pub background: bool,
+    pub dangerously_disable_sandbox: bool,
 }
 
 #[derive(Debug)]
@@ -106,12 +107,16 @@ pub async fn execute_shell_command(
             .map(ToOwned::to_owned),
         cwd: resolve_working_dir(&context.cwd, input.get("cwd").and_then(Value::as_str))?,
         timeout_ms: input
-            .get("timeout_ms")
+            .get("timeout")
             .and_then(Value::as_u64)
             .unwrap_or(context.timeout_ms)
             .clamp(1_000, 600_000),
         background: input
-            .get("background")
+            .get("run_in_background")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        dangerously_disable_sandbox: input
+            .get("dangerouslyDisableSandbox")
             .and_then(Value::as_bool)
             .unwrap_or(false),
     };
@@ -588,7 +593,7 @@ mod tests {
             &json!({
                 "command": timeout_command(),
                 "description": "timeout test",
-                "timeout_ms": 250
+                "timeout": 250
             }),
             &context,
             &policy,

@@ -142,6 +142,7 @@ pub use serialization::McpCliState;
 // OAuth
 pub use oauth::{
     AuthorizationServerMetadata, McpOAuthFlow, OAuthTokenStore, OAuthTokens, PkceParams,
+    mcp_oauth_server_key,
 };
 
 // Elicitation

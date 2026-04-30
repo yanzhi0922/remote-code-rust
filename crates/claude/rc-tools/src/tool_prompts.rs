@@ -179,52 +179,55 @@ notified when it completes — do not poll.";
 
 /// Prompt for `glob`.
 pub const GLOB: &str = "\
-Fast file pattern matching tool that works with any codebase size.
-
-Usage:
-- Supports glob patterns like '**/*.rs', 'src/**/*.ts', or '*.toml'.
-- Returns matching file paths sorted by modification time (newest first).
-- Optionally specify a `path` to search within a subdirectory.
-- Use this tool when you need to find files by name patterns.
-
-Notes:
-- For content-based searches, use `grep` or `search_text` instead.
-- When doing an open-ended search that may require multiple rounds of globbing \
-  and grepping, use the `agent` tool instead.
-- Patterns are case-sensitive on most systems. Use appropriate casing.";
+- Fast file pattern matching tool that works with any codebase size
+- Supports glob patterns like \"**/*.js\" or \"src/**/*.ts\"
+- Returns matching file paths sorted by modification time
+- Use this tool when you need to find files by name patterns
+- When you are doing an open ended search that may require multiple rounds of \
+  globbing and grepping, use the Agent tool instead";
 
 /// Prompt for `grep`.
 pub const GREP: &str = "\
-A powerful search tool for finding patterns in files.
+A powerful search tool built on ripgrep.
 
 Usage:
-- ALWAYS use this tool for search tasks. NEVER invoke `grep` or `rg` as a bash command.
-- Supports full regex syntax (e.g., 'log.*Error', 'function\\s+\\w+').
-- Filter files with `file_pattern` parameter (e.g., '*.rs', '**/*.tsx').
-- Use `max_matches` to limit the number of results (max 200).
-- Returns matching file paths, line numbers, and content.
-
-Notes:
-- Pattern syntax uses Rust regex — literal braces need escaping.
-- For open-ended searches requiring multiple rounds, use the `agent` tool.
-- Binary files and common ignored directories are automatically excluded.
-- Searches are case-sensitive by default.";
+- ALWAYS use Grep for search tasks. NEVER invoke `grep` or `rg` as a Bash \
+command. The Grep tool has been optimized for correct permissions and access.
+- Supports full regex syntax (e.g., \"log.*Error\", \"function\\s+\\w+\").
+- Filter files with glob parameter (e.g., \"*.js\", \"**/*.tsx\") or type \
+parameter (e.g., \"js\", \"py\", \"rust\").
+- Output modes: \"content\" shows matching lines, \"files_with_matches\" \
+shows only file paths (default), \"count\" shows match counts.
+- Use Agent tool for open-ended searches requiring multiple rounds.
+- Pattern syntax: Uses ripgrep (not grep) - literal braces need escaping \
+(use `interface\\{\\}` to find `interface{}` in Go code).
+- Multiline matching: By default patterns match within single lines only. \
+For cross-line patterns like `struct \\{[\\s\\S]*?field`, use `multiline: true`.";
 
 /// Prompt for `web_fetch`.
 pub const WEB_FETCH: &str = "\
-Fetch the content of a URL and return it as text.
+- Fetches content from a specified URL and processes it using an AI model
+- Takes a URL and a prompt as input
+- Fetches the URL content, converts HTML to markdown
+- Processes the content with the prompt using a small, fast model
+- Returns the model's response about the content
+- Use this tool when you need to retrieve and analyze web content
 
-Usage:
-- The `url` parameter must be a valid HTTP or HTTPS URL.
-- Use `max_chars` to limit the response size (max 100000 characters).
-- Returns the page content as plain text or markdown.
-- Useful for reading documentation, API responses, or web pages.
-
-Notes:
-- Requires network access. May fail behind restrictive firewalls.
-- Some websites block automated requests — consider using `web_browser` as a fallback.
-- For search queries, prefer `web_search` over fetching search engine URLs directly.
-- Large pages may be truncated — use `max_chars` to control the output size.";
+Usage notes:
+  - IMPORTANT: If an MCP-provided web fetch tool is available, prefer using \
+that tool instead of this one, as it may have fewer restrictions.
+  - The URL must be a fully-formed valid URL
+  - HTTP URLs will be automatically upgraded to HTTPS
+  - The prompt should describe what information you want to extract from the page
+  - This tool is read-only and does not modify any files
+  - Results may be summarized if the content is very large
+  - Includes a self-cleaning 15-minute cache for faster responses when \
+repeatedly accessing the same URL
+  - When a URL redirects to a different host, the tool will inform you and \
+provide the redirect URL in a special format. You should then make a new \
+WebFetch request with the redirect URL to fetch the content.
+  - For GitHub URLs, prefer using the gh CLI via Bash instead (e.g., gh pr \
+view, gh issue view, gh api).";
 
 /// Prompt for `agent`.
 pub const AGENT: &str = "\
@@ -261,19 +264,81 @@ Notes:
 
 /// Prompt for `todo_write`.
 pub const TODO_WRITE: &str = "\
-Manage a task list by creating, updating, or deleting todo items.
+Use this tool to create and manage a structured task list for your current \
+coding session. This helps you track progress, organize complex tasks, and \
+demonstrate thoroughness to the user. It also helps the user understand the \
+progress of the task and overall progress of their requests.
 
-Usage:
-- Pass a `todos` array with objects containing `id`, `text`, and `status` fields.
-- Status values: 'pending', 'in_progress', 'completed'.
-- Each call replaces the entire todo list — include ALL items, not just changes.
-- Use this to track multi-step tasks and show progress to the user.
+## When to Use This Tool
+Use this tool proactively in these scenarios:
 
-Notes:
-- Keep todo items concise and actionable.
-- Update status to 'in_progress' when starting a step, 'completed' when done.
-- This tool is useful for complex, multi-step tasks that benefit from progress tracking.
-- Do not use for simple single-step tasks.";
+1. Complex multi-step tasks - When a task requires 3 or more distinct steps \
+or actions
+2. Non-trivial and complex tasks - Tasks that require careful planning or \
+multiple operations
+3. User explicitly requests todo list - When the user directly asks you to \
+use the todo list
+4. User provides multiple tasks - When users provide a list of things to be \
+done (numbered or comma-separated)
+5. After receiving new instructions - Immediately capture user requirements \
+as todos
+6. When you start working on a task - Mark it as in_progress BEFORE \
+beginning work. Ideally you should only have one todo as in_progress at a time
+7. After completing a task - Mark it as completed and add any new follow-up \
+tasks discovered during implementation
+
+## When NOT to Use This Tool
+
+Skip using this tool when:
+1. There is only a single, straightforward task
+2. The task is trivial and tracking it provides no organizational benefit
+3. The task can be completed in less than 3 trivial steps
+4. The task is purely conversational or informational
+
+NOTE that you should not use this tool if there is only one trivial task to \
+do. In this case you are better off just doing the task directly.
+
+## Task States and Management
+
+1. **Task States**: Use these states to track progress:
+   - pending: Task not yet started
+   - in_progress: Currently working on (limit to ONE task at a time)
+   - completed: Task finished successfully
+
+   **IMPORTANT**: Task descriptions must have two forms:
+   - content: The imperative form describing what needs to be done (e.g., \
+\"Run tests\", \"Build the project\")
+   - activeForm: The present continuous form shown during execution (e.g., \
+\"Running tests\", \"Building the project\")
+
+2. **Task Management**:
+   - Update task status in real-time as you work
+   - Mark tasks complete IMMEDIATELY after finishing (don't batch completions)
+   - Exactly ONE task must be in_progress at any time (not less, not more)
+   - Complete current tasks before starting new ones
+   - Remove tasks that are no longer relevant from the list entirely
+
+3. **Task Completion Requirements**:
+   - ONLY mark a task as completed when you have FULLY accomplished it
+   - If you encounter errors, blockers, or cannot finish, keep the task as \
+in_progress
+   - When blocked, create a new task describing what needs to be resolved
+   - Never mark a task as completed if:
+     - Tests are failing
+     - Implementation is partial
+     - You encountered unresolved errors
+     - You couldn't find necessary files or dependencies
+
+4. **Task Breakdown**:
+   - Create specific, actionable items
+   - Break complex tasks into smaller, manageable steps
+   - Use clear, descriptive task names
+   - Always provide both forms:
+     - content: \"Fix authentication bug\"
+     - activeForm: \"Fixing authentication bug\"
+
+When in doubt, use this tool. Being proactive with task management demonstrates \
+attentiveness and ensures you complete all requirements successfully.";
 
 /// Prompt for `config_read`.
 pub const CONFIG_READ: &str = "\
@@ -1377,17 +1442,16 @@ Notes:
 
 /// Prompt for `web_search`.
 pub const WEB_SEARCH: &str = "\
-Search the web for information using a search API.
+- Allows Claude to search the web and use the results to inform responses
+- Provides up-to-date information for current events and recent data
+- Returns search result information formatted as search result blocks, \
+including links as markdown hyperlinks
+- Use this tool for accessing information beyond Claude's knowledge cutoff
+- Searches are performed automatically within a single API call
 
-Usage:
-- `query` is the search query string.
-- `max_results` controls the number of results (default 5, max 10).
-- Returns titles, URLs, and summaries for each result.
-
-Notes:
-- Use this for finding documentation, solutions, or current information.
-- For fetching specific URL content, use `web_fetch` or `web_browser`.
-- Search results are summaries — use `web_fetch` for full page content.";
+Usage notes:
+  - Domain filtering is supported to include or block specific websites
+  - Web search is only available in the US";
 
 /// Prompt for `tungsten`.
 pub const TUNGSTEN: &str = "\
@@ -1771,6 +1835,105 @@ IMPORTANT - Use the correct year in search queries:
 }
 
 // ── Detailed prompt functions (Claude Code parity) ───────────────────────────
+
+/// Returns the Grep tool prompt matching Claude Code's GrepTool/prompt.ts.
+#[must_use]
+pub fn grep_tool_prompt() -> String {
+    "A powerful search tool built on ripgrep.\n\n\
+    Usage:\n\
+    - ALWAYS use Grep for search tasks. NEVER invoke `grep` or `rg` as a Bash \
+    command. The Grep tool has been optimized for correct permissions and access.\n\
+    - Supports full regex syntax (e.g., \"log.*Error\", \"function\\s+\\w+\")\n\
+    - Filter files with glob parameter (e.g., \"*.js\", \"**/*.tsx\") or type \
+    parameter (e.g., \"js\", \"py\", \"rust\")\n\
+    - Output modes: \"content\" shows matching lines, \"files_with_matches\" \
+    shows only file paths (default), \"count\" shows match counts\n\
+    - Use Agent tool for open-ended searches requiring multiple rounds\n\
+    - Pattern syntax: Uses ripgrep (not grep) - literal braces need escaping \
+    (use `interface\\{\\}` to find `interface{}` in Go code)\n\
+    - Multiline matching: By default patterns match within single lines only. \
+    For cross-line patterns like `struct \\{[\\s\\S]*?field`, use `multiline: true`"
+        .to_owned()
+}
+
+/// Returns the WebFetch tool prompt matching Claude Code's WebFetchTool/prompt.ts.
+#[must_use]
+pub fn web_fetch_tool_prompt() -> String {
+    "Fetches content from a specified URL and processes it using an AI model.\n\n\
+    - Takes a URL and a prompt as input\n\
+    - Fetches the URL content, converts HTML to markdown\n\
+    - Processes the content with the prompt using a small, fast model\n\
+    - Returns the model's response about the content\n\
+    - Use this tool when you need to retrieve and analyze web content\n\n\
+    Usage notes:\n\
+      - IMPORTANT: If an MCP-provided web fetch tool is available, prefer using \
+    that tool instead of this one, as it may have fewer restrictions.\n\
+      - The URL must be a fully-formed valid URL\n\
+      - HTTP URLs will be automatically upgraded to HTTPS\n\
+      - The prompt should describe what information you want to extract from the page\n\
+      - This tool is read-only and does not modify any files\n\
+      - Results may be summarized if the content is very large\n\
+      - Includes a self-cleaning 15-minute cache for faster responses when \
+    repeatedly accessing the same URL\n\
+      - When a URL redirects to a different host, the tool will inform you and \
+    provide the redirect URL in a special format. You should then make a new \
+    WebFetch request with the redirect URL to fetch the content.\n\
+      - For GitHub URLs, prefer using the gh CLI via Bash instead (e.g., gh pr \
+    view, gh issue view, gh api)."
+        .to_owned()
+}
+
+/// Returns the TodoWrite tool prompt matching Claude Code's TodoWriteTool/prompt.ts.
+#[must_use]
+pub fn todo_write_tool_prompt() -> String {
+    "Use this tool to create and manage a structured task list for your current \
+    coding session. This helps you track progress, organize complex tasks, and \
+    demonstrate thoroughness to the user. It also helps the user understand the \
+    progress of the task and overall progress of their requests.\n\n\
+    ## When to Use This Tool\n\
+    Use this tool proactively in these scenarios:\n\n\
+    1. Complex multi-step tasks - When a task requires 3 or more distinct steps \
+    or actions\n\
+    2. Non-trivial and complex tasks - Tasks that require careful planning or \
+    multiple operations\n\
+    3. User explicitly requests todo list - When the user directly asks you to \
+    use the todo list\n\
+    4. User provides multiple tasks - When users provide a list of things to be \
+    done (numbered or comma-separated)\n\
+    5. After receiving new instructions - Immediately capture user requirements \
+    as todos\n\
+    6. When you start working on a task - Mark it as in_progress BEFORE \
+    beginning work. Ideally you should only have one todo as in_progress at a time\n\
+    7. After completing a task - Mark it as completed and add any new follow-up \
+    tasks discovered during implementation\n\n\
+    ## When NOT to Use This Tool\n\n\
+    Skip using this tool when:\n\
+    1. There is only a single, straightforward task\n\
+    2. The task is trivial and tracking it provides no organizational benefit\n\
+    3. The task can be completed in less than 3 trivial steps\n\
+    4. The task is purely conversational or informational\n\n\
+    NOTE that you should not use this tool if there is only one trivial task to \
+    do. In this case you are better off just doing the task directly.\n\n\
+    ## Task States and Management\n\n\
+    1. **Task States**: Use these states to track progress:\n\
+       - pending: Task not yet started\n\
+       - in_progress: Currently working on (limit to ONE task at a time)\n\
+       - completed: Task finished successfully\n\n\
+       **IMPORTANT**: Task descriptions must have two forms:\n\
+       - content: The imperative form describing what needs to be done (e.g., \
+    \"Run tests\", \"Build the project\")\n\
+       - activeForm: The present continuous form shown during execution (e.g., \
+    \"Running tests\", \"Building the project\")\n\n\
+    2. **Task Management**:\n\
+       - Update task status in real-time as you work\n\
+       - Mark tasks complete IMMEDIATELY after finishing (don't batch completions)\n\
+       - Exactly ONE task must be in_progress at any time (not less, not more)\n\
+       - Complete current tasks before starting new ones\n\
+       - Remove tasks that are no longer relevant from the list entirely\n\n\
+    When in doubt, use this tool. Being proactive with task management demonstrates \
+    attentiveness and ensures you complete all requirements successfully."
+        .to_owned()
+}
 
 /// Returns the full Bash tool prompt matching Claude Code's BashTool/prompt.ts.
 ///

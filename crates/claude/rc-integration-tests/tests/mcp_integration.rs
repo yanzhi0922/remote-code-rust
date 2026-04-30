@@ -61,6 +61,7 @@ fn mcp_config_save_and_load() {
                     capabilities: rc_mcp::McpCapabilityMatrix::default(),
                     startup_timeout_secs: None,
                     request_timeout_secs: None,
+                    oauth: None,
                     metadata: BTreeMap::new(),
                 },
             );
@@ -287,6 +288,7 @@ fn connection_state_transitions() {
         capabilities: rc_mcp::McpCapabilityMatrix::default(),
         startup_timeout_secs: None,
         request_timeout_secs: None,
+        oauth: None,
         metadata: BTreeMap::new(),
     };
     let scoped =
@@ -392,6 +394,7 @@ fn batch_queue_operations() {
         capabilities: rc_mcp::McpCapabilityMatrix::default(),
         startup_timeout_secs: None,
         request_timeout_secs: None,
+        oauth: None,
         metadata: BTreeMap::new(),
     };
     let scoped =

@@ -9,6 +9,13 @@ type AllowedPrompt = {
   prompt: string;
 };
 
+type CodexQuestion = {
+  id: string;
+  header?: string;
+  question?: string;
+  options?: { label: string; description?: string }[] | null;
+};
+
 function formatInput(input: unknown): string {
   try {
     return JSON.stringify(input, null, 2);
@@ -67,14 +74,77 @@ function buildExitPlanPermissionUpdates(allowedPrompts: AllowedPrompt[]): unknow
   ];
 }
 
+function extractCodexQuestions(input: unknown): CodexQuestion[] {
+  const record = asRecord(input);
+  const rawQuestions = record?.questions;
+  if (!Array.isArray(rawQuestions)) return [];
+
+  const questions: CodexQuestion[] = [];
+  for (const item of rawQuestions) {
+    const question = asRecord(item);
+    const id = typeof question?.id === 'string' ? question.id : '';
+    if (!id) continue;
+
+    const options: NonNullable<CodexQuestion['options']> = [];
+    if (Array.isArray(question?.options)) {
+      for (const option of question.options) {
+        const optionRecord = asRecord(option);
+        const label = typeof optionRecord?.label === 'string' ? optionRecord.label : '';
+        if (!label) continue;
+        options.push({
+          label,
+          description:
+            typeof optionRecord?.description === 'string' ? optionRecord.description : undefined,
+        });
+      }
+    }
+
+    questions.push({
+      id,
+      header: typeof question?.header === 'string' ? question.header : undefined,
+      question: typeof question?.question === 'string' ? question.question : undefined,
+      options: options.length > 0 ? options : null,
+    });
+  }
+  return questions;
+}
+
+function defaultCodexAnswers(questions: CodexQuestion[]): Record<string, { answers: string[] }> {
+  return Object.fromEntries(
+    questions.map((question) => [
+      question.id,
+      { answers: question.options?.[0]?.label ? [question.options[0].label] : [] },
+    ]),
+  );
+}
+
+function parseJsonOrText(value: string): unknown {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return trimmed;
+  }
+}
+
 export function PermissionModal() {
   const pendingPermission = useAppStore((state) => state.pendingPermission);
   const resolvePermission = useAppStore((state) => state.resolvePermission);
   const [feedback, setFeedback] = useState('');
+  const [codexJsonResponse, setCodexJsonResponse] = useState('');
+  const [codexTextResponse, setCodexTextResponse] = useState('');
   const isExitPlanMode = pendingPermission?.tool_name === 'exit_plan_mode';
+  const isCodexToolUserInput = pendingPermission?.tool_name === 'tool_user_input';
+  const isCodexMcpElicitation = pendingPermission?.tool_name === 'mcp_elicitation';
+  const isCodexDynamicTool = pendingPermission?.tool_name === 'dynamic_tool';
   const inputRecord = useMemo(() => asRecord(pendingPermission?.input), [pendingPermission?.input]);
   const allowedPrompts = useMemo(
     () => extractAllowedPrompts(pendingPermission?.input),
+    [pendingPermission?.input],
+  );
+  const codexQuestions = useMemo(
+    () => extractCodexQuestions(pendingPermission?.input),
     [pendingPermission?.input],
   );
   const planText = stringField(inputRecord, 'plan');
@@ -82,6 +152,16 @@ export function PermissionModal() {
 
   useEffect(() => {
     setFeedback('');
+    setCodexTextResponse('');
+    if (pendingPermission?.tool_name === 'tool_user_input') {
+      setCodexJsonResponse(
+        JSON.stringify({ answers: defaultCodexAnswers(extractCodexQuestions(pendingPermission.input)) }, null, 2),
+      );
+    } else if (pendingPermission?.tool_name === 'mcp_elicitation') {
+      setCodexJsonResponse(JSON.stringify({ action: 'accept', content: {}, _meta: null }, null, 2));
+    } else {
+      setCodexJsonResponse('');
+    }
   }, [pendingPermission?.request_id]);
 
   if (!pendingPermission) return null;
@@ -139,6 +219,64 @@ export function PermissionModal() {
               </div>
             </div>
           )}
+          {isCodexToolUserInput && (
+            <div className="space-y-3 rounded-2xl border border-[#e3dbcf] bg-[#fbfaf7] p-4">
+              <div className="text-sm font-medium text-slate-700">Codex 用户输入请求</div>
+              {codexQuestions.map((question) => (
+                <div key={question.id} className="rounded-xl bg-white p-3 text-sm text-slate-700">
+                  <div className="font-medium">{question.header || question.id}</div>
+                  {question.question && <div className="mt-1 text-slate-600">{question.question}</div>}
+                  {question.options && question.options.length > 0 && (
+                    <div className="mt-2 space-y-1 text-xs text-slate-500">
+                      {question.options.map((option) => (
+                        <div key={option.label}>
+                          {option.label}
+                          {option.description ? ` - ${option.description}` : ''}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+              <label htmlFor="codex-user-input-response" className="text-sm font-medium text-slate-700">
+                官方 ToolRequestUserInputResponse JSON
+              </label>
+              <textarea
+                id="codex-user-input-response"
+                value={codexJsonResponse}
+                onChange={(event) => setCodexJsonResponse(event.target.value)}
+                className="min-h-40 w-full rounded-2xl border border-[#e3dbcf] bg-white px-4 py-3 font-mono text-xs leading-5 text-slate-700 outline-none transition focus:border-slate-400"
+              />
+            </div>
+          )}
+          {isCodexMcpElicitation && (
+            <div className="space-y-3 rounded-2xl border border-[#e3dbcf] bg-[#fbfaf7] p-4">
+              <div className="text-sm font-medium text-slate-700">Codex MCP elicitation</div>
+              <div className="text-sm text-slate-600">
+                填写官方 `McpServerElicitationRequestResponse`。拒绝按钮会返回 decline。
+              </div>
+              <textarea
+                aria-label="MCP elicitation response"
+                value={codexJsonResponse}
+                onChange={(event) => setCodexJsonResponse(event.target.value)}
+                className="min-h-40 w-full rounded-2xl border border-[#e3dbcf] bg-white px-4 py-3 font-mono text-xs leading-5 text-slate-700 outline-none transition focus:border-slate-400"
+              />
+            </div>
+          )}
+          {isCodexDynamicTool && (
+            <div className="space-y-3 rounded-2xl border border-[#e3dbcf] bg-[#fbfaf7] p-4">
+              <label htmlFor="codex-dynamic-tool-output" className="text-sm font-medium text-slate-700">
+                Codex dynamic tool 输出
+              </label>
+              <textarea
+                id="codex-dynamic-tool-output"
+                value={codexTextResponse}
+                onChange={(event) => setCodexTextResponse(event.target.value)}
+                placeholder="返回给官方 DynamicToolCallResponse 的文本。"
+                className="min-h-28 w-full rounded-2xl border border-[#e3dbcf] bg-white px-4 py-3 text-sm leading-6 text-slate-700 outline-none transition focus:border-slate-400"
+              />
+            </div>
+          )}
           {pendingPermission.blocked_path && (
             <div>
               <div className="text-sm font-medium text-slate-700">目标路径</div>
@@ -188,7 +326,12 @@ export function PermissionModal() {
           <button
             onClick={() => {
               void resolvePermission(
-                isExitPlanMode
+                isCodexMcpElicitation
+                  ? {
+                      allowed: false,
+                      codex_response: { action: 'decline', content: null, _meta: null },
+                    }
+                  : isExitPlanMode
                   ? {
                       allowed: false,
                       message: trimmedFeedback || null,
@@ -203,6 +346,28 @@ export function PermissionModal() {
           </button>
           <button
             onClick={() => {
+              if (isCodexToolUserInput || isCodexMcpElicitation) {
+                void resolvePermission({
+                  allowed: true,
+                  codex_response: parseJsonOrText(codexJsonResponse),
+                });
+                return;
+              }
+              if (isCodexDynamicTool) {
+                void resolvePermission({
+                  allowed: true,
+                  codex_response: {
+                    contentItems: [
+                      {
+                        type: 'inputText',
+                        text: codexTextResponse.trim() || 'Approved by user.',
+                      },
+                    ],
+                    success: true,
+                  },
+                });
+                return;
+              }
               void resolvePermission(
                 isExitPlanMode
                   ? {

@@ -110,4 +110,74 @@ describe('PermissionModal', () => {
       });
     });
   });
+
+  it('resolves Codex request_user_input with an official response payload', async () => {
+    const resolvePermission = vi.fn().mockResolvedValue(undefined);
+
+    resetAppStore({
+      pendingPermission: {
+        request_id: 'codex-input',
+        tool_name: 'tool_user_input',
+        tool_use_id: '',
+        title: 'Codex 请求权限',
+        description: '工具 tool_user_input 需要授权才能执行。',
+        input: {
+          questions: [
+            {
+              id: 'choice',
+              header: 'Choice',
+              question: 'Pick one',
+              options: [{ label: 'A', description: 'Option A' }],
+            },
+          ],
+        },
+        blocked_path: null,
+        permission_suggestions: [],
+      },
+      resolvePermission,
+    });
+
+    render(<PermissionModal />);
+
+    expect(screen.getByText('Codex 用户输入请求')).toBeInTheDocument();
+    expect(screen.getByText('Pick one')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '允许执行' }));
+
+    await waitFor(() => {
+      expect(resolvePermission).toHaveBeenCalledWith({
+        allowed: true,
+        codex_response: { answers: { choice: { answers: ['A'] } } },
+      });
+    });
+  });
+
+  it('resolves Codex MCP elicitation decline with typed response payload', async () => {
+    const resolvePermission = vi.fn().mockResolvedValue(undefined);
+
+    resetAppStore({
+      pendingPermission: {
+        request_id: 'codex-mcp',
+        tool_name: 'mcp_elicitation',
+        tool_use_id: '',
+        title: 'Codex 请求权限',
+        description: 'MCP elicitation',
+        input: { serverName: 'memory', message: 'Need input' },
+        blocked_path: null,
+        permission_suggestions: [],
+      },
+      resolvePermission,
+    });
+
+    render(<PermissionModal />);
+
+    expect(screen.getByText('Codex MCP elicitation')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '拒绝' }));
+
+    await waitFor(() => {
+      expect(resolvePermission).toHaveBeenCalledWith({
+        allowed: false,
+        codex_response: { action: 'decline', content: null, _meta: null },
+      });
+    });
+  });
 });

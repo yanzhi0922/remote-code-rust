@@ -3,6 +3,8 @@ import type {
   AgentTypeInfo,
   AgentType,
   BatchProgressInfo,
+  CodexAppServerNotificationInfo,
+  CodexRecoverableErrorInfo,
   ConversationEntry,
   ContextCompactedInfo,
   ContextOverflowInfo,
@@ -150,6 +152,13 @@ interface AppState {
   providerConfigs: ProviderConfigList | null;
 
   pendingPermission: PermissionRequestInfo | null;
+
+  codexNotifications: CodexAppServerNotificationInfo[];
+  codexGuardianEvents: Array<{ session_id: string; method: string; outcome: string; risk_level?: string }>;
+  codexAccountInfo: Record<string, unknown> | null;
+  codexRateLimits: Record<string, unknown> | null;
+  codexMcpStatus: Array<Record<string, unknown>>;
+  codexRecoverableErrors: Array<{ session_id: string; message: string; timestamp: number }>;
 
   availableAgents: AgentTypeInfo[];
   activeAgentType: AgentType | null;
@@ -392,6 +401,57 @@ async function registerEventListeners(): Promise<(() => void)[]> {
         },
       }));
     }),
+    tauri.onCodexAppServerNotification((event) => {
+      const { method, params } = event.payload;
+      const paramsRecord =
+        params && typeof params === 'object' && !Array.isArray(params)
+          ? (params as Record<string, unknown>)
+          : null;
+
+      useAppStore.setState((state) => ({
+        codexNotifications: [...state.codexNotifications.slice(-199), event.payload],
+      }));
+
+      if (method === 'item/autoApprovalReview/completed' && paramsRecord) {
+        useAppStore.setState((state) => ({
+          codexGuardianEvents: [
+            ...state.codexGuardianEvents.slice(-99),
+            {
+              session_id: event.payload.session_id,
+              method,
+              outcome: String(paramsRecord['outcome'] ?? 'unknown'),
+              risk_level: paramsRecord['riskLevel'] != null ? String(paramsRecord['riskLevel']) : undefined,
+            },
+          ],
+        }));
+      }
+
+      if (method === 'account/login/completed' && paramsRecord) {
+        useAppStore.setState({ codexAccountInfo: paramsRecord });
+      }
+
+      if (method === 'account/rateLimits/updated' && paramsRecord) {
+        useAppStore.setState({ codexRateLimits: paramsRecord });
+      }
+
+      if (
+        (method === 'mcpServer/statusUpdated' || method === 'mcpServer/oauthLoginCompleted') &&
+        paramsRecord
+      ) {
+        useAppStore.setState((state) => ({
+          codexMcpStatus: [...state.codexMcpStatus.slice(-49), paramsRecord],
+        }));
+      }
+    }),
+    tauri.onCodexRecoverableError((event) => {
+      const { session_id, message, timestamp } = event.payload;
+      useAppStore.setState((state) => ({
+        codexRecoverableErrors: [
+          ...state.codexRecoverableErrors.slice(-49),
+          { session_id, message, timestamp },
+        ],
+      }));
+    }),
   ]);
   // Return the UnlistenFn array so callers can tear down listeners later.
   return unlistenFns;
@@ -427,6 +487,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   settingsLoading: false,
   providerConfigs: null,
   pendingPermission: null,
+  codexNotifications: [],
+  codexGuardianEvents: [],
+  codexAccountInfo: null,
+  codexRateLimits: null,
+  codexMcpStatus: [],
+  codexRecoverableErrors: [],
   availableAgents: [],
   activeAgentType: null,
   agentStatuses: {},

@@ -1783,7 +1783,7 @@ pub async fn execute_tool_call(
             "tungsten" => misc::tungsten_tool(&effective_call.input, context).await,
             "overflow_test" => misc::overflow_test_tool(&effective_call.input),
             "synthetic_output" => misc::synthetic_output_tool(&effective_call.input),
-            "mcp_auth" => mcp_tools::mcp_auth_tool(&effective_call.input, context),
+            "mcp_auth" => mcp_tools::mcp_auth_tool(&effective_call.input, context).await,
             "list_mcp_resources" => {
                 mcp_tools::list_mcp_resources_tool(&effective_call.input, context).await
             }
@@ -2316,6 +2316,7 @@ while True:
                 startup_timeout_secs: Some(1),
                 request_timeout_secs: Some(1),
                 metadata: BTreeMap::new(),
+                oauth: None,
             },
         }
     }
@@ -3270,14 +3271,14 @@ while True:
         };
         let broker = StaticPermissionBroker::new(true);
 
-        // Search with file_pattern filter
+        // Search with include filter
         let result = execute_tool_call(
             &ToolCall {
                 id: "1".to_owned(),
                 name: "grep".to_owned(),
                 input: json!({
                     "pattern": "fn hello",
-                    "file_pattern": "*.rs"
+                    "include": "*.rs"
                 }),
             },
             &context,
@@ -3294,7 +3295,7 @@ while True:
         );
         assert!(
             !result.content.contains("notes.txt"),
-            "should not match notes.txt due to file_pattern"
+            "should not match notes.txt due to include filter"
         );
     }
 
@@ -3448,9 +3449,9 @@ while True:
                 name: "todo_write".to_owned(),
                 input: json!({
                     "todos": [
-                        {"id": "1", "text": "Task 1", "status": "completed"},
-                        {"id": "2", "text": "Task 2", "status": "in_progress"},
-                        {"id": "3", "text": "Task 3", "status": "pending"}
+                        {"id": "1", "content": "Task 1", "status": "completed"},
+                        {"id": "2", "content": "Task 2", "status": "in_progress"},
+                        {"content": "Task 3", "status": "pending", "priority": "high"}
                     ]
                 }),
             },
@@ -3474,6 +3475,7 @@ while True:
         assert_eq!(todos[0]["status"], "completed");
         assert_eq!(todos[1]["status"], "in_progress");
         assert_eq!(todos[2]["status"], "pending");
+        assert_eq!(todos[2]["priority"], "high");
     }
 
     #[tokio::test]
@@ -5610,6 +5612,7 @@ while True:
 
     #[tokio::test]
     async fn mcp_auth_login_and_status() {
+        let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX.lock().await;
         let tempdir = match tempdir() {
             Ok(dir) => dir,
             Err(error) => panic!("failed to create tempdir: {error}"),
@@ -5625,8 +5628,37 @@ while True:
             read_file_state: crate::FileStateCache::new(),
         };
         let broker = StaticPermissionBroker::new(true);
+        let original_policy = super::current_tool_runtime_policy();
+        configure_tool_runtime_policy(ToolRuntimePolicy {
+            allowed_tools: Vec::new(),
+            disallowed_tools: Vec::new(),
+            task_output_dir: None,
+            tasks_dir: None,
+            tool_results_dir: None,
+            mcp_servers: vec![RuntimeMcpServerPolicyEntry {
+                origin_kind: "profile".to_owned(),
+                origin_name: "profile".to_owned(),
+                config_path: tempdir.path().join("mcp.toml"),
+                server: McpServerConfig {
+                    name: "test-server".to_owned(),
+                    enabled: true,
+                    transport: McpTransportConfig::Stdio {
+                        command: "python".to_owned(),
+                        args: Vec::new(),
+                        cwd: None,
+                        env: Default::default(),
+                    },
+                    capabilities: McpCapabilityMatrix::default(),
+                    startup_timeout_secs: None,
+                    request_timeout_secs: None,
+                    metadata: Default::default(),
+                    oauth: None,
+                },
+            }],
+            shell_policy: Default::default(),
+        })
+        .expect("set runtime policy");
 
-        // MCP auth login is not yet implemented — it should return an error.
         let login_result = execute_tool_call(
             &ToolCall {
                 id: "1".to_owned(),
@@ -5640,15 +5672,13 @@ while True:
         .expect("mcp_auth tool dispatch should succeed");
 
         assert!(
-            login_result.is_error,
-            "mcp_auth login should report error until implemented: {}",
+            !login_result.is_error,
+            "mcp_auth login should return a structured unsupported result: {}",
             login_result.content
         );
-        assert!(
-            login_result.content.contains("not yet implemented"),
-            "error message should mention 'not yet implemented': {}",
-            login_result.content
-        );
+        let login_payload: serde_json::Value =
+            serde_json::from_str(&login_result.content).expect("login should be valid JSON");
+        assert_eq!(login_payload["status"], "unsupported");
 
         // Status should succeed and report not_authenticated.
         let status_result = execute_tool_call(
@@ -5671,6 +5701,9 @@ while True:
         let parsed: serde_json::Value =
             serde_json::from_str(&status_result.content).expect("should be valid JSON");
         assert_eq!(parsed["status"], "not_authenticated");
+        assert_eq!(parsed["transport"], "stdio");
+
+        configure_tool_runtime_policy(original_policy).expect("restore runtime policy");
     }
 
     #[tokio::test]
@@ -5713,6 +5746,7 @@ while True:
                     startup_timeout_secs: None,
                     request_timeout_secs: None,
                     metadata: Default::default(),
+                    oauth: None,
                 },
             }],
             shell_policy: Default::default(),
@@ -5789,6 +5823,7 @@ while True:
                     startup_timeout_secs: Some(1),
                     request_timeout_secs: Some(1),
                     metadata: Default::default(),
+                    oauth: None,
                 },
             }],
             shell_policy: Default::default(),
@@ -5857,6 +5892,7 @@ while True:
                     startup_timeout_secs: None,
                     request_timeout_secs: None,
                     metadata: Default::default(),
+                    oauth: None,
                 },
             };
         configure_tool_runtime_policy(ToolRuntimePolicy {
@@ -5943,6 +5979,7 @@ while True:
                     startup_timeout_secs: None,
                     request_timeout_secs: None,
                     metadata: Default::default(),
+                    oauth: None,
                 },
             }],
             shell_policy: Default::default(),
@@ -6019,6 +6056,7 @@ while True:
                 startup_timeout_secs: Some(1),
                 request_timeout_secs: Some(1),
                 metadata: Default::default(),
+                oauth: None,
             },
         };
         configure_tool_runtime_policy(ToolRuntimePolicy {
@@ -6093,6 +6131,7 @@ while True:
                     startup_timeout_secs: Some(1),
                     request_timeout_secs: Some(1),
                     metadata: Default::default(),
+                    oauth: None,
                 },
             }],
             shell_policy: Default::default(),
@@ -6170,6 +6209,7 @@ while True:
                     startup_timeout_secs: None,
                     request_timeout_secs: None,
                     metadata: Default::default(),
+                    oauth: None,
                 },
             }],
             shell_policy: Default::default(),

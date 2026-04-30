@@ -21,14 +21,11 @@ pub(crate) fn todo_write(input: &Value, context: &ToolExecutionContext) -> Resul
         .ok_or_else(|| anyhow!("todo_write requires a todos array"))?;
     let mut todo_items = Vec::new();
     for todo in todos {
-        let id = todo
-            .get("id")
+        let id = todo.get("id").and_then(Value::as_str).map(|s| s.to_owned());
+        let content = todo
+            .get("content")
             .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("each todo must have an id"))?;
-        let text = todo
-            .get("text")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("each todo must have text"))?;
+            .ok_or_else(|| anyhow!("each todo must have content"))?;
         let status = todo
             .get("status")
             .and_then(Value::as_str)
@@ -39,11 +36,26 @@ pub(crate) fn todo_write(input: &Value, context: &ToolExecutionContext) -> Resul
                 status
             ));
         }
-        todo_items.push(json!({
-            "id": id,
-            "text": text,
+        let priority = todo.get("priority").and_then(Value::as_str);
+        if let Some(p) = &priority {
+            if !["high", "medium", "low"].contains(p) {
+                return Err(anyhow!(
+                    "invalid todo priority '{}': must be high, medium, or low",
+                    p
+                ));
+            }
+        }
+        let mut item = json!({
+            "content": content,
             "status": status,
-        }));
+        });
+        if let Some(id) = id {
+            item["id"] = json!(id);
+        }
+        if let Some(priority) = priority {
+            item["priority"] = json!(priority);
+        }
+        todo_items.push(item);
     }
     let todos_dir = context.cwd.join(".remote-code-rust");
     std::fs::create_dir_all(&todos_dir)?;

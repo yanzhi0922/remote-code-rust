@@ -11940,6 +11940,8 @@ dependencies = [
  "codex-exec-server",
  "codex-feedback",
  "codex-protocol",
+ "codex-state",
+ "codex-utils-absolute-path",
  "directories 6.0.0",
  "rc-agent-protocol",
  "serde",

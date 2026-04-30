@@ -197,6 +197,7 @@ fn stress_large_mcp_config() {
                 },
                 startup_timeout_secs: None,
                 request_timeout_secs: None,
+                oauth: None,
                 metadata: BTreeMap::new(),
             },
         );

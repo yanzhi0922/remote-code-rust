@@ -10,7 +10,9 @@ use crate::sections::{BulletItem, SystemPromptSection, prepend_bullets};
 /// Knowledge cutoff dates per model family.
 fn get_knowledge_cutoff(model_id: &str) -> Option<&'static str> {
     let lower = model_id.to_lowercase();
-    if lower.contains("claude-sonnet-4-6") {
+    if lower.contains("claude-opus-4-7") {
+        Some("May 2025")
+    } else if lower.contains("claude-sonnet-4-6") {
         Some("August 2025")
     } else if lower.contains("claude-opus-4-6") || lower.contains("claude-opus-4-5") {
         Some("May 2025")
@@ -27,6 +29,13 @@ fn get_marketing_name_for_model(model_id: &str) -> Option<String> {
     let lower = model_id.to_lowercase();
     let has_1m = lower.contains("[1m]");
 
+    if lower.contains("claude-opus-4-7") {
+        return Some(if has_1m {
+            "Opus 4.7 (with 1M context)".to_string()
+        } else {
+            "Opus 4.7".to_string()
+        });
+    }
     if lower.contains("claude-opus-4-6") {
         return Some(if has_1m {
             "Opus 4.6 (with 1M context)".to_string()
@@ -172,7 +181,7 @@ impl SystemPromptSection for EnvInfoSection {
             env_items.push(BulletItem::Single(cutoff_msg));
         }
         env_items.push(BulletItem::Single(
-            "The most recent Claude model family is Claude 4.5/4.6. Model IDs \u{2014} Opus 4.6: 'claude-opus-4-6', Sonnet 4.6: 'claude-sonnet-4-6', Haiku 4.5: 'claude-haiku-4-5-20251001'. When building AI applications, default to the latest and most capable Claude models."
+            "The most recent Claude model family is Claude 4.6/4.7. Model IDs \u{2014} Opus 4.7: 'claude-opus-4-7', Sonnet 4.6: 'claude-sonnet-4-6', Haiku 4.5: 'claude-haiku-4-5'. When building AI applications, default to the latest and most capable Claude models."
                 .to_string(),
         ));
         env_items.push(BulletItem::Single(
@@ -180,7 +189,7 @@ impl SystemPromptSection for EnvInfoSection {
                 .to_string(),
         ));
         env_items.push(BulletItem::Single(
-            "Fast mode for Claude Code uses the same Claude Opus 4.6 model with faster output. It does NOT switch to a different model. It can be toggled with /fast."
+            "Fast mode for Claude Code uses the same Claude Opus 4.7 model with faster output. It does NOT switch to a different model. It can be toggled with /fast."
                 .to_string(),
         ));
 

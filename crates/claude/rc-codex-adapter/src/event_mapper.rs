@@ -41,14 +41,25 @@ fn official_event(
     method: &'static str,
     payload: impl serde::Serialize,
 ) -> Vec<UnifiedAgentEvent> {
-    json_progress_event(
-        session_id,
-        "codex_app_server_event",
-        serde_json::json!({
-            "method": method,
-            "params": payload,
-        }),
-    )
+    vec![UnifiedAgentEvent::CodexAppServerNotification {
+        session_id: session_id.to_owned(),
+        method: method.to_owned(),
+        params: serde_json::to_value(payload).unwrap_or(serde_json::Value::Null),
+    }]
+}
+
+fn raw_server_notification(
+    session_id: &str,
+    notification: &ServerNotification,
+) -> UnifiedAgentEvent {
+    UnifiedAgentEvent::CodexAppServerNotification {
+        session_id: session_id.to_owned(),
+        method: notification.to_string(),
+        params: notification
+            .clone()
+            .to_params()
+            .unwrap_or(serde_json::Value::Null),
+    }
 }
 
 fn non_negative_i64_to_usize(value: i64) -> usize {
@@ -225,7 +236,9 @@ pub fn map_app_server_event(event: AppServerEvent, session_id: &str) -> Vec<Unif
         }
 
         AppServerEvent::ServerNotification(notification) => {
-            map_server_notification(notification, session_id)
+            let mut events = vec![raw_server_notification(session_id, &notification)];
+            events.extend(map_server_notification(notification, session_id));
+            events
         }
 
         AppServerEvent::ServerRequest(request) => map_server_request(request, session_id),
@@ -624,8 +637,8 @@ fn map_server_request(request: ServerRequest, session_id: &str) -> Vec<UnifiedAg
             "dynamic_tool".to_owned(),
             serde_json::to_value(params).unwrap_or(serde_json::Value::Null),
         ),
-        ServerRequest::ChatgptAuthTokensRefresh { .. } => {
-            ("chatgpt_auth_refresh".to_owned(), serde_json::Value::Null)
+        ServerRequest::ChatgptAuthTokensRefresh { params, .. } => {
+            ("chatgpt_auth_refresh".to_owned(), serde_json::to_value(params).unwrap_or(serde_json::Value::Null))
         }
     };
 
@@ -642,5 +655,99 @@ fn request_id_to_string(id: &codex_app_server_protocol::RequestId) -> String {
     match id {
         codex_app_server_protocol::RequestId::String(s) => s.clone(),
         codex_app_server_protocol::RequestId::Integer(n) => n.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use codex_app_server_protocol::{
+        AgentMessageDeltaNotification, ServerNotification, ServerRequest,
+    };
+
+    #[test]
+    fn preserves_raw_codex_server_notification_before_derived_events() {
+        let notification = ServerNotification::AgentMessageDelta(AgentMessageDeltaNotification {
+            thread_id: "thread-1".to_owned(),
+            turn_id: "turn-1".to_owned(),
+            item_id: "item-1".to_owned(),
+            delta: "hello".to_owned(),
+        });
+
+        let events = map_app_server_event(
+            AppServerEvent::ServerNotification(notification),
+            "session-1",
+        );
+
+        assert_eq!(events.len(), 2);
+        match &events[0] {
+            UnifiedAgentEvent::CodexAppServerNotification {
+                session_id,
+                method,
+                params,
+            } => {
+                assert_eq!(session_id, "session-1");
+                assert_eq!(method, "item/agentMessage/delta");
+                assert_eq!(params["threadId"], "thread-1");
+                assert_eq!(params["turnId"], "turn-1");
+                assert_eq!(params["itemId"], "item-1");
+                assert_eq!(params["delta"], "hello");
+            }
+            other => panic!("expected raw Codex notification, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn derives_message_delta_from_agent_message_delta_notification() {
+        let notification = ServerNotification::AgentMessageDelta(AgentMessageDeltaNotification {
+            thread_id: "thread-1".to_owned(),
+            turn_id: "turn-1".to_owned(),
+            item_id: "item-1".to_owned(),
+            delta: "hello".to_owned(),
+        });
+
+        let events = map_app_server_event(
+            AppServerEvent::ServerNotification(notification),
+            "session-1",
+        );
+
+        match &events[1] {
+            UnifiedAgentEvent::MessageDelta { session_id, delta } => {
+                assert_eq!(session_id, "session-1");
+                assert_eq!(delta, "hello");
+            }
+            other => panic!("expected derived message delta, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn maps_chatgpt_auth_refresh_request_to_permission_event() {
+        let request = ServerRequest::ChatgptAuthTokensRefresh {
+            request_id: codex_app_server_protocol::RequestId::String("req-1".to_owned()),
+            params: codex_app_server_protocol::ChatgptAuthTokensRefreshParams {
+                reason: codex_app_server_protocol::ChatgptAuthTokensRefreshReason::Unauthorized,
+                previous_account_id: None,
+            },
+        };
+
+        let events = map_app_server_event(AppServerEvent::ServerRequest(request), "session-1");
+
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            UnifiedAgentEvent::PermissionRequest {
+                session_id,
+                request_id,
+                tool_name,
+                input,
+            } => {
+                assert_eq!(session_id, "session-1");
+                assert_eq!(request_id, "req-1");
+                assert_eq!(tool_name, "chatgpt_auth_refresh");
+                assert_eq!(input["reason"], "unauthorized");
+                assert!(input.get("previousAccountId").is_none() || input["previousAccountId"].is_null());
+            }
+            other => panic!("expected permission request, got {other:?}"),
+        }
     }
 }

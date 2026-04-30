@@ -10,10 +10,12 @@ use std::path::{Path, PathBuf};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::error::McpRuntimeError;
-use crate::transport::McpOAuthConfig;
+use crate::transport::{McpOAuthConfig, McpTransportConfig};
+use crate::McpServerConfig;
 
 // ── PKCE parameters ─────────────────────────────────────────────────────────
 
@@ -51,6 +53,40 @@ pub struct OAuthTokens {
 
 fn default_token_type() -> String {
     "Bearer".to_owned()
+}
+
+/// Generate the OAuth storage key used for an MCP server.
+///
+/// Claude Code keys remote MCP OAuth credentials by server name plus a stable
+/// hash of the transport identity, so credentials are not accidentally reused
+/// when a server is renamed in-place or a URL changes. Local transports fall
+/// back to the server name because they do not participate in MCP OAuth.
+#[must_use]
+pub fn mcp_oauth_server_key(server_name: &str, server_config: &McpServerConfig) -> String {
+    let Some(identity) = remote_transport_identity(server_config) else {
+        return server_name.to_owned();
+    };
+    let config_json = serde_json::to_string(&identity).unwrap_or_else(|_| identity.to_string());
+    let mut hasher = Sha256::new();
+    hasher.update(config_json.as_bytes());
+    let hash = format!("{:x}", hasher.finalize());
+    format!("{server_name}|{}", &hash[..16])
+}
+
+fn remote_transport_identity(server_config: &McpServerConfig) -> Option<serde_json::Value> {
+    match &server_config.transport {
+        McpTransportConfig::Http { url, headers } => Some(json!({
+            "type": "http",
+            "url": url,
+            "headers": headers,
+        })),
+        McpTransportConfig::WebSocket { url, headers } => Some(json!({
+            "type": "ws",
+            "url": url,
+            "headers": headers,
+        })),
+        McpTransportConfig::Stdio { .. } => None,
+    }
 }
 
 // ── Authorization server metadata ───────────────────────────────────────────
@@ -945,6 +981,29 @@ mod tests {
         let tokens: OAuthTokens =
             serde_json::from_str(r#"{"access_token":"abc"}"#).expect("deserialize");
         assert_eq!(tokens.token_type, "Bearer");
+    }
+
+    #[test]
+    fn oauth_server_key_changes_with_remote_url() {
+        let make_server = |url: &str| McpServerConfig {
+            name: "docs".to_owned(),
+            enabled: true,
+            transport: McpTransportConfig::Http {
+                url: url.to_owned(),
+                headers: Default::default(),
+            },
+            capabilities: Default::default(),
+            startup_timeout_secs: None,
+            request_timeout_secs: None,
+            metadata: Default::default(),
+            oauth: None,
+        };
+
+        let first = mcp_oauth_server_key("docs", &make_server("https://one.example/mcp"));
+        let second = mcp_oauth_server_key("docs", &make_server("https://two.example/mcp"));
+
+        assert!(first.starts_with("docs|"));
+        assert_ne!(first, second);
     }
 
     #[test]

@@ -91,6 +91,51 @@ pub struct Cli {
     #[arg(long = "strict-mcp-config")]
     pub strict_mcp_config: bool,
 
+    #[arg(long = "tools", value_delimiter = ',', num_args = 1.., value_name = "TOOLS")]
+    pub tools: Vec<String>,
+
+    #[arg(long = "effort")]
+    pub effort: Option<String>,
+
+    #[arg(long = "fallback-model", alias = "fallbackModel")]
+    pub fallback_model: Option<String>,
+
+    #[arg(long = "output-style", alias = "outputStyle")]
+    pub output_style: Option<String>,
+
+    #[arg(long = "language")]
+    pub language: Option<String>,
+
+    #[arg(long = "brief", action = clap::ArgAction::SetTrue)]
+    pub brief: bool,
+
+    #[arg(long = "no-brief", action = clap::ArgAction::SetTrue)]
+    pub no_brief: bool,
+
+    #[arg(long = "proactive", action = clap::ArgAction::SetTrue)]
+    pub proactive: bool,
+
+    #[arg(long = "no-proactive", action = clap::ArgAction::SetTrue)]
+    pub no_proactive: bool,
+
+    #[arg(long = "dangerously-skip-permissions", alias = "dangerouslySkipPermissions")]
+    pub dangerously_skip_permissions: bool,
+
+    #[arg(
+        long = "allow-dangerously-skip-permissions",
+        alias = "allowDangerouslySkipPermissions"
+    )]
+    pub allow_dangerously_skip_permissions: bool,
+
+    #[arg(long = "permission-prompt-tool", alias = "permissionPromptTool")]
+    pub permission_prompt_tool: Option<String>,
+
+    #[arg(long = "include-hook-events", alias = "includeHookEvents")]
+    pub include_hook_events: bool,
+
+    #[arg(long = "bare")]
+    pub bare: bool,
+
     #[arg(long)]
     pub provider: Option<String>,
 
@@ -1374,5 +1419,46 @@ mod tests {
         assert_eq!(cli.json_schema.as_deref(), Some(r#"{"type":"object"}"#));
         assert_eq!(cli.mcp_config.len(), 2);
         assert!(cli.strict_mcp_config);
+    }
+
+    #[test]
+    fn parses_reference_runtime_knobs() {
+        let cli = Cli::try_parse_from([
+            "remote-code",
+            "-p",
+            "--tools",
+            "Read,Edit",
+            "--tools",
+            "Bash(git:*)",
+            "--effort",
+            "high",
+            "--fallback-model",
+            "minimax-m2.7",
+            "--output-style",
+            "concise",
+            "--language",
+            "zh-CN",
+            "--brief",
+            "--no-proactive",
+            "--dangerously-skip-permissions",
+            "--permission-prompt-tool",
+            "mcp__auth__ask",
+            "--include-hook-events",
+            "--bare",
+            "hello",
+        ])
+        .expect("cli should parse");
+
+        assert_eq!(cli.tools, vec!["Read", "Edit", "Bash(git:*)"]);
+        assert_eq!(cli.effort.as_deref(), Some("high"));
+        assert_eq!(cli.fallback_model.as_deref(), Some("minimax-m2.7"));
+        assert_eq!(cli.output_style.as_deref(), Some("concise"));
+        assert_eq!(cli.language.as_deref(), Some("zh-CN"));
+        assert!(cli.brief);
+        assert!(cli.no_proactive);
+        assert!(cli.dangerously_skip_permissions);
+        assert_eq!(cli.permission_prompt_tool.as_deref(), Some("mcp__auth__ask"));
+        assert!(cli.include_hook_events);
+        assert!(cli.bare);
     }
 }

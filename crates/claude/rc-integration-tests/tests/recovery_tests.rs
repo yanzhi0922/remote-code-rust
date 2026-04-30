@@ -159,6 +159,7 @@ fn mcp_connection_state_recovery() {
         capabilities: rc_mcp::McpCapabilityMatrix::default(),
         startup_timeout_secs: None,
         request_timeout_secs: None,
+        oauth: None,
         metadata: BTreeMap::new(),
     };
     let scoped =
