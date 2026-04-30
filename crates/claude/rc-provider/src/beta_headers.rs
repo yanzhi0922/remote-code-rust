@@ -64,6 +64,12 @@ pub const TOOL_SEARCH_BETA_1P: &str = "advanced-tool-use-2025-11-20";
 /// Tool search beta for Bedrock / Vertex Anthropic endpoints.
 pub const TOOL_SEARCH_BETA_3P: &str = "tool-search-tool-2025-10-19";
 
+/// Web search beta.
+pub const WEB_SEARCH_BETA: &str = "web-search-2025-03-05";
+
+/// Summarize connector text beta.
+pub const SUMMARIZE_CONNECTOR_TEXT_BETA: &str = "summarize-connector-text-2026-03-13";
+
 /// Default beta headers for Anthropic first-party requests.
 pub const DEFAULT_BETA_HEADERS: &[&str] = &[CLAUDE_CODE_BETA, PROMPT_CACHING_BETA, PDFS_BETA];
 
@@ -181,6 +187,11 @@ pub fn get_beta_headers(
     // Structured outputs for Claude models.
     if model_lower.contains("claude") {
         betas.insert(STRUCTURED_OUTPUTS_BETA.to_owned());
+    }
+
+    // Web search for Claude models.
+    if model_lower.contains("claude") {
+        betas.insert(WEB_SEARCH_BETA.to_owned());
     }
 
     // Bedrock-specific betas.

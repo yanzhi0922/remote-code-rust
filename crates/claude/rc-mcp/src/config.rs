@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::McpConfigError;
-use crate::transport::{McpTransport, McpTransportConfig, infer_transport_kind};
+use crate::transport::{McpOAuthConfig, McpTransport, McpTransportConfig, infer_transport_kind};
 
 /// Capability flags reported by an MCP server during initialisation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -55,6 +55,9 @@ pub struct McpServerConfig {
     /// Arbitrary metadata.
     #[serde(default)]
     pub metadata: BTreeMap<String, String>,
+    /// OAuth configuration for HTTP/SSE MCP servers.
+    #[serde(default)]
+    pub oauth: Option<McpOAuthConfig>,
 }
 
 /// Top-level MCP configuration containing all servers.
@@ -106,6 +109,8 @@ pub(crate) struct RawMcpServer {
     pub(crate) capabilities: RawMcpCapabilities,
     #[serde(default)]
     pub(crate) metadata: BTreeMap<String, String>,
+    #[serde(default)]
+    pub(crate) oauth: Option<McpOAuthConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -251,6 +256,7 @@ impl McpConfig {
                     startup_timeout_secs: raw_server.startup_timeout_secs,
                     request_timeout_secs: raw_server.request_timeout_secs,
                     metadata: raw_server.metadata,
+                    oauth: raw_server.oauth,
                 },
             );
         }
@@ -340,6 +346,7 @@ impl From<&McpConfig> for RawMcpConfig {
                             supports_roots: server.capabilities.supports_roots,
                         },
                         metadata: server.metadata.clone(),
+                        oauth: server.oauth.clone(),
                     },
                 )
             })
@@ -426,6 +433,37 @@ url = "https://example.com""#,
     }
 
     #[test]
+    fn parses_http_oauth_config_with_reference_camel_case() {
+        let config = McpConfig::from_json_str(
+            r#"{
+                "mcpServers": {
+                    "remote": {
+                        "type": "http",
+                        "url": "https://example.com/mcp",
+                        "oauth": {
+                            "clientId": "client-123",
+                            "callbackPort": 4567,
+                            "authServerMetadataUrl": "https://auth.example.com/.well-known/oauth-authorization-server"
+                        }
+                    }
+                }
+            }"#,
+        )
+        .expect("should parse");
+
+        let oauth = config.servers["remote"]
+            .oauth
+            .as_ref()
+            .expect("oauth config");
+        assert_eq!(oauth.client_id.as_deref(), Some("client-123"));
+        assert_eq!(oauth.callback_port, Some(4567));
+        assert_eq!(
+            oauth.auth_server_metadata_url.as_deref(),
+            Some("https://auth.example.com/.well-known/oauth-authorization-server")
+        );
+    }
+
+    #[test]
     fn load_detects_json_by_extension() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join(".mcp.json");
@@ -464,6 +502,7 @@ url = "https://example.com""#,
                     startup_timeout_secs: None,
                     request_timeout_secs: None,
                     metadata: BTreeMap::new(),
+                    oauth: None,
                 },
             )]),
         };

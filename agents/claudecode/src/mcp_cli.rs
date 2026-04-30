@@ -290,6 +290,7 @@ fn run_mcp_add(config: &RuntimeConfig, args: McpAddArgs) -> Result<()> {
             startup_timeout_secs: args.startup_timeout_secs,
             request_timeout_secs: args.request_timeout_secs,
             metadata,
+            oauth: None,
         },
     );
     mcp_config.save(&config_path)?;

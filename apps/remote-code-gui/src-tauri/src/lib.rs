@@ -5,15 +5,26 @@ use std::env;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use codex_app_server_protocol::{
-    CommandExecResizeParams, CommandExecTerminalSize, CommandExecWriteParams,
-    ConfigBatchWriteParams, ConfigEdit, ConfigValueWriteParams, McpServerStatusDetail,
-    MergeStrategy,
+    CancelLoginAccountParams, CommandExecResizeParams, CommandExecTerminalSize,
+    CommandExecWriteParams, ConfigBatchWriteParams, ConfigEdit, ConfigValueWriteParams,
+    DeviceKeyCreateParams, DeviceKeyPublicParams, DeviceKeySignParams,
+    ExternalAgentConfigDetectParams, ExternalAgentConfigImportParams, FsCopyParams,
+    FsCreateDirectoryParams, FsGetMetadataParams, FsReadDirectoryParams, FsReadFileParams,
+    FsRemoveParams, FsUnwatchParams, FsWatchParams, FsWriteFileParams, FuzzyFileSearchParams,
+    FuzzyFileSearchSessionStartParams, FuzzyFileSearchSessionStopParams,
+    FuzzyFileSearchSessionUpdateParams, LoginAccountParams, McpServerStatusDetail, MergeStrategy,
+    SendAddCreditsNudgeEmailParams, ThreadApproveGuardianDeniedActionParams, ThreadForkParams,
+    ThreadInjectItemsParams, ThreadMetadataGitInfoUpdateParams, ThreadMetadataUpdateParams,
+    ThreadRealtimeAppendAudioParams, ThreadRealtimeAppendTextParams, ThreadRealtimeStartParams,
+    ThreadRealtimeStopParams, ThreadResumeParams, ThreadStartParams, TurnStartParams,
+    WindowsSandboxSetupStartParams,
 };
 use rc_agent_protocol::AgentAdapter;
 use rc_agent_protocol::adapters::subprocess::SubprocessAdapter;
@@ -21,7 +32,9 @@ use rc_agent_protocol::permission::PermissionDecision as AgentPermissionDecision
 use rc_agent_protocol::types::AgentType as ProtocolAgentType;
 use rc_codex_adapter::{
     CodexAdapterOptions, CodexExecRequest, CodexFeedbackRequest, CodexInProcessAdapter,
-    CodexThreadListRequest,
+    CodexPluginRefRequest, CodexServerRequestResolution, CodexThreadGoalSetRequest,
+    CodexThreadListRequest, CodexThreadRollbackRequest, CodexTurnInterruptRequest,
+    CodexTurnSteerRequest,
 };
 use rc_config::{
     AppPaths, ProviderConfig as RuntimeProviderConfig, ProviderOverrides, RuntimeConfig,
@@ -62,10 +75,11 @@ use rc_ui_bridge::{
     UiProviderStatusSnapshot, UiRuntimeMcpInventorySummary, UiRuntimeMcpServerStatus,
     UiRuntimeStatusSnapshot,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_dialog::DialogExt;
 use tokio::sync::{Mutex, oneshot};
+use tokio::process::Command as TokioCommand;
 use tokio::time::{Duration, timeout};
 use uuid::Uuid;
 
@@ -75,6 +89,7 @@ const APP_EVENT_PERMISSION_RESOLVED: &str = "gui://permission-resolved";
 const APP_EVENT_TOOL_START: &str = "gui://tool-start";
 const APP_EVENT_TOOL_RESULT: &str = "gui://tool-result";
 const APP_EVENT_TOOL_PROGRESS: &str = "gui://tool-progress";
+const APP_EVENT_CODEX_APP_SERVER_NOTIFICATION: &str = "gui://codex-app-server-notification";
 const APP_EVENT_STREAMING_DELTA: &str = "gui://streaming-delta";
 const APP_EVENT_PROMPT_DONE: &str = "gui://prompt-done";
 const APP_EVENT_SUBTASK_STARTED: &str = "gui://subtask-started";
@@ -86,6 +101,7 @@ const APP_EVENT_CONTEXT_USAGE: &str = "gui://context-usage";
 const APP_EVENT_CONTEXT_OVERFLOW: &str = "gui://context-overflow";
 const APP_EVENT_CONTEXT_COMPACTED: &str = "gui://context-compacted";
 const APP_EVENT_RUNTIME_STATUS: &str = "gui://runtime-status";
+const APP_EVENT_CODEX_RECOVERABLE_ERROR: &str = "gui://codex-recoverable-error";
 const PROJECTS_FILE_NAME: &str = "gui-projects.json";
 const PROVIDERS_FILE_NAME: &str = "gui-providers.json";
 const SETTINGS_FILE_NAME: &str = "gui-settings.json";
@@ -205,6 +221,12 @@ struct GuiSettingsFile {
     codex_thread_store_endpoint: Option<String>,
     #[serde(default)]
     codex_config_overrides: BTreeMap<String, String>,
+    #[serde(default)]
+    codex_permission_profile: Option<serde_json::Value>,
+    #[serde(default)]
+    codex_service_tier: Option<String>,
+    #[serde(default)]
+    codex_ephemeral: Option<bool>,
 }
 
 impl Default for GuiSettingsFile {
@@ -230,6 +252,9 @@ impl Default for GuiSettingsFile {
             codex_memories_enabled: Some(true),
             codex_thread_store_endpoint: None,
             codex_config_overrides: BTreeMap::new(),
+            codex_permission_profile: None,
+            codex_service_tier: None,
+            codex_ephemeral: None,
         }
     }
 }
@@ -319,6 +344,9 @@ struct FullSettingsDto {
     codex_memories_enabled: bool,
     codex_thread_store_endpoint: Option<String>,
     codex_config_overrides: BTreeMap<String, String>,
+    codex_permission_profile: Option<serde_json::Value>,
+    codex_service_tier: Option<String>,
+    codex_ephemeral: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -373,6 +401,12 @@ struct UpdateProviderRequest {
     codex_thread_store_endpoint: Option<String>,
     #[serde(default)]
     codex_config_overrides: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    codex_permission_profile: Option<serde_json::Value>,
+    #[serde(default)]
+    codex_service_tier: Option<String>,
+    #[serde(default)]
+    codex_ephemeral: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -809,12 +843,198 @@ struct CodexThreadRefRequest {
     include_turns: bool,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CodexNativeParamsRequest {
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    params: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexThreadNativeParamsRequest {
+    #[serde(default)]
+    session_id: Option<String>,
+    thread_id: String,
+    #[serde(default)]
+    params: Option<serde_json::Value>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CodexThreadArchiveRequest {
     #[serde(default)]
     session_id: Option<String>,
     thread_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexThreadSetNameRequest {
+    #[serde(default)]
+    session_id: Option<String>,
+    thread_id: String,
+    name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexThreadMetadataUpdateRequest {
+    #[serde(default)]
+    session_id: Option<String>,
+    thread_id: String,
+    #[serde(default)]
+    sha: Option<Option<String>>,
+    #[serde(default)]
+    branch: Option<Option<String>>,
+    #[serde(default)]
+    origin_url: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexThreadShellCommandRequest {
+    #[serde(default)]
+    session_id: Option<String>,
+    thread_id: String,
+    command: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CodexThreadLoadedListRequest {
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    cursor: Option<String>,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexThreadGoalRequest {
+    #[serde(default)]
+    session_id: Option<String>,
+    thread_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexThreadGoalSetUiRequest {
+    #[serde(default)]
+    session_id: Option<String>,
+    thread_id: String,
+    text: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexThreadRollbackUiRequest {
+    #[serde(default)]
+    session_id: Option<String>,
+    thread_id: String,
+    num_turns: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexThreadTurnsListRequest {
+    #[serde(default)]
+    session_id: Option<String>,
+    thread_id: String,
+    #[serde(default)]
+    cursor: Option<String>,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexTurnSteerUiRequest {
+    #[serde(default)]
+    session_id: Option<String>,
+    thread_id: String,
+    expected_turn_id: String,
+    message: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexTurnInterruptUiRequest {
+    #[serde(default)]
+    session_id: Option<String>,
+    thread_id: String,
+    #[serde(default)]
+    turn_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexExperimentalFeatureSetRequest {
+    feature: String,
+    enabled: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CodexSkillsListRequest {
+    #[serde(default)]
+    cwds: Option<Vec<String>>,
+    #[serde(default)]
+    force_reload: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexSkillsConfigWriteRequest {
+    skill_id: String,
+    enabled: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CodexPluginListRequest {
+    #[serde(default)]
+    cwds: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexPluginIdRequest {
+    plugin_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexPluginInstallRequest {
+    source: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexMarketplaceRequest {
+    source: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexMcpOAuthLoginRequest {
+    #[serde(default)]
+    session_id: Option<String>,
+    server: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexReviewStartRequest {
+    #[serde(default)]
+    session_id: Option<String>,
+    thread_id: String,
+    #[serde(default)]
+    prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -837,6 +1057,31 @@ struct CodexExecResizeRequest {
     process_id: String,
     rows: u16,
     cols: u16,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexExecAgentRequest {
+    prompt: String,
+    #[serde(default)]
+    json: bool,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    env: BTreeMap<String, String>,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexExecAgentResponse {
+    exit_code: Option<i32>,
+    stdout: String,
+    stderr: String,
+    codex_home: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -907,6 +1152,15 @@ struct CodexConfigBatchWriteRequest {
     expected_version: Option<String>,
     #[serde(default)]
     reload_user_config: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CodexExternalAgentConfigDetectRequest {
+    #[serde(default)]
+    include_home: bool,
+    #[serde(default)]
+    cwds: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2084,6 +2338,7 @@ fn save_managed_mcp_server_at_path(
             startup_timeout_secs: request.startup_timeout_secs,
             request_timeout_secs: request.request_timeout_secs,
             metadata: request.metadata.clone(),
+            oauth: None,
         },
     );
     mcp_config.save(config_path)?;
@@ -2379,6 +2634,9 @@ fn full_settings_from_runtime(
         codex_memories_enabled: gui_settings.codex_memories_enabled.unwrap_or(true),
         codex_thread_store_endpoint: gui_settings.codex_thread_store_endpoint.clone(),
         codex_config_overrides: gui_settings.codex_config_overrides.clone(),
+        codex_permission_profile: gui_settings.codex_permission_profile.clone(),
+        codex_service_tier: gui_settings.codex_service_tier.clone(),
+        codex_ephemeral: gui_settings.codex_ephemeral,
     }
 }
 
@@ -2780,10 +3038,12 @@ fn codex_adapter_options_from_runtime(
             .codex_sandbox_mode
             .clone()
             .or_else(|| Some(codex_sandbox_from_permission_mode(config.permission_mode))),
-        permission_profile: None,
-        service_tier: None,
+        permission_profile: gui_settings.codex_permission_profile.clone(),
+        service_tier: gui_settings.codex_service_tier.as_ref().map(|v| {
+            serde_json::json!(v.to_lowercase())
+        }),
         persist_extended_history: gui_settings.codex_persist_extended_history.unwrap_or(true),
-        ephemeral: None,
+        ephemeral: gui_settings.codex_ephemeral,
         memories_enabled: gui_settings.codex_memories_enabled.or(Some(true)),
         thread_store_endpoint: gui_settings.codex_thread_store_endpoint.clone(),
         config_overrides,
@@ -2900,6 +3160,45 @@ fn parse_codex_merge_strategy(value: Option<&str>) -> MergeStrategy {
     match value.map(str::trim).filter(|value| !value.is_empty()) {
         Some(value) if value.eq_ignore_ascii_case("upsert") => MergeStrategy::Upsert,
         _ => MergeStrategy::Replace,
+    }
+}
+
+fn decode_codex_params<T>(
+    params: Option<serde_json::Value>,
+    default: impl FnOnce() -> T,
+) -> Result<T>
+where
+    T: DeserializeOwned,
+{
+    params
+        .map(serde_json::from_value)
+        .transpose()
+        .context("invalid Codex app-server params")
+        .map(|value| value.unwrap_or_else(default))
+}
+
+fn decode_required_codex_params<T>(params: Option<serde_json::Value>) -> Result<T>
+where
+    T: DeserializeOwned,
+{
+    serde_json::from_value(params.unwrap_or(serde_json::Value::Object(Default::default())))
+        .context("invalid Codex app-server params")
+}
+
+fn parse_codex_plugin_ref(value: String) -> CodexPluginRefRequest {
+    let value = value.trim().to_owned();
+    if let Some((plugin_name, remote_marketplace_name)) = value.split_once('@') {
+        return CodexPluginRefRequest {
+            marketplace_path: None,
+            remote_marketplace_name: Some(remote_marketplace_name.to_owned()),
+            plugin_name: plugin_name.to_owned(),
+        };
+    }
+
+    CodexPluginRefRequest {
+        marketplace_path: None,
+        remote_marketplace_name: None,
+        plugin_name: value,
     }
 }
 
@@ -3204,6 +3503,46 @@ fn bridge_binary_path(agent_type: &ProtocolAgentType) -> Option<PathBuf> {
     None
 }
 
+fn codex_cli_binary_path() -> Result<PathBuf> {
+    let binary_name = if cfg!(windows) { "codex.exe" } else { "codex" };
+    if let Some(exe_dir) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+    {
+        let candidate = exe_dir.join(binary_name);
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    let mut candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    candidate.pop();
+    candidate.pop();
+    candidate.pop();
+    candidate = candidate.join("target").join("debug").join(binary_name);
+    if candidate.exists() {
+        return Ok(candidate);
+    }
+
+    let lookup_cmd = if cfg!(windows) { "where" } else { "which" };
+    if let Ok(output) = std::process::Command::new(lookup_cmd)
+        .arg(if cfg!(windows) { "codex.exe" } else { "codex" })
+        .output()
+        && output.status.success()
+    {
+        if let Some(first_line) = String::from_utf8_lossy(&output.stdout).lines().next() {
+            let path = PathBuf::from(first_line.trim());
+            if path.exists() {
+                return Ok(path);
+            }
+        }
+    }
+
+    Err(anyhow!(
+        "Could not locate Codex CLI binary. Build `cargo build -p codex-cli` first."
+    ))
+}
+
 // ---------------------------------------------------------------------------
 // In-process Codex prompt execution
 // ---------------------------------------------------------------------------
@@ -3322,6 +3661,28 @@ async fn run_codex_in_process_prompt(
                         tool_call_id: String::new(),
                         tool_name,
                         message: progress,
+                    },
+                );
+            }
+            UnifiedAgentEvent::CodexAppServerNotification { method, params, .. } => {
+                let _ = app.emit(
+                    APP_EVENT_CODEX_APP_SERVER_NOTIFICATION,
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "method": method,
+                        "params": params.clone(),
+                    }),
+                );
+                let _ = app.emit(
+                    APP_EVENT_TOOL_PROGRESS,
+                    ToolProgressDto {
+                        tool_call_id: String::new(),
+                        tool_name: "codex_app_server_event".to_owned(),
+                        message: serde_json::json!({
+                            "method": method,
+                            "params": params,
+                        })
+                        .to_string(),
                     },
                 );
             }
@@ -3477,7 +3838,16 @@ async fn run_codex_in_process_prompt(
                 ..
             } => {
                 tracing::warn!(error = %message, "Codex error event");
-                if !recoverable {
+                if recoverable {
+                    let _ = app.emit(
+                        APP_EVENT_CODEX_RECOVERABLE_ERROR,
+                        serde_json::json!({
+                            "session_id": session_id,
+                            "message": message,
+                            "timestamp": chrono::Utc::now().timestamp_millis(),
+                        }),
+                    );
+                } else {
                     return Err(message);
                 }
             }
@@ -3765,6 +4135,21 @@ async fn run_subprocess_prompt(
             }
             rc_agent_protocol::events::UnifiedAgentEvent::ToolCallProgress { .. } => {
                 // Ignore progress events for now.
+            }
+            rc_agent_protocol::events::UnifiedAgentEvent::CodexAppServerNotification {
+                method,
+                params,
+                ..
+            } => {
+                let _ = app.emit(
+                    APP_EVENT_CODEX_APP_SERVER_NOTIFICATION,
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "method": method,
+                        "params": params.clone(),
+                    }),
+                );
+                tracing::debug!(method, params = %params, "subprocess Codex app-server notification");
             }
         }
     }
@@ -4357,6 +4742,23 @@ async fn codex_read_thread(
 }
 
 #[tauri::command]
+async fn codex_thread_start(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params =
+        decode_codex_params::<ThreadStartParams>(request.params, ThreadStartParams::default)
+            .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.start_thread_with_params(Some(params)).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
 async fn codex_resume_thread(
     state: State<'_, AppState>,
     request: CodexThreadRefRequest,
@@ -4375,6 +4777,22 @@ async fn codex_resume_thread(
 }
 
 #[tauri::command]
+async fn codex_resume_thread_native(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<ThreadResumeParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.resume_thread_with_params(params).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
 async fn codex_fork_thread(
     state: State<'_, AppState>,
     request: CodexThreadRefRequest,
@@ -4387,6 +4805,22 @@ async fn codex_fork_thread(
                     .await?,
             )
             .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_fork_thread_native(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<ThreadForkParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.fork_thread_with_params(params).await?)
+                .map_err(anyhow::Error::from)
         })
     })
     .await
@@ -4415,6 +4849,506 @@ async fn codex_unarchive_thread(
         Box::pin(async move {
             serde_json::to_value(adapter.unarchive_thread(request.thread_id).await?)
                 .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_thread_unsubscribe(
+    state: State<'_, AppState>,
+    request: CodexThreadGoalRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.unsubscribe_thread(request.thread_id).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_thread_elicitation_increment(
+    state: State<'_, AppState>,
+    request: CodexThreadGoalRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(
+                adapter
+                    .increment_thread_elicitation(request.thread_id)
+                    .await?,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_thread_elicitation_decrement(
+    state: State<'_, AppState>,
+    request: CodexThreadGoalRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(
+                adapter
+                    .decrement_thread_elicitation(request.thread_id)
+                    .await?,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_thread_set_name(
+    state: State<'_, AppState>,
+    request: CodexThreadSetNameRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(
+                adapter
+                    .set_thread_name(request.thread_id, request.name)
+                    .await?,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_thread_metadata_update(
+    state: State<'_, AppState>,
+    request: CodexThreadMetadataUpdateRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = ThreadMetadataUpdateParams {
+        thread_id: request.thread_id,
+        git_info: Some(ThreadMetadataGitInfoUpdateParams {
+            sha: request.sha,
+            branch: request.branch,
+            origin_url: request.origin_url,
+        }),
+    };
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.update_thread_metadata(params).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_thread_goal_set(
+    state: State<'_, AppState>,
+    request: CodexThreadGoalSetUiRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(
+                adapter
+                    .set_thread_goal(CodexThreadGoalSetRequest {
+                        thread_id: request.thread_id,
+                        text: request.text,
+                    })
+                    .await?,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_thread_goal_get(
+    state: State<'_, AppState>,
+    request: CodexThreadGoalRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.get_thread_goal(request.thread_id).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_thread_goal_clear(
+    state: State<'_, AppState>,
+    request: CodexThreadGoalRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.clear_thread_goal(request.thread_id).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_thread_compact_start(
+    state: State<'_, AppState>,
+    request: CodexThreadGoalRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.compact_thread(request.thread_id).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_thread_shell_command(
+    state: State<'_, AppState>,
+    request: CodexThreadShellCommandRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    if request.command.trim().is_empty() {
+        return Err("Codex thread shell command cannot be empty".to_owned());
+    }
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(
+                adapter
+                    .run_thread_shell_command(request.thread_id, request.command)
+                    .await?,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_thread_background_terminals_clean(
+    state: State<'_, AppState>,
+    request: CodexThreadGoalRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(
+                adapter
+                    .clean_thread_background_terminals(request.thread_id)
+                    .await?,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_thread_guardian_denied_action_approve(
+    state: State<'_, AppState>,
+    request: CodexThreadNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let mut params =
+        decode_required_codex_params::<ThreadApproveGuardianDeniedActionParams>(request.params)
+            .map_err(|error| format!("{error:#}"))?;
+    if params.thread_id.trim().is_empty() {
+        params.thread_id = request.thread_id;
+    }
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.approve_guardian_denied_action(params).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_thread_rollback(
+    state: State<'_, AppState>,
+    request: CodexThreadRollbackUiRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(
+                adapter
+                    .rollback_thread(CodexThreadRollbackRequest {
+                        thread_id: request.thread_id,
+                        num_turns: request.num_turns,
+                    })
+                    .await?,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_thread_turns_list(
+    state: State<'_, AppState>,
+    request: CodexThreadTurnsListRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(
+                adapter
+                    .list_thread_turns(request.thread_id, request.cursor, request.limit)
+                    .await?,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_thread_loaded_list(
+    state: State<'_, AppState>,
+    request: CodexThreadLoadedListRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(
+                adapter
+                    .list_loaded_threads(request.cursor, request.limit)
+                    .await?,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_thread_inject_items(
+    state: State<'_, AppState>,
+    request: CodexThreadNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let mut params = decode_required_codex_params::<ThreadInjectItemsParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    if params.thread_id.trim().is_empty() {
+        params.thread_id = request.thread_id;
+    }
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.inject_thread_items(params).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_turn_start(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<TurnStartParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.start_turn(params).await?).map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_turn_steer(
+    state: State<'_, AppState>,
+    request: CodexTurnSteerUiRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(
+                adapter
+                    .steer_turn(CodexTurnSteerRequest {
+                        thread_id: request.thread_id,
+                        expected_turn_id: request.expected_turn_id,
+                        message: request.message,
+                    })
+                    .await?,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_turn_interrupt(
+    state: State<'_, AppState>,
+    request: CodexTurnInterruptUiRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(
+                adapter
+                    .interrupt_turn(CodexTurnInterruptRequest {
+                        thread_id: request.thread_id,
+                        turn_id: request.turn_id,
+                    })
+                    .await?,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_model_list(
+    state: State<'_, AppState>,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, None, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.list_models(Some(true)).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_collaboration_mode_list(
+    state: State<'_, AppState>,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, None, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.list_collaboration_modes().await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_experimental_feature_list(
+    state: State<'_, AppState>,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, None, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.list_experimental_features().await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_experimental_feature_set(
+    state: State<'_, AppState>,
+    request: CodexExperimentalFeatureSetRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, None, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(
+                adapter
+                    .set_experimental_feature(request.feature, request.enabled)
+                    .await?,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_account_read(
+    state: State<'_, AppState>,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, None, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.read_account().await?).map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_account_login(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<LoginAccountParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.login_account(params).await?).map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_account_login_cancel(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<CancelLoginAccountParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.cancel_login_account(params).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_account_logout(
+    state: State<'_, AppState>,
+    session_id: Option<String>,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.logout_account().await?).map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_account_rate_limits_read(
+    state: State<'_, AppState>,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, None, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.read_account_rate_limits().await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_account_add_credits_nudge(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<SendAddCreditsNudgeEmailParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.send_add_credits_nudge_email(params).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_apps_list(
+    state: State<'_, AppState>,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, None, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.list_apps().await?).map_err(anyhow::Error::from)
         })
     })
     .await
@@ -4513,6 +5447,22 @@ async fn codex_exec_resize(
 }
 
 #[tauri::command]
+async fn codex_windows_sandbox_setup_start(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<WindowsSandboxSetupStartParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.start_windows_sandbox_setup(params).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
 async fn codex_mcp_refresh(
     state: State<'_, AppState>,
     session_id: Option<String>,
@@ -4587,6 +5537,184 @@ async fn codex_mcp_call_tool(
 }
 
 #[tauri::command]
+async fn codex_mcp_oauth_login(
+    state: State<'_, AppState>,
+    request: CodexMcpOAuthLoginRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.mcp_oauth_login(request.server).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_skills_list(
+    state: State<'_, AppState>,
+    request: CodexSkillsListRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let cwds = request
+        .cwds
+        .unwrap_or_default()
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    with_codex_adapter_value(&state, None, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.list_skills(cwds, request.force_reload).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_skills_config_write(
+    state: State<'_, AppState>,
+    request: CodexSkillsConfigWriteRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let path_candidate = PathBuf::from(&request.skill_id);
+    let (path, name) = if path_candidate.components().count() > 1 || path_candidate.is_absolute() {
+        (Some(path_candidate), None)
+    } else {
+        (None, Some(request.skill_id))
+    };
+    with_codex_adapter_value(&state, None, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(
+                adapter
+                    .write_skills_config(path, name, request.enabled)
+                    .await?,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_plugin_list(
+    state: State<'_, AppState>,
+    request: CodexPluginListRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let cwds = request
+        .cwds
+        .map(|paths| paths.into_iter().map(PathBuf::from).collect());
+    with_codex_adapter_value(&state, None, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.list_plugins(cwds).await?).map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_plugin_read(
+    state: State<'_, AppState>,
+    request: CodexPluginIdRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let request = parse_codex_plugin_ref(request.plugin_id);
+    with_codex_adapter_value(&state, None, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.read_plugin(request).await?).map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_plugin_install(
+    state: State<'_, AppState>,
+    request: CodexPluginInstallRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let request = parse_codex_plugin_ref(request.source);
+    with_codex_adapter_value(&state, None, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.install_plugin(request).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_plugin_uninstall(
+    state: State<'_, AppState>,
+    request: CodexPluginIdRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, None, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.uninstall_plugin(request.plugin_id).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_marketplace_add(
+    state: State<'_, AppState>,
+    request: CodexMarketplaceRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, None, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.add_marketplace(request.source).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_marketplace_remove(
+    state: State<'_, AppState>,
+    request: CodexMarketplaceRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, None, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.remove_marketplace(request.source).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_marketplace_upgrade(
+    state: State<'_, AppState>,
+    request: CodexMarketplaceRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let marketplace_name = trimmed_option(Some(request.source));
+    with_codex_adapter_value(&state, None, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.upgrade_marketplace(marketplace_name).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_review_start(
+    state: State<'_, AppState>,
+    request: CodexReviewStartRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(
+                adapter
+                    .start_review(request.thread_id, request.prompt)
+                    .await?,
+            )
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
 async fn codex_read_config(
     state: State<'_, AppState>,
     include_layers: Option<bool>,
@@ -4594,6 +5722,56 @@ async fn codex_read_config(
     with_codex_adapter_value(&state, None, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.read_config(include_layers.unwrap_or(false)).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_config_requirements_read(
+    state: State<'_, AppState>,
+    session_id: Option<String>,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.read_config_requirements().await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_external_agent_config_detect(
+    state: State<'_, AppState>,
+    request: CodexExternalAgentConfigDetectRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = ExternalAgentConfigDetectParams {
+        include_home: request.include_home,
+        cwds: request
+            .cwds
+            .map(|paths| paths.into_iter().map(PathBuf::from).collect()),
+    };
+    with_codex_adapter_value(&state, None, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.detect_external_agent_config(params).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_external_agent_config_import(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<ExternalAgentConfigImportParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.import_external_agent_config(params).await?)
                 .map_err(anyhow::Error::from)
         })
     })
@@ -4700,6 +5878,359 @@ async fn codex_reset_memories(
         })
     })
     .await
+}
+
+#[tauri::command]
+async fn codex_realtime_start(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<ThreadRealtimeStartParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.start_realtime(params).await?).map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_realtime_append_audio(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<ThreadRealtimeAppendAudioParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.append_realtime_audio(params).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_realtime_append_text(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<ThreadRealtimeAppendTextParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.append_realtime_text(params).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_realtime_stop(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<ThreadRealtimeStopParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.stop_realtime(params).await?).map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_realtime_voices_list(
+    state: State<'_, AppState>,
+    session_id: Option<String>,
+) -> std::result::Result<serde_json::Value, String> {
+    with_codex_adapter_value(&state, session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.list_realtime_voices().await?).map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_device_key_create(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<DeviceKeyCreateParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.create_device_key(params).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_device_key_public(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<DeviceKeyPublicParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.get_device_key_public(params).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_device_key_sign(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<DeviceKeySignParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.sign_device_key(params).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_fs_read_file(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<FsReadFileParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.fs_read_file(params).await?).map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_fs_write_file(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<FsWriteFileParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.fs_write_file(params).await?).map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_fs_create_directory(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<FsCreateDirectoryParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.fs_create_directory(params).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_fs_get_metadata(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<FsGetMetadataParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.fs_get_metadata(params).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_fs_read_directory(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<FsReadDirectoryParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.fs_read_directory(params).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_fs_remove(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<FsRemoveParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.fs_remove(params).await?).map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_fs_copy(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<FsCopyParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.fs_copy(params).await?).map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_fs_watch(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<FsWatchParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.fs_watch(params).await?).map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_fs_unwatch(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<FsUnwatchParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.fs_unwatch(params).await?).map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_fuzzy_file_search(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<FuzzyFileSearchParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.fuzzy_file_search(params).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_fuzzy_file_search_session_start(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<FuzzyFileSearchSessionStartParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.start_fuzzy_file_search_session(params).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_fuzzy_file_search_session_update(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<FuzzyFileSearchSessionUpdateParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.update_fuzzy_file_search_session(params).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_fuzzy_file_search_session_stop(
+    state: State<'_, AppState>,
+    request: CodexNativeParamsRequest,
+) -> std::result::Result<serde_json::Value, String> {
+    let params = decode_required_codex_params::<FuzzyFileSearchSessionStopParams>(request.params)
+        .map_err(|error| format!("{error:#}"))?;
+    with_codex_adapter_value(&state, request.session_id, |adapter| {
+        Box::pin(async move {
+            serde_json::to_value(adapter.stop_fuzzy_file_search_session(params).await?)
+                .map_err(anyhow::Error::from)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn codex_adapter_stop(
+    state: State<'_, AppState>,
+    session_id: Option<String>,
+) -> std::result::Result<(), String> {
+    let key = codex_adapter_key(session_id);
+    let mut adapters = state.active_codex_adapters.lock().await;
+    if let Some(mut adapter) = adapters.remove(&key) {
+        adapter.stop().await.map_err(|error| format!("{error:#}"))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn codex_adapter_restart(
+    state: State<'_, AppState>,
+    session_id: Option<String>,
+) -> std::result::Result<(), String> {
+    let key = codex_adapter_key(session_id);
+    {
+        let mut adapters = state.active_codex_adapters.lock().await;
+        if let Some(mut adapter) = adapters.remove(&key) {
+            let _ = adapter.stop().await;
+        }
+    }
+    ensure_codex_adapter(&state, &key).await
 }
 
 #[tauri::command]
@@ -4821,6 +6352,15 @@ async fn update_provider(
     }
     if let Some(overrides) = request.codex_config_overrides {
         runtime.gui_settings.codex_config_overrides = overrides;
+    }
+    if let Some(profile) = request.codex_permission_profile {
+        runtime.gui_settings.codex_permission_profile = Some(profile);
+    }
+    if let Some(tier) = request.codex_service_tier {
+        runtime.gui_settings.codex_service_tier = trimmed_option(Some(tier));
+    }
+    if let Some(ephemeral) = request.codex_ephemeral {
+        runtime.gui_settings.codex_ephemeral = Some(ephemeral);
     }
 
     if let Some(thinking_budget) = runtime.config.provider.thinking_budget {
@@ -5155,6 +6695,8 @@ async fn resolve_permission_request(
     permission_updates: Option<Vec<rc_permissions::PermissionUpdate>>,
     feedback: Option<String>,
     content_blocks: Option<Vec<serde_json::Value>>,
+    codex_response: Option<serde_json::Value>,
+    allow_all: Option<bool>,
 ) -> std::result::Result<bool, String> {
     let mut decision = if allowed {
         PermissionDecision::allow()
@@ -5190,7 +6732,11 @@ async fn resolve_permission_request(
         };
 
         let permission_updates_for_emit = permission_updates.unwrap_or_default();
-        let codex_decision = codex_permission_decision(allowed, &permission_updates_for_emit);
+        let codex_decision = if allow_all.unwrap_or(false) && allowed {
+            AgentPermissionDecision::AllowAll
+        } else {
+            codex_permission_decision(allowed, &permission_updates_for_emit)
+        };
 
         {
             let mut adapters = state.active_codex_adapters.lock().await;
@@ -5198,10 +6744,13 @@ async fn resolve_permission_request(
                 .get_mut(&pending_codex.session_id)
                 .ok_or_else(|| "Codex adapter not found for permission request".to_owned())?;
             adapter
-                .resolve_permission(
-                    &pending_codex.session_id,
+                .resolve_codex_server_request(
                     &pending_codex.request_id,
                     codex_decision,
+                    CodexServerRequestResolution {
+                        allow_all: allow_all.unwrap_or(false),
+                        response: codex_response,
+                    },
                 )
                 .await
                 .map_err(|error| {
@@ -5470,25 +7019,96 @@ pub fn run() {
             get_settings,
             codex_list_threads,
             codex_read_thread,
+            codex_thread_start,
             codex_resume_thread,
+            codex_resume_thread_native,
             codex_fork_thread,
+            codex_fork_thread_native,
             codex_archive_thread,
             codex_unarchive_thread,
+            codex_thread_unsubscribe,
+            codex_thread_elicitation_increment,
+            codex_thread_elicitation_decrement,
+            codex_thread_set_name,
+            codex_thread_metadata_update,
+            codex_thread_goal_set,
+            codex_thread_goal_get,
+            codex_thread_goal_clear,
+            codex_thread_compact_start,
+            codex_thread_shell_command,
+            codex_thread_background_terminals_clean,
+            codex_thread_guardian_denied_action_approve,
+            codex_thread_rollback,
+            codex_thread_turns_list,
+            codex_thread_loaded_list,
+            codex_thread_inject_items,
+            codex_turn_start,
+            codex_turn_steer,
+            codex_turn_interrupt,
+            codex_model_list,
+            codex_collaboration_mode_list,
+            codex_experimental_feature_list,
+            codex_experimental_feature_set,
+            codex_account_read,
+            codex_account_login,
+            codex_account_login_cancel,
+            codex_account_logout,
+            codex_account_rate_limits_read,
+            codex_account_add_credits_nudge,
+            codex_apps_list,
             codex_exec,
             codex_app_server_request,
             codex_exec_write,
             codex_exec_terminate,
             codex_exec_resize,
+            codex_windows_sandbox_setup_start,
             codex_mcp_refresh,
             codex_mcp_status,
             codex_mcp_read_resource,
             codex_mcp_call_tool,
+            codex_mcp_oauth_login,
+            codex_skills_list,
+            codex_skills_config_write,
+            codex_plugin_list,
+            codex_plugin_read,
+            codex_plugin_install,
+            codex_plugin_uninstall,
+            codex_marketplace_add,
+            codex_marketplace_remove,
+            codex_marketplace_upgrade,
+            codex_review_start,
             codex_read_config,
+            codex_config_requirements_read,
+            codex_external_agent_config_detect,
+            codex_external_agent_config_import,
             codex_write_config_value,
             codex_write_config_batch,
             codex_upload_feedback,
             codex_set_thread_memory_mode,
             codex_reset_memories,
+            codex_realtime_start,
+            codex_realtime_append_audio,
+            codex_realtime_append_text,
+            codex_realtime_stop,
+            codex_realtime_voices_list,
+            codex_device_key_create,
+            codex_device_key_public,
+            codex_device_key_sign,
+            codex_fs_read_file,
+            codex_fs_write_file,
+            codex_fs_create_directory,
+            codex_fs_get_metadata,
+            codex_fs_read_directory,
+            codex_fs_remove,
+            codex_fs_copy,
+            codex_fs_watch,
+            codex_fs_unwatch,
+            codex_fuzzy_file_search,
+            codex_fuzzy_file_search_session_start,
+            codex_fuzzy_file_search_session_update,
+            codex_fuzzy_file_search_session_stop,
+            codex_adapter_stop,
+            codex_adapter_restart,
             update_provider,
             list_projects,
             add_project,

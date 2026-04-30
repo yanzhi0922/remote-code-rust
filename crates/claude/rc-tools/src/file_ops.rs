@@ -603,23 +603,30 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
         input.get("path").and_then(Value::as_str),
         FilesystemOperation::Read,
     )?;
-    let file_pattern = input.get("file_pattern").and_then(Value::as_str);
-    let max_matches = input
-        .get("max_matches")
-        .and_then(Value::as_u64)
-        .unwrap_or(50) as usize;
+    let include = input.get("include").and_then(Value::as_str);
+    let output_mode = input
+        .get("output_mode")
+        .and_then(Value::as_str)
+        .unwrap_or("content");
+    if !["content", "files_with_matches", "count"].contains(&output_mode) {
+        return Err(anyhow!(
+            "output_mode must be 'content', 'files_with_matches', or 'count'"
+        ));
+    }
     let regex = Regex::new(pattern).or_else(|_| Regex::new(&regex::escape(pattern)))?;
-    let file_matcher: Option<globset::GlobMatcher> = match file_pattern {
+    let file_matcher: Option<globset::GlobMatcher> = match include {
         Some(fp) => Some(
             GlobBuilder::new(fp)
                 .literal_separator(true)
                 .build()
-                .context("invalid file_pattern")?
+                .context("invalid include pattern")?
                 .compile_matcher(),
         ),
         None => None,
     };
-    let mut matches = Vec::new();
+    let mut content_matches = Vec::new();
+    let mut files_with_matches: Vec<String> = Vec::new();
+    let mut count_per_file: Vec<(String, usize)> = Vec::new();
     let mut match_count = 0usize;
     for entry in WalkDir::new(&target).into_iter().filter_map(Result::ok) {
         if !entry.file_type().is_file() {
@@ -640,37 +647,79 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
             continue;
         };
         let lines: Vec<&str> = contents.lines().collect();
+        let mut file_match_count = 0usize;
         for (index, line) in lines.iter().enumerate() {
             if regex.is_match(line) {
-                let relative = entry
-                    .path()
-                    .strip_prefix(&context.cwd)
-                    .unwrap_or(entry.path());
-                let start = if index > 0 { index - 1 } else { 0 };
-                let end = (index + 2).min(lines.len());
-                for (offset, context_line) in lines[start..end].iter().enumerate() {
-                    let line_idx = start + offset;
-                    let prefix = if line_idx == index { ">" } else { " " };
-                    matches.push(format!(
-                        "{}:{}{} {}",
-                        relative.display(),
-                        line_idx + 1,
-                        prefix,
-                        context_line.trim()
-                    ));
-                }
-                matches.push(String::new());
-                match_count += 1;
-                if match_count >= max_matches {
-                    return Ok(matches.join("\n").trim_end().to_owned());
+                file_match_count += 1;
+                if output_mode == "content" {
+                    let relative = entry
+                        .path()
+                        .strip_prefix(&context.cwd)
+                        .unwrap_or(entry.path());
+                    let start = if index > 0 { index - 1 } else { 0 };
+                    let end = (index + 2).min(lines.len());
+                    for (offset, context_line) in lines[start..end].iter().enumerate() {
+                        let line_idx = start + offset;
+                        let prefix = if line_idx == index { ">" } else { " " };
+                        content_matches.push(format!(
+                            "{}:{}{} {}",
+                            relative.display(),
+                            line_idx + 1,
+                            prefix,
+                            context_line.trim()
+                        ));
+                    }
+                    content_matches.push(String::new());
+                    match_count += 1;
+                    if match_count >= 50 {
+                        break;
+                    }
                 }
             }
         }
+        if file_match_count > 0 {
+            let relative = entry
+                .path()
+                .strip_prefix(&context.cwd)
+                .unwrap_or(entry.path())
+                .to_string_lossy()
+                .to_string();
+            if output_mode == "files_with_matches" {
+                files_with_matches.push(relative);
+            } else if output_mode == "count" {
+                count_per_file.push((relative, file_match_count));
+            }
+        }
+        if output_mode == "content" && match_count >= 50 {
+            break;
+        }
     }
-    if matches.is_empty() {
-        Ok("No matches found.".to_owned())
-    } else {
-        Ok(matches.join("\n").trim_end().to_owned())
+    match output_mode {
+        "files_with_matches" => {
+            if files_with_matches.is_empty() {
+                Ok("No matches found.".to_owned())
+            } else {
+                Ok(files_with_matches.join("\n"))
+            }
+        }
+        "count" => {
+            if count_per_file.is_empty() {
+                Ok("No matches found.".to_owned())
+            } else {
+                let lines: Vec<String> = count_per_file
+                    .iter()
+                    .map(|(path, count)| format!("{}: {}", path, count))
+                    .collect();
+                Ok(lines.join("\n"))
+            }
+        }
+        _ => {
+            if content_matches.is_empty() {
+                Ok("No matches found.".to_owned())
+            } else {
+                Ok(content_matches.join("\n").trim_end().to_owned())
+            }
+        }
     }
 }
 

@@ -854,6 +854,11 @@ fn all_unified_agent_event_variants_roundtrip() {
             tool_name: "bash".into(),
             progress: "running".into(),
         },
+        UnifiedAgentEvent::CodexAppServerNotification {
+            session_id: "s".into(),
+            method: "model/verification".into(),
+            params: serde_json::json!({"model": "gpt-5"}),
+        },
         UnifiedAgentEvent::ToolCallCompleted {
             session_id: "s".into(),
             tool_name: "bash".into(),

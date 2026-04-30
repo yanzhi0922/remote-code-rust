@@ -20,6 +20,8 @@ codex-core = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-feedback = { workspace = true }
+codex-state = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true, features = ["full"] }

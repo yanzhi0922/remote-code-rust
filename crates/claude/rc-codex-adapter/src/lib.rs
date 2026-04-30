@@ -68,22 +68,65 @@ use rc_agent_protocol::types::{AgentCapability, AgentConfig, AgentInfo, AgentSta
 
 use codex_app_server_client::{AppServerClient, AppServerEvent, AppServerRequestHandle};
 use codex_app_server_protocol::{
-    AskForApproval, ClientRequest, CommandExecParams, CommandExecResizeParams,
-    CommandExecResizeResponse, CommandExecResponse, CommandExecTerminateParams,
+    AppsListParams, AppsListResponse, AskForApproval, CancelLoginAccountParams,
+    CancelLoginAccountResponse, ChatgptAuthTokensRefreshResponse, ClientRequest,
+    CommandExecResponse,
+    CollaborationModeListParams, CollaborationModeListResponse, CommandExecParams,
+    CommandExecResizeParams, CommandExecResizeResponse, CommandExecTerminateParams,
     CommandExecTerminateResponse, CommandExecWriteParams, CommandExecWriteResponse,
-    ConfigBatchWriteParams, ConfigReadParams, ConfigReadResponse, ConfigValueWriteParams,
-    ConfigWriteResponse, FeedbackUploadParams, FeedbackUploadResponse, FileChangeApprovalDecision,
-    JSONRPCErrorError, ListMcpServerStatusParams, ListMcpServerStatusResponse,
+    ConfigBatchWriteParams, ConfigReadParams, ConfigReadResponse, ConfigRequirementsReadResponse,
+    ConfigValueWriteParams, ConfigWriteResponse, DeviceKeyCreateParams, DeviceKeyCreateResponse,
+    DeviceKeyPublicParams, DeviceKeyPublicResponse, DeviceKeySignParams, DeviceKeySignResponse,
+    DynamicToolCallOutputContentItem, DynamicToolCallResponse,
+    ExperimentalFeatureEnablementSetParams, ExperimentalFeatureEnablementSetResponse,
+    ExperimentalFeatureListParams, ExperimentalFeatureListResponse,
+    ExternalAgentConfigDetectParams, ExternalAgentConfigDetectResponse,
+    ExternalAgentConfigImportParams, ExternalAgentConfigImportResponse, FeedbackUploadParams,
+    FeedbackUploadResponse, FileChangeApprovalDecision, FsCopyParams, FsCopyResponse,
+    FsCreateDirectoryParams, FsCreateDirectoryResponse, FsGetMetadataParams, FsGetMetadataResponse,
+    FsReadDirectoryParams, FsReadDirectoryResponse, FsReadFileParams, FsReadFileResponse,
+    FsRemoveParams, FsRemoveResponse, FsUnwatchParams, FsUnwatchResponse, FsWatchParams,
+    FsWatchResponse, FsWriteFileParams, FsWriteFileResponse, FuzzyFileSearchParams,
+    FuzzyFileSearchResponse, FuzzyFileSearchSessionStartParams,
+    FuzzyFileSearchSessionStartResponse, FuzzyFileSearchSessionStopParams,
+    FuzzyFileSearchSessionStopResponse, FuzzyFileSearchSessionUpdateParams,
+    FuzzyFileSearchSessionUpdateResponse, GetAccountParams, GetAccountRateLimitsResponse,
+    GetAccountResponse, GrantedPermissionProfile, JSONRPCErrorError, ListMcpServerStatusParams,
+    ListMcpServerStatusResponse, LoginAccountParams, LoginAccountResponse, LogoutAccountResponse,
+    MarketplaceAddParams, MarketplaceAddResponse, MarketplaceRemoveParams,
+    MarketplaceRemoveResponse, MarketplaceUpgradeParams, MarketplaceUpgradeResponse,
     McpResourceReadParams, McpResourceReadResponse, McpServerElicitationAction,
-    McpServerElicitationRequestResponse, McpServerRefreshResponse, McpServerStatusDetail,
-    McpServerToolCallParams, McpServerToolCallResponse, PermissionGrantScope, RequestId,
-    Result as JsonRpcResult, SandboxMode, ServerRequest, SortDirection, ThreadArchiveParams,
-    ThreadArchiveResponse, ThreadForkParams, ThreadForkResponse, ThreadListCwdFilter,
-    ThreadListParams, ThreadListResponse, ThreadMemoryMode, ThreadMemoryModeSetParams,
-    ThreadMemoryModeSetResponse, ThreadReadParams, ThreadReadResponse, ThreadResumeParams,
-    ThreadResumeResponse, ThreadSortKey, ThreadSourceKind, ThreadStartParams, ThreadStartResponse,
-    ThreadUnarchiveParams, ThreadUnarchiveResponse, TurnStartParams, TurnStartResponse,
-    UserInput as ProtocolUserInput,
+    McpServerElicitationRequestResponse, McpServerOauthLoginParams, McpServerOauthLoginResponse,
+    McpServerRefreshResponse, McpServerStatusDetail, McpServerToolCallParams,
+    McpServerToolCallResponse, ModelListParams, ModelListResponse, PermissionGrantScope,
+    PluginInstallParams, PluginInstallResponse, PluginListParams, PluginListResponse,
+    PluginReadParams, PluginReadResponse, PluginUninstallParams, PluginUninstallResponse,
+    RequestId, Result as JsonRpcResult, ReviewDelivery, ReviewStartParams, ReviewStartResponse,
+    ReviewTarget, SandboxMode, SendAddCreditsNudgeEmailParams, SendAddCreditsNudgeEmailResponse,
+    ServerRequest, SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams,
+    SkillsListResponse, SortDirection, ThreadApproveGuardianDeniedActionParams,
+    ThreadApproveGuardianDeniedActionResponse, ThreadArchiveParams, ThreadArchiveResponse,
+    ThreadBackgroundTerminalsCleanParams, ThreadBackgroundTerminalsCleanResponse,
+    ThreadCompactStartParams, ThreadCompactStartResponse, ThreadDecrementElicitationParams,
+    ThreadDecrementElicitationResponse, ThreadForkParams, ThreadForkResponse,
+    ThreadGoalClearParams, ThreadGoalClearResponse, ThreadGoalGetParams, ThreadGoalGetResponse,
+    ThreadGoalSetParams, ThreadGoalSetResponse, ThreadIncrementElicitationParams,
+    ThreadIncrementElicitationResponse, ThreadInjectItemsParams, ThreadInjectItemsResponse,
+    ThreadListCwdFilter, ThreadListParams, ThreadListResponse, ThreadLoadedListParams,
+    ThreadLoadedListResponse, ThreadMemoryMode, ThreadMemoryModeSetParams,
+    ThreadMemoryModeSetResponse, ThreadMetadataUpdateParams, ThreadMetadataUpdateResponse,
+    ThreadReadParams, ThreadReadResponse, ThreadRealtimeAppendAudioParams,
+    ThreadRealtimeAppendAudioResponse, ThreadRealtimeAppendTextParams,
+    ThreadRealtimeAppendTextResponse, ThreadRealtimeListVoicesParams,
+    ThreadRealtimeListVoicesResponse, ThreadRealtimeStartParams, ThreadRealtimeStartResponse,
+    ThreadRealtimeStopParams, ThreadRealtimeStopResponse, ThreadResumeParams, ThreadResumeResponse,
+    ThreadRollbackParams, ThreadRollbackResponse, ThreadSetNameParams, ThreadSetNameResponse,
+    ThreadShellCommandParams, ThreadShellCommandResponse, ThreadSortKey, ThreadSourceKind,
+    ThreadStartParams, ThreadStartResponse, ThreadTurnsListParams, ThreadTurnsListResponse,
+    ThreadUnarchiveParams, ThreadUnarchiveResponse, ThreadUnsubscribeParams,
+    ThreadUnsubscribeResponse, TurnInterruptParams, TurnInterruptResponse, TurnStartParams,
+    TurnStartResponse, TurnSteerParams, TurnSteerResponse, UserInput as ProtocolUserInput,
+    WindowsSandboxSetupStartParams, WindowsSandboxSetupStartResponse,
 };
 use codex_exec_server::{EnvironmentManager, EnvironmentManagerArgs, ExecServerRuntimePaths};
 use codex_protocol::models::PermissionProfile as CorePermissionProfile;
@@ -149,6 +192,67 @@ pub struct CodexExecRequest {
     pub env: Option<HashMap<String, Option<String>>>,
     pub sandbox_policy: Option<serde_json::Value>,
     pub permission_profile: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexThreadGoalRefRequest {
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexThreadGoalSetRequest {
+    pub thread_id: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexThreadRollbackRequest {
+    pub thread_id: String,
+    pub num_turns: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexTurnSteerRequest {
+    pub thread_id: String,
+    pub expected_turn_id: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexTurnInterruptRequest {
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexPluginRefRequest {
+    pub marketplace_path: Option<PathBuf>,
+    pub remote_marketplace_name: Option<String>,
+    pub plugin_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexServerRequestResolution {
+    #[serde(default)]
+    pub allow_all: bool,
+    #[serde(default)]
+    pub response: Option<serde_json::Value>,
+}
+
+impl Default for CodexServerRequestResolution {
+    fn default() -> Self {
+        Self {
+            allow_all: false,
+            response: None,
+        }
+    }
 }
 
 /// Resolve the Codex home used by Remote Code's embedded Codex runtime.
@@ -255,7 +359,10 @@ fn default_true() -> bool {
     true
 }
 
-fn shared_feedback(capture_enabled: bool) -> codex_feedback::CodexFeedback {
+fn shared_feedback(
+    capture_enabled: bool,
+    log_db: Option<codex_state::log_db::LogDbLayer>,
+) -> codex_feedback::CodexFeedback {
     if !capture_enabled {
         return codex_feedback::CodexFeedback::new();
     }
@@ -264,9 +371,15 @@ fn shared_feedback(capture_enabled: bool) -> codex_feedback::CodexFeedback {
     let feedback = FEEDBACK
         .get_or_init(|| {
             let feedback = codex_feedback::CodexFeedback::new();
+            let log_db_layer = log_db.clone().map(|layer| {
+                layer.with_filter(
+                    tracing_subscriber::filter::Targets::new().with_default(tracing::Level::TRACE),
+                )
+            });
             let _ = tracing_subscriber::registry()
                 .with(feedback.logger_layer())
                 .with(feedback.metadata_layer())
+                .with(log_db_layer)
                 .try_init();
             feedback
         })
@@ -274,17 +387,25 @@ fn shared_feedback(capture_enabled: bool) -> codex_feedback::CodexFeedback {
     feedback
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum PendingServerRequestKind {
     CommandExecution,
     FileChange,
     ApplyPatch,
     ExecCommand,
-    Permissions,
+    Permissions(serde_json::Value),
     McpElicitation,
-    ToolUserInput,
-    DynamicTool,
-    ChatgptAuthRefresh,
+    ToolUserInput(serde_json::Value),
+    DynamicTool {
+        call_id: String,
+        namespace: Option<String>,
+        tool: String,
+        arguments: serde_json::Value,
+    },
+    ChatgptAuthRefresh {
+        reason: String,
+        previous_account_id: Option<String>,
+    },
 }
 
 impl PendingServerRequestKind {
@@ -294,11 +415,23 @@ impl PendingServerRequestKind {
             ServerRequest::FileChangeRequestApproval { .. } => Self::FileChange,
             ServerRequest::ApplyPatchApproval { .. } => Self::ApplyPatch,
             ServerRequest::ExecCommandApproval { .. } => Self::ExecCommand,
-            ServerRequest::PermissionsRequestApproval { .. } => Self::Permissions,
+            ServerRequest::PermissionsRequestApproval { params, .. } => Self::Permissions(
+                serde_json::to_value(&params.permissions).unwrap_or(serde_json::Value::Null),
+            ),
             ServerRequest::McpServerElicitationRequest { .. } => Self::McpElicitation,
-            ServerRequest::ToolRequestUserInput { .. } => Self::ToolUserInput,
-            ServerRequest::DynamicToolCall { .. } => Self::DynamicTool,
-            ServerRequest::ChatgptAuthTokensRefresh { .. } => Self::ChatgptAuthRefresh,
+            ServerRequest::ToolRequestUserInput { params, .. } => Self::ToolUserInput(
+                serde_json::to_value(&params.questions).unwrap_or(serde_json::Value::Null),
+            ),
+            ServerRequest::DynamicToolCall { params, .. } => Self::DynamicTool {
+                call_id: params.call_id.clone(),
+                namespace: params.namespace.clone(),
+                tool: params.tool.clone(),
+                arguments: params.arguments.clone(),
+            },
+            ServerRequest::ChatgptAuthTokensRefresh { params, .. } => Self::ChatgptAuthRefresh {
+                reason: format!("{:?}", params.reason),
+                previous_account_id: params.previous_account_id.clone(),
+            },
         }
     }
 }
@@ -542,7 +675,14 @@ impl CodexInProcessAdapter {
             local_runtime_paths: runtime_paths,
         });
 
-        let feedback = shared_feedback(options.feedback_capture_enabled);
+        let state_db = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.model_provider_id.clone(),
+        )
+        .await
+        .ok();
+        let log_db = state_db.clone().map(codex_state::log_db::start);
+        let feedback = shared_feedback(options.feedback_capture_enabled, log_db.clone());
 
         // 3. Build the in-process client start args.
         let args = codex_app_server_client::InProcessClientStartArgs {
@@ -552,7 +692,7 @@ impl CodexInProcessAdapter {
             loader_overrides,
             cloud_requirements,
             feedback,
-            log_db: None,
+            log_db,
             environment_manager: Arc::new(environment_manager),
             config_warnings: Vec::new(),
             session_source: codex_app_server_protocol::SessionSource::AppServer.into(),
@@ -654,6 +794,26 @@ impl CodexInProcessAdapter {
             params: self.thread_start_params(),
         })
         .await
+    }
+
+    pub async fn start_new_thread(&mut self) -> anyhow::Result<ThreadStartResponse> {
+        let response = self.start_thread().await?;
+        self.thread_id = Some(response.thread.id.clone());
+        Ok(response)
+    }
+
+    pub async fn start_thread_with_params(
+        &mut self,
+        params: Option<ThreadStartParams>,
+    ) -> anyhow::Result<ThreadStartResponse> {
+        let response: ThreadStartResponse = self
+            .request_typed(ClientRequest::ThreadStart {
+                request_id: self.next_request_id(),
+                params: params.unwrap_or_else(|| self.thread_start_params()),
+            })
+            .await?;
+        self.thread_id = Some(response.thread.id.clone());
+        Ok(response)
     }
 
     fn thread_start_params(&self) -> ThreadStartParams {
@@ -800,6 +960,20 @@ impl CodexInProcessAdapter {
         Ok(response)
     }
 
+    pub async fn resume_thread_with_params(
+        &mut self,
+        params: ThreadResumeParams,
+    ) -> anyhow::Result<ThreadResumeResponse> {
+        let response: ThreadResumeResponse = self
+            .request_typed(ClientRequest::ThreadResume {
+                request_id: self.next_request_id(),
+                params,
+            })
+            .await?;
+        self.thread_id = Some(response.thread.id.clone());
+        Ok(response)
+    }
+
     pub async fn fork_thread(
         &mut self,
         thread_id: String,
@@ -809,6 +983,20 @@ impl CodexInProcessAdapter {
             .request_typed(ClientRequest::ThreadFork {
                 request_id: self.next_request_id(),
                 params: self.thread_fork_params(thread_id, include_turns),
+            })
+            .await?;
+        self.thread_id = Some(response.thread.id.clone());
+        Ok(response)
+    }
+
+    pub async fn fork_thread_with_params(
+        &mut self,
+        params: ThreadForkParams,
+    ) -> anyhow::Result<ThreadForkResponse> {
+        let response: ThreadForkResponse = self
+            .request_typed(ClientRequest::ThreadFork {
+                request_id: self.next_request_id(),
+                params,
             })
             .await?;
         self.thread_id = Some(response.thread.id.clone());
@@ -830,6 +1018,539 @@ impl CodexInProcessAdapter {
         self.request_typed(ClientRequest::ThreadUnarchive {
             request_id: self.next_request_id(),
             params: ThreadUnarchiveParams { thread_id },
+        })
+        .await
+    }
+
+    pub async fn unsubscribe_thread(
+        &self,
+        thread_id: String,
+    ) -> anyhow::Result<ThreadUnsubscribeResponse> {
+        self.request_typed(ClientRequest::ThreadUnsubscribe {
+            request_id: self.next_request_id(),
+            params: ThreadUnsubscribeParams { thread_id },
+        })
+        .await
+    }
+
+    pub async fn increment_thread_elicitation(
+        &self,
+        thread_id: String,
+    ) -> anyhow::Result<ThreadIncrementElicitationResponse> {
+        self.request_typed(ClientRequest::ThreadIncrementElicitation {
+            request_id: self.next_request_id(),
+            params: ThreadIncrementElicitationParams { thread_id },
+        })
+        .await
+    }
+
+    pub async fn decrement_thread_elicitation(
+        &self,
+        thread_id: String,
+    ) -> anyhow::Result<ThreadDecrementElicitationResponse> {
+        self.request_typed(ClientRequest::ThreadDecrementElicitation {
+            request_id: self.next_request_id(),
+            params: ThreadDecrementElicitationParams { thread_id },
+        })
+        .await
+    }
+
+    pub async fn update_thread_metadata(
+        &self,
+        params: ThreadMetadataUpdateParams,
+    ) -> anyhow::Result<ThreadMetadataUpdateResponse> {
+        self.request_typed(ClientRequest::ThreadMetadataUpdate {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn set_thread_name(
+        &self,
+        thread_id: String,
+        name: String,
+    ) -> anyhow::Result<ThreadSetNameResponse> {
+        self.request_typed(ClientRequest::ThreadSetName {
+            request_id: self.next_request_id(),
+            params: ThreadSetNameParams { thread_id, name },
+        })
+        .await
+    }
+
+    pub async fn set_thread_goal(
+        &self,
+        request: CodexThreadGoalSetRequest,
+    ) -> anyhow::Result<ThreadGoalSetResponse> {
+        self.request_typed(ClientRequest::ThreadGoalSet {
+            request_id: self.next_request_id(),
+            params: ThreadGoalSetParams {
+                thread_id: request.thread_id,
+                objective: Some(request.text),
+                status: None,
+                token_budget: None,
+            },
+        })
+        .await
+    }
+
+    pub async fn get_thread_goal(
+        &self,
+        thread_id: String,
+    ) -> anyhow::Result<ThreadGoalGetResponse> {
+        self.request_typed(ClientRequest::ThreadGoalGet {
+            request_id: self.next_request_id(),
+            params: ThreadGoalGetParams { thread_id },
+        })
+        .await
+    }
+
+    pub async fn clear_thread_goal(
+        &self,
+        thread_id: String,
+    ) -> anyhow::Result<ThreadGoalClearResponse> {
+        self.request_typed(ClientRequest::ThreadGoalClear {
+            request_id: self.next_request_id(),
+            params: ThreadGoalClearParams { thread_id },
+        })
+        .await
+    }
+
+    pub async fn compact_thread(
+        &self,
+        thread_id: String,
+    ) -> anyhow::Result<ThreadCompactStartResponse> {
+        self.request_typed(ClientRequest::ThreadCompactStart {
+            request_id: self.next_request_id(),
+            params: ThreadCompactStartParams { thread_id },
+        })
+        .await
+    }
+
+    pub async fn run_thread_shell_command(
+        &self,
+        thread_id: String,
+        command: String,
+    ) -> anyhow::Result<ThreadShellCommandResponse> {
+        self.request_typed(ClientRequest::ThreadShellCommand {
+            request_id: self.next_request_id(),
+            params: ThreadShellCommandParams { thread_id, command },
+        })
+        .await
+    }
+
+    pub async fn clean_thread_background_terminals(
+        &self,
+        thread_id: String,
+    ) -> anyhow::Result<ThreadBackgroundTerminalsCleanResponse> {
+        self.request_typed(ClientRequest::ThreadBackgroundTerminalsClean {
+            request_id: self.next_request_id(),
+            params: ThreadBackgroundTerminalsCleanParams { thread_id },
+        })
+        .await
+    }
+
+    pub async fn approve_guardian_denied_action(
+        &self,
+        params: ThreadApproveGuardianDeniedActionParams,
+    ) -> anyhow::Result<ThreadApproveGuardianDeniedActionResponse> {
+        self.request_typed(ClientRequest::ThreadApproveGuardianDeniedAction {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn rollback_thread(
+        &self,
+        request: CodexThreadRollbackRequest,
+    ) -> anyhow::Result<ThreadRollbackResponse> {
+        self.request_typed(ClientRequest::ThreadRollback {
+            request_id: self.next_request_id(),
+            params: ThreadRollbackParams {
+                thread_id: request.thread_id,
+                num_turns: request.num_turns.max(1),
+            },
+        })
+        .await
+    }
+
+    pub async fn list_thread_turns(
+        &self,
+        thread_id: String,
+        cursor: Option<String>,
+        limit: Option<u32>,
+    ) -> anyhow::Result<ThreadTurnsListResponse> {
+        self.request_typed(ClientRequest::ThreadTurnsList {
+            request_id: self.next_request_id(),
+            params: ThreadTurnsListParams {
+                thread_id,
+                cursor,
+                limit,
+                sort_direction: Some(SortDirection::Desc),
+            },
+        })
+        .await
+    }
+
+    pub async fn list_loaded_threads(
+        &self,
+        cursor: Option<String>,
+        limit: Option<u32>,
+    ) -> anyhow::Result<ThreadLoadedListResponse> {
+        self.request_typed(ClientRequest::ThreadLoadedList {
+            request_id: self.next_request_id(),
+            params: ThreadLoadedListParams { cursor, limit },
+        })
+        .await
+    }
+
+    pub async fn inject_thread_items(
+        &self,
+        params: ThreadInjectItemsParams,
+    ) -> anyhow::Result<ThreadInjectItemsResponse> {
+        self.request_typed(ClientRequest::ThreadInjectItems {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn start_turn(&self, params: TurnStartParams) -> anyhow::Result<TurnStartResponse> {
+        self.request_typed(ClientRequest::TurnStart {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn steer_turn(
+        &self,
+        request: CodexTurnSteerRequest,
+    ) -> anyhow::Result<TurnSteerResponse> {
+        self.request_typed(ClientRequest::TurnSteer {
+            request_id: self.next_request_id(),
+            params: TurnSteerParams {
+                thread_id: request.thread_id,
+                input: vec![ProtocolUserInput::Text {
+                    text: request.message,
+                    text_elements: Vec::new(),
+                }],
+                responsesapi_client_metadata: None,
+                expected_turn_id: request.expected_turn_id,
+            },
+        })
+        .await
+    }
+
+    pub async fn interrupt_turn(
+        &self,
+        request: CodexTurnInterruptRequest,
+    ) -> anyhow::Result<TurnInterruptResponse> {
+        self.request_typed(ClientRequest::TurnInterrupt {
+            request_id: self.next_request_id(),
+            params: TurnInterruptParams {
+                thread_id: request.thread_id,
+                turn_id: request.turn_id.unwrap_or_default(),
+            },
+        })
+        .await
+    }
+
+    pub async fn list_models(
+        &self,
+        include_hidden: Option<bool>,
+    ) -> anyhow::Result<ModelListResponse> {
+        self.request_typed(ClientRequest::ModelList {
+            request_id: self.next_request_id(),
+            params: ModelListParams {
+                cursor: None,
+                limit: None,
+                include_hidden,
+            },
+        })
+        .await
+    }
+
+    pub async fn list_collaboration_modes(&self) -> anyhow::Result<CollaborationModeListResponse> {
+        self.request_typed(ClientRequest::CollaborationModeList {
+            request_id: self.next_request_id(),
+            params: CollaborationModeListParams::default(),
+        })
+        .await
+    }
+
+    pub async fn list_experimental_features(
+        &self,
+    ) -> anyhow::Result<ExperimentalFeatureListResponse> {
+        self.request_typed(ClientRequest::ExperimentalFeatureList {
+            request_id: self.next_request_id(),
+            params: ExperimentalFeatureListParams {
+                cursor: None,
+                limit: None,
+            },
+        })
+        .await
+    }
+
+    pub async fn set_experimental_feature(
+        &self,
+        feature: String,
+        enabled: bool,
+    ) -> anyhow::Result<ExperimentalFeatureEnablementSetResponse> {
+        self.request_typed(ClientRequest::ExperimentalFeatureEnablementSet {
+            request_id: self.next_request_id(),
+            params: ExperimentalFeatureEnablementSetParams {
+                enablement: std::iter::once((feature, enabled)).collect(),
+            },
+        })
+        .await
+    }
+
+    pub async fn read_account(&self) -> anyhow::Result<GetAccountResponse> {
+        self.request_typed(ClientRequest::GetAccount {
+            request_id: self.next_request_id(),
+            params: GetAccountParams {
+                refresh_token: false,
+            },
+        })
+        .await
+    }
+
+    pub async fn login_account(
+        &self,
+        params: LoginAccountParams,
+    ) -> anyhow::Result<LoginAccountResponse> {
+        self.request_typed(ClientRequest::LoginAccount {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn cancel_login_account(
+        &self,
+        params: CancelLoginAccountParams,
+    ) -> anyhow::Result<CancelLoginAccountResponse> {
+        self.request_typed(ClientRequest::CancelLoginAccount {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn logout_account(&self) -> anyhow::Result<LogoutAccountResponse> {
+        self.request_typed(ClientRequest::LogoutAccount {
+            request_id: self.next_request_id(),
+            params: None,
+        })
+        .await
+    }
+
+    pub async fn read_account_rate_limits(&self) -> anyhow::Result<GetAccountRateLimitsResponse> {
+        self.request_typed(ClientRequest::GetAccountRateLimits {
+            request_id: self.next_request_id(),
+            params: None,
+        })
+        .await
+    }
+
+    pub async fn send_add_credits_nudge_email(
+        &self,
+        params: SendAddCreditsNudgeEmailParams,
+    ) -> anyhow::Result<SendAddCreditsNudgeEmailResponse> {
+        self.request_typed(ClientRequest::SendAddCreditsNudgeEmail {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn list_apps(&self) -> anyhow::Result<AppsListResponse> {
+        self.request_typed(ClientRequest::AppsList {
+            request_id: self.next_request_id(),
+            params: AppsListParams {
+                cursor: None,
+                limit: None,
+                thread_id: self.thread_id.clone(),
+                force_refetch: false,
+            },
+        })
+        .await
+    }
+
+    pub async fn list_skills(
+        &self,
+        cwds: Vec<PathBuf>,
+        force_reload: bool,
+    ) -> anyhow::Result<SkillsListResponse> {
+        self.request_typed(ClientRequest::SkillsList {
+            request_id: self.next_request_id(),
+            params: SkillsListParams {
+                cwds,
+                force_reload,
+                per_cwd_extra_user_roots: None,
+            },
+        })
+        .await
+    }
+
+    pub async fn write_skills_config(
+        &self,
+        path: Option<PathBuf>,
+        name: Option<String>,
+        enabled: bool,
+    ) -> anyhow::Result<SkillsConfigWriteResponse> {
+        self.request_typed(ClientRequest::SkillsConfigWrite {
+            request_id: self.next_request_id(),
+            params: SkillsConfigWriteParams {
+                path: path.map(|path| {
+                    codex_utils_absolute_path::AbsolutePathBuf::resolve_path_against_base(
+                        path, &self.cwd,
+                    )
+                }),
+                name,
+                enabled,
+            },
+        })
+        .await
+    }
+
+    pub async fn list_plugins(
+        &self,
+        cwds: Option<Vec<PathBuf>>,
+    ) -> anyhow::Result<PluginListResponse> {
+        self.request_typed(ClientRequest::PluginList {
+            request_id: self.next_request_id(),
+            params: PluginListParams {
+                cwds: cwds.map(|paths| {
+                    paths
+                        .into_iter()
+                        .map(|path| {
+                            codex_utils_absolute_path::AbsolutePathBuf::resolve_path_against_base(
+                                path, &self.cwd,
+                            )
+                        })
+                        .collect()
+                }),
+            },
+        })
+        .await
+    }
+
+    pub async fn read_plugin(
+        &self,
+        request: CodexPluginRefRequest,
+    ) -> anyhow::Result<PluginReadResponse> {
+        self.request_typed(ClientRequest::PluginRead {
+            request_id: self.next_request_id(),
+            params: PluginReadParams {
+                marketplace_path: request.marketplace_path.map(|path| {
+                    codex_utils_absolute_path::AbsolutePathBuf::resolve_path_against_base(
+                        path, &self.cwd,
+                    )
+                }),
+                remote_marketplace_name: request.remote_marketplace_name,
+                plugin_name: request.plugin_name,
+            },
+        })
+        .await
+    }
+
+    pub async fn install_plugin(
+        &self,
+        request: CodexPluginRefRequest,
+    ) -> anyhow::Result<PluginInstallResponse> {
+        self.request_typed(ClientRequest::PluginInstall {
+            request_id: self.next_request_id(),
+            params: PluginInstallParams {
+                marketplace_path: request.marketplace_path.map(|path| {
+                    codex_utils_absolute_path::AbsolutePathBuf::resolve_path_against_base(
+                        path, &self.cwd,
+                    )
+                }),
+                remote_marketplace_name: request.remote_marketplace_name,
+                plugin_name: request.plugin_name,
+            },
+        })
+        .await
+    }
+
+    pub async fn uninstall_plugin(
+        &self,
+        plugin_id: String,
+    ) -> anyhow::Result<PluginUninstallResponse> {
+        self.request_typed(ClientRequest::PluginUninstall {
+            request_id: self.next_request_id(),
+            params: PluginUninstallParams { plugin_id },
+        })
+        .await
+    }
+
+    pub async fn add_marketplace(&self, source: String) -> anyhow::Result<MarketplaceAddResponse> {
+        self.request_typed(ClientRequest::MarketplaceAdd {
+            request_id: self.next_request_id(),
+            params: MarketplaceAddParams {
+                source,
+                ref_name: None,
+                sparse_paths: None,
+            },
+        })
+        .await
+    }
+
+    pub async fn remove_marketplace(
+        &self,
+        marketplace_name: String,
+    ) -> anyhow::Result<MarketplaceRemoveResponse> {
+        self.request_typed(ClientRequest::MarketplaceRemove {
+            request_id: self.next_request_id(),
+            params: MarketplaceRemoveParams { marketplace_name },
+        })
+        .await
+    }
+
+    pub async fn upgrade_marketplace(
+        &self,
+        marketplace_name: Option<String>,
+    ) -> anyhow::Result<MarketplaceUpgradeResponse> {
+        self.request_typed(ClientRequest::MarketplaceUpgrade {
+            request_id: self.next_request_id(),
+            params: MarketplaceUpgradeParams { marketplace_name },
+        })
+        .await
+    }
+
+    pub async fn mcp_oauth_login(
+        &self,
+        server: String,
+    ) -> anyhow::Result<McpServerOauthLoginResponse> {
+        self.request_typed(ClientRequest::McpServerOauthLogin {
+            request_id: self.next_request_id(),
+            params: McpServerOauthLoginParams {
+                name: server,
+                scopes: None,
+                timeout_secs: None,
+            },
+        })
+        .await
+    }
+
+    pub async fn start_review(
+        &self,
+        thread_id: String,
+        prompt: Option<String>,
+    ) -> anyhow::Result<ReviewStartResponse> {
+        self.request_typed(ClientRequest::ReviewStart {
+            request_id: self.next_request_id(),
+            params: ReviewStartParams {
+                thread_id,
+                target: match prompt.filter(|value| !value.trim().is_empty()) {
+                    Some(instructions) => ReviewTarget::Custom { instructions },
+                    None => ReviewTarget::UncommittedChanges,
+                },
+                delivery: Some(ReviewDelivery::Inline),
+            },
         })
         .await
     }
@@ -910,6 +1631,17 @@ impl CodexInProcessAdapter {
         .await
     }
 
+    pub async fn start_windows_sandbox_setup(
+        &self,
+        params: WindowsSandboxSetupStartParams,
+    ) -> anyhow::Result<WindowsSandboxSetupStartResponse> {
+        self.request_typed(ClientRequest::WindowsSandboxSetupStart {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
     pub async fn refresh_mcp(&self) -> anyhow::Result<McpServerRefreshResponse> {
         self.request_typed(ClientRequest::McpServerRefresh {
             request_id: self.next_request_id(),
@@ -983,6 +1715,36 @@ impl CodexInProcessAdapter {
         .await
     }
 
+    pub async fn read_config_requirements(&self) -> anyhow::Result<ConfigRequirementsReadResponse> {
+        self.request_typed(ClientRequest::ConfigRequirementsRead {
+            request_id: self.next_request_id(),
+            params: None,
+        })
+        .await
+    }
+
+    pub async fn detect_external_agent_config(
+        &self,
+        params: ExternalAgentConfigDetectParams,
+    ) -> anyhow::Result<ExternalAgentConfigDetectResponse> {
+        self.request_typed(ClientRequest::ExternalAgentConfigDetect {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn import_external_agent_config(
+        &self,
+        params: ExternalAgentConfigImportParams,
+    ) -> anyhow::Result<ExternalAgentConfigImportResponse> {
+        self.request_typed(ClientRequest::ExternalAgentConfigImport {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
     pub async fn write_config_value(
         &self,
         params: ConfigValueWriteParams,
@@ -1043,6 +1805,265 @@ impl CodexInProcessAdapter {
             params: None,
         })
         .await
+    }
+
+    pub async fn start_realtime(
+        &self,
+        params: ThreadRealtimeStartParams,
+    ) -> anyhow::Result<ThreadRealtimeStartResponse> {
+        self.request_typed(ClientRequest::ThreadRealtimeStart {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn append_realtime_audio(
+        &self,
+        params: ThreadRealtimeAppendAudioParams,
+    ) -> anyhow::Result<ThreadRealtimeAppendAudioResponse> {
+        self.request_typed(ClientRequest::ThreadRealtimeAppendAudio {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn append_realtime_text(
+        &self,
+        params: ThreadRealtimeAppendTextParams,
+    ) -> anyhow::Result<ThreadRealtimeAppendTextResponse> {
+        self.request_typed(ClientRequest::ThreadRealtimeAppendText {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn stop_realtime(
+        &self,
+        params: ThreadRealtimeStopParams,
+    ) -> anyhow::Result<ThreadRealtimeStopResponse> {
+        self.request_typed(ClientRequest::ThreadRealtimeStop {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn list_realtime_voices(&self) -> anyhow::Result<ThreadRealtimeListVoicesResponse> {
+        self.request_typed(ClientRequest::ThreadRealtimeListVoices {
+            request_id: self.next_request_id(),
+            params: ThreadRealtimeListVoicesParams::default(),
+        })
+        .await
+    }
+
+    pub async fn create_device_key(
+        &self,
+        params: DeviceKeyCreateParams,
+    ) -> anyhow::Result<DeviceKeyCreateResponse> {
+        self.request_typed(ClientRequest::DeviceKeyCreate {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn get_device_key_public(
+        &self,
+        params: DeviceKeyPublicParams,
+    ) -> anyhow::Result<DeviceKeyPublicResponse> {
+        self.request_typed(ClientRequest::DeviceKeyPublic {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn sign_device_key(
+        &self,
+        params: DeviceKeySignParams,
+    ) -> anyhow::Result<DeviceKeySignResponse> {
+        self.request_typed(ClientRequest::DeviceKeySign {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn fs_read_file(
+        &self,
+        params: FsReadFileParams,
+    ) -> anyhow::Result<FsReadFileResponse> {
+        self.request_typed(ClientRequest::FsReadFile {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn fs_write_file(
+        &self,
+        params: FsWriteFileParams,
+    ) -> anyhow::Result<FsWriteFileResponse> {
+        self.request_typed(ClientRequest::FsWriteFile {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn fs_create_directory(
+        &self,
+        params: FsCreateDirectoryParams,
+    ) -> anyhow::Result<FsCreateDirectoryResponse> {
+        self.request_typed(ClientRequest::FsCreateDirectory {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn fs_get_metadata(
+        &self,
+        params: FsGetMetadataParams,
+    ) -> anyhow::Result<FsGetMetadataResponse> {
+        self.request_typed(ClientRequest::FsGetMetadata {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn fs_read_directory(
+        &self,
+        params: FsReadDirectoryParams,
+    ) -> anyhow::Result<FsReadDirectoryResponse> {
+        self.request_typed(ClientRequest::FsReadDirectory {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn fs_remove(&self, params: FsRemoveParams) -> anyhow::Result<FsRemoveResponse> {
+        self.request_typed(ClientRequest::FsRemove {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn fs_copy(&self, params: FsCopyParams) -> anyhow::Result<FsCopyResponse> {
+        self.request_typed(ClientRequest::FsCopy {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn fs_watch(&self, params: FsWatchParams) -> anyhow::Result<FsWatchResponse> {
+        self.request_typed(ClientRequest::FsWatch {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn fs_unwatch(&self, params: FsUnwatchParams) -> anyhow::Result<FsUnwatchResponse> {
+        self.request_typed(ClientRequest::FsUnwatch {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn fuzzy_file_search(
+        &self,
+        params: FuzzyFileSearchParams,
+    ) -> anyhow::Result<FuzzyFileSearchResponse> {
+        self.request_typed(ClientRequest::FuzzyFileSearch {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn start_fuzzy_file_search_session(
+        &self,
+        params: FuzzyFileSearchSessionStartParams,
+    ) -> anyhow::Result<FuzzyFileSearchSessionStartResponse> {
+        self.request_typed(ClientRequest::FuzzyFileSearchSessionStart {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn update_fuzzy_file_search_session(
+        &self,
+        params: FuzzyFileSearchSessionUpdateParams,
+    ) -> anyhow::Result<FuzzyFileSearchSessionUpdateResponse> {
+        self.request_typed(ClientRequest::FuzzyFileSearchSessionUpdate {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn stop_fuzzy_file_search_session(
+        &self,
+        params: FuzzyFileSearchSessionStopParams,
+    ) -> anyhow::Result<FuzzyFileSearchSessionStopResponse> {
+        self.request_typed(ClientRequest::FuzzyFileSearchSessionStop {
+            request_id: self.next_request_id(),
+            params,
+        })
+        .await
+    }
+
+    pub async fn resolve_codex_server_request(
+        &mut self,
+        request_id: &str,
+        decision: PermissionDecision,
+        resolution: CodexServerRequestResolution,
+    ) -> anyhow::Result<()> {
+        let kind = {
+            let mut state = self.event_state.lock().await;
+            state.pending_server_requests.remove(request_id)
+        }
+        .ok_or_else(|| anyhow::anyhow!("unknown Codex permission request id {request_id}"))?;
+        let req_id = RequestId::String(request_id.to_owned());
+
+        let rejection_message = match &kind {
+            PendingServerRequestKind::ChatgptAuthRefresh { .. } => {
+                "chatgpt auth token refresh is not supported for in-process app-server clients"
+                    .to_string()
+            }
+            _ => "Permission denied by user".to_string(),
+        };
+
+        if let Some(response) = typed_server_request_response(kind, decision, resolution)? {
+            self.handle()?
+                .resolve_server_request(req_id, response)
+                .await
+                .map_err(|e| anyhow::anyhow!("resolve_server_request failed: {e}"))?;
+        } else {
+            self.handle()?
+                .reject_server_request(
+                    req_id,
+                    JSONRPCErrorError {
+                        code: -32000,
+                        message: rejection_message,
+                        data: None,
+                    },
+                )
+                .await
+                .map_err(|e| anyhow::anyhow!("reject_server_request failed: {e}"))?;
+        }
+
+        Ok(())
     }
 }
 
@@ -1167,33 +2188,12 @@ impl AgentAdapter for CodexInProcessAdapter {
         request_id: &str,
         decision: PermissionDecision,
     ) -> anyhow::Result<()> {
-        let kind = {
-            let mut state = self.event_state.lock().await;
-            state.pending_server_requests.remove(request_id)
-        }
-        .ok_or_else(|| anyhow::anyhow!("unknown Codex permission request id {request_id}"))?;
-        let req_id = RequestId::String(request_id.to_owned());
-
-        if let Some(response) = typed_server_request_response(kind, decision)? {
-            self.handle()?
-                .resolve_server_request(req_id, response)
-                .await
-                .map_err(|e| anyhow::anyhow!("resolve_server_request failed: {e}"))?;
-        } else {
-            self.handle()?
-                .reject_server_request(
-                    req_id,
-                    JSONRPCErrorError {
-                        code: -32000,
-                        message: "Permission denied by user".to_string(),
-                        data: None,
-                    },
-                )
-                .await
-                .map_err(|e| anyhow::anyhow!("reject_server_request failed: {e}"))?;
-        }
-
-        Ok(())
+        self.resolve_codex_server_request(
+            request_id,
+            decision,
+            CodexServerRequestResolution::default(),
+        )
+        .await
     }
 
     async fn stop(&mut self) -> anyhow::Result<()> {
@@ -1276,10 +2276,6 @@ fn build_harness_overrides(
 fn build_cli_overrides(options: &CodexAdapterOptions) -> anyhow::Result<Vec<(String, TomlValue)>> {
     let mut overrides = Vec::new();
 
-    for (key, raw) in &options.config_overrides {
-        overrides.push((key.clone(), parse_toml_scalar(raw)));
-    }
-
     if let Some(endpoint) = trim_opt(options.thread_store_endpoint.clone()) {
         overrides.push((
             "experimental_thread_store".to_string(),
@@ -1309,11 +2305,11 @@ fn build_cli_overrides(options: &CodexAdapterOptions) -> anyhow::Result<Vec<(Str
     }
 
     if let Some(provider_id) = trim_opt(options.model_provider.clone()) {
+        let provider_prefix = format!("model_providers.{provider_id}");
         overrides.push((
             "model_provider".to_string(),
             TomlValue::String(provider_id.clone()),
         ));
-        let provider_prefix = format!("model_providers.{provider_id}");
         overrides.push((
             format!("{provider_prefix}.name"),
             TomlValue::String(provider_id.clone()),
@@ -1340,6 +2336,10 @@ fn build_cli_overrides(options: &CodexAdapterOptions) -> anyhow::Result<Vec<(Str
 
     for (name, value) in &options.mcp_servers {
         overrides.push((format!("mcp_servers.{name}"), json_to_toml(value.clone())?));
+    }
+
+    for (key, raw) in &options.config_overrides {
+        overrides.push((key.clone(), parse_toml_scalar(raw)));
     }
 
     Ok(overrides)
@@ -1446,16 +2446,23 @@ fn parse_sandbox_mode_core(
 fn typed_server_request_response(
     kind: PendingServerRequestKind,
     decision: PermissionDecision,
+    resolution: CodexServerRequestResolution,
 ) -> anyhow::Result<Option<serde_json::Value>> {
     let allow = matches!(
         decision,
         PermissionDecision::Allow | PermissionDecision::AllowAll
     );
-    let allow_all = matches!(decision, PermissionDecision::AllowAll);
+    let allow_all = matches!(decision, PermissionDecision::AllowAll) || resolution.allow_all;
+
+    if let Some(ref response) = resolution.response {
+        if allow {
+            return Ok(Some(response.clone()));
+        }
+    }
 
     if !allow
         && !matches!(
-            kind,
+            &kind,
             PendingServerRequestKind::CommandExecution
                 | PendingServerRequestKind::FileChange
                 | PendingServerRequestKind::ApplyPatch
@@ -1509,9 +2516,9 @@ fn typed_server_request_response(
                 },
             })?
         }
-        PendingServerRequestKind::Permissions => serde_json::to_value(
+        PendingServerRequestKind::Permissions(requested_permissions) => serde_json::to_value(
             codex_app_server_protocol::PermissionsRequestApprovalResponse {
-                permissions: Default::default(),
+                permissions: requested_permissions_to_granted_profile(requested_permissions)?,
                 scope: if allow_all {
                     PermissionGrantScope::Session
                 } else {
@@ -1531,26 +2538,79 @@ fn typed_server_request_response(
                 meta: None,
             })?
         }
-        PendingServerRequestKind::ToolUserInput => {
+        PendingServerRequestKind::ToolUserInput(questions) => {
             serde_json::to_value(codex_app_server_protocol::ToolRequestUserInputResponse {
-                answers: HashMap::new(),
+                answers: default_tool_user_input_answers(questions),
             })?
         }
-        PendingServerRequestKind::DynamicTool => {
-            serde_json::to_value(codex_app_server_protocol::DynamicToolCallResponse {
-                content_items: vec![
-                    codex_app_server_protocol::DynamicToolCallOutputContentItem::InputText {
-                        text: "Approved by user, but no dynamic client tool handler is registered."
-                            .to_string(),
+        PendingServerRequestKind::DynamicTool { .. } => {
+            serde_json::to_value(DynamicToolCallResponse {
+                content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                    text: if allow {
+                        "No dynamic client tool handler is registered.".to_string()
+                    } else {
+                        "Dynamic tool call denied by user.".to_string()
                     },
-                ],
-                success: allow,
+                }],
+                success: false,
             })?
         }
-        PendingServerRequestKind::ChatgptAuthRefresh => return Ok(None),
+        PendingServerRequestKind::ChatgptAuthRefresh { .. } => {
+            if let Some(response) = resolution.response {
+                let _refresh_response: ChatgptAuthTokensRefreshResponse =
+                    serde_json::from_value(response.clone())
+                    .with_context(|| "Invalid ChatgptAuthTokensRefreshResponse in resolution")?;
+                return Ok(Some(response));
+            }
+            return Ok(None);
+        }
     };
 
     Ok(Some(value))
+}
+
+fn requested_permissions_to_granted_profile(
+    value: serde_json::Value,
+) -> anyhow::Result<GrantedPermissionProfile> {
+    if value.is_null() {
+        return Ok(GrantedPermissionProfile::default());
+    }
+
+    let mut granted = serde_json::Map::new();
+    if let Some(network) = value.get("network").cloned() {
+        granted.insert("network".to_owned(), network);
+    }
+    if let Some(file_system) = value.get("fileSystem").cloned() {
+        granted.insert("fileSystem".to_owned(), file_system);
+    }
+
+    serde_json::from_value(serde_json::Value::Object(granted))
+        .context("failed to convert requested permissions to granted permissions")
+}
+
+fn default_tool_user_input_answers(
+    questions: serde_json::Value,
+) -> HashMap<String, codex_app_server_protocol::ToolRequestUserInputAnswer> {
+    questions
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|question| {
+            let id = question.get("id")?.as_str()?.to_owned();
+            let answers = question
+                .get("options")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|options| options.first())
+                .and_then(|option| option.get("label"))
+                .and_then(serde_json::Value::as_str)
+                .map(|label| vec![label.to_owned()])
+                .unwrap_or_default();
+            Some((
+                id,
+                codex_app_server_protocol::ToolRequestUserInputAnswer { answers },
+            ))
+        })
+        .collect()
 }
 
 fn thread_list_params_from_request(request: CodexThreadListRequest) -> ThreadListParams {
@@ -1628,4 +2688,230 @@ fn trim_opt(value: Option<String>) -> Option<String> {
     value
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn response_json(
+        kind: PendingServerRequestKind,
+        decision: PermissionDecision,
+        resolution: CodexServerRequestResolution,
+    ) -> serde_json::Value {
+        typed_server_request_response(kind, decision, resolution)
+            .expect("request response should serialize")
+            .expect("request kind should produce a response")
+    }
+
+    #[test]
+    fn command_execution_allow_uses_turn_scope_decision() {
+        let response = response_json(
+            PendingServerRequestKind::CommandExecution,
+            PermissionDecision::Allow,
+            CodexServerRequestResolution::default(),
+        );
+
+        assert_eq!(response, json!({ "decision": "accept" }));
+    }
+
+    #[test]
+    fn command_execution_allow_all_uses_session_scope_decision() {
+        let response = response_json(
+            PendingServerRequestKind::CommandExecution,
+            PermissionDecision::AllowAll,
+            CodexServerRequestResolution::default(),
+        );
+
+        assert_eq!(response, json!({ "decision": "acceptForSession" }));
+    }
+
+    #[test]
+    fn resolution_allow_all_upgrades_allow_to_session_scope() {
+        let response = response_json(
+            PendingServerRequestKind::ExecCommand,
+            PermissionDecision::Allow,
+            CodexServerRequestResolution {
+                allow_all: true,
+                response: None,
+            },
+        );
+
+        assert_eq!(response, json!({ "decision": "approved_for_session" }));
+    }
+
+    #[test]
+    fn hard_deny_returns_none_for_untyped_or_unavailable_response_kinds() {
+        for kind in [
+            PendingServerRequestKind::Permissions(json!({
+                "network": { "enabled": true }
+            })),
+            PendingServerRequestKind::ToolUserInput(json!([])),
+            PendingServerRequestKind::DynamicTool {
+                call_id: "test".to_string(),
+                namespace: None,
+                tool: "test_tool".to_string(),
+                arguments: json!(null),
+            },
+            PendingServerRequestKind::ChatgptAuthRefresh {
+                reason: "Unauthorized".to_string(),
+                previous_account_id: None,
+            },
+        ] {
+            let response = typed_server_request_response(
+                kind,
+                PermissionDecision::Deny,
+                CodexServerRequestResolution::default(),
+            )
+            .expect("deny should not fail");
+
+            assert_eq!(response, None);
+        }
+    }
+
+    #[test]
+    fn permissions_grant_preserves_requested_network_and_file_system() {
+        let requested = json!({
+            "network": { "enabled": true },
+            "fileSystem": {
+                "read": ["C:\\repo"],
+                "write": ["C:\\repo\\out"]
+            }
+        });
+
+        let response = response_json(
+            PendingServerRequestKind::Permissions(requested),
+            PermissionDecision::Allow,
+            CodexServerRequestResolution::default(),
+        );
+
+        assert_eq!(response["scope"], "turn");
+        assert_eq!(
+            response["permissions"]["network"],
+            json!({ "enabled": true })
+        );
+        assert_eq!(
+            response["permissions"]["fileSystem"],
+            json!({
+                "read": ["C:\\repo"],
+                "write": ["C:\\repo\\out"]
+            })
+        );
+    }
+
+    #[test]
+    fn permissions_allow_all_uses_session_scope() {
+        let response = response_json(
+            PendingServerRequestKind::Permissions(json!({
+                "network": { "enabled": true }
+            })),
+            PermissionDecision::AllowAll,
+            CodexServerRequestResolution::default(),
+        );
+
+        assert_eq!(response["scope"], "session");
+    }
+
+    #[test]
+    fn tool_user_input_defaults_to_first_option_label() {
+        let response = response_json(
+            PendingServerRequestKind::ToolUserInput(json!([
+                {
+                    "id": "approval_mode",
+                    "header": "Mode",
+                    "question": "Choose a mode",
+                    "options": [
+                        { "label": "Careful", "description": "Ask first" },
+                        { "label": "Fast", "description": "Proceed" }
+                    ]
+                }
+            ])),
+            PermissionDecision::Allow,
+            CodexServerRequestResolution::default(),
+        );
+
+        assert_eq!(
+            response,
+            json!({
+                "answers": {
+                    "approval_mode": {
+                        "answers": ["Careful"]
+                    }
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn custom_response_overrides_allow_response() {
+        let custom = json!({
+            "decision": "custom",
+            "extra": true
+        });
+
+        let response = response_json(
+            PendingServerRequestKind::CommandExecution,
+            PermissionDecision::Allow,
+            CodexServerRequestResolution {
+                allow_all: false,
+                response: Some(custom.clone()),
+            },
+        );
+
+        assert_eq!(response, custom);
+    }
+
+    #[test]
+    fn custom_response_is_ignored_for_deny() {
+        let response = response_json(
+            PendingServerRequestKind::CommandExecution,
+            PermissionDecision::Deny,
+            CodexServerRequestResolution {
+                allow_all: false,
+                response: Some(json!({ "decision": "accept" })),
+            },
+        );
+
+        assert_eq!(response, json!({ "decision": "decline" }));
+    }
+
+    #[test]
+    fn chatgpt_auth_refresh_returns_none_without_tokens() {
+        let response = typed_server_request_response(
+            PendingServerRequestKind::ChatgptAuthRefresh {
+                reason: "Unauthorized".to_string(),
+                previous_account_id: None,
+            },
+            PermissionDecision::Allow,
+            CodexServerRequestResolution::default(),
+        )
+        .expect("auth refresh should not fail");
+
+        assert_eq!(response, None);
+    }
+
+    #[test]
+    fn chatgpt_auth_refresh_returns_tokens_from_resolution() {
+        let tokens = json!({
+            "accessToken": "new-token-123",
+            "chatgptAccountId": "acct-456",
+            "chatgptPlanType": "plus"
+        });
+
+        let response = typed_server_request_response(
+            PendingServerRequestKind::ChatgptAuthRefresh {
+                reason: "Unauthorized".to_string(),
+                previous_account_id: None,
+            },
+            PermissionDecision::Allow,
+            CodexServerRequestResolution {
+                allow_all: false,
+                response: Some(tokens.clone()),
+            },
+        )
+        .expect("auth refresh should not fail");
+
+        assert_eq!(response, Some(tokens));
+    }
 }

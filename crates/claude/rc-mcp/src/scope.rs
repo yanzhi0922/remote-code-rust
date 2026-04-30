@@ -156,6 +156,7 @@ mod tests {
             startup_timeout_secs: None,
             request_timeout_secs: None,
             metadata: std::collections::BTreeMap::new(),
+            oauth: None,
         };
         let scoped = ScopedMcpServerConfig::new(inner.clone(), ConfigScope::User)
             .with_plugin_source("my-plugin");

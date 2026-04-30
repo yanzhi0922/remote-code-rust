@@ -160,6 +160,7 @@ fn saves_config_in_round_trip_format() {
                     startup_timeout_secs: Some(3),
                     request_timeout_secs: Some(5),
                     metadata: BTreeMap::from([("scope".to_owned(), "local".to_owned())]),
+                    oauth: None,
                 },
             ),
             (
@@ -178,6 +179,7 @@ fn saves_config_in_round_trip_format() {
                     startup_timeout_secs: None,
                     request_timeout_secs: None,
                     metadata: BTreeMap::new(),
+                    oauth: None,
                 },
             ),
         ]),
@@ -290,6 +292,7 @@ while True:
         startup_timeout_secs: Some(3),
         request_timeout_secs: Some(3),
         metadata: BTreeMap::new(),
+        oauth: None,
     };
 
     let inspection = inspect_server(&server, &McpClientInfo::new("remote-code-rust", "test"))
@@ -340,6 +343,7 @@ async fn inspection_lists_prompts_and_get_prompt_returns_messages() {
         startup_timeout_secs: Some(3),
         request_timeout_secs: Some(3),
         metadata: BTreeMap::new(),
+        oauth: None,
     };
 
     let inspection = inspect_server(&server, &McpClientInfo::new("remote-code-rust", "test"))
@@ -396,6 +400,7 @@ async fn inspection_lists_advertised_resources() {
         startup_timeout_secs: Some(3),
         request_timeout_secs: Some(3),
         metadata: BTreeMap::new(),
+        oauth: None,
     };
 
     let inspection = inspect_server(&server, &McpClientInfo::new("remote-code-rust", "test"))
@@ -445,6 +450,7 @@ async fn inspection_tolerates_unsupported_advertised_resources() {
         startup_timeout_secs: Some(3),
         request_timeout_secs: Some(3),
         metadata: BTreeMap::new(),
+        oauth: None,
     };
 
     let inspection = inspect_server(&server, &McpClientInfo::new("remote-code-rust", "test"))
@@ -483,6 +489,7 @@ async fn calls_stdio_tool_and_returns_typed_result() {
         startup_timeout_secs: Some(3),
         request_timeout_secs: Some(3),
         metadata: BTreeMap::new(),
+        oauth: None,
     };
 
     let response = call_tool(
@@ -543,6 +550,7 @@ async fn preserves_tool_error_payloads() {
         startup_timeout_secs: Some(3),
         request_timeout_secs: Some(3),
         metadata: BTreeMap::new(),
+        oauth: None,
     };
 
     let response = call_tool(
@@ -590,6 +598,7 @@ async fn surfaces_json_rpc_errors_from_tool_call() {
         startup_timeout_secs: Some(3),
         request_timeout_secs: Some(3),
         metadata: BTreeMap::new(),
+        oauth: None,
     };
 
     let error = call_tool(
@@ -627,6 +636,7 @@ async fn http_transport_attempts_connection() {
         startup_timeout_secs: None,
         request_timeout_secs: None,
         metadata: BTreeMap::new(),
+        oauth: None,
     };
 
     let error = inspect_server(&server, &McpClientInfo::default())
@@ -668,6 +678,7 @@ fn connection_states_have_correct_type_tags() {
             startup_timeout_secs: None,
             request_timeout_secs: None,
             metadata: BTreeMap::new(),
+            oauth: None,
         },
         ConfigScope::Local,
     );

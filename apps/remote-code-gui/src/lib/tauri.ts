@@ -11,28 +11,58 @@ import type {
   CodexConfigReadResponse,
   CodexConfigValueWriteRequest,
   CodexConfigWriteResponse,
+  CodexDeviceKeySignRequest,
   CodexEmptyResponse,
   CodexExecRequest,
   CodexExecResizeRequest,
   CodexExecResponse,
   CodexExecWriteRequest,
+  CodexExperimentalFeatureSetRequest,
+  CodexExternalAgentConfigImportRequest,
   CodexFeedbackResponse,
   CodexFeedbackRequest,
+  CodexFsCopyRequest,
+  CodexFsPathRequest,
+  CodexFsWriteFileRequest,
+  CodexFuzzyFileSearchRequest,
   CodexJsonValue,
+  CodexMarketplaceRequest,
+  CodexMcpOAuthLoginRequest,
   CodexMcpResourceReadResponse,
   CodexMcpResourceReadRequest,
   CodexMcpStatusResponse,
   CodexMcpStatusRequest,
   CodexMcpToolCallResponse,
   CodexMcpToolCallRequest,
+  CodexAppServerNotificationInfo,
   CodexMemoryModeRequest,
+  CodexAccountLoginRequest,
+  CodexPluginInstallRequest,
+  CodexPluginListRequest,
+  CodexPluginReadRequest,
+  CodexPluginUninstallRequest,
+  CodexReviewStartRequest,
+  CodexRealtimeAppendTextRequest,
+  CodexRealtimeRequest,
+  CodexSkillsConfigWriteRequest,
+  CodexSkillsListRequest,
   CodexThreadArchiveRequest,
   CodexThreadArchiveResponse,
+  CodexThreadGoalRequest,
+  CodexThreadGoalSetRequest,
   CodexThreadListRequest,
   CodexThreadListResponse,
+  CodexThreadNativeRequest,
   CodexThreadReadResponse,
   CodexThreadRefRequest,
+  CodexThreadRollbackRequest,
+  CodexThreadShellCommandRequest,
   CodexThreadSessionResponse,
+  CodexThreadSetNameRequest,
+  CodexThreadTurnsListRequest,
+  CodexTurnInterruptRequest,
+  CodexTurnStartRequest,
+  CodexTurnSteerRequest,
   ConversationEntry,
   ContextCompactedInfo,
   ContextOverflowInfo,
@@ -256,6 +286,122 @@ export function codexAppServerRequest(request: CodexAppServerRequest): Promise<C
   return invoke<CodexJsonValue>('codex_app_server_request', { request });
 }
 
+export function codexThreadSetName(request: CodexThreadSetNameRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_thread_set_name', { request });
+}
+
+export function codexThreadGoalSet(request: CodexThreadGoalSetRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_thread_goal_set', { request });
+}
+
+export function codexThreadGoalGet(request: CodexThreadGoalRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_thread_goal_get', { request });
+}
+
+export function codexThreadGoalClear(request: CodexThreadGoalRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_thread_goal_clear', { request });
+}
+
+export function codexThreadCompactStart(request: CodexThreadGoalRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_thread_compact_start', { request });
+}
+
+export function codexThreadRollback(request: CodexThreadRollbackRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_thread_rollback', { request });
+}
+
+export function codexThreadTurnsList(
+  request: CodexThreadTurnsListRequest,
+): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_thread_turns_list', { request });
+}
+
+export function codexTurnSteer(request: CodexTurnSteerRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_turn_steer', { request });
+}
+
+export function codexTurnInterrupt(request: CodexTurnInterruptRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_turn_interrupt', { request });
+}
+
+export function codexModelList(): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_model_list');
+}
+
+export function codexCollaborationModeList(): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_collaboration_mode_list');
+}
+
+export function codexExperimentalFeatureList(): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_experimental_feature_list');
+}
+
+export function codexExperimentalFeatureSet(
+  request: CodexExperimentalFeatureSetRequest,
+): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_experimental_feature_set', { request });
+}
+
+export function codexAccountRead(): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_account_read');
+}
+
+export function codexAccountRateLimitsRead(): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_account_rate_limits_read');
+}
+
+export function codexAppsList(): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_apps_list');
+}
+
+export function codexSkillsList(request: CodexSkillsListRequest = {}): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_skills_list', { request });
+}
+
+export function codexSkillsConfigWrite(
+  request: CodexSkillsConfigWriteRequest,
+): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_skills_config_write', { request });
+}
+
+export function codexPluginList(request: CodexPluginListRequest = {}): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_plugin_list', { request });
+}
+
+export function codexPluginRead(request: CodexPluginReadRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_plugin_read', { request });
+}
+
+export function codexPluginInstall(request: CodexPluginInstallRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_plugin_install', { request });
+}
+
+export function codexPluginUninstall(
+  request: CodexPluginUninstallRequest,
+): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_plugin_uninstall', { request });
+}
+
+export function codexMarketplaceAdd(request: CodexMarketplaceRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_marketplace_add', { request });
+}
+
+export function codexMarketplaceRemove(request: CodexMarketplaceRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_marketplace_remove', { request });
+}
+
+export function codexMarketplaceUpgrade(request: CodexMarketplaceRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_marketplace_upgrade', { request });
+}
+
+export function codexMcpOAuthLogin(request: CodexMcpOAuthLoginRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_mcp_oauth_login', { request });
+}
+
+export function codexReviewStart(request: CodexReviewStartRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_review_start', { request });
+}
+
 export function codexExecWrite(request: CodexExecWriteRequest): Promise<CodexEmptyResponse> {
   return invoke<CodexEmptyResponse>('codex_exec_write', { request });
 }
@@ -326,6 +472,257 @@ export function codexResetMemories(): Promise<CodexEmptyResponse> {
   return invoke<CodexEmptyResponse>('codex_reset_memories');
 }
 
+export function codexThreadStart(request: CodexThreadNativeRequest = {}): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_thread_start', { request });
+}
+
+export function codexThreadUnsubscribe(request: CodexThreadNativeRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_thread_unsubscribe', {
+    request: { sessionId: request.sessionId ?? null, threadId: request.threadId ?? '' },
+  });
+}
+
+export function codexThreadElicitationIncrement(
+  request: CodexThreadNativeRequest,
+): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_thread_elicitation_increment', {
+    request: { sessionId: request.sessionId ?? null, threadId: request.threadId ?? '' },
+  });
+}
+
+export function codexThreadElicitationDecrement(
+  request: CodexThreadNativeRequest,
+): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_thread_elicitation_decrement', {
+    request: { sessionId: request.sessionId ?? null, threadId: request.threadId ?? '' },
+  });
+}
+
+export function codexThreadMetadataUpdate(
+  request: CodexThreadNativeRequest,
+): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_thread_metadata_update', {
+    request: { sessionId: request.sessionId ?? null, threadId: request.threadId ?? '', ...(request.params ?? {}) },
+  });
+}
+
+export function codexThreadShellCommand(
+  request: CodexThreadShellCommandRequest,
+): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_thread_shell_command', { request });
+}
+
+export function codexThreadBackgroundTerminalsClean(
+  request: CodexThreadNativeRequest = {},
+): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_thread_background_terminals_clean', {
+    request: { sessionId: request.sessionId ?? null, threadId: request.threadId ?? '' },
+  });
+}
+
+export function codexThreadLoadedList(request: CodexThreadNativeRequest = {}): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_thread_loaded_list', {
+    request: { sessionId: request.sessionId ?? null, ...(request.params ?? {}) },
+  });
+}
+
+export function codexThreadInjectItems(request: CodexThreadNativeRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_thread_inject_items', {
+    request: {
+      sessionId: request.sessionId ?? null,
+      threadId: request.threadId ?? '',
+      params: { threadId: request.threadId ?? '', ...(request.params ?? {}) },
+    },
+  });
+}
+
+export function codexTurnStart(request: CodexTurnStartRequest): Promise<CodexJsonValue> {
+  const prompt = request.prompt?.trim();
+  const input = prompt
+    ? [{ type: 'text', text: prompt, textElements: [] }]
+    : ((request.params?.input as unknown) ?? []);
+  return invoke<CodexJsonValue>('codex_turn_start', {
+    request: {
+      sessionId: request.sessionId ?? null,
+      params: { threadId: request.threadId ?? '', ...(request.params ?? {}), input },
+    },
+  });
+}
+
+export function codexAccountLogin(request: CodexAccountLoginRequest = {}): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_account_login', { request });
+}
+
+export function codexAccountLoginCancel(request: CodexAccountLoginRequest = {}): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_account_login_cancel', { request });
+}
+
+export function codexAccountLogout(sessionId?: string | null): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_account_logout', { sessionId: sessionId ?? null });
+}
+
+export function codexAccountAddCreditsNudge(request: CodexAccountLoginRequest = {}): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_account_add_credits_nudge', { request });
+}
+
+export function codexConfigRequirementsRead(sessionId?: string | null): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_config_requirements_read', { sessionId: sessionId ?? null });
+}
+
+export function codexExternalAgentConfigDetect(
+  request: { includeHome?: boolean; cwds?: string[] | null } = {},
+): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_external_agent_config_detect', { request });
+}
+
+export function codexExternalAgentConfigImport(
+  request: CodexExternalAgentConfigImportRequest = {},
+): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_external_agent_config_import', { request });
+}
+
+export function codexWindowsSandboxSetupStart(request: CodexRealtimeRequest = {}): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_windows_sandbox_setup_start', { request });
+}
+
+export function codexRealtimeStart(request: CodexRealtimeRequest = {}): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_realtime_start', { request });
+}
+
+export function codexRealtimeAppendText(
+  request: CodexRealtimeAppendTextRequest,
+): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_realtime_append_text', {
+    request: { params: { ...(request.params ?? {}), text: request.text } },
+  });
+}
+
+export function codexRealtimeStop(request: CodexRealtimeRequest = {}): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_realtime_stop', { request });
+}
+
+export function codexRealtimeVoicesList(sessionId?: string | null): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_realtime_voices_list', { sessionId: sessionId ?? null });
+}
+
+export function codexDeviceKeyCreate(request: CodexAccountLoginRequest = {}): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_device_key_create', { request });
+}
+
+export function codexDeviceKeyPublic(request: CodexAccountLoginRequest = {}): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_device_key_public', { request });
+}
+
+export function codexDeviceKeySign(request: CodexDeviceKeySignRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_device_key_sign', { request });
+}
+
+export function codexFsReadFile(request: CodexFsPathRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_fs_read_file', {
+    request: { params: { ...(request.params ?? {}), path: request.path } },
+  });
+}
+
+export function codexFsWriteFile(request: CodexFsWriteFileRequest): Promise<CodexJsonValue> {
+  const dataBase64 = btoa(unescape(encodeURIComponent(request.contents)));
+  return invoke<CodexJsonValue>('codex_fs_write_file', {
+    request: { params: { ...(request.params ?? {}), path: request.path, dataBase64 } },
+  });
+}
+
+export function codexFsCreateDirectory(request: CodexFsPathRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_fs_create_directory', {
+    request: { params: { recursive: true, ...(request.params ?? {}), path: request.path } },
+  });
+}
+
+export function codexFsGetMetadata(request: CodexFsPathRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_fs_get_metadata', {
+    request: { params: { ...(request.params ?? {}), path: request.path } },
+  });
+}
+
+export function codexFsReadDirectory(request: CodexFsPathRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_fs_read_directory', {
+    request: { params: { ...(request.params ?? {}), path: request.path } },
+  });
+}
+
+export function codexFsRemove(request: CodexFsPathRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_fs_remove', {
+    request: { params: { recursive: true, force: true, ...(request.params ?? {}), path: request.path } },
+  });
+}
+
+export function codexFsCopy(request: CodexFsCopyRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_fs_copy', {
+    request: {
+      params: {
+        recursive: true,
+        ...(request.params ?? {}),
+        sourcePath: request.from,
+        destinationPath: request.to,
+      },
+    },
+  });
+}
+
+export function codexFsWatch(request: CodexFsPathRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_fs_watch', {
+    request: { params: { watchId: request.path, ...(request.params ?? {}), path: request.path } },
+  });
+}
+
+export function codexFsUnwatch(request: CodexFsPathRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_fs_unwatch', {
+    request: { params: { watchId: request.path, ...(request.params ?? {}) } },
+  });
+}
+
+export function codexFuzzyFileSearch(request: CodexFuzzyFileSearchRequest): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_fuzzy_file_search', {
+    request: { params: { roots: request.cwd ? [request.cwd] : [], ...(request.params ?? {}), query: request.query } },
+  });
+}
+
+export function codexFuzzyFileSearchSessionStart(
+  request: CodexFuzzyFileSearchRequest,
+): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_fuzzy_file_search_session_start', {
+    request: {
+      params: {
+        sessionId: request.query,
+        roots: request.cwd ? [request.cwd] : [],
+        ...(request.params ?? {}),
+      },
+    },
+  });
+}
+
+export function codexFuzzyFileSearchSessionUpdate(
+  request: CodexFuzzyFileSearchRequest,
+): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_fuzzy_file_search_session_update', {
+    request: { params: { sessionId: request.query, ...(request.params ?? {}), query: request.query } },
+  });
+}
+
+export function codexFuzzyFileSearchSessionStop(
+  request: CodexFuzzyFileSearchRequest,
+): Promise<CodexJsonValue> {
+  return invoke<CodexJsonValue>('codex_fuzzy_file_search_session_stop', {
+    request: { params: { sessionId: request.query, ...(request.params ?? {}) } },
+  });
+}
+
+export function codexAdapterStop(sessionId?: string | null): Promise<void> {
+  return invoke<void>('codex_adapter_stop', { sessionId: sessionId ?? null });
+}
+
+export function codexAdapterRestart(sessionId?: string | null): Promise<void> {
+  return invoke<void>('codex_adapter_restart', { sessionId: sessionId ?? null });
+}
+
 export function listProjects(): Promise<ProjectInfo[]> {
   return invoke<ProjectInfo[]>('list_projects');
 }
@@ -383,6 +780,8 @@ export interface PermissionResolutionRequest {
   permission_updates?: unknown[];
   feedback?: string | null;
   content_blocks?: unknown[];
+  codex_response?: unknown;
+  allow_all?: boolean;
 }
 
 export function resolvePermissionRequest(
@@ -414,6 +813,18 @@ export function onToolProgress(callback: EventCallback<ToolProgressInfo>): Promi
 
 export function onToolResult(callback: EventCallback<ToolResultInfo>): Promise<UnlistenFn> {
   return listen<ToolResultInfo>('gui://tool-result', callback);
+}
+
+export function onCodexAppServerNotification(
+  callback: EventCallback<CodexAppServerNotificationInfo>,
+): Promise<UnlistenFn> {
+  return listen<CodexAppServerNotificationInfo>('gui://codex-app-server-notification', callback);
+}
+
+export function onCodexRecoverableError(
+  callback: EventCallback<CodexRecoverableErrorInfo>,
+): Promise<UnlistenFn> {
+  return listen<CodexRecoverableErrorInfo>('gui://codex-recoverable-error', callback);
 }
 
 export function onStreamingDelta(

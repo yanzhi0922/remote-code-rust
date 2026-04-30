@@ -34,6 +34,13 @@ pub enum UnifiedAgentEvent {
         tool_name: String,
         progress: String,
     },
+    /// Native Codex app-server notification, preserved in its original
+    /// method/params envelope for GUI features that need protocol parity.
+    CodexAppServerNotification {
+        session_id: String,
+        method: String,
+        params: serde_json::Value,
+    },
     /// A tool invocation has completed.
     ToolCallCompleted {
         session_id: String,
@@ -225,6 +232,30 @@ mod tests {
                 assert_eq!(tool_input["path"], "/tmp/test.rs");
             }
             other => panic!("expected ToolCallStarted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn codex_app_server_notification_roundtrip() {
+        let event = UnifiedAgentEvent::CodexAppServerNotification {
+            session_id: "sess-codex".into(),
+            method: "model/verification".into(),
+            params: serde_json::json!({"model": "gpt-5"}),
+        };
+        let json = serde_json::to_string(&event).expect("serialize");
+        let back: UnifiedAgentEvent = serde_json::from_str(&json).expect("deserialize");
+
+        match back {
+            UnifiedAgentEvent::CodexAppServerNotification {
+                session_id,
+                method,
+                params,
+            } => {
+                assert_eq!(session_id, "sess-codex");
+                assert_eq!(method, "model/verification");
+                assert_eq!(params["model"], "gpt-5");
+            }
+            other => panic!("expected CodexAppServerNotification, got {other:?}"),
         }
     }
 

@@ -137,13 +137,17 @@ impl std::fmt::Display for McpTransportKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpOAuthConfig {
     /// OAuth client ID.
-    #[serde(default)]
+    #[serde(default, rename = "clientId", alias = "client_id")]
     pub client_id: Option<String>,
     /// Callback port for the OAuth redirect URI.
-    #[serde(default)]
+    #[serde(default, rename = "callbackPort", alias = "callback_port")]
     pub callback_port: Option<u16>,
     /// Authorization server metadata URL.
-    #[serde(default)]
+    #[serde(
+        default,
+        rename = "authServerMetadataUrl",
+        alias = "auth_server_metadata_url"
+    )]
     pub auth_server_metadata_url: Option<String>,
     /// Whether to use X-Authorization-Header flow.
     #[serde(default)]

@@ -26,7 +26,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "read_file".to_owned(),
-            protocol_name: "ReadFile".to_owned(),
+            protocol_name: "Read".to_owned(),
             permission_tool_name: "Read".to_owned(),
             description: tool_prompts::file_read_tool_prompt(),
             requires_permission: false,
@@ -34,8 +34,9 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                 "type": "object",
                 "properties": {
                     "file_path": {"type": "string", "description": "The absolute path to the file to read"},
-                    "offset": {"type": "integer", "minimum": 1, "description": "The line number to start reading from. Only provide if reading a specific range."},
-                    "limit": {"type": "integer", "minimum": 1, "description": "The number of lines to read. Only provide if reading a specific range."}
+                    "offset": {"type": "integer", "minimum": 1, "description": "The line number to start reading from (1-indexed). Only provide if reading a specific range."},
+                    "limit": {"type": "integer", "minimum": 1, "description": "The number of lines to read. Only provide if reading a specific range."},
+                    "pages": {"type": "string", "description": "For PDF files, page ranges to read, e.g. '1-5' or '1,3,5'"}
                 },
                 "required": ["file_path"],
                 "additionalProperties": false,
@@ -60,7 +61,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "write_file".to_owned(),
-            protocol_name: "WriteFile".to_owned(),
+            protocol_name: "Write".to_owned(),
             permission_tool_name: "Edit".to_owned(),
             description: tool_prompts::file_write_tool_prompt(),
             requires_permission: true,
@@ -94,7 +95,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "edit_file".to_owned(),
-            protocol_name: "EditFile".to_owned(),
+            protocol_name: "Edit".to_owned(),
             permission_tool_name: "Edit".to_owned(),
             description: tool_prompts::file_edit_tool_prompt(),
             requires_permission: true,
@@ -119,11 +120,11 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "command": {"type": "string"},
-                    "cwd": {"type": "string", "description": "Optional working directory, relative to the current workspace. Use this instead of prefixing the command with cd or Set-Location."},
-                    "description": {"type": "string", "description": "Optional short human description of what the command is doing."},
-                    "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 600000},
-                    "background": {"type": "boolean", "description": "Run the command in the background and return a task handle immediately."}
+                    "command": {"type": "string", "description": "The bash command to run."},
+                    "timeout": {"type": "number", "description": "Optional maximum execution time in milliseconds. Default is 120000 (2 minutes)."},
+                    "description": {"type": "string", "description": "A clear, concise description of what this command does in 5-10 words."},
+                    "run_in_background": {"type": "boolean", "description": "If true, run the command in the background and return a task handle immediately."},
+                    "dangerouslyDisableSandbox": {"type": "boolean", "description": "When set to true, disables the sandbox for this command."}
                 },
                 "required": ["command"],
                 "additionalProperties": false,
@@ -139,7 +140,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                 "type": "object",
                 "properties": {
                     "pattern": {"type": "string"},
-                    "path": {"type": "string"}
+                    "path": {"type": "string", "description": "The directory to search in. Defaults to current working directory. IMPORTANT: Omit this field if you want to search the default directory. DO NOT enter 'undefined' or 'null'."}
                 },
                 "required": ["pattern"],
                 "additionalProperties": false,
@@ -149,15 +150,15 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "grep".to_owned(),
             protocol_name: "Grep".to_owned(),
             permission_tool_name: "Read".to_owned(),
-            description: tool_prompts::GREP.to_owned(),
+            description: tool_prompts::grep_tool_prompt(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "pattern": {"type": "string"},
-                    "path": {"type": "string"},
-                    "file_pattern": {"type": "string"},
-                    "max_matches": {"type": "integer", "minimum": 1, "maximum": 200}
+                    "pattern": {"type": "string", "description": "The regular expression pattern to search for in the contents of files."},
+                    "path": {"type": "string", "description": "File or directory to search in. If omitted, searches the current working directory."},
+                    "include": {"type": "string", "description": "File pattern to include in the search (e.g. '*.js', '*.{ts,tsx}')"},
+                    "output_mode": {"type": "string", "enum": ["content", "files_with_matches", "count"], "description": "The mode to use for the search. Default is 'content'. Use 'files_with_matches' for file names only, 'count' for a count of matches per file."}
                 },
                 "required": ["pattern"],
                 "additionalProperties": false,
@@ -167,15 +168,15 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "web_fetch".to_owned(),
             protocol_name: "WebFetch".to_owned(),
             permission_tool_name: "WebFetch".to_owned(),
-            description: tool_prompts::WEB_FETCH.to_owned(),
+            description: tool_prompts::web_fetch_tool_prompt(),
             requires_permission: true,
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string"},
-                    "max_chars": {"type": "integer", "minimum": 1, "maximum": 100000}
+                    "url": {"type": "string", "format": "uri", "description": "The URL to fetch content from."},
+                    "prompt": {"type": "string", "description": "The prompt to run on the fetched content. This should be a clear, specific instruction for how to process the fetched content."}
                 },
-                "required": ["url"],
+                "required": ["url", "prompt"],
                 "additionalProperties": false,
             }),
         },
@@ -271,7 +272,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             name: "todo_write".to_owned(),
             protocol_name: "TodoWrite".to_owned(),
             permission_tool_name: "TodoWrite".to_owned(),
-            description: tool_prompts::TODO_WRITE.to_owned(),
+            description: tool_prompts::todo_write_tool_prompt(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
@@ -281,11 +282,12 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                         "items": {
                             "type": "object",
                             "properties": {
-                                "id": {"type": "string"},
-                                "text": {"type": "string"},
-                                "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}
+                                "id": {"type": "string", "description": "Optional unique identifier for the todo item."},
+                                "content": {"type": "string", "description": "Brief description of the task."},
+                                "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]},
+                                "priority": {"type": "string", "enum": ["high", "medium", "low"]}
                             },
-                            "required": ["id", "text", "status"],
+                            "required": ["content", "status"],
                             "additionalProperties": false
                         }
                     }
@@ -344,8 +346,17 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "The search query."},
-                    "max_results": {"type": "integer", "minimum": 1, "maximum": 10, "description": "Maximum number of results to return (default 5)."}
+                    "query": {"type": "string", "minLength": 2, "description": "The search query. Aim for 3-5 keywords for best results."},
+                    "allowed_domains": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Only include search results from these domains."
+                    },
+                    "blocked_domains": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Never include search results from these domains."
+                    }
                 },
                 "required": ["query"],
                 "additionalProperties": false,
@@ -1231,7 +1242,47 @@ mod tests {
     #[test]
     fn shell_tool_schemas_expose_cwd_controls() {
         let specs = builtin_tool_specs();
-        for tool_name in ["bash_command", "powershell"] {
+
+        let bash = specs
+            .iter()
+            .find(|spec| spec.name == "bash_command")
+            .unwrap_or_else(|| panic!("missing tool spec for bash_command"));
+        let bash_properties = bash
+            .input_schema
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .unwrap_or_else(|| panic!("missing properties object for bash_command"));
+
+        assert!(
+            bash_properties.contains_key("description"),
+            "bash_command should expose description"
+        );
+        assert!(
+            bash_properties.contains_key("run_in_background"),
+            "bash_command should expose run_in_background"
+        );
+        assert!(
+            bash_properties.contains_key("timeout"),
+            "bash_command should expose timeout"
+        );
+        assert!(
+            bash_properties.contains_key("dangerouslyDisableSandbox"),
+            "bash_command should expose dangerouslyDisableSandbox"
+        );
+        assert!(
+            !bash_properties.contains_key("cwd"),
+            "bash_command should not expose cwd"
+        );
+        assert!(
+            !bash_properties.contains_key("timeout_ms"),
+            "bash_command should not expose legacy timeout_ms"
+        );
+        assert!(
+            !bash_properties.contains_key("background"),
+            "bash_command should not expose legacy background"
+        );
+
+        for tool_name in ["powershell"] {
             let spec = specs
                 .iter()
                 .find(|spec| spec.name == tool_name)

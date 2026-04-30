@@ -35,7 +35,7 @@ use std::{
 
 use anyhow::{Result, anyhow};
 use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
-use rc_core::{InputFormat, OutputFormat};
+use rc_core::{InputFormat, OutputFormat, PermissionMode};
 use rc_session::SessionStore;
 use rc_telemetry::install_tracing;
 use rc_tools::mcp_runtime::runtime_mcp_policy_entries;
@@ -102,6 +102,7 @@ async fn run_app() -> Result<()> {
     let prompt_overrides = resolve_cli_prompt_overrides(&cli)?;
     let structured_output_schema = parse_json_schema_arg(cli.json_schema.as_deref())?;
     let mcp_config_paths = resolve_mcp_config_args(&cli.mcp_config)?;
+    let effective_permission_mode = effective_permission_mode_from_cli(&cli);
 
     let resume_session = resolve_resume_session(&cli, &prompt_overrides)?;
     let overrides = ProviderOverrides {
@@ -115,7 +116,7 @@ async fn run_app() -> Result<()> {
         cli.cwd.clone(),
         cli.profile_dir.clone(),
         resume_session,
-        cli.permission_mode,
+        effective_permission_mode,
         cli.input_format,
         cli.output_format,
         cli.print_mode,
@@ -124,25 +125,12 @@ async fn run_app() -> Result<()> {
         cli.include_partial_messages,
         cli.max_turns,
         overrides,
-        RuntimeOverrides {
-            session_name: cli.name.clone(),
-            system_prompt: prompt_overrides.system_prompt.clone(),
-            append_system_prompt: prompt_overrides.append_system_prompt.clone(),
-            settings_files: cli.settings_files.clone(),
-            show_setting_sources: cli.show_setting_sources,
-            allowed_setting_sources: setting_sources_from_cli(&cli.setting_sources),
-            allowed_tools: normalize_cli_tool_values(&cli.allowed_tools),
-            disallowed_tools: normalize_cli_tool_values(&cli.disallowed_tools),
-            structured_output_schema: structured_output_schema.clone(),
-            mcp_config_paths: mcp_config_paths.clone(),
-            strict_mcp_config: cli.strict_mcp_config,
-            effort: None,
-            fallback_model: None,
-            output_style: None,
-            language: None,
-            brief_enabled: None,
-            proactive_active: None,
-        },
+        runtime_overrides_from_cli(
+            &cli,
+            &prompt_overrides,
+            structured_output_schema.clone(),
+            mcp_config_paths.clone(),
+        ),
     )?;
     let store = SessionStore::open(config.paths.clone())?;
     if resume_session.is_some() {
@@ -153,6 +141,9 @@ async fn run_app() -> Result<()> {
             &mut config,
             permission_mode_explicit,
         );
+        if cli.dangerously_skip_permissions {
+            config.permission_mode = PermissionMode::BypassPermissions;
+        }
     }
     hydrate_api_key_helper(&mut config).await?;
     configure_runtime_policy(&config)?;
@@ -313,6 +304,24 @@ fn validate_cli_mode(cli: &Cli) -> Result<()> {
         ));
     }
 
+    if cli.brief && cli.no_brief {
+        return Err(anyhow!("--brief and --no-brief cannot be used together"));
+    }
+
+    if cli.proactive && cli.no_proactive {
+        return Err(anyhow!(
+            "--proactive and --no-proactive cannot be used together"
+        ));
+    }
+
+    if cli.permission_prompt_tool.is_some()
+        && !(cli.print_mode && matches!(cli.output_format, OutputFormat::StreamJson))
+    {
+        return Err(anyhow!(
+            "--permission-prompt-tool requires --print and --output-format=stream-json"
+        ));
+    }
+
     if !cli.print_mode
         && !matches!(cli.input_format, InputFormat::StreamJson)
         && !matches!(cli.output_format, OutputFormat::Text)
@@ -323,6 +332,74 @@ fn validate_cli_mode(cli: &Cli) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn runtime_overrides_from_cli(
+    cli: &Cli,
+    prompt_overrides: &ResolvedPromptOverrides,
+    structured_output_schema: Option<serde_json::Value>,
+    mcp_config_paths: Vec<PathBuf>,
+) -> RuntimeOverrides {
+    RuntimeOverrides {
+        session_name: cli.name.clone(),
+        system_prompt: prompt_overrides.system_prompt.clone(),
+        append_system_prompt: prompt_overrides.append_system_prompt.clone(),
+        settings_files: cli.settings_files.clone(),
+        show_setting_sources: cli.show_setting_sources,
+        allowed_setting_sources: setting_sources_from_cli(&cli.setting_sources),
+        allowed_tools: runtime_allowed_tools_from_cli(cli),
+        disallowed_tools: normalize_cli_tool_values(&cli.disallowed_tools),
+        structured_output_schema,
+        mcp_config_paths,
+        strict_mcp_config: cli.strict_mcp_config || cli.bare,
+        effort: normalize_cli_optional_string(cli.effort.as_deref()),
+        fallback_model: normalize_cli_optional_string(cli.fallback_model.as_deref()),
+        output_style: normalize_cli_optional_string(cli.output_style.as_deref()),
+        language: normalize_cli_optional_string(cli.language.as_deref()),
+        brief_enabled: bool_override(cli.brief, cli.no_brief),
+        proactive_active: bool_override(cli.proactive, cli.no_proactive),
+    }
+}
+
+fn runtime_allowed_tools_from_cli(cli: &Cli) -> Vec<String> {
+    let mut tools = normalize_cli_tool_values(&cli.allowed_tools);
+    let requested_tools = normalize_cli_tool_values(&cli.tools);
+    if requested_tools
+        .iter()
+        .any(|tool| tool.eq_ignore_ascii_case("default"))
+    {
+        return tools;
+    }
+    if cli.tools.iter().any(|tool| tool.trim().is_empty()) {
+        return Vec::new();
+    }
+    tools.extend(requested_tools);
+    tools
+}
+
+fn effective_permission_mode_from_cli(cli: &Cli) -> PermissionMode {
+    if cli.dangerously_skip_permissions {
+        PermissionMode::BypassPermissions
+    } else {
+        cli.permission_mode
+    }
+}
+
+fn bool_override(enabled: bool, disabled: bool) -> Option<bool> {
+    if enabled {
+        Some(true)
+    } else if disabled {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+fn normalize_cli_optional_string(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn resolve_resume_session(
@@ -342,7 +419,7 @@ fn resolve_resume_session(
                 cli.cwd.clone(),
                 cli.profile_dir.clone(),
                 None,
-                cli.permission_mode,
+                effective_permission_mode_from_cli(cli),
                 cli.input_format,
                 cli.output_format,
                 cli.print_mode,
@@ -351,25 +428,12 @@ fn resolve_resume_session(
                 cli.include_partial_messages,
                 cli.max_turns,
                 ProviderOverrides::default(),
-                RuntimeOverrides {
-                    session_name: None,
-                    system_prompt: prompt_overrides.system_prompt.clone(),
-                    append_system_prompt: prompt_overrides.append_system_prompt.clone(),
-                    settings_files: cli.settings_files.clone(),
-                    show_setting_sources: false,
-                    allowed_setting_sources: setting_sources_from_cli(&cli.setting_sources),
-                    allowed_tools: Vec::new(),
-                    disallowed_tools: Vec::new(),
-                    structured_output_schema: parse_json_schema_arg(cli.json_schema.as_deref())?,
-                    mcp_config_paths: resolve_mcp_config_args(&cli.mcp_config)?,
-                    strict_mcp_config: cli.strict_mcp_config,
-                    effort: None,
-                    fallback_model: None,
-                    output_style: None,
-                    language: None,
-                    brief_enabled: None,
-                    proactive_active: None,
-                },
+                runtime_overrides_from_cli(
+                    cli,
+                    prompt_overrides,
+                    parse_json_schema_arg(cli.json_schema.as_deref())?,
+                    resolve_mcp_config_args(&cli.mcp_config)?,
+                ),
             )?;
             let store = SessionStore::open(config.paths.clone())?;
             Ok(store
@@ -754,8 +818,9 @@ mod tests {
         remote_session_commands_path, remote_session_state_path, remote_sessions_path,
     };
     use crate::{
-        Cli, hydrate_api_key_helper, normalize_cli_tool_values, parse_json_schema_arg,
-        resolve_cli_prompt_overrides, resolve_mcp_config_args, validate_cli_mode,
+        Cli, ResolvedPromptOverrides, effective_permission_mode_from_cli, hydrate_api_key_helper,
+        normalize_cli_tool_values, parse_json_schema_arg, resolve_cli_prompt_overrides,
+        resolve_mcp_config_args, runtime_overrides_from_cli, validate_cli_mode,
     };
 
     use axum::{
@@ -774,7 +839,7 @@ mod tests {
     use std::{
         collections::BTreeSet,
         fs,
-        path::Path,
+        path::{Path, PathBuf},
         process::Command as ProcessCommand,
         sync::{Arc, Mutex as StdMutex},
         time::Duration,
@@ -970,6 +1035,81 @@ mod tests {
             "hello",
         ]);
         validate_cli_mode(&cli).expect("valid stream-json print mode");
+    }
+
+    #[test]
+    fn cli_runtime_overrides_wire_reference_knobs() {
+        let cli = Cli::parse_from([
+            "remote-code",
+            "--allowedTools",
+            "Read",
+            "--tools",
+            "Edit,Bash(git:*)",
+            "--effort",
+            "high",
+            "--fallback-model",
+            "minimax-m2.7",
+            "--output-style",
+            "concise",
+            "--language",
+            "zh-CN",
+            "--brief",
+            "--no-proactive",
+            "--strict-mcp-config",
+            "hello",
+        ]);
+        let overrides = runtime_overrides_from_cli(
+            &cli,
+            &ResolvedPromptOverrides::default(),
+            Some(serde_json::json!({"type": "object"})),
+            vec![PathBuf::from("mcp.json")],
+        );
+
+        assert_eq!(
+            overrides.allowed_tools,
+            vec!["Read", "Edit", "Bash(git:*)"]
+        );
+        assert_eq!(overrides.effort.as_deref(), Some("high"));
+        assert_eq!(overrides.fallback_model.as_deref(), Some("minimax-m2.7"));
+        assert_eq!(overrides.output_style.as_deref(), Some("concise"));
+        assert_eq!(overrides.language.as_deref(), Some("zh-CN"));
+        assert_eq!(overrides.brief_enabled, Some(true));
+        assert_eq!(overrides.proactive_active, Some(false));
+        assert!(overrides.strict_mcp_config);
+        assert_eq!(overrides.mcp_config_paths, vec![PathBuf::from("mcp.json")]);
+        assert_eq!(
+            overrides.structured_output_schema,
+            Some(serde_json::json!({"type": "object"}))
+        );
+    }
+
+    #[test]
+    fn cli_tools_empty_disables_all_builtin_tools() {
+        let cli = Cli::parse_from(["remote-code", "--tools", "", "hello"]);
+        let overrides = runtime_overrides_from_cli(
+            &cli,
+            &ResolvedPromptOverrides::default(),
+            None,
+            Vec::new(),
+        );
+
+        assert!(overrides.allowed_tools.is_empty());
+    }
+
+    #[test]
+    fn cli_dangerous_skip_permissions_maps_to_bypass_mode() {
+        let cli = Cli::parse_from([
+            "remote-code",
+            "--permission-mode",
+            "default",
+            "--dangerously-skip-permissions",
+            "hello",
+        ]);
+
+        assert_eq!(
+            effective_permission_mode_from_cli(&cli),
+            rc_core::PermissionMode::BypassPermissions
+        );
     }
 
     #[tokio::test]

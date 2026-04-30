@@ -2838,6 +2838,7 @@ mod tests {
                 startup_timeout_secs: Some(1),
                 request_timeout_secs: Some(1),
                 metadata: BTreeMap::new(),
+                oauth: None,
             },
         }
     }
@@ -3317,6 +3318,7 @@ mod tests {
                     startup_timeout_secs: Some(3),
                     request_timeout_secs: Some(3),
                     metadata: BTreeMap::new(),
+                    oauth: None,
                 },
             }],
             shell_policy: Default::default(),
@@ -4864,6 +4866,7 @@ while True:
                     capabilities: McpCapabilityMatrix::default(),
                     startup_timeout_secs: Some(3),
                     request_timeout_secs: Some(3),
+                    oauth: None,
                     metadata: BTreeMap::new(),
                 },
             }],

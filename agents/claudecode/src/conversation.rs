@@ -588,6 +588,49 @@ pub(crate) fn reapply_cli_overrides(
     if let Some(model) = &cli.model {
         config.provider.model = Some(model.clone());
     }
+    if let Some(effort) = cli.effort.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        config.effort = Some(effort.to_owned());
+    }
+    if let Some(fallback_model) = cli
+        .fallback_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        config.fallback_model = Some(fallback_model.to_owned());
+        if config.provider.model.is_none() {
+            config.provider.model = Some(fallback_model.to_owned());
+        }
+    }
+    if let Some(output_style) = cli
+        .output_style
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        config.output_style = Some(output_style.to_owned());
+    }
+    if let Some(language) = cli
+        .language
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        config.language = Some(language.to_owned());
+    }
+    if cli.brief {
+        config.brief_enabled = true;
+    } else if cli.no_brief {
+        config.brief_enabled = false;
+    }
+    if cli.proactive {
+        config.proactive_active = true;
+    } else if cli.no_proactive {
+        config.proactive_active = false;
+    }
+    if cli.dangerously_skip_permissions {
+        config.permission_mode = rc_core::PermissionMode::BypassPermissions;
+    }
     if let Some(api_key) = &cli.api_key {
         config.provider.api_key = Some(api_key.clone());
         config.auth_source = Some("cli:api-key".to_owned());
@@ -1923,6 +1966,45 @@ mod tests {
         reapply_cli_overrides(&cli, &ResolvedPromptOverrides::default(), &mut config, true);
 
         assert_eq!(config.permission_mode, rc_core::PermissionMode::AcceptEdits);
+    }
+
+    #[test]
+    fn reapply_cli_overrides_restores_runtime_knobs() {
+        let (_tempdir, mut config) = test_config();
+        config.effort = None;
+        config.fallback_model = None;
+        config.output_style = None;
+        config.language = None;
+        config.brief_enabled = false;
+        config.proactive_active = true;
+
+        let cli = crate::cli::Cli::parse_from([
+            "remote-code",
+            "--effort",
+            "high",
+            "--fallback-model",
+            "minimax-m2.7",
+            "--output-style",
+            "concise",
+            "--language",
+            "zh-CN",
+            "--brief",
+            "--no-proactive",
+            "--dangerously-skip-permissions",
+            "resume prompt",
+        ]);
+        reapply_cli_overrides(&cli, &ResolvedPromptOverrides::default(), &mut config, false);
+
+        assert_eq!(config.effort.as_deref(), Some("high"));
+        assert_eq!(config.fallback_model.as_deref(), Some("minimax-m2.7"));
+        assert_eq!(config.output_style.as_deref(), Some("concise"));
+        assert_eq!(config.language.as_deref(), Some("zh-CN"));
+        assert!(config.brief_enabled);
+        assert!(!config.proactive_active);
+        assert_eq!(
+            config.permission_mode,
+            rc_core::PermissionMode::BypassPermissions
+        );
     }
 
     #[tokio::test]

@@ -27,10 +27,10 @@ pub(crate) async fn web_fetch(input: &Value, _context: &ToolExecutionContext) ->
         ));
     }
 
-    let max_chars = input
-        .get("max_chars")
-        .and_then(Value::as_u64)
-        .unwrap_or(50_000) as usize;
+    let prompt = input
+        .get("prompt")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("web_fetch requires a prompt"))?;
 
     // Apply a timeout to prevent hanging on unresponsive servers
     let response = timeout(Duration::from_secs(30), reqwest::get(url))
@@ -46,7 +46,13 @@ pub(crate) async fn web_fetch(input: &Value, _context: &ToolExecutionContext) ->
         .text()
         .await
         .context("failed to read response body")?;
-    Ok(text.chars().take(max_chars).collect())
+    let fetched: String = text.chars().take(50_000).collect();
+    Ok(json!({
+        "url": url,
+        "prompt": prompt,
+        "content": fetched,
+    })
+    .to_string())
 }
 
 pub(crate) async fn web_search(input: &Value, _context: &ToolExecutionContext) -> Result<String> {
@@ -54,19 +60,40 @@ pub(crate) async fn web_search(input: &Value, _context: &ToolExecutionContext) -
         .get("query")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("web_search requires a query"))?;
-    let max_results = input
-        .get("max_results")
-        .and_then(Value::as_u64)
-        .unwrap_or(5)
-        .min(10) as usize;
+    let allowed_domains: Vec<String> = input
+        .get("allowed_domains")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(|s| s.to_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    let blocked_domains: Vec<String> = input
+        .get("blocked_domains")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(|s| s.to_owned())
+                .collect()
+        })
+        .unwrap_or_default();
 
     // Try multiple search backends for better results.
     let search_backends = get_search_backends();
 
     let mut last_error: Option<String> = None;
     for backend in &search_backends {
-        match backend.search(query, max_results).await {
-            Ok(Some(results)) if !results.is_empty() => return Ok(results),
+        match backend.search(query, 10).await {
+            Ok(Some(results)) if !results.is_empty() => {
+                return Ok(filter_results_by_domains(
+                    &results,
+                    &allowed_domains,
+                    &blocked_domains,
+                ));
+            }
             Ok(_) => continue,
             Err(e) => {
                 last_error = Some(e.to_string());
@@ -86,6 +113,39 @@ pub(crate) async fn web_search(input: &Value, _context: &ToolExecutionContext) -
             "No search results found for '{}'. Try a more specific query.",
             query
         ))
+    }
+}
+
+fn filter_results_by_domains(
+    results: &str,
+    allowed_domains: &[String],
+    blocked_domains: &[String],
+) -> String {
+    if allowed_domains.is_empty() && blocked_domains.is_empty() {
+        return results.to_owned();
+    }
+    let filtered_lines: Vec<String> = results
+        .lines()
+        .filter(|line| {
+            let line_lower = line.to_ascii_lowercase();
+            let matches_allowed = if allowed_domains.is_empty() {
+                true
+            } else {
+                allowed_domains
+                    .iter()
+                    .any(|domain| line_lower.contains(&domain.to_ascii_lowercase()))
+            };
+            let matches_blocked = blocked_domains
+                .iter()
+                .any(|domain| line_lower.contains(&domain.to_ascii_lowercase()));
+            matches_allowed && !matches_blocked
+        })
+        .map(|s| s.to_owned())
+        .collect();
+    if filtered_lines.is_empty() {
+        "No results found after domain filtering.".to_owned()
+    } else {
+        filtered_lines.join("\n")
     }
 }
 

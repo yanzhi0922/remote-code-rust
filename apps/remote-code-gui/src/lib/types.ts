@@ -336,6 +336,9 @@ export interface FullSettings {
   codex_memories_enabled: boolean;
   codex_thread_store_endpoint: string | null;
   codex_config_overrides: Record<string, string>;
+  codex_permission_profile: unknown | null;
+  codex_service_tier: string | null;
+  codex_ephemeral: boolean | null;
 }
 
 export interface UpdateProviderRequest {
@@ -364,6 +367,9 @@ export interface UpdateProviderRequest {
   codex_memories_enabled?: boolean;
   codex_thread_store_endpoint?: string | null;
   codex_config_overrides?: Record<string, string>;
+  codex_permission_profile?: unknown | null;
+  codex_service_tier?: string | null;
+  codex_ephemeral?: boolean | null;
 }
 
 export interface CodexThreadListRequest {
@@ -413,6 +419,146 @@ export interface CodexAppServerRequest {
 }
 
 export type CodexJsonValue = object | unknown[] | string | number | boolean | null;
+
+export interface CodexThreadSetNameRequest {
+  sessionId?: string | null;
+  threadId: string;
+  name: string;
+}
+
+export interface CodexThreadGoalRequest {
+  sessionId?: string | null;
+  threadId: string;
+}
+
+export interface CodexThreadGoalSetRequest extends CodexThreadGoalRequest {
+  text: string;
+}
+
+export interface CodexThreadRollbackRequest extends CodexThreadGoalRequest {
+  numTurns: number;
+}
+
+export interface CodexThreadTurnsListRequest extends CodexThreadGoalRequest {
+  cursor?: string | null;
+  limit?: number | null;
+}
+
+export interface CodexTurnSteerRequest extends CodexThreadGoalRequest {
+  expectedTurnId: string;
+  message: string;
+}
+
+export interface CodexTurnInterruptRequest extends CodexThreadGoalRequest {
+  turnId?: string | null;
+}
+
+export interface CodexExperimentalFeatureSetRequest {
+  feature: string;
+  enabled: boolean;
+}
+
+export interface CodexSkillsListRequest {
+  cwds?: string[] | null;
+  forceReload?: boolean | null;
+}
+
+export type CodexNativeParams = Record<string, unknown>;
+
+export interface CodexThreadNativeRequest {
+  sessionId?: string | null;
+  threadId?: string | null;
+  params?: CodexNativeParams | null;
+}
+
+export interface CodexTurnStartRequest extends CodexThreadNativeRequest {
+  prompt?: string | null;
+}
+
+export interface CodexThreadShellCommandRequest extends CodexThreadNativeRequest {
+  command?: string | string[] | null;
+  cwd?: string | null;
+}
+
+export interface CodexAccountLoginRequest {
+  params?: CodexNativeParams | null;
+}
+
+export interface CodexExternalAgentConfigImportRequest {
+  params?: CodexNativeParams | null;
+}
+
+export interface CodexRealtimeRequest {
+  params?: CodexNativeParams | null;
+}
+
+export interface CodexRealtimeAppendTextRequest {
+  text: string;
+  params?: CodexNativeParams | null;
+}
+
+export interface CodexDeviceKeySignRequest {
+  payload: string;
+  params?: CodexNativeParams | null;
+}
+
+export interface CodexFsPathRequest {
+  path: string;
+  params?: CodexNativeParams | null;
+}
+
+export interface CodexFsWriteFileRequest extends CodexFsPathRequest {
+  contents: string;
+}
+
+export interface CodexFsCopyRequest {
+  from: string;
+  to: string;
+  params?: CodexNativeParams | null;
+}
+
+export interface CodexFuzzyFileSearchRequest {
+  query: string;
+  cwd?: string | null;
+  params?: CodexNativeParams | null;
+}
+
+export interface CodexSkillsConfigWriteRequest {
+  skillId: string;
+  enabled: boolean;
+  cwd?: string | null;
+}
+
+export interface CodexPluginListRequest {
+  cwds?: string[] | null;
+}
+
+export interface CodexPluginReadRequest {
+  pluginId: string;
+}
+
+export interface CodexPluginInstallRequest {
+  source: string;
+}
+
+export interface CodexPluginUninstallRequest {
+  pluginId: string;
+}
+
+export interface CodexMarketplaceRequest {
+  source: string;
+}
+
+export interface CodexMcpOAuthLoginRequest {
+  sessionId?: string | null;
+  server: string;
+}
+
+export interface CodexReviewStartRequest {
+  sessionId?: string | null;
+  threadId: string;
+  prompt?: string | null;
+}
 
 export interface CodexExecWriteRequest {
   sessionId?: string | null;
@@ -619,6 +765,8 @@ export interface PermissionDecisionInfo {
   permission_updates?: unknown[];
   feedback?: string | null;
   content_blocks?: unknown[];
+  codex_response?: unknown;
+  allow_all?: boolean;
 }
 
 export interface ToolProgressInfo {
@@ -632,6 +780,18 @@ export interface ToolResultInfo {
   tool_name: string;
   is_error: boolean;
   output: string;
+}
+
+export interface CodexAppServerNotificationInfo {
+  session_id: string;
+  method: string;
+  params: unknown;
+}
+
+export interface CodexRecoverableErrorInfo {
+  session_id: string;
+  message: string;
+  timestamp: number;
 }
 
 export interface StreamingDeltaInfo {

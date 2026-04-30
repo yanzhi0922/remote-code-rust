@@ -286,6 +286,7 @@ fn mcp_config_round_trips_via_json() {
         },
         startup_timeout_secs: None,
         request_timeout_secs: None,
+        oauth: None,
         metadata: std::collections::BTreeMap::new(),
     };
     let json = serde_json::to_string(&config).expect("serialize mcp config");
@@ -337,6 +338,7 @@ fn mcp_server_connection_states_serialize() {
                 capabilities: rc_mcp::McpCapabilityMatrix::default(),
                 startup_timeout_secs: None,
                 request_timeout_secs: None,
+                oauth: None,
                 metadata: std::collections::BTreeMap::new(),
             },
             rc_mcp::scope::ConfigScope::Local,

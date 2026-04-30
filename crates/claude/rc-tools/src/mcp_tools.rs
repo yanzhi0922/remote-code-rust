@@ -9,10 +9,13 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use rc_core::ToolResult;
 use rc_mcp::{
-    McpPromptMessage, McpResourceContent, McpToolCallContent, McpToolCallResponse,
-    McpToolCallResult, normalization::normalize_name_for_mcp,
+    AuthorizationServerMetadata, McpAuthCache, McpOAuthFlow, McpPromptMessage,
+    McpResourceContent, McpToolCallContent, McpToolCallResponse, McpToolCallResult,
+    OAuthTokenStore, OAuthTokens, mcp_oauth_server_key, normalization::normalize_name_for_mcp,
 };
 use serde_json::{Map, Value, json};
+use tokio::sync::oneshot;
+use tokio::time::{Duration, timeout};
 use uuid::Uuid;
 
 use super::{
@@ -29,7 +32,7 @@ use crate::tool_result_storage::{persist_tool_result_text, process_tool_result_t
 
 const MCP_RESOURCE_TOOL_MAX_RESULT_SIZE_CHARS: usize = 100_000;
 
-pub(crate) fn mcp_auth_tool(input: &Value, _context: &ToolExecutionContext) -> Result<String> {
+pub(crate) async fn mcp_auth_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
     let server = input["server"]
         .as_str()
         .ok_or_else(|| anyhow!("server is required"))?;
@@ -37,26 +40,279 @@ pub(crate) fn mcp_auth_tool(input: &Value, _context: &ToolExecutionContext) -> R
         .as_str()
         .ok_or_else(|| anyhow!("action is required (login, logout, or status)"))?;
 
-    // MCP authentication is not yet implemented. Writing a fake JSON file
-    // that claims "authenticated" would be misleading and insecure.
-    // Return an explicit error so callers know to configure credentials manually.
+    let runtime_policy = current_tool_runtime_policy();
+    let entry = resolve_runtime_policy_mcp_server(&runtime_policy, server)?;
+    let server_config = entry.server;
+    let auth_dir = runtime_mcp_auth_dir(context);
+    let server_key = mcp_oauth_server_key(server, &server_config);
+    let mut token_store = OAuthTokenStore::new(&auth_dir);
+    token_store.load().await?;
+
     match action {
-        "login" => Err(anyhow!(
-            "MCP authentication is not yet implemented for server '{server}'. \
-             Please configure MCP server credentials manually in your MCP configuration file."
-        )),
-        "logout" => Err(anyhow!(
-            "MCP authentication is not yet implemented for server '{server}'. \
-             No session to log out from."
-        )),
-        "status" => Ok(json!({
-            "server": server,
-            "status": "not_authenticated",
-            "note": "MCP authentication is not yet implemented. Configure credentials manually."
-        })
-        .to_string()),
+        "login" => mcp_auth_login(server, &server_config, &server_key, &auth_dir).await,
+        "logout" => {
+            let had_token = token_store.contains(&server_key) || token_store.contains(server);
+            token_store.remove_token(&server_key);
+            token_store.remove_token(server);
+            token_store.persist().await?;
+            let mut cache = McpAuthCache::new(&auth_dir);
+            cache.load().await.ok();
+            cache.clear_server(server);
+            cache.save().await?;
+            Ok(json!({
+                "server": server,
+                "status": "logged_out",
+                "hadToken": had_token,
+                "message": format!("Cleared OAuth credentials and authentication cache for MCP server \"{server}\"."),
+            })
+            .to_string())
+        }
+        "status" => {
+            let token = token_store
+                .get_token(&server_key)
+                .or_else(|| token_store.get_token(server));
+            let mut cache = McpAuthCache::new(&auth_dir);
+            cache.load().await.ok();
+            Ok(json!({
+                "server": server,
+                "serverKey": server_key,
+                "status": mcp_auth_status(token),
+                "hasToken": token.is_some(),
+                "expiresAt": token.and_then(|tokens| tokens.expires_at),
+                "scope": token.and_then(|tokens| tokens.scope.as_deref()),
+                "needsAuthCached": cache.is_cached(server),
+                "transport": mcp_transport_label(&server_config),
+                "authStore": auth_dir,
+            })
+            .to_string())
+        }
         _ => Err(anyhow!("action must be 'login', 'logout', or 'status'")),
     }
+}
+
+async fn mcp_auth_login(
+    server_name: &str,
+    server_config: &rc_mcp::McpServerConfig,
+    server_key: &str,
+    auth_dir: &Path,
+) -> Result<String> {
+    let url = match &server_config.transport {
+        rc_mcp::McpTransportConfig::Http { url, .. } => url.clone(),
+        rc_mcp::McpTransportConfig::WebSocket { .. } => {
+            return Ok(json!({
+                "server": server_name,
+                "status": "unsupported",
+                "message": format!("Server \"{server_name}\" uses WebSocket transport, which does not support OAuth from the MCP auth tool. Authenticate it manually with /mcp or configure credentials in the MCP server config."),
+            })
+            .to_string());
+        }
+        rc_mcp::McpTransportConfig::Stdio { .. } => {
+            return Ok(json!({
+                "server": server_name,
+                "status": "unsupported",
+                "message": format!("Server \"{server_name}\" uses stdio transport, which does not support OAuth from the MCP auth tool. Configure credentials in the MCP server environment or command."),
+            })
+            .to_string());
+        }
+    };
+
+    let Some(oauth) = server_config.oauth.clone() else {
+        return Ok(json!({
+            "server": server_name,
+            "status": "unsupported",
+            "message": format!("Server \"{server_name}\" has no OAuth configuration. Add an `oauth` block with authServerMetadataUrl/clientId/callbackPort, or authenticate it manually with /mcp."),
+        })
+        .to_string());
+    };
+    let flow = McpOAuthFlow::new(&oauth);
+    if flow.xaa_enabled() {
+        return Ok(json!({
+            "server": server_name,
+            "status": "unsupported",
+            "message": format!("Server \"{server_name}\" is configured for XAA OAuth. The Rust CLI does not yet implement XAA; authenticate it manually with /mcp."),
+        })
+        .to_string());
+    }
+
+    let metadata = flow.discover_metadata(&url).await?;
+    let pkce = McpOAuthFlow::generate_pkce();
+    let state = format!("rc-{}", Uuid::new_v4().simple());
+    let callback_port = oauth.callback_port.unwrap_or(0);
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", callback_port)).await?;
+    let port = listener.local_addr()?.port();
+    let redirect_uri = format!("http://127.0.0.1:{port}/callback");
+    let auth_url = flow.build_authorization_url(&metadata, &pkce, &state, &redirect_uri);
+    let client_id = oauth
+        .client_id
+        .clone()
+        .unwrap_or_else(|| "mcp-client".to_owned());
+
+    let (sender, receiver) = oneshot::channel();
+    let background_server = server_name.to_owned();
+    let background_server_key = server_key.to_owned();
+    let background_auth_dir = auth_dir.to_path_buf();
+    tokio::spawn(async move {
+        let result = complete_mcp_oauth_callback(
+            listener,
+            &metadata,
+            &pkce,
+            &state,
+            &redirect_uri,
+            &client_id,
+            &background_server,
+            &background_server_key,
+            &background_auth_dir,
+        )
+        .await;
+        let _ = sender.send(result);
+    });
+
+    match timeout(Duration::from_millis(300), receiver).await {
+        Ok(Ok(Ok(()))) => Ok(json!({
+            "server": server_name,
+            "status": "auth_url",
+            "authUrl": auth_url,
+            "message": format!("Authentication completed silently for {server_name}. The server's tools should now be available."),
+        })
+        .to_string()),
+        Ok(Ok(Err(error))) => Ok(json!({
+            "server": server_name,
+            "status": "error",
+            "message": format!("Failed to complete OAuth flow for {server_name}: {error}. Ask the user to run /mcp and authenticate manually."),
+        })
+        .to_string()),
+        Ok(Err(_)) | Err(_) => Ok(json!({
+            "server": server_name,
+            "status": "auth_url",
+            "authUrl": auth_url,
+            "message": format!("Ask the user to open this URL in their browser to authorize the {server_name} MCP server:\n\n{auth_url}\n\nOnce they complete the flow, the OAuth callback will save credentials for future MCP connections."),
+        })
+        .to_string()),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn complete_mcp_oauth_callback(
+    listener: tokio::net::TcpListener,
+    metadata: &AuthorizationServerMetadata,
+    pkce: &rc_mcp::PkceParams,
+    expected_state: &str,
+    redirect_uri: &str,
+    client_id: &str,
+    server_name: &str,
+    server_key: &str,
+    auth_dir: &Path,
+) -> Result<()> {
+    let (mut stream, _) = listener.accept().await?;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut buf = vec![0u8; 4096];
+    let n = stream.read(&mut buf).await?;
+    let request = String::from_utf8_lossy(&buf[..n]);
+    let request_line = request.lines().next().unwrap_or_default();
+    let error = extract_query_param(request_line, "error");
+    if let Some(error) = error {
+        let response = oauth_callback_response(false);
+        let _ = stream.write_all(response.as_bytes()).await;
+        return Err(anyhow!("OAuth error: {error}"));
+    }
+    let code = extract_query_param(request_line, "code")
+        .ok_or_else(|| anyhow!("callback request missing 'code' parameter"))?;
+    let state = extract_query_param(request_line, "state").unwrap_or_default();
+    if state != expected_state {
+        let response = oauth_callback_response(false);
+        let _ = stream.write_all(response.as_bytes()).await;
+        return Err(anyhow!("OAuth state mismatch - possible CSRF attack"));
+    }
+
+    let flow = McpOAuthFlow::with_values(Some(client_id.to_owned()), None, None, false);
+    let tokens = flow
+        .exchange_code_for_tokens(metadata, &code, pkce, redirect_uri, client_id)
+        .await?;
+    let mut store = OAuthTokenStore::new(auth_dir);
+    store.load().await?;
+    store.save_token(server_key, normalize_tokens(tokens));
+    store.persist().await?;
+    let mut cache = McpAuthCache::new(auth_dir);
+    cache.load().await.ok();
+    cache.clear_server(server_name);
+    cache.save().await?;
+
+    stream
+        .write_all(oauth_callback_response(true).as_bytes())
+        .await?;
+    Ok(())
+}
+
+fn normalize_tokens(mut tokens: OAuthTokens) -> OAuthTokens {
+    if let Some(expires_at) = tokens.expires_at
+        && expires_at < 4_102_444_800
+    {
+        tokens.expires_at = Some(current_epoch_seconds().saturating_add(expires_at));
+    }
+    tokens
+}
+
+fn current_epoch_seconds() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| i64::try_from(duration.as_secs()).unwrap_or(0))
+        .unwrap_or(0)
+}
+
+fn oauth_callback_response(success: bool) -> String {
+    let body = if success {
+        "<html><body><h1>Authorization successful</h1><p>You can close this tab.</p></body></html>"
+    } else {
+        "<html><body><h1>Authorization failed</h1><p>Return to the terminal for details.</p></body></html>"
+    };
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    )
+}
+
+fn mcp_auth_status(token: Option<&OAuthTokens>) -> &'static str {
+    match token {
+        Some(tokens) if McpOAuthFlow::is_token_expired(tokens) => "expired",
+        Some(_) => "authenticated",
+        None => "not_authenticated",
+    }
+}
+
+fn mcp_transport_label(server_config: &rc_mcp::McpServerConfig) -> &'static str {
+    match server_config.transport {
+        rc_mcp::McpTransportConfig::Stdio { .. } => "stdio",
+        rc_mcp::McpTransportConfig::Http { .. } => "http",
+        rc_mcp::McpTransportConfig::WebSocket { .. } => "ws",
+    }
+}
+
+fn runtime_mcp_auth_dir(context: &ToolExecutionContext) -> PathBuf {
+    current_tool_runtime_policy()
+        .tool_results_dir
+        .as_ref()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| context.cwd.join(".remote-code-rust"))
+        .join("mcp-auth")
+}
+
+fn extract_query_param(request_line: &str, param: &str) -> Option<String> {
+    let query_start = request_line.find('?')?;
+    let query = &request_line[query_start + 1..];
+    let query_end = query.find(" HTTP").unwrap_or(query.len());
+    let query = &query[..query_end];
+
+    query.split('&').find_map(|pair| {
+        let mut parts = pair.splitn(2, '=');
+        let key = parts.next()?;
+        let value = parts.next().unwrap_or_default();
+        (key == param).then(|| {
+            urlencoding::decode(value)
+                .map(|decoded| decoded.into_owned())
+                .unwrap_or_else(|_| value.to_owned())
+        })
+    })
 }
 
 pub(crate) async fn list_mcp_resources_tool(
