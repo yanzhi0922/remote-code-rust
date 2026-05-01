@@ -6,18 +6,18 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
-use rc_control_plane::{
+use claude_control_plane::{
     RunnerCommandPullResponse, RunnerQueuedCommandBody, RuntimeEventCreateRequest,
     RuntimeEventDetail, SessionState as ControlPlaneSessionState, SessionStateUpdateRequest,
     runtime_event_detail_from_stream_json_value,
 };
-use rc_runner::{
+use claude_runner::{
     ApprovalCreateRequest, ApprovalDecision, ApprovalDecisionRequest, ApprovalRequestRecord,
     RunnerApi, RunnerApiEvent, RunnerConfig, RunnerConfigOverrides, RunnerSessionCommandRequest,
     RunnerSessionRecord, RunnerSessionStateUpdateRequest, SessionState as RunnerSessionState,
     describe_status, load_runner_config, register_with_control_plane, send_heartbeat,
 };
-use rc_telemetry::install_tracing;
+use claude_telemetry::install_tracing;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, Command as ProcessCommand};
 use tokio::sync::{Mutex, mpsc, watch};
@@ -221,7 +221,7 @@ impl HostedSessionManager {
         self.post_runtime_event(
             session.session_id,
             RuntimeEventDetail::DaemonPresenceChanged {
-                state: rc_control_plane::DaemonPresenceState::Online,
+                state: claude_control_plane::DaemonPresenceState::Online,
             },
         )
         .await?;
@@ -481,18 +481,18 @@ impl HostedSessionManager {
         handle.request_to_approval.lock().await.remove(&request_id);
 
         let behavior = match approval.state {
-            rc_runner::ApprovalState::Approved => "allow",
-            rc_runner::ApprovalState::Denied | rc_runner::ApprovalState::Cancelled => "deny",
-            rc_runner::ApprovalState::Pending => return Ok(()),
+            claude_runner::ApprovalState::Approved => "allow",
+            claude_runner::ApprovalState::Denied | claude_runner::ApprovalState::Cancelled => "deny",
+            claude_runner::ApprovalState::Pending => return Ok(()),
         };
         let note = approval
             .note
             .clone()
             .unwrap_or_else(|| match approval.state {
-                rc_runner::ApprovalState::Approved => "Approved remotely.".to_owned(),
-                rc_runner::ApprovalState::Denied => "Denied remotely.".to_owned(),
-                rc_runner::ApprovalState::Cancelled => "Cancelled remotely.".to_owned(),
-                rc_runner::ApprovalState::Pending => String::new(),
+                claude_runner::ApprovalState::Approved => "Approved remotely.".to_owned(),
+                claude_runner::ApprovalState::Denied => "Denied remotely.".to_owned(),
+                claude_runner::ApprovalState::Cancelled => "Cancelled remotely.".to_owned(),
+                claude_runner::ApprovalState::Pending => String::new(),
             });
         let payload = serde_json::json!({
             "type": "control_response",
@@ -552,7 +552,7 @@ impl HostedSessionManager {
         self.post_runtime_event(
             session_id,
             RuntimeEventDetail::DaemonPresenceChanged {
-                state: rc_control_plane::DaemonPresenceState::Offline,
+                state: claude_control_plane::DaemonPresenceState::Offline,
             },
         )
         .await?;
@@ -976,7 +976,7 @@ mod tests {
         routing::post,
     };
     use chrono::Utc;
-    use rc_runner::{
+    use claude_runner::{
         ApprovalRequestRecord, RunnerHeartbeat, RunnerRegistrationLease, RunnerRegistrationRequest,
         RunnerSessionCreateRequest, RunnerSnapshot, RunnerState, RunnerWorkspace,
     };
@@ -1076,7 +1076,7 @@ mod tests {
             &api,
             RunnerCommandPullResponse {
                 commands: vec![
-                    rc_control_plane::RunnerQueuedCommand {
+                    claude_control_plane::RunnerQueuedCommand {
                         command_id: Uuid::new_v4(),
                         runner_id: "runner-pull".to_owned(),
                         created_at: Utc::now(),
@@ -1087,7 +1087,7 @@ mod tests {
                             },
                         },
                     },
-                    rc_control_plane::RunnerQueuedCommand {
+                    claude_control_plane::RunnerQueuedCommand {
                         command_id: Uuid::new_v4(),
                         runner_id: "runner-pull".to_owned(),
                         created_at: Utc::now(),
@@ -1133,7 +1133,7 @@ mod tests {
         {
             RunnerApiEvent::ApprovalResolved(record) => {
                 assert_eq!(record.approval_id, approval.approval_id);
-                assert_eq!(record.state, rc_runner::ApprovalState::Approved);
+                assert_eq!(record.state, claude_runner::ApprovalState::Approved);
                 assert_eq!(record.responder.as_deref(), Some("mobile-web"));
             }
             other => panic!("unexpected approval event after pull command: {other:?}"),
@@ -1434,7 +1434,7 @@ mod tests {
         assert!(events.iter().any(|(_, event)| matches!(
             event.detail,
             RuntimeEventDetail::DaemonPresenceChanged {
-                state: rc_control_plane::DaemonPresenceState::Online
+                state: claude_control_plane::DaemonPresenceState::Online
             }
         )));
         assert!(
@@ -1471,7 +1471,7 @@ mod tests {
         assert!(events.iter().any(|(_, event)| matches!(
             event.detail,
             RuntimeEventDetail::DaemonPresenceChanged {
-                state: rc_control_plane::DaemonPresenceState::Offline
+                state: claude_control_plane::DaemonPresenceState::Offline
             }
         )));
 
@@ -1561,7 +1561,7 @@ mod tests {
         State(state): State<HostedControlPlaneState>,
         AxumPath(session_id): AxumPath<Uuid>,
         Json(request): Json<RuntimeEventCreateRequest>,
-    ) -> (StatusCode, Json<rc_control_plane::TimelineEvent>) {
+    ) -> (StatusCode, Json<claude_control_plane::TimelineEvent>) {
         state
             .events
             .write()
@@ -1570,7 +1570,7 @@ mod tests {
         let sequence = state.next_sequence.fetch_add(1, Ordering::SeqCst) as u64 + 1;
         (
             StatusCode::CREATED,
-            Json(rc_control_plane::TimelineEvent {
+            Json(claude_control_plane::TimelineEvent {
                 sequence,
                 recorded_at: Utc::now(),
                 runner_id: Some("runner-hosted".to_owned()),

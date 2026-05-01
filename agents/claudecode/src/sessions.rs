@@ -1,6 +1,6 @@
 use anyhow::Result;
-use rc_core::ConversationRole;
-use rc_session::{SessionStore, SessionSummary};
+use claude_core::ConversationRole;
+use claude_session::{SessionStore, SessionSummary};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -183,9 +183,9 @@ fn session_stats_row(store: &SessionStore, session_id: Uuid) -> Result<SessionSt
 #[cfg(test)]
 mod tests {
     use super::collect_session_stats;
-    use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
-    use rc_core::{ConversationEntry, InputFormat, OutputFormat, PermissionMode};
-    use rc_session::SessionStore;
+    use claude_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
+    use claude_core::{ConversationEntry, InputFormat, OutputFormat, PermissionMode};
+    use claude_session::SessionStore;
     use tempfile::tempdir;
 
     #[test]
@@ -208,7 +208,7 @@ mod tests {
                 base_url: Some("https://open.bigmodel.cn/api/paas/v4".to_owned()),
                 api_key: Some("secret".to_owned()),
                 model: Some("glm-5.1".to_owned()),
-                protocol: Some(rc_core::ProviderProtocol::OpenAi),
+                protocol: Some(claude_core::ProviderProtocol::OpenAi),
             },
             RuntimeOverrides::default(),
         )

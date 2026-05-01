@@ -7,22 +7,22 @@ use std::sync::{
 use std::time::Instant;
 
 use anyhow::Result;
-use rc_config::{RUNTIME_VERSION, RuntimeConfig};
-use rc_core::{InputFormat, PermissionMode, SessionState};
-use rc_permissions::{
+use claude_config::{RUNTIME_VERSION, RuntimeConfig};
+use claude_core::{InputFormat, PermissionMode, SessionState};
+use claude_permissions::{
     LayeredPermissionBroker, PermissionBroker, PermissionClass, PermissionDecision,
     PermissionRequest, load_layered_rules,
 };
-use rc_protocol::{
+use claude_protocol::{
     InitPayload, PermissionRequestPayload, ProtocolEmitter, ProtocolInput, ResultPayload,
     UsagePayload, parse_input_line, result_event_value,
 };
-use rc_provider::ProviderCompatBackend;
-use rc_session::SessionStore;
-use rc_tools::mcp_catalog::runtime_mcp_prompt_command_names;
-use rc_tools::runtime_plan_mode::{RuntimePlanModeController, install_plan_mode_runtime};
-use rc_tools::runtime_provider_tool_specs;
-use rc_tui::builtin_protocol_slash_command_names;
+use claude_provider::ProviderCompatBackend;
+use claude_session::SessionStore;
+use claude_tools::mcp_catalog::runtime_mcp_prompt_command_names;
+use claude_tools::runtime_plan_mode::{RuntimePlanModeController, install_plan_mode_runtime};
+use claude_tools::runtime_provider_tool_specs;
+use claude_tui::builtin_protocol_slash_command_names;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tracing::warn;
@@ -103,7 +103,7 @@ pub(crate) async fn run_headless(
     let processor_interrupted = interrupted.clone();
     let processor = tokio::spawn(async move {
         let backend = ProviderCompatBackend::new(
-            Arc::new(rc_provider::ProviderClient::new()?),
+            Arc::new(claude_provider::ProviderClient::new()?),
             &processor_config.provider,
         );
         let discovered_tool_scope = backend.discovered_tool_scope();
@@ -235,13 +235,13 @@ pub(crate) async fn run_headless_stream_json_print(
     prompt: String,
 ) -> Result<()> {
     let backend = ProviderCompatBackend::new(
-        Arc::new(rc_provider::ProviderClient::new()?),
+        Arc::new(claude_provider::ProviderClient::new()?),
         &config.provider,
     );
     let discovered_tool_scope = backend.discovered_tool_scope();
     let discovery = discover_runtime_hooks(config, &[]);
     let (plan_mode_controller, broker) =
-        rc_tools::runtime_plan_mode::build_runtime_plan_mode(config, store)?;
+        claude_tools::runtime_plan_mode::build_runtime_plan_mode(config, store)?;
     let _plan_mode_runtime = install_plan_mode_runtime(plan_mode_controller)?;
     let (mut conversation, mut hook_state) = prepare_prompt_runtime_state(
         store,
@@ -471,11 +471,11 @@ async fn run_headless_prompt_once<W: Write + Send + 'static>(
     config: &mut RuntimeConfig,
     store: &SessionStore,
     backend: Arc<dyn crate::conversation_backend::ConversationBackend>,
-    discovered_tool_scope: rc_provider::DiscoveredToolScope,
+    discovered_tool_scope: claude_provider::DiscoveredToolScope,
     broker: Arc<dyn PermissionBroker>,
     discovery: &RuntimeHookDiscovery,
     hook_state: &mut HookRunState,
-    conversation: &mut Vec<rc_core::ConversationEntry>,
+    conversation: &mut Vec<claude_core::ConversationEntry>,
     prompt: &str,
 ) -> Result<()> {
     let (event_tx, event_rx) = mpsc::unbounded_channel::<PromptStreamEvent>();
@@ -536,13 +536,13 @@ async fn run_headless_text_prompt_once(
     prompt: &str,
 ) -> Result<PromptRunOutcome> {
     let backend = ProviderCompatBackend::new(
-        Arc::new(rc_provider::ProviderClient::new()?),
+        Arc::new(claude_provider::ProviderClient::new()?),
         &config.provider,
     );
     let discovered_tool_scope = backend.discovered_tool_scope();
     let discovery = discover_runtime_hooks(config, &[]);
     let (plan_mode_controller, broker) =
-        rc_tools::runtime_plan_mode::build_runtime_plan_mode(config, store)?;
+        claude_tools::runtime_plan_mode::build_runtime_plan_mode(config, store)?;
     let _plan_mode_runtime = install_plan_mode_runtime(plan_mode_controller)?;
     let (mut conversation, mut hook_state) = prepare_prompt_runtime_state(
         store,
@@ -613,16 +613,16 @@ impl PermissionBroker for ChannelPermissionFallbackBroker {
 
         // Auto-approve in dont-ask mode when the tool class is auto-allowed.
         if matches!(mode, PermissionMode::DontAsk) {
-            let class = rc_permissions::classify_tool(&request.tool_name);
-            if request.blocked_path.is_none() && rc_permissions::auto_allows(mode, class) {
+            let class = claude_permissions::classify_tool(&request.tool_name);
+            if request.blocked_path.is_none() && claude_permissions::auto_allows(mode, class) {
                 return PermissionDecision::allow();
             }
         }
 
         // Auto-approve file edits in accept-edits mode.
         if matches!(mode, PermissionMode::AcceptEdits) {
-            let class = rc_permissions::classify_tool(&request.tool_name);
-            if request.blocked_path.is_none() && rc_permissions::auto_allows(mode, class) {
+            let class = claude_permissions::classify_tool(&request.tool_name);
+            if request.blocked_path.is_none() && claude_permissions::auto_allows(mode, class) {
                 return PermissionDecision::allow();
             }
         }
@@ -746,7 +746,7 @@ impl PermissionBroker for HeadlessPermissionBroker {
 
     fn add_session_rule(
         &self,
-        action: rc_permissions::RuleAction,
+        action: claude_permissions::RuleAction,
         tool_pattern: String,
     ) -> Result<()> {
         self.inner.add_session_rule(action, tool_pattern)
@@ -758,30 +758,30 @@ impl PermissionBroker for HeadlessPermissionBroker {
 
     fn apply_permission_updates(
         &self,
-        updates: &[rc_permissions::PermissionUpdate],
+        updates: &[claude_permissions::PermissionUpdate],
     ) -> Result<usize> {
         self.inner.apply_permission_updates(updates)
     }
 
-    fn audit_records(&self) -> Vec<rc_permissions::PermissionAuditRecord> {
+    fn audit_records(&self) -> Vec<claude_permissions::PermissionAuditRecord> {
         self.inner.audit_records()
     }
 
-    fn layered_rules(&self) -> Vec<rc_permissions::SourceAwarePermissionRule> {
+    fn layered_rules(&self) -> Vec<claude_permissions::SourceAwarePermissionRule> {
         self.inner.layered_rules()
     }
 
     fn matching_rule(
         &self,
         request: &PermissionRequest,
-    ) -> Option<rc_permissions::SourceAwarePermissionRule> {
+    ) -> Option<claude_permissions::SourceAwarePermissionRule> {
         self.inner.matching_rule(request)
     }
 
     fn matching_rule_action(
         &self,
         request: &PermissionRequest,
-    ) -> Option<rc_permissions::RuleAction> {
+    ) -> Option<claude_permissions::RuleAction> {
         self.inner.matching_rule_action(request)
     }
 }
@@ -795,19 +795,19 @@ mod tests {
     use std::sync::{Arc, Mutex as StdMutex};
 
     use anyhow::{Result, anyhow};
-    use rc_config::{ProviderOverrides, RuntimeConfig, RuntimeOverrides, load_runtime_config};
-    use rc_core::{
+    use claude_config::{ProviderOverrides, RuntimeConfig, RuntimeOverrides, load_runtime_config};
+    use claude_core::{
         ConversationEntry, InputFormat, OutputFormat, PermissionMode, ProviderProtocol,
         ProviderResponse, SubAgentCompletion, UsageSummary,
     };
-    use rc_permissions::{
+    use claude_permissions::{
         LayeredPermissionBroker, PermissionBroker, PermissionClass, PermissionDecision,
         PermissionRequest, StaticPermissionBroker,
     };
-    use rc_protocol::UsagePayload;
-    use rc_provider::{ConversationBackend, StreamingCallbacks};
-    use rc_session::SessionStore;
-    use rc_tools::runtime_plan_mode::install_plan_mode_runtime;
+    use claude_protocol::UsagePayload;
+    use claude_provider::{ConversationBackend, StreamingCallbacks};
+    use claude_session::SessionStore;
+    use claude_tools::runtime_plan_mode::install_plan_mode_runtime;
     use serde_json::Value;
     use tempfile::{NamedTempFile, TempDir, tempdir};
     use tokio::sync::{Mutex, oneshot};
@@ -820,8 +820,8 @@ mod tests {
         PromptRunOutcome, initialize_conversation, prepare_prompt_runtime_state, run_prompt,
     };
     use crate::hooks::{HookRunState, RuntimeHookDiscovery};
-    use rc_protocol::ProtocolEmitter;
-    use rc_tools::runtime_plan_mode::RuntimePlanModeController;
+    use claude_protocol::ProtocolEmitter;
+    use claude_tools::runtime_plan_mode::RuntimePlanModeController;
 
     fn mock_config_and_store() -> (TempDir, RuntimeConfig, SessionStore) {
         let tempdir = tempdir().expect("tempdir");
@@ -1022,7 +1022,7 @@ mod tests {
                     history_text: None,
                     thinking: None,
                     content_blocks: Vec::new(),
-                    tool_calls: vec![rc_core::ToolCall {
+                    tool_calls: vec![claude_core::ToolCall {
                         id: "tool-read-outside".to_owned(),
                         name: "read_file".to_owned(),
                         input: serde_json::json!({"path": self.outside_path}),
@@ -1087,7 +1087,7 @@ mod tests {
             model_usage: serde_json::json!({"provider":"mock"}),
             permission_denials: Vec::new(),
         });
-        let event = rc_protocol::result_event_value(config.session_id, &payload);
+        let event = claude_protocol::result_event_value(config.session_id, &payload);
 
         assert_eq!(event["type"], "result");
         assert_eq!(event["subtype"], "success");
@@ -1128,7 +1128,7 @@ mod tests {
                         &mut config,
                         &store,
                         backend.clone(),
-                        rc_provider::DiscoveredToolScope::default(),
+                        claude_provider::DiscoveredToolScope::default(),
                         broker,
                         &RuntimeHookDiscovery::default(),
                         &mut hook_state,
@@ -1199,10 +1199,10 @@ mod tests {
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.print_mode = true;
         let backend = Arc::new(RecordingStreamingBackend::default());
-        let discovered_tool_scope = rc_provider::DiscoveredToolScope::default();
+        let discovered_tool_scope = claude_provider::DiscoveredToolScope::default();
         let discovery = RuntimeHookDiscovery::default();
         let (plan_mode_controller, broker) =
-            rc_tools::runtime_plan_mode::build_runtime_plan_mode(&config, &store)
+            claude_tools::runtime_plan_mode::build_runtime_plan_mode(&config, &store)
                 .expect("plan mode");
         let _plan_mode_runtime =
             install_plan_mode_runtime(plan_mode_controller).expect("install plan mode");
@@ -1264,7 +1264,7 @@ mod tests {
                         &mut config,
                         &store,
                         Arc::new(FailingStreamingBackend),
-                        rc_provider::DiscoveredToolScope::default(),
+                        claude_provider::DiscoveredToolScope::default(),
                         broker,
                         &RuntimeHookDiscovery::default(),
                         &mut hook_state,
@@ -1378,7 +1378,7 @@ mod tests {
                             outside_path: outside.to_string_lossy().into_owned(),
                             turn: AtomicUsize::new(0),
                         }),
-                        rc_provider::DiscoveredToolScope::default(),
+                        claude_provider::DiscoveredToolScope::default(),
                         Arc::new(SuggestionCaptureBroker {
                             captured: captured.clone(),
                         }),

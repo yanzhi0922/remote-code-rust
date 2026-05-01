@@ -50,17 +50,17 @@
 ├───────────────────┼────────────────────────────────┼────────┤
 │              核心运行时层            │     Control Plane 层    │
 │  ┌────────────────▼────────────┐   │  ┌──────────────────▼─┐ │
-│  │ rc-core │ rc-session │ rc-tools   │  │ rc-control-plane   │ │
-│  │ rc-provider │ rc-agents │ rc-mcp   │  │ (registry, events, │ │
-│  │ rc-config │ rc-skills │ rc-plugins │  │  approvals, SQLite)│ │
-│  │ rc-compact│rc-context│ rc-query-eng│  └────────────────────┘ │
-│  │ rc-system-prompt│rc-auth│rc-model  │                         │
+│  │ claude-core │ claude-session │ claude-tools   │  │ claude-control-plane   │ │
+│  │ claude-provider │ claude-agents │ claude-mcp   │  │ (registry, events, │ │
+│  │ claude-config │ claude-skills │ claude-plugins │  │  approvals, SQLite)│ │
+│  │ claude-compact│claude-context│ rc-query-eng│  └────────────────────┘ │
+│  │ claude-system-prompt│claude-auth│claude-model  │                         │
 │  └─────────────────────────────┘   │                         │
 │                                     │                         │
 ├─────────────────────────────────────┼─────────────────────────┤
 │              Runner 层              │                         │
 │  ┌─────────────────────────────────▼───────────────────────┐ │
-│  │ rc-runner (daemon, heartbeat, session hosting)          │ │
+│  │ claude-runner (daemon, heartbeat, session hosting)          │ │
 │  └─────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -69,47 +69,47 @@
 
 | Crate | 职责 | 关键文件 |
 |-------|------|---------|
-| `rc-core` | 核心类型、hook、状态、消息 | lib.rs, hooks.rs, state.rs, message.rs |
-| `rc-protocol` | Stream-JSON 协议、消息类型 | lib.rs |
-| `rc-config` | 配置加载、Provider 发现 | lib.rs, settings_layers.rs |
-| `rc-provider` | LLM 调用、流式、故障转移 | lib.rs, streaming.rs, circuit_breaker.rs |
-| `rc-tools` | 65+ 内置工具、运行时策略 | specs.rs, streaming_executor.rs |
-| `rc-session` | 会话存储、记忆、恢复 | lib.rs, transcript.rs, resume_state.rs |
-| `rc-permissions` | 权限规则引擎、审计 | lib.rs, classifier.rs, denial_tracking.rs |
-| `rc-agents` | 多代理调度器、Fork、Built-in | lib.rs, fork.rs, builtins.rs |
-| `rc-mcp` | MCP 客户端 (stdio/HTTP/WS) | lib.rs, lifecycle.rs, oauth.rs |
-| `rc-plugins` | 插件发现与加载 | lib.rs, loader.rs, marketplace/ |
-| `rc-skills` | Skill 发现与加载 | lib.rs |
-| `rc-compact` | 上下文压缩 (5 策略) | engine.rs, auto.rs, micro.rs, snip.rs |
-| `rc-system-prompt` | 动态系统提示词 | lib.rs + 22 sections |
-| `rc-query-engine` | 统一查询引擎 | query_loop.rs, state_machine.rs, observer.rs |
-| `rc-engine-events` | 统一事件层 | lib.rs, types.rs, stream.rs |
-| `rc-auth` | 认证 (API key + OAuth PKCE) | lib.rs, oauth/ |
-| `rc-model` | 模型管理、别名、能力 | lib.rs, model.rs, providers.rs |
-| `rc-context` | 上下文管理 (effort/fast mode) | lib.rs, effort.rs, fast_mode.rs |
-| `rc-settings` | 设置类型 (hooks/MCP/sandbox) | lib.rs, hooks.rs, mcp.rs |
-| `rc-managed-settings` | MDM/安全策略 | lib.rs, mdm.rs, sync_engine.rs |
-| `rc-skill-search` | BM25 技能搜索 | lib.rs, local_search.rs |
-| `rc-ide` | IDE 集成 (bridge/connection) | lib.rs, bridge.rs |
-| `rc-teleport` | 会话迁移 | lib.rs, api.rs |
-| `rc-file-history` | 文件历史/备份 | lib.rs, backup.rs, snapshot.rs |
-| `rc-voice` | 语音输入/输出 (TTS Mock) | lib.rs, stt.rs, tts.rs |
-| `rc-lsp` | LSP 客户端 | lib.rs, client.rs |
-| `rc-analytics` | 分析/遥测 | lib.rs |
-| `rc-event-bus` | 发布/订阅事件总线 | lib.rs |
-| `rc-ui-bridge` | UI 事件桥接 | lib.rs, bridge.rs |
-| `rc-control-plane` | 远程控制面服务 | lib.rs, handlers.rs |
-| `rc-runner` | Runner daemon | lib.rs |
-| `rc-tui` | 终端用户界面 | app.rs, 20 components, 32 commands |
-| `rc-utils` | 工具函数 (diff/git/markdown) | diff.rs, git_fs.rs, markdown.rs |
-| `rc-agent-protocol` | 多 Agent 协议抽象层 | adapter.rs, events.rs, router.rs, types.rs |
+| `claude-core` | 核心类型、hook、状态、消息 | lib.rs, hooks.rs, state.rs, message.rs |
+| `claude-protocol` | Stream-JSON 协议、消息类型 | lib.rs |
+| `claude-config` | 配置加载、Provider 发现 | lib.rs, settings_layers.rs |
+| `claude-provider` | LLM 调用、流式、故障转移 | lib.rs, streaming.rs, circuit_breaker.rs |
+| `claude-tools` | 65+ 内置工具、运行时策略 | specs.rs, streaming_executor.rs |
+| `claude-session` | 会话存储、记忆、恢复 | lib.rs, transcript.rs, resume_state.rs |
+| `claude-permissions` | 权限规则引擎、审计 | lib.rs, classifier.rs, denial_tracking.rs |
+| `claude-agents` | 多代理调度器、Fork、Built-in | lib.rs, fork.rs, builtins.rs |
+| `claude-mcp` | MCP 客户端 (stdio/HTTP/WS) | lib.rs, lifecycle.rs, oauth.rs |
+| `claude-plugins` | 插件发现与加载 | lib.rs, loader.rs, marketplace/ |
+| `claude-skills` | Skill 发现与加载 | lib.rs |
+| `claude-compact` | 上下文压缩 (5 策略) | engine.rs, auto.rs, micro.rs, snip.rs |
+| `claude-system-prompt` | 动态系统提示词 | lib.rs + 22 sections |
+| `claude-query-engine` | 统一查询引擎 | query_loop.rs, state_machine.rs, observer.rs |
+| `claude-engine-events` | 统一事件层 | lib.rs, types.rs, stream.rs |
+| `claude-auth` | 认证 (API key + OAuth PKCE) | lib.rs, oauth/ |
+| `claude-model` | 模型管理、别名、能力 | lib.rs, model.rs, providers.rs |
+| `claude-context` | 上下文管理 (effort/fast mode) | lib.rs, effort.rs, fast_mode.rs |
+| `claude-settings` | 设置类型 (hooks/MCP/sandbox) | lib.rs, hooks.rs, mcp.rs |
+| `claude-managed-settings` | MDM/安全策略 | lib.rs, mdm.rs, sync_engine.rs |
+| `claude-skill-search` | BM25 技能搜索 | lib.rs, local_search.rs |
+| `claude-ide` | IDE 集成 (bridge/connection) | lib.rs, bridge.rs |
+| `claude-teleport` | 会话迁移 | lib.rs, api.rs |
+| `claude-file-history` | 文件历史/备份 | lib.rs, backup.rs, snapshot.rs |
+| `claude-voice` | 语音输入/输出 (TTS Mock) | lib.rs, stt.rs, tts.rs |
+| `claude-lsp` | LSP 客户端 | lib.rs, client.rs |
+| `claude-analytics` | 分析/遥测 | lib.rs |
+| `claude-event-bus` | 发布/订阅事件总线 | lib.rs |
+| `claude-ui-bridge` | UI 事件桥接 | lib.rs, bridge.rs |
+| `claude-control-plane` | 远程控制面服务 | lib.rs, handlers.rs |
+| `claude-runner` | Runner daemon | lib.rs |
+| `claude-tui` | 终端用户界面 | app.rs, 20 components, 32 commands |
+| `claude-utils` | 工具函数 (diff/git/markdown) | diff.rs, git_fs.rs, markdown.rs |
+| `claude-agent-protocol` | 多 Agent 协议抽象层 | adapter.rs, events.rs, router.rs, types.rs |
 | `rc-claude-adapter` | Claude 适配器 (QueryEngine) | src/lib.rs (ClaudeInProcessAdapter = QueryEngine) |
 | `rc-codex-adapter` | Codex 适配器 (AppServer) | lib.rs (CodexInProcessAdapter + event_mapper) |
 | `rc-roo-adapter` | Roo 适配器 (Provider+Dispatcher) | lib.rs (RooInProcessAdapter + agent loop) |
-| `rc-swarm` | 多代理类型系统 | lib.rs, backends/in_process.rs |
-| `rc-telemetry` | 追踪设置、结构化日志 | lib.rs, analytics.rs |
-| `rc-runtime-prompt` | 运行时提示词 | lib.rs, auto_memory.rs |
-| `rc-integration-tests` | 集成测试 | tests/ |
+| `claude-swarm` | 多代理类型系统 | lib.rs, backends/in_process.rs |
+| `claude-telemetry` | 追踪设置、结构化日志 | lib.rs, analytics.rs |
+| `claude-runtime-prompt` | 运行时提示词 | lib.rs, auto_memory.rs |
+| `claude-integration-tests` | 集成测试 | tests/ |
 
 ---
 
@@ -167,7 +167,7 @@
 - ✅ 会话持久化 + CI 前端任务
 
 ### Phase 7-8: 多 Agent 架构 — ✅ 完成
-- ✅ `rc-agent-protocol` crate 创建
+- ✅ `claude-agent-protocol` crate 创建
 - ✅ `AgentAdapter` trait 定义
 - ✅ `UnifiedAgentEvent` 统一事件模型
 - ✅ `AgentRouter` 路由分发
@@ -215,7 +215,7 @@
 
 | 限制 | 说明 | 优先级 |
 |------|------|--------|
-| TTS 为 Mock 实现 | `rc-voice::tts` 返回占位响应，未接入真实 TTS 服务 | P2 |
+| TTS 为 Mock 实现 | `claude-voice::tts` 返回占位响应，未接入真实 TTS 服务 | P2 |
 | Roo 权限系统未接线 | `RooInProcessAdapter::resolve_permission()` 为 no-op | P1 |
 | Roo Token 估算粗糙 | 使用 `text.len() / 4` 而非 Roo 原生 tiktoken | P2 |
 | Roo MCP 未接入 | 声明了 McpSupport 但未集成 McpServerConnection | P2 |

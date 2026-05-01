@@ -167,7 +167,7 @@ Objective: support multiple AI agent backends (Remote Code, Roo Code, OpenAI Cod
 
 Deliverables:
 
-- ✅ `rc-agent-protocol` crate — `AgentAdapter` trait, `UnifiedAgentEvent`, `AgentRouter`
+- ✅ `claude-agent-protocol` crate — `AgentAdapter` trait, `UnifiedAgentEvent`, `AgentRouter`
 - ✅ Initial adapter implementations (subprocess JSON-RPC for Roo/Codex)
 - ✅ GUI frontend Agent selector component
 - ✅ Event translation layer (UnifiedAgentEvent → Tauri events)
@@ -190,7 +190,7 @@ Objective: convert RooCode/Codex from subprocess JSON-RPC to in-process callback
 
 Deliverables:
 
-- ✅ `InProcessAdapter` unified implementation in `crates/claude/rc-agent-protocol/src/adapters/in_process.rs`
+- ✅ `InProcessAdapter` unified implementation in `crates/claude/claude-agent-protocol/src/adapters/in_process.rs`
 - ✅ Type aliases: `RemoteClaudeAdapter`, `RemoteRooAdapter`, `RemoteCodexAdapter`
 - ✅ Builder-pattern callback injection (`with_send_message`, `with_cancel`, `with_resolve_permission`)
 - ✅ Subprocess management code removed

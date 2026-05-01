@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use rc_config::RuntimeConfig;
-use rc_core::ToolCall;
-use rc_session::SessionStore;
+use claude_config::RuntimeConfig;
+use claude_core::ToolCall;
+use claude_session::SessionStore;
 use serde_json::Value;
 
 use crate::memory_file_detection::{
@@ -173,15 +173,15 @@ pub(crate) fn handle_session_file_access_post_tool(
 mod tests {
     use std::fs;
 
-    use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
-    use rc_core::ToolCall;
-    use rc_runtime_prompt::RuntimePromptSettings;
-    use rc_session::SessionStore;
+    use claude_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
+    use claude_core::ToolCall;
+    use claude_runtime_prompt::RuntimePromptSettings;
+    use claude_session::SessionStore;
     use tempfile::tempdir;
 
     use super::handle_session_file_access_post_tool;
 
-    fn config_and_store() -> (tempfile::TempDir, rc_config::RuntimeConfig, SessionStore) {
+    fn config_and_store() -> (tempfile::TempDir, claude_config::RuntimeConfig, SessionStore) {
         let temp = tempdir().expect("tempdir");
         let cwd = temp.path().join("cwd");
         let profile = temp.path().join("profile");
@@ -191,9 +191,9 @@ mod tests {
             Some(cwd),
             Some(profile),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -213,7 +213,7 @@ mod tests {
     #[test]
     fn records_session_memory_access_for_read_file() {
         let (_temp, config, store) = config_and_store();
-        let session_memory_path = rc_runtime_prompt::claude_config_home()
+        let session_memory_path = claude_runtime_prompt::claude_config_home()
             .join("projects")
             .join("repo")
             .join(config.session_id.to_string())
@@ -254,7 +254,7 @@ mod tests {
     #[test]
     fn records_session_transcript_access_for_projects_jsonl() {
         let (_temp, config, store) = config_and_store();
-        let transcript_path = rc_runtime_prompt::claude_config_home()
+        let transcript_path = claude_runtime_prompt::claude_config_home()
             .join("projects")
             .join("repo")
             .join(format!("{}.jsonl", config.session_id));
@@ -294,13 +294,13 @@ mod tests {
     fn records_auto_and_team_memory_access_and_scope() {
         let (_temp, config, store) = config_and_store();
         let features = RuntimePromptSettings::from_config(&config).memory_prompt_features;
-        let Some(auto_dir) = rc_runtime_prompt::auto_memory_entrypoint(&config)
+        let Some(auto_dir) = claude_runtime_prompt::auto_memory_entrypoint(&config)
             .expect("auto memory")
             .and_then(|entrypoint| entrypoint.parent().map(std::path::Path::to_path_buf))
         else {
             return;
         };
-        let Some(team_dir) = rc_runtime_prompt::team_memory_path_with_features(&config, &features)
+        let Some(team_dir) = claude_runtime_prompt::team_memory_path_with_features(&config, &features)
             .expect("team memory")
         else {
             return;

@@ -9,7 +9,7 @@
 `send_prompt` 命令根据会话的 `agent_type` 选择不同的执行路径：
 
 - **RemoteCode（默认）**：沿用现有 [`run_gui_prompt`](apps/remote-code-gui/src-tauri/src/lib.rs:2624) 对话循环，直接调用 `backend.complete_streaming()` + 工具执行循环。零改动。
-- **RooCode / Codex**：通过 [`AgentRouter`](crates/claude/rc-agent-protocol/src/router.rs:25) 创建对应适配器，调用 `adapter.send_message()` 获取 `mpsc::Receiver<UnifiedAgentEvent>` 事件流，由新函数 `run_agent_prompt` 将事件翻译为现有 GUI 事件。
+- **RooCode / Codex**：通过 [`AgentRouter`](crates/claude/claude-agent-protocol/src/router.rs:25) 创建对应适配器，调用 `adapter.send_message()` 获取 `mpsc::Receiver<UnifiedAgentEvent>` 事件流，由新函数 `run_agent_prompt` 将事件翻译为现有 GUI 事件。
 
 **理由**：
 1. 现有 [`run_gui_prompt`](apps/remote-code-gui/src-tauri/src/lib.rs:2624) 深度耦合了 provider API 调用、工具执行、上下文窗口管理、权限代理等逻辑，不适合改造为通用 Agent 接口。
@@ -18,7 +18,7 @@
 
 ### 1.2 事件翻译映射
 
-[`UnifiedAgentEvent`](crates/claude/rc-agent-protocol/src/events.rs:15) → GUI 事件映射表：
+[`UnifiedAgentEvent`](crates/claude/claude-agent-protocol/src/events.rs:15) → GUI 事件映射表：
 
 | UnifiedAgentEvent 变体 | GUI 事件常量 | DTO 类型 |
 |---|---|---|
@@ -68,10 +68,10 @@ flowchart TD
 **修改**: 在 `[dependencies]` 中添加：
 
 ```toml
-rc-agent-protocol = { path = "../../../crates/claude/rc-agent-protocol" }
+claude-agent-protocol = { path = "../../../crates/claude/claude-agent-protocol" }
 ```
 
-**风险**: 低。`rc-agent-protocol` 仅依赖 `tokio`、`serde`、`anyhow`、`async-trait`、`uuid`、`chrono`、`thiserror`、`tracing`、`futures`，均为 workspace 共享依赖。
+**风险**: 低。`claude-agent-protocol` 仅依赖 `tokio`、`serde`、`anyhow`、`async-trait`、`uuid`、`chrono`、`thiserror`、`tracing`、`futures`，均为 workspace 共享依赖。
 
 ---
 

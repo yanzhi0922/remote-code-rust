@@ -223,7 +223,7 @@ KIMI_CODING_PLAN_API_KEY=xxx
 
 ### 步骤 2: 实现 Claude Code 请求伪装
 
-**修改文件**: `crates/claude/rc-provider/src/lib.rs`
+**修改文件**: `crates/claude/claude-provider/src/lib.rs`
 
 在 `build_headers()` 函数中：
 
@@ -265,9 +265,9 @@ fn build_headers(provider: &ProviderConfig) -> Result<HeaderMap> {
 3. 保留 `x-api-key` 和 `authorization` 双重认证
 4. Session ID 通过 `x-claude-code-session-id` 传递
 
-### 步骤 3: 更新 rc-config Coding Plan 配置
+### 步骤 3: 更新 claude-config Coding Plan 配置
 
-**修改文件**: `crates/claude/rc-config/src/lib.rs`
+**修改文件**: `crates/claude/claude-config/src/lib.rs`
 
 **3a. 新增阿里云百炼 Coding Plan**:
 ```rust
@@ -330,7 +330,7 @@ if let Some(api_key) = read_env_first(&["QIANFAN_CODING_PLAN_API_KEY"]) {
 
 ### 步骤 4: 更新 RESERVED_PROVIDER_HEADER_NAMES
 
-在 `rc-config/src/lib.rs` 中，需要确保 Claude Code 伪装 headers 不被过滤：
+在 `claude-config/src/lib.rs` 中，需要确保 Claude Code 伪装 headers 不被过滤：
 
 ```rust
 const RESERVED_PROVIDER_HEADER_NAMES: &[&str] = &[
@@ -367,10 +367,10 @@ const RESERVED_PROVIDER_HEADER_NAMES: &[&str] = &[
 
 | 文件 | 修改类型 | 说明 |
 |------|----------|------|
-| `crates/claude/rc-provider/src/model_info.rs` | 重构 | 移除过时模型，添加新模型，修正参数 |
-| `crates/claude/rc-provider/src/lib.rs` | 修改 | `build_headers()` Claude Code 伪装 |
-| `crates/claude/rc-config/src/lib.rs` | 修改 | 新增阿里云，更新腾讯云/百度千帆为 Anthropic |
-| `crates/claude/rc-provider/src/streaming.rs` | 无变更 | Anthropic streaming 已支持 |
+| `crates/claude/claude-provider/src/model_info.rs` | 重构 | 移除过时模型，添加新模型，修正参数 |
+| `crates/claude/claude-provider/src/lib.rs` | 修改 | `build_headers()` Claude Code 伪装 |
+| `crates/claude/claude-config/src/lib.rs` | 修改 | 新增阿里云，更新腾讯云/百度千帆为 Anthropic |
+| `crates/claude/claude-provider/src/streaming.rs` | 无变更 | Anthropic streaming 已支持 |
 
 ## 六、测试计划
 

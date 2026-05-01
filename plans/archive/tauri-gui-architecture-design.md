@@ -4,7 +4,7 @@
 基于现有 `remote-code-rust` 的全异步、多 Crate 架构，我们采用以下技术栈构建桌面客户端：
 
 * **核心框架**: **Tauri (v2)**
-  * 利用现有的 Rust 后端 (`rc-core`, `rc-agents`, `rc-ui-bridge` 等)。
+  * 利用现有的 Rust 后端 (`claude-core`, `claude-agents`, `claude-ui-bridge` 等)。
   * 提供原生的跨平台桌面体验，极低的内存占用和极小的打包体积。
 * **前端框架**: **React 18/19 (Vite) + TypeScript**
 * **UI 组件与样式**:
@@ -73,13 +73,13 @@
 
 Tauri 提供了一个 `IPC (Inter-Process Communication)` 桥梁。我们将充分利用现有的 Crate：
 
-1. **`rc-ui-bridge` (前端通信层)**: 
+1. **`claude-ui-bridge` (前端通信层)**: 
    * 将作为 Tauri 的 `#[tauri::command]` 暴露点。
    * 提供 API 如 `send_prompt(thread_id, prompt, agent_tags)`、`approve_diff(diff_id)`。
-   * **SSE / Tauri Events**: 后端执行是长时间运行的，不能阻塞前端。`rc-core` 或 `rc-session` 产生的事件通过 `rc-event-bus` (mpsc channel/broadcast) 路由到 `rc-ui-bridge`，转为 Tauri 的 `Window::emit` 推送给前端（如 `TaskProgressUpdated`, `AgentThoughtEmitted`, `NewDiffAvailable`）。
-2. **`rc-agents` (多智能体层)**: 
+   * **SSE / Tauri Events**: 后端执行是长时间运行的，不能阻塞前端。`claude-core` 或 `claude-session` 产生的事件通过 `claude-event-bus` (mpsc channel/broadcast) 路由到 `claude-ui-bridge`，转为 Tauri 的 `Window::emit` 推送给前端（如 `TaskProgressUpdated`, `AgentThoughtEmitted`, `NewDiffAvailable`）。
+2. **`claude-agents` (多智能体层)**: 
    * 响应前端通过 `@` 标签发来的定向请求，或者由默认 Router 自动分发任务。
-3. **`rc-permissions` (安全控制层)**:
+3. **`claude-permissions` (安全控制层)**:
    * 支持拦截敏感操作文件（修改配置、运行高危脚本），以阻塞状态推送到前端，等待用户在 UI 上点击 `接受` 后方可放行。
 
 ---

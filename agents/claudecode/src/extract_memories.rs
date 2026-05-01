@@ -9,19 +9,19 @@ use std::time::Duration;
 
 use anyhow::Result;
 use chrono::Utc;
-use rc_config::RuntimeConfig;
-use rc_core::{ConversationEntry, ConversationRole, PermissionMode, SystemMemorySavedMessage};
-use rc_permissions::{PermissionBroker, PermissionDecision, PermissionRequest};
-use rc_protocol::UsagePayload;
-use rc_provider::{ConversationBackend, DiscoveredToolScope};
-use rc_query_engine::QuerySource;
-use rc_runtime_prompt::{
+use claude_config::RuntimeConfig;
+use claude_core::{ConversationEntry, ConversationRole, PermissionMode, SystemMemorySavedMessage};
+use claude_permissions::{PermissionBroker, PermissionDecision, PermissionRequest};
+use claude_protocol::UsagePayload;
+use claude_provider::{ConversationBackend, DiscoveredToolScope};
+use claude_query_engine::QuerySource;
+use claude_runtime_prompt::{
     RuntimePromptSettings, build_extract_memory_auto_only_prompt,
     build_extract_memory_combined_prompt, format_auto_memory_manifest, runtime_env_defined_falsy,
     runtime_env_truthy, scan_auto_memory_files,
 };
-use rc_session::SessionStore;
-use rc_tools::shell::readonly::{ShellKind, is_read_only_command};
+use claude_session::SessionStore;
+use claude_tools::shell::readonly::{ShellKind, is_read_only_command};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -687,7 +687,7 @@ fn is_auto_memory_enabled(config: &RuntimeConfig) -> Result<bool> {
     {
         return Ok(false);
     }
-    let settings = rc_config::settings_layers::load_runtime_settings(&config.settings_files)?;
+    let settings = claude_config::settings_layers::load_runtime_settings(&config.settings_files)?;
     if let Some(enabled) = settings.auto_memory_enabled {
         return Ok(enabled);
     }
@@ -711,7 +711,7 @@ fn runtime_feature_gate_enabled(feature_key: &str, default: bool) -> bool {
         env_suffix,
     ];
     for env_name in env_names {
-        if rc_runtime_prompt::runtime_env_truthy(&env_name) {
+        if claude_runtime_prompt::runtime_env_truthy(&env_name) {
             return true;
         }
         if runtime_env_defined_falsy(&env_name) {
@@ -749,8 +749,8 @@ mod tests {
         ExtractMemoriesPermissionBroker, count_visible_messages_since, extract_written_paths,
         has_memory_writes_since,
     };
-    use rc_core::{ConversationEntry, ConversationRole, ToolCall};
-    use rc_permissions::{PermissionBroker, PermissionRequest};
+    use claude_core::{ConversationEntry, ConversationRole, ToolCall};
+    use claude_permissions::{PermissionBroker, PermissionRequest};
     use serde_json::json;
     use std::path::PathBuf;
     use uuid::Uuid;

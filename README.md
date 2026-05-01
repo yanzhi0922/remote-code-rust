@@ -66,10 +66,10 @@ remote-code-rust/
 │   │   ├── rc-codex-adapter/      # Codex 适配器（AppServer + event_mapper）
 │   │   └── rc-roo-adapter/        # Roo 适配器（Provider + ToolDispatcher）
 │   ├── claude/
-│   │   ├── rc-agent-protocol/     # 多 Agent 协议抽象层（trait + events + types）
-│   │   ├── rc-query-engine/       # QueryEngine 执行路径
-│   │   ├── rc-core/               # 核心运行时类型
-│   │   ├── rc-provider/           # Provider 标准化与流式
+│   │   ├── claude-agent-protocol/     # 多 Agent 协议抽象层（trait + events + types）
+│   │   ├── claude-query-engine/       # QueryEngine 执行路径
+│   │   ├── claude-core/               # 核心运行时类型
+│   │   ├── claude-provider/           # Provider 标准化与流式
 │   │   └── ...                    # 其他 Claude 核心 crate
 │   ├── codex/                     # Codex 核心 crate（core, exec, protocol 等）
 │   └── roo/                       # Roo 核心 crate（65 个，provider, task, tools 等）
@@ -99,45 +99,45 @@ remote-code-rust/
 
 | Crate | 职责 |
 |-------|------|
-| `rc-core` | 共享运行时类型、错误、会话模型、Hook 类型 |
-| `rc-config` | CLI 解析、环境变量、配置优先级、Provider 配置、遗留导入 |
-| `rc-provider` | Provider 标准化、请求构建、传输、重试、SSE 流、故障转移、成本追踪 |
-| `rc-tools` | 65+ 内置工具、工具注册、权限检查、BM25 搜索、延迟加载 |
-| `rc-permissions` | 5 种权限模式、审批请求、规则引擎、审计记录 |
-| `rc-session` | 会话持久化（SQLite + NDJSON）、索引、导出、恢复、重放 |
-| `rc-mcp` | MCP 客户端/服务器生命周期、JSON-RPC 传输、工具投影 |
-| `rc-plugins` | 插件清单、JSON-RPC 进程运行时、能力协商 |
-| `rc-skills` | SKILL.md 发现、TOML frontmatter 解析、索引 |
-| `rc-skill-search` | 远程技能加载、TTL 缓存 |
-| `rc-agents` | 调度器、邮箱、任务生命周期、并行执行 |
-| `rc-swarm` | 多代理类型系统、Team 文件、权限请求、消息传递 |
-| `rc-tui` | ratatui 界面、Vim 键绑定、视口状态、渲染 |
-| `rc-compact` | 上下文压缩策略（5 种）、Session Memory 压缩 |
-| `rc-query-engine` | 统一查询循环、状态机、流式执行器、Token 预算 |
-| `rc-system-prompt` | 系统提示词构建、缓存、各段落模块化 |
-| `rc-runtime-prompt` | 运行时提示词、自动记忆注入 |
-| `rc-engine-events` | 引擎事件类型、流处理 |
-| `rc-event-bus` | 进程内事件总线 |
-| `rc-file-history` | 文件备份、差异统计、快照 |
-| `rc-ide` | IDE 桥接（JSON-RPC 2.0）、stdio/HTTP 连接 |
-| `rc-ui-bridge` | UI 桥接层 |
-| `rc-analytics` | 事件导出（Datadog / 自有 / 文件） |
-| `rc-auth` | API Key、OAuth2、订阅验证 |
-| `rc-context` | Effort 级别、Fast Mode、运行时身份 |
-| `rc-model` | 模型信息与元数据 |
-| `rc-voice` | 语音转文字（STT）、文字转语音（TTS Mock） |
-| `rc-telemetry` | 追踪设置、结构化日志、Token 估算 |
-| `rc-teleport` | Teleport 远程环境 API |
-| `rc-transcript` | 会话转录、边界标记、存储 |
-| `rc-protocol` | 类型化运行时事件、兼容性序列化 |
-| `rc-settings` | 设置加载、合并、验证、MCP/Sandbox/Provider 配置 |
-| `rc-lsp` | 简化 LSP 协议支持 |
-| `rc-managed-settings` | 托管设置策略 |
-| `rc-integration-tests` | 集成测试 |
-| `rc-runner` | Runner 协议、HTTP API、心跳 |
-| `rc-control-plane` | API 模型、Runner 注册、WebSocket 扇出 |
-| `rc-utils` | 工具函数（Git、Diff、Markdown、图片、Cron 等） |
-| `rc-agent-protocol` | 多 Agent 协议抽象层：`AgentAdapter` trait、`UnifiedAgentEvent`、`AgentRouter` |
+| `claude-core` | 共享运行时类型、错误、会话模型、Hook 类型 |
+| `claude-config` | CLI 解析、环境变量、配置优先级、Provider 配置、遗留导入 |
+| `claude-provider` | Provider 标准化、请求构建、传输、重试、SSE 流、故障转移、成本追踪 |
+| `claude-tools` | 65+ 内置工具、工具注册、权限检查、BM25 搜索、延迟加载 |
+| `claude-permissions` | 5 种权限模式、审批请求、规则引擎、审计记录 |
+| `claude-session` | 会话持久化（SQLite + NDJSON）、索引、导出、恢复、重放 |
+| `claude-mcp` | MCP 客户端/服务器生命周期、JSON-RPC 传输、工具投影 |
+| `claude-plugins` | 插件清单、JSON-RPC 进程运行时、能力协商 |
+| `claude-skills` | SKILL.md 发现、TOML frontmatter 解析、索引 |
+| `claude-skill-search` | 远程技能加载、TTL 缓存 |
+| `claude-agents` | 调度器、邮箱、任务生命周期、并行执行 |
+| `claude-swarm` | 多代理类型系统、Team 文件、权限请求、消息传递 |
+| `claude-tui` | ratatui 界面、Vim 键绑定、视口状态、渲染 |
+| `claude-compact` | 上下文压缩策略（5 种）、Session Memory 压缩 |
+| `claude-query-engine` | 统一查询循环、状态机、流式执行器、Token 预算 |
+| `claude-system-prompt` | 系统提示词构建、缓存、各段落模块化 |
+| `claude-runtime-prompt` | 运行时提示词、自动记忆注入 |
+| `claude-engine-events` | 引擎事件类型、流处理 |
+| `claude-event-bus` | 进程内事件总线 |
+| `claude-file-history` | 文件备份、差异统计、快照 |
+| `claude-ide` | IDE 桥接（JSON-RPC 2.0）、stdio/HTTP 连接 |
+| `claude-ui-bridge` | UI 桥接层 |
+| `claude-analytics` | 事件导出（Datadog / 自有 / 文件） |
+| `claude-auth` | API Key、OAuth2、订阅验证 |
+| `claude-context` | Effort 级别、Fast Mode、运行时身份 |
+| `claude-model` | 模型信息与元数据 |
+| `claude-voice` | 语音转文字（STT）、文字转语音（TTS Mock） |
+| `claude-telemetry` | 追踪设置、结构化日志、Token 估算 |
+| `claude-teleport` | Teleport 远程环境 API |
+| `claude-transcript` | 会话转录、边界标记、存储 |
+| `claude-protocol` | 类型化运行时事件、兼容性序列化 |
+| `claude-settings` | 设置加载、合并、验证、MCP/Sandbox/Provider 配置 |
+| `claude-lsp` | 简化 LSP 协议支持 |
+| `claude-managed-settings` | 托管设置策略 |
+| `claude-integration-tests` | 集成测试 |
+| `claude-runner` | Runner 协议、HTTP API、心跳 |
+| `claude-control-plane` | API 模型、Runner 注册、WebSocket 扇出 |
+| `claude-utils` | 工具函数（Git、Diff、Markdown、图片、Cron 等） |
+| `claude-agent-protocol` | 多 Agent 协议抽象层：`AgentAdapter` trait、`UnifiedAgentEvent`、`AgentRouter` |
 | `rc-claude-adapter` | Claude 适配器：`ClaudeInProcessAdapter` = `QueryEngine` |
 | `rc-codex-adapter` | Codex 适配器：`CodexInProcessAdapter` + `event_mapper` (754 行) |
 | `rc-roo-adapter` | Roo 适配器：`RooInProcessAdapter` + 12 Provider 后端 |
@@ -361,7 +361,7 @@ graph TB
 
 | 限制 | 说明 |
 |------|------|
-| TTS 为 Mock 实现 | `rc-voice::tts` 目前返回占位响应，未接入真实 TTS 服务 |
+| TTS 为 Mock 实现 | `claude-voice::tts` 目前返回占位响应，未接入真实 TTS 服务 |
 | 外部 Agent 回调为 Stub | Roo Code / Codex 的回调函数目前返回硬编码响应，需接入真实实现 |
 
 ## 项目文档

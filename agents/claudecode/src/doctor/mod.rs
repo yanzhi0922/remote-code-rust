@@ -4,7 +4,7 @@ mod network;
 mod providers;
 
 use anyhow::Result;
-use rc_config::RuntimeConfig;
+use claude_config::RuntimeConfig;
 
 use crate::cli::DoctorArgs;
 use checks::DoctorReport;

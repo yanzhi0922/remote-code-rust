@@ -3,12 +3,12 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use anyhow::{Result, anyhow};
-use rc_config::{RUNTIME_VERSION, RuntimeConfig};
-use rc_tools::mcp_runtime::{
+use claude_config::{RUNTIME_VERSION, RuntimeConfig};
+use claude_tools::mcp_runtime::{
     RuntimeMcpResolution, RuntimeMcpServerObservation, observe_runtime_mcp_servers,
     resolve_runtime_mcp_server,
 };
-use rc_ui_bridge::UiRuntimeMcpServerStatus;
+use claude_ui_bridge::UiRuntimeMcpServerStatus;
 
 use crate::cli::{
     McpAddArgs, McpCallArgs, McpCommand, McpGetArgs, McpListArgs, McpRemoveArgs, McpResetArgs,
@@ -26,7 +26,7 @@ pub(crate) struct McpServerRecord {
     pub(crate) name: String,
     pub(crate) status: UiRuntimeMcpServerStatus,
     pub(crate) enabled: bool,
-    pub(crate) transport: rc_mcp::McpTransport,
+    pub(crate) transport: claude_mcp::McpTransport,
     pub(crate) origin_kind: String,
     pub(crate) origin_name: String,
     pub(crate) config_path: PathBuf,
@@ -37,14 +37,14 @@ pub(crate) struct McpServerRecord {
 pub(crate) struct McpLiveRecord {
     pub(crate) status: String,
     pub(crate) protocol_version: Option<String>,
-    pub(crate) server_info: Option<rc_mcp::McpPeerInfo>,
+    pub(crate) server_info: Option<claude_mcp::McpPeerInfo>,
     pub(crate) tool_count: usize,
-    pub(crate) tools: Vec<rc_mcp::McpToolDescriptor>,
+    pub(crate) tools: Vec<claude_mcp::McpToolDescriptor>,
     pub(crate) error: Option<String>,
 }
 
 impl McpLiveRecord {
-    pub(crate) fn from_inspection(inspection: rc_mcp::McpServerInspection) -> Self {
+    pub(crate) fn from_inspection(inspection: claude_mcp::McpServerInspection) -> Self {
         Self {
             status: UiRuntimeMcpServerStatus::Connected.as_str().to_owned(),
             protocol_version: Some(inspection.protocol_version),
@@ -83,7 +83,7 @@ pub(crate) struct McpCallOutput {
     pub(crate) warnings: Vec<String>,
     pub(crate) server: McpCallServerRecord,
     pub(crate) arguments: serde_json::Value,
-    pub(crate) response: rc_mcp::McpToolCallResponse,
+    pub(crate) response: claude_mcp::McpToolCallResponse,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -109,7 +109,7 @@ struct McpServeOutput {
     warnings: Vec<String>,
     server: String,
     enabled: bool,
-    transport: rc_mcp::McpTransport,
+    transport: claude_mcp::McpTransport,
     command: Option<String>,
     args: Vec<String>,
     cwd: Option<PathBuf>,
@@ -247,7 +247,7 @@ fn run_mcp_add(config: &RuntimeConfig, args: McpAddArgs) -> Result<()> {
     let mut mcp_config = load_managed_mcp_config(&config_path)?;
     let existed = mcp_config.servers.contains_key(&args.name);
     let transport = match (&args.command, &args.url) {
-        (Some(command), None) => rc_mcp::McpTransportConfig::Stdio {
+        (Some(command), None) => claude_mcp::McpTransportConfig::Stdio {
             command: command.clone(),
             args: args.args.clone(),
             cwd: args.cwd.clone(),
@@ -256,12 +256,12 @@ fn run_mcp_add(config: &RuntimeConfig, args: McpAddArgs) -> Result<()> {
         (None, Some(url)) => {
             let headers = parse_string_map("--meta", &args.metadata)?;
             if url.starts_with("ws://") || url.starts_with("wss://") {
-                rc_mcp::McpTransportConfig::WebSocket {
+                claude_mcp::McpTransportConfig::WebSocket {
                     url: url.clone(),
                     headers,
                 }
             } else {
-                rc_mcp::McpTransportConfig::Http {
+                claude_mcp::McpTransportConfig::Http {
                     url: url.clone(),
                     headers,
                 }
@@ -275,18 +275,18 @@ fn run_mcp_add(config: &RuntimeConfig, args: McpAddArgs) -> Result<()> {
         }
     };
 
-    let metadata = if matches!(transport, rc_mcp::McpTransportConfig::Stdio { .. }) {
+    let metadata = if matches!(transport, claude_mcp::McpTransportConfig::Stdio { .. }) {
         parse_string_map("--meta", &args.metadata)?
     } else {
         BTreeMap::new()
     };
     mcp_config.servers.insert(
         args.name.clone(),
-        rc_mcp::McpServerConfig {
+        claude_mcp::McpServerConfig {
             name: args.name.clone(),
             enabled: !args.disabled,
             transport,
-            capabilities: rc_mcp::McpCapabilityMatrix::default(),
+            capabilities: claude_mcp::McpCapabilityMatrix::default(),
             startup_timeout_secs: args.startup_timeout_secs,
             request_timeout_secs: args.request_timeout_secs,
             metadata,
@@ -507,7 +507,7 @@ async fn run_mcp_serve(config: &RuntimeConfig, args: McpServeArgs) -> Result<()>
         println!("warning: {warning}");
     }
 
-    let rc_mcp::McpTransportConfig::Stdio {
+    let claude_mcp::McpTransportConfig::Stdio {
         command,
         args,
         cwd,
@@ -529,7 +529,7 @@ async fn run_mcp_serve(config: &RuntimeConfig, args: McpServeArgs) -> Result<()>
     if let Some(cwd) = cwd {
         println!("cwd: {}", cwd.display());
     }
-    let resolved_command = rc_mcp::resolve_stdio_command(command);
+    let resolved_command = claude_mcp::resolve_stdio_command(command);
     let mut command_builder = tokio::process::Command::new(&resolved_command);
     command_builder
         .args(args)
@@ -624,7 +624,7 @@ pub(crate) async fn build_mcp_list_output(
         config,
         &args.config_paths,
         args.connect,
-        &rc_mcp::McpClientInfo::new("remote-code-rust", RUNTIME_VERSION),
+        &claude_mcp::McpClientInfo::new("remote-code-rust", RUNTIME_VERSION),
     )
     .await;
     let filters = args.servers.iter().cloned().collect::<BTreeSet<_>>();
@@ -696,9 +696,9 @@ pub(crate) async fn build_mcp_call_output(
     }
 
     let arguments = parse_mcp_call_arguments(args)?;
-    let response = rc_mcp::call_tool(
+    let response = claude_mcp::call_tool(
         &resolution.entry.server,
-        &rc_mcp::McpClientInfo::new("remote-code-rust", RUNTIME_VERSION),
+        &claude_mcp::McpClientInfo::new("remote-code-rust", RUNTIME_VERSION),
         &args.tool,
         arguments.clone(),
     )
@@ -848,27 +848,27 @@ fn managed_mcp_config_path(
 ) -> PathBuf {
     override_path.cloned().unwrap_or_else(|| {
         if project {
-            config.cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE)
+            config.cwd.join(claude_mcp::DEFAULT_MCP_CONFIG_FILE)
         } else {
             config
                 .paths
                 .profile_dir
-                .join(rc_mcp::DEFAULT_MCP_CONFIG_FILE)
+                .join(claude_mcp::DEFAULT_MCP_CONFIG_FILE)
         }
     })
 }
 
-fn load_managed_mcp_config(path: &Path) -> Result<rc_mcp::McpConfig> {
+fn load_managed_mcp_config(path: &Path) -> Result<claude_mcp::McpConfig> {
     if path.exists() {
-        Ok(rc_mcp::McpConfig::load(path)?)
+        Ok(claude_mcp::McpConfig::load(path)?)
     } else {
-        Ok(rc_mcp::McpConfig::default())
+        Ok(claude_mcp::McpConfig::default())
     }
 }
 
 fn mcp_serve_output_from_resolution(resolution: &RuntimeMcpResolution) -> McpServeOutput {
     let (command, args, cwd, env_keys) = match &resolution.entry.server.transport {
-        rc_mcp::McpTransportConfig::Stdio {
+        claude_mcp::McpTransportConfig::Stdio {
             command,
             args,
             cwd,
@@ -894,11 +894,11 @@ fn mcp_serve_output_from_resolution(resolution: &RuntimeMcpResolution) -> McpSer
     }
 }
 
-pub(crate) fn format_mcp_transport(transport: rc_mcp::McpTransport) -> &'static str {
+pub(crate) fn format_mcp_transport(transport: claude_mcp::McpTransport) -> &'static str {
     match transport {
-        rc_mcp::McpTransport::Stdio => "stdio",
-        rc_mcp::McpTransport::Http => "http",
-        rc_mcp::McpTransport::WebSocket => "websocket",
+        claude_mcp::McpTransport::Stdio => "stdio",
+        claude_mcp::McpTransport::Http => "http",
+        claude_mcp::McpTransport::WebSocket => "websocket",
     }
 }
 
@@ -928,7 +928,7 @@ pub(crate) fn format_mcp_call_source(server: &McpCallServerRecord) -> String {
 mod tests {
     use std::fs;
 
-    use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
+    use claude_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
     use tempfile::tempdir;
 
     use super::{
@@ -937,9 +937,9 @@ mod tests {
         run_mcp_toggle,
     };
     use crate::cli::{McpAddArgs, McpRemoveArgs, McpResetArgs, McpToggleArgs};
-    use rc_tools::mcp_runtime::{discover_runtime_mcp_servers, resolve_runtime_mcp_server};
+    use claude_tools::mcp_runtime::{discover_runtime_mcp_servers, resolve_runtime_mcp_server};
 
-    fn test_config() -> (tempfile::TempDir, rc_config::RuntimeConfig) {
+    fn test_config() -> (tempfile::TempDir, claude_config::RuntimeConfig) {
         let tempdir = tempdir().expect("tempdir");
         let cwd = tempdir.path().join("workspace");
         let profile = tempdir.path().join(".remote-code-rust");
@@ -949,9 +949,9 @@ mod tests {
             Some(cwd),
             Some(profile),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -1152,14 +1152,14 @@ mod tests {
         fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("plugin dir");
         fs::create_dir_all(&extra_root).expect("extra root");
         fs::write(
-            cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            cwd.join(claude_mcp::DEFAULT_MCP_CONFIG_FILE),
             r#"[servers.project]
 command = "python"
 args = ["project.py"]"#,
         )
         .expect("write project mcp");
         fs::write(
-            profile.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            profile.join(claude_mcp::DEFAULT_MCP_CONFIG_FILE),
             r#"[servers.profile]
 command = "python"
 args = ["profile.py"]"#,
@@ -1178,7 +1178,7 @@ args = ["plugin.py"]"#,
         )
         .expect("write plugin mcp");
         fs::write(
-            extra_root.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            extra_root.join(claude_mcp::DEFAULT_MCP_CONFIG_FILE),
             r#"[servers.explicit]
 command = "python"
 args = ["explicit.py"]"#,
@@ -1189,9 +1189,9 @@ args = ["explicit.py"]"#,
             Some(cwd.clone()),
             Some(profile.clone()),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -1218,9 +1218,9 @@ args = ["explicit.py"]"#,
             Some(cwd.clone()),
             Some(profile.clone()),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -1247,9 +1247,9 @@ args = ["explicit.py"]"#,
             Some(cwd),
             Some(profile),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -1282,14 +1282,14 @@ args = ["explicit.py"]"#,
         fs::create_dir_all(&cwd).expect("cwd");
         fs::create_dir_all(&profile).expect("profile");
         fs::write(
-            cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            cwd.join(claude_mcp::DEFAULT_MCP_CONFIG_FILE),
             r#"[servers.shared]
 command = "python"
 args = ["project.py"]"#,
         )
         .expect("write project mcp");
         fs::write(
-            profile.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            profile.join(claude_mcp::DEFAULT_MCP_CONFIG_FILE),
             r#"[servers.shared]
 command = "python"
 args = ["profile.py"]"#,
@@ -1300,9 +1300,9 @@ args = ["profile.py"]"#,
             Some(cwd.clone()),
             Some(profile.clone()),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -1323,9 +1323,9 @@ args = ["profile.py"]"#,
             Some(cwd),
             Some(profile),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -1348,14 +1348,14 @@ args = ["profile.py"]"#,
         fs::create_dir_all(&cwd).expect("cwd");
         fs::create_dir_all(&profile).expect("profile");
         fs::write(
-            cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            cwd.join(claude_mcp::DEFAULT_MCP_CONFIG_FILE),
             r#"[mcp_servers.shared]
 command = "python"
 args = ["managed.py"]"#,
         )
         .expect("write managed mcp");
         fs::write(
-            cwd.join(rc_mcp::DEFAULT_PROJECT_MCP_CONFIG_FILE),
+            cwd.join(claude_mcp::DEFAULT_PROJECT_MCP_CONFIG_FILE),
             r#"{
   "mcpServers": {
     "shared": {
@@ -1371,9 +1371,9 @@ args = ["managed.py"]"#,
             Some(cwd.clone()),
             Some(profile),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -1386,12 +1386,12 @@ args = ["managed.py"]"#,
 
         let warnings = post_mutation_warnings(
             &config,
-            &cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            &cwd.join(claude_mcp::DEFAULT_MCP_CONFIG_FILE),
             &["shared".to_owned()],
         );
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("shadowed"));
-        assert!(warnings[0].contains(rc_mcp::DEFAULT_PROJECT_MCP_CONFIG_FILE));
+        assert!(warnings[0].contains(claude_mcp::DEFAULT_PROJECT_MCP_CONFIG_FILE));
     }
 
     #[test]
@@ -1403,7 +1403,7 @@ args = ["managed.py"]"#,
         fs::create_dir_all(&cwd).expect("cwd");
         fs::create_dir_all(&profile).expect("profile");
         fs::write(
-            project_root.join(rc_mcp::DEFAULT_PROJECT_MCP_CONFIG_FILE),
+            project_root.join(claude_mcp::DEFAULT_PROJECT_MCP_CONFIG_FILE),
             r#"{
   "mcpServers": {
     "project": {
@@ -1415,7 +1415,7 @@ args = ["managed.py"]"#,
         )
         .expect("write project mcp");
         fs::write(
-            profile.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            profile.join(claude_mcp::DEFAULT_MCP_CONFIG_FILE),
             r#"[servers.profile]
 command = "python"
 args = ["profile.py"]"#,
@@ -1426,9 +1426,9 @@ args = ["profile.py"]"#,
             Some(cwd),
             None,
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -1457,7 +1457,7 @@ args = ["profile.py"]"#,
         fs::create_dir_all(&cwd).expect("cwd");
         fs::create_dir_all(&profile).expect("profile");
         fs::write(
-            cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            cwd.join(claude_mcp::DEFAULT_MCP_CONFIG_FILE),
             r#"[mcp_servers.project]
 command = "python""#,
         )
@@ -1467,9 +1467,9 @@ command = "python""#,
             Some(cwd.clone()),
             Some(profile),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -1481,7 +1481,7 @@ command = "python""#,
         .expect("config");
 
         let discovery =
-            discover_runtime_mcp_servers(&config, &[cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE)]);
+            discover_runtime_mcp_servers(&config, &[cwd.join(claude_mcp::DEFAULT_MCP_CONFIG_FILE)]);
         assert_eq!(discovery.servers.len(), 1);
         assert_eq!(discovery.servers[0].server.name, "project");
         assert!(discovery.warnings.is_empty());
@@ -1497,7 +1497,7 @@ command = "python""#,
         fs::create_dir_all(&cwd).expect("cwd");
         fs::create_dir_all(&profile).expect("profile");
         fs::write(
-            profile.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            profile.join(claude_mcp::DEFAULT_MCP_CONFIG_FILE),
             r#"[mcp_servers.profile]
 command = "python""#,
         )
@@ -1508,9 +1508,9 @@ command = "python""#,
             Some(cwd),
             Some(profile),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,

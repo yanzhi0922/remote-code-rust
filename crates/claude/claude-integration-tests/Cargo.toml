@@ -1,0 +1,41 @@
+[package]
+name = "claude-integration-tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+claude-core = { path = "../claude-core" }
+claude-auth = { path = "../claude-auth" }
+claude-model = { path = "../claude-model" }
+claude-context = { path = "../claude-context" }
+claude-compact = { path = "../claude-compact" }
+claude-provider = { path = "../claude-provider" }
+claude-query-engine = { path = "../claude-query-engine" }
+claude-engine-events = { path = "../claude-engine-events" }
+claude-event-bus = { path = "../claude-event-bus" }
+claude-file-history = { path = "../claude-file-history" }
+claude-session = { path = "../claude-session" }
+claude-settings = { path = "../claude-settings" }
+claude-permissions = { path = "../claude-permissions" }
+claude-system-prompt = { path = "../claude-system-prompt" }
+claude-tools = { path = "../claude-tools" }
+claude-mcp = { path = "../claude-mcp" }
+claude-agents = { path = "../claude-agents" }
+claude-agent-protocol = { path = "../claude-agent-protocol" }
+claude-swarm = { path = "../claude-swarm" }
+claude-transcript = { path = "../claude-transcript" }
+claude-config = { path = "../claude-config" }
+claude-skills = { path = "../claude-skills" }
+claude-utils = { path = "../claude-utils" }
+tokio = { workspace = true, features = ["rt", "macros", "time", "sync", "fs"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+chrono = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }

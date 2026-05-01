@@ -7,47 +7,47 @@ use std::time::Instant;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use directories::BaseDirs;
-use rc_agents::definition::AgentDefinition;
-use rc_agents::loader::load_all_agents_with_context;
-use rc_agents::prompt::{format_agent_line, visible_agents};
-use rc_auth::load_persisted_oauth_state;
-use rc_config::settings_layers::load_runtime_settings;
-use rc_config::{RuntimeConfig, validate_provider_config};
-use rc_context::runtime_identity::{
+use claude_agents::definition::AgentDefinition;
+use claude_agents::loader::load_all_agents_with_context;
+use claude_agents::prompt::{format_agent_line, visible_agents};
+use claude_auth::load_persisted_oauth_state;
+use claude_config::settings_layers::load_runtime_settings;
+use claude_config::{RuntimeConfig, validate_provider_config};
+use claude_context::runtime_identity::{
     agent_swarms_enabled, code_guide_enabled, default_entrypoint, embedded_search_tools_enabled,
     entrypoint_is_non_interactive, explore_plan_agents_enabled, fork_subagent_enabled,
     runtime_user_type_from_env, show_agent_concurrency_note, verification_agent_enabled,
 };
-use rc_context::{
+use claude_context::{
     RuntimeFeatureGates, RuntimeIdentityContext, RuntimeSubscriptionContext, RuntimeUserType,
 };
-use rc_core::{
+use claude_core::{
     Attachment, AttachmentMediaType, ConversationEntry, ConversationRole, Message, PermissionMode,
     ProviderProtocol, ProviderResponse, ToolCall, ToolResult,
 };
-use rc_mcp::normalization::{build_mcp_tool_name, mcp_info_from_string};
-use rc_mcp::serialization::{McpCliState, SerializedClient, SerializedTool};
-use rc_mcp::{McpClientInfo, McpListChangedSurface};
-use rc_permissions::PermissionBroker;
-use rc_protocol::UsagePayload;
-use rc_provider::{
+use claude_mcp::normalization::{build_mcp_tool_name, mcp_info_from_string};
+use claude_mcp::serialization::{McpCliState, SerializedClient, SerializedTool};
+use claude_mcp::{McpClientInfo, McpListChangedSurface};
+use claude_permissions::PermissionBroker;
+use claude_protocol::UsagePayload;
+use claude_provider::{
     ConversationBackend, DiscoveredToolScope, provider_runtime_tool_specs_for_request,
     query_source::ProviderRequestContext,
 };
-use rc_query_engine::{
+use claude_query_engine::{
     EffortLevel, ProcessUserInputContext, ProviderInvocationMode, QueryCheckpointKind, QueryEngine,
     QueryEngineConfig, QueryObserver, QueryObserverEvent, QuerySource, ToolRunResult, ToolRunner,
 };
-use rc_runtime_prompt::{
+use claude_runtime_prompt::{
     PromptRuntimeOverrides, RuntimePromptSettings, clear_runtime_system_prompt_state,
     conversation_with_runtime_user_context_with_settings, effective_allowed_tool_names,
     runtime_agent_listing_delta_enabled, runtime_deferred_tools_delta_enabled, runtime_env_truthy,
     runtime_mcp_instructions_delta_enabled,
 };
-use rc_session::SessionStore;
-use rc_session::resume_state::{PendingToolCall, ResumeState};
-use rc_session::session_memory::session_memory_dir;
-use rc_tools::{
+use claude_session::SessionStore;
+use claude_session::resume_state::{PendingToolCall, ResumeState};
+use claude_session::session_memory::session_memory_dir;
+use claude_tools::{
     FileStateCache, RuntimeAgentPromptContext, ToolExecutionContext, ToolRuntimePolicyOverlay,
     ToolSpec, current_runtime_agent_prompt_context, current_tool_runtime_policy, execute_tool_call,
     git::{apply_worktree_tool_result_to_runtime, sync_tool_context_from_runtime},
@@ -66,7 +66,7 @@ use rc_tools::{
     with_runtime_mcp_observation_provider, with_runtime_mcp_state_provider,
     with_tool_runtime_policy_overlay,
 };
-use rc_ui_bridge::UiRuntimeMcpServerStatus;
+use claude_ui_bridge::UiRuntimeMcpServerStatus;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -98,8 +98,8 @@ struct CompatSharedState {
 
 fn fork_snapshot_from_conversation(
     conversation: &[ConversationEntry],
-) -> rc_core::SubAgentForkSnapshot {
-    rc_core::SubAgentForkSnapshot {
+) -> claude_core::SubAgentForkSnapshot {
+    claude_core::SubAgentForkSnapshot {
         fork_context_messages: conversation.iter().cloned().map(Message::from).collect(),
         system_prompt: conversation
             .iter()
@@ -115,7 +115,7 @@ pub(crate) type CompatRunOverrides = PromptRuntimeOverrides;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ForkCacheSafeParams {
-    pub(crate) fork_context_messages: Vec<rc_core::Message>,
+    pub(crate) fork_context_messages: Vec<claude_core::Message>,
     pub(crate) system_prompt: Option<String>,
     pub(crate) user_context: std::collections::BTreeMap<String, String>,
     pub(crate) system_context: std::collections::BTreeMap<String, String>,
@@ -124,7 +124,7 @@ pub(crate) struct ForkCacheSafeParams {
 
 impl ForkCacheSafeParams {
     pub(crate) fn from_repl_hook_context(
-        context: &rc_query_engine::stop_hooks::ReplHookContext,
+        context: &claude_query_engine::stop_hooks::ReplHookContext,
     ) -> Self {
         Self {
             fork_context_messages: context.messages.clone(),
@@ -160,7 +160,7 @@ pub(crate) struct CompatExecutionOptions {
     pub(crate) persist_tool_results_dir: Option<PathBuf>,
     pub(crate) hook_options: HookExecutionOptions,
     pub(crate) query_source: QuerySource,
-    pub(crate) agent_id: Option<rc_core::AgentId>,
+    pub(crate) agent_id: Option<claude_core::AgentId>,
     pub(crate) fork_snapshot: Option<ForkCacheSafeParams>,
 }
 
@@ -358,7 +358,7 @@ impl ConversationBackend for CriticalReminderBackend {
     async fn complete_streaming(
         &self,
         conversation: &[ConversationEntry],
-        callbacks: Option<rc_provider::StreamingCallbacks>,
+        callbacks: Option<claude_provider::StreamingCallbacks>,
     ) -> Result<ProviderResponse> {
         let augmented = augment_conversation_with_critical_reminder(conversation, &self.reminder);
         self.inner.complete_streaming(&augmented, callbacks).await
@@ -367,7 +367,7 @@ impl ConversationBackend for CriticalReminderBackend {
     async fn complete_streaming_with_context(
         &self,
         conversation: &[ConversationEntry],
-        callbacks: Option<rc_provider::StreamingCallbacks>,
+        callbacks: Option<claude_provider::StreamingCallbacks>,
         context: &ProviderRequestContext,
     ) -> Result<ProviderResponse> {
         let augmented = augment_conversation_with_critical_reminder(conversation, &self.reminder);
@@ -376,7 +376,7 @@ impl ConversationBackend for CriticalReminderBackend {
             .await
     }
 
-    fn sub_agent_completion(&self) -> Arc<dyn rc_core::SubAgentCompletion> {
+    fn sub_agent_completion(&self) -> Arc<dyn claude_core::SubAgentCompletion> {
         self.inner.sub_agent_completion()
     }
 }
@@ -441,8 +441,8 @@ fn runtime_mcp_state_from_observation(observation: &RuntimeMcpObservation) -> Mc
 }
 
 fn runtime_mcp_observation_key_matches(
-    left: &rc_tools::mcp_runtime::RuntimeMcpServerEntry,
-    right: &rc_tools::mcp_runtime::RuntimeMcpServerEntry,
+    left: &claude_tools::mcp_runtime::RuntimeMcpServerEntry,
+    right: &claude_tools::mcp_runtime::RuntimeMcpServerEntry,
 ) -> bool {
     left.origin_kind == right.origin_kind
         && left.origin_name == right.origin_name
@@ -564,7 +564,7 @@ async fn handle_runtime_mcp_session_list_changed(
     server_name: &str,
     surface: McpListChangedSurface,
 ) {
-    rc_tools::mcp_catalog::handle_runtime_mcp_list_changed(server_name, surface).await;
+    claude_tools::mcp_catalog::handle_runtime_mcp_list_changed(server_name, surface).await;
     if matches!(surface, McpListChangedSurface::Resources) {
         return;
     }
@@ -575,8 +575,8 @@ async fn handle_runtime_mcp_session_list_changed(
 fn spawn_runtime_mcp_providers(
     config: &RuntimeConfig,
 ) -> (
-    Arc<rc_tools::RuntimeMcpStateProvider>,
-    Arc<rc_tools::RuntimeMcpObservationProvider>,
+    Arc<claude_tools::RuntimeMcpStateProvider>,
+    Arc<claude_tools::RuntimeMcpObservationProvider>,
 ) {
     let observation = runtime_mcp_session_observation(config);
     refresh_runtime_mcp_session_observation(config.clone(), Arc::clone(&observation));
@@ -612,15 +612,15 @@ fn spawn_runtime_agent_prompt_context_provider(
     config: &RuntimeConfig,
     broker: &dyn PermissionBroker,
     tool_results_dir: Option<PathBuf>,
-) -> Arc<rc_tools::RuntimeAgentPromptContextProvider> {
+) -> Arc<claude_tools::RuntimeAgentPromptContextProvider> {
     let runtime_identity = build_runtime_identity_context(config);
     let inherited_context = current_runtime_agent_prompt_context();
-    let prompt_settings = rc_runtime_prompt::RuntimePromptSettings::from_config(config);
+    let prompt_settings = claude_runtime_prompt::RuntimePromptSettings::from_config(config);
     let mut agent_memory_dirs = inherited_context
         .as_ref()
         .map(|context| context.agent_memory_dirs.clone())
         .unwrap_or_default();
-    agent_memory_dirs.extend(rc_runtime_prompt::agent_memory_dirs(config));
+    agent_memory_dirs.extend(claude_runtime_prompt::agent_memory_dirs(config));
     agent_memory_dirs.sort();
     agent_memory_dirs.dedup();
     let context = RuntimeAgentPromptContext {
@@ -638,13 +638,13 @@ fn spawn_runtime_agent_prompt_context_provider(
             .unwrap_or_default(),
         allowed_agent_types: None,
         denied_agent_types: extract_denied_agent_types(&broker.layered_rules()),
-        is_coordinator: rc_agents::coordinator::is_coordinator_mode(),
+        is_coordinator: claude_agents::coordinator::is_coordinator_mode(),
         is_non_interactive: config.print_mode,
         list_via_attachment: runtime_identity.features.agent_listing_delta_enabled,
         runtime_identity,
         scratchpad_dir: prompt_settings.scratchpad_dir.map(PathBuf::from),
         session_memory_dir: Some(session_memory_dir(config)),
-        tasks_dir: Some(rc_swarm::team_helpers::claude_config_home_dir().join("tasks")),
+        tasks_dir: Some(claude_swarm::team_helpers::claude_config_home_dir().join("tasks")),
         tool_results_dir: Some(tool_results_dir.unwrap_or_else(|| {
             config
                 .paths
@@ -659,7 +659,7 @@ fn spawn_runtime_agent_prompt_context_provider(
         team_memory_read_dir: prompt_settings.team_memory_read_dir.map(PathBuf::from),
         project_temp_dir: prompt_settings.project_temp_dir.map(PathBuf::from),
         preview_launch_config_path: Some(config.original_cwd.join(".claude").join("launch.json")),
-        teams_dir: Some(rc_swarm::team_helpers::teams_base_dir()),
+        teams_dir: Some(claude_swarm::team_helpers::teams_base_dir()),
         agent_memory_dirs,
     };
     Arc::new(move || context.clone())
@@ -764,10 +764,10 @@ fn runtime_agent_listing_delta_active() -> bool {
         .unwrap_or_else(runtime_agent_listing_delta_enabled)
 }
 
-fn extract_denied_agent_types(rules: &[rc_permissions::SourceAwarePermissionRule]) -> Vec<String> {
+fn extract_denied_agent_types(rules: &[claude_permissions::SourceAwarePermissionRule]) -> Vec<String> {
     let mut denied = std::collections::BTreeSet::new();
     for rule in rules {
-        if rule.action != rc_permissions::RuleAction::Deny {
+        if rule.action != claude_permissions::RuleAction::Deny {
             continue;
         }
         let pattern = rule.tool_pattern.trim();
@@ -818,7 +818,7 @@ fn resolved_runtime_entrypoint(_config: &RuntimeConfig, is_non_interactive: bool
 fn build_runtime_identity_context(config: &RuntimeConfig) -> RuntimeIdentityContext {
     let resolved_settings = load_runtime_settings(&config.settings_files).unwrap_or_default();
     let is_non_interactive = config.print_mode
-        || !matches!(config.output_format, rc_core::OutputFormat::Text)
+        || !matches!(config.output_format, claude_core::OutputFormat::Text)
         || entrypoint_is_non_interactive(std::env::var("CLAUDE_CODE_ENTRYPOINT").ok().as_deref());
     let entrypoint = Some(resolved_runtime_entrypoint(config, is_non_interactive));
     let user_type = runtime_user_type_from_env(std::env::var("USER_TYPE").ok().as_deref());
@@ -830,7 +830,7 @@ fn build_runtime_identity_context(config: &RuntimeConfig) -> RuntimeIdentityCont
             RuntimeUserType::Ant => Some("max".to_owned()),
             _ => None,
         });
-    let coordinator_mode = rc_agents::coordinator::is_coordinator_mode();
+    let coordinator_mode = claude_agents::coordinator::is_coordinator_mode();
     let embedded_search_tools = embedded_search_tools_enabled(
         entrypoint.as_deref(),
         runtime_env_truthy("EMBEDDED_SEARCH_TOOLS"),
@@ -841,7 +841,7 @@ fn build_runtime_identity_context(config: &RuntimeConfig) -> RuntimeIdentityCont
             .provider
             .base_url
             .as_deref()
-            .map(rc_model::is_first_party_base_url)
+            .map(claude_model::is_first_party_base_url)
             .unwrap_or(matches!(
                 config.provider.protocol,
                 ProviderProtocol::Anthropic
@@ -881,7 +881,7 @@ fn build_runtime_identity_context(config: &RuntimeConfig) -> RuntimeIdentityCont
             .provider
             .base_url
             .as_deref()
-            .map(rc_model::is_first_party_base_url)
+            .map(claude_model::is_first_party_base_url)
             .unwrap_or(matches!(
                 config.provider.protocol,
                 ProviderProtocol::Anthropic
@@ -1168,7 +1168,7 @@ async fn build_deferred_tools_delta_entry(
 }
 
 fn build_mcp_instruction_blocks(
-    catalog: rc_tools::mcp_catalog::RuntimeMcpCatalog,
+    catalog: claude_tools::mcp_catalog::RuntimeMcpCatalog,
 ) -> Vec<(String, String)> {
     let mut blocks = catalog
         .clients
@@ -1246,7 +1246,7 @@ fn build_mcp_instructions_delta_from_blocks(
 async fn build_mcp_instructions_delta_entry(
     conversation: &[ConversationEntry],
 ) -> Result<Option<ConversationEntry>> {
-    let catalog = rc_tools::mcp_catalog::runtime_mcp_catalog().await;
+    let catalog = claude_tools::mcp_catalog::runtime_mcp_catalog().await;
     build_mcp_instructions_delta_from_blocks(build_mcp_instruction_blocks(catalog), conversation)
 }
 
@@ -1495,7 +1495,7 @@ fn load_query_runtime_prompt_settings(config: &RuntimeConfig) -> Result<RuntimeP
     settings.mcp_instructions_delta_enabled =
         runtime_identity.features.mcp_instructions_delta_enabled;
     settings.is_non_interactive =
-        config.print_mode || !matches!(config.output_format, rc_core::OutputFormat::Text);
+        config.print_mode || !matches!(config.output_format, claude_core::OutputFormat::Text);
     settings.include_token_budget_prompt = runtime_identity.features.include_token_budget_prompt;
     settings.runtime_identity = runtime_identity;
     Ok(settings)
@@ -1508,7 +1508,7 @@ async fn refresh_runtime_system_prompt(
     discovered_tool_scope: &DiscoveredToolScope,
 ) -> Result<()> {
     let settings = load_query_runtime_prompt_settings(config)?;
-    rc_runtime_prompt::refresh_runtime_system_prompt(
+    claude_runtime_prompt::refresh_runtime_system_prompt(
         config,
         conversation,
         overrides,
@@ -1608,7 +1608,7 @@ impl QueryObserver for CompatObserver {
                 let mut discovered_before_compaction = self.shared.discovered_tool_scope.snapshot();
                 {
                     let conversation = self.shared.conversation.lock().await;
-                    discovered_before_compaction.extend(rc_tools::extract_discovered_tool_names(
+                    discovered_before_compaction.extend(claude_tools::extract_discovered_tool_names(
                         &conversation,
                         &std::collections::BTreeSet::new(),
                     ));
@@ -1629,8 +1629,8 @@ impl QueryObserver for CompatObserver {
                             "threshold_tokens": threshold_tokens,
                         }),
                     )?;
-                    let mut boundary = rc_transcript::CompactBoundary::new(
-                        rc_transcript::CompactTrigger::Auto,
+                    let mut boundary = claude_transcript::CompactBoundary::new(
+                        claude_transcript::CompactTrigger::Auto,
                         estimated_tokens_before,
                     );
                     boundary.messages_summarized = Some(entries_removed);
@@ -1640,7 +1640,7 @@ impl QueryObserver for CompatObserver {
                             discovered_before_compaction.iter().cloned().collect();
                     }
                     self.store.append_transcript_entry(
-                        &rc_transcript::TranscriptEntry::compact_boundary_now(session_id, boundary),
+                        &claude_transcript::TranscriptEntry::compact_boundary_now(session_id, boundary),
                     )?;
                     clear_runtime_system_prompt_state(session_id);
                     for entry in &compacted_conversation {
@@ -1840,7 +1840,7 @@ struct CompatToolRunner {
     shared: Arc<CompatSharedState>,
     broker: Arc<dyn PermissionBroker>,
     allowed_tools: Option<HashSet<String>>,
-    sub_agent_completion: Arc<dyn rc_core::SubAgentCompletion>,
+    sub_agent_completion: Arc<dyn claude_core::SubAgentCompletion>,
     execution: CompatExecutionOptions,
 }
 
@@ -1915,7 +1915,7 @@ impl ToolRunner for CompatToolRunner {
                 let conversation = self.shared.conversation.lock().await;
                 fork_snapshot_from_conversation(&conversation)
             };
-            let fork_snapshot_provider: Arc<rc_tools::RuntimeForkSnapshotProvider> =
+            let fork_snapshot_provider: Arc<claude_tools::RuntimeForkSnapshotProvider> =
                 Arc::new(move || fork_snapshot.clone());
             let tool_context = ToolExecutionContext {
                 sub_agent: Some(build_remote_code_sub_agent_runtime(
@@ -2011,7 +2011,7 @@ impl ToolRunner for CompatToolRunner {
             .model
             .as_deref()
             .unwrap_or("unknown");
-        let truncated_content = rc_provider::context::ContextWindowManager::for_model(model_name)
+        let truncated_content = claude_provider::context::ContextWindowManager::for_model(model_name)
             .truncate_tool_output_default(&processed_result.content);
         let result = ToolResult {
             content: truncated_content.clone(),
@@ -2128,8 +2128,8 @@ pub(crate) async fn run_prompt_with_query_engine_compat(
     conversation: &mut Vec<ConversationEntry>,
     prompt: &str,
 ) -> Result<PromptRunOutcome> {
-    let query_source = if matches!(config.input_format, rc_core::InputFormat::StreamJson)
-        || matches!(config.output_format, rc_core::OutputFormat::StreamJson)
+    let query_source = if matches!(config.input_format, claude_core::InputFormat::StreamJson)
+        || matches!(config.output_format, claude_core::OutputFormat::StreamJson)
     {
         QuerySource::Sdk
     } else {
@@ -2202,7 +2202,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
             config.session_id,
             tool_results_dir.clone(),
             provision_content_replacement_state(store, config.session_id, conversation)?,
-            rc_tools::runtime_tool_result_persistence_skip_names(),
+            claude_tools::runtime_tool_result_persistence_skip_names(),
             false,
         );
         let mut prepared = content_backend.prepare_conversation(conversation).await?;
@@ -2338,7 +2338,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         &model_name,
         backend.clone(),
         tool_runner,
-        rc_engine_events::EventStream::new(64),
+        claude_engine_events::EventStream::new(64),
     )
     .with_observer(observer);
     if let Some(schema) = config.structured_output_schema.clone() {
@@ -2504,7 +2504,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
             }
             Ok(outcome)
         }
-        Err(rc_query_engine::EngineError::Stopped(reason))
+        Err(claude_query_engine::EngineError::Stopped(reason))
             if reason == format!("turn budget exceeded ({})", config.max_turns) =>
         {
             let error = anyhow!(
@@ -2602,10 +2602,10 @@ fn assistant_entry_from_message(message: &Message) -> Result<ConversationEntry> 
 
 fn legacy_conversation_for_result(
     engine: &QueryEngine,
-    error: Option<&rc_query_engine::EngineError>,
+    error: Option<&claude_query_engine::EngineError>,
 ) -> Vec<ConversationEntry> {
     let mut conversation = engine.state().legacy_conversation();
-    if let Some(rc_query_engine::EngineError::Stopped(reason)) = error
+    if let Some(claude_query_engine::EngineError::Stopped(reason)) = error
         && conversation
             .last()
             .is_some_and(|entry| entry.role == ConversationRole::System && entry.text == *reason)
@@ -2715,24 +2715,24 @@ mod tests {
 
     use anyhow::Result;
     use base64::Engine;
-    use rc_config::{ProviderOverrides, RuntimeConfig, RuntimeOverrides, load_runtime_config};
-    use rc_context::{RuntimeIdentityContext, RuntimeUserType};
-    use rc_core::{
+    use claude_config::{ProviderOverrides, RuntimeConfig, RuntimeOverrides, load_runtime_config};
+    use claude_context::{RuntimeIdentityContext, RuntimeUserType};
+    use claude_core::{
         ConversationEntry, ConversationRole, InputFormat, Message, OutputFormat, PermissionMode,
         ProviderProtocol, ProviderResponse, SubAgentCompletion, ToolCall, UsageSummary,
     };
-    use rc_mcp::{McpCapabilityMatrix, McpServerConfig, McpServerInspection, McpTransportConfig};
-    use rc_permissions::{
+    use claude_mcp::{McpCapabilityMatrix, McpServerConfig, McpServerInspection, McpTransportConfig};
+    use claude_permissions::{
         LayeredPermissionBroker, PermissionBroker, PermissionDecision, PermissionRequest,
         StaticPermissionBroker,
     };
-    use rc_provider::{
+    use claude_provider::{
         ConversationBackend, DiscoveredToolScope, ProviderCompatBackend, StreamingCallbacks,
     };
-    use rc_query_engine::{QueryObserver, QueryObserverEvent, QuerySource};
-    use rc_session::{SessionStore, plan_state::PlanModeState};
-    use rc_tools::mcp_catalog::clear_runtime_mcp_catalog_cache;
-    use rc_tools::{
+    use claude_query_engine::{QueryObserver, QueryObserverEvent, QuerySource};
+    use claude_session::{SessionStore, plan_state::PlanModeState};
+    use claude_tools::mcp_catalog::clear_runtime_mcp_catalog_cache;
+    use claude_tools::{
         RuntimeAgentPromptContext, RuntimeMcpServerPolicyEntry, ToolRuntimePolicy,
         configure_tool_runtime_policy, current_tool_runtime_policy,
         with_runtime_agent_prompt_context_provider, with_runtime_mcp_observation_provider,
@@ -2758,7 +2758,7 @@ mod tests {
     };
     use crate::conversation::{PromptEventSink, PromptStreamEvent, initialize_conversation};
     use crate::hooks::{HookRunState, RuntimeHookDiscovery};
-    use rc_system_prompt::cache::SYSTEM_PROMPT_DYNAMIC_BOUNDARY;
+    use claude_system_prompt::cache::SYSTEM_PROMPT_DYNAMIC_BOUNDARY;
 
     static RUNTIME_POLICY_TEST_MUTEX: OnceLock<AsyncMutex<()>> = OnceLock::new();
 
@@ -2767,20 +2767,20 @@ mod tests {
     }
 
     impl CoordinatorModeTestGuard {
-        async fn enter(mode: rc_agents::coordinator::CoordinatorMode) -> Self {
+        async fn enter(mode: claude_agents::coordinator::CoordinatorMode) -> Self {
             let guard = RUNTIME_POLICY_TEST_MUTEX
                 .get_or_init(|| AsyncMutex::new(()))
                 .lock()
                 .await;
-            rc_agents::coordinator::reset_coordinator_override();
-            let _ = rc_agents::coordinator::match_session_mode(Some(mode));
+            claude_agents::coordinator::reset_coordinator_override();
+            let _ = claude_agents::coordinator::match_session_mode(Some(mode));
             Self { _guard: guard }
         }
     }
 
     impl Drop for CoordinatorModeTestGuard {
         fn drop(&mut self) {
-            rc_agents::coordinator::reset_coordinator_override();
+            claude_agents::coordinator::reset_coordinator_override();
         }
     }
 
@@ -2844,8 +2844,8 @@ mod tests {
     }
 
     fn live_mcp_observation_provider(
-        observation: rc_tools::mcp_runtime::RuntimeMcpObservation,
-    ) -> Arc<rc_tools::RuntimeMcpObservationProvider> {
+        observation: claude_tools::mcp_runtime::RuntimeMcpObservation,
+    ) -> Arc<claude_tools::RuntimeMcpObservationProvider> {
         Arc::new(move || observation.clone())
     }
 
@@ -3365,7 +3365,7 @@ mod tests {
                 .servers
                 .first_mut()
                 .expect("discovered server should exist");
-            server.status = rc_ui_bridge::UiRuntimeMcpServerStatus::Connected;
+            server.status = claude_ui_bridge::UiRuntimeMcpServerStatus::Connected;
             server.inspection = Some(McpServerInspection {
                 server_name: "context7".to_owned(),
                 protocol_version: "2025-03-26".to_owned(),
@@ -3383,7 +3383,7 @@ mod tests {
         let second_snapshot = second.lock().expect("snapshot lock").clone();
         assert_eq!(
             second_snapshot.servers[0].status,
-            rc_ui_bridge::UiRuntimeMcpServerStatus::Connected
+            claude_ui_bridge::UiRuntimeMcpServerStatus::Connected
         );
         assert_eq!(
             second_snapshot.servers[0]
@@ -3420,16 +3420,16 @@ mod tests {
         .expect("set runtime policy");
         clear_runtime_mcp_catalog_cache().await;
 
-        let observation = rc_tools::mcp_runtime::RuntimeMcpObservation {
-            servers: vec![rc_tools::mcp_runtime::RuntimeMcpServerObservation {
-                entry: rc_tools::mcp_runtime::RuntimeMcpServerEntry {
+        let observation = claude_tools::mcp_runtime::RuntimeMcpObservation {
+            servers: vec![claude_tools::mcp_runtime::RuntimeMcpServerObservation {
+                entry: claude_tools::mcp_runtime::RuntimeMcpServerEntry {
                     origin_kind: "cwd",
                     origin_name: "workspace".to_owned(),
                     config_path,
                     server: fake_runtime_mcp_policy_entry("context7", config.cwd.join(".mcp.json"))
                         .server,
                 },
-                status: rc_ui_bridge::UiRuntimeMcpServerStatus::Connected,
+                status: claude_ui_bridge::UiRuntimeMcpServerStatus::Connected,
                 inspection: Some(McpServerInspection {
                     server_name: "context7".to_owned(),
                     protocol_version: "2025-03-26".to_owned(),
@@ -3509,7 +3509,7 @@ mod tests {
         {
             let mut snapshot = observation.lock().expect("snapshot");
             let server = snapshot.servers.first_mut().expect("server");
-            server.status = rc_ui_bridge::UiRuntimeMcpServerStatus::Connected;
+            server.status = claude_ui_bridge::UiRuntimeMcpServerStatus::Connected;
             server.inspection = Some(McpServerInspection {
                 server_name: "context7".to_owned(),
                 protocol_version: "2025-03-26".to_owned(),
@@ -3541,14 +3541,14 @@ mod tests {
             &config,
             &observation,
             "context7",
-            rc_mcp::McpListChangedSurface::Resources,
+            claude_mcp::McpListChangedSurface::Resources,
         )
         .await;
         {
             let snapshot = observation.lock().expect("snapshot");
             assert_eq!(
                 snapshot.servers[0].status,
-                rc_ui_bridge::UiRuntimeMcpServerStatus::Connected,
+                claude_ui_bridge::UiRuntimeMcpServerStatus::Connected,
                 "resources/list_changed should not invalidate the prompt/tool snapshot"
             );
             assert_eq!(
@@ -3564,14 +3564,14 @@ mod tests {
             &config,
             &observation,
             "context7",
-            rc_mcp::McpListChangedSurface::Prompts,
+            claude_mcp::McpListChangedSurface::Prompts,
         )
         .await;
         {
             let snapshot = observation.lock().expect("snapshot");
             assert_eq!(
                 snapshot.servers[0].status,
-                rc_ui_bridge::UiRuntimeMcpServerStatus::Failed
+                claude_ui_bridge::UiRuntimeMcpServerStatus::Failed
             );
             assert!(snapshot.servers[0].inspection.is_none());
             assert!(snapshot.servers[0].error.is_some());
@@ -3613,7 +3613,7 @@ mod tests {
                 streamed_tool_calls: tokio::sync::Mutex::new(std::collections::HashSet::new()),
                 latest_streaming_usage: tokio::sync::Mutex::new(None),
                 latest_request_id: tokio::sync::Mutex::new(None),
-                read_file_state: rc_tools::FileStateCache::new(),
+                read_file_state: claude_tools::FileStateCache::new(),
             }),
             event_sink: None,
             include_partial_messages: false,
@@ -3775,7 +3775,7 @@ while True:
 
     fn mock_provider_backend(config: &RuntimeConfig) -> Arc<dyn ConversationBackend> {
         Arc::new(ProviderCompatBackend::new(
-            Arc::new(rc_provider::ProviderClient::new().expect("provider client")),
+            Arc::new(claude_provider::ProviderClient::new().expect("provider client")),
             &config.provider,
         ))
     }
@@ -4288,7 +4288,7 @@ while True:
     #[tokio::test]
     async fn compat_run_includes_coordinator_worker_tools_context_in_user_reminder() {
         let _coordinator_mode =
-            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Coordinator)
+            CoordinatorModeTestGuard::enter(claude_agents::coordinator::CoordinatorMode::Coordinator)
                 .await;
 
         let (_tempdir, config, store) = mock_config_and_store();
@@ -4508,7 +4508,7 @@ while True:
     #[tokio::test]
     async fn refresh_runtime_system_prompt_preserves_structured_blocks() {
         let _coordinator_mode =
-            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal).await;
+            CoordinatorModeTestGuard::enter(claude_agents::coordinator::CoordinatorMode::Normal).await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4553,7 +4553,7 @@ while True:
     #[tokio::test]
     async fn agent_system_prompt_keeps_runtime_system_context() {
         let _coordinator_mode =
-            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal).await;
+            CoordinatorModeTestGuard::enter(claude_agents::coordinator::CoordinatorMode::Normal).await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4593,7 +4593,7 @@ while True:
     #[tokio::test]
     async fn custom_system_prompt_skips_runtime_system_context() {
         let _coordinator_mode =
-            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal).await;
+            CoordinatorModeTestGuard::enter(claude_agents::coordinator::CoordinatorMode::Normal).await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4633,7 +4633,7 @@ while True:
     #[tokio::test]
     async fn append_system_prompt_keeps_runtime_system_context() {
         let _coordinator_mode =
-            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal).await;
+            CoordinatorModeTestGuard::enter(claude_agents::coordinator::CoordinatorMode::Normal).await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4673,7 +4673,7 @@ while True:
     #[tokio::test]
     async fn override_system_prompt_replaces_runtime_prompt_and_system_context() {
         let _coordinator_mode =
-            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal).await;
+            CoordinatorModeTestGuard::enter(claude_agents::coordinator::CoordinatorMode::Normal).await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4720,7 +4720,7 @@ while True:
     #[tokio::test]
     async fn empty_custom_system_prompt_still_skips_default_prompt_and_system_context() {
         let _coordinator_mode =
-            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal).await;
+            CoordinatorModeTestGuard::enter(claude_agents::coordinator::CoordinatorMode::Normal).await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4775,7 +4775,7 @@ while True:
     #[tokio::test]
     async fn whitespace_custom_system_prompt_skips_default_prompt_and_system_context() {
         let _coordinator_mode =
-            CoordinatorModeTestGuard::enter(rc_agents::coordinator::CoordinatorMode::Normal).await;
+            CoordinatorModeTestGuard::enter(claude_agents::coordinator::CoordinatorMode::Normal).await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4932,7 +4932,7 @@ while True:
                 streamed_tool_calls: tokio::sync::Mutex::new(std::collections::HashSet::new()),
                 latest_streaming_usage: tokio::sync::Mutex::new(None),
                 latest_request_id: tokio::sync::Mutex::new(None),
-                read_file_state: rc_tools::FileStateCache::new(),
+                read_file_state: claude_tools::FileStateCache::new(),
             }),
             event_sink: Some(event_sink),
             include_partial_messages: true,

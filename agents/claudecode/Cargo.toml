@@ -27,32 +27,32 @@ tracing.workspace = true
 uuid.workspace = true
 directories.workspace = true
 tempfile.workspace = true
-rc-config = { path = "../../crates/claude/rc-config" }
-rc-compact = { path = "../../crates/claude/rc-compact" }
-rc-context = { path = "../../crates/claude/rc-context" }
-rc-control-plane = { path = "../../crates/claude/rc-control-plane" }
-rc-core = { path = "../../crates/claude/rc-core" }
-rc-engine-events = { path = "../../crates/claude/rc-engine-events" }
-rc-agents = { path = "../../crates/claude/rc-agents" }
-rc-auth = { path = "../../crates/claude/rc-auth" }
-rc-mcp = { path = "../../crates/claude/rc-mcp" }
-rc-model = { path = "../../crates/claude/rc-model" }
-rc-permissions = { path = "../../crates/claude/rc-permissions" }
-rc-plugins = { path = "../../crates/claude/rc-plugins" }
-rc-protocol = { path = "../../crates/claude/rc-protocol" }
-rc-provider = { path = "../../crates/claude/rc-provider" }
-rc-query-engine = { path = "../../crates/claude/rc-query-engine" }
-rc-runtime-prompt = { path = "../../crates/claude/rc-runtime-prompt" }
-rc-runner = { path = "../../crates/claude/rc-runner" }
-rc-session = { path = "../../crates/claude/rc-session" }
-rc-skills = { path = "../../crates/claude/rc-skills" }
-rc-swarm = { path = "../../crates/claude/rc-swarm" }
-rc-system-prompt = { path = "../../crates/claude/rc-system-prompt" }
-rc-telemetry = { path = "../../crates/claude/rc-telemetry" }
-rc-tools = { path = "../../crates/claude/rc-tools" }
-rc-transcript = { path = "../../crates/claude/rc-transcript" }
-rc-tui = { path = "../../crates/claude/rc-tui" }
-rc-ui-bridge = { path = "../../crates/claude/rc-ui-bridge" }
+claude-config = { path = "../../crates/claude/claude-config" }
+claude-compact = { path = "../../crates/claude/claude-compact" }
+claude-context = { path = "../../crates/claude/claude-context" }
+claude-control-plane = { path = "../../crates/claude/claude-control-plane" }
+claude-core = { path = "../../crates/claude/claude-core" }
+claude-engine-events = { path = "../../crates/claude/claude-engine-events" }
+claude-agents = { path = "../../crates/claude/claude-agents" }
+claude-auth = { path = "../../crates/claude/claude-auth" }
+claude-mcp = { path = "../../crates/claude/claude-mcp" }
+claude-model = { path = "../../crates/claude/claude-model" }
+claude-permissions = { path = "../../crates/claude/claude-permissions" }
+claude-plugins = { path = "../../crates/claude/claude-plugins" }
+claude-protocol = { path = "../../crates/claude/claude-protocol" }
+claude-provider = { path = "../../crates/claude/claude-provider" }
+claude-query-engine = { path = "../../crates/claude/claude-query-engine" }
+claude-runtime-prompt = { path = "../../crates/claude/claude-runtime-prompt" }
+claude-runner = { path = "../../crates/claude/claude-runner" }
+claude-session = { path = "../../crates/claude/claude-session" }
+claude-skills = { path = "../../crates/claude/claude-skills" }
+claude-swarm = { path = "../../crates/claude/claude-swarm" }
+claude-system-prompt = { path = "../../crates/claude/claude-system-prompt" }
+claude-telemetry = { path = "../../crates/claude/claude-telemetry" }
+claude-tools = { path = "../../crates/claude/claude-tools" }
+claude-transcript = { path = "../../crates/claude/claude-transcript" }
+claude-tui = { path = "../../crates/claude/claude-tui" }
+claude-ui-bridge = { path = "../../crates/claude/claude-ui-bridge" }
 chrono.workspace = true
 
 [dev-dependencies]

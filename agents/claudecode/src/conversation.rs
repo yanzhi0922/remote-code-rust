@@ -5,24 +5,24 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Result, anyhow};
-use rc_config::{
+use claude_config::{
     RuntimeConfig, SettingSource, import_legacy_profile, normalize_base_url,
     validate_provider_config,
 };
-use rc_core::{ConversationEntry, ConversationRole};
-use rc_permissions::{PermissionBroker, load_layered_rules, rules::summarize_rule_sources};
-use rc_protocol::{MessageRole, RuntimeEventDetail, UsagePayload};
-use rc_provider::context::ContextWindowManager;
-use rc_provider::query_source::ProviderRequestContext;
-use rc_provider::{DiscoveredToolScope, ProviderCompatBackend, StreamingCallbacks};
-use rc_session::resume_state::{PendingToolCall, ResumeState};
-use rc_session::runtime_context::{
+use claude_core::{ConversationEntry, ConversationRole};
+use claude_permissions::{PermissionBroker, load_layered_rules, rules::summarize_rule_sources};
+use claude_protocol::{MessageRole, RuntimeEventDetail, UsagePayload};
+use claude_provider::context::ContextWindowManager;
+use claude_provider::query_source::ProviderRequestContext;
+use claude_provider::{DiscoveredToolScope, ProviderCompatBackend, StreamingCallbacks};
+use claude_session::resume_state::{PendingToolCall, ResumeState};
+use claude_session::runtime_context::{
     persist_runtime_config_session_context, repair_interrupted_tool_batch,
     restore_runtime_config_session_context,
 };
-use rc_session::{SessionStore, conversation::ensure_conversation_initialized};
-use rc_skills::SkillDocument;
-use rc_tools::{
+use claude_session::{SessionStore, conversation::ensure_conversation_initialized};
+use claude_skills::SkillDocument;
+use claude_tools::{
     ProgressCallback, ToolExecutionContext,
     agent::{DelegateProgressEvent, parse_delegate_progress_event},
     execute_tool_call,
@@ -40,7 +40,7 @@ use rc_tools::{
         reconstruct_content_replacement_state,
     },
 };
-use rc_ui_bridge::UiTaskNode;
+use claude_ui_bridge::UiTaskNode;
 
 use crate::ResolvedPromptOverrides;
 use crate::agents::build_remote_code_sub_agent_runtime;
@@ -91,13 +91,13 @@ struct WizardSettingsProvider {
     api_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     model: Option<String>,
-    protocol: rc_core::ProviderProtocol,
+    protocol: claude_core::ProviderProtocol,
 }
 
 #[derive(Debug, Clone)]
 struct WizardProviderSelection {
     provider_name: String,
-    protocol: rc_core::ProviderProtocol,
+    protocol: claude_core::ProviderProtocol,
     base_url: Option<String>,
     api_key: Option<String>,
     model: Option<String>,
@@ -236,7 +236,7 @@ impl ConversationBackend for ContentReplacementBackend {
     async fn complete(
         &self,
         conversation: &[ConversationEntry],
-    ) -> Result<rc_core::ProviderResponse> {
+    ) -> Result<claude_core::ProviderResponse> {
         let provider_conversation = self.prepare_conversation(conversation).await?;
         self.inner.complete(&provider_conversation).await
     }
@@ -245,7 +245,7 @@ impl ConversationBackend for ContentReplacementBackend {
         &self,
         conversation: &[ConversationEntry],
         context: &ProviderRequestContext,
-    ) -> Result<rc_core::ProviderResponse> {
+    ) -> Result<claude_core::ProviderResponse> {
         let provider_conversation = self.prepare_conversation(conversation).await?;
         self.inner
             .complete_with_context(&provider_conversation, context)
@@ -256,7 +256,7 @@ impl ConversationBackend for ContentReplacementBackend {
         &self,
         conversation: &[ConversationEntry],
         callbacks: Option<StreamingCallbacks>,
-    ) -> Result<rc_core::ProviderResponse> {
+    ) -> Result<claude_core::ProviderResponse> {
         let provider_conversation = self.prepare_conversation(conversation).await?;
         self.inner
             .complete_streaming(&provider_conversation, callbacks)
@@ -268,14 +268,14 @@ impl ConversationBackend for ContentReplacementBackend {
         conversation: &[ConversationEntry],
         callbacks: Option<StreamingCallbacks>,
         context: &ProviderRequestContext,
-    ) -> Result<rc_core::ProviderResponse> {
+    ) -> Result<claude_core::ProviderResponse> {
         let provider_conversation = self.prepare_conversation(conversation).await?;
         self.inner
             .complete_streaming_with_context(&provider_conversation, callbacks, context)
             .await
     }
 
-    fn sub_agent_completion(&self) -> Arc<dyn rc_core::SubAgentCompletion> {
+    fn sub_agent_completion(&self) -> Arc<dyn claude_core::SubAgentCompletion> {
         self.inner.sub_agent_completion()
     }
 }
@@ -629,7 +629,7 @@ pub(crate) fn reapply_cli_overrides(
         config.proactive_active = false;
     }
     if cli.dangerously_skip_permissions {
-        config.permission_mode = rc_core::PermissionMode::BypassPermissions;
+        config.permission_mode = claude_core::PermissionMode::BypassPermissions;
     }
     if let Some(api_key) = &cli.api_key {
         config.provider.api_key = Some(api_key.clone());
@@ -662,7 +662,7 @@ pub(crate) fn discover_runtime_extensions(config: &RuntimeConfig) -> RuntimeExte
 
     if user_sources_enabled && config.paths.skills_dir.exists() {
         collect_skill_names(
-            rc_skills::discover_skills(&config.paths.skills_dir),
+            claude_skills::discover_skills(&config.paths.skills_dir),
             &mut skills,
             &mut warnings,
             "profile skills",
@@ -670,7 +670,7 @@ pub(crate) fn discover_runtime_extensions(config: &RuntimeConfig) -> RuntimeExte
     }
 
     if user_sources_enabled && config.paths.plugins_dir.exists() {
-        match rc_plugins::discover_plugins(&config.paths.plugins_dir) {
+        match claude_plugins::discover_plugins(&config.paths.plugins_dir) {
             Ok(discovered_plugins) => {
                 for plugin in discovered_plugins {
                     plugins.insert(plugin.manifest.name.clone());
@@ -709,7 +709,7 @@ fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool
 }
 
 fn collect_skill_names(
-    result: std::result::Result<Vec<SkillDocument>, rc_skills::SkillError>,
+    result: std::result::Result<Vec<SkillDocument>, claude_skills::SkillError>,
     skills: &mut BTreeSet<String>,
     warnings: &mut Vec<String>,
     source: &str,
@@ -888,7 +888,7 @@ async fn run_prompt_legacy(
         .as_ref()
         .map(|event_sink| build_prompt_progress_callback(config, event_sink));
 
-    let read_file_state = rc_tools::FileStateCache::new();
+    let read_file_state = claude_tools::FileStateCache::new();
     let mut tool_context = ToolExecutionContext {
         cwd: config.cwd.clone(),
         original_cwd: config.original_cwd.clone(),
@@ -901,7 +901,7 @@ async fn run_prompt_legacy(
         )),
         progress_cb,
         task_stack: std::sync::Arc::new(std::sync::Mutex::new(
-            rc_core::task_stack::TaskStack::default(),
+            claude_core::task_stack::TaskStack::default(),
         )),
         read_file_state,
     };
@@ -1109,18 +1109,18 @@ async fn run_prompt_legacy(
             };
             let audit_count_before = broker.audit_records().len();
             let tool_result = if let Some(blocked_reason) = &prepared.blocked_reason {
-                rc_core::ToolResult {
+                claude_core::ToolResult {
                     content: blocked_reason.clone(),
                     is_error: true,
                     content_blocks: Vec::new(),
                     follow_up_user_blocks: Vec::new(),
                 }
             } else {
-                let fork_snapshot = rc_core::SubAgentForkSnapshot {
+                let fork_snapshot = claude_core::SubAgentForkSnapshot {
                     fork_context_messages: conversation
                         .iter()
                         .cloned()
-                        .map(rc_core::Message::from)
+                        .map(claude_core::Message::from)
                         .collect(),
                     system_prompt: conversation
                         .iter()
@@ -1130,12 +1130,12 @@ async fn run_prompt_legacy(
                     user_context: std::collections::BTreeMap::new(),
                     system_context: std::collections::BTreeMap::new(),
                 };
-                let fork_snapshot_provider: Arc<rc_tools::RuntimeForkSnapshotProvider> =
+                let fork_snapshot_provider: Arc<claude_tools::RuntimeForkSnapshotProvider> =
                     Arc::new(move || fork_snapshot.clone());
                 // Capture tool execution errors as error tool results instead of
                 // propagating, to keep conversation state consistent for the next
                 // provider call.  This matches the TUI error-recovery pattern.
-                match rc_tools::with_runtime_fork_snapshot_provider(fork_snapshot_provider, async {
+                match claude_tools::with_runtime_fork_snapshot_provider(fork_snapshot_provider, async {
                     execute_tool_call(&effective_tool_call, &tool_context, broker.as_ref()).await
                 })
                 .await
@@ -1154,7 +1154,7 @@ async fn run_prompt_legacy(
                                 "error": format!("{error:#}"),
                             }),
                         )?;
-                        rc_core::ToolResult {
+                        claude_core::ToolResult {
                             content: format!("Tool execution error: {error}"),
                             is_error: true,
                             content_blocks: Vec::new(),
@@ -1199,7 +1199,7 @@ async fn run_prompt_legacy(
                 effective_tool_spec.tool_result_size_policy(),
             )?;
             let tool_preview = truncate_preview(&processed_result.content, 160);
-            let processed_tool_result = rc_core::ToolResult {
+            let processed_tool_result = claude_core::ToolResult {
                 content: processed_result.content.clone(),
                 is_error: tool_result.is_error,
                 content_blocks: processed_result.content_blocks.clone(),
@@ -1295,7 +1295,7 @@ pub(crate) async fn run_oneshot_text(
     prompt: String,
 ) -> Result<()> {
     let backend = ProviderCompatBackend::new(
-        Arc::new(rc_provider::ProviderClient::new()?),
+        Arc::new(claude_provider::ProviderClient::new()?),
         &config.provider,
     );
     let discovered_tool_scope = backend.discovered_tool_scope();
@@ -1345,8 +1345,8 @@ pub(crate) fn run_doctor(config: &RuntimeConfig) -> Result<()> {
     };
 
     // Gather additional diagnostic information.
-    let tool_count = rc_tools::runtime_builtin_tool_specs().len();
-    let model_info = rc_provider::model_info::get_model_info(
+    let tool_count = claude_tools::runtime_builtin_tool_specs().len();
+    let model_info = claude_provider::model_info::get_model_info(
         config.provider.model.as_deref().unwrap_or("unknown"),
     );
     let profile_dir = config.paths.profile_dir.display();
@@ -1390,7 +1390,7 @@ pub(crate) fn run_doctor(config: &RuntimeConfig) -> Result<()> {
             model_info.multimodal,
             model_info
                 .capabilities
-                .contains(&rc_provider::model_info::ModelCapability::Reasoning)
+                .contains(&claude_provider::model_info::ModelCapability::Reasoning)
         ),
         String::new(),
         "[Tools]".to_owned(),
@@ -1539,39 +1539,39 @@ pub(crate) fn run_first_run_wizard(config: &mut RuntimeConfig) -> Result<()> {
     let (provider_name, protocol, default_base_url, default_model) = match provider_choice.trim() {
         "1" => (
             "anthropic",
-            rc_core::ProviderProtocol::Anthropic,
+            claude_core::ProviderProtocol::Anthropic,
             "https://api.anthropic.com",
             "claude-sonnet-4-20250514",
         ),
         "2" => (
             "openai",
-            rc_core::ProviderProtocol::OpenAi,
+            claude_core::ProviderProtocol::OpenAi,
             "https://api.openai.com",
             "gpt-4o",
         ),
         "3" => (
             "deepseek",
-            rc_core::ProviderProtocol::OpenAi,
+            claude_core::ProviderProtocol::OpenAi,
             "https://api.deepseek.com",
             "deepseek-chat",
         ),
         "4" => (
             "glm",
-            rc_core::ProviderProtocol::OpenAi,
+            claude_core::ProviderProtocol::OpenAi,
             "https://open.bigmodel.cn/api/paas",
             "glm-5.1",
         ),
         "5" => (
             "minimax",
-            rc_core::ProviderProtocol::OpenAi,
+            claude_core::ProviderProtocol::OpenAi,
             "https://api.minimax.chat",
             "MiniMax-M1",
         ),
-        "6" => ("custom", rc_core::ProviderProtocol::OpenAi, "", ""),
-        "7" => ("custom", rc_core::ProviderProtocol::Anthropic, "", ""),
+        "6" => ("custom", claude_core::ProviderProtocol::OpenAi, "", ""),
+        "7" => ("custom", claude_core::ProviderProtocol::Anthropic, "", ""),
         _ => {
             println!("  → Using default: OpenAI-compatible");
-            ("custom", rc_core::ProviderProtocol::OpenAi, "", "")
+            ("custom", claude_core::ProviderProtocol::OpenAi, "", "")
         }
     };
 
@@ -1735,7 +1735,7 @@ fn apply_wizard_settings(
         .api_key
         .as_ref()
         .map(|_| format!("settings:{}", settings_path.display()));
-    config.settings_files = rc_config::settings_layers::resolve_runtime_settings_files(
+    config.settings_files = claude_config::settings_layers::resolve_runtime_settings_files(
         &config.cwd,
         &config.paths.profile_dir,
         &config.paths.profiles_dir,
@@ -1774,14 +1774,14 @@ mod tests {
     use anyhow::Result;
     use async_trait::async_trait;
     use clap::Parser;
-    use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
-    use rc_core::{
+    use claude_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
+    use claude_core::{
         ConversationEntry, ConversationRole, ProviderResponse, SubAgentCompletion, ToolCall,
     };
-    use rc_protocol::{MessageRole, RuntimeEventDetail};
-    use rc_provider::StreamingCallbacks;
-    use rc_session::SessionStore;
-    use rc_session::resume_state::{PendingToolCall, ResumeState};
+    use claude_protocol::{MessageRole, RuntimeEventDetail};
+    use claude_provider::StreamingCallbacks;
+    use claude_session::SessionStore;
+    use claude_session::resume_state::{PendingToolCall, ResumeState};
     use tempfile::tempdir;
 
     use super::{
@@ -1837,7 +1837,7 @@ mod tests {
         }
     }
 
-    fn test_config() -> (tempfile::TempDir, rc_config::RuntimeConfig) {
+    fn test_config() -> (tempfile::TempDir, claude_config::RuntimeConfig) {
         let tempdir = tempdir().expect("tempdir");
         let cwd = tempdir.path().join("workspace");
         let profile = tempdir.path().join(".remote-code-rust");
@@ -1846,9 +1846,9 @@ mod tests {
             Some(cwd),
             Some(profile),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -1864,7 +1864,7 @@ mod tests {
     fn sample_wizard_selection() -> WizardProviderSelection {
         WizardProviderSelection {
             provider_name: "glm".to_owned(),
-            protocol: rc_core::ProviderProtocol::OpenAi,
+            protocol: claude_core::ProviderProtocol::OpenAi,
             base_url: Some("https://open.bigmodel.cn/api/paas".to_owned()),
             api_key: Some("secret".to_owned()),
             model: Some("glm-5.1".to_owned()),
@@ -1906,7 +1906,7 @@ mod tests {
         let selection = sample_wizard_selection();
 
         write_wizard_settings_file(&settings_path, &selection).expect("wizard settings");
-        let resolved = rc_config::settings_layers::load_runtime_settings(&[settings_path])
+        let resolved = claude_config::settings_layers::load_runtime_settings(&[settings_path])
             .expect("settings should load");
 
         assert_eq!(resolved.provider_name.as_deref(), Some("glm"));
@@ -1916,7 +1916,7 @@ mod tests {
         );
         assert_eq!(resolved.api_key.as_deref(), Some("secret"));
         assert_eq!(resolved.model.as_deref(), Some("glm-5.1"));
-        assert_eq!(resolved.protocol, Some(rc_core::ProviderProtocol::OpenAi));
+        assert_eq!(resolved.protocol, Some(claude_core::ProviderProtocol::OpenAi));
     }
 
     #[test]
@@ -1955,7 +1955,7 @@ mod tests {
     #[test]
     fn reapply_cli_overrides_restores_permission_mode() {
         let (_tempdir, mut config) = test_config();
-        config.permission_mode = rc_core::PermissionMode::Default;
+        config.permission_mode = claude_core::PermissionMode::Default;
 
         let cli = crate::cli::Cli::parse_from([
             "remote-code",
@@ -1965,7 +1965,7 @@ mod tests {
         ]);
         reapply_cli_overrides(&cli, &ResolvedPromptOverrides::default(), &mut config, true);
 
-        assert_eq!(config.permission_mode, rc_core::PermissionMode::AcceptEdits);
+        assert_eq!(config.permission_mode, claude_core::PermissionMode::AcceptEdits);
     }
 
     #[test]
@@ -2003,7 +2003,7 @@ mod tests {
         assert!(!config.proactive_active);
         assert_eq!(
             config.permission_mode,
-            rc_core::PermissionMode::BypassPermissions
+            claude_core::PermissionMode::BypassPermissions
         );
     }
 
@@ -2115,7 +2115,7 @@ mod tests {
     #[test]
     fn reapply_cli_overrides_preserves_restored_permission_mode_when_cli_is_default() {
         let (_tempdir, mut config) = test_config();
-        config.permission_mode = rc_core::PermissionMode::Plan;
+        config.permission_mode = claude_core::PermissionMode::Plan;
 
         let cli = crate::cli::Cli::parse_from(["remote-code", "resume prompt"]);
         reapply_cli_overrides(
@@ -2125,7 +2125,7 @@ mod tests {
             false,
         );
 
-        assert_eq!(config.permission_mode, rc_core::PermissionMode::Plan);
+        assert_eq!(config.permission_mode, claude_core::PermissionMode::Plan);
     }
 
     #[test]
@@ -2258,7 +2258,7 @@ mod tests {
         )
         .expect("write skill");
         fs::write(
-            profile.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            profile.join(claude_mcp::DEFAULT_MCP_CONFIG_FILE),
             r#"[servers.profile]
 command = "python"
 args = ["profile.py"]
@@ -2270,7 +2270,7 @@ enabled = false"#,
         )
         .expect("write profile mcp");
         fs::write(
-            cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            cwd.join(claude_mcp::DEFAULT_MCP_CONFIG_FILE),
             r#"[servers.project]
 command = "python"
 args = ["project.py"]"#,
@@ -2308,9 +2308,9 @@ args = ["plugin.py"]"#,
             Some(cwd.clone()),
             Some(profile.clone()),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -2334,9 +2334,9 @@ args = ["plugin.py"]"#,
             Some(cwd),
             Some(profile),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,

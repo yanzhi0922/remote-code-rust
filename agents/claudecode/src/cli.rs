@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
-use rc_control_plane::SessionState as RemoteSessionState;
-use rc_core::{InputFormat, OutputFormat, PermissionMode, ProviderProtocol};
-use rc_runner::{ApprovalDecision, RunnerSessionCommandResponse};
+use claude_control_plane::SessionState as RemoteSessionState;
+use claude_core::{InputFormat, OutputFormat, PermissionMode, ProviderProtocol};
+use claude_runner::{ApprovalDecision, RunnerSessionCommandResponse};
 use uuid::Uuid;
 
 use crate::hooks::HooksCommand;

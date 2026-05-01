@@ -227,7 +227,7 @@ Claude Code 有一个完整的 bridge 层（40+ 文件）：
 
 ### 4.2 remote-code 对应
 
-我们的 `headless.rs` + `rc-protocol` + `rc-control-plane` 提供了类似功能，但架构不同：
+我们的 `headless.rs` + `claude-protocol` + `claude-control-plane` 提供了类似功能，但架构不同：
 - headless 模式通过 `PromptStreamEvent` 输出
 - remote 通过 control plane WebSocket 通信
 - 缺少 bridge 式的双向实时通信模型

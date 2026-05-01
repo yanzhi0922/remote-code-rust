@@ -1,6 +1,6 @@
 use anyhow::Result;
-use rc_config::RuntimeConfig;
-use rc_tools::{ToolExecutionContext, git};
+use claude_config::RuntimeConfig;
+use claude_tools::{ToolExecutionContext, git};
 use serde_json::{Value, json};
 
 use crate::cli::{WorktreeAddArgs, WorktreeCommand, WorktreeListArgs, WorktreeRemoveArgs};
@@ -119,7 +119,7 @@ fn render_scalar(value: &Value, key: &str) -> Option<String> {
 mod tests {
     use std::fs;
 
-    use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
+    use claude_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
     use tempfile::tempdir;
 
     use super::build_worktree_list_output;
@@ -135,9 +135,9 @@ mod tests {
             Some(cwd),
             Some(profile),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,

@@ -1,1 +1,1 @@
-pub(crate) use rc_provider::ConversationBackend;
+pub(crate) use claude_provider::ConversationBackend;

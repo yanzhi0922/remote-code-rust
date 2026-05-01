@@ -4,7 +4,7 @@
 //! specialized event types. This module translates the subset relevant to
 //! the unified agent protocol into [`UnifiedAgentEvent`] variants.
 
-use rc_agent_protocol::events::{AgentResult, ToolCallInfo, UnifiedAgentEvent, UsageInfo};
+use claude_agent_protocol::events::{AgentResult, ToolCallInfo, UnifiedAgentEvent, UsageInfo};
 
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::{

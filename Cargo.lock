@@ -2030,6 +2030,676 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
+name = "claude-agent-protocol"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "claude-agents"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "claude-context",
+ "claude-core",
+ "directories 6.0.0",
+ "indexmap 2.14.0",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+ "walkdir",
+]
+
+[[package]]
+name = "claude-analytics"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "claude-auth"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "claude-context",
+ "claude-core",
+ "getrandom 0.3.4",
+ "hmac 0.12.1",
+ "once_cell",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "claude-compact"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "claude-config",
+ "claude-core",
+ "claude-provider",
+ "claude-session",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "claude-config"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "claude-core",
+ "directories 6.0.0",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml 0.9.12+spec-1.1.0",
+ "uuid",
+ "walkdir",
+]
+
+[[package]]
+name = "claude-context"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "claude-control-plane"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "claude-config",
+ "claude-engine-events",
+ "claude-runner",
+ "futures",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite 0.28.0",
+ "tower",
+ "tower-http",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "claude-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "clap",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "claude-engine-events"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "claude-event-bus"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "claude-file-history"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "claude-core",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
+name = "claude-ide"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "claude-integration-tests"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "claude-agent-protocol",
+ "claude-agents",
+ "claude-auth",
+ "claude-compact",
+ "claude-config",
+ "claude-context",
+ "claude-core",
+ "claude-engine-events",
+ "claude-event-bus",
+ "claude-file-history",
+ "claude-mcp",
+ "claude-model",
+ "claude-permissions",
+ "claude-provider",
+ "claude-query-engine",
+ "claude-session",
+ "claude-settings",
+ "claude-skills",
+ "claude-swarm",
+ "claude-system-prompt",
+ "claude-tools",
+ "claude-transcript",
+ "claude-utils",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "claude-lsp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "claude-managed-settings"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "claude-mcp"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "rand 0.9.4",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml 0.9.12+spec-1.1.0",
+ "tracing",
+ "walkdir",
+]
+
+[[package]]
+name = "claude-model"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "claude-permissions"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "claude-core",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "toml 0.9.12+spec-1.1.0",
+ "tracing",
+]
+
+[[package]]
+name = "claude-plugins"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "claude-mcp",
+ "claude-skills",
+ "directories 6.0.0",
+ "flate2",
+ "once_cell",
+ "regex",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "walkdir",
+ "zip",
+]
+
+[[package]]
+name = "claude-protocol"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "claude-core",
+ "claude-engine-events",
+ "claude-permissions",
+ "claude-ui-bridge",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "claude-provider"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "claude-config",
+ "claude-core",
+ "claude-tools",
+ "futures",
+ "hmac 0.12.1",
+ "image",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "claude-query-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "claude-core",
+ "claude-engine-events",
+ "claude-provider",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "claude-runner"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "claude-config",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "uuid",
+]
+
+[[package]]
+name = "claude-runtime-prompt"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "claude-agents",
+ "claude-config",
+ "claude-context",
+ "claude-core",
+ "claude-model",
+ "claude-provider",
+ "claude-skills",
+ "claude-system-prompt",
+ "claude-tools",
+ "globset",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
+ "walkdir",
+]
+
+[[package]]
+name = "claude-session"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "claude-config",
+ "claude-core",
+ "claude-transcript",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "uuid",
+ "walkdir",
+]
+
+[[package]]
+name = "claude-settings"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "claude-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
+name = "claude-skill-search"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "regex",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "claude-skills"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml 0.9.12+spec-1.1.0",
+ "walkdir",
+]
+
+[[package]]
+name = "claude-swarm"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "claude-agents",
+ "claude-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "claude-system-prompt"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "claude-core",
+ "once_cell",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "claude-telemetry"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "claude-teleport"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "claude-tools"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "claude-agents",
+ "claude-config",
+ "claude-context",
+ "claude-core",
+ "claude-mcp",
+ "claude-permissions",
+ "claude-plugins",
+ "claude-session",
+ "claude-skills",
+ "claude-swarm",
+ "claude-ui-bridge",
+ "claude-utils",
+ "directories 5.0.1",
+ "glob",
+ "globset",
+ "ignore",
+ "once_cell",
+ "regex",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "urlencoding",
+ "uuid",
+ "walkdir",
+]
+
+[[package]]
+name = "claude-transcript"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "claude-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "claude-tui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "claude-agents",
+ "claude-config",
+ "claude-core",
+ "claude-mcp",
+ "claude-model",
+ "claude-permissions",
+ "claude-plugins",
+ "claude-provider",
+ "claude-runtime-prompt",
+ "claude-session",
+ "claude-skills",
+ "claude-system-prompt",
+ "claude-tools",
+ "claude-utils",
+ "crossterm",
+ "directories 6.0.0",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml 0.9.12+spec-1.1.0",
+ "unicode-width 0.2.1",
+ "uuid",
+]
+
+[[package]]
+name = "claude-ui-bridge"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "claude-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "claude-utils"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "claude-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "claude-voice"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "clipboard-win"
 version = "5.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11683,92 +12353,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "rc-agent-protocol"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "rc-agents"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "directories 6.0.0",
- "indexmap 2.14.0",
- "rc-context",
- "rc-core",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
- "uuid",
- "walkdir",
-]
-
-[[package]]
-name = "rc-analytics"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "rc-auth"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64 0.22.1",
- "chrono",
- "getrandom 0.3.4",
- "hmac 0.12.1",
- "once_cell",
- "rc-context",
- "rc-core",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "rc-claude-adapter"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "rc-agent-protocol",
- "rc-config",
- "rc-core",
- "rc-engine-events",
- "rc-permissions",
- "rc-provider",
- "rc-query-engine",
- "rc-session",
- "rc-tools",
+ "claude-agent-protocol",
+ "claude-config",
+ "claude-core",
+ "claude-engine-events",
+ "claude-permissions",
+ "claude-provider",
+ "claude-query-engine",
+ "claude-session",
+ "claude-tools",
  "serde",
  "serde_json",
  "tokio",
@@ -11782,6 +12380,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "claude-agent-protocol",
  "codex-app-server-client",
  "codex-app-server-protocol",
  "codex-arg0",
@@ -11792,7 +12391,6 @@ dependencies = [
  "codex-state",
  "codex-utils-absolute-path",
  "directories 6.0.0",
- "rc-agent-protocol",
  "serde",
  "serde_json",
  "tokio",
@@ -11803,336 +12401,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "rc-compact"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "rc-config",
- "rc-core",
- "rc-provider",
- "rc-session",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "rc-config"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "directories 6.0.0",
- "rc-core",
- "serde",
- "serde_json",
- "tempfile",
- "toml 0.9.12+spec-1.1.0",
- "uuid",
- "walkdir",
-]
-
-[[package]]
-name = "rc-context"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tracing",
-]
-
-[[package]]
-name = "rc-control-plane"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "base64 0.22.1",
- "chrono",
- "futures",
- "rc-config",
- "rc-engine-events",
- "rc-runner",
- "reqwest 0.12.28",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "tokio",
- "tokio-tungstenite 0.28.0",
- "tower",
- "tower-http",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "rc-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64 0.22.1",
- "chrono",
- "clap",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tokio",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "rc-engine-events"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "rc-event-bus"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "rc-file-history"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "rc-core",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "tracing",
-]
-
-[[package]]
-name = "rc-ide"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "rc-integration-tests"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "rc-agent-protocol",
- "rc-agents",
- "rc-auth",
- "rc-compact",
- "rc-config",
- "rc-context",
- "rc-core",
- "rc-engine-events",
- "rc-event-bus",
- "rc-file-history",
- "rc-mcp",
- "rc-model",
- "rc-permissions",
- "rc-provider",
- "rc-query-engine",
- "rc-session",
- "rc-settings",
- "rc-skills",
- "rc-swarm",
- "rc-system-prompt",
- "rc-tools",
- "rc-transcript",
- "rc-utils",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "rc-lsp"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "rc-managed-settings"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "regex",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "rc-mcp"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "rand 0.9.4",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "toml 0.9.12+spec-1.1.0",
- "tracing",
- "walkdir",
-]
-
-[[package]]
-name = "rc-model"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tracing",
-]
-
-[[package]]
-name = "rc-permissions"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "rc-core",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "tokio",
- "toml 0.9.12+spec-1.1.0",
- "tracing",
-]
-
-[[package]]
-name = "rc-plugins"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "directories 6.0.0",
- "flate2",
- "once_cell",
- "rc-mcp",
- "rc-skills",
- "regex",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tar",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "walkdir",
- "zip",
-]
-
-[[package]]
-name = "rc-protocol"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "rc-core",
- "rc-engine-events",
- "rc-permissions",
- "rc-ui-bridge",
- "serde",
- "serde_json",
- "uuid",
-]
-
-[[package]]
-name = "rc-provider"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "base64 0.22.1",
- "chrono",
- "futures",
- "hmac 0.12.1",
- "image",
- "rc-config",
- "rc-core",
- "rc-tools",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "rc-query-engine"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "rc-core",
- "rc-engine-events",
- "rc-provider",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "rc-roo-adapter"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "claude-agent-protocol",
  "futures",
- "rc-agent-protocol",
  "roo-app",
  "roo-modes",
  "roo-prompt",
@@ -12171,281 +12446,6 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
-]
-
-[[package]]
-name = "rc-runner"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "chrono",
- "rc-config",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tower",
- "uuid",
-]
-
-[[package]]
-name = "rc-runtime-prompt"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "globset",
- "rc-agents",
- "rc-config",
- "rc-context",
- "rc-core",
- "rc-model",
- "rc-provider",
- "rc-skills",
- "rc-system-prompt",
- "rc-tools",
- "regex",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "uuid",
- "walkdir",
-]
-
-[[package]]
-name = "rc-session"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "rc-config",
- "rc-core",
- "rc-transcript",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "uuid",
- "walkdir",
-]
-
-[[package]]
-name = "rc-settings"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "rc-core",
- "serde",
- "serde_json",
- "tempfile",
- "tracing",
-]
-
-[[package]]
-name = "rc-skill-search"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "regex",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "rc-skills"
-version = "0.1.0"
-dependencies = [
- "regex",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "toml 0.9.12+spec-1.1.0",
- "walkdir",
-]
-
-[[package]]
-name = "rc-swarm"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "rc-agents",
- "rc-core",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "rc-system-prompt"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "once_cell",
- "rc-core",
- "serde",
- "serde_json",
- "uuid",
-]
-
-[[package]]
-name = "rc-telemetry"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "rc-teleport"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "rc-tools"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64 0.22.1",
- "chrono",
- "directories 5.0.1",
- "glob",
- "globset",
- "ignore",
- "once_cell",
- "rc-agents",
- "rc-config",
- "rc-context",
- "rc-core",
- "rc-mcp",
- "rc-permissions",
- "rc-plugins",
- "rc-session",
- "rc-skills",
- "rc-swarm",
- "rc-ui-bridge",
- "rc-utils",
- "regex",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "serial_test",
- "tempfile",
- "tokio",
- "tracing",
- "urlencoding",
- "uuid",
- "walkdir",
-]
-
-[[package]]
-name = "rc-transcript"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "rc-core",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "rc-tui"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "crossterm",
- "directories 6.0.0",
- "ratatui",
- "rc-agents",
- "rc-config",
- "rc-core",
- "rc-mcp",
- "rc-model",
- "rc-permissions",
- "rc-plugins",
- "rc-provider",
- "rc-runtime-prompt",
- "rc-session",
- "rc-skills",
- "rc-system-prompt",
- "rc-tools",
- "rc-utils",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "toml 0.9.12+spec-1.1.0",
- "unicode-width 0.2.1",
- "uuid",
-]
-
-[[package]]
-name = "rc-ui-bridge"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "rc-core",
- "serde",
- "serde_json",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "rc-utils"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "rc-core",
- "serde",
- "serde_json",
- "tempfile",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "rc-voice"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -12573,34 +12573,34 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clap",
+ "claude-agents",
+ "claude-auth",
+ "claude-compact",
+ "claude-config",
+ "claude-context",
+ "claude-control-plane",
+ "claude-core",
+ "claude-engine-events",
+ "claude-mcp",
+ "claude-model",
+ "claude-permissions",
+ "claude-plugins",
+ "claude-protocol",
+ "claude-provider",
+ "claude-query-engine",
+ "claude-runner",
+ "claude-runtime-prompt",
+ "claude-session",
+ "claude-skills",
+ "claude-swarm",
+ "claude-system-prompt",
+ "claude-telemetry",
+ "claude-tools",
+ "claude-transcript",
+ "claude-tui",
+ "claude-ui-bridge",
  "directories 6.0.0",
  "futures",
- "rc-agents",
- "rc-auth",
- "rc-compact",
- "rc-config",
- "rc-context",
- "rc-control-plane",
- "rc-core",
- "rc-engine-events",
- "rc-mcp",
- "rc-model",
- "rc-permissions",
- "rc-plugins",
- "rc-protocol",
- "rc-provider",
- "rc-query-engine",
- "rc-runner",
- "rc-runtime-prompt",
- "rc-session",
- "rc-skills",
- "rc-swarm",
- "rc-system-prompt",
- "rc-telemetry",
- "rc-tools",
- "rc-transcript",
- "rc-tui",
- "rc-ui-bridge",
  "regex",
  "reqwest 0.12.28",
  "serde",
@@ -12621,8 +12621,8 @@ dependencies = [
  "anyhow",
  "axum",
  "clap",
- "rc-control-plane",
- "rc-telemetry",
+ "claude-control-plane",
+ "claude-telemetry",
  "serde_json",
  "tokio",
 ]
@@ -12634,26 +12634,26 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "claude-agent-protocol",
+ "claude-config",
+ "claude-core",
+ "claude-engine-events",
+ "claude-mcp",
+ "claude-permissions",
+ "claude-plugins",
+ "claude-provider",
+ "claude-query-engine",
+ "claude-session",
+ "claude-skills",
+ "claude-tools",
+ "claude-ui-bridge",
+ "claude-voice",
  "codex-app-server-protocol",
  "codex-arg0",
  "directories 6.0.0",
  "keyring 2.3.3",
- "rc-agent-protocol",
  "rc-codex-adapter",
- "rc-config",
- "rc-core",
- "rc-engine-events",
- "rc-mcp",
- "rc-permissions",
- "rc-plugins",
- "rc-provider",
- "rc-query-engine",
  "rc-roo-adapter",
- "rc-session",
- "rc-skills",
- "rc-tools",
- "rc-ui-bridge",
- "rc-voice",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -12674,10 +12674,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "rc-config",
- "rc-core",
- "rc-session",
- "rc-telemetry",
+ "claude-config",
+ "claude-core",
+ "claude-session",
+ "claude-telemetry",
  "serde_json",
 ]
 
@@ -12689,9 +12689,9 @@ dependencies = [
  "axum",
  "chrono",
  "clap",
- "rc-control-plane",
- "rc-runner",
- "rc-telemetry",
+ "claude-control-plane",
+ "claude-runner",
+ "claude-telemetry",
  "reqwest 0.12.28",
  "serde_json",
  "tempfile",

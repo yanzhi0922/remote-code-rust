@@ -1,0 +1,27 @@
+[package]
+name = "claude-runner"
+description = "Runner API server for remote agent execution"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+chrono.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+claude-config = { path = "../claude-config" }
+
+[dev-dependencies]
+tempfile.workspace = true
+tower = "0.5.2"

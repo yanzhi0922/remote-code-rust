@@ -3,10 +3,10 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
-use rc_control_plane::{
+use claude_control_plane::{
     ControlPlaneConfigOverrides, ControlPlaneService, describe_status, load_control_plane_config,
 };
-use rc_telemetry::install_tracing;
+use claude_telemetry::install_tracing;
 
 #[derive(Parser, Debug)]
 #[command(

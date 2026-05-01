@@ -14,7 +14,7 @@ workspace = true
 anyhow.workspace = true
 clap.workspace = true
 serde_json.workspace = true
-rc-config = { path = "../../crates/claude/rc-config" }
-rc-core = { path = "../../crates/claude/rc-core" }
-rc-session = { path = "../../crates/claude/rc-session" }
-rc-telemetry = { path = "../../crates/claude/rc-telemetry" }
+claude-config = { path = "../../crates/claude/claude-config" }
+claude-core = { path = "../../crates/claude/claude-core" }
+claude-session = { path = "../../crates/claude/claude-session" }
+claude-telemetry = { path = "../../crates/claude/claude-telemetry" }

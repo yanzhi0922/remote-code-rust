@@ -1,5 +1,5 @@
-use rc_config::{ProviderConfig, discover_env_providers};
-use rc_core::ProviderProtocol;
+use claude_config::{ProviderConfig, discover_env_providers};
+use claude_core::ProviderProtocol;
 use serde::Serialize;
 
 use super::network::ProbeSpec;
@@ -74,8 +74,8 @@ fn default_protocol_endpoint(protocol: ProviderProtocol) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{provider_endpoint_url, provider_probe_spec};
-    use rc_config::ProviderConfig;
-    use rc_core::ProviderProtocol;
+    use claude_config::ProviderConfig;
+    use claude_core::ProviderProtocol;
     use std::collections::BTreeMap;
 
     fn provider(protocol: ProviderProtocol, base_url: Option<&str>) -> ProviderConfig {

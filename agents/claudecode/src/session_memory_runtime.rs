@@ -3,22 +3,22 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use anyhow::Result;
-use rc_compact::session_memory::SessionMemoryCompactFileContext;
-use rc_compact::{SessionMemoryCompactConfig, build_post_compact_messages, session_memory_compact};
-use rc_config::RuntimeConfig;
-use rc_core::{ConversationEntry, ConversationRole, PermissionMode};
-use rc_permissions::{PermissionBroker, PermissionDecision, PermissionRequest};
-use rc_provider::context::TokenEstimator;
-use rc_provider::{ConversationBackend, DiscoveredToolScope};
-use rc_query_engine::QuerySource;
-use rc_runtime_prompt::{runtime_env_defined_falsy, runtime_env_truthy};
-use rc_session::SessionStore;
-use rc_session::session_memory::{
+use claude_compact::session_memory::SessionMemoryCompactFileContext;
+use claude_compact::{SessionMemoryCompactConfig, build_post_compact_messages, session_memory_compact};
+use claude_config::RuntimeConfig;
+use claude_core::{ConversationEntry, ConversationRole, PermissionMode};
+use claude_permissions::{PermissionBroker, PermissionDecision, PermissionRequest};
+use claude_provider::context::TokenEstimator;
+use claude_provider::{ConversationBackend, DiscoveredToolScope};
+use claude_query_engine::QuerySource;
+use claude_runtime_prompt::{runtime_env_defined_falsy, runtime_env_truthy};
+use claude_session::SessionStore;
+use claude_session::session_memory::{
     SessionMemoryConfig, SessionMemoryState, build_session_memory_update_prompt,
     ensure_session_memory_file,
 };
-use rc_telemetry::growthbook::{FeatureGate, FeatureValue, GrowthBookClient};
-use rc_tools::ToolExecutionContext;
+use claude_telemetry::growthbook::{FeatureGate, FeatureValue, GrowthBookClient};
+use claude_tools::ToolExecutionContext;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -145,7 +145,7 @@ fn is_auto_compact_enabled(config: &RuntimeConfig) -> Result<bool> {
         return Ok(false);
     }
 
-    let settings = rc_config::settings_layers::load_runtime_settings(&config.settings_files)?;
+    let settings = claude_config::settings_layers::load_runtime_settings(&config.settings_files)?;
     Ok(settings.auto_compact_enabled.unwrap_or(true))
 }
 
@@ -386,7 +386,7 @@ pub(crate) async fn maybe_spawn_session_memory_update(
 pub(crate) async fn try_session_memory_compaction(
     config: &RuntimeConfig,
     conversation: &[ConversationEntry],
-    context_manager: &rc_provider::context::ContextWindowManager,
+    context_manager: &claude_provider::context::ContextWindowManager,
 ) -> Option<Vec<ConversationEntry>> {
     let gate_enabled = session_memory_gate_enabled(config).ok()?;
     try_session_memory_compaction_with_gate(config, conversation, context_manager, gate_enabled)
@@ -396,7 +396,7 @@ pub(crate) async fn try_session_memory_compaction(
 async fn try_session_memory_compaction_with_gate(
     config: &RuntimeConfig,
     conversation: &[ConversationEntry],
-    context_manager: &rc_provider::context::ContextWindowManager,
+    context_manager: &claude_provider::context::ContextWindowManager,
     gate_enabled: bool,
 ) -> Option<Vec<ConversationEntry>> {
     if !gate_enabled {
@@ -416,7 +416,7 @@ async fn try_session_memory_compaction_with_gate(
     let messages = conversation
         .iter()
         .cloned()
-        .map(rc_core::Message::from)
+        .map(claude_core::Message::from)
         .collect::<Vec<_>>();
     let threshold = context_manager
         .budget_snapshot(conversation)
@@ -450,7 +450,7 @@ async fn try_session_memory_compaction_with_gate(
 struct SessionMemoryFileSetup {
     summary_path: PathBuf,
     current_memory: String,
-    read_file_state: rc_tools::FileStateCache,
+    read_file_state: claude_tools::FileStateCache,
 }
 
 fn parse_numbered_read_file_output(output: &str) -> String {
@@ -477,7 +477,7 @@ fn setup_session_memory_file(
     let summary_path = ensure_session_memory_file(config)?;
     let setup_context = ToolExecutionContext::from_runtime_config(config);
     setup_context.read_file_state.delete(&summary_path);
-    let current_memory = rc_tools::file_ops::read_file(
+    let current_memory = claude_tools::file_ops::read_file(
         &json!({
             "file_path": summary_path.to_string_lossy().to_string()
         }),
@@ -614,11 +614,11 @@ async fn run_session_memory_update(
 #[cfg(test)]
 mod tests {
     use super::{SessionMemoryPermissionBroker, session_memory_shared_state_for_session};
-    use rc_config::{ProviderOverrides, RuntimeConfig, RuntimeOverrides, load_runtime_config};
-    use rc_core::{ConversationEntry, PermissionMode, ProviderProtocol};
-    use rc_permissions::{PermissionBroker, PermissionRequest};
-    use rc_provider::context::ContextWindowManager;
-    use rc_session::session_memory::ensure_session_memory_file;
+    use claude_config::{ProviderOverrides, RuntimeConfig, RuntimeOverrides, load_runtime_config};
+    use claude_core::{ConversationEntry, PermissionMode, ProviderProtocol};
+    use claude_permissions::{PermissionBroker, PermissionRequest};
+    use claude_provider::context::ContextWindowManager;
+    use claude_session::session_memory::ensure_session_memory_file;
     use serde_json::json;
     use tempfile::{TempDir, tempdir};
 
@@ -634,8 +634,8 @@ mod tests {
             Some(profile),
             None,
             PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,

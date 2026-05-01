@@ -10,7 +10,7 @@ rust-version.workspace = true
 
 [dependencies]
 # Our protocol layer
-rc-agent-protocol = { path = "../../claude/rc-agent-protocol" }
+claude-agent-protocol = { path = "../../claude/claude-agent-protocol" }
 
 # Codex crates (all in workspace)
 codex-app-server-client = { workspace = true }
