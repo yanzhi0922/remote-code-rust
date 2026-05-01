@@ -1,10 +1,10 @@
 # Remote Code Rust — 项目状态与路线图
 
-> 更新日期: 2026-04-28
-> 当前阶段: Phase 14 已完成 — 代码清理与架构精简
-> 代码规模: ~85,000 行 (Rust + TypeScript)，38 个 crates
-> 当前验证基线: `cargo test --workspace` 全绿（860+ 测试），`cargo clippy` 零警告，MiniMax Provider + MCP 端到端测试通过。
-> 基准提交: `05b05ec`
+> 更新日期: 2026-05-01
+> 当前阶段: Phase 15 已完成 — 三 Agent 独立适配器架构
+> 代码规模: ~85,000 行 (Rust + TypeScript)，41 个 crates（含 3 个 adapter crate）
+> 当前验证基线: `cargo test --workspace` 全绿（860+ 测试），`cargo clippy` 零警告，三 Agent 适配器编译通过。
+> 基准提交: `7798a5f`
 
 ---
 
@@ -27,7 +27,7 @@
 | 工具系统 | ✅ 丰富 | 65+ 内置工具 + MCP + 插件扩展 |
 | Control Plane | ✅ 完整 | Runner/Session/Approval/Artifact/Event 全链路 |
 | Runner | ✅ 完整 | Daemon 模式，心跳，命令拉取，审批中继 |
-| 多 Agent | ✅ 统一 | InProcessAdapter 进程内回调 + QueryEngine 统一执行路径 |
+| 多 Agent | ✅ 三引擎独立适配器 | Claude (QueryEngine) + Codex (AppServer) + Roo (Provider+Dispatcher) 三条独立 in-process 路径 |
 | 国际化 | ✅ 完整 | Web GUI / mobile shell 支持中文界面 |
 
 ### 1.2 架构概览
@@ -42,10 +42,9 @@
 ├───────┼──────────────┼──────────────┼────────────────┼────────┤
 │       │    多 Agent 统一层          │                │        │
 │  ┌────▼────────────────────────────▼────┐    ┌──────▼───────┐ │
-│  │ AgentRouter → InProcessAdapter       │    │  REST/WS API │ │
-│  │ (RemoteClaude / Roo / Codex)         │    │  (api.ts)    │ │
-│  │       ↓                              │    └──────┬───────┘ │
-│  │ QueryEngine 统一执行路径              │           │        │
+│  │ send_prompt() → agent_type routing   │    │  REST/WS API │ │
+│  │ Claude→QueryEngine  Codex→AppServer  │    │  (api.ts)    │ │
+│  │ Roo→Provider+Dispatcher              │    └──────┬───────┘ │
 │  └────────────────┬────────────────────┘           │        │
 │                   │                                │        │
 ├───────────────────┼────────────────────────────────┼────────┤
@@ -103,7 +102,10 @@
 | `rc-runner` | Runner daemon | lib.rs |
 | `rc-tui` | 终端用户界面 | app.rs, 20 components, 32 commands |
 | `rc-utils` | 工具函数 (diff/git/markdown) | diff.rs, git_fs.rs, markdown.rs |
-| `rc-agent-protocol` | 多 Agent 协议抽象层 | adapter.rs, events.rs, adapters/in_process.rs |
+| `rc-agent-protocol` | 多 Agent 协议抽象层 | adapter.rs, events.rs, router.rs, types.rs |
+| `rc-claude-adapter` | Claude 适配器 (QueryEngine) | src/lib.rs (ClaudeInProcessAdapter = QueryEngine) |
+| `rc-codex-adapter` | Codex 适配器 (AppServer) | lib.rs (CodexInProcessAdapter + event_mapper) |
+| `rc-roo-adapter` | Roo 适配器 (Provider+Dispatcher) | lib.rs (RooInProcessAdapter + agent loop) |
 | `rc-swarm` | 多代理类型系统 | lib.rs, backends/in_process.rs |
 | `rc-telemetry` | 追踪设置、结构化日志 | lib.rs, analytics.rs |
 | `rc-runtime-prompt` | 运行时提示词 | lib.rs, auto_memory.rs |
@@ -178,20 +180,18 @@
 - ✅ 生产代码 `console.log` 清除
 - ✅ `#[allow(dead_code)]` 标注审查
 
-### Phase 11: 进程内回调模式转换 — ✅ 完成
-- ✅ RooCode/Codex 从子进程 JSON-RPC 转换为进程内回调模式
-- ✅ `InProcessAdapter` 统一实现
-- ✅ 三个 Agent 共享同一个适配器（类型别名区分）
-- ✅ 回调注入模式 (`with_send_message`, `with_cancel`, `with_resolve_permission`)
-- ✅ 删除子进程管理代码
+### Phase 11: 进程内执行模式 — ✅ 完成
+- ✅ RooCode/Codex 从子进程 JSON-RPC 转换为进程内执行
+- ✅ 删除子进程管理代码、bridge_proto.rs、subprocess.rs
+- ✅ 三个 Agent 各自拥有独立的适配器 crate
 
 ### Phase 12: 端到端真实测试 — ✅ 完成
 - ✅ MiniMax Provider (anthropic-compatible) 真实 API 调用测试
 - ✅ MCP 端到端集成测试
 - ✅ Headless `--print` 与 `stream-json` 冒烟测试通过
 
-### Phase 13: QueryEngine 统一执行路径 — ✅ 完成
-- ✅ 三个 Agent 共享一条 QueryEngine 执行路径
+### Phase 13: QueryEngine 执行路径 — ✅ 完成
+- ✅ Claude Agent 使用 QueryEngine 统一执行路径
 - ✅ 消除双路径分歧 (`run_gui_prompt` vs `run_agent_prompt`)
 - ✅ 统一状态机 + 流式执行器 + Token 预算
 - ✅ Observer 模式支持 checkpoint 和恢复
@@ -199,8 +199,15 @@
 ### Phase 14: 代码清理 — ✅ 完成
 - ✅ 删除 880 行旧代码 (AgentRouter、健康检查、重启追踪器等)
 - ✅ AppState 精简
-- ✅ `InProcessAdapter` 提取为独立模块
 - ✅ 代码已推送 (commit `05b05ec`)
+
+### Phase 15: 三 Agent 独立适配器架构 — ✅ 完成
+- ✅ 删除 bridge 残留 (subprocess.rs 730行 + bridge_proto.rs)
+- ✅ `rc-codex-adapter` 从 `crates/claude/` 移至 `crates/adapters/`
+- ✅ `rc-roo-adapter` 从 `crates/claude/` 移至 `crates/adapters/`
+- ✅ 新建 `rc-claude-adapter` (ClaudeInProcessAdapter = QueryEngine)
+- ✅ 三个适配器编译验证通过
+- ✅ 代码已推送 (commit `7798a5f`)
 
 ---
 
@@ -209,32 +216,36 @@
 | 限制 | 说明 | 优先级 |
 |------|------|--------|
 | TTS 为 Mock 实现 | `rc-voice::tts` 返回占位响应，未接入真实 TTS 服务 | P2 |
-| 外部 Agent 回调为 Stub | Roo Code / Codex 的回调函数返回硬编码响应 | P1 |
+| Roo 权限系统未接线 | `RooInProcessAdapter::resolve_permission()` 为 no-op | P1 |
+| Roo Token 估算粗糙 | 使用 `text.len() / 4` 而非 Roo 原生 tiktoken | P2 |
+| Roo MCP 未接入 | 声明了 McpSupport 但未集成 McpServerConnection | P2 |
 | Headless 浏览器截图 | `web_browser` 工具的截图功能未完成 | P2 |
 
 ---
 
 ## 四、下一阶段路线图
 
-### Phase 15: 外部 Agent 真实接入
-- [ ] Roo Code 回调实现 — 接入 roo-server 逻辑
-- [ ] Codex 回调实现 — 接入 codex-app-server 逻辑
-- [ ] Agent 特有工具映射
+### Phase 16: Roo Agent 深化集成
+- [ ] Roo 权限系统 — 将 `resolve_permission()` 接入 GUI 交互式权限弹窗
+- [ ] Roo Token 精确计算 — 使用 `roo_context::tiktoken` 替代粗略估算
+- [ ] Roo 系统提示 — 使用 `roo_prompt::build_system_prompt()` 替代硬编码
+- [ ] Roo 原生 AgentLoop — 复用 `roo_task::agent_loop::AgentLoop` 的完整功能
+- [ ] Roo MCP 集成 — 在 `send_message()` 中集成 `McpServerConnection`
 - [ ] 端到端多 Agent 集成测试
 
-### Phase 16: 增强远程交互
+### Phase 17: 增强远程交互
 - [ ] 终端流 (Terminal Stream) — 实时终端输出远程查看
 - [ ] 文件预览 — 远程文件内容浏览
 - [ ] Diff 浏览 — 代码变更可视化
 - [ ] 推送通知 — 移动端审批提醒
 
-### Phase 17: 竞品超越
+### Phase 18: 竞品超越
 - [ ] 子任务深度委派 — 多级子代理 + 并行执行 + 凭证轮换
 - [ ] 会话回退 — 回退到任意历史点继续
 - [ ] Shadow Git 检查点 — 自动 git checkpoint
 - [ ] Task Flow 可视化 — 任务依赖图 + 进度追踪
 
-### Phase 18: 可选扩展
+### Phase 19: 可选扩展
 - [ ] 云端 Runner — 腾讯云执行代码
 - [ ] 多工作站调度 — 多台机器协同
 - [ ] 团队协作 — 多用户共享会话
@@ -256,10 +267,10 @@
 | 工具数量 | 65+ | 55+ | 40+ | 20+ | 30+ |
 | PWA 移动端 | ✅ | ❌ | ❌ | ❌ | ❌ |
 | 国际化 | ✅ 中/英 | ❌ | ❌ | ❌ | ❌ |
-| 多 Agent 统一架构 | ✅ InProcessAdapter | ❌ | ❌ | ❌ | ❌ |
-| QueryEngine 统一路径 | ✅ | ❌ | ❌ | ❌ | ❌ |
+| 多 Agent 统一架构 | ✅ 三引擎独立适配器 | ❌ | ❌ | ❌ | ❌ |
+| QueryEngine 执行路径 | ✅ Claude Agent | ❌ | ❌ | ❌ | ❌ |
 
-**独有优势**: Rust 原生性能 + InProcessAdapter 统一多 Agent 架构 + QueryEngine 统一执行路径 + 分布式远程执行 + Circuit Breaker + PWA 移动端 + 多 Provider 故障转移 + 65+ 内置工具
+**独有优势**: Rust 原生性能 + 三引擎独立 in-process 适配器架构 (Claude/Codex/Roo) + 分布式远程执行 + Circuit Breaker + PWA 移动端 + 多 Provider 故障转移 + 65+ 内置工具
 
 ---
 
