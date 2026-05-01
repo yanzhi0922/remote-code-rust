@@ -4159,38 +4159,28 @@ async fn run_claude_in_process_prompt(
     pending_claude_permissions: &Arc<Mutex<HashMap<String, ClaudePendingPermission>>>,
     session_id: &str,
     prompt: &str,
-    working_dir: PathBuf,
-    model: String,
-    provider_name: String,
-    api_key: Option<String>,
-    base_url: Option<String>,
-    permission_mode: PermissionMode,
-    max_turns: usize,
+    runtime_config: claude_config::RuntimeConfig,
+    session_store: Arc<claude_session::SessionStore>,
 ) -> std::result::Result<String, String> {
     // Ensure the adapter exists for this session.
     {
         let mut adapters = claude_adapters.lock().await;
         if !adapters.contains_key(session_id) {
-            tracing::info!(session_id, "Creating new ClaudeInProcessAdapter");
+            tracing::info!(session_id, "Creating new ClaudeInProcessAdapter with RuntimeConfig");
             let mut adapter = ClaudeInProcessAdapter::new(
-                model.clone(),
-                provider_name.clone(),
-                api_key.clone(),
-                base_url.clone(),
-                working_dir.clone(),
-                permission_mode,
-                max_turns,
+                runtime_config.clone(),
+                session_store.clone(),
             );
             let agent_config = claude_agent_protocol::types::AgentConfig {
                 agent_type: ProtocolAgentType::RemoteClaude,
                 binary_path: None,
                 args: Vec::new(),
                 env: Vec::new(),
-                working_dir: Some(working_dir.clone()),
-                model: Some(model.clone()),
-                provider: Some(provider_name.clone()),
-                api_key: api_key.clone(),
-                base_url: base_url.clone(),
+                working_dir: Some(runtime_config.cwd.clone()),
+                model: runtime_config.provider.model.clone(),
+                provider: Some(runtime_config.provider.name.clone()),
+                api_key: runtime_config.provider.api_key.clone(),
+                base_url: runtime_config.provider.base_url.clone(),
             };
             adapter
                 .start(&agent_config)
@@ -4739,13 +4729,6 @@ async fn send_prompt(
                 let pending_claude_permissions = Arc::clone(&state.pending_claude_permissions);
                 let sid_clone = sid.clone();
                 let prompt_owned = prompt.clone();
-                let working_dir = config.cwd.clone();
-                let model = config.provider.model.clone().unwrap_or_else(|| "claude-sonnet-4-20250514".to_owned());
-                let provider_name = config.provider.name.clone();
-                let api_key = config.provider.api_key.clone();
-                let base_url = config.provider.base_url.clone();
-                let permission_mode = config.permission_mode;
-                let max_turns = DEFAULT_MAX_TURNS;
 
                 let handle = tokio::spawn(async move {
                     let result = run_claude_in_process_prompt(
@@ -4754,13 +4737,8 @@ async fn send_prompt(
                         &pending_claude_permissions,
                         &sid_clone,
                         &prompt_owned,
-                        working_dir,
-                        model,
-                        provider_name,
-                        api_key,
-                        base_url,
-                        permission_mode,
-                        max_turns,
+                        config.clone(),
+                        session_store.clone(),
                     )
                     .await;
 

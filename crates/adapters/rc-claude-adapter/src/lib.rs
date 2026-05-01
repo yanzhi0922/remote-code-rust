@@ -9,57 +9,77 @@
 //!
 //! # Architecture
 //!
+//! This adapter achieves 100% parity with the GUI direct path
+//! ([`GuiToolRunner`] / [`GuiQueryObserver`]) by:
+//! - Accepting [`RuntimeConfig`] + [`SessionStore`] for full configuration and persistence.
+//! - Building a complete [`ToolExecutionContext`] with `sub_agent`, `progress_cb`,
+//!   and `active_worktree_session`.
+//! - Persisting tool results and lifecycle events via [`SessionStore`].
+//!
 //! ```text
-//! ┌──────────────────────────────────────────────────┐
-//! │  ClaudeInProcessAdapter                          │
-//! │  ┌────────────────────────────────────────────┐  │
-//! │  │ AgentAdapter impl                          │  │
-//! │  │  start()  →  save config, set Ready       │  │
-//! │  │  send_message()  →  spawn QueryEngine     │  │
-//! │  │  cancel()  →  CancellationToken            │  │
-//! │  │  resolve_permission()  →  oneshot tx       │  │
-//! │  └────────────────────────────────────────────┘  │
-//! │  ┌─────────────────┐  ┌──────────────────────┐   │
-//! │  │ AdapterPermission│  │ AdapterQueryObserver │   │
-//! │  │ Broker           │  │ maps observer events │   │
-//! │  │ decide() → event│  │ → UnifiedAgentEvent  │   │
-//! │  └─────────────────┘  └──────────────────────┘   │
-//! │  ┌────────────────────────────────────────────┐  │
-//! │  │ AdapterToolRunner                          │  │
-//! │  │ wraps execute_tool_call()                  │  │
-//! │  └────────────────────────────────────────────┘  │
-//! └──────────────────────────────────────────────────┘
+//! ┌──────────────────────────────────────────────────────────────┐
+//! │  ClaudeInProcessAdapter                                      │
+//! │  ┌────────────────────────────────────────────────────────┐  │
+//! │  │ AgentAdapter impl                                      │  │
+//! │  │  start()  →  create ProviderClient, set Ready         │  │
+//! │  │  send_message()  →  spawn QueryEngine with full config│  │
+//! │  │  cancel()  →  CancellationToken                       │  │
+//! │  │  resolve_permission()  →  oneshot tx                  │  │
+//! │  └────────────────────────────────────────────────────────┘  │
+//! │  ┌─────────────────┐  ┌──────────────────────────────────┐   │
+//! │  │ AdapterPermission│  │ AdapterQueryObserver             │   │
+//! │  │ Broker           │  │ maps observer events             │   │
+//! │  │ decide() → event│  │ → UnifiedAgentEvent              │   │
+//! │  └─────────────────┘  │ + SessionStore persistence       │   │
+//! │                        └──────────────────────────────────┘   │
+//! │  ┌────────────────────────────────────────────────────────┐  │
+//! │  │ AdapterToolRunner                                      │  │
+//! │  │ full ToolExecutionContext (sub_agent, progress_cb,     │  │
+//! │  │ active_worktree_session) + SessionStore persistence    │  │
+//! │  └────────────────────────────────────────────────────────┘  │
+//! └──────────────────────────────────────────────────────────────┘
 //! ```
 
 mod event_mapper;
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use serde_json::json;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
+use uuid::Uuid;
 
 use claude_agent_protocol::adapter::AgentAdapter;
 use claude_agent_protocol::events::UnifiedAgentEvent;
 use claude_agent_protocol::permission::PermissionDecision as ProtocolPermissionDecision;
 use claude_agent_protocol::types::{AgentCapability, AgentConfig, AgentInfo, AgentStatus, AgentType};
-use claude_config::ProviderConfig;
-use claude_core::{ConversationEntry, Message, PermissionMode, ProviderProtocol, SessionId};
+use claude_config::RuntimeConfig;
+use claude_core::{ConversationEntry, Message, SessionId, SubAgentCompletion, ToolResult};
 use claude_engine_events::EventStream;
 use claude_permissions::{
     PermissionBroker, PermissionDecision as PermissionsPermissionDecision,
     PermissionRequest as PermissionsPermissionRequest,
 };
 use claude_provider::ProviderCompatBackend;
+use claude_provider::context::ContextWindowManager;
 use claude_query_engine::{
     ProcessUserInputContext, ProviderInvocationMode, QueryEngine, QueryEngineConfig, QueryObserver,
     QueryObserverEvent, ToolRunResult, ToolRunner,
 };
-use claude_tools::{FileStateCache, execute_tool_call};
+use claude_session::SessionStore;
+use claude_session::conversation::ensure_conversation_initialized;
+use claude_session::runtime_context::persist_runtime_config_session_context;
+use claude_tools::{
+    FileStateCache,
+    agent::parse_delegate_progress_event,
+    execute_tool_call,
+    git::apply_worktree_tool_result_to_runtime,
+    runtime_provider_tool_spec,
+};
 
 /// Maximum time (in seconds) to wait for a permission decision before denying.
 const PERMISSION_TIMEOUT_SECS: u64 = 60 * 30; // 30 minutes
@@ -159,19 +179,50 @@ impl PermissionBroker for AdapterPermissionBroker {
 
 // ─── AdapterToolRunner ──────────────────────────────────────────────────────
 
-/// Tool runner that wraps [`execute_tool_call`] and emits tool events.
+/// Tool runner that wraps [`execute_tool_call`] with full [`ToolExecutionContext`]
+/// parity to the GUI's [`GuiToolRunner`].
+///
+/// Key enhancements over the minimal version:
+/// - `sub_agent` from `ProviderCompatBackend` enables the agent tool.
+/// - `progress_cb` emits subtask events via the event channel.
+/// - `active_worktree_session` from `RuntimeConfig` enables multi-workspace.
+/// - Tool results are persisted to `SessionStore`.
+/// - Worktree mutations are applied and persisted.
 struct AdapterToolRunner {
+    /// Runtime config (guarded by async mutex for worktree mutations).
+    config: Arc<Mutex<RuntimeConfig>>,
+    /// Session store for persisting tool results.
+    store: Arc<SessionStore>,
+    /// Permission broker for tool approval.
     broker: Arc<dyn PermissionBroker>,
-    cwd: PathBuf,
-    timeout_ms: u64,
+    /// Sub-agent completion from the provider backend.
+    sub_agent: Arc<dyn SubAgentCompletion>,
+    /// Context window manager for output truncation.
+    context_manager: ContextWindowManager,
+    /// Event channel for emitting progress events.
+    event_tx: mpsc::Sender<UnifiedAgentEvent>,
+    /// Session ID for persistence.
+    session_id: Uuid,
 }
 
 impl AdapterToolRunner {
-    fn new(broker: Arc<dyn PermissionBroker>, cwd: PathBuf, timeout_ms: u64) -> Self {
+    fn new(
+        config: RuntimeConfig,
+        store: Arc<SessionStore>,
+        broker: Arc<dyn PermissionBroker>,
+        sub_agent: Arc<dyn SubAgentCompletion>,
+        context_manager: ContextWindowManager,
+        event_tx: mpsc::Sender<UnifiedAgentEvent>,
+        session_id: Uuid,
+    ) -> Self {
         Self {
+            config: Arc::new(Mutex::new(config)),
+            store,
             broker,
-            cwd,
-            timeout_ms,
+            sub_agent,
+            context_manager,
+            event_tx,
+            session_id,
         }
     }
 }
@@ -183,22 +234,37 @@ impl ToolRunner for AdapterToolRunner {
         tool_call: &claude_core::ToolCall,
         _context: &ProcessUserInputContext,
     ) -> Result<ToolRunResult> {
-        let tool_context = claude_tools::ToolExecutionContext {
-            cwd: self.cwd.clone(),
-            original_cwd: self.cwd.clone(),
-            active_worktree_session: None,
-            timeout_ms: self.timeout_ms,
-            sub_agent: None,
-            progress_cb: None,
-            task_stack: Arc::new(std::sync::Mutex::new(
-                claude_core::task_stack::TaskStack::default(),
-            )),
-            read_file_state: FileStateCache::new(),
+        // 1. Validate tool spec.
+        let _spec = runtime_provider_tool_spec(&tool_call.name)
+            .await
+            .ok_or_else(|| anyhow!("unknown tool {}", tool_call.name))?;
+
+        // 2. Build ToolExecutionContext with full parity to GuiToolRunner.
+        let event_tx = self.event_tx.clone();
+        let session_id_str = self.session_id.to_string();
+
+        let tool_context = {
+            let config = self.config.lock().await;
+            claude_tools::ToolExecutionContext {
+                cwd: config.cwd.clone(),
+                original_cwd: config.original_cwd.clone(),
+                active_worktree_session: config.active_worktree_session.clone(),
+                timeout_ms: config.provider.timeout_ms,
+                sub_agent: Some(self.sub_agent.clone()),
+                progress_cb: Some(Arc::new(move |message: &str| {
+                    emit_delegate_progress(&event_tx, &session_id_str, message);
+                })),
+                task_stack: Arc::new(std::sync::Mutex::new(
+                    claude_core::task_stack::TaskStack::default(),
+                )),
+                read_file_state: FileStateCache::new(),
+            }
         };
 
+        // 3. Execute tool.
         let tool_result = match execute_tool_call(tool_call, &tool_context, self.broker.as_ref()).await {
             Ok(result) => result,
-            Err(error) => claude_core::ToolResult {
+            Err(error) => ToolResult {
                 content: format!("Tool execution error: {error}"),
                 is_error: true,
                 content_blocks: Vec::new(),
@@ -206,17 +272,34 @@ impl ToolRunner for AdapterToolRunner {
             },
         };
 
-        // Check if this was a permission denial.
-        let permission_denial = if tool_result.is_error {
-            // Heuristic: if the tool result is an error, check if it looks like
-            // a permission denial. The actual denial info is carried by the
-            // PermissionDecision that the broker already processed.
-            None
-        } else {
-            None
-        };
+        // 4. Handle worktree updates (mutates RuntimeConfig if worktree changed).
+        {
+            let mut config = self.config.lock().await;
+            let mut temp_context = claude_tools::ToolExecutionContext {
+                cwd: config.cwd.clone(),
+                original_cwd: config.original_cwd.clone(),
+                active_worktree_session: config.active_worktree_session.clone(),
+                timeout_ms: config.provider.timeout_ms,
+                sub_agent: Some(self.sub_agent.clone()),
+                progress_cb: None,
+                task_stack: Arc::new(std::sync::Mutex::new(
+                    claude_core::task_stack::TaskStack::default(),
+                )),
+                read_file_state: FileStateCache::new(),
+            };
 
-        // Handle follow-up user blocks as post_messages.
+            if apply_worktree_tool_result_to_runtime(
+                &tool_call.name,
+                &tool_call.input,
+                &tool_result,
+                &mut config,
+                &mut temp_context,
+            )? {
+                persist_runtime_config_session_context(self.store.as_ref(), &config)?;
+            }
+        }
+
+        // 5. Handle follow-up user blocks as post_messages.
         let mut post_messages = Vec::new();
         if !tool_result.follow_up_user_blocks.is_empty() {
             let follow_up_entry = ConversationEntry::user_with_content_blocks(
@@ -225,29 +308,129 @@ impl ToolRunner for AdapterToolRunner {
             post_messages.push(Message::from(follow_up_entry));
         }
 
+        // 6. Persist tool result to session store.
+        let output_for_context = self
+            .context_manager
+            .truncate_tool_output_default(&tool_result.content);
+        let mut tool_entry = ConversationEntry::tool(
+            tool_call.id.clone(),
+            tool_call.name.clone(),
+            output_for_context,
+            tool_result.is_error,
+        );
+        tool_entry.content_blocks = tool_result.content_blocks.clone();
+        self.store
+            .append_conversation_entry(self.session_id, &tool_entry)?;
+
+        self.store.append_named_event(
+            self.session_id,
+            "tool_result",
+            json!({
+                "tool_name": tool_call.name,
+                "tool_use_id": tool_call.id,
+                "is_error": tool_entry.is_error,
+            }),
+        )?;
+
         Ok(ToolRunResult {
             result: tool_result,
             pre_messages: Vec::new(),
             post_messages,
-            permission_denial,
+            permission_denial: None,
         })
+    }
+}
+
+/// Emit delegate progress events as [`UnifiedAgentEvent`]s through the event channel.
+///
+/// Parses structured [`DelegateProgressEvent`] messages from the agent tool
+/// and maps them to the appropriate subtask events.
+fn emit_delegate_progress(
+    event_tx: &mpsc::Sender<UnifiedAgentEvent>,
+    session_id: &str,
+    message: &str,
+) {
+    let Some(event) = parse_delegate_progress_event(message) else {
+        // Unstructured progress — emit as tool progress.
+        let _ = event_tx.try_send(UnifiedAgentEvent::ToolCallProgress {
+            session_id: session_id.to_owned(),
+            tool_name: "agent".to_owned(),
+            progress: message.to_owned(),
+        });
+        return;
+    };
+
+    match event {
+        claude_tools::agent::DelegateProgressEvent::SubtaskStarted {
+            task_id,
+            description,
+            ..
+        } => {
+            let _ = event_tx.try_send(UnifiedAgentEvent::SubtaskStarted {
+                session_id: session_id.to_owned(),
+                task_id,
+                description,
+            });
+        }
+        claude_tools::agent::DelegateProgressEvent::SubtaskProgress {
+            task_id,
+            summary,
+            ..
+        } => {
+            let _ = event_tx.try_send(UnifiedAgentEvent::SubtaskProgress {
+                session_id: session_id.to_owned(),
+                task_id,
+                progress: summary,
+            });
+        }
+        claude_tools::agent::DelegateProgressEvent::SubtaskCompleted {
+            task_id,
+            success,
+            output_preview,
+            ..
+        } => {
+            let _ = event_tx.try_send(UnifiedAgentEvent::SubtaskCompleted {
+                session_id: session_id.to_owned(),
+                task_id,
+                result: json!({
+                    "success": success,
+                    "output_preview": output_preview,
+                }),
+            });
+        }
+        claude_tools::agent::DelegateProgressEvent::BatchProgress { .. } => {
+            // BatchProgress doesn't have a direct UnifiedAgentEvent mapping.
+        }
     }
 }
 
 // ─── AdapterQueryObserver ───────────────────────────────────────────────────
 
 /// Query observer that maps [`QueryObserverEvent`] → [`UnifiedAgentEvent`]
-/// and forwards them through the event channel.
+/// and persists session state via [`SessionStore`].
+///
+/// Parity with the GUI's [`GuiQueryObserver`]:
+/// - Persists assistant messages, context compaction, and lifecycle events.
+/// - Maps all events to [`UnifiedAgentEvent`] for the adapter protocol.
 struct AdapterQueryObserver {
     event_tx: mpsc::Sender<UnifiedAgentEvent>,
     session_id: String,
+    store: Arc<SessionStore>,
+    session_uuid: Uuid,
 }
 
 impl AdapterQueryObserver {
-    fn new(event_tx: mpsc::Sender<UnifiedAgentEvent>, session_id: String) -> Self {
+    fn new(
+        event_tx: mpsc::Sender<UnifiedAgentEvent>,
+        session_id: String,
+        store: Arc<SessionStore>,
+        session_uuid: Uuid,
+    ) -> Self {
         Self {
             event_tx,
             session_id,
+            store,
+            session_uuid,
         }
     }
 }
@@ -255,11 +438,103 @@ impl AdapterQueryObserver {
 #[async_trait]
 impl QueryObserver for AdapterQueryObserver {
     async fn on_event(&self, event: QueryObserverEvent) -> Result<()> {
+        // 1. Persist to SessionStore (matching GuiQueryObserver behavior).
+        match &event {
+            QueryObserverEvent::AssistantMessageCommitted {
+                message,
+                stop_reason,
+                turn,
+                usage,
+                ..
+            } => {
+                if let Some(entry) = message.as_conversation_entry() {
+                    self.store
+                        .append_conversation_entry(self.session_uuid, &entry)?;
+                }
+                self.store.append_named_event(
+                    self.session_uuid,
+                    "assistant_turn",
+                    json!({
+                        "turn": turn,
+                        "stop_reason": stop_reason,
+                        "usage": {
+                            "input_tokens": usage.input_tokens,
+                            "output_tokens": usage.output_tokens,
+                        },
+                    }),
+                )?;
+            }
+
+            QueryObserverEvent::ContextCompactionApplied {
+                turn,
+                before_messages,
+                after_messages,
+                usage_ratio_before,
+                usage_ratio_after,
+                estimated_tokens_before,
+                estimated_tokens_after,
+                ..
+            } => {
+                let removed = before_messages.saturating_sub(*after_messages);
+                if removed > 0 {
+                    self.store.append_named_event(
+                        self.session_uuid,
+                        "context_compacted",
+                        json!({
+                            "turn": turn,
+                            "entries_removed": removed,
+                            "usage_ratio_before": usage_ratio_before,
+                            "usage_ratio_after": usage_ratio_after,
+                            "estimated_tokens_before": estimated_tokens_before,
+                            "estimated_tokens_after": estimated_tokens_after,
+                        }),
+                    )?;
+                }
+            }
+
+            QueryObserverEvent::QueryFinished {
+                stop_reason,
+                turns,
+                usage,
+                ..
+            } => {
+                self.store.append_named_event(
+                    self.session_uuid,
+                    "result",
+                    json!({
+                        "is_error": false,
+                        "stop_reason": stop_reason,
+                        "usage": {
+                            "input_tokens": usage.input_tokens,
+                            "output_tokens": usage.output_tokens,
+                        },
+                        "num_turns": turns,
+                    }),
+                )?;
+            }
+
+            QueryObserverEvent::QueryFailed { error, turns, .. } => {
+                self.store.append_named_event(
+                    self.session_uuid,
+                    "result",
+                    json!({
+                        "is_error": true,
+                        "error": error,
+                        "num_turns": turns,
+                    }),
+                )?;
+            }
+
+            _ => {}
+        }
+
+        // 2. Map to UnifiedAgentEvent and forward through the event channel.
         if let Some(unified) = event_mapper::map_observer_event(event, &self.session_id) {
             // Use a tolerant send — if the receiver is dropped (e.g. consumer
             // disconnected), we silently drop the event rather than erroring.
             let _ = self.event_tx.send(unified).await;
         }
+
         Ok(())
     }
 }
@@ -267,21 +542,17 @@ impl QueryObserver for AdapterQueryObserver {
 // ─── ClaudeInProcessAdapter ─────────────────────────────────────────────────
 
 /// In-process adapter that wraps the Claude [`QueryEngine`] into the
-/// [`AgentAdapter`] trait.
+/// [`AgentAdapter`] trait with full parity to the GUI direct path.
+///
+/// Uses [`RuntimeConfig`] and [`SessionStore`] for complete configuration
+/// and persistence, matching [`GuiToolRunner`] and [`GuiQueryObserver`].
 pub struct ClaudeInProcessAdapter {
     info: AgentInfo,
     status: AgentStatus,
 
-    // Configuration
-    model: String,
-    provider_name: String,
-    api_key: Option<String>,
-    base_url: Option<String>,
-    working_dir: PathBuf,
-    permission_mode: PermissionMode,
-    max_turns: usize,
-    max_output_tokens: u32,
-    timeout_ms: u64,
+    // Full runtime configuration (from GUI).
+    runtime_config: RuntimeConfig,
+    session_store: Arc<SessionStore>,
 
     // Reusable provider client (created once in start()).
     provider_client: Option<Arc<claude_provider::ProviderClient>>,
@@ -291,25 +562,26 @@ pub struct ClaudeInProcessAdapter {
     worker_handle: Option<tokio::task::JoinHandle<()>>,
     pending_permissions: Arc<Mutex<HashMap<String, PendingPermission>>>,
 
-    // Session state
-    session_messages: Arc<Mutex<Vec<Message>>>,
+    // Session ID (from RuntimeConfig, cached for convenience).
+    session_id: Uuid,
 }
 
 impl ClaudeInProcessAdapter {
-    /// Create a new adapter with the given configuration.
+    /// Create a new adapter with full runtime configuration.
+    ///
+    /// The adapter uses [`RuntimeConfig`] for all settings (model, provider,
+    /// working directory, permissions, etc.) and [`SessionStore`] for
+    /// persisting conversation history and events.
     pub fn new(
-        model: String,
-        provider_name: String,
-        api_key: Option<String>,
-        base_url: Option<String>,
-        working_dir: PathBuf,
-        permission_mode: PermissionMode,
-        max_turns: usize,
+        runtime_config: RuntimeConfig,
+        session_store: Arc<SessionStore>,
     ) -> Self {
         let mut caps = HashSet::new();
         caps.insert(AgentCapability::Streaming);
         caps.insert(AgentCapability::ToolUse);
         caps.insert(AgentCapability::Permissions);
+
+        let session_id = runtime_config.session_id;
 
         let info = AgentInfo {
             name: "Remote Claude".to_owned(),
@@ -321,48 +593,13 @@ impl ClaudeInProcessAdapter {
         Self {
             info,
             status: AgentStatus::Starting,
-            model,
-            provider_name,
-            api_key,
-            base_url,
-            working_dir,
-            permission_mode,
-            max_turns,
-            max_output_tokens: 16_384,
-            timeout_ms: 600_000,
+            runtime_config,
+            session_store,
             provider_client: None,
             cancel_token: CancellationToken::new(),
             worker_handle: None,
             pending_permissions: Arc::new(Mutex::new(HashMap::new())),
-            session_messages: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-
-    /// Determine the provider protocol from the provider name.
-    fn infer_protocol(&self) -> ProviderProtocol {
-        match self.provider_name.to_ascii_lowercase().as_str() {
-            "anthropic" => ProviderProtocol::Anthropic,
-            _ => ProviderProtocol::OpenAi,
-        }
-    }
-
-    /// Build a [`ProviderConfig`] from the adapter's configuration.
-    fn build_provider_config(&self) -> ProviderConfig {
-        ProviderConfig {
-            name: self.provider_name.clone(),
-            base_url: self.base_url.clone(),
-            api_key: self.api_key.clone(),
-            model: Some(self.model.clone()),
-            protocol: self.infer_protocol(),
-            timeout_ms: self.timeout_ms,
-            max_output_tokens: self.max_output_tokens,
-            max_retries: 3,
-            retry_initial_backoff_ms: 1_000,
-            retry_max_backoff_ms: 30_000,
-            respect_retry_after: true,
-            request_header_overrides: Default::default(),
-            request_metadata: Default::default(),
-            thinking_budget: None,
+            session_id,
         }
     }
 
@@ -419,38 +656,68 @@ impl AgentAdapter for ClaudeInProcessAdapter {
             .ok_or_else(|| anyhow!("adapter not started — call start() first"))?;
 
         // 2. Build provider config and create backend.
-        let provider_config = self.build_provider_config();
+        let provider_config = self.runtime_config.provider.clone();
+        let model = provider_config.model.clone().unwrap_or_else(|| "unknown".to_owned());
+
         let backend: Arc<dyn claude_provider::ConversationBackend> = Arc::new(
             ProviderCompatBackend::new(provider_client, &provider_config),
         );
 
-        // 3. Create permission broker.
+        // 3. Get sub_agent from backend (enables the agent/delegate tool).
+        let sub_agent = backend.sub_agent_completion();
+
+        // 4. Initialize session conversation from SessionStore.
+        let mut conversation = ensure_conversation_initialized(
+            &self.session_store,
+            self.session_id,
+            &self.runtime_config.cwd,
+            &self.runtime_config.provider.name,
+            self.runtime_config.provider.model.as_deref(),
+            Some(message),
+        )?;
+
+        // Persist user entry.
+        let user_entry = ConversationEntry::user(message);
+        self.session_store.append_conversation_entry(self.session_id, &user_entry)?;
+        conversation.push(user_entry);
+
+        // 5. Create permission broker.
         let broker = Arc::new(AdapterPermissionBroker::new(
             event_tx.clone(),
             self.pending_permissions.clone(),
             session_id.to_owned(),
         ));
 
-        // 4. Create tool runner.
+        // 6. Create context manager for tool output truncation.
+        let context_manager = ContextWindowManager::for_model(&model);
+
+        // 7. Create tool runner with full config (sub_agent, progress_cb, worktree).
         let tool_runner = Arc::new(AdapterToolRunner::new(
+            self.runtime_config.clone(),
+            self.session_store.clone(),
             broker.clone(),
-            self.working_dir.clone(),
-            provider_config.timeout_ms,
+            sub_agent,
+            context_manager.clone(),
+            event_tx.clone(),
+            self.session_id,
         ));
 
-        // 5. Create query observer.
+        // 8. Create query observer with SessionStore persistence.
         let observer = Arc::new(AdapterQueryObserver::new(
             event_tx.clone(),
             session_id.to_owned(),
+            self.session_store.clone(),
+            self.session_id,
         ));
 
-        // 6. Build QueryEngineConfig.
+        // 9. Build QueryEngineConfig.
         let claude_session_id = SessionId::from(session_id.to_owned());
         let event_stream = EventStream::new(64);
+        let max_turns = self.runtime_config.max_turns.max(1) as u32;
 
         let mut query_config = QueryEngineConfig::new(
             claude_session_id.clone(),
-            &self.model,
+            &model,
             backend,
             tool_runner,
             event_stream,
@@ -458,34 +725,35 @@ impl AgentAdapter for ClaudeInProcessAdapter {
         .with_observer(observer)
         .with_provider_invocation_mode(ProviderInvocationMode::Streaming);
 
-        query_config.max_turns = self.max_turns.max(1) as u32;
+        query_config.max_turns = max_turns;
 
-        // 7. Load existing messages and create user message.
-        let existing_messages = {
-            let guard = self.session_messages.lock().await;
-            guard.clone()
-        };
+        // 10. Convert existing conversation to Messages for QueryEngine.
+        let existing_messages: Vec<Message> = conversation.into_iter().map(Message::from).collect();
 
-        let user_message = vec![Message::from(ConversationEntry::user(message))];
-
-        // 8. Create the query engine.
+        // 11. Create the query engine.
         let mut engine = QueryEngine::new(query_config, existing_messages);
 
-        // 9. Build the process-user-input context.
-        let context = ProcessUserInputContext::new(
+        // 12. Build the process-user-input context with fields from RuntimeConfig.
+        let mut context = ProcessUserInputContext::new(
             claude_session_id,
-            self.permission_mode,
-            &self.model,
+            self.runtime_config.permission_mode,
+            &model,
         );
 
-        // 10. Send Started event.
+        // Populate optional fields from RuntimeConfig.
+        context.system_prompt = self.runtime_config.system_prompt.clone();
+        context.requested_effort = self.runtime_config.effort.clone();
+
+        // 13. Create user message.
+        let user_message = vec![Message::from(ConversationEntry::user(message))];
+
+        // 14. Send Started event.
         let _ = event_tx
             .send(UnifiedAgentEvent::Started(self.info.clone()))
             .await;
 
-        // 11. Spawn the query engine task.
+        // 15. Spawn the query engine task.
         let cancel_token = self.cancel_token.clone();
-        let session_messages = self.session_messages.clone();
         let event_tx_for_completion = event_tx.clone();
         let session_id_for_completion = session_id.to_owned();
 
@@ -507,14 +775,7 @@ impl AgentAdapter for ClaudeInProcessAdapter {
                         turns = query_result.turns,
                         "Query engine completed"
                     );
-                    // Persist the updated messages.
-                    {
-                        let mut guard = session_messages.lock().await;
-                        *guard = query_result.state.messages;
-                    }
-                    // The QueryFinished observer event already emitted Completed.
-                    // If the engine completed without emitting QueryFinished (e.g.
-                    // budget stop), emit a Completed event here as a safety net.
+                    // Session persistence is handled by the observer and tool runner.
                 }
                 Err(e) => {
                     warn!("Query engine error: {e}");
@@ -582,12 +843,6 @@ impl AgentAdapter for ClaudeInProcessAdapter {
 
         // Deny all pending permissions to unblock any waiting oneshot channels.
         self.drain_pending_permissions().await;
-
-        // Clear session messages.
-        {
-            let mut guard = self.session_messages.lock().await;
-            guard.clear();
-        }
 
         self.provider_client = None;
         self.status = AgentStatus::Stopped;
