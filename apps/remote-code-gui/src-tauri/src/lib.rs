@@ -7283,7 +7283,7 @@ pub fn run() {
                 app.handle().plugin(tauri_plugin_biometric::init())?;
                 app.handle().plugin(tauri_plugin_network::init())?;
                 app.handle().plugin(tauri_plugin_deep_link::init())?;
-                app.handle().plugin(tauri_plugin_push_notifications::init())?;
+                app.handle().plugin(tauri_plugin_notification::init())?;
                 app.handle().plugin(tauri_plugin_share::init())?;
                 mobile::register_deep_link_listener(&app.handle().clone());
             }
