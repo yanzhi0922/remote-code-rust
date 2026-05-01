@@ -1,12 +1,121 @@
 /** @type {import('tailwindcss').Config} */
 export default {
+  darkMode: ['class', '[data-theme="dark"]'],
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
   ],
   theme: {
-    extend: {},
+    extend: {
+      colors: {
+        'rc-bg': {
+          primary: 'var(--color-bg-primary)',
+          secondary: 'var(--color-bg-secondary)',
+          tertiary: 'var(--color-bg-tertiary)',
+          sidebar: 'var(--color-bg-sidebar)',
+          input: 'var(--color-bg-input)',
+          hover: 'var(--color-bg-hover)',
+          active: 'var(--color-bg-active)',
+          chat: 'var(--color-bg-chat)',
+          'user-bubble': 'var(--color-bg-user-bubble)',
+          'assistant-card': 'var(--color-bg-assistant-card)',
+          code: 'var(--color-bg-code)',
+          overlay: 'var(--color-bg-overlay)',
+        },
+        'rc-text': {
+          primary: 'var(--color-text-primary)',
+          secondary: 'var(--color-text-secondary)',
+          tertiary: 'var(--color-text-tertiary)',
+          inverse: 'var(--color-text-inverse)',
+          link: 'var(--color-text-link)',
+          'on-accent': 'var(--color-text-on-accent)',
+        },
+        'rc-border': {
+          primary: 'var(--color-border-primary)',
+          secondary: 'var(--color-border-secondary)',
+          focus: 'var(--color-border-focus)',
+        },
+        'rc-accent': {
+          primary: 'var(--color-accent-primary)',
+          'primary-hover': 'var(--color-accent-primary-hover)',
+          success: 'var(--color-accent-success)',
+          'success-bg': 'var(--color-accent-success-bg)',
+          warning: 'var(--color-accent-warning)',
+          'warning-bg': 'var(--color-accent-warning-bg)',
+          error: 'var(--color-accent-error)',
+          'error-bg': 'var(--color-accent-error-bg)',
+        },
+      },
+      fontFamily: {
+        sans: ['var(--font-sans)'],
+        mono: ['var(--font-mono)'],
+      },
+      fontSize: {
+        '2xs': ['var(--text-2xs)', { lineHeight: '1.25' }],
+        'xs': ['var(--text-xs)', { lineHeight: '1.5' }],
+        'sm': ['var(--text-sm)', { lineHeight: '1.5' }],
+        'base': ['var(--text-base)', { lineHeight: '1.5' }],
+        'md': ['var(--text-md)', { lineHeight: '1.625' }],
+        'lg': ['var(--text-lg)', { lineHeight: '1.5' }],
+        'xl': ['var(--text-xl)', { lineHeight: '1.4' }],
+        '2xl': ['var(--text-2xl)', { lineHeight: '1.35' }],
+        '3xl': ['var(--text-3xl)', { lineHeight: '1.25' }],
+      },
+      spacing: {
+        '0.5': 'var(--space-0_5)',
+        '1.5': 'var(--space-1_5)',
+        '2.5': 'var(--space-2_5)',
+        '3.5': 'var(--space-3_5)',
+        '13': '52px',
+        '15': '60px',
+        '18': '72px',
+      },
+      borderRadius: {
+        'sm': 'var(--radius-sm)',
+        'md': 'var(--radius-md)',
+        'lg': 'var(--radius-lg)',
+        'xl': 'var(--radius-xl)',
+        '2xl': 'var(--radius-2xl)',
+        '3xl': 'var(--radius-3xl)',
+      },
+      boxShadow: {
+        'xs': 'var(--shadow-xs)',
+        'sm': 'var(--shadow-sm)',
+        'md': 'var(--shadow-md)',
+        'lg': 'var(--shadow-lg)',
+        'xl': 'var(--shadow-xl)',
+        '2xl': 'var(--shadow-2xl)',
+        'inner': 'var(--shadow-inner)',
+      },
+      transitionDuration: {
+        'fast': 'var(--transition-fast)',
+        'normal': 'var(--transition-normal)',
+        'slow': 'var(--transition-slow)',
+      },
+      zIndex: {
+        'sidebar': 'var(--z-sidebar)',
+        'header': 'var(--z-header)',
+        'overlay': 'var(--z-overlay)',
+        'modal': 'var(--z-modal)',
+        'toast': 'var(--z-toast)',
+        'tooltip': 'var(--z-tooltip)',
+      },
+      width: {
+        'activity-bar': 'var(--activity-bar-width)',
+        'sidebar': 'var(--sidebar-width)',
+      },
+      height: {
+        'status-bar': 'var(--status-bar-height)',
+        'header': 'var(--header-height)',
+      },
+      maxWidth: {
+        'chat': 'var(--chat-max-width)',
+        'sidebar': 'var(--sidebar-max-width)',
+      },
+      minWidth: {
+        'sidebar': 'var(--sidebar-min-width)',
+      },
+    },
   },
   plugins: [],
 }
-

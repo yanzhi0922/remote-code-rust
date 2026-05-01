@@ -22,13 +22,13 @@ type MobileInitPhase = 'loading' | 'biometric' | 'ready' | 'error';
 
 function MobileInitScreen() {
   return (
-    <div className="flex h-screen w-screen items-center justify-center bg-[#f4efe4]">
+    <div className="flex h-screen w-screen items-center justify-center bg-rc-bg-secondary">
       <div className="flex flex-col items-center gap-4">
-        <div className="h-14 w-14 rounded-2xl bg-[#17181a] flex items-center justify-center shadow-lg">
-          <span className="text-white text-xl font-bold">RC</span>
+        <div className="h-14 w-14 rounded-2xl bg-rc-bg-user-bubble flex items-center justify-center shadow-lg">
+          <span className="text-rc-text-inverse text-xl font-bold">RC</span>
         </div>
-        <div className="flex items-center gap-3 text-slate-500">
-          <div className="h-5 w-5 rounded-full border-2 border-slate-300 border-t-slate-600 animate-spin" />
+        <div className="flex items-center gap-3 text-rc-text-secondary">
+          <div className="h-5 w-5 rounded-full border-2 border-rc-border-primary border-t-rc-text-primary animate-spin" />
           <span className="text-sm font-medium">正在初始化...</span>
         </div>
       </div>
@@ -38,12 +38,12 @@ function MobileInitScreen() {
 
 function MobileBiometricScreen() {
   return (
-    <div className="flex h-screen w-screen items-center justify-center bg-[#f4efe4]">
+    <div className="flex h-screen w-screen items-center justify-center bg-rc-bg-secondary">
       <div className="flex flex-col items-center gap-4">
-        <div className="h-14 w-14 rounded-2xl bg-[#17181a] flex items-center justify-center shadow-lg">
+        <div className="h-14 w-14 rounded-2xl bg-rc-bg-user-bubble flex items-center justify-center shadow-lg">
           <span className="text-2xl">🔒</span>
         </div>
-        <p className="text-sm text-slate-500 font-medium">请验证身份</p>
+        <p className="text-sm text-rc-text-secondary font-medium">请验证身份</p>
       </div>
     </div>
   );
@@ -51,14 +51,14 @@ function MobileBiometricScreen() {
 
 function MobileErrorScreen({ error, onRetry }: { error: string; onRetry: () => void }) {
   return (
-    <div className="flex h-screen w-screen items-center justify-center bg-[#f4efe4] px-6">
+    <div className="flex h-screen w-screen items-center justify-center bg-rc-bg-secondary px-6">
       <div className="max-w-sm text-center space-y-4">
         <div className="text-4xl">⚠️</div>
-        <h1 className="text-lg font-bold text-slate-800">初始化失败</h1>
-        <p className="text-sm text-slate-500 break-all">{error}</p>
+        <h1 className="text-lg font-bold text-rc-text-primary">初始化失败</h1>
+        <p className="text-sm text-rc-text-secondary break-all">{error}</p>
         <button
           onClick={onRetry}
-          className="px-4 py-2 bg-[#17181a] text-white rounded-lg text-sm font-medium hover:bg-[#2d2e30] transition-colors"
+          className="px-4 py-2 bg-rc-bg-user-bubble text-rc-text-inverse rounded-lg text-sm font-medium hover:opacity-90 transition-colors"
         >
           重试
         </button>
@@ -70,7 +70,7 @@ function MobileErrorScreen({ error, onRetry }: { error: string; onRetry: () => v
 function MobileNetworkBanner({ online, connectionType }: { online: boolean; connectionType: string }) {
   if (online) return null;
   return (
-    <div className="fixed top-0 left-0 right-0 z-50 bg-amber-500 text-white text-center py-1.5 text-xs font-medium shadow-md">
+    <div className="fixed top-0 left-0 right-0 z-50 bg-rc-accent-warning text-rc-text-inverse text-center py-1.5 text-xs font-medium shadow-md">
       网络已断开 — {describeConnectionType(connectionType)}
     </div>
   );
@@ -144,14 +144,14 @@ function LocalApp() {
 
   if (initError) {
     return (
-      <div className="flex h-screen w-screen items-center justify-center bg-[#f8f7f4]">
+      <div className="flex h-screen w-screen items-center justify-center bg-rc-bg-secondary">
         <div className="max-w-md text-center space-y-4">
           <div className="text-4xl">⚠️</div>
-          <h1 className="text-lg font-bold text-slate-800">初始化失败</h1>
-          <p className="text-sm text-slate-500 break-all">{initError}</p>
+          <h1 className="text-lg font-bold text-rc-text-primary">初始化失败</h1>
+          <p className="text-sm text-rc-text-secondary break-all">{initError}</p>
           <button
             onClick={() => init()}
-            className="px-4 py-2 bg-[#17181a] text-white rounded-lg text-sm font-medium hover:bg-[#2d2e30] transition-colors"
+            className="px-4 py-2 bg-rc-bg-user-bubble text-rc-text-inverse rounded-lg text-sm font-medium hover:opacity-90 transition-colors"
           >
             重试
           </button>
@@ -162,9 +162,9 @@ function LocalApp() {
 
   if (!initialised) {
     return (
-      <div className="flex h-screen w-screen items-center justify-center bg-[#f8f7f4]">
-        <div className="flex items-center gap-3 text-slate-500">
-          <div className="w-5 h-5 border-2 border-slate-300 border-t-slate-600 rounded-full animate-spin" />
+      <div className="flex h-screen w-screen items-center justify-center bg-rc-bg-secondary">
+        <div className="flex items-center gap-3 text-rc-text-secondary">
+          <div className="w-5 h-5 border-2 border-rc-border-primary border-t-rc-text-primary rounded-full animate-spin" />
           <span className="text-sm font-medium">正在初始化...</span>
         </div>
       </div>
@@ -174,7 +174,7 @@ function LocalApp() {
   return (
     <>
       <Layout>
-        <div className="flex h-full flex-col bg-[#f7f4ed]">
+        <div className="flex h-full flex-col bg-rc-bg-chat">
           <ChatArea />
           <ChatInput />
         </div>

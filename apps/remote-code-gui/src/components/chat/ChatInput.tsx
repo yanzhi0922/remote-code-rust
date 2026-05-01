@@ -32,7 +32,7 @@ function Dropdown({
             className="fixed inset-0 z-10 cursor-default"
             onClick={onToggle}
           />
-          <div className="absolute bottom-full left-0 z-20 mb-2 min-w-[220px] overflow-hidden rounded-2xl border border-[#dedad2] bg-white shadow-[0_18px_42px_rgba(24,29,33,0.16)]">
+          <div className="absolute bottom-full left-0 z-20 mb-2 min-w-[220px] overflow-hidden rounded-2xl border border-rc-border-primary bg-rc-bg-primary shadow-xl">
             <div className="max-h-72 overflow-y-auto p-1.5">{children}</div>
           </div>
         </>
@@ -55,13 +55,13 @@ function DropdownItem({
   return (
     <button
       className={`flex w-full items-start gap-2 rounded-xl px-3 py-2 text-left transition-colors ${
-        active ? 'bg-[#ece7dc] text-slate-900' : 'text-slate-700 hover:bg-[#f3efe7]'
+        active ? 'bg-rc-bg-active text-rc-text-primary' : 'text-rc-text-primary hover:bg-rc-bg-hover'
       }`}
       onClick={onClick}
     >
       <div className="min-w-0">
         <div className="truncate text-sm font-medium">{title}</div>
-        {subtitle && <div className="mt-0.5 text-xs text-slate-500">{subtitle}</div>}
+        {subtitle && <div className="mt-0.5 text-xs text-rc-text-secondary">{subtitle}</div>}
       </div>
     </button>
   );
@@ -130,17 +130,17 @@ export function ChatInput() {
   };
 
   return (
-    <div className="border-t border-[#ebe6dd] bg-[#f7f4ed] px-4 pb-4 pt-3 sm:px-6">
+    <div className="border-t border-rc-border-primary bg-rc-bg-chat px-4 pb-4 pt-3 sm:px-6">
       <div className="mx-auto w-full max-w-5xl">
-        <div className="rounded-[28px] border border-[#dfd9cd] bg-white shadow-[0_16px_40px_rgba(23,24,26,0.08)]">
-          <div className="border-b border-[#f1ece3] px-4 py-3">
+        <div className="rounded-[28px] border border-rc-border-primary bg-rc-bg-primary shadow-lg">
+          <div className="border-b border-rc-border-secondary px-4 py-3">
             {activeSession ? (
-              <div className="inline-flex max-w-full items-center gap-2 rounded-full border border-[#ddd6c8] bg-[#f3efe7] px-3 py-1.5 text-sm font-medium text-slate-700">
-                <MessageSquareText size={14} className="text-slate-500" />
+              <div className="inline-flex max-w-full items-center gap-2 rounded-full border border-rc-border-primary bg-rc-bg-secondary px-3 py-1.5 text-sm font-medium text-rc-text-primary">
+                <MessageSquareText size={14} className="text-rc-text-secondary" />
                 <span className="truncate">当前会话 · {currentSessionLabel}</span>
               </div>
             ) : (
-              <div className="text-sm text-slate-500">选择 Provider、模型和权限后直接发送即可。</div>
+              <div className="text-sm text-rc-text-secondary">选择 Provider、模型和权限后直接发送即可。</div>
             )}
           </div>
 
@@ -155,10 +155,10 @@ export function ChatInput() {
               disabled={sending}
               rows={1}
               placeholder="输入需求，直接在 GUI 中运行、改代码、调用工具。Shift+Enter 换行。"
-              className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-1 text-[15px] leading-6 text-slate-800 outline-none placeholder:text-slate-400 disabled:cursor-not-allowed"
+              className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-1 text-[15px] leading-6 text-rc-text-primary outline-none placeholder:text-rc-text-tertiary disabled:cursor-not-allowed"
             />
 
-            {/* Fix #11: Voice input UI entry point — shows "coming soon" toast */}
+            {/* Voice input */}
             <div className="relative">
               <button
                 title="语音输入"
@@ -166,12 +166,12 @@ export function ChatInput() {
                   setVoiceToast(true);
                   setTimeout(() => setVoiceToast(false), 2500);
                 }}
-                className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[#dfd9cd] bg-[#fcfaf5] text-slate-500 transition-colors hover:bg-[#f3efe7] hover:text-slate-700"
+                className="flex h-12 w-12 items-center justify-center rounded-2xl border border-rc-border-primary bg-rc-bg-secondary text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
               >
                 <Mic size={17} />
               </button>
               {voiceToast && (
-                <div className="absolute bottom-full right-0 mb-2 whitespace-nowrap rounded-lg bg-slate-800 px-3 py-1.5 text-xs text-white shadow-lg">
+                <div className="absolute bottom-full right-0 mb-2 whitespace-nowrap rounded-lg bg-rc-bg-user-bubble px-3 py-1.5 text-xs text-rc-text-inverse shadow-lg">
                   🎤 语音输入功能即将推出
                 </div>
               )}
@@ -182,7 +182,7 @@ export function ChatInput() {
                 void handleSend();
               }}
               disabled={sending || !input.trim()}
-              className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#17181a] text-white shadow-[0_8px_20px_rgba(23,24,26,0.22)] transition-colors hover:bg-[#2a2c2f] disabled:cursor-not-allowed disabled:bg-[#cfc8ba] disabled:text-white/70"
+              className="flex h-12 w-12 items-center justify-center rounded-2xl bg-rc-bg-user-bubble text-rc-text-inverse shadow-lg transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {sending ? (
                 <div className="h-5 w-5 animate-spin rounded-full border-2 border-white/25 border-t-white" />
@@ -192,7 +192,7 @@ export function ChatInput() {
             </button>
           </div>
 
-          <div className="border-t border-[#f1ece3] px-4 pb-3 pt-3">
+          <div className="border-t border-rc-border-secondary px-4 pb-3 pt-3">
             <div className="flex flex-wrap items-center gap-2">
               <AgentSelector
                 availableAgents={availableAgents}
@@ -206,11 +206,11 @@ export function ChatInput() {
                 trigger={
                   <button
                     title="为下一次发送选择 Provider"
-                    className="inline-flex items-center gap-2 rounded-full border border-[#ddd6c8] bg-[#fcfaf5] px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-[#f6f1e8]"
+                    className="inline-flex items-center gap-2 rounded-full border border-rc-border-primary bg-rc-bg-secondary px-3 py-1.5 text-sm font-medium text-rc-text-primary transition-colors hover:bg-rc-bg-hover"
                   >
-                    <Cpu size={14} className="text-slate-500" />
+                    <Cpu size={14} className="text-rc-text-secondary" />
                     <span className="max-w-[240px] truncate">{activeProviderName}</span>
-                    <ChevronDown size={14} className="text-slate-400" />
+                    <ChevronDown size={14} className="text-rc-text-tertiary" />
                   </button>
                 }
               >
@@ -241,8 +241,8 @@ export function ChatInput() {
                 )}
               </Dropdown>
 
-              <div className="inline-flex min-w-0 items-center gap-2 rounded-full border border-[#ddd6c8] bg-[#fcfaf5] px-3 py-1.5 text-sm text-slate-700">
-                <Sparkles size={14} className="text-slate-500" />
+              <div className="inline-flex min-w-0 items-center gap-2 rounded-full border border-rc-border-primary bg-rc-bg-secondary px-3 py-1.5 text-sm text-rc-text-primary">
+                <Sparkles size={14} className="text-rc-text-secondary" />
                 <input
                   value={modelDraft}
                   onChange={(event) => setModelDraft(event.target.value)}
@@ -255,7 +255,7 @@ export function ChatInput() {
                       void commitModelDraft();
                     }
                   }}
-                  className="w-[220px] min-w-0 bg-transparent outline-none placeholder:text-slate-400"
+                  className="w-[220px] min-w-0 bg-transparent outline-none placeholder:text-rc-text-tertiary"
                   placeholder="为下一次发送设置模型"
                   title="为下一次发送设置模型"
                 />
@@ -265,10 +265,10 @@ export function ChatInput() {
                 open={openMenu === 'permission'}
                 onToggle={() => setOpenMenu((state) => (state === 'permission' ? null : 'permission'))}
                 trigger={
-                  <button className="inline-flex items-center gap-2 rounded-full border border-[#ddd6c8] bg-[#fcfaf5] px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-[#f6f1e8]">
-                    <Shield size={14} className="text-slate-500" />
+                  <button className="inline-flex items-center gap-2 rounded-full border border-rc-border-primary bg-rc-bg-secondary px-3 py-1.5 text-sm font-medium text-rc-text-primary transition-colors hover:bg-rc-bg-hover">
+                    <Shield size={14} className="text-rc-text-secondary" />
                     <span>{permissionLabel}</span>
-                    <ChevronDown size={14} className="text-slate-400" />
+                    <ChevronDown size={14} className="text-rc-text-tertiary" />
                   </button>
                 }
               >
@@ -287,7 +287,7 @@ export function ChatInput() {
               </Dropdown>
             </div>
 
-            <div className="mt-3 text-xs leading-5 text-slate-500">
+            <div className="mt-3 text-xs leading-5 text-rc-text-tertiary">
               {activeSession
                 ? '继续发送时会保留当前会话的工作目录，但 Provider、模型和权限模式以这里当前选择为准。'
                 : '当前选择会用于下一次发送和新建会话。'}

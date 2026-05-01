@@ -26,4 +26,4 @@ export { ThemedText } from './ThemedText';
 export type { ThemedTextProps } from './ThemedText';
 
 export { ThemeProvider, useTheme } from './ThemeProvider';
-export type { ThemeProviderProps } from './ThemeProvider';
+export type { ThemeProviderProps, ThemeMode } from './ThemeProvider';
