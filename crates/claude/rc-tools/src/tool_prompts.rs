@@ -298,6 +298,155 @@ Skip using this tool when:
 NOTE that you should not use this tool if there is only one trivial task to \
 do. In this case you are better off just doing the task directly.
 
+## Examples of When to Use the Todo List
+
+<example>
+User: I want to add a dark mode toggle to the application settings. Make \
+sure you run the tests and build when you're done!
+Assistant: *Creates todo list with the following items:*
+1. Creating dark mode toggle component in Settings page
+2. Adding dark mode state management (context/store)
+3. Implementing CSS-in-JS styles for dark theme
+4. Updating existing components to support theme switching
+5. Running tests and build process, addressing any failures or errors that occur
+*Begins working on the first task*
+
+<reasoning>
+The assistant used the todo list because:
+1. Adding dark mode is a multi-step feature requiring UI, state management, \
+and styling changes
+2. The user explicitly requested tests and build be run afterward
+3. The assistant inferred that tests and build need to pass by adding \
+\"Ensure tests and build succeed\" as the final task
+</reasoning>
+</example>
+
+<example>
+User: Help me rename the function getCwd to getCurrentWorkingDirectory \
+across my project
+Assistant: *Uses grep or search tools to locate all instances of getCwd \
+in the codebase*
+I've found 15 instances of 'getCwd' across 8 different files.
+*Creates todo list with specific items for each file that needs updating*
+
+<reasoning>
+The assistant used the todo list because:
+1. First, the assistant searched to understand the scope of the task
+2. Upon finding multiple occurrences across different files, it determined \
+this was a complex task with multiple steps
+3. The todo list helps ensure every instance is tracked and updated systematically
+4. This approach prevents missing any occurrences and maintains code consistency
+</reasoning>
+</example>
+
+<example>
+User: I need to implement these features for my e-commerce site: user \
+registration, product catalog, shopping cart, and checkout flow.
+Assistant: *Creates a todo list breaking down each feature into specific \
+tasks based on the project architecture*
+Let's start with user registration. This will involve creating database \
+models, API endpoints, and frontend forms that integrate with your existing \
+authentication system.
+
+<reasoning>
+The assistant used the todo list because:
+1. The user provided multiple complex features to implement in a comma \
+separated list
+2. The todo list helps organize these large features into manageable tasks
+3. This approach allows for tracking progress across the entire implementation
+</reasoning>
+</example>
+
+<example>
+User: Can you help optimize my React application? It's rendering slowly \
+and has performance issues.
+Assistant: *Reviews component structure, render patterns, state management, \
+and data fetching*
+After analyzing your codebase, I've identified several performance issues.
+*Creates todo list with items like: 1) Implementing memoization for \
+expensive calculations in ProductList, 2) Adding virtualization for long \
+lists in Dashboard, 3) Optimizing image loading in Gallery component, \
+4) Fixing state update loops in ShoppingCart, 5) Reviewing bundle size \
+and implementing code splitting*
+Let's start by implementing memoization for the expensive calculations in \
+your ProductList component.
+
+<reasoning>
+The assistant used the todo list because:
+1. First, the assistant examined the codebase to identify specific \
+performance issues
+2. Based on this analysis, it identified multiple optimization opportunities
+3. Performance optimization is a non-trivial task requiring multiple steps
+4. The todo list helps methodically track improvements across different components
+5. This systematic approach ensures all performance bottlenecks are addressed
+</reasoning>
+</example>
+
+## Examples of When NOT to Use the Todo List
+
+<example>
+User: How do I print 'Hello World' in Python?
+Assistant: In Python, you can print \"Hello World\" with this simple code:
+
+python
+print(\"Hello World\")
+
+This will output the text \"Hello World\" to the console when executed.
+
+<reasoning>
+The assistant did not use the todo list because this is a single, trivial \
+task that can be completed in one step. There's no need to track multiple \
+tasks or steps for such a straightforward request.
+</reasoning>
+</example>
+
+<example>
+User: What does the git status command do?
+Assistant: The git status command shows the current state of your working \
+directory and staging area. It displays which changes have been staged, \
+which haven't, and which files aren't being tracked by Git. This is a \
+fundamental command for understanding the current state of your repository \
+before making commits.
+
+<reasoning>
+The assistant did not use the todo list because this is an informational \
+request with no actual coding task to complete. The user is simply asking \
+for an explanation, not for the assistant to perform multiple steps or tasks.
+</reasoning>
+</example>
+
+<example>
+User: Can you add a comment to the calculateTotal function to explain \
+what it does?
+Assistant: Sure, let me add a comment to the calculateTotal function to \
+explain what it does.
+* Uses the edit_file tool to add a comment to the calculateTotal function *
+
+<reasoning>
+The assistant did not use the todo list because this is a single, \
+straightforward task confined to one location in the code. Adding a comment \
+doesn't require tracking multiple steps or systematic organization.
+</reasoning>
+</example>
+
+<example>
+User: Run npm install for me and tell me what happens.
+Assistant: I'll run the npm install command for you.
+
+*Executes: npm install*
+
+The command completed successfully. Here's the output:
+[Output of npm install command]
+
+All dependencies have been installed according to your package.json file.
+
+<reasoning>
+The assistant did not use the todo list because this is a single command \
+execution with immediate results. There are no multiple steps to track or \
+organize, making the todo list unnecessary for this straightforward task.
+</reasoning>
+</example>
+
 ## Task States and Management
 
 1. **Task States**: Use these states to track progress:
@@ -540,25 +689,25 @@ Notes:
 
 /// Prompt for `lsp`.
 pub const LSP: &str = "\
-Language Server Protocol tool for code intelligence.
+Interact with Language Server Protocol (LSP) servers to get code intelligence features.
 
-Usage:
-- `action` determines the operation: 'definitions', 'references', 'hover', 'completion', 'diagnostics'.
-- `file_path` is required for all actions (relative to workspace).
-- `line` and `column` are required for definitions, references, hover, and completion.
-- `symbol` can be used instead of line/column for some actions.
+Supported operations:
+- goToDefinition: Find where a symbol is defined
+- findReferences: Find all references to a symbol
+- hover: Get hover information (documentation, type info) for a symbol
+- documentSymbol: Get all symbols (functions, classes, variables) in a document
+- workspaceSymbol: Search for symbols across the entire workspace
+- goToImplementation: Find implementations of an interface or abstract method
+- prepareCallHierarchy: Get call hierarchy item at a position (functions/methods)
+- incomingCalls: Find all functions/methods that call the function at a position
+- outgoingCalls: Find all functions/methods called by the function at a position
 
-Actions:
-- definitions: Go to the definition of a symbol at the given position.
-- references: Find all references to a symbol at the given position.
-- hover: Get type information and documentation for a symbol.
-- completion: Get auto-completion suggestions at a position.
-- diagnostics: Get linting/error diagnostics for a file.
+All operations require:
+- filePath: The file to operate on
+- line: The line number (1-based, as shown in editors)
+- character: The character offset (1-based, as shown in editors)
 
-Notes:
-- Requires a running language server for the file's language.
-- Falls back to text-based search if no language server is available.
-- Line and column numbers are 1-based.";
+Note: LSP servers must be configured for the file type. If no server is available, an error will be returned.";
 
 /// Prompt for `notebook_edit`.
 pub const NOTEBOOK_EDIT: &str = "\
@@ -1914,6 +2063,132 @@ pub fn todo_write_tool_prompt() -> String {
     4. The task is purely conversational or informational\n\n\
     NOTE that you should not use this tool if there is only one trivial task to \
     do. In this case you are better off just doing the task directly.\n\n\
+    ## Examples of When to Use the Todo List\n\n\
+    <example>\n\
+    User: I want to add a dark mode toggle to the application settings. Make \
+    sure you run the tests and build when you're done!\n\
+    Assistant: *Creates todo list with the following items:*\n\
+    1. Creating dark mode toggle component in Settings page\n\
+    2. Adding dark mode state management (context/store)\n\
+    3. Implementing CSS-in-JS styles for dark theme\n\
+    4. Updating existing components to support theme switching\n\
+    5. Running tests and build process, addressing any failures or errors that occur\n\
+    *Begins working on the first task*\n\n\
+    <reasoning>\n\
+    The assistant used the todo list because:\n\
+    1. Adding dark mode is a multi-step feature requiring UI, state management, \
+    and styling changes\n\
+    2. The user explicitly requested tests and build be run afterward\n\
+    3. The assistant inferred that tests and build need to pass by adding \
+    \"Ensure tests and build succeed\" as the final task\n\
+    </reasoning>\n\
+    </example>\n\n\
+    <example>\n\
+    User: Help me rename the function getCwd to getCurrentWorkingDirectory \
+    across my project\n\
+    Assistant: *Uses grep or search tools to locate all instances of getCwd \
+    in the codebase*\n\
+    I've found 15 instances of 'getCwd' across 8 different files.\n\
+    *Creates todo list with specific items for each file that needs updating*\n\n\
+    <reasoning>\n\
+    The assistant used the todo list because:\n\
+    1. First, the assistant searched to understand the scope of the task\n\
+    2. Upon finding multiple occurrences across different files, it determined \
+    this was a complex task with multiple steps\n\
+    3. The todo list helps ensure every instance is tracked and updated systematically\n\
+    4. This approach prevents missing any occurrences and maintains code consistency\n\
+    </reasoning>\n\
+    </example>\n\n\
+    <example>\n\
+    User: I need to implement these features for my e-commerce site: user \
+    registration, product catalog, shopping cart, and checkout flow.\n\
+    Assistant: *Creates a todo list breaking down each feature into specific \
+    tasks based on the project architecture*\n\
+    Let's start with user registration. This will involve creating database \
+    models, API endpoints, and frontend forms that integrate with your existing \
+    authentication system.\n\n\
+    <reasoning>\n\
+    The assistant used the todo list because:\n\
+    1. The user provided multiple complex features to implement in a comma \
+    separated list\n\
+    2. The todo list helps organize these large features into manageable tasks\n\
+    3. This approach allows for tracking progress across the entire implementation\n\
+    </reasoning>\n\
+    </example>\n\n\
+    <example>\n\
+    User: Can you help optimize my React application? It's rendering slowly \
+    and has performance issues.\n\
+    Assistant: *Reviews component structure, render patterns, state management, \
+    and data fetching*\n\
+    After analyzing your codebase, I've identified several performance issues.\n\
+    *Creates todo list with items like: 1) Implementing memoization for \
+    expensive calculations in ProductList, 2) Adding virtualization for long \
+    lists in Dashboard, 3) Optimizing image loading in Gallery component, \
+    4) Fixing state update loops in ShoppingCart, 5) Reviewing bundle size \
+    and implementing code splitting*\n\
+    Let's start by implementing memoization for the expensive calculations in \
+    your ProductList component.\n\n\
+    <reasoning>\n\
+    The assistant used the todo list because:\n\
+    1. First, the assistant examined the codebase to identify specific \
+    performance issues\n\
+    2. Based on this analysis, it identified multiple optimization opportunities\n\
+    3. Performance optimization is a non-trivial task requiring multiple steps\n\
+    4. The todo list helps methodically track improvements across different components\n\
+    5. This systematic approach ensures all performance bottlenecks are addressed\n\
+    </reasoning>\n\
+    </example>\n\n\
+    ## Examples of When NOT to Use the Todo List\n\n\
+    <example>\n\
+    User: How do I print 'Hello World' in Python?\n\
+    Assistant: In Python, you can print \"Hello World\" with this simple code:\n\n\
+    python\n\
+    print(\"Hello World\")\n\n\
+    This will output the text \"Hello World\" to the console when executed.\n\n\
+    <reasoning>\n\
+    The assistant did not use the todo list because this is a single, trivial \
+    task that can be completed in one step. There's no need to track multiple \
+    tasks or steps for such a straightforward request.\n\
+    </reasoning>\n\
+    </example>\n\n\
+    <example>\n\
+    User: What does the git status command do?\n\
+    Assistant: The git status command shows the current state of your working \
+    directory and staging area. It displays which changes have been staged, \
+    which haven't, and which files aren't being tracked by Git. This is a \
+    fundamental command for understanding the current state of your repository \
+    before making commits.\n\n\
+    <reasoning>\n\
+    The assistant did not use the todo list because this is an informational \
+    request with no actual coding task to complete. The user is simply asking \
+    for an explanation, not for the assistant to perform multiple steps or tasks.\n\
+    </reasoning>\n\
+    </example>\n\n\
+    <example>\n\
+    User: Can you add a comment to the calculateTotal function to explain \
+    what it does?\n\
+    Assistant: Sure, let me add a comment to the calculateTotal function to \
+    explain what it does.\n\
+    * Uses the edit_file tool to add a comment to the calculateTotal function *\n\n\
+    <reasoning>\n\
+    The assistant did not use the todo list because this is a single, \
+    straightforward task confined to one location in the code. Adding a comment \
+    doesn't require tracking multiple steps or systematic organization.\n\
+    </reasoning>\n\
+    </example>\n\n\
+    <example>\n\
+    User: Run npm install for me and tell me what happens.\n\
+    Assistant: I'll run the npm install command for you.\n\n\
+    *Executes: npm install*\n\n\
+    The command completed successfully. Here's the output:\n\
+    [Output of npm install command]\n\n\
+    All dependencies have been installed according to your package.json file.\n\n\
+    <reasoning>\n\
+    The assistant did not use the todo list because this is a single command \
+    execution with immediate results. There are no multiple steps to track or \
+    organize, making the todo list unnecessary for this straightforward task.\n\
+    </reasoning>\n\
+    </example>\n\n\
     ## Task States and Management\n\n\
     1. **Task States**: Use these states to track progress:\n\
        - pending: Task not yet started\n\
@@ -1930,6 +2205,23 @@ pub fn todo_write_tool_prompt() -> String {
        - Exactly ONE task must be in_progress at any time (not less, not more)\n\
        - Complete current tasks before starting new ones\n\
        - Remove tasks that are no longer relevant from the list entirely\n\n\
+    3. **Task Completion Requirements**:\n\
+       - ONLY mark a task as completed when you have FULLY accomplished it\n\
+       - If you encounter errors, blockers, or cannot finish, keep the task as \
+    in_progress\n\
+       - When blocked, create a new task describing what needs to be resolved\n\
+       - Never mark a task as completed if:\n\
+         - Tests are failing\n\
+         - Implementation is partial\n\
+         - You encountered unresolved errors\n\
+         - You couldn't find necessary files or dependencies\n\n\
+    4. **Task Breakdown**:\n\
+       - Create specific, actionable items\n\
+       - Break complex tasks into smaller, manageable steps\n\
+       - Use clear, descriptive task names\n\
+       - Always provide both forms:\n\
+         - content: \"Fix authentication bug\"\n\
+         - activeForm: \"Fixing authentication bug\"\n\n\
     When in doubt, use this tool. Being proactive with task management demonstrates \
     attentiveness and ensures you complete all requirements successfully."
         .to_owned()
@@ -2793,9 +3085,14 @@ mod tests {
             prompt.len()
         );
         assert!(prompt.contains("Agent tool"), "should mention Agent tool");
+        // In fork mode (default for interactive sessions), background notes are
+        // not shown — they are replaced by fork semantics. In non-fork mode,
+        // run_in_background appears. Either fork or background notes must be present.
+        let has_background = prompt.contains("run_in_background");
+        let has_fork = prompt.contains("When to fork");
         assert!(
-            prompt.contains("run_in_background"),
-            "should mention background execution"
+            has_background || has_fork,
+            "should mention either background execution or fork mode"
         );
         assert!(prompt.contains("SendMessage"), "should mention SendMessage");
     }

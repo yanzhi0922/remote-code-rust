@@ -42,6 +42,7 @@ members = [
     "crates/claude/rc-telemetry",
     "crates/claude/rc-utils",
     "crates/claude/rc-voice",
+    "crates/claude/rc-roo-adapter",
     "apps/remote-code-gui/src-tauri",
     "agents/claudecode",
     # Codex leaf crates (Stage 1) — listed explicitly to avoid glob issues
@@ -173,6 +174,7 @@ members = [
 exclude = [
     "apps/remote-code-gui",
     "apps/remote-code-mobile",
+    "crates/roo",
 ]
 resolver = "2"
 

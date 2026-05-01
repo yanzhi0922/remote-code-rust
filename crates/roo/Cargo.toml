@@ -1,0 +1,199 @@
+[workspace]
+resolver = "2"
+members = [
+    "roo-types",
+    "roo-jsonrpc",
+    "roo-provider",
+    "roo-provider-anthropic",
+    "roo-provider-openai",
+    "roo-provider-openai-native",
+    "roo-provider-google",
+    "roo-provider-aws",
+    "roo-provider-openrouter",
+    "roo-provider-ollama",
+    "roo-provider-deepseek",
+    "roo-provider-xai",
+    "roo-provider-minimax",
+    "roo-provider-moonshot",
+    "roo-provider-qwen",
+    "roo-provider-zai",
+    "roo-provider-mistral",
+    "roo-provider-fireworks",
+    "roo-provider-sambanova",
+    "roo-provider-baseten",
+    "roo-provider-vscode-lm",
+    "roo-provider-poe",
+    "roo-provider-litellm",
+    "roo-provider-requesty",
+    "roo-provider-unbound",
+    "roo-provider-roo",
+    "roo-provider-vercel",
+    "roo-provider-lmstudio",
+    "roo-tools",
+    "roo-tools-fs",
+    "roo-tools-command",
+    "roo-tools-mcp",
+    "roo-tools-search",
+    "roo-tools-mode",
+    "roo-tools-misc",
+    "roo-mcp",
+    "roo-task",
+    "roo-prompt",
+    "roo-context",
+    "roo-condense",
+    "roo-checkpoint",
+    "roo-diff",
+    "roo-index",
+    "roo-skills",
+    "roo-modes",
+    "roo-config",
+    "roo-telemetry",
+    "roo-cloud",
+    "roo-i18n",
+    "roo-ignore",
+    "roo-protect",
+    "roo-terminal",
+    "roo-editor",
+    "roo-marketplace",
+    "roo-mdm",
+    "roo-command",
+    "roo-worktree",
+    "roo-custom-tools",
+    "roo-mentions",
+    "roo-environment",
+    "roo-message-manager",
+    "roo-message-queue",
+    "roo-task-persistence",
+    "roo-context-tracking",
+    "roo-auto-approval",
+    "roo-app",
+    "roo-server",
+    "roo-cli",
+    "roo-tree-sitter",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/roo-code/rust"
+rust-version = "1.85"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+async-trait = "0.1"
+pin-project-lite = "0.2"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# HTTP
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+eventsource-stream = "0.2"
+http = "1"
+
+# Streaming
+tokio-stream = "0.1"
+
+# Schema
+schemars = "0.8"
+jsonschema = "0.26"
+
+# Git
+git2 = { version = "0.20", default-features = false }
+
+# File watching
+notify = "7"
+
+# Regex
+regex = "1"
+
+# Token counting
+tiktoken-rs = "0.6"
+
+# Diff
+similar = "2"
+strsim = "0.11"
+
+# Markdown
+pulldown-cmark = "0.11"
+
+# Crypto / ID
+sha2 = "0.10"
+uuid = { version = "1", features = ["v7", "serde"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Errors
+anyhow = "1"
+thiserror = "2"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# YAML/TOML
+toml = "0.8"
+
+# Vector search
+instant-distance = "0.2"
+
+# Tree-sitter
+tree-sitter = "0.24"
+
+# IPC / JSON-RPC
+jsonrpsee = { version = "0.24", features = ["server", "client", "macros"] }
+
+# i18n
+fluent = "0.16"
+fluent-bundle = "0.15"
+unic-langid = "0.9"
+
+# Ignore (like .gitignore)
+ignore = "0.4"
+
+# Frontmatter parsing
+gray_matter = "0.2"
+
+# Glob
+glob = "0.3"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Base64
+base64 = "0.22"
+
+# JWT
+jsonwebtoken = "9"
+
+# URL
+url = { version = "2", features = ["serde"] }
+
+# Internal crates
+roo-types = { path = "roo-types" }
+roo-jsonrpc = { path = "roo-jsonrpc" }
+roo-provider = { path = "roo-provider" }
+roo-prompt = { path = "roo-prompt" }
+roo-modes = { path = "roo-modes" }
+roo-diff = { path = "roo-diff" }
+roo-mcp = { path = "roo-mcp" }
+roo-tools = { path = "roo-tools" }
+roo-context = { path = "roo-context" }
+roo-condense = { path = "roo-condense" }
+roo-checkpoint = { path = "roo-checkpoint" }
+roo-config = { path = "roo-config" }
+roo-task = { path = "roo-task" }
+roo-server = { path = "roo-server" }
+roo-app = { path = "roo-app" }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

@@ -19,6 +19,10 @@ path = "src/lib.rs"
 [lints.rust]
 unsafe_code = "allow"
 
+[features]
+default = []
+codex-windows-sandbox = []
+
 [dependencies]
 anyhow = { workspace = true }
 arc-swap = { workspace = true }

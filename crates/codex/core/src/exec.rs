@@ -408,9 +408,9 @@ async fn get_raw_output_result(
     network_sandbox_policy: NetworkSandboxPolicy,
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
-    #[cfg_attr(not(windows), allow(unused_variables))] sandbox: SandboxType,
-    #[cfg_attr(not(windows), allow(unused_variables))] sandbox_policy: &SandboxPolicy,
-    #[cfg_attr(not(windows), allow(unused_variables))] windows_sandbox_filesystem_overrides: Option<
+    #[cfg_attr(not(all(target_os = "windows", feature = "codex-windows-sandbox")), allow(unused_variables))] sandbox: SandboxType,
+    #[cfg_attr(not(all(target_os = "windows", feature = "codex-windows-sandbox")), allow(unused_variables))] sandbox_policy: &SandboxPolicy,
+    #[cfg_attr(not(all(target_os = "windows", feature = "codex-windows-sandbox")), allow(unused_variables))] windows_sandbox_filesystem_overrides: Option<
         &WindowsSandboxFilesystemOverrides,
     >,
 ) -> Result<RawExecToolCallOutput> {
@@ -425,6 +425,7 @@ async fn get_raw_output_result(
 }
 
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 fn extract_create_process_as_user_error_code(err: &str) -> Option<String> {
     let marker = "CreateProcessAsUserW failed: ";
     let start = err.find(marker)? + marker.len();
@@ -438,6 +439,7 @@ fn extract_create_process_as_user_error_code(err: &str) -> Option<String> {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 fn windowsapps_path_kind(path: &str) -> &'static str {
     let lower = path.to_ascii_lowercase();
     if lower.contains("\\program files\\windowsapps\\") {
@@ -453,6 +455,7 @@ fn windowsapps_path_kind(path: &str) -> &'static str {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 fn record_windows_sandbox_spawn_failure(
     command_path: Option<&str>,
     windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,

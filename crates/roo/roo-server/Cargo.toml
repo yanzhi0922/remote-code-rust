@@ -1,0 +1,40 @@
+[package]
+name = "roo-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "JSON-RPC server for Roo Code Rust — handles IPC communication"
+
+[dependencies]
+roo-types = { path = "../roo-types" }
+roo-jsonrpc = { path = "../roo-jsonrpc" }
+roo-app = { path = "../roo-app" }
+roo-modes = { path = "../roo-modes" }
+roo-mcp = { path = "../roo-mcp" }
+roo-tools-search = { path = "../roo-tools-search" }
+roo-task = { path = "../roo-task" }
+roo-task-persistence = { path = "../roo-task-persistence" }
+roo-condense = { path = "../roo-condense" }
+roo-checkpoint = { path = "../roo-checkpoint" }
+roo-command = { path = "../roo-command" }
+roo-terminal = { path = "../roo-terminal" }
+roo-telemetry = { path = "../roo-telemetry" }
+roo-provider = { path = "../roo-provider" }
+roo-provider-anthropic = { path = "../roo-provider-anthropic" }
+roo-provider-openai = { path = "../roo-provider-openai" }
+roo-provider-minimax = { path = "../roo-provider-minimax" }
+roo-provider-deepseek = { path = "../roo-provider-deepseek" }
+roo-provider-openrouter = { path = "../roo-provider-openrouter" }
+roo-provider-google = { path = "../roo-provider-google" }
+roo-provider-ollama = { path = "../roo-provider-ollama" }
+roo-message-queue = { path = "../roo-message-queue" }
+roo-skills = { path = "../roo-skills" }
+tokio = { workspace = true, features = ["full"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }

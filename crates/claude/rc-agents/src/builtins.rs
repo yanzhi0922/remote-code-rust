@@ -6,7 +6,9 @@
 use crate::coordinator::is_coordinator_mode;
 use crate::definition::{AgentDefinition, AgentSource};
 use crate::worker::worker_agent_definition;
-use rc_context::{RuntimeFeatureGates, RuntimeIdentityContext, RuntimeUserType};
+use rc_context::{RuntimeIdentityContext, RuntimeUserType};
+#[cfg(test)]
+use rc_context::RuntimeFeatureGates;
 
 /// Returns all built-in agent definitions.
 ///

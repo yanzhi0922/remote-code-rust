@@ -1,0 +1,81 @@
+[package]
+name = "roo-tree-sitter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Tree-sitter integration for Roo Code Rust"
+
+[dependencies]
+tree-sitter = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+regex = { workspace = true }
+streaming-iterator = "0.1"
+
+# Tree-sitter language grammars (optional, controlled by features)
+tree-sitter-rust = { version = "0.23", optional = true }
+tree-sitter-javascript = { version = "0.23", optional = true }
+tree-sitter-typescript = { version = "0.23", optional = true }
+tree-sitter-python = { version = "0.23", optional = true }
+tree-sitter-go = { version = "0.23", optional = true }
+tree-sitter-c = { version = "0.23", optional = true }
+tree-sitter-cpp = { version = "0.23", optional = true }
+tree-sitter-java = { version = "0.23", optional = true }
+tree-sitter-ruby = { version = "0.23", optional = true }
+tree-sitter-c-sharp = { version = "0.23", optional = true }
+
+# Languages with different version schemes - commented out until needed
+# tree-sitter-php = { version = "0.23", optional = true }
+# tree-sitter-swift = { version = "0.7", optional = true }
+# tree-sitter-kotlin = { version = "0.3", optional = true }
+# tree-sitter-css = { version = "0.23", optional = true }
+# tree-sitter-html = { version = "0.23", optional = true }
+# tree-sitter-ocaml = { version = "0.23", optional = true }
+# tree-sitter-solidity = { version = "1", optional = true }
+# tree-sitter-toml = { version = "0.23", optional = true }
+# tree-sitter-lua = { version = "0.2", optional = true }
+# tree-sitter-elixir = { version = "0.3", optional = true }
+# tree-sitter-zig = { version = "0.0", optional = true }
+
+[features]
+default = [
+    "lang_rust",
+    "lang_javascript",
+    "lang_typescript",
+    "lang_python",
+    "lang_go",
+    "lang_c",
+    "lang_cpp",
+    "lang_java",
+    "lang_ruby",
+    "lang_csharp",
+]
+
+lang_rust = ["dep:tree-sitter-rust"]
+lang_javascript = ["dep:tree-sitter-javascript"]
+lang_typescript = ["dep:tree-sitter-typescript"]
+lang_python = ["dep:tree-sitter-python"]
+lang_go = ["dep:tree-sitter-go"]
+lang_c = ["dep:tree-sitter-c"]
+lang_cpp = ["dep:tree-sitter-cpp"]
+lang_java = ["dep:tree-sitter-java"]
+lang_ruby = ["dep:tree-sitter-ruby"]
+lang_csharp = ["dep:tree-sitter-c-sharp"]
+
+# Additional languages - uncomment when grammar crates are confirmed available
+# lang_php = ["dep:tree-sitter-php"]
+# lang_swift = ["dep:tree-sitter-swift"]
+# lang_kotlin = ["dep:tree-sitter-kotlin"]
+# lang_css = ["dep:tree-sitter-css"]
+# lang_html = ["dep:tree-sitter-html"]
+# lang_ocaml = ["dep:tree-sitter-ocaml"]
+# lang_solidity = ["dep:tree-sitter-solidity"]
+# lang_toml = ["dep:tree-sitter-toml"]
+# lang_lua = ["dep:tree-sitter-lua"]
+# lang_elixir = ["dep:tree-sitter-elixir"]
+# lang_zig = ["dep:tree-sitter-zig"]
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,19 @@
+[package]
+name = "roo-command"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Slash command loading and management for Roo Code Rust"
+
+[dependencies]
+tokio = { workspace = true, features = ["fs"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+roo-config = { path = "../roo-config" }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["fs", "rt", "macros"] }
+tempfile = "3"

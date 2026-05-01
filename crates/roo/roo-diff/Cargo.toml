@@ -1,0 +1,10 @@
+[package]
+name = "roo-diff"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "MultiSearchReplace diff strategy for Roo Code Rust"
+
+[dependencies]
+regex = { workspace = true }
