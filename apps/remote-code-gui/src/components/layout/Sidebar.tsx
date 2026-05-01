@@ -5,17 +5,12 @@ import {
   FolderOpen,
   FolderPlus,
   Plus,
-  Settings2,
   Trash2,
 } from 'lucide-react';
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ConversationEntry, SessionSubtask, SessionSummary, ToolCallInfo } from '../../lib/types';
 import { cn, normalizePathKey, truncateMiddle } from '../../lib/utils';
 import { useAppStore } from '../../stores/useAppStore';
-
-const LazySettingsPanel = lazy(() =>
-  import('./SettingsPanel').then((module) => ({ default: module.SettingsPanel })),
-);
 
 type SessionTaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'stopped';
 
@@ -294,7 +289,6 @@ export function Sidebar() {
   const sessionTasks = useAppStore((state) => state.sessionTasks);
   const canCreateSession = !!activeProjectPath;
 
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
   const [expandedSessions, setExpandedSessions] = useState<Record<string, boolean>>({});
 
@@ -539,21 +533,7 @@ export function Sidebar() {
             </div>
           )}
         </div>
-
-        <div className="border-t border-rc-border-primary p-3">
-          <button
-            onClick={() => setSettingsOpen(true)}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-rc-border-primary bg-rc-bg-primary px-3 py-2.5 text-sm font-medium text-rc-text-primary transition-colors hover:bg-rc-bg-hover"
-          >
-            <Settings2 size={15} />
-            设置
-          </button>
-        </div>
       </aside>
-
-      <Suspense fallback={null}>
-        {settingsOpen && <LazySettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />}
-      </Suspense>
     </>
   );
 }
