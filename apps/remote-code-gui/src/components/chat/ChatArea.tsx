@@ -92,8 +92,8 @@ function EmptyState({
   return (
     <div className="flex h-full min-h-[320px] items-center justify-center px-6 py-10">
       <div className="max-w-xl space-y-3 text-center">
-        <h2 className="text-xl font-semibold text-slate-800">{title}</h2>
-        <p className="text-sm leading-6 text-slate-500">{description}</p>
+        <h2 className="text-xl font-semibold text-rc-text-primary">{title}</h2>
+        <p className="text-sm leading-6 text-rc-text-secondary">{description}</p>
       </div>
     </div>
   );
@@ -109,16 +109,16 @@ function AssistantToolCalls({ toolCalls }: { toolCalls: ToolCallInfo[] }) {
           key={toolCall.id}
           summary={
             <div className="flex min-w-0 items-center gap-2">
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
+              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-rc-accent-success">
                 Tool
               </span>
-              <span className="font-medium text-emerald-700">{toolCall.name}</span>
-              <span className="truncate text-sm text-slate-500">{summarizeToolInput(toolCall)}</span>
+              <span className="font-medium text-rc-accent-success">{toolCall.name}</span>
+              <span className="truncate text-sm text-rc-text-secondary">{summarizeToolInput(toolCall)}</span>
             </div>
           }
-          iconColor="text-emerald-600"
+          iconColor="text-rc-accent-success"
         >
-          <pre className="overflow-x-auto whitespace-pre-wrap rounded-xl bg-[#f7f5ef] p-3 text-xs text-slate-700">
+          <pre className="overflow-x-auto whitespace-pre-wrap rounded-xl bg-rc-bg-secondary p-3 text-xs text-rc-text-primary">
             {formatToolInput(toolCall.input)}
           </pre>
         </CollapsibleBlock>
@@ -134,24 +134,24 @@ function ToolMessage({ entry }: { entry: ConversationEntry }) {
     <CollapsibleBlock
       summary={
         <div className="flex min-w-0 items-center gap-2">
-          <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+          <span className="text-xs font-semibold uppercase tracking-[0.16em] text-rc-text-tertiary">
             {entry.is_error ? 'Tool Error' : 'Tool Result'}
           </span>
           <span
             className={`rounded-full px-2 py-0.5 text-[11px] ${
-              entry.is_error ? 'bg-[#fff1f0] text-[#9c2f2f]' : 'bg-[#eee7dc] text-slate-600'
+              entry.is_error ? 'bg-rc-accent-error-bg text-rc-accent-error' : 'bg-rc-bg-tertiary text-rc-text-secondary'
             }`}
           >
             {label}
           </span>
-          <span className="truncate text-sm text-slate-600">{summarizeToolOutput(entry.text)}</span>
+          <span className="truncate text-sm text-rc-text-secondary">{summarizeToolOutput(entry.text)}</span>
         </div>
       }
-      iconColor={entry.is_error ? 'text-rose-500' : 'text-slate-500'}
+      iconColor={entry.is_error ? 'text-rc-accent-error' : 'text-rc-text-tertiary'}
     >
       <pre
         className={`overflow-x-auto whitespace-pre-wrap rounded-xl p-3 text-xs leading-6 ${
-          entry.is_error ? 'bg-[#fff1f0] text-[#9c2f2f]' : 'bg-[#f7f5ef] text-slate-700'
+          entry.is_error ? 'bg-rc-accent-error-bg text-rc-accent-error' : 'bg-rc-bg-secondary text-rc-text-primary'
         }`}
       >
         {entry.text}
@@ -170,15 +170,15 @@ function AssistantThinking({ blocks }: { blocks: string[] }) {
           key={`${index}-${block.slice(0, 20)}`}
           summary={
             <div className="flex min-w-0 items-center gap-2">
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
+              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-rc-accent-warning">
                 Thinking
               </span>
-              <span className="truncate text-sm text-slate-600">{summarizeToolOutput(block)}</span>
+              <span className="truncate text-sm text-rc-text-secondary">{summarizeToolOutput(block)}</span>
             </div>
           }
-          iconColor="text-amber-600"
+          iconColor="text-rc-accent-warning"
         >
-          <div className="whitespace-pre-wrap text-sm leading-7 text-slate-700">{block}</div>
+          <div className="whitespace-pre-wrap text-sm leading-7 text-rc-text-primary">{block}</div>
         </CollapsibleBlock>
       ))}
     </div>
@@ -189,8 +189,8 @@ function AssistantMessage({ entry }: { entry: ConversationEntry }) {
   const thinkingBlocks = extractThinkingBlocks(entry);
 
   return (
-    <div className="rounded-[24px] border border-[#e8e2d8] bg-white px-5 py-4 shadow-[0_10px_28px_rgba(23,24,26,0.05)]">
-      <div className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">
+    <div className="rounded-[24px] border border-rc-border-primary bg-rc-bg-assistant-card px-5 py-4 shadow-md">
+      <div className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-rc-text-tertiary">
         Assistant
       </div>
 
@@ -198,12 +198,12 @@ function AssistantMessage({ entry }: { entry: ConversationEntry }) {
 
       {entry.text ? (
         <div className="prose prose-slate max-w-none">
-          <Suspense fallback={<div className="text-sm text-slate-500">正在渲染回复…</div>}>
+          <Suspense fallback={<div className="text-sm text-rc-text-secondary">正在渲染回复…</div>}>
             <LazyMarkdownRenderer content={entry.text} />
           </Suspense>
         </div>
       ) : (
-        <div className="text-sm text-slate-500">模型请求了工具调用。</div>
+        <div className="text-sm text-rc-text-secondary">模型请求了工具调用。</div>
       )}
 
       <AssistantToolCalls toolCalls={entry.tool_calls} />
@@ -222,7 +222,7 @@ const MessageCard = memo(
     if (entry.role === 'user') {
       return (
         <div className="flex justify-end">
-          <div className="max-w-3xl rounded-[24px] bg-[#17181a] px-5 py-4 text-[15px] leading-7 text-white shadow-[0_14px_32px_rgba(23,24,26,0.16)]">
+          <div className="max-w-3xl rounded-[24px] bg-rc-bg-user-bubble px-5 py-4 text-[15px] leading-7 text-rc-text-inverse shadow-lg">
             <div className="whitespace-pre-wrap break-words">{entry.text}</div>
           </div>
         </div>
@@ -250,9 +250,9 @@ function StatusCards({
   return (
     <>
       {sending && (
-        <div className="rounded-2xl border border-[#e3ddd2] bg-white px-5 py-4 text-sm text-slate-600 shadow-[0_10px_24px_rgba(23,24,26,0.05)]">
+        <div className="rounded-2xl border border-rc-border-primary bg-rc-bg-assistant-card px-5 py-4 text-sm text-rc-text-secondary shadow-md">
           <div className="flex items-center gap-3">
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-rc-border-primary border-t-rc-text-primary" />
             <span>正在处理当前请求…</span>
           </div>
 
@@ -261,10 +261,10 @@ function StatusCards({
               {compactProgress.map((progress, index) => (
                 <div
                   key={`${progress.tool_name}-${progress.tool_call_id}-${index}`}
-                  className="rounded-xl bg-[#f7f5ef] px-3 py-2 text-xs text-slate-600"
+                  className="rounded-xl bg-rc-bg-secondary px-3 py-2 text-xs text-rc-text-secondary"
                 >
-                  <span className="font-medium text-slate-800">{progress.tool_name || 'tool'}</span>
-                  <span className="mx-2 text-slate-400">·</span>
+                  <span className="font-medium text-rc-text-primary">{progress.tool_name || 'tool'}</span>
+                  <span className="mx-2 text-rc-text-tertiary">·</span>
                   <span>{truncateMiddle(progress.message, 120)}</span>
                 </div>
               ))}
@@ -277,7 +277,7 @@ function StatusCards({
                 <div
                   key={`${result.tool_name}-${result.tool_call_id}-${index}`}
                   className={`rounded-xl px-3 py-2 text-xs ${
-                    result.is_error ? 'bg-[#fff1f0] text-[#9c2f2f]' : 'bg-[#edf7ef] text-[#25653b]'
+                    result.is_error ? 'bg-rc-accent-error-bg text-rc-accent-error' : 'bg-rc-accent-success-bg text-rc-accent-success'
                   }`}
                 >
                   <span className="font-medium">{result.tool_name}</span>
@@ -291,7 +291,7 @@ function StatusCards({
       )}
 
       {sendError && (
-        <div className="rounded-2xl border border-[#f3cbc6] bg-[#fff6f4] px-5 py-4 text-sm text-[#9c2f2f]">
+        <div className="rounded-2xl border border-rc-accent-error bg-rc-accent-error-bg px-5 py-4 text-sm text-rc-accent-error">
           {sendError}
         </div>
       )}
@@ -327,7 +327,7 @@ function ConversationTimeline({
   });
 
   return (
-    <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto bg-[#f7f4ed] px-4 py-5 sm:px-6">
+    <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto bg-rc-bg-chat px-4 py-5 sm:px-6">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
         {shouldVirtualize ? (
           <div className="relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
@@ -383,10 +383,10 @@ export function ChatArea() {
 
   if (!activeSessionId) {
     return (
-      <div className="flex-1 overflow-y-auto bg-[#f7f4ed]">
+      <div className="flex-1 overflow-y-auto bg-rc-bg-chat">
         <EmptyState
           title="选择一个项目或会话"
-          description="左侧现在按项目、会话、子任务三层组织。选中后，右侧会渲染完整对话、公式、工具调用和折叠详情。"
+          description="左侧按项目、会话、子任务三层组织。选中后，右侧会渲染完整对话、公式、工具调用和折叠详情。"
         />
       </div>
     );
@@ -394,7 +394,7 @@ export function ChatArea() {
 
   if (conversationLoading) {
     return (
-      <div className="flex-1 overflow-y-auto bg-[#f7f4ed]">
+      <div className="flex-1 overflow-y-auto bg-rc-bg-chat">
         <EmptyState title="正在加载会话" description="正在读取本地会话历史与工具调用记录。" />
       </div>
     );
@@ -402,7 +402,7 @@ export function ChatArea() {
 
   if (conversation.length === 0) {
     return (
-      <div className="flex-1 overflow-y-auto bg-[#f7f4ed]">
+      <div className="flex-1 overflow-y-auto bg-rc-bg-chat">
         <EmptyState
           title="会话已创建"
           description="直接在下方输入框中发送需求。公式会渲染，工具调用、代码块和工具输出会默认折叠。"
@@ -412,7 +412,7 @@ export function ChatArea() {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col bg-[#f7f4ed]">
+    <div className="flex h-full min-h-0 flex-1 flex-col bg-rc-bg-chat">
       <ConversationTimeline
         conversation={conversation}
         sending={sending}

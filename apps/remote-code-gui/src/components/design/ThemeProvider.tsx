@@ -1,39 +1,89 @@
-import { createContext, useContext } from 'react';
-import { cn } from '../../lib/utils';
+import { createContext, useCallback, useContext, useEffect, useState } from 'react';
+
+export type ThemeMode = 'light' | 'dark' | 'system';
 
 export interface ThemeProviderProps {
-  theme?: 'light' | 'dark';
+  defaultTheme?: ThemeMode;
   children: React.ReactNode;
 }
 
 interface ThemeContextValue {
-  theme: string;
+  theme: 'light' | 'dark';
+  mode: ThemeMode;
   isDark: boolean;
+  setMode: (mode: ThemeMode) => void;
+  toggle: () => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue>({
   theme: 'light',
+  mode: 'system',
   isDark: false,
+  setMode: () => {},
+  toggle: () => {},
 });
+
+const STORAGE_KEY = 'rc-theme-mode';
+
+function getSystemTheme(): 'light' | 'dark' {
+  if (typeof window === 'undefined') return 'light';
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function resolveTheme(mode: ThemeMode): 'light' | 'dark' {
+  if (mode === 'system') return getSystemTheme();
+  return mode;
+}
 
 export function useTheme(): ThemeContextValue {
   return useContext(ThemeContext);
 }
 
-export function ThemeProvider({ theme = 'light', children }: ThemeProviderProps) {
+export function ThemeProvider({ defaultTheme = 'system', children }: ThemeProviderProps) {
+  const [mode, setModeState] = useState<ThemeMode>(() => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored === 'light' || stored === 'dark' || stored === 'system') return stored;
+    } catch {}
+    return defaultTheme;
+  });
+
+  const theme = resolveTheme(mode);
   const isDark = theme === 'dark';
-  const value: ThemeContextValue = { theme, isDark };
+
+  const setMode = useCallback((newMode: ThemeMode) => {
+    setModeState(newMode);
+    try {
+      localStorage.setItem(STORAGE_KEY, newMode);
+    } catch {}
+  }, []);
+
+  const toggle = useCallback(() => {
+    setMode(isDark ? 'light' : 'dark');
+  }, [isDark, setMode]);
+
+  // Apply data-theme attribute to document root
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
+
+  // Listen for system theme changes when mode is 'system'
+  useEffect(() => {
+    if (mode !== 'system') return;
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handler = () => {
+      const resolved = getSystemTheme();
+      document.documentElement.setAttribute('data-theme', resolved);
+    };
+    mediaQuery.addEventListener('change', handler);
+    return () => mediaQuery.removeEventListener('change', handler);
+  }, [mode]);
+
+  const value: ThemeContextValue = { theme, mode, isDark, setMode, toggle };
 
   return (
     <ThemeContext.Provider value={value}>
-      <div
-        data-testid="theme-provider"
-        className={cn(
-          isDark ? 'bg-slate-900 text-white' : 'bg-white text-slate-800'
-        )}
-      >
-        {children}
-      </div>
+      {children}
     </ThemeContext.Provider>
   );
 }
