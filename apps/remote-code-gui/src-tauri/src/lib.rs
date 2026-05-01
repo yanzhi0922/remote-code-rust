@@ -37,6 +37,7 @@ use rc_codex_adapter::{
     CodexTurnSteerRequest,
 };
 use rc_roo_adapter::RooInProcessAdapter;
+use rc_claude_adapter::ClaudeInProcessAdapter;
 use claude_config::{
     AppPaths, ProviderConfig as RuntimeProviderConfig, ProviderOverrides, RuntimeConfig,
     RuntimeOverrides, SettingSource, discover_env_providers, load_runtime_config,
@@ -1203,11 +1204,14 @@ struct AppState {
     pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
     pending_codex_permissions: Arc<Mutex<HashMap<String, CodexPendingPermission>>>,
     pending_roo_permissions: Arc<Mutex<HashMap<String, RooPendingPermission>>>,
+    pending_claude_permissions: Arc<Mutex<HashMap<String, ClaudePendingPermission>>>,
     running_prompts: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
     /// Codex in-process adapters (session_id → adapter).
     active_codex_adapters: Arc<Mutex<HashMap<String, CodexInProcessAdapter>>>,
     /// Roo in-process adapters (session_id → adapter).
     active_roo_adapters: Arc<Mutex<HashMap<String, RooInProcessAdapter>>>,
+    /// Claude in-process adapters (session_id → adapter).
+    active_claude_adapters: Arc<Mutex<HashMap<String, ClaudeInProcessAdapter>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -1218,6 +1222,12 @@ struct CodexPendingPermission {
 
 #[derive(Debug, Clone)]
 struct RooPendingPermission {
+    session_id: String,
+    request_id: String,
+}
+
+#[derive(Debug, Clone)]
+struct ClaudePendingPermission {
     session_id: String,
     request_id: String,
 }
@@ -4139,6 +4149,314 @@ async fn run_roo_in_process_prompt(
     Ok(final_text)
 }
 
+/// Execute a prompt via the native Claude in-process adapter.
+///
+/// This creates a [`ClaudeInProcessAdapter`], starts it, sends the user message,
+/// and forwards events to the frontend via Tauri emissions.
+async fn run_claude_in_process_prompt(
+    app: &AppHandle,
+    claude_adapters: &Arc<Mutex<HashMap<String, ClaudeInProcessAdapter>>>,
+    pending_claude_permissions: &Arc<Mutex<HashMap<String, ClaudePendingPermission>>>,
+    session_id: &str,
+    prompt: &str,
+    working_dir: PathBuf,
+    model: String,
+    provider_name: String,
+    api_key: Option<String>,
+    base_url: Option<String>,
+    permission_mode: PermissionMode,
+    max_turns: usize,
+) -> std::result::Result<String, String> {
+    // Ensure the adapter exists for this session.
+    {
+        let mut adapters = claude_adapters.lock().await;
+        if !adapters.contains_key(session_id) {
+            tracing::info!(session_id, "Creating new ClaudeInProcessAdapter");
+            let mut adapter = ClaudeInProcessAdapter::new(
+                model.clone(),
+                provider_name.clone(),
+                api_key.clone(),
+                base_url.clone(),
+                working_dir.clone(),
+                permission_mode,
+                max_turns,
+            );
+            let agent_config = claude_agent_protocol::types::AgentConfig {
+                agent_type: ProtocolAgentType::RemoteClaude,
+                binary_path: None,
+                args: Vec::new(),
+                env: Vec::new(),
+                working_dir: Some(working_dir.clone()),
+                model: Some(model.clone()),
+                provider: Some(provider_name.clone()),
+                api_key: api_key.clone(),
+                base_url: base_url.clone(),
+            };
+            adapter
+                .start(&agent_config)
+                .await
+                .map_err(|e| format!("Failed to start Claude in-process runtime: {e}"))?;
+            adapters.insert(session_id.to_string(), adapter);
+        }
+    }
+
+    // Get the adapter and send the message.
+    let mut adapters = claude_adapters.lock().await;
+    let adapter = adapters
+        .get_mut(session_id)
+        .ok_or_else(|| "Claude adapter not found".to_string())?;
+
+    let mut rx = adapter
+        .send_message(session_id, prompt)
+        .await
+        .map_err(|e| format!("ClaudeInProcessAdapter::send_message failed: {e}"))?;
+
+    // Forward events to the frontend. Drop the lock before streaming.
+    drop(adapters);
+
+    let mut final_text = String::new();
+    let mut tool_calls: Vec<ToolCallDto> = Vec::new();
+    let mut usage_info: claude_agent_protocol::events::UsageInfo = Default::default();
+    let mut stop_reason = "completed".to_owned();
+    while let Some(event) = rx.recv().await {
+        use claude_agent_protocol::events::UnifiedAgentEvent;
+        match event {
+            UnifiedAgentEvent::MessageDelta { delta, .. } => {
+                final_text.push_str(&delta);
+                let _ = app.emit(
+                    APP_EVENT_STREAMING_DELTA,
+                    StreamingDeltaDto {
+                        session_id: session_id.to_string(),
+                        delta,
+                    },
+                );
+            }
+            UnifiedAgentEvent::ToolCallStarted {
+                tool_name,
+                tool_input,
+                ..
+            } => {
+                let tool_call_id = Uuid::new_v4().to_string();
+                tool_calls.push(ToolCallDto {
+                    id: tool_call_id.clone(),
+                    name: tool_name.clone(),
+                    input: tool_input,
+                });
+                let _ = app.emit(
+                    APP_EVENT_TOOL_START,
+                    ToolProgressDto {
+                        tool_call_id,
+                        tool_name,
+                        message: "started".to_owned(),
+                    },
+                );
+            }
+            UnifiedAgentEvent::ToolCallProgress {
+                tool_name,
+                progress,
+                ..
+            } => {
+                let _ = app.emit(
+                    APP_EVENT_TOOL_PROGRESS,
+                    ToolProgressDto {
+                        tool_call_id: String::new(),
+                        tool_name,
+                        message: progress,
+                    },
+                );
+            }
+            UnifiedAgentEvent::ToolCallCompleted {
+                tool_name, result, ..
+            } => {
+                let _ = app.emit(
+                    APP_EVENT_TOOL_RESULT,
+                    ToolResultDto {
+                        tool_call_id: String::new(),
+                        tool_name,
+                        is_error: false,
+                        output: result.to_string(),
+                    },
+                );
+            }
+            UnifiedAgentEvent::PermissionRequest {
+                request_id,
+                tool_name,
+                input,
+                ..
+            } => {
+                let gui_request_id = Uuid::new_v4().to_string();
+                {
+                    let mut pending = pending_claude_permissions.lock().await;
+                    pending.insert(
+                        gui_request_id.clone(),
+                        ClaudePendingPermission {
+                            session_id: session_id.to_string(),
+                            request_id,
+                        },
+                    );
+                }
+                let _ = app.emit(
+                    APP_EVENT_PERMISSION_REQUEST,
+                    PermissionRequestDto {
+                        request_id: gui_request_id,
+                        tool_name: tool_name.clone(),
+                        tool_use_id: String::new(),
+                        title: "Claude 请求权限".to_owned(),
+                        description: format!("工具 {tool_name} 需要授权才能执行。"),
+                        input,
+                        blocked_path: None,
+                        permission_suggestions: vec![],
+                    },
+                );
+            }
+            UnifiedAgentEvent::SubtaskStarted {
+                task_id,
+                description,
+                ..
+            } => {
+                let _ = app.emit(
+                    APP_EVENT_SUBTASK_STARTED,
+                    SubtaskStartedDto {
+                        session_id: session_id.to_string(),
+                        task_id,
+                        parent_task_id: None,
+                        description,
+                        depth: 0,
+                    },
+                );
+            }
+            UnifiedAgentEvent::SubtaskProgress {
+                task_id, progress, ..
+            } => {
+                let _ = app.emit(
+                    APP_EVENT_SUBTASK_PROGRESS,
+                    SubtaskProgressDto {
+                        session_id: session_id.to_string(),
+                        task_id,
+                        turn: 0,
+                        max_turns: 0,
+                        summary: progress,
+                    },
+                );
+            }
+            UnifiedAgentEvent::SubtaskCompleted {
+                task_id, result, ..
+            } => {
+                let _ = app.emit(
+                    APP_EVENT_SUBTASK_COMPLETED,
+                    SubtaskCompletedDto {
+                        session_id: session_id.to_string(),
+                        task_id,
+                        success: true,
+                        output_preview: result.to_string(),
+                        turns_used: 0,
+                    },
+                );
+            }
+            UnifiedAgentEvent::ContextUsage { used, total, .. } => {
+                let _ = app.emit(
+                    APP_EVENT_CONTEXT_USAGE,
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "used": used,
+                        "total": total,
+                    }),
+                );
+            }
+            UnifiedAgentEvent::ContextOverflow { used, total, .. } => {
+                let _ = app.emit(
+                    APP_EVENT_CONTEXT_OVERFLOW,
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "used": used,
+                        "total": total,
+                    }),
+                );
+            }
+            UnifiedAgentEvent::ContextCompacted {
+                entries_removed,
+                usage_ratio,
+                ..
+            } => {
+                let _ = app.emit(
+                    APP_EVENT_CONTEXT_COMPACTED,
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "entries_removed": entries_removed,
+                        "usage_ratio": usage_ratio,
+                    }),
+                );
+            }
+            UnifiedAgentEvent::Completed { result, .. } => {
+                if !result.response_text.is_empty() {
+                    final_text = result.response_text;
+                }
+                if !result.tool_calls.is_empty() {
+                    tool_calls = result
+                        .tool_calls
+                        .into_iter()
+                        .map(|tc| ToolCallDto {
+                            id: tc.id,
+                            name: tc.name,
+                            input: tc.input,
+                        })
+                        .collect();
+                }
+                if result.usage.input_tokens > 0
+                    || result.usage.output_tokens > 0
+                    || result.usage.cache_read > 0
+                    || result.usage.cache_write > 0
+                {
+                    usage_info = result.usage;
+                }
+                break;
+            }
+            UnifiedAgentEvent::Error {
+                message,
+                recoverable,
+                ..
+            } => {
+                tracing::warn!(error = %message, "Claude error event");
+                if !recoverable {
+                    return Err(message);
+                }
+            }
+            UnifiedAgentEvent::Stopped => {
+                stop_reason = "stopped".to_owned();
+                break;
+            }
+            UnifiedAgentEvent::Started(_) | UnifiedAgentEvent::Ready => {
+                tracing::debug!(event = ?event, "Claude lifecycle event");
+            }
+            // Ignore agent-specific events that Claude won't emit
+            _ => {}
+        }
+    }
+
+    let _ = app.emit(
+        APP_EVENT_PROMPT_DONE,
+        PromptDoneDto {
+            session_id: session_id.to_string(),
+            is_error: false,
+            error: None,
+            result: Some(PromptResultDto {
+                session_id: session_id.to_string(),
+                text: final_text.clone(),
+                tool_calls,
+                usage: UsageDto {
+                    input_tokens: usage_info.input_tokens,
+                    output_tokens: usage_info.output_tokens,
+                    total_tokens: usage_info.input_tokens + usage_info.output_tokens,
+                },
+                num_turns: 1,
+                stop_reason,
+            }),
+        },
+    );
+
+    Ok(final_text)
+}
+
 #[tauri::command]
 async fn init_app(
     app: AppHandle,
@@ -4414,9 +4732,60 @@ async fn send_prompt(
                 });
                 running.insert(sid.clone(), handle);
             }
+            "remote_claude" => {
+                // Native in-process path: Claude uses ClaudeInProcessAdapter
+                // (wraps QueryEngine via AgentAdapter trait).
+                let claude_adapters = Arc::clone(&state.active_claude_adapters);
+                let pending_claude_permissions = Arc::clone(&state.pending_claude_permissions);
+                let sid_clone = sid.clone();
+                let prompt_owned = prompt.clone();
+                let working_dir = config.cwd.clone();
+                let model = config.provider.model.clone().unwrap_or_else(|| "claude-sonnet-4-20250514".to_owned());
+                let provider_name = config.provider.name.clone();
+                let api_key = config.provider.api_key.clone();
+                let base_url = config.provider.base_url.clone();
+                let permission_mode = config.permission_mode;
+                let max_turns = DEFAULT_MAX_TURNS;
+
+                let handle = tokio::spawn(async move {
+                    let result = run_claude_in_process_prompt(
+                        &app,
+                        &claude_adapters,
+                        &pending_claude_permissions,
+                        &sid_clone,
+                        &prompt_owned,
+                        working_dir,
+                        model,
+                        provider_name,
+                        api_key,
+                        base_url,
+                        permission_mode,
+                        max_turns,
+                    )
+                    .await;
+
+                    if let Err(error) = result {
+                        let _ = app.emit(
+                            APP_EVENT_PROMPT_DONE,
+                            PromptDoneDto {
+                                session_id: sid_clone.clone(),
+                                is_error: true,
+                                error: Some(error),
+                                result: None,
+                            },
+                        );
+                    }
+
+                    // Clean up the running-prompts map entry.
+                    {
+                        let mut running = running_prompts.lock().await;
+                        running.remove(&sid_for_cleanup);
+                    }
+                });
+                running.insert(sid.clone(), handle);
+            }
             _ => {
-                // Default path: Claude Code Agent (remote_claude / empty) uses
-                // the in-process QueryEngine.
+                // Fallback path: uses the in-process QueryEngine directly.
                 let handle = tokio::spawn(async move {
                     let result = query_engine_gui::run_unified_prompt_with_provider(
                         &app,
@@ -6677,13 +7046,58 @@ async fn resolve_permission_request(
             pending.get(&request_id).cloned()
         };
         let Some(pending_codex) = pending_codex else {
-            // Check Roo permissions as last resort.
+            // Check Roo permissions.
             let pending_roo = {
                 let pending = state.pending_roo_permissions.lock().await;
                 pending.get(&request_id).cloned()
             };
             let Some(pending_roo) = pending_roo else {
-                return Ok(false);
+                // Check Claude adapter permissions as last resort.
+                let pending_claude = {
+                    let pending = state.pending_claude_permissions.lock().await;
+                    pending.get(&request_id).cloned()
+                };
+                let Some(pending_claude) = pending_claude else {
+                    return Ok(false);
+                };
+
+                {
+                    let mut adapters = state.active_claude_adapters.lock().await;
+                    if let Some(adapter) = adapters.get_mut(&pending_claude.session_id) {
+                        let decision = if allowed {
+                            AgentPermissionDecision::Allow
+                        } else {
+                            AgentPermissionDecision::Deny
+                        };
+                        let _ = adapter
+                            .resolve_permission(
+                                &pending_claude.session_id,
+                                &pending_claude.request_id,
+                                decision,
+                            )
+                            .await;
+                    }
+                }
+
+                {
+                    let mut pending = state.pending_claude_permissions.lock().await;
+                    pending.remove(&request_id);
+                }
+
+                let _ = app.emit(
+                    APP_EVENT_PERMISSION_RESOLVED,
+                    PermissionDecisionDto {
+                        request_id,
+                        allowed,
+                        message: message.clone(),
+                        updated_input: None,
+                        permission_updates: vec![],
+                        feedback: None,
+                        content_blocks: vec![],
+                    },
+                );
+
+                return Ok(true);
             };
 
             {
@@ -6793,6 +7207,58 @@ async fn resolve_roo_permission_request(
 
     {
         let mut pending = state.pending_roo_permissions.lock().await;
+        pending.remove(&request_id);
+    }
+
+    let _ = app.emit(
+        APP_EVENT_PERMISSION_RESOLVED,
+        PermissionDecisionDto {
+            request_id,
+            allowed,
+            message: None,
+            updated_input: None,
+            permission_updates: vec![],
+            feedback: None,
+            content_blocks: vec![],
+        },
+    );
+
+    Ok(true)
+}
+
+#[tauri::command]
+async fn resolve_claude_permission_request(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request_id: String,
+    allowed: bool,
+) -> std::result::Result<bool, String> {
+    let pending_claude = {
+        let pending = state.pending_claude_permissions.lock().await;
+        pending.get(&request_id).cloned()
+    };
+    let Some(pending_claude) = pending_claude else {
+        return Ok(false);
+    };
+
+    {
+        let mut adapters = state.active_claude_adapters.lock().await;
+        let adapter = adapters
+            .get_mut(&pending_claude.session_id)
+            .ok_or_else(|| "Claude adapter not found for permission request".to_owned())?;
+        let decision = if allowed {
+            AgentPermissionDecision::Allow
+        } else {
+            AgentPermissionDecision::Deny
+        };
+        adapter
+            .resolve_permission(&pending_claude.session_id, &pending_claude.request_id, decision)
+            .await
+            .map_err(|error| format!("Failed to resolve Claude permission request: {error:#}"))?;
+    }
+
+    {
+        let mut pending = state.pending_claude_permissions.lock().await;
         pending.remove(&request_id);
     }
 
@@ -7017,9 +7483,11 @@ pub fn run() {
     let pending_permissions = Arc::new(Mutex::new(HashMap::new()));
     let pending_codex_permissions = Arc::new(Mutex::new(HashMap::new()));
     let pending_roo_permissions = Arc::new(Mutex::new(HashMap::new()));
+    let pending_claude_permissions = Arc::new(Mutex::new(HashMap::new()));
     let running_prompts = Arc::new(Mutex::new(HashMap::new()));
     let active_codex_adapters = Arc::new(Mutex::new(HashMap::new()));
     let active_roo_adapters = Arc::new(Mutex::new(HashMap::new()));
+    let active_claude_adapters = Arc::new(Mutex::new(HashMap::new()));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -7034,9 +7502,11 @@ pub fn run() {
             pending_permissions,
             pending_codex_permissions,
             pending_roo_permissions,
+            pending_claude_permissions,
             running_prompts,
             active_codex_adapters,
             active_roo_adapters,
+            active_claude_adapters,
         })
         .invoke_handler(tauri::generate_handler![
             init_app,
@@ -7163,6 +7633,7 @@ pub fn run() {
             switch_profile,
             resolve_permission_request,
             resolve_roo_permission_request,
+            resolve_claude_permission_request,
             pick_folder,
             list_available_agents,
             install_agent,

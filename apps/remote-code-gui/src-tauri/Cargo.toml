@@ -39,6 +39,7 @@ claude-skills = { path = "../../../crates/claude/claude-skills" }
 claude-agent-protocol = { path = "../../../crates/claude/claude-agent-protocol" }
 rc-codex-adapter = { path = "../../../crates/adapters/rc-codex-adapter" }
 rc-roo-adapter = { path = "../../../crates/adapters/rc-roo-adapter" }
+rc-claude-adapter = { path = "../../../crates/adapters/rc-claude-adapter" }
 claude-voice = { path = "../../../crates/claude/claude-voice" }
 claude-query-engine = { path = "../../../crates/claude/claude-query-engine" }
 claude-engine-events = { path = "../../../crates/claude/claude-engine-events" }
