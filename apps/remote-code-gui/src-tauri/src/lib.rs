@@ -1,3 +1,4 @@
+mod mobile;
 mod query_engine_gui;
 
 use std::collections::{BTreeMap, HashMap};
@@ -7259,6 +7260,7 @@ async fn transcribe_audio(
     }
 }
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let runtime_state = build_runtime_state().unwrap_or_else(|error| {
         panic!("failed to initialize remote-code-gui runtime: {error:#}");
@@ -7273,6 +7275,20 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
+        .setup(|app| {
+            #[cfg(any(target_os = "ios", target_os = "android"))]
+            {
+                app.handle().plugin(tauri_plugin_haptics::init())?;
+                app.handle().plugin(tauri_plugin_biometric::init())?;
+                app.handle().plugin(tauri_plugin_network::init())?;
+                app.handle().plugin(tauri_plugin_deep_link::init())?;
+                app.handle().plugin(tauri_plugin_push_notifications::init())?;
+                app.handle().plugin(tauri_plugin_share::init())?;
+                mobile::register_deep_link_listener(&app.handle().clone());
+            }
+            Ok(())
+        })
         .manage(AppState {
             runtime: Mutex::new(runtime_state),
             pending_permissions,
@@ -7410,7 +7426,19 @@ pub fn run() {
             list_available_agents,
             install_agent,
             uninstall_agent,
-            transcribe_audio
+            transcribe_audio,
+            mobile::mobile_platform,
+            mobile::mobile_is_mobile,
+            mobile::mobile_haptic_impact,
+            mobile::mobile_haptic_notification,
+            mobile::mobile_haptic_selection,
+            mobile::mobile_biometric_check_availability,
+            mobile::mobile_biometric_authenticate,
+            mobile::mobile_secure_store_get,
+            mobile::mobile_secure_store_set,
+            mobile::mobile_secure_store_remove,
+            mobile::mobile_download_artifact,
+            mobile::mobile_share_file
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|error| panic!("error while running tauri application: {error}"));

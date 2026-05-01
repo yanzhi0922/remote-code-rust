@@ -65,3 +65,46 @@
     @apply mb-3 overflow-x-auto;
   }
 }
+
+/* ── Mobile viewport & touch optimizations ─────────────────────── */
+
+@layer utilities {
+  .safe-top {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .safe-left {
+    padding-left: env(safe-area-inset-left, 0px);
+  }
+  .safe-right {
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+}
+
+@media (max-width: 768px) {
+  html, body, #root {
+    height: 100dvh;
+    overflow: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  body {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  input, textarea, [contenteditable] {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .scroll-container {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+}

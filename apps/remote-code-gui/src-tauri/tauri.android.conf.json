@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "title": "Remote Code",
+        "width": 393,
+        "height": 852,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["aab"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "android": {
+      "minSdkVersion": 24
+    }
+  }
+}

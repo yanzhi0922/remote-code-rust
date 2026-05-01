@@ -1694,7 +1694,11 @@ impl ToolHandler for SkillHandler {
 ///
 /// Looks up the command via [`roo_command::get_command`] using the current
 /// working directory from the tool context. If the command is found, its
-/// content is returned; otherwise a fallback message is produced.
+/// content is returned with full metadata (description, argument hint, mode,
+/// source). If the command is not found, lists available commands in the
+/// error message.
+///
+/// Source: `src/core/tools/RunSlashCommandTool.ts` — `execute()`
 pub struct SlashCommandHandler;
 
 #[async_trait]
@@ -1712,26 +1716,52 @@ impl ToolHandler for SlashCommandHandler {
 
         // Try to load command from project/global/built-in sources
         if let Some(cmd) = roo_command::get_command(&context.cwd, &command).await {
-            let mut result = format!("Command: {}\n", cmd.name);
+            // Build the result message matching TS format:
+            // Command: /<name>
+            // Description: <description>
+            // Argument hint: <argumentHint>
+            // Mode: <mode>
+            // Provided arguments: <args>
+            // Source: <source>
+            // --- Command Content ---
+            // <content>
+            let mut result = format!("Command: /{}", command);
+
             if let Some(desc) = &cmd.description {
-                result.push_str(&format!("Description: {}\n", desc));
+                result.push_str(&format!("\nDescription: {}", desc));
             }
-            if !cmd.content.is_empty() {
-                result.push_str(&format!("\n{}", cmd.content));
+
+            if let Some(hint) = &cmd.argument_hint {
+                result.push_str(&format!("\nArgument hint: {}", hint));
             }
+
+            if let Some(mode) = &cmd.mode {
+                result.push_str(&format!("\nMode: {}", mode));
+            }
+
             if let Some(args) = &args {
-                result.push_str(&format!("\n\nArguments: {}", args));
+                result.push_str(&format!("\nProvided arguments: {}", args));
             }
+
+            result.push_str(&format!("\nSource: {}", cmd.source));
+            result.push_str(&format!("\n\n--- Command Content ---\n\n{}", cmd.content));
+
             return ToolExecutionResult::success(result);
         }
 
-        // Fallback: command not found in any source
-        let mut msg = format!("Slash command '/{}' executed.", command);
-        if let Some(args) = &args {
-            msg.push_str(&format!(" Arguments: {}", args));
-        }
+        // Command not found — list available commands in the error message
+        // Source: TS `RunSlashCommandTool.ts` lines 75-83
+        let available_commands = roo_command::get_command_names(&context.cwd).await;
+        let available_str = if available_commands.is_empty() {
+            "(none)".to_string()
+        } else {
+            available_commands.join(", ")
+        };
 
-        ToolExecutionResult::success(msg)
+        ToolExecutionResult::error(format!(
+            "Command '{}' not found. Available commands: {}",
+            command, available_str
+        ))
     }
 
     fn tool_name(&self) -> &str {
@@ -3204,26 +3234,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_slash_command_handler_valid() {
+    async fn test_slash_command_handler_not_found() {
         let handler = SlashCommandHandler;
         let ctx = make_context();
         let result = handler
-            .execute(serde_json::json!({"command": "init", "args": "setup project"}), &ctx)
+            .execute(serde_json::json!({"command": "nonexistent", "args": "setup project"}), &ctx)
             .await;
-        assert!(!result.is_error, "unexpected error: {}", result.text);
-        assert!(result.text.contains("init"));
-        assert!(result.text.contains("setup project"));
+        // Command not found → error with available commands listing
+        assert!(result.is_error, "expected error for nonexistent command");
+        assert!(result.text.contains("not found"));
+        assert!(result.text.contains("Available commands"));
     }
 
     #[tokio::test]
-    async fn test_slash_command_handler_no_args() {
+    async fn test_slash_command_handler_not_found_no_args() {
         let handler = SlashCommandHandler;
         let ctx = make_context();
         let result = handler
             .execute(serde_json::json!({"command": "test"}), &ctx)
             .await;
-        assert!(!result.is_error);
-        assert!(result.text.contains("test"));
+        // Command not found → error
+        assert!(result.is_error);
+        assert!(result.text.contains("not found"));
     }
 
     // ---- Generate Image handler tests ----

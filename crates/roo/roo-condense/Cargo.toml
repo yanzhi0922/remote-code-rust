@@ -9,6 +9,7 @@ description = "Conversation condensation for Roo Code Rust"
 [dependencies]
 roo-types = { workspace = true }
 roo-provider = { workspace = true }
+roo-tree-sitter = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

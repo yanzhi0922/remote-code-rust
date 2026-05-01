@@ -13,6 +13,7 @@ use roo_provider::handler::{CreateMessageMetadata, Provider};
 use roo_types::api::{ApiMessage, ContentBlock, MessageRole};
 
 use crate::convert::extract_command_blocks;
+use crate::folded_file_context::{generate_folded_file_context, FoldedFileContextOptions};
 use crate::history::get_messages_since_last_summary;
 use crate::transform::{inject_synthetic_tool_results, transform_messages_for_condensing};
 
@@ -276,53 +277,26 @@ pub async fn summarize_conversation(
         });
     }
 
-    // Generate simplified folded file context.
-    // A full implementation would use tree-sitter for smart code folding;
-    // this simplified version reads the first N lines of referenced files.
+    // Generate folded file context (smart code folding using tree-sitter).
+    // Each file gets its own <system-reminder> block as a separate content block.
+    // Source: `src/core/condense/index.ts` — `generateFoldedFileContext()` call
     if let Some(ref file_paths) = files_read_by_roo {
         if !file_paths.is_empty() {
-            const MAX_LINES_PER_FILE: usize = 20;
-            let mut file_contexts = Vec::new();
-
-            for file_path in file_paths.iter().take(10) {
-                let resolved = if let Some(ref workdir) = cwd {
-                    std::path::Path::new(workdir).join(file_path)
-                } else {
-                    std::path::PathBuf::from(file_path)
+            if let Some(ref workdir) = cwd {
+                let folded_options = FoldedFileContextOptions {
+                    max_characters: 50_000,
+                    cwd: workdir.clone(),
                 };
-
-                match std::fs::read_to_string(&resolved) {
-                    Ok(content) => {
-                        let lines: Vec<&str> = content.lines().take(MAX_LINES_PER_FILE).collect();
-                        let total_lines = content.lines().count();
-                        let preview = lines.join("\n");
-                        let suffix = if total_lines > MAX_LINES_PER_FILE {
-                            format!(
-                                "\n... ({} more lines)",
-                                total_lines - MAX_LINES_PER_FILE
-                            )
-                        } else {
-                            String::new()
-                        };
-                        file_contexts.push(format!("### {file_path}\n```\n{preview}{suffix}\n```"));
-                    }
-                    Err(_) => {
-                        // File may no longer exist; skip silently.
+                let folded_result = generate_folded_file_context(file_paths, &folded_options);
+                if !folded_result.sections.is_empty() {
+                    for section in &folded_result.sections {
+                        if !section.trim().is_empty() {
+                            summary_content.push(ContentBlock::Text {
+                                text: section.clone(),
+                            });
+                        }
                     }
                 }
-            }
-
-            if !file_contexts.is_empty() {
-                summary_content.push(ContentBlock::Text {
-                    text: format!(
-                        "<system-reminder>\n\
-                         ## File Context\n\
-                         Key files referenced during the conversation:\n\
-                         {}\n\
-                         </system-reminder>",
-                        file_contexts.join("\n\n")
-                    ),
-                });
             }
         }
     }
