@@ -128,36 +128,54 @@ impl ToolName {
 
     /// Returns which tool group this tool belongs to.
     ///
-    /// Source: `src/shared/tools.ts` — tool group mappings
+    /// Must stay consistent with `TOOL_GROUPS` in `roo-tools/src/groups.rs`.
+    ///
+    /// Mapping based on TOOL_GROUPS:
+    /// - **Read**: read_file, search_files, list_files, codebase_search
+    /// - **Edit**: apply_diff, write_to_file, generate_image
+    ///   (+ custom_tools: edit, search_replace, edit_file, apply_patch)
+    ///   (+ alias: search_and_replace → edit)
+    /// - **Command**: execute_command, read_command_output
+    /// - **Mcp**: use_mcp_tool, access_mcp_resource
+    /// - **Modes**: switch_mode, new_task (always_available)
+    ///
+    /// Always-available tools not in any named group (ask_followup_question,
+    /// attempt_completion, update_todo_list, run_slash_command, skill,
+    /// custom_tool) fall back to Modes.
     pub fn group(&self) -> ToolGroup {
         match self {
+            // Read group
             | Self::ReadFile
-            | Self::ListFiles
-            | Self::CodebaseSearch
             | Self::SearchFiles
-            | Self::ReadCommandOutput => ToolGroup::Read,
+            | Self::ListFiles
+            | Self::CodebaseSearch => ToolGroup::Read,
 
+            // Edit group (tools + custom_tools + alias search_and_replace→edit)
             | Self::WriteToFile
             | Self::ApplyDiff
+            | Self::GenerateImage
             | Self::Edit
-            | Self::SearchAndReplace
             | Self::SearchReplace
             | Self::EditFile
             | Self::ApplyPatch
-            | Self::UpdateTodoList => ToolGroup::Edit,
+            | Self::SearchAndReplace => ToolGroup::Edit,
 
-            | Self::ExecuteCommand => ToolGroup::Command,
+            // Command group
+            | Self::ExecuteCommand
+            | Self::ReadCommandOutput => ToolGroup::Command,
 
+            // Mcp group
             | Self::UseMcpTool
             | Self::AccessMcpResource => ToolGroup::Mcp,
 
+            // Modes group (always_available) + always-available tools not in a named group
             | Self::SwitchMode
             | Self::NewTask
             | Self::AskFollowupQuestion
             | Self::AttemptCompletion
+            | Self::UpdateTodoList
             | Self::RunSlashCommand
             | Self::Skill
-            | Self::GenerateImage
             | Self::CustomTool => ToolGroup::Modes,
         }
     }

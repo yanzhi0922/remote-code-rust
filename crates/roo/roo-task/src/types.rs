@@ -513,6 +513,10 @@ pub enum TaskError {
     /// A persistence error.
     #[error("persistence error: {0}")]
     Persistence(#[from] roo_task_persistence::TaskPersistenceError),
+
+    /// A checkpoint error.
+    #[error("checkpoint error: {0}")]
+    Checkpoint(String),
 }
 
 // ---------------------------------------------------------------------------

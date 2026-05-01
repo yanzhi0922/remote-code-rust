@@ -31,6 +31,8 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+use roo_checkpoint::service::ShadowCheckpointService;
+use roo_checkpoint::types::GetDiffParams;
 use roo_types::message::{ClineAsk, ClineMessage, ClineSay, MessageType};
 
 use crate::ask_say::{AskResponse, AskSayHandler, SayOptions};
@@ -153,6 +155,10 @@ pub struct TaskLifecycle {
     /// when `cancel_current_request()` is called, allowing the spawned
     /// stream-consumer task in `AgentLoop` to stop immediately.
     cancellation_token: Option<CancellationToken>,
+    /// Shadow checkpoint service for file-modifying tool checkpoints.
+    ///
+    /// Source: TS `this.checkpointService`
+    checkpoint_service: Option<ShadowCheckpointService>,
 }
 
 impl TaskLifecycle {
@@ -207,6 +213,7 @@ impl TaskLifecycle {
             abandoned: false,
             max_mcp_tools_threshold: 128,
             cancellation_token: None,
+            checkpoint_service: None,
         }
     }
 
@@ -217,6 +224,19 @@ impl TaskLifecycle {
     pub fn with_services(mut self, services: ServiceRefs) -> Self {
         self.services = services;
         self
+    }
+
+    /// Attach a checkpoint service to this lifecycle.
+    ///
+    /// Source: TS `this.checkpointService` — initialized during agent loop.
+    pub fn with_checkpoint_service(mut self, service: ShadowCheckpointService) -> Self {
+        self.checkpoint_service = Some(service);
+        self
+    }
+
+    /// Set or replace the checkpoint service.
+    pub fn set_checkpoint_service(&mut self, service: Option<ShadowCheckpointService>) {
+        self.checkpoint_service = service;
     }
 
     // -------------------------------------------------------------------
@@ -1243,20 +1263,97 @@ impl TaskLifecycle {
     /// Restore the task to a previous checkpoint.
     ///
     /// Source: `src/core/task/Task.ts` — `checkpointRestore()` (lines 4567–4589)
-    pub async fn checkpoint_restore(&mut self) -> Result<(), TaskError> {
+    pub async fn checkpoint_restore(
+        &mut self,
+        commit_hash: &str,
+        timestamp: Option<f64>,
+    ) -> Result<(), TaskError> {
         // Source: TS lines 4567–4589
+
+        // 1. Call ShadowCheckpointService::restore_checkpoint
+        if let Some(ref mut service) = self.checkpoint_service {
+            service
+                .restore_checkpoint(commit_hash)
+                .await
+                .map_err(|e| TaskError::Checkpoint(e.to_string()))?;
+        }
+
+        // 2. Rewind messages to the specified timestamp
+        if let Some(ts) = timestamp {
+            self.rewind_messages_to_timestamp(ts)?;
+        }
+
+        // 3. Emit restore completed event
         self.engine.emitter().emit_checkpoint_restored(self.task_id());
-        debug!(task_id = %self.task_id(), "Checkpoint restore requested");
+        debug!(
+            task_id = %self.task_id(),
+            commit_hash = %commit_hash,
+            "Checkpoint restored"
+        );
+
+        // 4. Save current state
+        let _ = self.engine.save_cline_messages().await;
+        let _ = self.engine.save_api_conversation_history().await;
+
         Ok(())
     }
 
     /// Get the diff for a checkpoint.
     ///
     /// Source: `src/core/task/Task.ts` — `checkpointDiff()` (lines 4591–4604)
-    pub async fn checkpoint_diff(&self) -> Result<Option<String>, TaskError> {
+    pub async fn checkpoint_diff(
+        &self,
+        from_commit: Option<&str>,
+        to_commit: Option<&str>,
+    ) -> Result<Option<String>, TaskError> {
         // Source: TS lines 4591–4604
-        debug!(task_id = %self.task_id(), "Checkpoint diff requested");
-        Ok(None)
+        if let Some(ref service) = self.checkpoint_service {
+            let diffs = service
+                .get_diff(GetDiffParams {
+                    from: from_commit.map(String::from),
+                    to: to_commit.map(String::from),
+                })
+                .await
+                .map_err(|e| TaskError::Checkpoint(e.to_string()))?;
+
+            // Serialize the diff result to JSON string
+            let diff_str = serde_json::to_string_pretty(&diffs)
+                .map_err(|e| TaskError::Checkpoint(format!("Failed to serialize diff: {}", e)))?;
+            Ok(Some(diff_str))
+        } else {
+            debug!(task_id = %self.task_id(), "Checkpoint diff requested (no service)");
+            Ok(None)
+        }
+    }
+
+    /// Rewind cline messages to the given timestamp, removing all messages
+    /// whose `ts` field is strictly greater than `timestamp`.
+    ///
+    /// This mirrors the TS logic in `checkpointRestore()` where messages
+    /// after the checkpoint timestamp are discarded.
+    fn rewind_messages_to_timestamp(&mut self, timestamp: f64) -> Result<(), TaskError> {
+        // Capture task_id before mutable borrow of engine
+        let task_id = self.task_id().to_string();
+
+        let messages = self.engine.cline_messages_mut();
+
+        // Find the split point: first message with ts > timestamp
+        let split_idx = messages
+            .iter()
+            .position(|m| m.ts > timestamp)
+            .unwrap_or(messages.len());
+
+        let removed_count = messages.len().saturating_sub(split_idx);
+        if removed_count > 0 {
+            debug!(
+                task_id = %task_id,
+                removed = removed_count,
+                "Rewound messages to timestamp"
+            );
+            messages.truncate(split_idx);
+        }
+
+        Ok(())
     }
 
     // ===================================================================
@@ -1696,15 +1793,88 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_checkpoint_restore() {
+    async fn test_checkpoint_restore_no_service() {
+        // Without a checkpoint service, restore should succeed (no-op for the
+        // git part) but still emit the event.
         let mut lc = make_lifecycle();
-        lc.checkpoint_restore().await.unwrap();
+        lc.checkpoint_restore("abc123", None).await.unwrap();
     }
 
     #[tokio::test]
-    async fn test_checkpoint_diff() {
+    async fn test_checkpoint_restore_with_timestamp() {
+        let mut lc = make_lifecycle();
+        // Add some messages with timestamps
+        let msgs = vec![
+            ClineMessage {
+                ts: 1000.0,
+                r#type: MessageType::Say,
+                ask: None,
+                say: None,
+                text: Some("first".to_string()),
+                images: None,
+                partial: None,
+                reasoning: None,
+                conversation_history_index: None,
+                checkpoint: None,
+                progress_status: None,
+                context_condense: None,
+                context_truncation: None,
+                is_protected: None,
+                api_protocol: None,
+                is_answered: None,
+            },
+            ClineMessage {
+                ts: 2000.0,
+                r#type: MessageType::Say,
+                ask: None,
+                say: None,
+                text: Some("second".to_string()),
+                images: None,
+                partial: None,
+                reasoning: None,
+                conversation_history_index: None,
+                checkpoint: None,
+                progress_status: None,
+                context_condense: None,
+                context_truncation: None,
+                is_protected: None,
+                api_protocol: None,
+                is_answered: None,
+            },
+            ClineMessage {
+                ts: 3000.0,
+                r#type: MessageType::Say,
+                ask: None,
+                say: None,
+                text: Some("third".to_string()),
+                images: None,
+                partial: None,
+                reasoning: None,
+                conversation_history_index: None,
+                checkpoint: None,
+                progress_status: None,
+                context_condense: None,
+                context_truncation: None,
+                is_protected: None,
+                api_protocol: None,
+                is_answered: None,
+            },
+        ];
+        *lc.engine.cline_messages_mut() = msgs;
+
+        // Restore with timestamp 1500 — should remove messages after that
+        lc.checkpoint_restore("abc123", Some(1500.0)).await.unwrap();
+        assert_eq!(lc.engine.cline_messages().len(), 1);
+        assert_eq!(
+            lc.engine.cline_messages()[0].text.as_deref(),
+            Some("first")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_checkpoint_diff_no_service() {
         let lc = make_lifecycle();
-        let result = lc.checkpoint_diff().await.unwrap();
+        let result = lc.checkpoint_diff(None, None).await.unwrap();
         assert!(result.is_none());
     }
 
