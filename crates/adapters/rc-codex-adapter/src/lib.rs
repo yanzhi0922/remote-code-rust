@@ -2115,6 +2115,23 @@ impl AgentAdapter for CodexInProcessAdapter {
         let thread_id = self.ensure_thread().await?;
         self.thread_id = Some(thread_id.clone());
 
+        // Interrupt any in-progress turn before starting a new one to avoid
+        // conflicts.  Errors are logged but not fatal — there may be no
+        // active turn.
+        if let Err(err) = self
+            .handle()?
+            .request_typed::<TurnInterruptResponse>(ClientRequest::TurnInterrupt {
+                request_id: self.next_request_id(),
+                params: TurnInterruptParams {
+                    thread_id: thread_id.clone(),
+                    turn_id: String::new(), // empty = current turn
+                },
+            })
+            .await
+        {
+            warn!(error = %err, "Pre-turn interrupt failed (no active turn?)");
+        }
+
         // Create a new channel for this turn's events.
         let (tx, rx) = mpsc::channel(256);
 
@@ -2201,11 +2218,36 @@ impl AgentAdapter for CodexInProcessAdapter {
     async fn stop(&mut self) -> anyhow::Result<()> {
         info!("CodexInProcessAdapter stopping");
 
-        // Clear the event sender so the pump stops forwarding.
+        // Drain and reject all pending server requests so the Codex runtime
+        // doesn't hang waiting for responses.
         {
             let mut state = self.event_state.lock().await;
             state.current_tx = None;
+            let pending_ids: Vec<String> =
+                state.pending_server_requests.keys().cloned().collect();
             state.pending_server_requests.clear();
+            drop(state);
+
+            // Reject each pending request.  Best-effort — errors are logged
+            // but don't prevent shutdown.
+            if let Ok(handle) = self.handle() {
+                for id in pending_ids {
+                    let req_id = RequestId::String(id);
+                    if let Err(err) = handle
+                        .reject_server_request(
+                            req_id,
+                            JSONRPCErrorError {
+                                code: -32000,
+                                message: "Adapter shutting down".to_string(),
+                                data: None,
+                            },
+                        )
+                        .await
+                    {
+                        warn!(error = %err, "Failed to reject pending request during stop");
+                    }
+                }
+            }
         }
 
         // Drop the request handle.
