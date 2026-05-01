@@ -13,12 +13,6 @@ pub struct BiometricAvailability {
     pub biometry_type: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeepLinkPairing {
-    pub offer_id: String,
-    pub secret: String,
-}
-
 #[tauri::command]
 pub async fn mobile_platform() -> String {
     if cfg!(target_os = "ios") {
@@ -43,12 +37,11 @@ pub async fn mobile_is_mobile() -> bool {
 
 #[tauri::command]
 pub async fn mobile_haptic_impact(style: String) -> Result<(), String> {
-    #[cfg(any(target_os = "ios", target_os = "android"))]
+    #[cfg(feature = "mobile")]
     {
         let impact_style = match style.as_str() {
             "heavy" => tauri_plugin_haptics::ImpactStyle::Heavy,
             "medium" => tauri_plugin_haptics::ImpactStyle::Medium,
-            "light" => tauri_plugin_haptics::ImpactStyle::Light,
             _ => tauri_plugin_haptics::ImpactStyle::Light,
         };
         tauri_plugin_haptics::impact(impact_style);
@@ -59,7 +52,7 @@ pub async fn mobile_haptic_impact(style: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn mobile_haptic_notification(kind: String) -> Result<(), String> {
-    #[cfg(any(target_os = "ios", target_os = "android"))]
+    #[cfg(feature = "mobile")]
     {
         let notif_type = match kind.as_str() {
             "success" => tauri_plugin_haptics::NotificationType::Success,
@@ -75,7 +68,7 @@ pub async fn mobile_haptic_notification(kind: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn mobile_haptic_selection() -> Result<(), String> {
-    #[cfg(any(target_os = "ios", target_os = "android"))]
+    #[cfg(feature = "mobile")]
     {
         tauri_plugin_haptics::selection();
     }
@@ -86,7 +79,7 @@ pub async fn mobile_haptic_selection() -> Result<(), String> {
 pub async fn mobile_biometric_check_availability(
     app: AppHandle<impl Runtime>,
 ) -> Result<BiometricAvailability, String> {
-    #[cfg(any(target_os = "ios", target_os = "android"))]
+    #[cfg(feature = "mobile")]
     {
         let result = tauri_plugin_biometric::check_availability(&app, None)
             .await
@@ -96,7 +89,7 @@ pub async fn mobile_biometric_check_availability(
             biometry_type: result,
         })
     }
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    #[cfg(not(feature = "mobile"))]
     {
         let _ = app;
         Ok(BiometricAvailability {
@@ -111,7 +104,7 @@ pub async fn mobile_biometric_authenticate(
     app: AppHandle<impl Runtime>,
     reason: String,
 ) -> Result<bool, String> {
-    #[cfg(any(target_os = "ios", target_os = "android"))]
+    #[cfg(feature = "mobile")]
     {
         let options = tauri_plugin_biometric::BiometricOptions {
             reason,
@@ -122,7 +115,7 @@ pub async fn mobile_biometric_authenticate(
             .map(|_| true)
             .map_err(|e| e.to_string())
     }
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    #[cfg(not(feature = "mobile"))]
     {
         let _ = (app, reason);
         Ok(false)
@@ -134,7 +127,6 @@ pub async fn mobile_secure_store_get(
     app: AppHandle<impl Runtime>,
     key: String,
 ) -> Result<Option<String>, String> {
-    use tauri_plugin_fs::FsExt;
     let data_dir = app
         .path()
         .app_data_dir()
@@ -146,7 +138,6 @@ pub async fn mobile_secure_store_get(
     let content = std::fs::read_to_string(&store_path).map_err(|e| e.to_string())?;
     let map: std::collections::HashMap<String, String> =
         serde_json::from_str(&content).unwrap_or_default();
-    let _ = FsExt;
     Ok(map.get(&key).cloned())
 }
 
@@ -213,7 +204,6 @@ pub async fn mobile_download_artifact(
         return Err(format!("HTTP {}", response.status()));
     }
     let bytes = response.bytes().await.map_err(|e| e.to_string())?;
-
     let download_dir = app
         .path()
         .download_dir()
@@ -222,7 +212,6 @@ pub async fn mobile_download_artifact(
     std::fs::create_dir_all(&download_dir).map_err(|e| e.to_string())?;
     let file_path = download_dir.join(&file_name);
     std::fs::write(&file_path, &bytes).map_err(|e| e.to_string())?;
-
     Ok(file_path.to_string_lossy().to_string())
 }
 
@@ -232,14 +221,11 @@ pub async fn mobile_share_file(
     file_path: String,
     _title: Option<String>,
 ) -> Result<(), String> {
-    #[cfg(any(target_os = "ios", target_os = "android"))]
+    #[cfg(feature = "mobile")]
     {
         let path = std::path::Path::new(&file_path);
-        let file_name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
         let data = std::fs::read(path).map_err(|e| e.to_string())?;
+        let _ = data;
         tauri_plugin_share::share_file(
             &app,
             tauri_plugin_share::ShareFileRequest {
@@ -248,33 +234,47 @@ pub async fn mobile_share_file(
                     .first()
                     .map(|m| m.to_string())
                     .unwrap_or_else(|| "application/octet-stream".to_string()),
-                title: _title.unwrap_or(file_name),
+                title: _title.unwrap_or_default(),
             },
         )
         .await
         .map_err(|e| e.to_string())?;
     }
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    #[cfg(not(feature = "mobile"))]
     {
         let _ = (app, file_path, _title);
     }
     Ok(())
 }
 
-pub fn register_deep_link_listener<R: Runtime>(app: &AppHandle<R>) {
-    #[cfg(any(target_os = "ios", target_os = "android"))]
+pub fn register_mobile_plugins<R: Runtime>(app: &tauri::AppHandle<R>) {
+    #[cfg(feature = "mobile")]
     {
-        let handle = app.clone();
-        if let Err(e) = tauri_plugin_deep_link::register(
-            "remotecode",
-            move |urls| {
-                for url in urls {
-                    let _ = handle.emit("mobile://deep-link", &url);
-                }
-            },
-        ) {
-            tracing::warn!("deep link registration failed: {e}");
-        }
+        let _ = app.handle().plugin(tauri_plugin_haptics::init());
+        let _ = app.handle().plugin(tauri_plugin_biometric::init());
+        let _ = app.handle().plugin(tauri_plugin_network::init());
+        let _ = app.handle().plugin(tauri_plugin_deep_link::init());
+        let _ = app.handle().plugin(tauri_plugin_notification::init());
+        let _ = app.handle().plugin(tauri_plugin_share::init());
+        register_deep_link_listener(&app.handle().clone());
     }
-    let _ = app;
+    #[cfg(not(feature = "mobile"))]
+    {
+        let _ = app;
+    }
+}
+
+#[cfg(feature = "mobile")]
+fn register_deep_link_listener<R: Runtime>(app: &AppHandle<R>) {
+    let handle = app.clone();
+    if let Err(e) = tauri_plugin_deep_link::register(
+        "remotecode",
+        move |urls| {
+            for url in urls {
+                let _ = handle.emit("mobile://deep-link", &url);
+            }
+        },
+    ) {
+        tracing::warn!("deep link registration failed: {e}");
+    }
 }

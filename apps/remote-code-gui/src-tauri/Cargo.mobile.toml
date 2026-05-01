@@ -1,0 +1,16 @@
+# Mobile-specific dependencies.
+# Merge into Cargo.toml before building for iOS/Android:
+#   cargo tauri android init  (first time)
+#   cargo tauri ios init      (first time, macOS only)
+#
+# The Tauri CLI will handle dependency resolution automatically
+# when you run `tauri android build` or `tauri ios build`.
+# These deps are only needed when compiling for mobile targets.
+
+[dependencies]
+tauri-plugin-haptics = "2"
+tauri-plugin-biometric = "2"
+tauri-plugin-network = "2"
+tauri-plugin-deep-link = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-share = "2"
