@@ -1760,6 +1760,7 @@ dependencies = [
  "futures",
  "regex",
  "roo-provider",
+ "roo-tree-sitter",
  "roo-types",
  "serde",
  "serde_json",

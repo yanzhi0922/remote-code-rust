@@ -16,6 +16,13 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-share = "2"
+tauri-plugin-haptics = "2"
+tauri-plugin-biometric = "2"
+tauri-plugin-network = "2"
+tauri-plugin-deep-link = "2"
+tauri-plugin-push-notifications = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }

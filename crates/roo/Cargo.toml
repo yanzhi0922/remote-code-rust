@@ -191,6 +191,7 @@ roo-config = { path = "roo-config" }
 roo-task = { path = "roo-task" }
 roo-server = { path = "roo-server" }
 roo-app = { path = "roo-app" }
+roo-tree-sitter = { path = "roo-tree-sitter" }
 
 [profile.release]
 opt-level = 3
