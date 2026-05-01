@@ -19,9 +19,9 @@ serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
-rc-control-plane = { path = "../../crates/claude/rc-control-plane" }
-rc-runner = { path = "../../crates/claude/rc-runner" }
-rc-telemetry = { path = "../../crates/claude/rc-telemetry" }
+claude-control-plane = { path = "../../crates/claude/claude-control-plane" }
+claude-runner = { path = "../../crates/claude/claude-runner" }
+claude-telemetry = { path = "../../crates/claude/claude-telemetry" }
 
 [dev-dependencies]
 chrono.workspace = true

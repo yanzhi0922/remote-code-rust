@@ -9,9 +9,9 @@ use std::{
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Args, Subcommand, ValueEnum};
-use rc_config::{RuntimeConfig, SettingSource};
-use rc_core::{ConversationEntry, ToolCall, ToolResult};
-use rc_session::SessionStore;
+use claude_config::{RuntimeConfig, SettingSource};
+use claude_core::{ConversationEntry, ToolCall, ToolResult};
+use claude_session::SessionStore;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::{
@@ -393,7 +393,7 @@ pub fn discover_runtime_hooks(
         if !root.exists() {
             continue;
         }
-        match rc_plugins::discover_plugins(&root) {
+        match claude_plugins::discover_plugins(&root) {
             Ok(plugins) => {
                 for plugin in plugins {
                     let manifest_key = plugin.manifest_path.display().to_string();
@@ -1413,7 +1413,7 @@ fn format_source(hook: &HookRecord) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
+    use claude_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
     use tempfile::tempdir;
 
     fn json_emitting_hook(json_body: &str) -> (String, String) {
@@ -1446,9 +1446,9 @@ mod tests {
             Some(cwd),
             Some(profile),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -1502,9 +1502,9 @@ mod tests {
             Some(cwd),
             Some(profile),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,

@@ -27,9 +27,9 @@ use codex_app_server_protocol::{
     ThreadRealtimeStopParams, ThreadResumeParams, ThreadStartParams, TurnStartParams,
     WindowsSandboxSetupStartParams,
 };
-use rc_agent_protocol::AgentAdapter;
-use rc_agent_protocol::permission::PermissionDecision as AgentPermissionDecision;
-use rc_agent_protocol::types::AgentType as ProtocolAgentType;
+use claude_agent_protocol::AgentAdapter;
+use claude_agent_protocol::permission::PermissionDecision as AgentPermissionDecision;
+use claude_agent_protocol::types::AgentType as ProtocolAgentType;
 use rc_codex_adapter::{
     CodexAdapterOptions, CodexExecRequest, CodexFeedbackRequest, CodexInProcessAdapter,
     CodexPluginRefRequest, CodexServerRequestResolution, CodexThreadGoalSetRequest,
@@ -37,33 +37,33 @@ use rc_codex_adapter::{
     CodexTurnSteerRequest,
 };
 use rc_roo_adapter::RooInProcessAdapter;
-use rc_config::{
+use claude_config::{
     AppPaths, ProviderConfig as RuntimeProviderConfig, ProviderOverrides, RuntimeConfig,
     RuntimeOverrides, SettingSource, discover_env_providers, load_runtime_config,
     normalize_base_url, validate_provider_config,
 };
-use rc_core::{
+use claude_core::{
     ConversationEntry, ConversationRole, PermissionMode, ProviderProtocol, ToolCall, UsageSummary,
 };
-use rc_mcp::{
+use claude_mcp::{
     DEFAULT_MCP_CONFIG_FILE, McpClientInfo, McpConfig, McpServerConfig, McpServerInspection,
     McpTransport, McpTransportConfig, inspect_server,
 };
-use rc_permissions::{
+use claude_permissions::{
     LayeredPermissionBroker, PermissionBroker, PermissionClass, PermissionDecision,
     PermissionRequest, PermissionUpdate, PermissionUpdateDestination, auto_allows, classify_tool,
     load_layered_rules, rules::summarize_rule_sources,
 };
-use rc_plugins::{PluginBundle, discover_plugins_including_disabled};
-use rc_provider::ProviderClient;
-use rc_provider::model_info::{ModelCapability, get_model_info};
-use rc_session::runtime_context::{
+use claude_plugins::{PluginBundle, discover_plugins_including_disabled};
+use claude_provider::ProviderClient;
+use claude_provider::model_info::{ModelCapability, get_model_info};
+use claude_session::runtime_context::{
     persist_runtime_config_session_context, restore_runtime_config_session_context,
 };
-use rc_session::{SessionStore, SessionSummary, conversation::ensure_conversation_initialized};
-use rc_skills::discover_skills;
-use rc_tools::shell::ShellExecutionPolicy;
-use rc_tools::{
+use claude_session::{SessionStore, SessionSummary, conversation::ensure_conversation_initialized};
+use claude_skills::discover_skills;
+use claude_tools::shell::ShellExecutionPolicy;
+use claude_tools::{
     ToolRuntimePolicy, configure_tool_runtime_policy,
     mcp_runtime::{
         RuntimeMcpServerObservation, observe_runtime_mcp_servers, runtime_mcp_inventory_summary,
@@ -72,7 +72,7 @@ use rc_tools::{
     runtime_plan_mode::RuntimePlanModeController,
     tasks::load_persisted_ui_task_snapshots,
 };
-use rc_ui_bridge::{
+use claude_ui_bridge::{
     UiProviderStatusSnapshot, UiRuntimeMcpInventorySummary, UiRuntimeMcpServerStatus,
     UiRuntimeStatusSnapshot,
 };
@@ -436,7 +436,7 @@ struct PermissionDecisionDto {
     allowed: bool,
     message: Option<String>,
     updated_input: Option<serde_json::Value>,
-    permission_updates: Vec<rc_permissions::PermissionUpdate>,
+    permission_updates: Vec<claude_permissions::PermissionUpdate>,
     feedback: Option<String>,
     content_blocks: Vec<serde_json::Value>,
 }
@@ -1243,10 +1243,10 @@ fn codex_permission_decision(
 
 fn usage_info_from_codex_token_usage(
     value: &serde_json::Value,
-) -> Option<rc_agent_protocol::events::UsageInfo> {
+) -> Option<claude_agent_protocol::events::UsageInfo> {
     let params = value.get("params").unwrap_or(value);
     let total = params.get("tokenUsage")?.get("total")?;
-    Some(rc_agent_protocol::events::UsageInfo {
+    Some(claude_agent_protocol::events::UsageInfo {
         input_tokens: total
             .get("inputTokens")
             .and_then(serde_json::Value::as_i64)
@@ -1945,7 +1945,7 @@ async fn build_gui_doctor_report(
             probe: provider_probe,
         },
         tools: GuiDoctorToolsDto {
-            builtin_tools: rc_tools::runtime_builtin_tool_specs().len(),
+            builtin_tools: claude_tools::runtime_builtin_tool_specs().len(),
             allowed_tools: config.allowed_tools.clone(),
             disallowed_tools: config.disallowed_tools.clone(),
         },
@@ -2337,7 +2337,7 @@ fn save_managed_mcp_server_at_path(
             name: name.to_owned(),
             enabled: !request.disabled,
             transport,
-            capabilities: rc_mcp::McpCapabilityMatrix::default(),
+            capabilities: claude_mcp::McpCapabilityMatrix::default(),
             startup_timeout_secs: request.startup_timeout_secs,
             request_timeout_secs: request.request_timeout_secs,
             metadata: request.metadata.clone(),
@@ -2497,7 +2497,7 @@ fn configure_runtime_policy_for_config(config: &RuntimeConfig) -> Result<()> {
         allowed_tools: config.allowed_tools.clone(),
         disallowed_tools: config.disallowed_tools.clone(),
         task_output_dir: Some(task_dir_for_paths(&config.paths, config.session_id)),
-        tasks_dir: Some(rc_tools::tasks::task_list_base_dir()),
+        tasks_dir: Some(claude_tools::tasks::task_list_base_dir()),
         tool_results_dir: Some(session_dir.join("tool-results")),
         mcp_servers: runtime_mcp_policy_entries(config, &[]),
         shell_policy: ShellExecutionPolicy {
@@ -2512,7 +2512,7 @@ fn configure_runtime_policy_for_config(config: &RuntimeConfig) -> Result<()> {
     })
 }
 
-fn ui_task_node_to_dto(session_id: &str, task: rc_ui_bridge::UiTaskNode) -> SessionTaskDto {
+fn ui_task_node_to_dto(session_id: &str, task: claude_ui_bridge::UiTaskNode) -> SessionTaskDto {
     SessionTaskDto {
         session_id: session_id.to_owned(),
         task_id: task.id,
@@ -2520,11 +2520,11 @@ fn ui_task_node_to_dto(session_id: &str, task: rc_ui_bridge::UiTaskNode) -> Sess
         description: task.title,
         depth: task.depth,
         status: match task.status {
-            rc_ui_bridge::UiTaskStatus::Pending => "pending",
-            rc_ui_bridge::UiTaskStatus::Running => "running",
-            rc_ui_bridge::UiTaskStatus::Completed => "completed",
-            rc_ui_bridge::UiTaskStatus::Failed => "failed",
-            rc_ui_bridge::UiTaskStatus::Stopped => "stopped",
+            claude_ui_bridge::UiTaskStatus::Pending => "pending",
+            claude_ui_bridge::UiTaskStatus::Running => "running",
+            claude_ui_bridge::UiTaskStatus::Completed => "completed",
+            claude_ui_bridge::UiTaskStatus::Failed => "failed",
+            claude_ui_bridge::UiTaskStatus::Stopped => "stopped",
         }
         .to_owned(),
         summary: task.summary.clone(),
@@ -2535,9 +2535,9 @@ fn ui_task_node_to_dto(session_id: &str, task: rc_ui_bridge::UiTaskNode) -> Sess
         },
         turns_used: task.turns_used,
         kind: match task.kind {
-            rc_ui_bridge::UiTaskKind::Background => "background",
-            rc_ui_bridge::UiTaskKind::Delegation => "delegation",
-            rc_ui_bridge::UiTaskKind::Batch => "batch",
+            claude_ui_bridge::UiTaskKind::Background => "background",
+            claude_ui_bridge::UiTaskKind::Delegation => "delegation",
+            claude_ui_bridge::UiTaskKind::Batch => "batch",
         }
         .to_owned(),
         output_path: task.output_path,
@@ -2765,8 +2765,8 @@ fn load_base_runtime_config(profile_override: Option<PathBuf>) -> Result<Runtime
         profile_override,
         None,
         PermissionMode::Default,
-        rc_core::InputFormat::Text,
-        rc_core::OutputFormat::Text,
+        claude_core::InputFormat::Text,
+        claude_core::OutputFormat::Text,
         false,
         false,
         false,
@@ -3063,8 +3063,8 @@ fn codex_adapter_options_from_runtime(
 
 fn codex_agent_config_from_options(
     options: &CodexAdapterOptions,
-) -> rc_agent_protocol::types::AgentConfig {
-    rc_agent_protocol::types::AgentConfig {
+) -> claude_agent_protocol::types::AgentConfig {
+    claude_agent_protocol::types::AgentConfig {
         agent_type: ProtocolAgentType::RemoteCodex,
         binary_path: None,
         args: Vec::new(),
@@ -3386,7 +3386,7 @@ impl PermissionBroker for GuiRuntimePermissionBroker {
 
     fn add_session_rule(
         &self,
-        action: rc_permissions::RuleAction,
+        action: claude_permissions::RuleAction,
         tool_pattern: String,
     ) -> Result<()> {
         self.inner.add_session_rule(action, tool_pattern)
@@ -3398,30 +3398,30 @@ impl PermissionBroker for GuiRuntimePermissionBroker {
 
     fn apply_permission_updates(
         &self,
-        updates: &[rc_permissions::PermissionUpdate],
+        updates: &[claude_permissions::PermissionUpdate],
     ) -> Result<usize> {
         self.inner.apply_permission_updates(updates)
     }
 
-    fn audit_records(&self) -> Vec<rc_permissions::PermissionAuditRecord> {
+    fn audit_records(&self) -> Vec<claude_permissions::PermissionAuditRecord> {
         self.inner.audit_records()
     }
 
-    fn layered_rules(&self) -> Vec<rc_permissions::SourceAwarePermissionRule> {
+    fn layered_rules(&self) -> Vec<claude_permissions::SourceAwarePermissionRule> {
         self.inner.layered_rules()
     }
 
     fn matching_rule(
         &self,
         request: &PermissionRequest,
-    ) -> Option<rc_permissions::SourceAwarePermissionRule> {
+    ) -> Option<claude_permissions::SourceAwarePermissionRule> {
         self.inner.matching_rule(request)
     }
 
     fn matching_rule_action(
         &self,
         request: &PermissionRequest,
-    ) -> Option<rc_permissions::RuleAction> {
+    ) -> Option<claude_permissions::RuleAction> {
         self.inner.matching_rule_action(request)
     }
 }
@@ -3527,7 +3527,7 @@ async fn run_codex_in_process_prompt(
 
     // Start the adapter if not yet started.
     if !adapter.is_alive() {
-        let agent_config = rc_agent_protocol::types::AgentConfig {
+        let agent_config = claude_agent_protocol::types::AgentConfig {
             agent_type: ProtocolAgentType::RemoteCodex,
             binary_path: None,
             args: Vec::new(),
@@ -3554,10 +3554,10 @@ async fn run_codex_in_process_prompt(
 
     let mut final_text = String::new();
     let mut tool_calls: Vec<ToolCallDto> = Vec::new();
-    let mut usage_info: rc_agent_protocol::events::UsageInfo = Default::default();
+    let mut usage_info: claude_agent_protocol::events::UsageInfo = Default::default();
     let mut stop_reason = "completed".to_owned();
     while let Some(event) = rx.recv().await {
-        use rc_agent_protocol::events::UnifiedAgentEvent;
+        use claude_agent_protocol::events::UnifiedAgentEvent;
         match event {
             UnifiedAgentEvent::MessageDelta { delta, .. } => {
                 final_text.push_str(&delta);
@@ -3855,7 +3855,7 @@ async fn run_roo_in_process_prompt(
         if !adapters.contains_key(session_id) {
             tracing::info!(session_id, "Creating new RooInProcessAdapter");
             let mut adapter = RooInProcessAdapter::new();
-            let agent_config = rc_agent_protocol::types::AgentConfig {
+            let agent_config = claude_agent_protocol::types::AgentConfig {
                 agent_type: ProtocolAgentType::RemoteRoo,
                 binary_path: None,
                 args: Vec::new(),
@@ -3890,10 +3890,10 @@ async fn run_roo_in_process_prompt(
 
     let mut final_text = String::new();
     let mut tool_calls: Vec<ToolCallDto> = Vec::new();
-    let mut usage_info: rc_agent_protocol::events::UsageInfo = Default::default();
+    let mut usage_info: claude_agent_protocol::events::UsageInfo = Default::default();
     let mut stop_reason = "completed".to_owned();
     while let Some(event) = rx.recv().await {
-        use rc_agent_protocol::events::UnifiedAgentEvent;
+        use claude_agent_protocol::events::UnifiedAgentEvent;
         match event {
             UnifiedAgentEvent::MessageDelta { delta, .. } => {
                 final_text.push_str(&delta);
@@ -6600,7 +6600,7 @@ async fn resolve_permission_request(
     allowed: bool,
     message: Option<String>,
     updated_input: Option<serde_json::Value>,
-    permission_updates: Option<Vec<rc_permissions::PermissionUpdate>>,
+    permission_updates: Option<Vec<claude_permissions::PermissionUpdate>>,
     feedback: Option<String>,
     content_blocks: Option<Vec<serde_json::Value>>,
     codex_response: Option<serde_json::Value>,
@@ -6873,7 +6873,7 @@ async fn transcribe_audio(
 
     let api_key = api_key.ok_or_else(|| "未配置 API key，无法使用语音转录".to_string())?;
 
-    let stt = rc_voice::WhisperStt::new(api_key);
+    let stt = claude_voice::WhisperStt::new(api_key);
     let format = audio_format.as_deref().unwrap_or("webm");
 
     match stt.transcribe(&audio_data, format).await {
@@ -7080,8 +7080,8 @@ mod tests {
             Some(profile_dir.to_path_buf()),
             None,
             PermissionMode::AcceptEdits,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -7127,7 +7127,7 @@ mod tests {
                 cwd: None,
                 env: BTreeMap::new(),
             },
-            capabilities: rc_mcp::McpCapabilityMatrix::default(),
+            capabilities: claude_mcp::McpCapabilityMatrix::default(),
             startup_timeout_secs: Some(5),
             request_timeout_secs: Some(30),
             metadata: BTreeMap::new(),
@@ -7179,7 +7179,7 @@ mod tests {
     fn permission_request_dto_preserves_permission_suggestions() {
         let request = PermissionRequest {
             tool_name: "read_file".to_owned(),
-            permission_class: Some(rc_permissions::PermissionClass::Read),
+            permission_class: Some(claude_permissions::PermissionClass::Read),
             tool_input: json!({"path": "..\\outside.txt"}),
             working_directory: None,
             tool_use_id: Some("tool-1".to_owned()),
@@ -7209,11 +7209,11 @@ mod tests {
     fn codex_permission_decision_preserves_session_scope() {
         let session_update = PermissionUpdate::SetMode {
             destination: PermissionUpdateDestination::Session,
-            mode: rc_permissions::ExtendedPermissionMode::AcceptEdits,
+            mode: claude_permissions::ExtendedPermissionMode::AcceptEdits,
         };
         let user_update = PermissionUpdate::SetMode {
             destination: PermissionUpdateDestination::UserSettings,
-            mode: rc_permissions::ExtendedPermissionMode::AcceptEdits,
+            mode: claude_permissions::ExtendedPermissionMode::AcceptEdits,
         };
 
         assert_eq!(
@@ -7405,7 +7405,7 @@ mod tests {
         let _runtime_policy_guard = runtime_policy_test_mutex()
             .lock()
             .expect("runtime policy test mutex");
-        let original_policy = rc_tools::current_tool_runtime_policy();
+        let original_policy = claude_tools::current_tool_runtime_policy();
         let temp = tempdir().expect("tempdir should work");
         let project_dir = temp.path().join("project");
         let profile_dir = temp.path().join(".remote-code-rust");
@@ -7448,7 +7448,7 @@ mod tests {
         let config = test_runtime_config(&project_dir, &profile_dir);
         configure_runtime_policy_for_config(&config).expect("runtime policy should configure");
 
-        let policy = rc_tools::current_tool_runtime_policy();
+        let policy = claude_tools::current_tool_runtime_policy();
         let names = policy
             .mcp_servers
             .iter()
@@ -7467,7 +7467,7 @@ mod tests {
                     && entry.origin_name == "sample")
         );
 
-        rc_tools::configure_tool_runtime_policy(original_policy)
+        claude_tools::configure_tool_runtime_policy(original_policy)
             .expect("runtime policy should restore");
     }
 

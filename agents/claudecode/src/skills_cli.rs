@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
-use rc_config::{RuntimeConfig, SettingSource};
-use rc_skills::{DEFAULT_SKILL_LOCK_FILE, SkillMetadata, load_skill_lock_file};
+use claude_config::{RuntimeConfig, SettingSource};
+use claude_skills::{DEFAULT_SKILL_LOCK_FILE, SkillMetadata, load_skill_lock_file};
 
 use crate::cli::{SkillsCommand, SkillsIndexArgs, SkillsListArgs, SkillsLockArgs, SkillsShowArgs};
 
@@ -44,7 +44,7 @@ struct SkillsLockOutput {
     path: PathBuf,
     exists: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    lock: Option<rc_skills::SkillLockFile>,
+    lock: Option<claude_skills::SkillLockFile>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -264,7 +264,7 @@ fn build_skills_list_output(config: &RuntimeConfig, include_plugins: bool) -> Sk
     let user_sources_enabled = setting_source_enabled(config, SettingSource::User);
 
     if user_sources_enabled && config.paths.skills_dir.exists() {
-        match rc_skills::discover_skills(&config.paths.skills_dir) {
+        match claude_skills::discover_skills(&config.paths.skills_dir) {
             Ok(discovered) => {
                 for skill in discovered {
                     let record = skill_record("profile", "profile", &skill.metadata);
@@ -280,7 +280,7 @@ fn build_skills_list_output(config: &RuntimeConfig, include_plugins: bool) -> Sk
     }
 
     if include_plugins && user_sources_enabled && config.paths.plugins_dir.exists() {
-        match rc_plugins::discover_plugins(&config.paths.plugins_dir) {
+        match claude_plugins::discover_plugins(&config.paths.plugins_dir) {
             Ok(plugins) => {
                 for plugin in plugins {
                     match plugin.discover_bundled_skills() {
@@ -419,7 +419,7 @@ fn build_skill_show_output(
     let user_sources_enabled = setting_source_enabled(config, SettingSource::User);
 
     if user_sources_enabled && config.paths.skills_dir.exists() {
-        match rc_skills::discover_skills(&config.paths.skills_dir) {
+        match claude_skills::discover_skills(&config.paths.skills_dir) {
             Ok(discovered) => {
                 matches.extend(
                     discovered
@@ -433,7 +433,7 @@ fn build_skill_show_output(
     }
 
     if include_plugins && user_sources_enabled && config.paths.plugins_dir.exists() {
-        match rc_plugins::discover_plugins(&config.paths.plugins_dir) {
+        match claude_plugins::discover_plugins(&config.paths.plugins_dir) {
             Ok(plugins) => {
                 for plugin in plugins {
                     match plugin.discover_bundled_skills() {
@@ -513,13 +513,13 @@ fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool
 mod tests {
     use std::fs;
 
-    use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
-    use rc_skills::DEFAULT_SKILL_LOCK_FILE;
+    use claude_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
+    use claude_skills::DEFAULT_SKILL_LOCK_FILE;
     use tempfile::tempdir;
 
     use super::{build_skill_show_output, build_skills_index_output, build_skills_list_output};
 
-    fn test_config() -> (tempfile::TempDir, rc_config::RuntimeConfig) {
+    fn test_config() -> (tempfile::TempDir, claude_config::RuntimeConfig) {
         let tempdir = tempdir().expect("tempdir");
         let cwd = tempdir.path().join("workspace");
         let profile = tempdir.path().join(".remote-code-rust");
@@ -563,9 +563,9 @@ mod tests {
             Some(cwd),
             Some(profile),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,

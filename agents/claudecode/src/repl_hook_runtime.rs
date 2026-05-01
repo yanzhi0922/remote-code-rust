@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use rc_config::RuntimeConfig;
-use rc_core::{ConversationEntry, ConversationRole, SystemMemorySavedMessage};
-use rc_provider::{ConversationBackend, DiscoveredToolScope};
-use rc_query_engine::{ProcessUserInputContext, QueryEngineConfig, QuerySource};
-use rc_session::SessionStore;
+use claude_config::RuntimeConfig;
+use claude_core::{ConversationEntry, ConversationRole, SystemMemorySavedMessage};
+use claude_provider::{ConversationBackend, DiscoveredToolScope};
+use claude_query_engine::{ProcessUserInputContext, QueryEngineConfig, QuerySource};
+use claude_session::SessionStore;
 
 use crate::conversation::PromptEventSink;
 use crate::extract_memories::{AppendSystemMessageFn, spawn_extract_memories_after_turn};
@@ -54,7 +54,7 @@ pub(crate) fn register_repl_runtime_hooks(
 ) -> QueryEngineConfig {
     let post_sampling = Arc::new({
         let resources = resources.clone();
-        move |hook_context: rc_query_engine::stop_hooks::ReplHookContext| {
+        move |hook_context: claude_query_engine::stop_hooks::ReplHookContext| {
             let resources = resources.clone();
             Box::pin(async move {
                 if hook_context.query_source != QuerySource::ReplMainThread
@@ -65,7 +65,7 @@ pub(crate) fn register_repl_runtime_hooks(
                 let conversation = hook_context
                     .messages
                     .iter()
-                    .filter_map(rc_core::Message::as_conversation_entry)
+                    .filter_map(claude_core::Message::as_conversation_entry)
                     .collect::<Vec<_>>();
                 maybe_spawn_session_memory_update(
                     &resources.config,
@@ -85,8 +85,8 @@ pub(crate) fn register_repl_runtime_hooks(
 
     let stop_hook = Arc::new({
         let resources = resources.clone();
-        move |hook_context: rc_query_engine::stop_hooks::ReplHookContext,
-              _request: rc_query_engine::stop_hooks::StopHookRequest| {
+        move |hook_context: claude_query_engine::stop_hooks::ReplHookContext,
+              _request: claude_query_engine::stop_hooks::StopHookRequest| {
             let resources = resources.clone();
             Box::pin(async move {
                 if matches!(
@@ -122,7 +122,7 @@ pub(crate) fn register_repl_runtime_hooks(
                     let conversation = hook_context
                         .messages
                         .iter()
-                        .filter_map(rc_core::Message::as_conversation_entry)
+                        .filter_map(claude_core::Message::as_conversation_entry)
                         .collect::<Vec<_>>();
                     spawn_extract_memories_after_turn(
                         &resources.config,
@@ -134,13 +134,13 @@ pub(crate) fn register_repl_runtime_hooks(
                         Some(ForkCacheSafeParams::from_repl_hook_context(&hook_context)),
                     );
                 }
-                Ok(rc_query_engine::stop_hooks::StopHookOutcome::Allow)
+                Ok(claude_query_engine::stop_hooks::StopHookOutcome::Allow)
             })
                 as std::pin::Pin<
                     Box<
                         dyn std::future::Future<
                                 Output = anyhow::Result<
-                                    rc_query_engine::stop_hooks::StopHookOutcome,
+                                    claude_query_engine::stop_hooks::StopHookOutcome,
                                 >,
                             > + Send,
                     >,
@@ -231,9 +231,9 @@ mod tests {
         ReplHookRuntimeResources, build_runtime_system_context, parse_context_sections,
         register_repl_runtime_hooks,
     };
-    use rc_core::{AgentId, Message};
-    use rc_provider::ConversationBackend;
-    use rc_query_engine::QueryEngineConfig;
+    use claude_core::{AgentId, Message};
+    use claude_provider::ConversationBackend;
+    use claude_query_engine::QueryEngineConfig;
 
     #[test]
     fn parse_context_sections_extracts_named_blocks() {
@@ -249,20 +249,20 @@ mod tests {
 
     #[test]
     fn build_runtime_system_context_includes_basic_runtime_keys() {
-        let mut config = rc_config::load_runtime_config(
+        let mut config = claude_config::load_runtime_config(
             None,
             None,
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
             false,
             8,
-            rc_config::ProviderOverrides::default(),
-            rc_config::settings_layers::RuntimeOverrides::default(),
+            claude_config::ProviderOverrides::default(),
+            claude_config::settings_layers::RuntimeOverrides::default(),
         )
         .expect("config");
         config.language = Some("Chinese".to_owned());
@@ -286,29 +286,29 @@ mod tests {
         impl ConversationBackend for NoopBackend {
             async fn complete(
                 &self,
-                _conversation: &[rc_core::ConversationEntry],
-            ) -> anyhow::Result<rc_core::ProviderResponse> {
-                Ok(rc_core::ProviderResponse::default())
+                _conversation: &[claude_core::ConversationEntry],
+            ) -> anyhow::Result<claude_core::ProviderResponse> {
+                Ok(claude_core::ProviderResponse::default())
             }
 
             async fn complete_streaming(
                 &self,
-                _conversation: &[rc_core::ConversationEntry],
-                _callbacks: Option<rc_provider::StreamingCallbacks>,
-            ) -> anyhow::Result<rc_core::ProviderResponse> {
-                Ok(rc_core::ProviderResponse::default())
+                _conversation: &[claude_core::ConversationEntry],
+                _callbacks: Option<claude_provider::StreamingCallbacks>,
+            ) -> anyhow::Result<claude_core::ProviderResponse> {
+                Ok(claude_core::ProviderResponse::default())
             }
 
-            fn sub_agent_completion(&self) -> Arc<dyn rc_core::SubAgentCompletion> {
+            fn sub_agent_completion(&self) -> Arc<dyn claude_core::SubAgentCompletion> {
                 struct DummyCompletion;
 
                 #[async_trait::async_trait]
-                impl rc_core::SubAgentCompletion for DummyCompletion {
+                impl claude_core::SubAgentCompletion for DummyCompletion {
                     async fn complete(
                         &self,
-                        _conversation: &[rc_core::ConversationEntry],
-                    ) -> anyhow::Result<rc_core::ProviderResponse> {
-                        Ok(rc_core::ProviderResponse::default())
+                        _conversation: &[claude_core::ConversationEntry],
+                    ) -> anyhow::Result<claude_core::ProviderResponse> {
+                        Ok(claude_core::ProviderResponse::default())
                     }
                 }
 
@@ -319,41 +319,41 @@ mod tests {
         struct NoopToolRunner;
 
         #[async_trait::async_trait]
-        impl rc_query_engine::ToolRunner for NoopToolRunner {
+        impl claude_query_engine::ToolRunner for NoopToolRunner {
             async fn run_tool(
                 &self,
-                _tool_call: &rc_core::ToolCall,
-                _context: &rc_query_engine::ProcessUserInputContext,
-            ) -> anyhow::Result<rc_query_engine::ToolRunResult> {
-                Ok(rc_query_engine::ToolRunResult::from(
-                    rc_core::ToolResult::default(),
+                _tool_call: &claude_core::ToolCall,
+                _context: &claude_query_engine::ProcessUserInputContext,
+            ) -> anyhow::Result<claude_query_engine::ToolRunResult> {
+                Ok(claude_query_engine::ToolRunResult::from(
+                    claude_core::ToolResult::default(),
                 ))
             }
         }
 
-        let config = rc_config::load_runtime_config(
+        let config = claude_config::load_runtime_config(
             None,
             None,
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
             false,
             8,
-            rc_config::ProviderOverrides::default(),
-            rc_config::settings_layers::RuntimeOverrides::default(),
+            claude_config::ProviderOverrides::default(),
+            claude_config::settings_layers::RuntimeOverrides::default(),
         )
         .expect("config");
-        let store = Arc::new(rc_session::SessionStore::open(config.paths.clone()).expect("store"));
+        let store = Arc::new(claude_session::SessionStore::open(config.paths.clone()).expect("store"));
         let query_config = QueryEngineConfig::new(
             config.session_id.into(),
             "mock",
             Arc::new(NoopBackend),
             Arc::new(NoopToolRunner),
-            rc_engine_events::EventStream::new(8),
+            claude_engine_events::EventStream::new(8),
         );
         let query_config = register_repl_runtime_hooks(
             query_config,
@@ -361,16 +361,16 @@ mod tests {
                 config: config.clone(),
                 store,
                 backend: Arc::new(NoopBackend),
-                discovered_tool_scope: rc_provider::DiscoveredToolScope::default(),
+                discovered_tool_scope: claude_provider::DiscoveredToolScope::default(),
                 event_sink: None,
             },
         );
 
-        let hook_context = rc_query_engine::stop_hooks::ReplHookContext {
+        let hook_context = claude_query_engine::stop_hooks::ReplHookContext {
             session_id: config.session_id.into(),
             turn: 1,
-            messages: vec![Message::from(rc_core::ConversationEntry::user("hello"))],
-            query_source: rc_query_engine::QuerySource::ReplMainThread,
+            messages: vec![Message::from(claude_core::ConversationEntry::user("hello"))],
+            query_source: claude_query_engine::QuerySource::ReplMainThread,
             agent_id: Some(AgentId::from("agent-test")),
             system_prompt: None,
             user_context: Default::default(),
@@ -383,7 +383,7 @@ mod tests {
         let stop_hook = query_config.stop_hook.expect("stop hook");
         let outcome = stop_hook(
             hook_context,
-            rc_query_engine::stop_hooks::StopHookRequest {
+            claude_query_engine::stop_hooks::StopHookRequest {
                 stop_reason: "end_turn".to_owned(),
                 final_text: Some("done".to_owned()),
             },
@@ -393,7 +393,7 @@ mod tests {
 
         assert!(matches!(
             outcome,
-            rc_query_engine::stop_hooks::StopHookOutcome::Allow
+            claude_query_engine::stop_hooks::StopHookOutcome::Allow
         ));
     }
 }

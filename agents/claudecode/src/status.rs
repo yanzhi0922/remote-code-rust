@@ -1,9 +1,9 @@
 use anyhow::Result;
-use rc_config::RuntimeConfig;
-use rc_session::SessionStore;
-use rc_session::resume_state::ResumeState;
-use rc_tools::mcp_runtime::runtime_mcp_inventory_summary;
-use rc_ui_bridge::{
+use claude_config::RuntimeConfig;
+use claude_session::SessionStore;
+use claude_session::resume_state::ResumeState;
+use claude_tools::mcp_runtime::runtime_mcp_inventory_summary;
+use claude_ui_bridge::{
     UiProviderStatusSnapshot, UiRuntimeMcpInventorySummary, UiRuntimeStatusSnapshot,
 };
 use serde::Serialize;
@@ -131,8 +131,8 @@ fn collect_runtime_status(
 
 fn build_session_status(
     config: &RuntimeConfig,
-    summary: Option<&rc_session::SessionSummary>,
-    bundle: Option<&rc_session::SessionBundle>,
+    summary: Option<&claude_session::SessionSummary>,
+    bundle: Option<&claude_session::SessionBundle>,
     resume_state: Option<&ResumeState>,
 ) -> RuntimeSessionStatus {
     RuntimeSessionStatus {
@@ -312,10 +312,10 @@ fn print_runtime_status(report: &RuntimeStatusReport) {
 #[cfg(test)]
 mod tests {
     use super::{build_runtime_status_snapshot, collect_runtime_status};
-    use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
-    use rc_core::{ConversationEntry, InputFormat, OutputFormat, PermissionMode, ProviderProtocol};
-    use rc_session::SessionStore;
-    use rc_session::resume_state::{PendingToolCall, ResumeState};
+    use claude_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
+    use claude_core::{ConversationEntry, InputFormat, OutputFormat, PermissionMode, ProviderProtocol};
+    use claude_session::SessionStore;
+    use claude_session::resume_state::{PendingToolCall, ResumeState};
     use tempfile::tempdir;
 
     #[test]

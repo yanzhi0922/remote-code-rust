@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use rc_config::{RUNTIME_VERSION, RuntimeConfig, SettingSource, validate_provider_config};
-use rc_mcp::McpClientInfo;
-use rc_permissions::{load_layered_rules, rules::summarize_rule_sources};
-use rc_tools::mcp_runtime::observe_runtime_mcp_servers;
-use rc_ui_bridge::{UiRuntimeMcpInventorySummary, UiRuntimeMcpServerStatus};
+use claude_config::{RUNTIME_VERSION, RuntimeConfig, SettingSource, validate_provider_config};
+use claude_mcp::McpClientInfo;
+use claude_permissions::{load_layered_rules, rules::summarize_rule_sources};
+use claude_tools::mcp_runtime::observe_runtime_mcp_servers;
+use claude_ui_bridge::{UiRuntimeMcpInventorySummary, UiRuntimeMcpServerStatus};
 use serde::Serialize;
 
 use super::install::{InstallSource, detect_install_source, release_repository_slug};
@@ -137,7 +137,7 @@ pub(crate) async fn collect_report(
         &config.settings_files,
         &config.cli_settings_files,
     );
-    let model_info = rc_provider::model_info::get_model_info(
+    let model_info = claude_provider::model_info::get_model_info(
         config.provider.model.as_deref().unwrap_or("unknown"),
     );
     let install_source = detect_install_source();
@@ -159,7 +159,7 @@ pub(crate) async fn collect_report(
         .contains(&SettingSource::User)
         && config.paths.plugins_dir.exists()
     {
-        match rc_plugins::discover_plugins_including_disabled(&config.paths.plugins_dir) {
+        match claude_plugins::discover_plugins_including_disabled(&config.paths.plugins_dir) {
             Ok(plugins) => plugins.iter().filter(|plugin| plugin.is_disabled()).count(),
             Err(error) => {
                 warnings.push(format!("Failed to inspect disabled plugins: {error}"));
@@ -251,13 +251,13 @@ pub(crate) async fn collect_report(
         multimodal: model_info.multimodal,
         reasoning: model_info
             .capabilities
-            .contains(&rc_provider::model_info::ModelCapability::Reasoning),
+            .contains(&claude_provider::model_info::ModelCapability::Reasoning),
         validation_ok: validation.ok,
         validation_issues: validation.issues,
         probe: provider_probe,
     };
     let tools = ToolsSection {
-        builtin_tools: rc_tools::runtime_builtin_tool_specs().len(),
+        builtin_tools: claude_tools::runtime_builtin_tool_specs().len(),
         allowed_tools: config.allowed_tools.clone(),
         disallowed_tools: config.disallowed_tools.clone(),
     };
@@ -341,14 +341,14 @@ fn build_install_section(install_source: &InstallSource) -> InstallSection {
 mod tests {
     use std::fs;
 
-    use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
-    use rc_core::{InputFormat, OutputFormat, PermissionMode};
+    use claude_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
+    use claude_core::{InputFormat, OutputFormat, PermissionMode};
     use tempfile::tempdir;
 
     use super::collect_report;
     use crate::cli::DoctorArgs;
 
-    fn test_config() -> (tempfile::TempDir, rc_config::RuntimeConfig) {
+    fn test_config() -> (tempfile::TempDir, claude_config::RuntimeConfig) {
         let tempdir = tempdir().expect("tempdir");
         let cwd = tempdir.path().join("workspace");
         let profile = tempdir.path().join(".remote-code-rust");
@@ -379,7 +379,7 @@ mod tests {
     async fn doctor_report_includes_runtime_mcp_summary_without_probe() {
         let (_tempdir, config) = test_config();
         fs::write(
-            config.cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            config.cwd.join(claude_mcp::DEFAULT_MCP_CONFIG_FILE),
             concat!(
                 "[mcp_servers.pending]\ncommand = \"python\"\n",
                 "[mcp_servers.disabled]\ncommand = \"python\"\nenabled = false\n"
@@ -401,7 +401,7 @@ mod tests {
     async fn doctor_report_probe_mcp_marks_failed_servers() {
         let (_tempdir, config) = test_config();
         fs::write(
-            config.cwd.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            config.cwd.join(claude_mcp::DEFAULT_MCP_CONFIG_FILE),
             "[mcp_servers.failing]\ncommand = \"command-that-does-not-exist-remote-code\"\n",
         )
         .expect("write mcp config");
@@ -419,7 +419,7 @@ mod tests {
         assert_eq!(report.mcp_runtime.summary.status_counts.failed, 1);
         assert_eq!(report.mcp_runtime.summary.status_counts.pending, 0);
         assert!(report.mcp_runtime.servers.iter().any(|server| server.status
-            == rc_ui_bridge::UiRuntimeMcpServerStatus::Failed
+            == claude_ui_bridge::UiRuntimeMcpServerStatus::Failed
             && server.error.as_deref().is_some()));
     }
 }

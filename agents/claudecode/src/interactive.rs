@@ -1,6 +1,6 @@
 use anyhow::Result;
-use rc_config::RuntimeConfig;
-use rc_session::SessionStore;
+use claude_config::RuntimeConfig;
+use claude_session::SessionStore;
 
 /// Run the interactive shell by delegating to the rc-tui crate.
 ///
@@ -13,5 +13,5 @@ pub(crate) async fn run_interactive_shell(
     config: RuntimeConfig,
     store: &SessionStore,
 ) -> Result<()> {
-    rc_tui::run_tui_app(config, store).await
+    claude_tui::run_tui_app(config, store).await
 }

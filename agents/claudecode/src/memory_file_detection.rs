@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use rc_config::RuntimeConfig;
-use rc_runtime_prompt::{
+use claude_config::RuntimeConfig;
+use claude_runtime_prompt::{
     AutoMemoryScope, MemoryPromptFeatures, RuntimePromptSettings, SessionMemoryFileType,
     detect_memory_session_file_type, detect_memory_session_pattern_type,
     is_auto_managed_memory_file_with_features as runtime_is_auto_managed_memory_file,
@@ -100,28 +100,28 @@ mod tests {
         MemoryScope, SessionFileType, detect_session_file_type, detect_session_pattern_type,
         is_auto_managed_memory_pattern, memory_scope_for_path,
     };
-    use rc_runtime_prompt::RuntimePromptSettings;
+    use claude_runtime_prompt::RuntimePromptSettings;
 
-    fn test_config() -> (tempfile::TempDir, rc_config::RuntimeConfig) {
+    fn test_config() -> (tempfile::TempDir, claude_config::RuntimeConfig) {
         let temp = tempdir().expect("tempdir");
         let cwd = temp.path().join("cwd");
         let profile = temp.path().join("profile");
         fs::create_dir_all(&cwd).expect("cwd dir");
         fs::create_dir_all(&profile).expect("profile dir");
-        let config = rc_config::load_runtime_config(
+        let config = claude_config::load_runtime_config(
             Some(cwd),
             Some(profile),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
             false,
             4,
-            rc_config::ProviderOverrides::default(),
-            rc_config::RuntimeOverrides::default(),
+            claude_config::ProviderOverrides::default(),
+            claude_config::RuntimeOverrides::default(),
         )
         .expect("config");
         (temp, config)
@@ -155,7 +155,7 @@ mod tests {
 
     #[test]
     fn session_file_detection_uses_claude_config_projects_jsonl() {
-        let config_home = rc_runtime_prompt::memory_base_dir();
+        let config_home = claude_runtime_prompt::memory_base_dir();
         let transcript_path = config_home
             .join("projects")
             .join("repo")
@@ -183,7 +183,7 @@ mod tests {
         if !features.team_memory_enabled {
             return;
         }
-        let team_dir = rc_runtime_prompt::team_memory_path_with_features(&config, &features)
+        let team_dir = claude_runtime_prompt::team_memory_path_with_features(&config, &features)
             .expect("team path")
             .expect("team enabled");
         assert_eq!(

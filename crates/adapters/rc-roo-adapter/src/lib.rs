@@ -43,10 +43,10 @@ use futures::StreamExt;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-use rc_agent_protocol::adapter::AgentAdapter;
-use rc_agent_protocol::events::UnifiedAgentEvent;
-use rc_agent_protocol::permission::PermissionDecision;
-use rc_agent_protocol::types::{AgentConfig, AgentInfo, AgentStatus, AgentType};
+use claude_agent_protocol::adapter::AgentAdapter;
+use claude_agent_protocol::events::UnifiedAgentEvent;
+use claude_agent_protocol::permission::PermissionDecision;
+use claude_agent_protocol::types::{AgentConfig, AgentInfo, AgentStatus, AgentType};
 
 use roo_provider::handler::{CreateMessageMetadata, Provider};
 use roo_task::tool_dispatcher::{
@@ -524,11 +524,11 @@ impl RooInProcessAdapter {
     /// Create a new adapter in the **Starting** state.
     pub fn new() -> Self {
         let mut caps = HashSet::new();
-        caps.insert(rc_agent_protocol::types::AgentCapability::Streaming);
-        caps.insert(rc_agent_protocol::types::AgentCapability::ToolUse);
-        caps.insert(rc_agent_protocol::types::AgentCapability::McpSupport);
-        caps.insert(rc_agent_protocol::types::AgentCapability::Subtasks);
-        caps.insert(rc_agent_protocol::types::AgentCapability::Permissions);
+        caps.insert(claude_agent_protocol::types::AgentCapability::Streaming);
+        caps.insert(claude_agent_protocol::types::AgentCapability::ToolUse);
+        caps.insert(claude_agent_protocol::types::AgentCapability::McpSupport);
+        caps.insert(claude_agent_protocol::types::AgentCapability::Subtasks);
+        caps.insert(claude_agent_protocol::types::AgentCapability::Permissions);
 
         Self {
             info: AgentInfo {
@@ -776,8 +776,8 @@ async fn run_agent_loop(
     cancel_token: tokio_util::sync::CancellationToken,
 ) {
     let mut caps = HashSet::new();
-    caps.insert(rc_agent_protocol::types::AgentCapability::Streaming);
-    caps.insert(rc_agent_protocol::types::AgentCapability::ToolUse);
+    caps.insert(claude_agent_protocol::types::AgentCapability::Streaming);
+    caps.insert(claude_agent_protocol::types::AgentCapability::ToolUse);
 
     // Emit Started event
     let _ = tx.send(UnifiedAgentEvent::Started(AgentInfo {
@@ -791,7 +791,7 @@ async fn run_agent_loop(
 
     let mut messages = vec![initial_message];
     let mut final_text = String::new();
-    let mut total_tool_calls: Vec<rc_agent_protocol::events::ToolCallInfo> = Vec::new();
+    let mut total_tool_calls: Vec<claude_agent_protocol::events::ToolCallInfo> = Vec::new();
     let mut total_input_tokens: u64 = 0;
     let mut total_output_tokens: u64 = 0;
     let max_turns = 50; // Safety limit
@@ -899,7 +899,7 @@ async fn run_agent_loop(
             let output_value = serde_json::Value::String(output_text.clone());
 
             // Record tool call info
-            total_tool_calls.push(rc_agent_protocol::events::ToolCallInfo {
+            total_tool_calls.push(claude_agent_protocol::events::ToolCallInfo {
                 id: tc.id.clone(),
                 name: tc.name.clone(),
                 input: serde_json::from_str(&tc.arguments).unwrap_or(serde_json::json!({})),
@@ -945,10 +945,10 @@ async fn run_agent_loop(
     // Emit completion
     let _ = tx.send(UnifiedAgentEvent::Completed {
         session_id: session_id.to_string(),
-        result: rc_agent_protocol::events::AgentResult {
+        result: claude_agent_protocol::events::AgentResult {
             response_text: final_text,
             tool_calls: total_tool_calls,
-            usage: rc_agent_protocol::events::UsageInfo {
+            usage: claude_agent_protocol::events::UsageInfo {
                 input_tokens: total_input_tokens,
                 output_tokens: total_output_tokens,
                 cache_read: 0,

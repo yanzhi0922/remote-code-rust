@@ -1,9 +1,9 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use rc_config::{RuntimeConfig, SettingSource, load_hooks_file, load_settings_hooks};
-use rc_core::{CommandHook, ConversationEntry, HookEvent, HookShell, ToolCall};
-use rc_tools::{CommandHookExecutionRequest, CommandHookExecutionResult, execute_command_hook};
+use claude_config::{RuntimeConfig, SettingSource, load_hooks_file, load_settings_hooks};
+use claude_core::{CommandHook, ConversationEntry, HookEvent, HookShell, ToolCall};
+use claude_tools::{CommandHookExecutionRequest, CommandHookExecutionResult, execute_command_hook};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -149,7 +149,7 @@ impl HookRuntime {
         }
 
         if user_sources_enabled && config.paths.plugins_dir.exists() {
-            match rc_plugins::discover_plugins(&config.paths.plugins_dir) {
+            match claude_plugins::discover_plugins(&config.paths.plugins_dir) {
                 Ok(plugins) => {
                     for plugin in plugins {
                         if let Some(path) = plugin.hooks_config_path() {
@@ -349,13 +349,13 @@ impl HookRuntime {
         origin_kind: &'static str,
         origin_name: String,
         path: PathBuf,
-        config: std::collections::BTreeMap<HookEvent, Vec<rc_core::HookMatcher>>,
+        config: std::collections::BTreeMap<HookEvent, Vec<claude_core::HookMatcher>>,
     ) {
         let mut hook_index = self.entries.len();
         for (event, matchers) in config {
             for matcher in matchers {
                 for hook in matcher.hooks {
-                    let rc_core::HookCommand::Command(command) = hook;
+                    let claude_core::HookCommand::Command(command) = hook;
                     let hook_id = format!(
                         "{}:{}:{}:{}",
                         path.display(),
@@ -769,8 +769,8 @@ mod tests {
         HookDecision, HookRuntime, append_hook_context_entries, condition_matches, matcher_matches,
         wildcard_match,
     };
-    use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
-    use rc_core::{ConversationRole, HookEvent};
+    use claude_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
+    use claude_core::{ConversationRole, HookEvent};
     use serde_json::json;
     use tempfile::tempdir;
     use uuid::Uuid;
@@ -853,9 +853,9 @@ mod tests {
             Some(cwd.clone()),
             Some(profile.clone()),
             Some(Uuid::nil()),
-            rc_core::PermissionMode::BypassPermissions,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::BypassPermissions,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -921,9 +921,9 @@ mod tests {
             Some(cwd.clone()),
             Some(profile.clone()),
             Some(Uuid::nil()),
-            rc_core::PermissionMode::BypassPermissions,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::BypassPermissions,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -959,9 +959,9 @@ mod tests {
             Some(cwd),
             Some(profile),
             Some(Uuid::nil()),
-            rc_core::PermissionMode::BypassPermissions,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::BypassPermissions,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -992,7 +992,7 @@ mod tests {
 
     #[test]
     fn hook_decision_default_path_is_ask() {
-        let config = super::PreToolUseHookSummary::from_tool_call(rc_core::ToolCall {
+        let config = super::PreToolUseHookSummary::from_tool_call(claude_core::ToolCall {
             id: "tool-1".to_owned(),
             name: "bash_command".to_owned(),
             input: json!({}),

@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::{Result, anyhow};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use futures::StreamExt;
-use rc_control_plane::{
+use claude_control_plane::{
     ArtifactCreateRequest as RemoteArtifactCreateRequest, ArtifactRecord as RemoteArtifactRecord,
     BootstrapClaimRequest as RemoteBootstrapClaimRequest,
     BootstrapClaimResponse as RemoteBootstrapClaimResponse,
@@ -20,7 +20,7 @@ use rc_control_plane::{
     TimelineEvent as RemoteTimelineEvent, TimelineEventDetail as RemoteTimelineEventDetail,
     TrustedDeviceRecord as RemoteTrustedDeviceRecord,
 };
-use rc_runner::{
+use claude_runner::{
     ApprovalCreateRequest as SharedApprovalCreateRequest,
     ApprovalDecisionRequest as SharedApprovalDecisionRequest,
     ApprovalRequestRecord as RemoteApprovalRecord, ApprovalState as RemoteApprovalState,
@@ -1293,7 +1293,7 @@ async fn run_remote_sessions_prompt(args: RemoteSessionPromptArgs) -> Result<()>
     let response: RemoteSessionCommandResponseValue = remote_post_json(
         &control_plane_url,
         &remote_session_commands_path(args.session_id),
-        &rc_control_plane::RunnerSessionCommandRequest::SendPrompt { content: prompt },
+        &claude_control_plane::RunnerSessionCommandRequest::SendPrompt { content: prompt },
     )
     .await?;
     if args.json {
@@ -1312,7 +1312,7 @@ async fn run_remote_sessions_interrupt(args: RemoteSessionInterruptArgs) -> Resu
     let response: RemoteSessionCommandResponseValue = remote_post_json(
         &control_plane_url,
         &remote_session_commands_path(args.session_id),
-        &rc_control_plane::RunnerSessionCommandRequest::Interrupt,
+        &claude_control_plane::RunnerSessionCommandRequest::Interrupt,
     )
     .await?;
     if args.json {

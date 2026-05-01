@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
-use rc_config::{RUNTIME_VERSION, RuntimeConfig, SettingSource};
+use claude_config::{RUNTIME_VERSION, RuntimeConfig, SettingSource};
 
 use crate::cli::{
     PluginsCommand, PluginsInspectArgs, PluginsInstallArgs, PluginsInvokeArgs, PluginsListArgs,
@@ -204,7 +204,7 @@ async fn run_plugins_invoke(config: &RuntimeConfig, args: PluginsInvokeArgs) -> 
 #[derive(Debug, Clone, serde::Serialize)]
 struct PluginValidateOutput {
     warnings: Vec<String>,
-    reports: Vec<rc_plugins::PluginValidationReport>,
+    reports: Vec<claude_plugins::PluginValidationReport>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -212,7 +212,7 @@ struct PluginInstallOutput {
     status: String,
     plugin: String,
     destination: PathBuf,
-    validation: rc_plugins::PluginValidationReport,
+    validation: claude_plugins::PluginValidationReport,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -230,7 +230,7 @@ struct PluginUpdateOutput {
     plugin: String,
     destination: PathBuf,
     preserved_disabled: bool,
-    validation: rc_plugins::PluginValidationReport,
+    validation: claude_plugins::PluginValidationReport,
 }
 
 async fn run_plugins_validate(config: &RuntimeConfig, args: PluginsValidateArgs) -> Result<()> {
@@ -268,8 +268,8 @@ async fn run_plugins_validate(config: &RuntimeConfig, args: PluginsValidateArgs)
 }
 
 fn run_plugins_install(config: &RuntimeConfig, args: PluginsInstallArgs) -> Result<()> {
-    let plugin = rc_plugins::load_plugin_from_root(&args.path)?;
-    let validation = rc_plugins::validate_plugin_bundle(&plugin);
+    let plugin = claude_plugins::load_plugin_from_root(&args.path)?;
+    let validation = claude_plugins::validate_plugin_bundle(&plugin);
     if !validation.errors.is_empty() {
         return Err(anyhow!(
             "Plugin validation failed: {}",
@@ -366,7 +366,7 @@ fn run_plugins_toggle(
                 status: "noop".to_owned(),
                 plugin: args.plugin,
                 enabled,
-                marker_path: destination.join(rc_plugins::PLUGIN_DISABLED_MARKER),
+                marker_path: destination.join(claude_plugins::PLUGIN_DISABLED_MARKER),
                 destination,
             };
             if args.json {
@@ -389,7 +389,7 @@ fn run_plugins_toggle(
         ));
     }
 
-    let marker_path = destination.join(rc_plugins::PLUGIN_DISABLED_MARKER);
+    let marker_path = destination.join(claude_plugins::PLUGIN_DISABLED_MARKER);
     let status = if enabled {
         if marker_path.exists() {
             fs::remove_file(&marker_path)?;
@@ -431,8 +431,8 @@ fn run_plugins_toggle(
 }
 
 fn run_plugins_update(config: &RuntimeConfig, args: PluginsUpdateArgs) -> Result<()> {
-    let plugin = rc_plugins::load_plugin_from_root(&args.path)?;
-    let validation = rc_plugins::validate_plugin_bundle(&plugin);
+    let plugin = claude_plugins::load_plugin_from_root(&args.path)?;
+    let validation = claude_plugins::validate_plugin_bundle(&plugin);
     if !validation.errors.is_empty() {
         return Err(anyhow!(
             "Plugin validation failed: {}",
@@ -455,7 +455,7 @@ fn run_plugins_update(config: &RuntimeConfig, args: PluginsUpdateArgs) -> Result
         ));
     }
 
-    let marker_path = destination.join(rc_plugins::PLUGIN_DISABLED_MARKER);
+    let marker_path = destination.join(claude_plugins::PLUGIN_DISABLED_MARKER);
     let preserved_disabled = marker_path.exists();
     fs::remove_dir_all(&destination)?;
     copy_dir_recursive(&plugin.root, &destination)?;
@@ -492,7 +492,7 @@ fn run_plugins_update(config: &RuntimeConfig, args: PluginsUpdateArgs) -> Result
 pub(crate) struct RuntimePluginEntry {
     pub(crate) origin_kind: &'static str,
     pub(crate) origin_name: String,
-    pub(crate) bundle: rc_plugins::PluginBundle,
+    pub(crate) bundle: claude_plugins::PluginBundle,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -532,9 +532,9 @@ pub(crate) struct PluginRecord {
 pub(crate) struct PluginLiveRecord {
     status: String,
     protocol_version: Option<String>,
-    plugin_info: Option<rc_plugins::PluginPeerInfo>,
+    plugin_info: Option<claude_plugins::PluginPeerInfo>,
     action_count: usize,
-    actions: Vec<rc_plugins::PluginRuntimeActionDescriptor>,
+    actions: Vec<claude_plugins::PluginRuntimeActionDescriptor>,
     error: Option<String>,
 }
 
@@ -549,11 +549,11 @@ struct PluginInvokeOutput {
     warnings: Vec<String>,
     plugin: PluginRecord,
     input: serde_json::Value,
-    response: rc_plugins::PluginInvokeResponse,
+    response: claude_plugins::PluginInvokeResponse,
 }
 
 impl PluginLiveRecord {
-    fn from_inspection(inspection: rc_plugins::PluginRuntimeInspection) -> Self {
+    fn from_inspection(inspection: claude_plugins::PluginRuntimeInspection) -> Self {
         Self {
             status: "ok".to_owned(),
             protocol_version: Some(inspection.protocol_version),
@@ -607,9 +607,9 @@ async fn build_plugins_list_output(
                 ))
             } else if has_runtime {
                 Some(
-                    match rc_plugins::inspect_runtime(
+                    match claude_plugins::inspect_runtime(
                         &entry.bundle,
-                        &rc_plugins::PluginHostInfo::new("remote-code-rust", RUNTIME_VERSION),
+                        &claude_plugins::PluginHostInfo::new("remote-code-rust", RUNTIME_VERSION),
                     )
                     .await
                     {
@@ -653,9 +653,9 @@ async fn build_plugins_inspect_output(
         ))
     } else if has_runtime {
         Some(
-            match rc_plugins::inspect_runtime(
+            match claude_plugins::inspect_runtime(
                 &resolution.entry.bundle,
-                &rc_plugins::PluginHostInfo::new("remote-code-rust", RUNTIME_VERSION),
+                &claude_plugins::PluginHostInfo::new("remote-code-rust", RUNTIME_VERSION),
             )
             .await
             {
@@ -691,9 +691,9 @@ async fn build_plugins_invoke_output(
         ));
     }
     let input = parse_plugin_invoke_input(args)?;
-    let response = rc_plugins::invoke_runtime(
+    let response = claude_plugins::invoke_runtime(
         &resolution.entry.bundle,
-        &rc_plugins::PluginHostInfo::new("remote-code-rust", RUNTIME_VERSION),
+        &claude_plugins::PluginHostInfo::new("remote-code-rust", RUNTIME_VERSION),
         &args.action,
         input.clone(),
     )
@@ -767,7 +767,7 @@ fn load_runtime_plugins_root(
         }
         return;
     }
-    match rc_plugins::discover_plugins_including_disabled(root) {
+    match claude_plugins::discover_plugins_including_disabled(root) {
         Ok(plugins) => {
             for plugin in plugins {
                 if !seen_manifest_paths.insert(plugin.manifest_path.clone()) {
@@ -872,15 +872,15 @@ fn build_plugins_validate_output(
     let mut reports = Vec::new();
 
     if let Some(path) = &args.path {
-        let plugin = rc_plugins::load_plugin_from_root(path)?;
-        reports.push(rc_plugins::validate_plugin_bundle(&plugin));
+        let plugin = claude_plugins::load_plugin_from_root(path)?;
+        reports.push(claude_plugins::validate_plugin_bundle(&plugin));
         return Ok(PluginValidateOutput { warnings, reports });
     }
 
     if let Some(plugin_name) = &args.plugin {
         let resolution = resolve_runtime_plugin(config, plugin_name, &args.plugin_roots)?;
         warnings.extend(resolution.warnings);
-        reports.push(rc_plugins::validate_plugin_bundle(&resolution.entry.bundle));
+        reports.push(claude_plugins::validate_plugin_bundle(&resolution.entry.bundle));
         return Ok(PluginValidateOutput { warnings, reports });
     }
 
@@ -890,7 +890,7 @@ fn build_plugins_validate_output(
         discovery
             .plugins
             .iter()
-            .map(|entry| rc_plugins::validate_plugin_bundle(&entry.bundle)),
+            .map(|entry| claude_plugins::validate_plugin_bundle(&entry.bundle)),
     );
     Ok(PluginValidateOutput { warnings, reports })
 }
@@ -916,7 +916,7 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
-    use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
+    use claude_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
     use tempfile::tempdir;
 
     use super::{
@@ -928,7 +928,7 @@ mod tests {
         PluginsUpdateArgs,
     };
 
-    fn test_config() -> (tempfile::TempDir, rc_config::RuntimeConfig) {
+    fn test_config() -> (tempfile::TempDir, claude_config::RuntimeConfig) {
         let tempdir = tempdir().expect("tempdir");
         let cwd = tempdir.path().join("workspace");
         let profile = tempdir.path().join(".remote-code-rust");
@@ -938,9 +938,9 @@ mod tests {
             Some(cwd),
             Some(profile),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -954,10 +954,10 @@ mod tests {
     }
 
     fn write_plugin(root: &Path, version: &str, extra_files: &[(&str, &str)]) {
-        fs::create_dir_all(root.join(rc_plugins::PLUGIN_MANIFEST_DIR)).expect("manifest dir");
+        fs::create_dir_all(root.join(claude_plugins::PLUGIN_MANIFEST_DIR)).expect("manifest dir");
         fs::write(
-            root.join(rc_plugins::PLUGIN_MANIFEST_DIR)
-                .join(rc_plugins::PLUGIN_MANIFEST_FILE),
+            root.join(claude_plugins::PLUGIN_MANIFEST_DIR)
+                .join(claude_plugins::PLUGIN_MANIFEST_FILE),
             format!(r#"{{"name":"demo","version":"{version}"}}"#),
         )
         .expect("manifest");
@@ -971,10 +971,10 @@ mod tests {
     }
 
     fn write_plugin_manifest(root: &Path, manifest: &str, extra_files: &[(&str, &str)]) {
-        fs::create_dir_all(root.join(rc_plugins::PLUGIN_MANIFEST_DIR)).expect("manifest dir");
+        fs::create_dir_all(root.join(claude_plugins::PLUGIN_MANIFEST_DIR)).expect("manifest dir");
         fs::write(
-            root.join(rc_plugins::PLUGIN_MANIFEST_DIR)
-                .join(rc_plugins::PLUGIN_MANIFEST_FILE),
+            root.join(claude_plugins::PLUGIN_MANIFEST_DIR)
+                .join(claude_plugins::PLUGIN_MANIFEST_FILE),
             manifest,
         )
         .expect("manifest");
@@ -1005,7 +1005,7 @@ mod tests {
         .expect("disable plugin");
         assert!(
             plugin_root
-                .join(rc_plugins::PLUGIN_DISABLED_MARKER)
+                .join(claude_plugins::PLUGIN_DISABLED_MARKER)
                 .exists()
         );
 
@@ -1021,7 +1021,7 @@ mod tests {
         .expect("enable plugin");
         assert!(
             !plugin_root
-                .join(rc_plugins::PLUGIN_DISABLED_MARKER)
+                .join(claude_plugins::PLUGIN_DISABLED_MARKER)
                 .exists()
         );
     }
@@ -1032,7 +1032,7 @@ mod tests {
         let installed_root = config.paths.plugins_dir.join("demo");
         write_plugin(&installed_root, "0.1.0", &[("data.txt", "old")]);
         fs::write(
-            installed_root.join(rc_plugins::PLUGIN_DISABLED_MARKER),
+            installed_root.join(claude_plugins::PLUGIN_DISABLED_MARKER),
             b"disabled\n",
         )
         .expect("disabled marker");
@@ -1055,7 +1055,7 @@ mod tests {
         );
         assert!(
             installed_root
-                .join(rc_plugins::PLUGIN_DISABLED_MARKER)
+                .join(claude_plugins::PLUGIN_DISABLED_MARKER)
                 .exists()
         );
     }
@@ -1066,7 +1066,7 @@ mod tests {
         let plugin_root = config.paths.plugins_dir.join("demo");
         write_plugin(&plugin_root, "0.1.0", &[]);
         fs::write(
-            plugin_root.join(rc_plugins::PLUGIN_DISABLED_MARKER),
+            plugin_root.join(claude_plugins::PLUGIN_DISABLED_MARKER),
             b"disabled\n",
         )
         .expect("disabled marker");
@@ -1101,7 +1101,7 @@ mod tests {
             &[],
         );
         fs::write(
-            plugin_root.join(rc_plugins::PLUGIN_DISABLED_MARKER),
+            plugin_root.join(claude_plugins::PLUGIN_DISABLED_MARKER),
             b"disabled\n",
         )
         .expect("disabled marker");
@@ -1140,7 +1140,7 @@ mod tests {
             &[],
         );
         fs::write(
-            plugin_root.join(rc_plugins::PLUGIN_DISABLED_MARKER),
+            plugin_root.join(claude_plugins::PLUGIN_DISABLED_MARKER),
             b"disabled\n",
         )
         .expect("disabled marker");
@@ -1179,7 +1179,7 @@ mod tests {
             &[],
         );
         fs::write(
-            plugin_root.join(rc_plugins::PLUGIN_DISABLED_MARKER),
+            plugin_root.join(claude_plugins::PLUGIN_DISABLED_MARKER),
             b"disabled\n",
         )
         .expect("disabled marker");

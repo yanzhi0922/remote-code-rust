@@ -61,10 +61,10 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, mpsc};
 use tracing::{info, warn};
 
-use rc_agent_protocol::adapter::AgentAdapter;
-use rc_agent_protocol::events::UnifiedAgentEvent;
-use rc_agent_protocol::permission::PermissionDecision;
-use rc_agent_protocol::types::{AgentCapability, AgentConfig, AgentInfo, AgentStatus, AgentType};
+use claude_agent_protocol::adapter::AgentAdapter;
+use claude_agent_protocol::events::UnifiedAgentEvent;
+use claude_agent_protocol::permission::PermissionDecision;
+use claude_agent_protocol::types::{AgentCapability, AgentConfig, AgentInfo, AgentStatus, AgentType};
 
 use codex_app_server_client::{AppServerClient, AppServerEvent, AppServerRequestHandle};
 use codex_app_server_protocol::{

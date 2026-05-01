@@ -17,20 +17,20 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use rc_config::RuntimeConfig;
-use rc_core::{
+use claude_config::RuntimeConfig;
+use claude_core::{
     ConversationEntry, Message, SessionId, SubAgentCompletion, ToolCall, ToolResult, UsageSummary,
 };
-use rc_engine_events::EventStream;
-use rc_permissions::PermissionDecision;
-use rc_provider::ConversationBackend;
-use rc_provider::context::ContextWindowManager;
-use rc_query_engine::{
+use claude_engine_events::EventStream;
+use claude_permissions::PermissionDecision;
+use claude_provider::ConversationBackend;
+use claude_provider::context::ContextWindowManager;
+use claude_query_engine::{
     ProcessUserInputContext, ProviderInvocationMode, QueryEngine, QueryEngineConfig, QueryObserver,
     QueryObserverEvent, ToolRunResult, ToolRunner,
 };
-use rc_session::SessionStore;
-use rc_tools::{
+use claude_session::SessionStore;
+use claude_tools::{
     FileStateCache,
     agent::parse_delegate_progress_event,
     execute_tool_call,
@@ -64,9 +64,9 @@ pub(crate) struct GuiToolRunner {
     /// RuntimeConfig guarded by an async mutex for interior mutability
     /// (worktree updates mutate the config).
     config: Arc<Mutex<RuntimeConfig>>,
-    broker: Arc<dyn rc_permissions::PermissionBroker>,
+    broker: Arc<dyn claude_permissions::PermissionBroker>,
     session_id: Uuid,
-    task_paths: rc_config::AppPaths,
+    task_paths: claude_config::AppPaths,
     sub_agent: Arc<dyn SubAgentCompletion>,
     context_manager: ContextWindowManager,
 }
@@ -77,9 +77,9 @@ impl GuiToolRunner {
         app: AppHandle,
         store: Arc<SessionStore>,
         config: RuntimeConfig,
-        broker: Arc<dyn rc_permissions::PermissionBroker>,
+        broker: Arc<dyn claude_permissions::PermissionBroker>,
         session_id: Uuid,
-        task_paths: rc_config::AppPaths,
+        task_paths: claude_config::AppPaths,
         sub_agent: Arc<dyn SubAgentCompletion>,
         context_manager: ContextWindowManager,
     ) -> Self {
@@ -100,7 +100,7 @@ impl GuiToolRunner {
 impl ToolRunner for GuiToolRunner {
     async fn run_tool(
         &self,
-        tool_call: &rc_core::ToolCall,
+        tool_call: &claude_core::ToolCall,
         _context: &ProcessUserInputContext,
     ) -> Result<ToolRunResult> {
         // 1. Validate tool spec.
@@ -127,7 +127,7 @@ impl ToolRunner for GuiToolRunner {
 
         let tool_context = {
             let config = self.config.lock().await;
-            rc_tools::ToolExecutionContext {
+            claude_tools::ToolExecutionContext {
                 cwd: config.cwd.clone(),
                 original_cwd: config.original_cwd.clone(),
                 active_worktree_session: config.active_worktree_session.clone(),
@@ -137,7 +137,7 @@ impl ToolRunner for GuiToolRunner {
                     emit_delegate_progress(&app, &sid, &paths, session_id, message);
                 })),
                 task_stack: Arc::new(std::sync::Mutex::new(
-                    rc_core::task_stack::TaskStack::default(),
+                    claude_core::task_stack::TaskStack::default(),
                 )),
                 read_file_state: FileStateCache::new(),
             }
@@ -158,7 +158,7 @@ impl ToolRunner for GuiToolRunner {
         // 5. Handle worktree updates.
         {
             let mut config = self.config.lock().await;
-            let mut temp_context = rc_tools::ToolExecutionContext {
+            let mut temp_context = claude_tools::ToolExecutionContext {
                 cwd: config.cwd.clone(),
                 original_cwd: config.original_cwd.clone(),
                 active_worktree_session: config.active_worktree_session.clone(),
@@ -166,7 +166,7 @@ impl ToolRunner for GuiToolRunner {
                 sub_agent: Some(self.sub_agent.clone()),
                 progress_cb: None,
                 task_stack: Arc::new(std::sync::Mutex::new(
-                    rc_core::task_stack::TaskStack::default(),
+                    claude_core::task_stack::TaskStack::default(),
                 )),
                 read_file_state: FileStateCache::new(),
             };
@@ -239,7 +239,7 @@ impl ToolRunner for GuiToolRunner {
 fn emit_delegate_progress(
     app: &AppHandle,
     session_id_str: &str,
-    paths: &rc_config::AppPaths,
+    paths: &claude_config::AppPaths,
     session_id: Uuid,
     message: &str,
 ) {
@@ -256,7 +256,7 @@ fn emit_delegate_progress(
     };
 
     match event {
-        rc_tools::agent::DelegateProgressEvent::SubtaskStarted {
+        claude_tools::agent::DelegateProgressEvent::SubtaskStarted {
             task_id,
             parent_task_id,
             description,
@@ -274,7 +274,7 @@ fn emit_delegate_progress(
             );
             crate::emit_task_snapshot_for_session(app, paths, session_id);
         }
-        rc_tools::agent::DelegateProgressEvent::SubtaskProgress {
+        claude_tools::agent::DelegateProgressEvent::SubtaskProgress {
             task_id,
             turn,
             max_turns,
@@ -300,7 +300,7 @@ fn emit_delegate_progress(
             );
             crate::emit_task_snapshot_for_session(app, paths, session_id);
         }
-        rc_tools::agent::DelegateProgressEvent::SubtaskCompleted {
+        claude_tools::agent::DelegateProgressEvent::SubtaskCompleted {
             task_id,
             success,
             output_preview,
@@ -318,7 +318,7 @@ fn emit_delegate_progress(
             );
             crate::emit_task_snapshot_for_session(app, paths, session_id);
         }
-        rc_tools::agent::DelegateProgressEvent::BatchProgress {
+        claude_tools::agent::DelegateProgressEvent::BatchProgress {
             total,
             completed,
             running,
@@ -556,7 +556,7 @@ pub(crate) struct UnifiedPromptOutcome {
 pub(crate) async fn run_unified_prompt_with_provider(
     app: &AppHandle,
     config: RuntimeConfig,
-    provider: Arc<rc_provider::ProviderClient>,
+    provider: Arc<claude_provider::ProviderClient>,
     store: Arc<SessionStore>,
     pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
     prompt: &str,
@@ -602,7 +602,7 @@ pub(crate) async fn run_unified_prompt_with_provider(
     let context_manager = ContextWindowManager::for_model(&model);
 
     // 4. Create the backend (Arc-wrapped).
-    let backend: Arc<dyn ConversationBackend> = Arc::new(rc_provider::ProviderCompatBackend::new(
+    let backend: Arc<dyn ConversationBackend> = Arc::new(claude_provider::ProviderCompatBackend::new(
         Arc::clone(&provider),
         &config.provider,
     ));
@@ -670,7 +670,7 @@ pub(crate) async fn run_unified_prompt_with_provider(
 }
 
 /// Extract tool calls that were made during the query from the engine state.
-fn extract_tool_calls_from_state(state: &rc_query_engine::EngineState) -> Vec<ToolCall> {
+fn extract_tool_calls_from_state(state: &claude_query_engine::EngineState) -> Vec<ToolCall> {
     state
         .messages
         .iter()

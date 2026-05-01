@@ -94,7 +94,7 @@
 
 ## Test Plan
 - 单元测试：
-  - `rc-protocol` 到规范远程事件的映射
+  - `claude-protocol` 到规范远程事件的映射
   - `client_command_id` 幂等性
   - `cursor` 回放与去重
   - 审批生命周期和 interrupt 语义

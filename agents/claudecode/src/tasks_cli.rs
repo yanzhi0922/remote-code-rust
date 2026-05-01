@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
-use rc_config::RuntimeConfig;
-use rc_tools::tasks::{BackgroundTask, load_persisted_task, load_persisted_tasks};
+use claude_config::RuntimeConfig;
+use claude_tools::tasks::{BackgroundTask, load_persisted_task, load_persisted_tasks};
 use uuid::Uuid;
 
 use crate::cli::{TaskShowArgs, TasksCommand, TasksListArgs};

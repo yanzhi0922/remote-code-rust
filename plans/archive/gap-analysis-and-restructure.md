@@ -110,9 +110,9 @@ query() {
 | 29 | Effort Value | low/medium/high | ❌ 无 |
 | 30 | Fast Mode | fast mode toggle | ❌ 无 |
 
-### 2.2 API 客户端：rc-provider vs services/api/claude.ts
+### 2.2 API 客户端：claude-provider vs services/api/claude.ts
 
-**当前 Rust** (`crates/claude/rc-provider/src/lib.rs`, 1,657 行):
+**当前 Rust** (`crates/claude/claude-provider/src/lib.rs`, 1,657 行):
 
 - `complete()` → 非流式请求
 - `complete_streaming_with_callbacks()` → 流式请求（简单回调）
@@ -169,9 +169,9 @@ query() {
 | 19 | Query Source | compact/session_memory/agent | ❌ 无 |
 | 20 | Content Block Types | tool_use/text/thinking/signature | 部分 |
 
-### 2.3 工具运行时：rc-tools vs tools/*
+### 2.3 工具运行时：claude-tools vs tools/*
 
-**当前 Rust** (`crates/claude/rc-tools/src/`, ~3,000 行):
+**当前 Rust** (`crates/claude/claude-tools/src/`, ~3,000 行):
 
 - `specs.rs` (1,041 行) → 工具 JSON Schema 定义
 - `shell/mod.rs` (500 行) → Shell 执行
@@ -206,9 +206,9 @@ query() {
 | 9 | 流式工具执行 | Rust 无 vs Claude Code StreamingToolExecutor |
 | 10 | 工具验证 | Rust 无 vs Claude Code validateInput |
 
-### 2.4 核心类型：rc-core vs types/*
+### 2.4 核心类型：claude-core vs types/*
 
-**当前 Rust** (`crates/claude/rc-core/src/lib.rs`, 591 行):
+**当前 Rust** (`crates/claude/claude-core/src/lib.rs`, 591 行):
 
 - `PermissionMode` (6 变体)
 - `ProviderProtocol` (4 变体)
@@ -234,9 +234,9 @@ query() {
 - `ToolInputJSONSchema` (输入 Schema)
 - `SetToolJSXFn` (TUI 设置)
 
-### 2.5 权限系统：rc-permissions vs useCanUseTool.tsx
+### 2.5 权限系统：claude-permissions vs useCanUseTool.tsx
 
-**当前 Rust** (`crates/claude/rc-permissions/src/`, ~500 行):
+**当前 Rust** (`crates/claude/claude-permissions/src/`, ~500 行):
 
 - `PermissionBroker` trait → 简单 decide() 方法
 - `PermissionMode` → 6 种模式
@@ -272,46 +272,46 @@ query() {
 
 ```
 Phase 0: 保留可复用的 crate（不重构）
-├── rc-config/        → 保留，增强
-├── rc-session/       → 保留，增强
-├── rc-permissions/   → 保留，增强
-├── rc-event-bus/     → 保留，增强
-├── rc-protocol/      → 保留，增强
-├── rc-control-plane/ → 保留
-├── rc-runner/        → 保留
-├── rc-telemetry/     → 保留
-└── rc-ui-bridge/     → 保留，增强
+├── claude-config/        → 保留，增强
+├── claude-session/       → 保留，增强
+├── claude-permissions/   → 保留，增强
+├── claude-event-bus/     → 保留，增强
+├── claude-protocol/      → 保留，增强
+├── claude-control-plane/ → 保留
+├── claude-runner/        → 保留
+├── claude-telemetry/     → 保留
+└── claude-ui-bridge/     → 保留，增强
 
 Phase 1: 完全重写的 crate
-├── rc-core/          → 完全重写类型系统
-├── rc-provider/      → 完全重写 API 客户端（流式 + 缓存）
-├── rc-tools/         → 完全重写工具运行时（50+ 工具）
-├── rc-mcp/           → 完全重写 MCP 客户端
+├── claude-core/          → 完全重写类型系统
+├── claude-provider/      → 完全重写 API 客户端（流式 + 缓存）
+├── claude-tools/         → 完全重写工具运行时（50+ 工具）
+├── claude-mcp/           → 完全重写 MCP 客户端
 ├── rc-hooks/         → 完全重写 Hook 系统
-├── rc-skills/        → 完全重写技能系统
-├── rc-agents/        → 完全重写 Agent 系统
-└── rc-tui/           → 完全重写 TUI
+├── claude-skills/        → 完全重写技能系统
+├── claude-agents/        → 完全重写 Agent 系统
+└── claude-tui/           → 完全重写 TUI
 
 Phase 2: 新建的 crate
-├── rc-query-engine/  → 新建查询引擎
-├── rc-engine-events/ → 新建事件系统
-├── rc-transcript/    → 新建会话记录
-├── rc-system-prompt/ → 新建 System Prompt
-├── rc-compact/       → 新建上下文压缩
+├── claude-query-engine/  → 新建查询引擎
+├── claude-engine-events/ → 新建事件系统
+├── claude-transcript/    → 新建会话记录
+├── claude-system-prompt/ → 新建 System Prompt
+├── claude-compact/       → 新建上下文压缩
 ├── rc-tool-prompts/  → 新建工具 Prompt
 ├── rc-tasks/         → 新建任务系统
 ├── rc-memory/        → 新建记忆管理
-├── rc-context/       → 新建上下文管理
+├── claude-context/       → 新建上下文管理
 ├── rc-commands/      → 新建斜杠命令
-├── rc-tui-components/→ 新建 TUI 组件
-├── rc-tui-input/     → 新建 TUI 输入
-├── rc-analytics/     → 新建分析
-├── rc-lsp/           → 新建 LSP
+├── claude-tui-components/→ 新建 TUI 组件
+├── claude-tui-input/     → 新建 TUI 输入
+├── claude-analytics/     → 新建分析
+├── claude-lsp/           → 新建 LSP
 └── rc-output-styles/ → 新建输出风格
 
 Phase 3: 重写的应用入口
 └── apps/remote-code/ → 完全重写 CLI 入口
-    ├── conversation.rs → 删除，由 rc-query-engine 替代
+    ├── conversation.rs → 删除，由 claude-query-engine 替代
     ├── headless.rs     → 重写，对接新引擎
     ├── interactive.rs  → 重写，对接新 TUI
     └── main.rs         → 重写，对接新 CLI
@@ -320,23 +320,23 @@ Phase 3: 重写的应用入口
 ### 3.3 重构优先级
 
 **P0（必须首先完成）**:
-1. `rc-core` 类型系统重写 → 所有其他 crate 依赖
-2. `rc-engine-events` 事件系统 → 查询引擎依赖
-3. `rc-query-engine` 查询引擎 → 替代 conversation.rs
-4. `rc-provider` API 客户端重写 → 流式 + 缓存
-5. `rc-system-prompt` System Prompt → 对话质量依赖
+1. `claude-core` 类型系统重写 → 所有其他 crate 依赖
+2. `claude-engine-events` 事件系统 → 查询引擎依赖
+3. `claude-query-engine` 查询引擎 → 替代 conversation.rs
+4. `claude-provider` API 客户端重写 → 流式 + 缓存
+5. `claude-system-prompt` System Prompt → 对话质量依赖
 
 **P1（核心能力）**:
-6. `rc-compact` 上下文压缩 → 长对话依赖
+6. `claude-compact` 上下文压缩 → 长对话依赖
 7. `rc-tool-prompts` 工具 Prompt → 工具质量依赖
-8. `rc-tools` 工具运行时重写 → 50+ 工具
-9. `rc-permissions` 权限增强 → 安全依赖
-10. `rc-transcript` 会话记录 → 恢复依赖
+8. `claude-tools` 工具运行时重写 → 50+ 工具
+9. `claude-permissions` 权限增强 → 安全依赖
+10. `claude-transcript` 会话记录 → 恢复依赖
 
 **P2（增强能力）**:
-11. `rc-tui` + `rc-tui-components` TUI → 用户体验
-12. `rc-mcp` MCP 增强 → 工具生态
-13. `rc-agents` Agent 增强 → 复杂任务
+11. `claude-tui` + `claude-tui-components` TUI → 用户体验
+12. `claude-mcp` MCP 增强 → 工具生态
+13. `claude-agents` Agent 增强 → 复杂任务
 14. `rc-commands` 斜杠命令 → 交互体验
 15. `rc-hooks` Hook 增强 → 扩展性
 

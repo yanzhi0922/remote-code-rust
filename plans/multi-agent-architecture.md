@@ -52,7 +52,7 @@ graph TB
     end
 
     subgraph Core Runtime
-        RC_CORE[rc-provider / rc-session / rc-tools<br/>等核心 crates]
+        RC_CORE[claude-provider / claude-session / claude-tools<br/>等核心 crates]
     end
 
     UI --> TS
@@ -83,7 +83,7 @@ graph TB
 所有三个 Agent 共享同一个适配器实现：
 
 ```rust
-// crates/claude/rc-agent-protocol/src/adapters/in_process.rs
+// crates/claude/claude-agent-protocol/src/adapters/in_process.rs
 
 pub struct InProcessAdapter {
     pub(crate) info: AgentInfo,
@@ -126,20 +126,20 @@ impl InProcessAdapter {
 每个 Agent 类型是 `InProcessAdapter` 的类型别名：
 
 ```rust
-// crates/claude/rc-agent-protocol/src/adapters/remote_claude.rs
+// crates/claude/claude-agent-protocol/src/adapters/remote_claude.rs
 pub type RemoteClaudeAdapter = InProcessAdapter;
 
-// crates/claude/rc-agent-protocol/src/adapters/remote_roo.rs
+// crates/claude/claude-agent-protocol/src/adapters/remote_roo.rs
 pub type RemoteRooAdapter = InProcessAdapter;
 
-// crates/claude/rc-agent-protocol/src/adapters/remote_codex.rs
+// crates/claude/claude-agent-protocol/src/adapters/remote_codex.rs
 pub type RemoteCodexAdapter = InProcessAdapter;
 ```
 
 ### 2.3 AgentAdapter Trait
 
 ```rust
-// crates/claude/rc-agent-protocol/src/adapter.rs
+// crates/claude/claude-agent-protocol/src/adapter.rs
 
 #[async_trait]
 pub trait AgentAdapter: Send + Sync {
@@ -157,7 +157,7 @@ pub trait AgentAdapter: Send + Sync {
 ### 2.4 统一的 Agent 事件
 
 ```rust
-// crates/claude/rc-agent-protocol/src/events.rs
+// crates/claude/claude-agent-protocol/src/events.rs
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UnifiedAgentEvent {
@@ -199,7 +199,7 @@ pub enum UnifiedAgentEvent {
 
 let adapter = RemoteClaudeAdapter::new_claude()
     .with_send_message(|session_id, message| {
-        // 调用 rc-query-engine 或其他核心逻辑
+        // 调用 claude-query-engine 或其他核心逻辑
         // 返回 UnifiedAgentEvent 列表
         Ok(vec![
             UnifiedAgentEvent::MessageDelta { 
@@ -231,7 +231,7 @@ let adapter = RemoteClaudeAdapter::new_claude()
 ## 4. AgentRouter
 
 ```rust
-// crates/claude/rc-agent-protocol/src/router.rs
+// crates/claude/claude-agent-protocol/src/router.rs
 
 pub struct AgentRouter {
     adapters: HashMap<String, Box<dyn AgentAdapter>>,
@@ -344,7 +344,7 @@ async fn list_agents(state: State<'_, AppState>) -> Result<Vec<AgentInfoDto>, St
 2. GUI 调用 create_session Tauri 命令
 3. 后端创建对应类型的适配器，注入回调函数
 4. 用户发送消息 → send_prompt 命令
-5. 回调函数执行核心逻辑（rc-query-engine 等）
+5. 回调函数执行核心逻辑（claude-query-engine 等）
 6. 返回 UnifiedAgentEvent 列表
 7. 事件通过 mpsc channel 流式发送给前端
 8. 前端渲染事件（文本增量、工具调用、权限请求等）
@@ -385,7 +385,7 @@ async fn list_agents(state: State<'_, AppState>) -> Result<Vec<AgentInfoDto>, St
 ### 8.1 健康检查
 
 ```rust
-// crates/claude/rc-agent-protocol/src/health.rs
+// crates/claude/claude-agent-protocol/src/health.rs
 
 pub struct HealthChecker {
     // 健康状态追踪
@@ -400,7 +400,7 @@ impl HealthChecker {
 ### 8.2 重启策略
 
 ```rust
-// crates/claude/rc-agent-protocol/src/restart.rs
+// crates/claude/claude-agent-protocol/src/restart.rs
 
 pub struct RestartTracker {
     max_restarts: usize,
@@ -419,7 +419,7 @@ impl RestartTracker {
 
 ```
 crates/
-├── rc-agent-protocol/
+├── claude-agent-protocol/
 │   ├── Cargo.toml
 │   └── src/
 │       ├── lib.rs                    # 导出核心类型
@@ -458,7 +458,7 @@ apps/remote-code-gui/
 
 ### 10.1 单元测试
 
-- `rc-agent-protocol` crate 有 58 个测试
+- `claude-agent-protocol` crate 有 58 个测试
 - 测试适配器创建、回调注入、事件序列化等
 
 ### 10.2 集成测试

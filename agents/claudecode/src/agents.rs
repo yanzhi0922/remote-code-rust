@@ -5,26 +5,26 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
-use rc_agents::builtins::{explore_agent, general_purpose_agent, plan_agent, verification_agent};
-use rc_agents::constants::FORK_SUBAGENT_TYPE;
-use rc_agents::loader::load_all_agents;
-use rc_agents::{
+use claude_agents::builtins::{explore_agent, general_purpose_agent, plan_agent, verification_agent};
+use claude_agents::constants::FORK_SUBAGENT_TYPE;
+use claude_agents::loader::load_all_agents;
+use claude_agents::{
     AgentDefinition, AgentExecutionRequest, AgentExecutor, AgentIdentity, AgentRunConfig,
     AgentRunResult, AgentRunner, AgentScheduler, AgentSource, AgentTask,
 };
-use rc_config::{RuntimeConfig, restamp_runtime_session};
-use rc_core::{
+use claude_config::{RuntimeConfig, restamp_runtime_session};
+use claude_core::{
     ConversationEntry as CoreConversationEntry, ConversationRole, ProviderProtocol,
     ProviderResponse, SubAgentCompletion, SubAgentExecutionRequest, SubAgentExecutionResult,
 };
-use rc_model::model::{ResolveContext, parse_user_specified_model_with_ctx};
-use rc_model::{
+use claude_model::model::{ResolveContext, parse_user_specified_model_with_ctx};
+use claude_model::{
     ModelProvider, detect_provider, is_first_party_base_url, is_model_alias, provider_model_id,
 };
-use rc_provider::{ProviderClient, ProviderCompatBackend};
-use rc_query_engine::QuerySource;
-use rc_session::SessionStore;
-use rc_tools::{
+use claude_provider::{ProviderClient, ProviderCompatBackend};
+use claude_query_engine::QuerySource;
+use claude_session::SessionStore;
+use claude_tools::{
     ToolSpec,
     runtime_plan_mode::{
         build_runtime_plan_mode, copy_plan_mode_state_for_fork, install_plan_mode_runtime,
@@ -174,14 +174,14 @@ impl RemoteCodeAgentExecutor {
 struct RemoteCodeSubAgentRuntime {
     completion: Arc<dyn SubAgentCompletion>,
     executor: RemoteCodeAgentExecutor,
-    read_file_state: rc_tools::FileStateCache,
+    read_file_state: claude_tools::FileStateCache,
 }
 
 impl RemoteCodeSubAgentRuntime {
     fn new(
         config: &RuntimeConfig,
         completion: Arc<dyn SubAgentCompletion>,
-        read_file_state: rc_tools::FileStateCache,
+        read_file_state: claude_tools::FileStateCache,
     ) -> Self {
         Self {
             completion,
@@ -242,7 +242,7 @@ impl SubAgentCompletion for RemoteCodeSubAgentRuntime {
             output: result.output,
             success: result.success,
             turns: result.turns,
-            usage: rc_core::UsageSummary {
+            usage: claude_core::UsageSummary {
                 input_tokens: result.usage.input_tokens,
                 output_tokens: result.usage.output_tokens,
                 cache_read_input_tokens: result.usage.cache_read_tokens,
@@ -255,7 +255,7 @@ impl SubAgentCompletion for RemoteCodeSubAgentRuntime {
 pub(crate) fn build_remote_code_sub_agent_runtime(
     config: &RuntimeConfig,
     completion: Arc<dyn SubAgentCompletion>,
-    read_file_state: rc_tools::FileStateCache,
+    read_file_state: claude_tools::FileStateCache,
 ) -> Arc<dyn SubAgentCompletion> {
     Arc::new(RemoteCodeSubAgentRuntime::new(
         config,
@@ -302,8 +302,8 @@ impl AgentExecutor for RemoteCodeAgentExecutor {
             Some(parent_session_id),
         )?;
         let should_copy_plan_state = request.agent_type.eq_ignore_ascii_case(FORK_SUBAGENT_TYPE)
-            || request.permission_mode == Some(rc_core::PermissionMode::Plan)
-            || self.base_config.permission_mode == rc_core::PermissionMode::Plan;
+            || request.permission_mode == Some(claude_core::PermissionMode::Plan)
+            || self.base_config.permission_mode == claude_core::PermissionMode::Plan;
         if should_copy_plan_state && !request.skip_transcript {
             let _copied = copy_plan_mode_state_for_fork(
                 &store,
@@ -357,7 +357,7 @@ impl AgentExecutor for RemoteCodeAgentExecutor {
                     .agent_name
                     .as_deref()
                     .or(Some(request.agent_type.as_str()))
-                    .map(rc_core::AgentId::from),
+                    .map(claude_core::AgentId::from),
                 fork_snapshot: None,
                 ..CompatExecutionOptions::default()
             },
@@ -368,7 +368,7 @@ impl AgentExecutor for RemoteCodeAgentExecutor {
             output: outcome.text,
             success: true,
             turns: outcome.num_turns,
-            usage: rc_agents::UsageSummary {
+            usage: claude_agents::UsageSummary {
                 input_tokens: outcome.usage.input_tokens,
                 output_tokens: outcome.usage.output_tokens,
                 cache_creation_tokens: 0,
@@ -382,7 +382,7 @@ impl RemoteCodeAgentExecutor {
     async fn execute_fork(
         &self,
         request: SubAgentExecutionRequest,
-        read_file_state: rc_tools::FileStateCache,
+        read_file_state: claude_tools::FileStateCache,
     ) -> Result<SubAgentExecutionResult> {
         let fork_snapshot = request
             .fork_snapshot
@@ -456,7 +456,7 @@ impl RemoteCodeAgentExecutor {
             output,
             success: true,
             turns: outcome.num_turns,
-            usage: rc_core::UsageSummary {
+            usage: claude_core::UsageSummary {
                 input_tokens: outcome.usage.input_tokens,
                 output_tokens: outcome.usage.output_tokens,
                 cache_read_input_tokens: outcome.cache_read_input_tokens,
@@ -545,7 +545,7 @@ fn detect_model_provider(config: &RuntimeConfig, base_url: Option<&str>) -> Mode
         }
         ProviderProtocol::Bedrock => ModelProvider::AwsBedrock { region: None },
         ProviderProtocol::Vertex => ModelProvider::GcpVertex { project: None },
-        ProviderProtocol::OpenAi => detect_provider(&rc_model::ProviderConfig {
+        ProviderProtocol::OpenAi => detect_provider(&claude_model::ProviderConfig {
             openai_base_url: config.provider.base_url.clone(),
             provider: Some("openai_compatible".to_owned()),
             ..Default::default()
@@ -672,7 +672,7 @@ fn collect_skill_entries(root: &Path, skills: &mut BTreeMap<String, String>) {
         return;
     }
 
-    match rc_skills::discover_skills(root) {
+    match claude_skills::discover_skills(root) {
         Ok(discovered) => {
             for skill in discovered {
                 let description = skill
@@ -706,7 +706,7 @@ fn discover_guide_custom_agents(config: &RuntimeConfig) -> Vec<(String, String)>
 
 fn discover_guide_plugin_skills(config: &RuntimeConfig) -> Vec<(String, String)> {
     let mut skills = BTreeMap::new();
-    match rc_plugins::discover_plugins(&config.paths.plugins_dir) {
+    match claude_plugins::discover_plugins(&config.paths.plugins_dir) {
         Ok(plugins) => {
             for plugin in plugins {
                 match plugin.discover_bundled_skills() {
@@ -794,14 +794,14 @@ fn merge_json_value(target: &mut serde_json::Value, source: serde_json::Value) {
 
 fn core_entry_to_agent_context_entry(
     entry: &CoreConversationEntry,
-) -> rc_agents::ConversationEntry {
+) -> claude_agents::ConversationEntry {
     let role = match entry.role {
         ConversationRole::System => "system",
         ConversationRole::Assistant => "assistant",
         ConversationRole::User => "user",
         ConversationRole::Tool => "tool",
     };
-    rc_agents::ConversationEntry {
+    claude_agents::ConversationEntry {
         role: role.to_owned(),
         content: entry.text.clone(),
     }
@@ -985,7 +985,7 @@ pub(crate) async fn run_agents_plan(config: &RuntimeConfig, args: &AgentsPlanArg
 
 fn append_conversation_context(
     conversation: &mut Vec<CoreConversationEntry>,
-    context: &[rc_agents::ConversationEntry],
+    context: &[claude_agents::ConversationEntry],
 ) {
     conversation.extend(context.iter().map(
         |entry| match entry.role.to_ascii_lowercase().as_str() {
@@ -1039,7 +1039,7 @@ fn build_task_prompt(
     objective: &str,
     agent: &AgentIdentity,
     task: &AgentTask,
-    mailbox: &[rc_agents::AgentMailboxMessage],
+    mailbox: &[claude_agents::AgentMailboxMessage],
     definition: &AgentDefinition,
 ) -> String {
     let mut sections = vec![
@@ -1173,7 +1173,7 @@ mod tests {
     use super::*;
     use std::fs;
 
-    use rc_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
+    use claude_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
     use tempfile::tempdir;
 
     #[test]
@@ -1281,7 +1281,7 @@ mod tests {
         let mut conversation = Vec::new();
         append_conversation_context(
             &mut conversation,
-            &[rc_agents::ConversationEntry {
+            &[claude_agents::ConversationEntry {
                 role: "tool".to_owned(),
                 content: "cargo check passed".to_owned(),
             }],
@@ -1331,7 +1331,7 @@ mod tests {
         )
         .expect("write plugin skill");
         fs::write(
-            profile.join(rc_mcp::DEFAULT_MCP_CONFIG_FILE),
+            profile.join(claude_mcp::DEFAULT_MCP_CONFIG_FILE),
             r#"[servers.context7]
 command = "python"
 args = ["server.py"]"#,
@@ -1352,9 +1352,9 @@ args = ["server.py"]"#,
             Some(cwd),
             Some(profile),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -1408,9 +1408,9 @@ args = ["server.py"]"#,
             Some(cwd),
             Some(profile),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -1438,9 +1438,9 @@ args = ["server.py"]"#,
             Some(cwd.clone()),
             Some(profile.clone()),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,

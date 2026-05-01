@@ -34,13 +34,13 @@ use std::{
 };
 
 use anyhow::{Result, anyhow};
-use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
-use rc_core::{InputFormat, OutputFormat, PermissionMode};
-use rc_session::SessionStore;
-use rc_telemetry::install_tracing;
-use rc_tools::mcp_runtime::runtime_mcp_policy_entries;
-use rc_tools::shell::ShellExecutionPolicy;
-use rc_tools::{ToolRuntimePolicy, configure_tool_runtime_policy};
+use claude_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
+use claude_core::{InputFormat, OutputFormat, PermissionMode};
+use claude_session::SessionStore;
+use claude_telemetry::install_tracing;
+use claude_tools::mcp_runtime::runtime_mcp_policy_entries;
+use claude_tools::shell::ShellExecutionPolicy;
+use claude_tools::{ToolRuntimePolicy, configure_tool_runtime_policy};
 use uuid::Uuid;
 
 use agents::run_agents;
@@ -166,7 +166,7 @@ async fn run_app() -> Result<()> {
     result
 }
 
-async fn hydrate_api_key_helper(config: &mut rc_config::RuntimeConfig) -> Result<()> {
+async fn hydrate_api_key_helper(config: &mut claude_config::RuntimeConfig) -> Result<()> {
     if config.provider.api_key.is_some() {
         return Ok(());
     }
@@ -186,7 +186,7 @@ async fn hydrate_api_key_helper(config: &mut rc_config::RuntimeConfig) -> Result
         return Ok(());
     }
 
-    let result = rc_auth::execute_api_key_helper_cached(helper).await?;
+    let result = claude_auth::execute_api_key_helper_cached(helper).await?;
     config.provider.api_key = Some(result.key);
     config.auth_source = Some("apiKeyHelper".to_owned());
     Ok(())
@@ -195,7 +195,7 @@ async fn hydrate_api_key_helper(config: &mut rc_config::RuntimeConfig) -> Result
 fn dispatch_command<'a>(
     command: Option<Commands>,
     prompt_parts: Vec<String>,
-    config: &'a mut rc_config::RuntimeConfig,
+    config: &'a mut claude_config::RuntimeConfig,
     store: &'a SessionStore,
 ) -> CommandFuture<'a> {
     match command {
@@ -229,7 +229,7 @@ fn dispatch_command<'a>(
             run_session_entry(config, store, resolve_prompt_input(config, args.prompt)?).await
         }),
         Some(Commands::Tui) => {
-            Box::pin(async move { rc_tui::run_tui_app(config.clone(), store).await })
+            Box::pin(async move { claude_tui::run_tui_app(config.clone(), store).await })
         }
         Some(Commands::Ssh(args)) => Box::pin(async move { run_ssh(args).await }),
         Some(Commands::Update { command }) => Box::pin(async move {
@@ -246,7 +246,7 @@ fn dispatch_command<'a>(
 }
 
 async fn run_session_entry(
-    config: &mut rc_config::RuntimeConfig,
+    config: &mut claude_config::RuntimeConfig,
     store: &SessionStore,
     prompt: Option<String>,
 ) -> Result<()> {
@@ -473,7 +473,7 @@ fn resolve_mcp_config_args(values: &[String]) -> Result<Vec<PathBuf>> {
                 return Err(anyhow!("--mcp-config cannot be empty"));
             }
             if trimmed.starts_with('{') {
-                rc_mcp::McpConfig::from_json_str(trimmed)
+                claude_mcp::McpConfig::from_json_str(trimmed)
                     .map_err(|error| anyhow!("Invalid --mcp-config JSON: {error}"))?;
                 let mut path = std::env::temp_dir();
                 path.push(format!("remote-code-mcp-{}.json", Uuid::new_v4()));
@@ -500,7 +500,7 @@ fn normalize_cli_tool_values(values: &[String]) -> Vec<String> {
         .collect()
 }
 
-fn configure_runtime_policy(config: &rc_config::RuntimeConfig) -> Result<()> {
+fn configure_runtime_policy(config: &claude_config::RuntimeConfig) -> Result<()> {
     let session_dir = config
         .paths
         .sessions_dir
@@ -515,7 +515,7 @@ fn configure_runtime_policy(config: &rc_config::RuntimeConfig) -> Result<()> {
                 .join("tasks")
                 .join(config.session_id.to_string()),
         ),
-        tasks_dir: Some(rc_swarm::team_helpers::claude_config_home_dir().join("tasks")),
+        tasks_dir: Some(claude_swarm::team_helpers::claude_config_home_dir().join("tasks")),
         tool_results_dir: Some(session_dir.join("tool-results")),
         shell_policy: ShellExecutionPolicy {
             block_inline_cwd: true,
@@ -542,7 +542,7 @@ fn configure_runtime_policy(config: &rc_config::RuntimeConfig) -> Result<()> {
     })
 }
 
-fn print_setting_sources(config: &rc_config::RuntimeConfig) {
+fn print_setting_sources(config: &claude_config::RuntimeConfig) {
     println!("Setting sources:");
     if config.setting_sources.is_empty() {
         println!("  (defaults)");
@@ -762,7 +762,7 @@ fn resolve_cli_file_path(path: &Path) -> Result<PathBuf> {
 }
 
 fn resolve_prompt_input(
-    config: &rc_config::RuntimeConfig,
+    config: &claude_config::RuntimeConfig,
     parts: Vec<String>,
 ) -> Result<Option<String>> {
     let prompt = join_prompt(parts);
@@ -790,13 +790,13 @@ fn normalize_prompt(prompt: String) -> Option<String> {
 mod tests {
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use clap::Parser;
-    use rc_control_plane::{
+    use claude_control_plane::{
         ArtifactCreateRequest, ArtifactRecord, ControlPlaneMeta as RemoteControlPlaneMeta,
         SessionRecord as RemoteSessionRecord, SessionState as RemoteSessionState,
         SessionStateUpdateRequest, TimelineEvent as RemoteTimelineEvent,
         TimelineEventDetail as RemoteTimelineEventDetail,
     };
-    use rc_runner::{
+    use claude_runner::{
         ApprovalCreateRequest as SharedApprovalCreateRequest,
         ApprovalRequestRecord as RemoteApprovalRecord, ListResponse as RemoteListResponse,
         RunnerSnapshot as RemoteRunnerSnapshot,
@@ -834,8 +834,8 @@ mod tests {
     };
     use chrono::{DateTime, Utc};
     use futures::SinkExt;
-    use rc_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
-    use rc_tools::mcp_runtime::{discover_runtime_mcp_servers, resolve_runtime_mcp_server};
+    use claude_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
+    use claude_tools::mcp_runtime::{discover_runtime_mcp_servers, resolve_runtime_mcp_server};
     use std::{
         collections::BTreeSet,
         fs,
@@ -881,9 +881,9 @@ mod tests {
             Some(tempdir.path().to_path_buf()),
             Some(tempdir.path().join(".remote-code-rust")),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -1108,14 +1108,14 @@ mod tests {
 
         assert_eq!(
             effective_permission_mode_from_cli(&cli),
-            rc_core::PermissionMode::BypassPermissions
+            claude_core::PermissionMode::BypassPermissions
         );
     }
 
     #[tokio::test]
     #[serial]
     async fn api_key_helper_hydrates_runtime_provider_key() {
-        rc_auth::clear_global_api_key_helper_cache();
+        claude_auth::clear_global_api_key_helper_cache();
         let temp = tempdir().expect("tempdir should work");
         let cwd = temp.path().join("workspace");
         let profile_dir = temp.path().join("profile");
@@ -1137,9 +1137,9 @@ mod tests {
             Some(cwd),
             Some(profile_dir),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -1162,13 +1162,13 @@ mod tests {
             Some("hydrated-helper-key")
         );
         assert_eq!(config.auth_source.as_deref(), Some("apiKeyHelper"));
-        rc_auth::clear_global_api_key_helper_cache();
+        claude_auth::clear_global_api_key_helper_cache();
     }
 
     #[tokio::test]
     #[serial]
     async fn project_api_key_helper_is_not_hydrated_before_interactive_trust() {
-        rc_auth::clear_global_api_key_helper_cache();
+        claude_auth::clear_global_api_key_helper_cache();
         let temp = tempdir().expect("tempdir should work");
         let cwd = temp.path().join("workspace");
         let profile_dir = temp.path().join("profile");
@@ -1190,9 +1190,9 @@ mod tests {
             Some(cwd),
             Some(profile_dir),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -1210,13 +1210,13 @@ mod tests {
             .expect("helper hydration should skip safely");
 
         assert!(config.provider.api_key.is_none());
-        rc_auth::clear_global_api_key_helper_cache();
+        claude_auth::clear_global_api_key_helper_cache();
     }
 
     #[tokio::test]
     #[serial]
     async fn project_api_key_helper_runs_in_print_mode() {
-        rc_auth::clear_global_api_key_helper_cache();
+        claude_auth::clear_global_api_key_helper_cache();
         let temp = tempdir().expect("tempdir should work");
         let cwd = temp.path().join("workspace");
         let profile_dir = temp.path().join("profile");
@@ -1238,9 +1238,9 @@ mod tests {
             Some(cwd),
             Some(profile_dir),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             true,
             false,
             false,
@@ -1256,7 +1256,7 @@ mod tests {
             .expect("print helper should hydrate");
 
         assert_eq!(config.provider.api_key.as_deref(), Some("print-helper-key"));
-        rc_auth::clear_global_api_key_helper_cache();
+        claude_auth::clear_global_api_key_helper_cache();
     }
 
     #[test]
@@ -1559,7 +1559,7 @@ mod tests {
                         detail: RemoteTimelineEventDetail::SessionCreated {
                             workspace_id: "default".to_owned(),
                             owner_runner_id: Some("runner-a".to_owned()),
-                            state: rc_control_plane::SessionState::Running,
+                            state: claude_control_plane::SessionState::Running,
                         },
                     },
                     _ => RemoteTimelineEvent {
@@ -1570,8 +1570,8 @@ mod tests {
                         runner_id: Some("runner-a".to_owned()),
                         session_id: Some(Uuid::nil()),
                         detail: RemoteTimelineEventDetail::SessionStateChanged {
-                            previous_state: rc_control_plane::SessionState::Running,
-                            state: rc_control_plane::SessionState::Completed,
+                            previous_state: claude_control_plane::SessionState::Running,
+                            state: claude_control_plane::SessionState::Completed,
                         },
                     },
                 };
@@ -1685,9 +1685,9 @@ mod tests {
             Some(cwd.clone()),
             Some(profile.clone()),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -1736,9 +1736,9 @@ mod tests {
             Some(cwd),
             Some(profile),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -1778,9 +1778,9 @@ mod tests {
             Some(cwd),
             Some(profile),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -1870,9 +1870,9 @@ mod tests {
             Some(cwd),
             Some(profile),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,
@@ -2009,9 +2009,9 @@ mod tests {
             Some(cwd),
             Some(profile),
             None,
-            rc_core::PermissionMode::Default,
-            rc_core::InputFormat::Text,
-            rc_core::OutputFormat::Text,
+            claude_core::PermissionMode::Default,
+            claude_core::InputFormat::Text,
+            claude_core::OutputFormat::Text,
             false,
             false,
             false,

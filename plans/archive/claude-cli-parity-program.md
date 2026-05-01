@@ -53,14 +53,14 @@
 - `apps/remote-code/src/conversation.rs`
 - `apps/remote-code/src/headless.rs`
 - `apps/remote-code/src/hooks.rs`
-- `crates/claude/rc-provider/src/lib.rs`
-- `crates/claude/rc-provider/src/context.rs`
-- `crates/claude/rc-session/src/lib.rs`
-- `crates/claude/rc-tools/src/lib.rs`
-- `crates/claude/rc-tools/src/specs.rs`
-- `crates/claude/rc-control-plane/src/types.rs`
-- `crates/claude/rc-runner/src/lib.rs`
-- `crates/claude/rc-agents/src/lib.rs`
+- `crates/claude/claude-provider/src/lib.rs`
+- `crates/claude/claude-provider/src/context.rs`
+- `crates/claude/claude-session/src/lib.rs`
+- `crates/claude/claude-tools/src/lib.rs`
+- `crates/claude/claude-tools/src/specs.rs`
+- `crates/claude/claude-control-plane/src/types.rs`
+- `crates/claude/claude-runner/src/lib.rs`
+- `crates/claude/claude-agents/src/lib.rs`
 
 ### 2.2 `.research/claude-code-rev`
 
@@ -95,10 +95,10 @@
 - `SessionStore`：SQLite + transcript + export + resume state
 - `ProviderClient`：OpenAI / Anthropic / Bedrock / Vertex / Coding Plan provider 兼容
 - `ContextWindowManager`：已有多种 compaction 策略基础
-- `rc-tools`：已有 40+ built-in tools 骨架
+- `claude-tools`：已有 40+ built-in tools 骨架
 - `headless`：已有 stream-json / runtime event 输出链路
-- `rc-control-plane` / `rc-runner`：已有 remote 事件模型与审批 / artifact / pairing 结构
-- `rc-agents`：已有任务调度和 budget 模型骨架
+- `claude-control-plane` / `claude-runner`：已有 remote 事件模型与审批 / artifact / pairing 结构
+- `claude-agents`：已有任务调度和 budget 模型骨架
 
 ### 3.3 当前 Rust 与 Claude Code 的最大差距不在“命令数量”，而在“运行时状态机”
 
@@ -304,9 +304,9 @@ CLI 行为向 Claude 对齐，不等于 remote 协议向 Claude bridge 对齐。
 改造方向：
 
 - 逐步退化为 orchestrator / compatibility shim
-- 主要逻辑迁移到新 crate `rc-query-engine`
+- 主要逻辑迁移到新 crate `claude-query-engine`
 
-### 8.2 `crates/claude/rc-session`
+### 8.2 `crates/claude/claude-session`
 
 现状：
 
@@ -324,7 +324,7 @@ CLI 行为向 Claude 对齐，不等于 remote 协议向 Claude bridge 对齐。
 - 升级为 `Transcript V2`
 - 增加 schema version、boundary、fork lineage、pending state
 
-### 8.3 `crates/claude/rc-provider/src/context.rs`
+### 8.3 `crates/claude/claude-provider/src/context.rs`
 
 现状：
 
@@ -340,7 +340,7 @@ CLI 行为向 Claude 对齐，不等于 remote 协议向 Claude bridge 对齐。
 - 把 compact 结果接入 transcript 和引擎状态机
 - 引入 post-compact restoration、boundary event、budget continuity
 
-### 8.4 `crates/claude/rc-tools`
+### 8.4 `crates/claude/claude-tools`
 
 现状：
 
@@ -371,7 +371,7 @@ CLI 行为向 Claude 对齐，不等于 remote 协议向 Claude bridge 对齐。
 
 - 切换为消费 `Query Engine V2` 的统一 `EngineEvent`
 
-### 8.6 `crates/claude/rc-control-plane` / `crates/claude/rc-runner`
+### 8.6 `crates/claude/claude-control-plane` / `crates/claude/claude-runner`
 
 现状：
 
@@ -406,20 +406,20 @@ graph TD
 
 ### 9.1 新增 crate 建议
 
-- `crates/claude/rc-query-engine`
-- `crates/claude/rc-transcript`
-- `crates/claude/rc-engine-events`
-- 可选：`crates/claude/rc-context-runtime`
+- `crates/claude/claude-query-engine`
+- `crates/claude/claude-transcript`
+- `crates/claude/claude-engine-events`
+- 可选：`crates/claude/claude-context-runtime`
 - 可选：`crates/claude/rc-background-tasks`
 
 ### 9.2 保留并增强的 crate
 
-- `crates/claude/rc-session`
-- `crates/claude/rc-provider`
-- `crates/claude/rc-tools`
-- `crates/claude/rc-config`
-- `crates/claude/rc-control-plane`
-- `crates/claude/rc-runner`
+- `crates/claude/claude-session`
+- `crates/claude/claude-provider`
+- `crates/claude/claude-tools`
+- `crates/claude/claude-config`
+- `crates/claude/claude-control-plane`
+- `crates/claude/claude-runner`
 
 ---
 
@@ -687,7 +687,7 @@ graph TD
 
 ### 工作项
 
-- 新建 `rc-query-engine`
+- 新建 `claude-query-engine`
 - 定义 engine state machine
 - 接入 provider client
 - 接入 tool runtime
@@ -932,7 +932,7 @@ graph TD
 
 规避：
 
-- 强制引入 `rc-query-engine`
+- 强制引入 `claude-query-engine`
 - 旧 `conversation.rs` 不再直接继续长逻辑
 
 ### 风险 B：transcript 没先升级，导致 resume 一直脆弱
@@ -1005,9 +1005,9 @@ graph TD
 
 ### 代码
 
-- `crates/claude/rc-query-engine/`
-- `crates/claude/rc-transcript/`
-- `crates/claude/rc-engine-events/`
+- `crates/claude/claude-query-engine/`
+- `crates/claude/claude-transcript/`
+- `crates/claude/claude-engine-events/`
 - 可选 `crates/claude/rc-background-tasks/`
 
 ### 测试
@@ -1039,7 +1039,7 @@ graph TD
 如果立刻进入实施，第一批动作固定如下：
 
 1. 写 `docs/claude-parity-matrix.md`
-2. 新建 `crates/claude/rc-query-engine`
+2. 新建 `crates/claude/claude-query-engine`
 3. 抽 `EngineEvent` 类型
 4. 设计 `Transcript V2`
 5. 给现有 `conversation.rs` 建 compatibility adapter

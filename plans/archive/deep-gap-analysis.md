@@ -72,15 +72,15 @@ type QueryParams = {
 
 #### 已实现的功能
 
-**`QueryEngine`** (`crates/claude/rc-query-engine/src/engine.rs:112`)
+**`QueryEngine`** (`crates/claude/claude-query-engine/src/engine.rs:112`)
 - `EngineState` 携带: `turn`, `messages`, `usage`, `budget_tracker`, `state_machine`, `current_chain`, `failure_tracker`, `model_switcher`, `stop_hook_manager`, `structured_output`, `tool_summarizer`
 - `submit_message()` (`engine.rs:164`): 接收用户输入，执行查询循环
 
-**`StateMachine`** (`crates/claude/rc-query-engine/src/state_machine.rs`)
+**`StateMachine`** (`crates/claude/claude-query-engine/src/state_machine.rs`)
 - `EnginePhase` 枚举: `Idle → Initializing → BuildingPrompt → CallingProvider → ProcessingResponse → ExecutingTools → Compacting → Finalizing → Failed/Cancelled`
 - 验证转换合法性，记录转换历史
 
-**`run_query_loop()`** (`crates/claude/rc-query-engine/src/query_loop.rs:29`)
+**`run_query_loop()`** (`crates/claude/claude-query-engine/src/query_loop.rs:29`)
 - 基本循环: 预算评估 → 压缩 → API 调用 → 工具执行
 - 支持流式观察者 (`StreamingCallbacks`)
 - 基本压缩集成 (`maybe_compact_conversation`)
@@ -108,16 +108,16 @@ type QueryParams = {
 ### 1.3 具体修复建议
 
 **需要新增的文件/函数:**
-- `crates/claude/rc-query-engine/src/preprocessing.rs` — 消息预处理管线 (snip, microcompact, tool result budget)
-- `crates/claude/rc-query-engine/src/reactive_compact.rs` — reactive compact 恢复逻辑
-- `crates/claude/rc-query-engine/src/max_tokens_recovery.rs` — max-output-tokens 恢复
-- `crates/claude/rc-query-engine/src/attachment_injector.rs` — 附件消息注入 (memory, skills, queued commands)
-- `crates/claude/rc-query-engine/src/tool_summary.rs` — 已存在但需要集成到 query_loop
+- `crates/claude/claude-query-engine/src/preprocessing.rs` — 消息预处理管线 (snip, microcompact, tool result budget)
+- `crates/claude/claude-query-engine/src/reactive_compact.rs` — reactive compact 恢复逻辑
+- `crates/claude/claude-query-engine/src/max_tokens_recovery.rs` — max-output-tokens 恢复
+- `crates/claude/claude-query-engine/src/attachment_injector.rs` — 附件消息注入 (memory, skills, queued commands)
+- `crates/claude/claude-query-engine/src/tool_summary.rs` — 已存在但需要集成到 query_loop
 
 **需要修改的文件/函数:**
-- `crates/claude/rc-query-engine/src/query_loop.rs:run_query_loop()` — 添加预处理管线、错误恢复、流式工具执行
-- `crates/claude/rc-query-engine/src/engine.rs:EngineState` — 添加 `max_output_tokens_recovery_count`, `has_attempted_reactive_compact`, `pending_tool_use_summary` 字段
-- `crates/claude/rc-query-engine/src/config.rs:QueryEngineConfig` — 添加 `fallback_model`, `task_budget`, streaming executor 配置
+- `crates/claude/claude-query-engine/src/query_loop.rs:run_query_loop()` — 添加预处理管线、错误恢复、流式工具执行
+- `crates/claude/claude-query-engine/src/engine.rs:EngineState` — 添加 `max_output_tokens_recovery_count`, `has_attempted_reactive_compact`, `pending_tool_use_summary` 字段
+- `crates/claude/claude-query-engine/src/config.rs:QueryEngineConfig` — 添加 `fallback_model`, `task_budget`, streaming executor 配置
 
 **预估工作量:** 3-4 周 (P0 项目)
 
@@ -198,27 +198,27 @@ type Tool = {
 
 #### 已实现的功能
 
-**`ToolSpec` 结构** (`crates/claude/rc-tools/src/specs.rs`)
+**`ToolSpec` 结构** (`crates/claude/claude-tools/src/specs.rs`)
 - 40+ 内置工具规范: `list_directory`, `read_file`, `search_text`, `write_file`, `replace_in_file`, `edit_file`, `bash_command`, `glob`, `grep`, `web_fetch`, `ask_user`, `todo_write`, `task_create`, `task_output`, `task_stop`, `agent`, `send_message`, `skill`, `discover_skills`, `notebook_edit`, `web_search`, `computer_use`, `review_artifact`, `plan_mode_enter/exit`, `mcp_*`, `lsp_*`, `memory_read/write`, `git_*`, `worktree_*`, `send_user_file`, `delegate`, `workflow`, `team_*`, `system`
 
-**`ToolRunner` trait** (`crates/claude/rc-tools/src/streaming_executor.rs:71`)
+**`ToolRunner` trait** (`crates/claude/claude-tools/src/streaming_executor.rs:71`)
 ```rust
 pub trait ToolRunner: Send + Sync + 'static {
     fn run(&self, tool_call_id: &str, name: &str, input: &Value, progress: &ProgressStream) -> JoinHandle<ToolExecutionResult>;
 }
 ```
 
-**`StreamingToolExecutor`** (`crates/claude/rc-tools/src/streaming_executor.rs:160`)
+**`StreamingToolExecutor`** (`crates/claude/claude-tools/src/streaming_executor.rs:160`)
 - 并发控制: `max_concurrency`, `timeout`, `max_result_bytes`
 - 工具状态跟踪: `Queued → Executing → Completed → Yielded`
 - 结果按序输出
 
-**`ToolOrchestrator`** (`crates/claude/rc-tools/src/tool_orchestration.rs:189`)
+**`ToolOrchestrator`** (`crates/claude/claude-tools/src/tool_orchestration.rs:189`)
 - 依赖分析: 文件路径读写依赖 (`analyse_dependencies`)
 - 批次分区: 并发安全工具分组 (`partition_tool_calls`)
 - 调度策略: `Auto`, `SerialOnly`, `ForceParallel`
 
-**`ToolHookManager`** (`crates/claude/rc-tools/src/tool_hooks.rs`)
+**`ToolHookManager`** (`crates/claude/claude-tools/src/tool_hooks.rs`)
 - Pre/Post tool use hooks
 
 #### 缺失的功能
@@ -238,15 +238,15 @@ pub trait ToolRunner: Send + Sync + 'static {
 ### 2.3 具体修复建议
 
 **需要新增的文件/函数:**
-- `crates/claude/rc-tools/src/tool_trait.rs` — 完整的 Tool trait (含 aliases, validation, permissions, deferred 等方法)
-- `crates/claude/rc-tools/src/tool_use_context.rs` — 完整的 ToolUseContext 构建
-- `crates/claude/rc-tools/src/execution_pipeline.rs` — 完整的执行管线 (validate → backfill → pre-hooks → permission → call → post-hooks → result processing)
-- `crates/claude/rc-tools/src/tool_result_storage.rs` — 大结果持久化
+- `crates/claude/claude-tools/src/tool_trait.rs` — 完整的 Tool trait (含 aliases, validation, permissions, deferred 等方法)
+- `crates/claude/claude-tools/src/tool_use_context.rs` — 完整的 ToolUseContext 构建
+- `crates/claude/claude-tools/src/execution_pipeline.rs` — 完整的执行管线 (validate → backfill → pre-hooks → permission → call → post-hooks → result processing)
+- `crates/claude/claude-tools/src/tool_result_storage.rs` — 大结果持久化
 
 **需要修改的文件/函数:**
-- `crates/claude/rc-tools/src/specs.rs` — 添加 `aliases`, `search_hint`, `is_concurrency_safe` (per-input), `max_result_size_chars`, `should_defer` 字段
-- `crates/claude/rc-tools/src/streaming_executor.rs` — 集成 execution pipeline
-- `crates/claude/rc-tools/src/tool_orchestration.rs` — 集成 permission check 和 hooks
+- `crates/claude/claude-tools/src/specs.rs` — 添加 `aliases`, `search_hint`, `is_concurrency_safe` (per-input), `max_result_size_chars`, `should_defer` 字段
+- `crates/claude/claude-tools/src/streaming_executor.rs` — 集成 execution pipeline
+- `crates/claude/claude-tools/src/tool_orchestration.rs` — 集成 permission check 和 hooks
 
 **预估工作量:** 2-3 周
 
@@ -288,30 +288,30 @@ pub trait ToolRunner: Send + Sync + 'static {
 
 #### 已实现的功能
 
-**`ApiClient`** (`crates/claude/rc-provider/src/api_client.rs:175`)
+**`ApiClient`** (`crates/claude/claude-provider/src/api_client.rs:175`)
 - `query_model_streaming()` (`api_client.rs:204`) — 流式查询
 - `query_model_without_streaming()` (`api_client.rs:261`) — 非流式查询
 - `query_haiku()` (`api_client.rs:332`) — Haiku 模型快捷查询
 - `update_usage()` / `accumulate_usage()` — 使用量跟踪
 
-**`ProviderClient`** (`crates/claude/rc-provider/src/streaming.rs`)
+**`ProviderClient`** (`crates/claude/claude-provider/src/streaming.rs`)
 - `complete_streaming_with_callbacks()` — 支持 OpenAI 和 Anthropic 协议
 - SSE 解析: text delta, tool call accumulation, usage tracking
 - Streaming → non-streaming fallback (`streaming.rs:122-142`)
 - `StreamingCallbacks`: `on_text_delta`, `on_tool_call_start`, `on_tool_call_delta`, `on_usage`
 
 **其他已实现:**
-- Beta headers (`crates/claude/rc-provider/src/beta_headers.rs`)
-- Cache headers/breakpoints (`crates/claude/rc-provider/src/cache_headers.rs`)
-- Effort params (`crates/claude/rc-provider/src/effort_params.rs`)
-- Retry logic (`crates/claude/rc-provider/src/retry.rs`)
-- Fingerprint (`crates/claude/rc-provider/src/fingerprint.rs`)
-- Thinking blocks (`crates/claude/rc-provider/src/thinking_blocks.rs`)
-- Circuit breaker (`crates/claude/rc-provider/src/circuit_breaker.rs`)
-- Model failover (`crates/claude/rc-provider/src/failover.rs`)
-- SigV4 signing (`crates/claude/rc-provider/src/sigv4.rs`)
-- Cost calculation (`crates/claude/rc-provider/src/cost.rs`)
-- Max tokens config (`crates/claude/rc-provider/src/max_tokens.rs`)
+- Beta headers (`crates/claude/claude-provider/src/beta_headers.rs`)
+- Cache headers/breakpoints (`crates/claude/claude-provider/src/cache_headers.rs`)
+- Effort params (`crates/claude/claude-provider/src/effort_params.rs`)
+- Retry logic (`crates/claude/claude-provider/src/retry.rs`)
+- Fingerprint (`crates/claude/claude-provider/src/fingerprint.rs`)
+- Thinking blocks (`crates/claude/claude-provider/src/thinking_blocks.rs`)
+- Circuit breaker (`crates/claude/claude-provider/src/circuit_breaker.rs`)
+- Model failover (`crates/claude/claude-provider/src/failover.rs`)
+- SigV4 signing (`crates/claude/claude-provider/src/sigv4.rs`)
+- Cost calculation (`crates/claude/claude-provider/src/cost.rs`)
+- Max tokens config (`crates/claude/claude-provider/src/max_tokens.rs`)
 
 #### 缺失的功能
 
@@ -331,14 +331,14 @@ pub trait ToolRunner: Send + Sync + 'static {
 ### 3.3 具体修复建议
 
 **需要新增的文件/函数:**
-- `crates/claude/rc-provider/src/deferred_tools.rs` — deferred tool schema 处理
-- `crates/claude/rc-provider/src/advisor.rs` — advisor model 支持
-- `crates/claude/rc-provider/src/task_budget.rs` — task_budget API 参数
+- `crates/claude/claude-provider/src/deferred_tools.rs` — deferred tool schema 处理
+- `crates/claude/claude-provider/src/advisor.rs` — advisor model 支持
+- `crates/claude/claude-provider/src/task_budget.rs` — task_budget API 参数
 
 **需要修改的文件/函数:**
-- `crates/claude/rc-provider/src/streaming.rs` — 添加 thinking block 完整处理, deferred tools
-- `crates/claude/rc-provider/src/beta_headers.rs` — 添加 fast mode, AFK mode, task budget beta headers
-- `crates/claude/rc-provider/src/cache_headers.rs` — 添加 1h scope, cache editing 支持
+- `crates/claude/claude-provider/src/streaming.rs` — 添加 thinking block 完整处理, deferred tools
+- `crates/claude/claude-provider/src/beta_headers.rs` — 添加 fast mode, AFK mode, task budget beta headers
+- `crates/claude/claude-provider/src/cache_headers.rs` — 添加 1h scope, cache editing 支持
 
 **预估工作量:** 2 周
 
@@ -392,7 +392,7 @@ pub trait ToolRunner: Send + Sync + 'static {
 
 #### 已实现的功能
 
-**`SystemPromptBuilder`** (`crates/claude/rc-system-prompt/src/lib.rs:134`)
+**`SystemPromptBuilder`** (`crates/claude/claude-system-prompt/src/lib.rs:134`)
 - 完整的 section 架构: `SystemPromptSection` trait
 - 静态 sections: `IntroSection`, `SystemSection`, `DoingTasksSection`, `ActionsSection`, `UsingToolsSection`, `ToneStyleSection`, `OutputEfficiencySection`
 - 动态 sections: `SessionGuidanceSection`, `MemorySection`, `EnvInfoSection`, `LanguageSection`, `OutputStyleSection`, `McpInstructionsSection`, `ScratchpadSection`, `ToolResultSection`, `TokenBudgetSection`, `HooksSection`, `SystemRemindersSection`, `CoordinatorSection`, `ProactiveSection`
@@ -414,11 +414,11 @@ pub trait ToolRunner: Send + Sync + 'static {
 ### 4.3 具体修复建议
 
 **需要新增的文件/函数:**
-- `crates/claude/rc-system-prompt/src/sections/agent_tool.rs` — Agent 工具说明
-- `crates/claude/rc-system-prompt/src/sections/tool_search.rs` — ToolSearch 说明
+- `crates/claude/claude-system-prompt/src/sections/agent_tool.rs` — Agent 工具说明
+- `crates/claude/claude-system-prompt/src/sections/tool_search.rs` — ToolSearch 说明
 
 **需要修改的文件/函数:**
-- `crates/claude/rc-system-prompt/src/lib.rs` — 添加新 sections, 添加 feature gate 支持
+- `crates/claude/claude-system-prompt/src/lib.rs` — 添加新 sections, 添加 feature gate 支持
 - 各 section 文件 — 逐字对比更新 prompt 内容
 
 **预估工作量:** 1 周
@@ -478,24 +478,24 @@ pub trait ToolRunner: Send + Sync + 'static {
 
 #### 已实现的功能
 
-**`FullCompactStrategy` / `PartialCompactStrategy`** (`crates/claude/rc-compact/src/engine.rs`)
+**`FullCompactStrategy` / `PartialCompactStrategy`** (`crates/claude/claude-compact/src/engine.rs`)
 - `compact_conversation()` (`engine.rs:121`) — 完整压缩
 - PTL retry (最多 3 次) (`engine.rs:149`)
 - Summary provider trait (抽象 LLM 调用)
 - Preserved segment (保留最近消息)
 
-**`AutoCompactStrategy`** (`crates/claude/rc-compact/src/auto.rs`)
+**`AutoCompactStrategy`** (`crates/claude/claude-compact/src/auto.rs`)
 - `AutoCompactTrackingState` — 与 TS 版匹配
 - `should_auto_compact()` — 阈值检查
 - `calculate_token_warning_state()` — 警告状态计算
 - Circuit breaker (`MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3`)
 
 **其他已实现:**
-- `CompactStrategy` trait (`crates/claude/rc-compact/src/strategy.rs`)
+- `CompactStrategy` trait (`crates/claude/claude-compact/src/strategy.rs`)
 - `CompactOptions`, `CompactionResult`, `PreservedSegment`
 - `ProgressCallback` 支持
-- Compact prompt 构建 (`crates/claude/rc-compact/src/prompt.rs`)
-- Message grouping (`crates/claude/rc-compact/src/grouping.rs`)
+- Compact prompt 构建 (`crates/claude/claude-compact/src/prompt.rs`)
+- Message grouping (`crates/claude/claude-compact/src/grouping.rs`)
 
 #### 缺失的功能
 
@@ -515,15 +515,15 @@ pub trait ToolRunner: Send + Sync + 'static {
 ### 5.3 具体修复建议
 
 **需要新增的文件/函数:**
-- `crates/claude/rc-compact/src/reactive.rs` — 已存在但需要实现 reactive compact 逻辑
-- `crates/claude/rc-compact/src/micro.rs` — 已存在但需要实现 microcompact
-- `crates/claude/rc-compact/src/snip.rs` — 已存在但需要实现 snip compact
-- `crates/claude/rc-compact/src/context_collapse.rs` — 已存在但需要实现 context collapse
-- `crates/claude/rc-compact/src/post_compact.rs` — 已存在但需要实现 post-compact cleanup
+- `crates/claude/claude-compact/src/reactive.rs` — 已存在但需要实现 reactive compact 逻辑
+- `crates/claude/claude-compact/src/micro.rs` — 已存在但需要实现 microcompact
+- `crates/claude/claude-compact/src/snip.rs` — 已存在但需要实现 snip compact
+- `crates/claude/claude-compact/src/context_collapse.rs` — 已存在但需要实现 context collapse
+- `crates/claude/claude-compact/src/post_compact.rs` — 已存在但需要实现 post-compact cleanup
 
 **需要修改的文件/函数:**
-- `crates/claude/rc-compact/src/engine.rs` — 添加 image stripping, hooks, session memory
-- `crates/claude/rc-compact/src/auto.rs` — 集成 reactive/micro/snip
+- `crates/claude/claude-compact/src/engine.rs` — 添加 image stripping, hooks, session memory
+- `crates/claude/claude-compact/src/auto.rs` — 集成 reactive/micro/snip
 
 **预估工作量:** 2-3 周
 
@@ -633,7 +633,7 @@ type ToolPermissionContext = {
 
 #### 已实现的功能
 
-**`AppState`** (`crates/claude/rc-core/src/state.rs:44-62`)
+**`AppState`** (`crates/claude/claude-core/src/state.rs:44-62`)
 ```rust
 pub struct AppState {
     pub session_id: Option<SessionId>,
@@ -647,7 +647,7 @@ pub struct AppState {
 }
 ```
 
-**`ToolPermissionContext`** (`crates/claude/rc-core/src/state.rs:11-20`)
+**`ToolPermissionContext`** (`crates/claude/claude-core/src/state.rs:11-20`)
 ```rust
 pub struct ToolPermissionContext {
     pub allowlisted_tools: BTreeSet<String>,
@@ -657,7 +657,7 @@ pub struct ToolPermissionContext {
 }
 ```
 
-**`FileHistoryState`** (`crates/claude/rc-core/src/state.rs:23-41`)
+**`FileHistoryState`** (`crates/claude/claude-core/src/state.rs:23-41`)
 
 #### 缺失的功能
 
@@ -677,12 +677,12 @@ pub struct ToolPermissionContext {
 ### 6.3 具体修复建议
 
 **需要新增的文件/函数:**
-- `crates/claude/rc-core/src/tool_permission_context.rs` — 完整的 ToolPermissionContext (含 rules, modes, directories)
-- `crates/claude/rc-core/src/app_state.rs` — 已存在但需要大幅扩展字段
+- `crates/claude/claude-core/src/tool_permission_context.rs` — 完整的 ToolPermissionContext (含 rules, modes, directories)
+- `crates/claude/claude-core/src/app_state.rs` — 已存在但需要大幅扩展字段
 
 **需要修改的文件/函数:**
-- `crates/claude/rc-core/src/state.rs:AppState` — 添加 30+ 字段 (settings, mcp, plugins, tasks, todo, effort, fast_mode, etc.)
-- `crates/claude/rc-core/src/state.rs:ToolPermissionContext` — 替换为完整的 permission rules 系统
+- `crates/claude/claude-core/src/state.rs:AppState` — 添加 30+ 字段 (settings, mcp, plugins, tasks, todo, effort, fast_mode, etc.)
+- `crates/claude/claude-core/src/state.rs:ToolPermissionContext` — 替换为完整的 permission rules 系统
 
 **预估工作量:** 2 周
 

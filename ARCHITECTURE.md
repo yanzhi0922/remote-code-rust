@@ -27,23 +27,23 @@ The codex and roo-code directories are excluded from the main repo via `.gitigno
 
 ### Library Crates
 
-- `rc-core`: shared runtime types, errors, conversation model, session states, hook types, tool types
-- `rc-config`: CLI parsing, env loading, config precedence, profile resolution, provider config, legacy import
-- `rc-protocol`: typed runtime events plus compatibility serializers for `stream-json`
-- `rc-provider`: provider normalization, request shaping, transport, retries, streaming (SSE), failover, cost tracking, context management
-- `rc-session`: session persistence (SQLite + NDJSON), indexes, exports, transcript appenders, resume loading, replay, memory system
-- `rc-tools`: typed tool registry, 65+ built-in tools, tool execution with permission checks, BM25 search engine, lazy loading, sandbox execution
-- `rc-permissions`: permission policies (5 modes), approval requests, tool classification, rule engine with wildcard matching, audit records
-- `rc-mcp`: MCP client/server lifecycle, stdio/HTTP/WebSocket JSON-RPC transport, config discovery, tool projection
-- `rc-skills`: `SKILL.md` discovery, TOML frontmatter parsing, indexing, lock file support
-- `rc-plugins`: isolated plugin manifests, JSON-RPC process runtime, capability negotiation, bundled skills
-- `rc-agents`: scheduler, mailbox, ownership, task lifecycle, tool budgets, team coordination, parallel execution
-- `rc-tui`: `ratatui` screens, keyboard model (Vim mode), viewport state, and rendering
-- `rc-runner`: runner protocol, HTTP API, workspace registration, heartbeat, session/approval management
-- `rc-control-plane`: API models, runner registry, realtime fan-out (WebSocket), approvals, artifact routes, timeline events
-- `rc-telemetry`: tracing setup, structured logging, JSON output, cost telemetry
-- `rc-agent-protocol`: multi-agent protocol abstraction layer — `AgentAdapter` trait, `UnifiedAgentEvent` enum, `AgentRouter` for routing messages to different agent backends, `AgentType` enum
-- `rc-query-engine`: unified query loop, state machine, streaming executor, token budget — execution path for Claude agent
+- `claude-core`: shared runtime types, errors, conversation model, session states, hook types, tool types
+- `claude-config`: CLI parsing, env loading, config precedence, profile resolution, provider config, legacy import
+- `claude-protocol`: typed runtime events plus compatibility serializers for `stream-json`
+- `claude-provider`: provider normalization, request shaping, transport, retries, streaming (SSE), failover, cost tracking, context management
+- `claude-session`: session persistence (SQLite + NDJSON), indexes, exports, transcript appenders, resume loading, replay, memory system
+- `claude-tools`: typed tool registry, 65+ built-in tools, tool execution with permission checks, BM25 search engine, lazy loading, sandbox execution
+- `claude-permissions`: permission policies (5 modes), approval requests, tool classification, rule engine with wildcard matching, audit records
+- `claude-mcp`: MCP client/server lifecycle, stdio/HTTP/WebSocket JSON-RPC transport, config discovery, tool projection
+- `claude-skills`: `SKILL.md` discovery, TOML frontmatter parsing, indexing, lock file support
+- `claude-plugins`: isolated plugin manifests, JSON-RPC process runtime, capability negotiation, bundled skills
+- `claude-agents`: scheduler, mailbox, ownership, task lifecycle, tool budgets, team coordination, parallel execution
+- `claude-tui`: `ratatui` screens, keyboard model (Vim mode), viewport state, and rendering
+- `claude-runner`: runner protocol, HTTP API, workspace registration, heartbeat, session/approval management
+- `claude-control-plane`: API models, runner registry, realtime fan-out (WebSocket), approvals, artifact routes, timeline events
+- `claude-telemetry`: tracing setup, structured logging, JSON output, cost telemetry
+- `claude-agent-protocol`: multi-agent protocol abstraction layer — `AgentAdapter` trait, `UnifiedAgentEvent` enum, `AgentRouter` for routing messages to different agent backends, `AgentType` enum
+- `claude-query-engine`: unified query loop, state machine, streaming executor, token budget — execution path for Claude agent
 - `rc-codex-adapter`: Codex in-process adapter — wraps `InProcessAppServerClient` with background event pump and `event_mapper` (754 lines, 50+ notification types)
 - `rc-roo-adapter`: Roo in-process adapter — wraps Roo's `Provider` + `ToolDispatcher` with custom agent loop (12 provider backends)
 - `rc-claude-adapter`: Claude in-process adapter — type alias for `QueryEngine`, re-exports all QueryEngine types
@@ -98,12 +98,12 @@ The control plane owns:
 ### Local Session
 
 1. `remote-code` resolves config from CLI, env, and profile files.
-2. `rc-session` opens or creates a session and appends a bootstrap event.
-3. `rc-provider` normalizes the configured backend protocol and builds a provider client.
-4. `rc-tools`, `rc-mcp`, `rc-skills`, and `rc-plugins` register available capabilities.
-5. `rc-permissions` decides whether a tool call is auto-allowed, denied, or needs approval.
-6. `rc-protocol` emits typed events which are rendered either in the TUI, interactive shell, or serialized as `stream-json`.
-7. `rc-session` persists all externally meaningful events as append-only NDJSON.
+2. `claude-session` opens or creates a session and appends a bootstrap event.
+3. `claude-provider` normalizes the configured backend protocol and builds a provider client.
+4. `claude-tools`, `claude-mcp`, `claude-skills`, and `claude-plugins` register available capabilities.
+5. `claude-permissions` decides whether a tool call is auto-allowed, denied, or needs approval.
+6. `claude-protocol` emits typed events which are rendered either in the TUI, interactive shell, or serialized as `stream-json`.
+7. `claude-session` persists all externally meaningful events as append-only NDJSON.
 
 ### Conversation Loop
 
@@ -174,7 +174,7 @@ Three independent in-process adapters, each tailored to its agent's native archi
 
 ## Provider Architecture
 
-`rc-provider` standardizes provider access around a common request model:
+`claude-provider` standardizes provider access around a common request model:
 
 - normalized base URL
 - protocol family: `anthropic`, `openai`, `glm`, `bedrock`, `vertex`
@@ -222,7 +222,7 @@ The streaming subsystem provides real-time callbacks:
 
 ## Tool System Architecture
 
-`rc-tools` defines typed capability interfaces with 65+ built-in tools.
+`claude-tools` defines typed capability interfaces with 65+ built-in tools.
 
 ### Tool Categories
 
@@ -267,7 +267,7 @@ Tools are split into eager and lazy categories:
 
 ## Permission System Architecture
 
-`rc-permissions` owns the decision logic and audit log. No other crate can silently bypass it.
+`claude-permissions` owns the decision logic and audit log. No other crate can silently bypass it.
 
 ### Permission Modes
 
@@ -291,7 +291,7 @@ Fine-grained permission rules with wildcard matching:
 
 ## Context Management Architecture
 
-`rc-provider` includes intelligent context window management:
+`claude-provider` includes intelligent context window management:
 
 ### Token Estimation
 
@@ -318,7 +318,7 @@ When context approaches the window limit:
 
 ## Cost Tracking Architecture
 
-`rc-provider` tracks token usage and costs across all models:
+`claude-provider` tracks token usage and costs across all models:
 
 - Per-request token counting (input, output, cache read, cache write)
 - Per-model cost accumulation
@@ -328,7 +328,7 @@ When context approaches the window limit:
 
 ## Memory System Architecture
 
-`rc-session` implements RC.md persistent memory:
+`claude-session` implements RC.md persistent memory:
 
 - `memory_read` — load memories from the memory store
 - `memory_write` — persist observations and facts
@@ -338,9 +338,9 @@ When context approaches the window limit:
 
 ## Multi-Agent System Architecture
 
-### Internal Swarm (`rc-agents`)
+### Internal Swarm (`claude-agents`)
 
-`rc-agents` is the single owner of multi-agent state:
+`claude-agents` is the single owner of multi-agent state:
 
 - agent identities with labels and ownership paths
 - task scheduling with state machine (Pending → Assigned → Running → Completed/Failed)
@@ -412,7 +412,7 @@ graph TB
 - `AgentAdapter` trait — async interface: `start()`, `send_message()`, `cancel()`, `resolve_permission()`, `stop()`, `is_alive()`
 - `AgentRouter` — routes sessions to the correct adapter based on `agent_type`
 - `UnifiedAgentEvent` — normalized event model for all agent protocols
-- `rc-agent-protocol` — shared trait, event definitions, types (no adapter implementations)
+- `claude-agent-protocol` — shared trait, event definitions, types (no adapter implementations)
 - `rc-claude-adapter` — Claude adapter: `ClaudeInProcessAdapter` = type alias for `QueryEngine`
 - `rc-codex-adapter` — Codex adapter: `CodexInProcessAdapter` with `event_mapper` (AppServerEvent → UnifiedAgentEvent)
 - `rc-roo-adapter` — Roo adapter: `RooInProcessAdapter` with `Provider` + `ToolDispatcher`
@@ -434,7 +434,7 @@ graph TB
 
 | Agent | Adapter Crate | 适配器类型 | 运行时依赖 |
 |-------|--------------|-----------|-----------|
-| Claude Code | `crates/adapters/rc-claude-adapter` | `ClaudeInProcessAdapter` (= `QueryEngine`) | `rc-query-engine`, `rc-core`, `rc-provider`, `rc-tools`, `rc-session` |
+| Claude Code | `crates/adapters/rc-claude-adapter` | `ClaudeInProcessAdapter` (= `QueryEngine`) | `claude-query-engine`, `claude-core`, `claude-provider`, `claude-tools`, `claude-session` |
 | Codex | `crates/adapters/rc-codex-adapter` | `CodexInProcessAdapter` | `codex-app-server-client`, `codex-core`, `codex-protocol` |
 | Roo Code | `crates/adapters/rc-roo-adapter` | `RooInProcessAdapter` | `roo-provider`, `roo-task`, `roo-tools`, `roo-types` |
 
@@ -498,7 +498,7 @@ graph TB
 
 ## QueryEngine Execution Path (Claude Agent)
 
-`rc-query-engine` provides the execution path for the Claude agent, with full tool execution, permission brokering, and context management:
+`claude-query-engine` provides the execution path for the Claude agent, with full tool execution, permission brokering, and context management:
 
 ```mermaid
 graph LR
@@ -525,7 +525,7 @@ graph LR
 
 ### MCP
 
-MCP is a first-class transport and tool source. `rc-mcp` handles:
+MCP is a first-class transport and tool source. `claude-mcp` handles:
 
 - stdio JSON-RPC clients with configurable timeouts
 - HTTP transport for remote MCP servers
@@ -536,7 +536,7 @@ MCP is a first-class transport and tool source. `rc-mcp` handles:
 
 ### Skills
 
-Skills remain file-based and human-editable. `rc-skills` handles:
+Skills remain file-based and human-editable. `claude-skills` handles:
 
 - `SKILL.md` discovery with recursive directory walk
 - TOML frontmatter parsing (`+++` delimited)
@@ -548,7 +548,7 @@ Skills remain file-based and human-editable. `rc-skills` handles:
 
 ### Plugins
 
-Plugins are isolated processes. `rc-plugins` handles:
+Plugins are isolated processes. `claude-plugins` handles:
 
 - plugin manifest loading (`plugin.json`)
 - capability negotiation
@@ -559,7 +559,7 @@ Plugins are isolated processes. `rc-plugins` handles:
 
 ## TUI Architecture
 
-`rc-tui` is a client over the same typed session events used by headless mode.
+`claude-tui` is a client over the same typed session events used by headless mode.
 
 Current UI responsibilities:
 
@@ -581,24 +581,24 @@ apps/* → rc-* crates
 UI-facing crates → core crates (not the reverse)
 remote crates → protocol, config, session, telemetry
 compatibility code → internal typed models (not the reverse)
-rc-agent-protocol → rc-core (shared types only)
+claude-agent-protocol → claude-core (shared types only)
 ```
 
 Examples of allowed direction:
 
-- `rc-tui → rc-core, rc-config, rc-session`
-- `rc-control-plane → rc-runner, rc-config`
-- `rc-provider → rc-core, rc-config, rc-tools`
-- `rc-plugins → rc-mcp, rc-skills`
-- `rc-agent-protocol → rc-core` (shared types, events)
-- `rc-query-engine → rc-provider, rc-tools, rc-session` (unified execution)
+- `claude-tui → claude-core, claude-config, claude-session`
+- `claude-control-plane → claude-runner, claude-config`
+- `claude-provider → claude-core, claude-config, claude-tools`
+- `claude-plugins → claude-mcp, claude-skills`
+- `claude-agent-protocol → claude-core` (shared types, events)
+- `claude-query-engine → claude-provider, claude-tools, claude-session` (unified execution)
 
 Examples of disallowed direction:
 
-- `rc-core → rc-tui`
-- `rc-permissions → apps/remote-code`
-- `rc-session → rc-control-plane`
-- `rc-core → rc-agent-protocol`
+- `claude-core → claude-tui`
+- `claude-permissions → apps/remote-code`
+- `claude-session → claude-control-plane`
+- `claude-core → claude-agent-protocol`
 
 ## CI Expectations
 
@@ -616,7 +616,7 @@ Release builds are triggered by tags and produce binaries for 5 platforms.
 
 | Limitation | Description |
 |------------|-------------|
-| TTS Mock | `rc-voice::tts` returns placeholder responses, not connected to a real TTS service |
+| TTS Mock | `claude-voice::tts` returns placeholder responses, not connected to a real TTS service |
 | Roo Permission Stub | `RooInProcessAdapter::resolve_permission()` is a no-op — Roo's tool approval flow is not yet wired to the GUI interactive permission dialog |
 | Roo Token Estimation | Roo adapter uses `text.len() / 4` for approximate token counting instead of Roo's native tiktoken |
 | Roo MCP Not Wired | Roo adapter declares `McpSupport` capability but does not integrate `McpServerConnection` in `send_message()` |

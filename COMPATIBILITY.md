@@ -126,8 +126,8 @@ The runtime supports five provider protocols:
 
 Additional features implemented:
 
-- Automatic failover between providers ✅ (`rc-provider/src/failover.rs`)
-- Retry with exponential backoff ✅ (`rc-provider/src/streaming.rs`)
+- Automatic failover between providers ✅ (`claude-provider/src/failover.rs`)
+- Retry with exponential backoff ✅ (`claude-provider/src/streaming.rs`)
 - Health tracking and circuit-breaker logic ✅
 - Anthropic API cache optimization with `cache_control` ✅
 - Cost tracking per model ✅
@@ -253,12 +253,12 @@ Tool implementation details are intentionally new.
 
 Compatibility targets:
 
-- continue discovering skills from file-based `SKILL.md` roots ✅ (`rc-skills`)
+- continue discovering skills from file-based `SKILL.md` roots ✅ (`claude-skills`)
 - keep skill indexing and invocation as a first-class workflow ✅
 - support legacy plugin ecosystems only through explicit adapter bridges ✅
 - runtime skill discovery via `skill_discover` tool ✅
 
-Plugin runtime (`rc-plugins`):
+Plugin runtime (`claude-plugins`):
 
 - JSON-RPC over stdio protocol ✅
 - Plugin manifest with capabilities, actions, and runtime config ✅
@@ -314,7 +314,7 @@ The API surface is allowed to become stricter and more explicit than the current
 
 ## Multi-Agent System
 
-The Rust rewrite introduces a multi-agent scheduler (`rc-agents`):
+The Rust rewrite introduces a multi-agent scheduler (`claude-agents`):
 
 - Agent identity with name, role, and path ownership ✅
 - Task lifecycle with budget scopes ✅
@@ -372,17 +372,17 @@ Current test suite: **200+ tests** passing across all crates.
 
 | Crate | Tests | Category |
 |-------|-------|----------|
-| rc-agents | 5 | Scheduler, mailbox, capacity |
-| rc-config | 6 | Config loading, hooks, normalization |
-| rc-control-plane | 24 | Full API round-trip, WebSocket streaming |
-| rc-core | 2 | Hook events, upstream shapes |
-| rc-mcp | 9 | Config parsing, stdio transport, tool invocation |
-| rc-permissions | 19 | Tool classification, permission modes, broker |
-| rc-plugins | 8 | Manifest loading, runtime inspection, invocation |
-| rc-runner | 11 | Runner API, sessions, approvals, health |
-| rc-session | 11 | CRUD, conversation, events, export, bundle |
-| rc-skills | 4 | Skill loading, front matter, lock file |
-| rc-tools | 1 | Tool registry |
+| claude-agents | 5 | Scheduler, mailbox, capacity |
+| claude-config | 6 | Config loading, hooks, normalization |
+| claude-control-plane | 24 | Full API round-trip, WebSocket streaming |
+| claude-core | 2 | Hook events, upstream shapes |
+| claude-mcp | 9 | Config parsing, stdio transport, tool invocation |
+| claude-permissions | 19 | Tool classification, permission modes, broker |
+| claude-plugins | 8 | Manifest loading, runtime inspection, invocation |
+| claude-runner | 11 | Runner API, sessions, approvals, health |
+| claude-session | 11 | CRUD, conversation, events, export, bundle |
+| claude-skills | 4 | Skill loading, front matter, lock file |
+| claude-tools | 1 | Tool registry |
 | remote-code | 31 | CLI parsing, remote helpers, MCP/Plugin CLI |
 | remote-code-runner | 3 | Heartbeat, retry, control plane sync |
 | Apps (doctor) | 2 | Runner + control plane doctor |
