@@ -1,0 +1,27 @@
+[package]
+name = "rc-claude-adapter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "In-process adapter for Claude agent — wraps QueryEngine into a unified adapter interface"
+
+[dependencies]
+rc-agent-protocol = { path = "../../claude/rc-agent-protocol" }
+rc-query-engine = { path = "../../claude/rc-query-engine" }
+rc-core = { path = "../../claude/rc-core" }
+rc-config = { path = "../../claude/rc-config" }
+rc-session = { path = "../../claude/rc-session" }
+rc-permissions = { path = "../../claude/rc-permissions" }
+rc-provider = { path = "../../claude/rc-provider" }
+rc-tools = { path = "../../claude/rc-tools" }
+rc-engine-events = { path = "../../claude/rc-engine-events" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[lints]
+workspace = true

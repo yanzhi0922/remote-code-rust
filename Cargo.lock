@@ -11755,6 +11755,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "rc-claude-adapter"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "rc-agent-protocol",
+ "rc-config",
+ "rc-core",
+ "rc-engine-events",
+ "rc-permissions",
+ "rc-provider",
+ "rc-query-engine",
+ "rc-session",
+ "rc-tools",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "rc-codex-adapter"
 version = "0.1.0"
 dependencies = [

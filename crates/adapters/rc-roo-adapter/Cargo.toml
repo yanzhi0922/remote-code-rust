@@ -6,7 +6,7 @@ license.workspace = true
 description = "In-process adapter for Roo Code agent — implements AgentAdapter trait"
 
 [dependencies]
-rc-agent-protocol = { path = "../rc-agent-protocol" }
+rc-agent-protocol = { path = "../../claude/rc-agent-protocol" }
 roo-app = { path = "../../roo/roo-app" }
 roo-task = { path = "../../roo/roo-task" }
 roo-types = { path = "../../roo/roo-types" }
