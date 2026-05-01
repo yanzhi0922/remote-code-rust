@@ -24,7 +24,8 @@ members = [
     "crates/claude/rc-agent-protocol",
     "crates/claude/rc-analytics",
     "crates/claude/rc-auth",
-    "crates/claude/rc-codex-adapter",
+    "crates/adapters/rc-claude-adapter",
+    "crates/adapters/rc-codex-adapter",
     "crates/claude/rc-config",
     "crates/claude/rc-context",
     "crates/claude/rc-core",
@@ -42,7 +43,7 @@ members = [
     "crates/claude/rc-telemetry",
     "crates/claude/rc-utils",
     "crates/claude/rc-voice",
-    "crates/claude/rc-roo-adapter",
+    "crates/adapters/rc-roo-adapter",
     "apps/remote-code-gui/src-tauri",
     "agents/claudecode",
     # Codex leaf crates (Stage 1) — listed explicitly to avoid glob issues
