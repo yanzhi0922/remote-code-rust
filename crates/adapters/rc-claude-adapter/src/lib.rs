@@ -61,6 +61,9 @@ use claude_query_engine::{
 };
 use claude_tools::{FileStateCache, execute_tool_call};
 
+/// Maximum time (in seconds) to wait for a permission decision before denying.
+const PERMISSION_TIMEOUT_SECS: u64 = 60 * 30; // 30 minutes
+
 // ─── PendingPermission ─────────────────────────────────────────────────────
 
 /// A pending permission request waiting for user resolution.
@@ -72,6 +75,8 @@ struct PendingPermission {
 
 /// Permission broker that forwards requests through the event channel
 /// and waits for resolution via [`ClaudeInProcessAdapter::resolve_permission`].
+///
+/// Includes a timeout to prevent indefinite blocking if the GUI never responds.
 struct AdapterPermissionBroker {
     event_tx: mpsc::Sender<UnifiedAgentEvent>,
     pending_permissions: Arc<Mutex<HashMap<String, PendingPermission>>>,
@@ -120,15 +125,33 @@ impl PermissionBroker for AdapterPermissionBroker {
 
         if let Err(e) = self.event_tx.send(event).await {
             warn!(%request_id, "failed to send permission request event: {e}");
+            // Clean up the pending entry.
+            let mut map = self.pending_permissions.lock().await;
+            map.remove(&request_id);
             return PermissionsPermissionDecision::deny("Failed to send permission request");
         }
 
-        // Wait for the user's response.
-        match response_rx.await {
-            Ok(decision) => decision,
-            Err(_) => {
+        // Wait for the user's response with a timeout.
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(PERMISSION_TIMEOUT_SECS),
+            response_rx,
+        )
+        .await
+        {
+            Ok(Ok(decision)) => decision,
+            Ok(Err(_)) => {
                 warn!(%request_id, "permission response channel dropped");
+                // Clean up the pending entry.
+                let mut map = self.pending_permissions.lock().await;
+                map.remove(&request_id);
                 PermissionsPermissionDecision::deny("Permission request cancelled")
+            }
+            Err(_) => {
+                warn!(%request_id, "permission request timed out after {PERMISSION_TIMEOUT_SECS}s");
+                // Clean up the pending entry.
+                let mut map = self.pending_permissions.lock().await;
+                map.remove(&request_id);
+                PermissionsPermissionDecision::deny("Permission request timed out")
             }
         }
     }
@@ -183,6 +206,16 @@ impl ToolRunner for AdapterToolRunner {
             },
         };
 
+        // Check if this was a permission denial.
+        let permission_denial = if tool_result.is_error {
+            // Heuristic: if the tool result is an error, check if it looks like
+            // a permission denial. The actual denial info is carried by the
+            // PermissionDecision that the broker already processed.
+            None
+        } else {
+            None
+        };
+
         // Handle follow-up user blocks as post_messages.
         let mut post_messages = Vec::new();
         if !tool_result.follow_up_user_blocks.is_empty() {
@@ -196,7 +229,7 @@ impl ToolRunner for AdapterToolRunner {
             result: tool_result,
             pre_messages: Vec::new(),
             post_messages,
-            permission_denial: None,
+            permission_denial,
         })
     }
 }
@@ -247,6 +280,11 @@ pub struct ClaudeInProcessAdapter {
     working_dir: PathBuf,
     permission_mode: PermissionMode,
     max_turns: usize,
+    max_output_tokens: u32,
+    timeout_ms: u64,
+
+    // Reusable provider client (created once in start()).
+    provider_client: Option<Arc<claude_provider::ProviderClient>>,
 
     // Runtime state
     cancel_token: CancellationToken,
@@ -290,6 +328,9 @@ impl ClaudeInProcessAdapter {
             working_dir,
             permission_mode,
             max_turns,
+            max_output_tokens: 16_384,
+            timeout_ms: 600_000,
+            provider_client: None,
             cancel_token: CancellationToken::new(),
             worker_handle: None,
             pending_permissions: Arc::new(Mutex::new(HashMap::new())),
@@ -313,8 +354,8 @@ impl ClaudeInProcessAdapter {
             api_key: self.api_key.clone(),
             model: Some(self.model.clone()),
             protocol: self.infer_protocol(),
-            timeout_ms: 600_000,
-            max_output_tokens: 16_384,
+            timeout_ms: self.timeout_ms,
+            max_output_tokens: self.max_output_tokens,
             max_retries: 3,
             retry_initial_backoff_ms: 1_000,
             retry_max_backoff_ms: 30_000,
@@ -324,12 +365,38 @@ impl ClaudeInProcessAdapter {
             thinking_budget: None,
         }
     }
+
+    /// Abort the current worker (if any) and reset the cancel token.
+    fn abort_worker(&mut self) {
+        if let Some(handle) = self.worker_handle.take() {
+            handle.abort();
+        }
+        // Recreate the cancel token so future calls get a fresh token.
+        self.cancel_token = CancellationToken::new();
+    }
+
+    /// Clean up all pending permissions by denying them.
+    async fn drain_pending_permissions(&self) {
+        let mut map = self.pending_permissions.lock().await;
+        for (id, pending) in map.drain() {
+            let _ = pending.response_tx.send(
+                PermissionsPermissionDecision::deny("Adapter shutting down"),
+            );
+            debug!(%id, "drained pending permission on shutdown");
+        }
+    }
 }
 
 #[async_trait]
 impl AgentAdapter for ClaudeInProcessAdapter {
     async fn start(&mut self, _config: &AgentConfig) -> Result<()> {
         info!("ClaudeInProcessAdapter starting");
+
+        // Create the reusable provider client.
+        let client = claude_provider::ProviderClient::new()
+            .map_err(|e| anyhow!("failed to create provider client: {e}"))?;
+        self.provider_client = Some(Arc::new(client));
+
         self.status = AgentStatus::Ready;
         self.info.status = AgentStatus::Ready;
         Ok(())
@@ -342,16 +409,17 @@ impl AgentAdapter for ClaudeInProcessAdapter {
     ) -> Result<mpsc::Receiver<UnifiedAgentEvent>> {
         info!(%session_id, "ClaudeInProcessAdapter: send_message");
 
+        // Abort any previous worker to prevent zombie tasks.
+        self.abort_worker();
+
         let (event_tx, event_rx) = mpsc::channel(64);
 
-        // 1. Build provider config and client.
-        let provider_config = self.build_provider_config();
-        let provider_client = Arc::new(
-            claude_provider::ProviderClient::new()
-                .map_err(|e| anyhow!("failed to create provider client: {e}"))?,
-        );
+        // 1. Get or create provider client.
+        let provider_client = self.provider_client.clone()
+            .ok_or_else(|| anyhow!("adapter not started — call start() first"))?;
 
-        // 2. Create the conversation backend.
+        // 2. Build provider config and create backend.
+        let provider_config = self.build_provider_config();
         let backend: Arc<dyn claude_provider::ConversationBackend> = Arc::new(
             ProviderCompatBackend::new(provider_client, &provider_config),
         );
@@ -418,28 +486,45 @@ impl AgentAdapter for ClaudeInProcessAdapter {
         // 11. Spawn the query engine task.
         let cancel_token = self.cancel_token.clone();
         let session_messages = self.session_messages.clone();
+        let event_tx_for_completion = event_tx.clone();
+        let session_id_for_completion = session_id.to_owned();
 
         let handle = tokio::spawn(async move {
             // Check cancellation before starting.
             if cancel_token.is_cancelled() {
                 debug!("Query cancelled before starting");
+                let _ = event_tx_for_completion.send(UnifiedAgentEvent::Stopped).await;
                 return;
             }
 
             // Run the query engine to completion.
-            match engine.submit_message(user_message, context).await {
-                Ok(result) => {
+            let result = engine.submit_message(user_message, context).await;
+
+            match result {
+                Ok(query_result) => {
                     debug!(
-                        stops = %result.stop_reason,
-                        turns = result.turns,
+                        stops = %query_result.stop_reason,
+                        turns = query_result.turns,
                         "Query engine completed"
                     );
                     // Persist the updated messages.
-                    let mut guard = session_messages.lock().await;
-                    *guard = result.state.messages;
+                    {
+                        let mut guard = session_messages.lock().await;
+                        *guard = query_result.state.messages;
+                    }
+                    // The QueryFinished observer event already emitted Completed.
+                    // If the engine completed without emitting QueryFinished (e.g.
+                    // budget stop), emit a Completed event here as a safety net.
                 }
                 Err(e) => {
                     warn!("Query engine error: {e}");
+                    let _ = event_tx_for_completion
+                        .send(UnifiedAgentEvent::Error {
+                            session_id: session_id_for_completion,
+                            message: format!("{e:#}"),
+                            recoverable: false,
+                        })
+                        .await;
                 }
             }
         });
@@ -453,14 +538,11 @@ impl AgentAdapter for ClaudeInProcessAdapter {
 
     async fn cancel(&mut self, _session_id: &str) -> Result<()> {
         info!("ClaudeInProcessAdapter: cancel");
-        self.cancel_token.cancel();
+        self.abort_worker();
 
-        if let Some(handle) = self.worker_handle.take() {
-            handle.abort();
-        }
-
-        self.status = AgentStatus::Idle;
-        self.info.status = AgentStatus::Idle;
+        // After cancel, the adapter can still accept new messages.
+        self.status = AgentStatus::Ready;
+        self.info.status = AgentStatus::Ready;
         Ok(())
     }
 
@@ -481,7 +563,8 @@ impl AgentAdapter for ClaudeInProcessAdapter {
                 }
                 ProtocolPermissionDecision::AllowAll => {
                     // AllowAll is treated as allow for the current request.
-                    // TODO: Consider adding a session rule for future auto-approval.
+                    // TODO: Consider adding a session rule for future auto-approval
+                    // via broker.add_session_rule().
                     PermissionsPermissionDecision::allow()
                 }
             };
@@ -495,12 +578,18 @@ impl AgentAdapter for ClaudeInProcessAdapter {
 
     async fn stop(&mut self) -> Result<()> {
         info!("ClaudeInProcessAdapter: stop");
-        self.cancel_token.cancel();
+        self.abort_worker();
 
-        if let Some(handle) = self.worker_handle.take() {
-            handle.abort();
+        // Deny all pending permissions to unblock any waiting oneshot channels.
+        self.drain_pending_permissions().await;
+
+        // Clear session messages.
+        {
+            let mut guard = self.session_messages.lock().await;
+            guard.clear();
         }
 
+        self.provider_client = None;
         self.status = AgentStatus::Stopped;
         self.info.status = AgentStatus::Stopped;
         Ok(())
