@@ -1202,6 +1202,7 @@ struct AppState {
     runtime: Mutex<RuntimeState>,
     pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
     pending_codex_permissions: Arc<Mutex<HashMap<String, CodexPendingPermission>>>,
+    pending_roo_permissions: Arc<Mutex<HashMap<String, RooPendingPermission>>>,
     running_prompts: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
     /// Codex in-process adapters (session_id → adapter).
     active_codex_adapters: Arc<Mutex<HashMap<String, CodexInProcessAdapter>>>,
@@ -1211,6 +1212,12 @@ struct AppState {
 
 #[derive(Debug, Clone)]
 struct CodexPendingPermission {
+    session_id: String,
+    request_id: String,
+}
+
+#[derive(Debug, Clone)]
+struct RooPendingPermission {
     session_id: String,
     request_id: String,
 }
@@ -3842,6 +3849,7 @@ async fn run_codex_in_process_prompt(
 async fn run_roo_in_process_prompt(
     app: &AppHandle,
     roo_adapters: &Arc<Mutex<HashMap<String, RooInProcessAdapter>>>,
+    pending_roo_permissions: &Arc<Mutex<HashMap<String, RooPendingPermission>>>,
     session_id: &str,
     prompt: &str,
     working_dir: PathBuf,
@@ -3949,6 +3957,37 @@ async fn run_roo_in_process_prompt(
                         tool_name,
                         is_error: false,
                         output: result.to_string(),
+                    },
+                );
+            }
+            UnifiedAgentEvent::PermissionRequest {
+                request_id,
+                tool_name,
+                input,
+                ..
+            } => {
+                let gui_request_id = Uuid::new_v4().to_string();
+                {
+                    let mut pending = pending_roo_permissions.lock().await;
+                    pending.insert(
+                        gui_request_id.clone(),
+                        RooPendingPermission {
+                            session_id: session_id.to_string(),
+                            request_id,
+                        },
+                    );
+                }
+                let _ = app.emit(
+                    APP_EVENT_PERMISSION_REQUEST,
+                    PermissionRequestDto {
+                        request_id: gui_request_id,
+                        tool_name: tool_name.clone(),
+                        tool_use_id: String::new(),
+                        title: "Roo 请求权限".to_owned(),
+                        description: format!("工具 {tool_name} 需要授权才能执行。"),
+                        input,
+                        blocked_path: None,
+                        permission_suggestions: vec![],
                     },
                 );
             }
@@ -4333,6 +4372,7 @@ async fn send_prompt(
                 // Native in-process path: Roo uses RooInProcessAdapter
                 // (no bridge binary needed).
                 let roo_adapters = Arc::clone(&state.active_roo_adapters);
+                let pending_roo_permissions = Arc::clone(&state.pending_roo_permissions);
                 let sid_clone = sid.clone();
                 let prompt_owned = prompt.clone();
                 let working_dir = config.cwd.clone();
@@ -4344,6 +4384,7 @@ async fn send_prompt(
                     let result = run_roo_in_process_prompt(
                         &app,
                         &roo_adapters,
+                        &pending_roo_permissions,
                         &sid_clone,
                         &prompt_owned,
                         working_dir,
@@ -6636,7 +6677,43 @@ async fn resolve_permission_request(
             pending.get(&request_id).cloned()
         };
         let Some(pending_codex) = pending_codex else {
-            return Ok(false);
+            // Check Roo permissions as last resort.
+            let pending_roo = {
+                let pending = state.pending_roo_permissions.lock().await;
+                pending.get(&request_id).cloned()
+            };
+            let Some(pending_roo) = pending_roo else {
+                return Ok(false);
+            };
+
+            {
+                let mut adapters = state.active_roo_adapters.lock().await;
+                if let Some(adapter) = adapters.get_mut(&pending_roo.session_id) {
+                    let _ = adapter
+                        .resolve_roo_approval(&pending_roo.request_id, allowed)
+                        .await;
+                }
+            }
+
+            {
+                let mut pending = state.pending_roo_permissions.lock().await;
+                pending.remove(&request_id);
+            }
+
+            let _ = app.emit(
+                APP_EVENT_PERMISSION_RESOLVED,
+                PermissionDecisionDto {
+                    request_id,
+                    allowed,
+                    message: message.clone(),
+                    updated_input: None,
+                    permission_updates: vec![],
+                    feedback: None,
+                    content_blocks: vec![],
+                },
+            );
+
+            return Ok(true);
         };
 
         let permission_updates_for_emit = permission_updates.unwrap_or_default();
@@ -6686,6 +6763,53 @@ async fn resolve_permission_request(
 
         Ok(true)
     }
+}
+
+#[tauri::command]
+async fn resolve_roo_permission_request(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request_id: String,
+    allowed: bool,
+) -> std::result::Result<bool, String> {
+    let pending_roo = {
+        let pending = state.pending_roo_permissions.lock().await;
+        pending.get(&request_id).cloned()
+    };
+    let Some(pending_roo) = pending_roo else {
+        return Ok(false);
+    };
+
+    {
+        let mut adapters = state.active_roo_adapters.lock().await;
+        let adapter = adapters
+            .get_mut(&pending_roo.session_id)
+            .ok_or_else(|| "Roo adapter not found for permission request".to_owned())?;
+        adapter
+            .resolve_roo_approval(&pending_roo.request_id, allowed)
+            .await
+            .map_err(|error| format!("Failed to resolve Roo permission request: {error:#}"))?;
+    }
+
+    {
+        let mut pending = state.pending_roo_permissions.lock().await;
+        pending.remove(&request_id);
+    }
+
+    let _ = app.emit(
+        APP_EVENT_PERMISSION_RESOLVED,
+        PermissionDecisionDto {
+            request_id,
+            allowed,
+            message: None,
+            updated_input: None,
+            permission_updates: vec![],
+            feedback: None,
+            content_blocks: vec![],
+        },
+    );
+
+    Ok(true)
 }
 
 #[tauri::command]
@@ -6892,6 +7016,7 @@ pub fn run() {
     });
     let pending_permissions = Arc::new(Mutex::new(HashMap::new()));
     let pending_codex_permissions = Arc::new(Mutex::new(HashMap::new()));
+    let pending_roo_permissions = Arc::new(Mutex::new(HashMap::new()));
     let running_prompts = Arc::new(Mutex::new(HashMap::new()));
     let active_codex_adapters = Arc::new(Mutex::new(HashMap::new()));
     let active_roo_adapters = Arc::new(Mutex::new(HashMap::new()));
@@ -6908,6 +7033,7 @@ pub fn run() {
             runtime: Mutex::new(runtime_state),
             pending_permissions,
             pending_codex_permissions,
+            pending_roo_permissions,
             running_prompts,
             active_codex_adapters,
             active_roo_adapters,
@@ -7036,6 +7162,7 @@ pub fn run() {
             set_active_provider,
             switch_profile,
             resolve_permission_request,
+            resolve_roo_permission_request,
             pick_folder,
             list_available_agents,
             install_agent,

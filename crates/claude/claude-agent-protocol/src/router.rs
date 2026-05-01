@@ -45,10 +45,10 @@ impl AgentRouter {
     /// If an adapter was already registered under the same session ID, it is
     /// stopped before being replaced.
     pub async fn register(&mut self, session_id: String, adapter: Box<dyn AgentAdapter>) {
-        if let Some(mut old) = self.adapters.remove(&session_id) {
-            if let Err(e) = old.stop().await {
-                warn!(session_id = %session_id, error = %e, "failed to stop old adapter during register");
-            }
+        if let Some(mut old) = self.adapters.remove(&session_id)
+            && let Err(e) = old.stop().await
+        {
+            warn!(session_id = %session_id, error = %e, "failed to stop old adapter during register");
         }
         self.adapters.insert(session_id, adapter);
     }
