@@ -335,24 +335,18 @@ graph TB
         ROUTER[AgentRouter]
         IPA[InProcessAdapter<br/>Claude Code]
         CXA[CodexInProcessAdapter<br/>Codex]
-        SA_ROO[SubprocessAdapter<br/>Roo-code]
-    end
-
-    subgraph Bridge Binary
-        ROO_BRIDGE[roo-bridge]
+        ROA[RooInProcessAdapter<br/>Roo-code]
     end
 
     UI --> ROUTER
     ROUTER --> IPA
     ROUTER --> CXA
-    ROUTER --> SA_ROO
-    SA_ROO -->|JSON-RPC stdio| ROO_BRIDGE
+    ROUTER --> ROA
 ```
 
 **核心优势**：
-- 进程内运行 — Codex 和 Claude Code 均在主进程内运行，无 IPC 开销
+- 全部进程内运行 — Claude Code、Codex 和 Roo-code 均在主进程内运行，无 IPC 开销
 - 统一事件模型 — `UnifiedAgentEvent` 标准化所有 Agent 事件
-- Bridge 协议 — Roo-code 通过 JSON-RPC over stdio 通信
 - 统一权限流程 — 所有 Agent 共享 GUI 审批界面
 - 统一构建 — `Makefile` + `scripts/build-agents.{ps1,sh}` 一键构建
 
