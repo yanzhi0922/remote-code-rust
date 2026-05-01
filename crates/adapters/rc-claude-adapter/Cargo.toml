@@ -16,6 +16,8 @@ claude-provider = { path = "../../claude/claude-provider" }
 claude-tools = { path = "../../claude/claude-tools" }
 claude-engine-events = { path = "../../claude/claude-engine-events" }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
