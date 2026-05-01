@@ -12412,6 +12412,7 @@ dependencies = [
  "dirs",
  "futures",
  "roo-app",
+ "roo-auto-approval",
  "roo-modes",
  "roo-prompt",
  "roo-provider",
