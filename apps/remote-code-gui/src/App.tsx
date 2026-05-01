@@ -3,6 +3,7 @@ import { Layout } from './components/layout/Layout';
 import { PermissionModal } from './components/layout/PermissionModal';
 import { ChatArea } from './components/chat/ChatArea';
 import { ChatInput } from './components/chat/ChatInput';
+import { ThemeProvider } from './components/design/ThemeProvider';
 import { shouldUseRemoteMode } from './lib/runtime';
 import { isMobileSync, isTouchDevice } from './lib/mobile';
 import {
@@ -172,7 +173,7 @@ function LocalApp() {
   }
 
   return (
-    <>
+    <ThemeProvider>
       <Layout>
         <div className="flex h-full flex-col bg-rc-bg-chat">
           <ChatArea />
@@ -180,7 +181,7 @@ function LocalApp() {
         </div>
       </Layout>
       <PermissionModal />
-    </>
+    </ThemeProvider>
   );
 }
 
