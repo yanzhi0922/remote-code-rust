@@ -5,17 +5,18 @@
 //!
 //! - **In-process adapters** (`InProcessAdapter`, `RemoteClaudeAdapter`, etc.) share
 //!   the same callback-based implementation.
-//! - **Subprocess adapter** (`SubprocessAdapter`) communicates with an external
-//!   Agent binary over JSON-RPC via stdio.
+//!
+//! All agents run in-process via their respective adapters:
+//! - **Remote Claude** → `RemoteClaudeAdapter` (callback-based, in-process)
+//! - **Remote Codex** → `CodexInProcessAdapter` from `rc-codex-adapter` (in-process)
+//! - **Remote Roo** → `RooInProcessAdapter` from `rc-roo-adapter` (in-process)
 
 mod in_process;
 pub mod remote_claude;
 pub mod remote_codex;
 pub mod remote_roo;
-pub mod subprocess;
 
 pub use in_process::InProcessAdapter;
 pub use remote_claude::RemoteClaudeAdapter;
 pub use remote_codex::RemoteCodexAdapter;
 pub use remote_roo::RemoteRooAdapter;
-pub use subprocess::SubprocessAdapter;

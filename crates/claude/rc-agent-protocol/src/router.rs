@@ -4,13 +4,16 @@
 //! dispatches incoming messages to the correct adapter. It can create adapters
 //! based on [`AgentType`] via the [`create_adapter`](AgentRouter::create_adapter)
 //! factory method.
+//!
+//! All agents now run in-process. Use [`register`](AgentRouter::register) with
+//! the appropriate in-process adapter for Codex and Roo.
 
 use std::collections::HashMap;
 
 use tracing::warn;
 
 use crate::adapter::AgentAdapter;
-use crate::adapters::{InProcessAdapter, SubprocessAdapter};
+use crate::adapters::InProcessAdapter;
 use crate::error::AgentProtocolError;
 use crate::events::UnifiedAgentEvent;
 use crate::permission::PermissionDecision;
@@ -18,10 +21,12 @@ use crate::types::{AgentConfig, AgentType};
 
 /// Manages multiple Agent instances and routes messages by session ID.
 ///
-/// Supports three agent adapter types: [`RemoteCode`][RemoteCodeAdapter],
-/// [`RooCode`][RooCodeAdapter], and [`Codex`][CodexAdapter].
-/// Adapters are created via [`create_adapter`](AgentRouter::create_adapter)
-/// and registered under session IDs for message routing.
+/// All agents run in-process via their respective adapters:
+/// - **Remote Claude** → `InProcessAdapter` (callback-based)
+/// - **Remote Codex** → `CodexInProcessAdapter` from `rc-codex-adapter`
+/// - **Remote Roo** → `RooInProcessAdapter` from `rc-roo-adapter`
+///
+/// Adapters are created externally and registered via [`register`](AgentRouter::register).
 pub struct AgentRouter {
     /// Session ID → Agent adapter.
     adapters: HashMap<String, Box<dyn AgentAdapter>>,
@@ -41,10 +46,6 @@ impl AgentRouter {
     /// stopped before being replaced.
     pub async fn register(&mut self, session_id: String, adapter: Box<dyn AgentAdapter>) {
         if let Some(mut old) = self.adapters.remove(&session_id) {
-            // #3: Stop the old adapter before replacing it.
-            // Note: We cannot use Arc::get_mut here because the adapter is
-            // owned by a Box<dyn AgentAdapter>. Instead, we own the Box
-            // directly and can call stop() on it.
             if let Err(e) = old.stop().await {
                 warn!(session_id = %session_id, error = %e, "failed to stop old adapter during register");
             }
@@ -58,9 +59,8 @@ impl AgentRouter {
     /// - **RemoteCodex** → error — use [`register`](AgentRouter::register) with a
     ///   pre-built `CodexInProcessAdapter` from `rc-codex-adapter` (async initialization
     ///   is required for the in-process Codex runtime).
-    /// - **RemoteRoo** → subprocess adapter (JSON-RPC over stdio).
-    ///
-    /// For subprocess adapters, `config.binary_path` **must** be set.
+    /// - **RemoteRoo** → error — use [`register`](AgentRouter::register) with a
+    ///   pre-built `RooInProcessAdapter` from `rc-roo-adapter`.
     pub fn create_adapter(config: &AgentConfig) -> anyhow::Result<Box<dyn AgentAdapter>> {
         match config.agent_type {
             AgentType::RemoteClaude => {
@@ -72,18 +72,11 @@ impl AgentRouter {
                  Use CodexInProcessAdapter::start_in_process() from rc-codex-adapter, \
                  then register the adapter via AgentRouter::register()."
             )),
-            AgentType::RemoteRoo => {
-                let binary_path =
-                    config
-                        .binary_path
-                        .clone()
-                        .ok_or_else(|| AgentProtocolError::ConfigError {
-                            message: "binary_path is required for RemoteRoo subprocess adapter"
-                                .into(),
-                        })?;
-                let adapter = SubprocessAdapter::new(AgentType::RemoteRoo, binary_path);
-                Ok(Box::new(adapter))
-            }
+            AgentType::RemoteRoo => Err(anyhow::anyhow!(
+                "RemoteRoo requires async initialization. \
+                 Use RooInProcessAdapter from rc-roo-adapter, \
+                 then register the adapter via AgentRouter::register()."
+            )),
         }
     }
 
