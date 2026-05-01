@@ -1,10 +1,8 @@
-//! Bridge protocol definitions for the Roo-code bridge binary.
+//! Bridge protocol definitions for the Roo-code JSON-RPC adapter layer.
 //!
 //! This module defines the JSON-RPC method names, notification names, and
-//! parameter types used by the bridge layer. Both the bridge binary
-//! (`remote-code-roo-bridge`) and the
-//! [`SubprocessAdapter`](crate::adapters::SubprocessAdapter) use these
-//! constants so the wire protocol stays in sync.
+//! parameter types used by the [`SubprocessAdapter`](crate::adapters::SubprocessAdapter)
+//! so the wire protocol stays in sync.
 
 use serde::{Deserialize, Serialize};
 

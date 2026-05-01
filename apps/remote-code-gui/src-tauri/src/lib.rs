@@ -28,7 +28,6 @@ use codex_app_server_protocol::{
     WindowsSandboxSetupStartParams,
 };
 use rc_agent_protocol::AgentAdapter;
-use rc_agent_protocol::adapters::subprocess::SubprocessAdapter;
 use rc_agent_protocol::permission::PermissionDecision as AgentPermissionDecision;
 use rc_agent_protocol::types::AgentType as ProtocolAgentType;
 use rc_codex_adapter::{
@@ -1204,8 +1203,6 @@ struct AppState {
     pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
     pending_codex_permissions: Arc<Mutex<HashMap<String, CodexPendingPermission>>>,
     running_prompts: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
-    /// Active subprocess adapters keyed by session ID (for Codex / Roo-code agents).
-    active_subprocess_adapters: Arc<Mutex<HashMap<String, SubprocessAdapter>>>,
     /// Codex in-process adapters (session_id → adapter).
     active_codex_adapters: Arc<Mutex<HashMap<String, CodexInProcessAdapter>>>,
     /// Roo in-process adapters (session_id → adapter).
@@ -3451,66 +3448,6 @@ fn get_session_agent_type(store: &SessionStore, session_id: Uuid) -> String {
         .unwrap_or_else(|| "remote_claude".to_owned())
 }
 
-// ---------------------------------------------------------------------------
-// Bridge binary path lookup
-// ---------------------------------------------------------------------------
-
-/// Resolve the bridge binary name for the given agent type.
-///
-/// Only Roo-code uses the bridge binary — Codex uses native in-process integration.
-#[allow(dead_code)]
-fn bridge_binary_name(agent_type: &ProtocolAgentType) -> Option<&'static str> {
-    match agent_type {
-        ProtocolAgentType::RemoteRoo => Some("remote-code-roo-bridge"),
-        _ => None,
-    }
-}
-
-/// Locate the bridge binary on disk.
-///
-/// Search order:
-/// 1. Same directory as the current executable (with and without `.exe` on Windows).
-/// 2. `PATH` environment variable via `which`/`where`.
-#[allow(dead_code)]
-fn bridge_binary_path(agent_type: &ProtocolAgentType) -> Option<PathBuf> {
-    let binary_name = bridge_binary_name(agent_type)?;
-
-    // 1. Check alongside the current executable.
-    if let Some(exe_dir) = std::env::current_exe()
-        .ok()
-        .and_then(|e| e.parent().map(|p| p.to_path_buf()))
-    {
-        let path = exe_dir.join(binary_name);
-        if path.exists() {
-            return Some(path);
-        }
-        // Windows: try with .exe suffix
-        let path_exe = exe_dir.join(format!("{binary_name}.exe"));
-        if path_exe.exists() {
-            return Some(path_exe);
-        }
-    }
-
-    // 2. Search PATH using the platform-appropriate command.
-    let lookup_cmd = if cfg!(windows) { "where" } else { "which" };
-    if let Ok(output) = std::process::Command::new(lookup_cmd)
-        .arg(binary_name)
-        .output()
-    {
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if let Some(first_line) = stdout.lines().next() {
-                let p = PathBuf::from(first_line.trim());
-                if p.exists() {
-                    return Some(p);
-                }
-            }
-        }
-    }
-
-    None
-}
-
 #[allow(dead_code)]
 fn codex_cli_binary_path() -> Result<PathBuf> {
     let binary_name = if cfg!(windows) { "codex.exe" } else { "codex" };
@@ -4163,63 +4100,6 @@ async fn run_roo_in_process_prompt(
     Ok(final_text)
 }
 
-// ---------------------------------------------------------------------------
-// Subprocess prompt execution (legacy bridge)
-// ---------------------------------------------------------------------------
-
-/// Execute a prompt via a subprocess bridge binary.
-///
-/// This creates a [`SubprocessAdapter`], starts the bridge process, sends the
-/// user message, and forwards events to the frontend via Tauri emissions.
-#[allow(dead_code)]
-async fn run_subprocess_prompt(
-    app: &AppHandle,
-    active_adapters: &Arc<Mutex<HashMap<String, SubprocessAdapter>>>,
-    session_id: &str,
-    prompt: &str,
-    agent_type: ProtocolAgentType,
-    working_dir: Option<PathBuf>,
-    api_key: Option<String>,
-) -> std::result::Result<String, String> {
-    let bridge_path = bridge_binary_path(&agent_type).ok_or_else(|| {
-        format!(
-            "未找到 {} 的 bridge 二进制文件。请确保已编译 {} 并放置在可执行文件目录或 PATH 中。",
-            agent_type.display_name(),
-            bridge_binary_name(&agent_type).unwrap_or("unknown"),
-        )
-    })?;
-
-    tracing::info!(
-        agent = %agent_type.display_name(),
-        binary = %bridge_path.display(),
-        "starting subprocess adapter for prompt"
-    );
-
-    // Build the adapter config.
-    let config = rc_agent_protocol::types::AgentConfig {
-        agent_type,
-        binary_path: Some(bridge_path.clone()),
-        args: vec![],
-        env: vec![],
-        working_dir: working_dir.clone(),
-        model: None,
-        provider: None,
-        api_key: api_key.clone(),
-        base_url: None,
-    };
-
-    // Create and start the adapter.
-    let mut adapter = SubprocessAdapter::new(agent_type, bridge_path);
-    adapter
-        .start(&config)
-        .await
-        .map_err(|e| format!("启动 {} 子进程失败: {e:#}", agent_type.display_name()))?;
-
-    // Send the message and obtain the event channel.
-    let mut rx = adapter
-        .send_message(session_id, prompt)
-        .await
-        .map_err(|e| format!("发送消息到 {} 失败: {e:#}", agent_type.display_name()))?;
 
     // Store the adapter so cancel_prompt() can reach it.
     {
@@ -4809,15 +4689,6 @@ async fn cancel_prompt(
     state: State<'_, AppState>,
     session_id: String,
 ) -> std::result::Result<bool, String> {
-    // If a subprocess adapter is active for this session, cancel it.
-    {
-        let mut adapters = state.active_subprocess_adapters.lock().await;
-        if let Some(adapter) = adapters.get_mut(&session_id) {
-            tracing::info!(session_id = %session_id, "cancelling subprocess adapter");
-            let _ = adapter.cancel(&session_id).await;
-        }
-    }
-
     let mut running = state.running_prompts.lock().await;
     if let Some(handle) = running.remove(&session_id) {
         handle.abort();
@@ -7268,7 +7139,6 @@ pub fn run() {
     let pending_permissions = Arc::new(Mutex::new(HashMap::new()));
     let pending_codex_permissions = Arc::new(Mutex::new(HashMap::new()));
     let running_prompts = Arc::new(Mutex::new(HashMap::new()));
-    let active_subprocess_adapters = Arc::new(Mutex::new(HashMap::new()));
     let active_codex_adapters = Arc::new(Mutex::new(HashMap::new()));
     let active_roo_adapters = Arc::new(Mutex::new(HashMap::new()));
 
@@ -7277,16 +7147,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
-            #[cfg(any(target_os = "ios", target_os = "android"))]
-            {
-                app.handle().plugin(tauri_plugin_haptics::init())?;
-                app.handle().plugin(tauri_plugin_biometric::init())?;
-                app.handle().plugin(tauri_plugin_network::init())?;
-                app.handle().plugin(tauri_plugin_deep_link::init())?;
-                app.handle().plugin(tauri_plugin_notification::init())?;
-                app.handle().plugin(tauri_plugin_share::init())?;
-                mobile::register_deep_link_listener(&app.handle().clone());
-            }
+            mobile::register_mobile_plugins(app.handle());
             Ok(())
         })
         .manage(AppState {
@@ -7294,7 +7155,6 @@ pub fn run() {
             pending_permissions,
             pending_codex_permissions,
             running_prompts,
-            active_subprocess_adapters,
             active_codex_adapters,
             active_roo_adapters,
         })

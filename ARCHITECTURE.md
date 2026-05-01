@@ -497,26 +497,12 @@ graph TB
 └──────────────────────────────────────────────┘
 ```
 
-### Legacy SubprocessAdapter (Fallback)
-
-SubprocessAdapter 仍可作为 Roo-code 的备用方案，通过 Bridge Binary 以 JSON-RPC over stdio 通信：
-
-1. 主进程启动 Bridge Binary（`remote-code-roo-bridge`）
-2. Bridge Binary 通过 JSON-RPC over stdio 与主进程通信
-3. Bridge Binary 启动实际的 Roo-code 二进制并翻译 I/O
-
 ### Bridge Protocol
 
 定义在 `crates/claude/rc-agent-protocol/src/bridge_proto.rs`：
 
 - 请求方法：`initialize`, `send_message`, `cancel`, `shutdown`, `resolve_permission`
 - 通知方法：`started`, `ready`, `message_delta`, `tool_call_started`, `done`, `error` 等
-
-### Bridge Binary
-
-| Binary | Crate | 职责 |
-|--------|-------|------|
-| `remote-code-roo-bridge` | `apps/remote-code-roo-bridge/` | 启动 Roo-code 二进制，翻译 JSON-RPC ↔ Roo-code I/O |
 
 ### 构建系统
 
