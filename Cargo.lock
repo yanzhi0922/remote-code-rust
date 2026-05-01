@@ -2053,7 +2053,7 @@ dependencies = [
  "chrono",
  "claude-context",
  "claude-core",
- "directories 6.0.0",
+ "directories",
  "indexmap 2.14.0",
  "serde",
  "serde_json",
@@ -2127,7 +2127,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "claude-core",
- "directories 6.0.0",
+ "directories",
  "serde",
  "serde_json",
  "tempfile",
@@ -2352,7 +2352,7 @@ dependencies = [
  "chrono",
  "claude-mcp",
  "claude-skills",
- "directories 6.0.0",
+ "directories",
  "flate2",
  "once_cell",
  "regex",
@@ -2596,7 +2596,7 @@ dependencies = [
  "claude-swarm",
  "claude-ui-bridge",
  "claude-utils",
- "directories 5.0.1",
+ "directories",
  "glob",
  "globset",
  "ignore",
@@ -2649,7 +2649,7 @@ dependencies = [
  "claude-tools",
  "claude-utils",
  "crossterm",
- "directories 6.0.0",
+ "directories",
  "ratatui",
  "serde",
  "serde_json",
@@ -5716,20 +5716,11 @@ dependencies = [
 
 [[package]]
 name = "directories"
-version = "5.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a49173b84e034382284f27f1af4dcbbd231ffa358c0fe316541a7337f376a35"
-dependencies = [
- "dirs-sys 0.4.1",
-]
-
-[[package]]
-name = "directories"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "16f5094c54661b38d03bd7e50df373292118db60b585c08a411c6d840017fe7d"
 dependencies = [
- "dirs-sys 0.5.0",
+ "dirs-sys",
 ]
 
 [[package]]
@@ -5738,7 +5729,7 @@ version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3e8aa94d75141228480295a7d0e7feb620b1a5ad9f12bc40be62411e38cce4e"
 dependencies = [
- "dirs-sys 0.5.0",
+ "dirs-sys",
 ]
 
 [[package]]
@@ -5749,18 +5740,6 @@ checksum = "b98cf8ebf19c3d1b223e151f99a4f9f0690dca41414773390fc824184ac833e1"
 dependencies = [
  "cfg-if",
  "dirs-sys-next",
-]
-
-[[package]]
-name = "dirs-sys"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "520f05a5cbd335fae5a99ff7a6ab8627577660ee5cfd6a94a6a929b52ff0321c"
-dependencies = [
- "libc",
- "option-ext",
- "redox_users 0.4.6",
- "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -12392,7 +12371,7 @@ dependencies = [
  "codex-protocol",
  "codex-state",
  "codex-utils-absolute-path",
- "directories 6.0.0",
+ "directories",
  "serde",
  "serde_json",
  "tokio",
@@ -12603,7 +12582,7 @@ dependencies = [
  "claude-transcript",
  "claude-tui",
  "claude-ui-bridge",
- "directories 6.0.0",
+ "directories",
  "futures",
  "regex",
  "reqwest 0.12.28",
@@ -12654,7 +12633,7 @@ dependencies = [
  "claude-voice",
  "codex-app-server-protocol",
  "codex-arg0",
- "directories 6.0.0",
+ "directories",
  "keyring 2.3.3",
  "rc-claude-adapter",
  "rc-codex-adapter",
