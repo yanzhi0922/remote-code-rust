@@ -28,8 +28,8 @@
 - 📦 **插件系统** — JSON-RPC stdio 协议，隔离进程运行
 - 🧩 **Skills 系统** — Markdown frontmatter 技能发现与索引
 - 🤝 **多代理系统（Swarm）** — AgentScheduler + 并行执行 + 邮箱消息传递
-- 🌐 **多 Agent 统一管理** — Remote Code / Roo Code / OpenAI Codex 三引擎共享 `InProcessAdapter` 进程内回调架构
-- ⚡ **QueryEngine 统一执行路径** — 三个 Agent 共享同一条查询执行路径，消除双路径分歧
+- 🌐 **多 Agent 统一管理** — Claude / Codex / Roo 三引擎各自独立的 in-process 适配器，统一 `AgentAdapter` trait
+- ⚡ **QueryEngine 执行路径** — Claude Agent 使用 QueryEngine 统一执行路径，Codex 使用 AppServer 协议，Roo 使用 Provider+ToolDispatcher
 - 💾 **记忆系统** — RC.md 持久化记忆（全局 / 项目双作用域）
 - 🛡️ **沙箱执行** — Seatbelt (macOS) / Landlock (Linux) / Windows 策略
 - 📊 **成本追踪** — 多模型 Token 使用统计 + 费用累计
@@ -53,7 +53,7 @@ remote-code-rust/
 │   │   ├── src/                   # CLI / TUI / Headless / 交互式模式
 │   │   └── Cargo.toml
 │   ├── codex/                     # OpenAI Codex 源码（codex-rs，独立 Git 仓库）
-│   └── roo-code/                  # Roo Code 源码（roo-server，独立 Git 仓库）
+│   └── roo-code/                  # Roo Code 源码（独立 Git 仓库）
 ├── apps/                          # 应用程序
 │   ├── remote-code-gui/           # 桌面 GUI（Tauri v2 + React 19）
 │   ├── remote-code-mobile/        # 移动端（Capacitor）
@@ -61,18 +61,20 @@ remote-code-rust/
 │   ├── remote-code-runner/        # 远程 Runner
 │   └── remote-code-migrate/       # 数据迁移
 ├── crates/                        # 库 Crate（38 个）
-│   ├── rc-agent-protocol/         # 多 Agent 协议抽象层
-│   │   └── src/adapters/
-│   │       ├── in_process.rs      # 统一 InProcessAdapter 实现
-│   │       ├── remote_claude.rs   # RemoteClaudeAdapter 类型别名
-│   │       ├── remote_roo.rs      # RemoteRooAdapter 类型别名
-│   │       └── remote_codex.rs    # RemoteCodexAdapter 类型别名
-│   ├── rc-query-engine/           # QueryEngine 统一执行路径
-│   ├── rc-core/                   # 核心运行时类型
-│   ├── rc-provider/               # Provider 标准化与流式
-│   └── ...                        # 其他 34 个 crate
+│   ├── adapters/                  # 三 Agent 独立适配器
+│   │   ├── rc-claude-adapter/     # Claude 适配器（QueryEngine）
+│   │   ├── rc-codex-adapter/      # Codex 适配器（AppServer + event_mapper）
+│   │   └── rc-roo-adapter/        # Roo 适配器（Provider + ToolDispatcher）
+│   ├── claude/
+│   │   ├── rc-agent-protocol/     # 多 Agent 协议抽象层（trait + events + types）
+│   │   ├── rc-query-engine/       # QueryEngine 执行路径
+│   │   ├── rc-core/               # 核心运行时类型
+│   │   ├── rc-provider/           # Provider 标准化与流式
+│   │   └── ...                    # 其他 Claude 核心 crate
+│   ├── codex/                     # Codex 核心 crate（core, exec, protocol 等）
+│   └── roo/                       # Roo 核心 crate（65 个，provider, task, tools 等）
 ├── plans/                         # 设计文档
-│   ├── multi-agent-architecture.md  # 多 Agent 架构设计（当前）
+│   ├── multi-agent-architecture.md  # 多 Agent 架构设计
 │   ├── PROJECT_STATUS.md            # 项目状态
 │   └── archive/                     # 归档文档
 ├── scripts/                       # 构建与工具脚本
@@ -135,7 +137,10 @@ remote-code-rust/
 | `rc-runner` | Runner 协议、HTTP API、心跳 |
 | `rc-control-plane` | API 模型、Runner 注册、WebSocket 扇出 |
 | `rc-utils` | 工具函数（Git、Diff、Markdown、图片、Cron 等） |
-| `rc-agent-protocol` | 多 Agent 协议抽象层：`InProcessAdapter`、`UnifiedAgentEvent`、`AgentRouter` |
+| `rc-agent-protocol` | 多 Agent 协议抽象层：`AgentAdapter` trait、`UnifiedAgentEvent`、`AgentRouter` |
+| `rc-claude-adapter` | Claude 适配器：`ClaudeInProcessAdapter` = `QueryEngine` |
+| `rc-codex-adapter` | Codex 适配器：`CodexInProcessAdapter` + `event_mapper` (754 行) |
+| `rc-roo-adapter` | Roo 适配器：`RooInProcessAdapter` + 12 Provider 后端 |
 
 ### 数据流
 

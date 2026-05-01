@@ -42,8 +42,11 @@ The codex and roo-code directories are excluded from the main repo via `.gitigno
 - `rc-runner`: runner protocol, HTTP API, workspace registration, heartbeat, session/approval management
 - `rc-control-plane`: API models, runner registry, realtime fan-out (WebSocket), approvals, artifact routes, timeline events
 - `rc-telemetry`: tracing setup, structured logging, JSON output, cost telemetry
-- `rc-agent-protocol`: multi-agent protocol abstraction layer — `InProcessAdapter` for Claude/Roo (callback injection), `CodexInProcessAdapter` for Codex (native AppServerClient event pump), `SubprocessAdapter` fallback, `UnifiedAgentEvent` enum, `AgentRouter` for routing messages to different agent backends
-- `rc-query-engine`: unified query loop, state machine, streaming executor, token budget — shared execution path for all three agents
+- `rc-agent-protocol`: multi-agent protocol abstraction layer — `AgentAdapter` trait, `UnifiedAgentEvent` enum, `AgentRouter` for routing messages to different agent backends, `AgentType` enum
+- `rc-query-engine`: unified query loop, state machine, streaming executor, token budget — execution path for Claude agent
+- `rc-codex-adapter`: Codex in-process adapter — wraps `InProcessAppServerClient` with background event pump and `event_mapper` (754 lines, 50+ notification types)
+- `rc-roo-adapter`: Roo in-process adapter — wraps Roo's `Provider` + `ToolDispatcher` with custom agent loop (12 provider backends)
+- `rc-claude-adapter`: Claude in-process adapter — type alias for `QueryEngine`, re-exports all QueryEngine types
 
 ## Process Model
 
@@ -161,12 +164,13 @@ The compatibility serializer is the only place where loosely structured legacy s
 
 ### Multi-Agent Protocol Boundary
 
-Agents communicate via in-process adapters — no subprocess spawning or IPC overhead:
+Three independent in-process adapters, each tailored to its agent's native architecture:
 
-- **Claude Code & Roo Code**: `InProcessAdapter` receives injected callback functions at construction time
-- **Codex**: `CodexInProcessAdapter` wraps the Codex `AppServerClient` with a background event pump for real-time streaming
-- Events flow through `mpsc::Receiver<UnifiedAgentEvent>` channels
-- No external process spawning, no IPC overhead, no subprocess lifecycle management
+- **Claude Code**: `QueryEngine` (via `rc-claude-adapter`) — full turn-based conversation loop with `GuiToolRunner`, `GuiQueryObserver`, `GuiRuntimePermissionBroker`, `ContextWindowManager`
+- **Codex**: `CodexInProcessAdapter` (`rc-codex-adapter`) — wraps `InProcessAppServerClient` with background event pump and `event_mapper` (754 lines, 50+ notification types, 60+ RPC methods)
+- **Roo Code**: `RooInProcessAdapter` (`rc-roo-adapter`) — wraps Roo's `Provider` + `ToolDispatcher` with custom agent loop (12 provider backends: Anthropic, OpenAI, DeepSeek, Google, Ollama, LMStudio, Mistral, Fireworks, BaseTen, LiteLLM, Moonshot, MiniMax)
+- All adapters implement the `AgentAdapter` trait and emit `UnifiedAgentEvent` through `mpsc::Receiver`
+- No external process spawning, no IPC overhead, no bridge binaries
 
 ## Provider Architecture
 
@@ -357,124 +361,94 @@ When context approaches the window limit:
 
 ### Multi-Agent Adapter Architecture
 
-The GUI supports multiple AI agent backends through a unified in-process adapter pattern. See [plans/multi-agent-architecture.md](plans/multi-agent-architecture.md) for the full design.
+The GUI supports three independent AI agent backends, each with its own in-process adapter tailored to the agent's native architecture. See [plans/multi-agent-architecture.md](plans/multi-agent-architecture.md) for the full design.
 
-**Unified InProcessAdapter Architecture:**
-
-All three agents share the same `InProcessAdapter` implementation, differing only in the callback functions injected at construction time:
+**Three Independent Adapter Architecture:**
 
 ```mermaid
 graph TB
     subgraph Frontend
-        UI[React UI]
+        UI[React UI<br/>AgentSelector]
     end
 
-    subgraph Tauri Backend
+    subgraph Tauri Backend — send_prompt routing
         CMD[Tauri Commands]
-        ROUTER[AgentRouter]
+        ROUTING{agent_type match}
         
-        subgraph InProcessAdapter
-            RCA[RemoteClaudeAdapter<br/>callback: rc-query-engine]
-            RA[RemoteRooAdapter<br/>callback: roo-logic]
-            CA[RemoteCodexAdapter<br/>callback: codex-logic]
+        subgraph crates/adapters/
+            CA[rc-claude-adapter<br/>ClaudeInProcessAdapter<br/>= QueryEngine]
+            CXA[rc-codex-adapter<br/>CodexInProcessAdapter<br/>AppServerClient + event_pump]
+            RA[rc-roo-adapter<br/>RooInProcessAdapter<br/>Provider + ToolDispatcher]
         end
-
-        QE[QueryEngine<br/>统一执行路径]
     end
 
-    subgraph Core Runtime
-        PROVIDER[rc-provider]
-        TOOLS[rc-tools]
-        SESSION[rc-session]
+    subgraph Agent Runtimes
+        QE[QueryEngine<br/>GuiToolRunner + Observer]
+        CX_RT[Codex AppServer<br/>60+ RPC methods]
+        RO_RT[Roo Agent Loop<br/>12 Provider backends]
     end
 
     UI --> CMD
-    CMD --> ROUTER
-    ROUTER --> RCA
-    ROUTER --> RA
-    ROUTER --> CA
+    CMD --> ROUTING
+    ROUTING -->|remote_claude| CA
+    ROUTING -->|remote_codex| CXA
+    ROUTING -->|remote_roo| RA
     
-    RCA --> QE
-    RA --> QE
     CA --> QE
-    
-    QE --> PROVIDER
-    QE --> TOOLS
-    QE --> SESSION
+    CXA --> CX_RT
+    RA --> RO_RT
 ```
 
 **Supported Agents:**
 
-| Agent | Transport | Protocol | Implementation |
-|-------|-----------|----------|----------------|
-| Remote Code | In-process callback | Direct Rust calls | `InProcessAdapter` + rc-query-engine callbacks |
-| Roo Code | In-process callback | Callback injection | `InProcessAdapter` + roo-specific callbacks |
-| OpenAI Codex | In-process event pump | Codex AppServerClient | `CodexInProcessAdapter` + event_mapper |
+| Agent | Crate | Transport | Implementation |
+|-------|-------|-----------|----------------|
+| Claude Code | `rc-claude-adapter` | In-process QueryEngine | `QueryEngine` + `GuiToolRunner` + `GuiQueryObserver` + `GuiRuntimePermissionBroker` |
+| OpenAI Codex | `rc-codex-adapter` | In-process AppServer | `CodexInProcessAdapter` + `InProcessAppServerClient` + `event_mapper` (754 lines) |
+| Roo Code | `rc-roo-adapter` | In-process Provider | `RooInProcessAdapter` + `Provider` + `ToolDispatcher` + custom agent loop |
 
 **Core Abstractions:**
 
-- `InProcessAdapter` — unified adapter with builder-pattern callback injection (`with_send_message()`, `with_cancel()`, `with_resolve_permission()`) for Claude and Roo
-- `CodexInProcessAdapter` — native Codex adapter wrapping `AppServerClient` with background event pump and `event_mapper` for real-time streaming
-- `SubprocessAdapter` — legacy fallback using bridge binaries (JSON-RPC over stdio)
 - `AgentAdapter` trait — async interface: `start()`, `send_message()`, `cancel()`, `resolve_permission()`, `stop()`, `is_alive()`
 - `AgentRouter` — routes sessions to the correct adapter based on `agent_type`
 - `UnifiedAgentEvent` — normalized event model for all agent protocols
-- `rc-agent-protocol` — shared types, adapter trait, event definitions, type aliases
-- `rc-codex-adapter` — Codex-specific adapter with event_mapper (AppServerEvent → UnifiedAgentEvent)
+- `rc-agent-protocol` — shared trait, event definitions, types (no adapter implementations)
+- `rc-claude-adapter` — Claude adapter: `ClaudeInProcessAdapter` = type alias for `QueryEngine`
+- `rc-codex-adapter` — Codex adapter: `CodexInProcessAdapter` with `event_mapper` (AppServerEvent → UnifiedAgentEvent)
+- `rc-roo-adapter` — Roo adapter: `RooInProcessAdapter` with `Provider` + `ToolDispatcher`
 
 **Key Design Decisions:**
 
-1. All agents run in-process — no subprocess spawning, no IPC overhead
-2. Callback injection differentiates agent behavior — same struct, different closures
-3. Sessions are bound to a single agent type at creation time
-4. Permission requests from all agents are routed through the same GUI approval flow
-5. QueryEngine provides a unified execution path shared by all three agents
+1. All agents run in-process — no subprocess spawning, no IPC overhead, no bridge binaries
+2. Each agent has its own dedicated adapter crate under `crates/adapters/`
+3. Adapters are architecturally symmetric but implementation differs per agent's native architecture
+4. Sessions are bound to a single agent type at creation time
+5. Permission requests from all agents are routed through the same GUI approval flow
+6. Claude uses QueryEngine; Codex uses AppServer protocol; Roo uses Provider+ToolDispatcher
 
-## Three-Agent Independent Binary Architecture
+## Three-Agent In-Process Architecture
 
 ### 概览
 
-三个 Agent 各自编译为独立的可执行文件，通过统一的 `AgentAdapter` trait 与主进程通信：
+三个 Agent 各自拥有独立的适配器 crate，全部进程内执行，无需子进程或桥接二进制：
 
-| Agent | Binary Name | 通信方式 | 源码位置 |
-|-------|-------------|---------|---------|
-| Claude Code | `remote-code` | 进程内（InProcessAdapter + 回调注入） | `agents/claudecode/` |
-| Codex | `codex` | 进程内（CodexInProcessAdapter + 事件泵） | `agents/codex/codex-rs/` |
-| Roo-code | `roo` | 进程内（InProcessAdapter + 回调注入） | `agents/roo-code/` |
+| Agent | Adapter Crate | 适配器类型 | 运行时依赖 |
+|-------|--------------|-----------|-----------|
+| Claude Code | `crates/adapters/rc-claude-adapter` | `ClaudeInProcessAdapter` (= `QueryEngine`) | `rc-query-engine`, `rc-core`, `rc-provider`, `rc-tools`, `rc-session` |
+| Codex | `crates/adapters/rc-codex-adapter` | `CodexInProcessAdapter` | `codex-app-server-client`, `codex-core`, `codex-protocol` |
+| Roo Code | `crates/adapters/rc-roo-adapter` | `RooInProcessAdapter` | `roo-provider`, `roo-task`, `roo-tools`, `roo-types` |
 
-### In-Process Adapters
+### Adapter Integration Status
 
-所有三个 Agent 都通过进程内适配器与主进程通信，无需子进程桥接：
-
-```mermaid
-graph TB
-    subgraph Main Process
-        GUI[GUI / CLI]
-        ROUTER[AgentRouter]
-        IPA[InProcessAdapter<br/>Claude Code<br/>callback injection]
-        CXA[CodexInProcessAdapter<br/>Codex<br/>AppServerClient event pump]
-        ROA[InProcessAdapter<br/>Roo Code<br/>callback injection]
-    end
-
-    subgraph Agent Runtimes
-        RC_RT[rc-query-engine]
-        CX_RT[Codex AppServerClient]
-        RO_RT[roo-logic]
-    end
-
-    GUI --> ROUTER
-    ROUTER --> IPA
-    ROUTER --> CXA
-    ROUTER --> ROA
-
-    IPA --> RC_RT
-    CXA --> CX_RT
-    ROA --> RO_RT
-```
+| Agent | Core Path | Tool Execution | Permissions | Context Mgmt | Streaming | MCP |
+|-------|-----------|---------------|-------------|-------------|-----------|-----|
+| Claude | ✅ QueryEngine | ✅ All native tools | ✅ Full GUI broker | ✅ Auto compaction | ✅ | ✅ |
+| Codex | ✅ AppServer | ✅ AppServer tools | ✅ Mapped to GUI | ✅ AppServer managed | ✅ | ✅ |
+| Roo | ✅ Provider+Dispatcher | ✅ ToolDispatcher | ⚠️ No-op stub | ⚠️ Rough estimate | ✅ | ❌ Not yet |
 
 ### CodexInProcessAdapter Architecture
 
-`CodexInProcessAdapter` 直接包装 Codex 的 `AppServerClient`，通过后台事件泵实现实时流式传输：
+`CodexInProcessAdapter` 直接包装 Codex 的 `InProcessAppServerClient`，通过后台事件泵实现实时流式传输：
 
 ```text
 ┌──────────────────────────────────────────────┐
@@ -497,12 +471,24 @@ graph TB
 └──────────────────────────────────────────────┘
 ```
 
-### Bridge Protocol
+### RooInProcessAdapter Architecture
 
-定义在 `crates/claude/rc-agent-protocol/src/bridge_proto.rs`：
+`RooInProcessAdapter` 包装 Roo 的 `Provider` + `ToolDispatcher`，在后台任务中运行自定义 agent loop：
 
-- 请求方法：`initialize`, `send_message`, `cancel`, `shutdown`, `resolve_permission`
-- 通知方法：`started`, `ready`, `message_delta`, `tool_call_started`, `done`, `error` 等
+```text
+┌──────────────────────────────────────────────┐
+│  RooInProcessAdapter                         │
+│  ┌──────────────┐  ┌───────────────────────┐ │
+│  │ build_handler │  │ run_agent_loop (task) │ │
+│  │ 12 providers  │  │ Provider.create_msg   │ │
+│  │               │  │ collect_stream+fwd    │ │
+│  │               │  │ ToolDispatcher.dispatch│ │
+│  └──────────────┘  └───────────┬───────────┘ │
+│                                  │             │
+│  send_message() spawns worker    │             │
+│  cancel() via CancellationToken  │             │
+└──────────────────────────────────────────────┘
+```
 
 ### 构建系统
 
@@ -510,9 +496,9 @@ graph TB
 - `scripts/build-agents.ps1` — PowerShell 构建脚本（Windows）
 - `scripts/build-agents.sh` — Bash 构建脚本（Linux/macOS）
 
-## QueryEngine Unified Execution Path
+## QueryEngine Execution Path (Claude Agent)
 
-`rc-query-engine` provides a single execution path for all agent types, eliminating the previous dual-path architecture:
+`rc-query-engine` provides the execution path for the Claude agent, with full tool execution, permission brokering, and context management:
 
 ```mermaid
 graph LR
@@ -631,5 +617,7 @@ Release builds are triggered by tags and produce binaries for 5 platforms.
 | Limitation | Description |
 |------------|-------------|
 | TTS Mock | `rc-voice::tts` returns placeholder responses, not connected to a real TTS service |
-| Roo Code Callbacks | Roo Code callbacks currently return stub responses, awaiting real implementation |
+| Roo Permission Stub | `RooInProcessAdapter::resolve_permission()` is a no-op — Roo's tool approval flow is not yet wired to the GUI interactive permission dialog |
+| Roo Token Estimation | Roo adapter uses `text.len() / 4` for approximate token counting instead of Roo's native tiktoken |
+| Roo MCP Not Wired | Roo adapter declares `McpSupport` capability but does not integrate `McpServerConnection` in `send_message()` |
 | Alpha Dependencies | `rama-*` crates pinned to `0.3.0-alpha.4` — pre-release quality, will need migration when stable releases |
