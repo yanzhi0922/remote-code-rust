@@ -42,6 +42,10 @@ use roo_checkpoint::types::SaveCheckpointOptions;
 use roo_tools::repetition::ToolRepetitionDetector;
 use roo_types::mcp::McpServerConnection;
 use roo_types::tool::{ToolName, ToolUsageEntry};
+use roo_ignore::RooIgnoreController;
+use roo_protect::RooProtectedController;
+use roo_context_tracking::FileContextTracker;
+use roo_context_tracking::InMemoryMetadataStore;
 
 use crate::engine::TaskEngine;
 use crate::message_builder::MessageBuilder;
@@ -85,25 +89,6 @@ static LAST_GLOBAL_API_REQUEST_TIME: std::sync::Mutex<Option<Instant>> =
 /// Source: `src/core/task/Task.ts` line 408 — `TOKEN_USAGE_EMIT_INTERVAL_MS = 2000`
 const TOKEN_USAGE_EMIT_INTERVAL_MS: u64 = 2000;
 
-// ===========================================================================
-// Placeholder types for controllers not yet fully integrated
-// TODO: Replace with actual types when dependencies are wired up
-// ===========================================================================
-
-// TODO: Replace with roo_ignore::controller::RooIgnoreController
-// Source: `src/core/task/Task.ts` line 298 — `rooIgnoreController?: RooIgnoreController`
-#[derive(Debug, Clone, Default)]
-struct RooIgnoreControllerPlaceholder;
-
-// TODO: Replace with roo_protect::controller::RooProtectedController
-// Source: `src/core/task/Task.ts` line 299 — `rooProtectedController?: RooProtectedController`
-#[derive(Debug, Clone, Default)]
-struct RooProtectedControllerPlaceholder;
-
-// TODO: Replace with roo_context_tracking::FileContextTracker<InMemoryMetadataStore>
-// Source: `src/core/task/Task.ts` line 300 — `fileContextTracker: FileContextTracker`
-#[derive(Debug, Clone, Default)]
-struct FileContextTrackerPlaceholder;
 
 // ===========================================================================
 // merge_consecutive_api_messages — TS line 4198
@@ -137,14 +122,34 @@ fn merge_consecutive_api_messages(
             continue;
         }
 
+        // Never merge truncation marker messages
+        if msg.is_truncation_marker.unwrap_or(false) {
+            result.push(msg.clone());
+            continue;
+        }
+
         // Check if this message should be merged with the previous one
         if let Some(last) = result.last_mut() {
-            if last.role == msg.role
-                && roles.contains(&msg.role)
-                && !last.is_summary.unwrap_or(false)
+            // Never merge if the previous message is a summary or truncation marker
+            if last.is_summary.unwrap_or(false)
+                || last.is_truncation_marker.unwrap_or(false)
             {
+                result.push(msg.clone());
+                continue;
+            }
+
+            if last.role == msg.role && roles.contains(&msg.role) {
                 // Merge content blocks
                 last.content.extend(msg.content.iter().cloned());
+
+                // Merge timestamps: keep the maximum timestamp
+                let max_ts = msg.ts.unwrap_or(0.0).max(last.ts.unwrap_or(0.0));
+                last.ts = if max_ts > 0.0 {
+                    Some(max_ts)
+                } else {
+                    last.ts.or(msg.ts)
+                };
+
                 continue;
             }
         }
@@ -611,25 +616,19 @@ pub struct AgentLoop {
     ///
     /// Source: `src/core/task/Task.ts` line 298
     ///   `rooIgnoreController?: RooIgnoreController`
-    /// TODO: Replace placeholder with `roo_ignore::controller::RooIgnoreController`
-    #[allow(dead_code)]
-    roo_ignore_controller: Option<RooIgnoreControllerPlaceholder>,
+    pub roo_ignore_controller: Option<RooIgnoreController>,
 
     /// .rooprotect controller for protecting files from modification.
     ///
     /// Source: `src/core/task/Task.ts` line 299
     ///   `rooProtectedController?: RooProtectedController`
-    /// TODO: Replace placeholder with `roo_protect::controller::RooProtectedController`
-    #[allow(dead_code)]
-    roo_protected_controller: Option<RooProtectedControllerPlaceholder>,
+    pub roo_protected_controller: Option<RooProtectedController>,
 
     /// File context tracker for tracking file reads/edits.
     ///
     /// Source: `src/core/task/Task.ts` line 300
     ///   `fileContextTracker: FileContextTracker`
-    /// TODO: Replace placeholder with `roo_context_tracking::FileContextTracker<InMemoryMetadataStore>`
-    #[allow(dead_code)]
-    file_context_tracker: Option<FileContextTrackerPlaceholder>,
+    pub file_context_tracker: Option<FileContextTracker<InMemoryMetadataStore>>,
 
     /// Whether the checkpoint service is currently initializing.
     ///
@@ -842,6 +841,33 @@ impl AgentLoop {
     /// are not included in the tool definitions sent to the model.
     pub fn with_mcp_servers(mut self, servers: Vec<McpServerConnection>) -> Self {
         self.mcp_servers = servers;
+        self
+    }
+
+    /// Set the RooIgnore controller for filtering file access.
+    ///
+    /// Source: `src/core/task/Task.ts` line 298
+    ///   `rooIgnoreController?: RooIgnoreController`
+    pub fn with_roo_ignore_controller(mut self, controller: RooIgnoreController) -> Self {
+        self.roo_ignore_controller = Some(controller);
+        self
+    }
+
+    /// Set the RooProtected controller for write-protection checks.
+    ///
+    /// Source: `src/core/task/Task.ts` line 299
+    ///   `rooProtectedController?: RooProtectedController`
+    pub fn with_roo_protected_controller(mut self, controller: RooProtectedController) -> Self {
+        self.roo_protected_controller = Some(controller);
+        self
+    }
+
+    /// Set the file context tracker for tracking file reads/edits.
+    ///
+    /// Source: `src/core/task/Task.ts` line 300
+    ///   `fileContextTracker: FileContextTracker`
+    pub fn with_file_context_tracker(mut self, tracker: FileContextTracker<InMemoryMetadataStore>) -> Self {
+        self.file_context_tracker = Some(tracker);
         self
     }
 
@@ -1282,6 +1308,9 @@ impl AgentLoop {
                 //  if he's completed the task and then call attempt_completion"
                 next_user_content = Some(roo_prompt::responses::no_tools_used());
             }
+
+            // Persist messages at the end of each outer loop iteration
+            let _ = self.engine.save_cline_messages().await;
         }
 
         Ok(())
@@ -1380,13 +1409,13 @@ impl AgentLoop {
                             }
                             Ok(MistakeLimitAction::Cancel) => {
                                 warn!("User chose to cancel after mistake limit");
-                                self.handle_loop_termination()?;
+                                self.handle_loop_termination().await?;
                                 break;
                             }
                             Err(_) => {
                                 // Channel dropped (timeout/cancellation) — fall back to termination
                                 warn!("Mistake limit channel dropped, terminating");
-                                self.handle_loop_termination()?;
+                                self.handle_loop_termination().await?;
                                 break;
                             }
                         }
@@ -1396,7 +1425,7 @@ impl AgentLoop {
                         iteration = self.engine.loop_control().current_iteration,
                         "Loop terminated: should_continue is false"
                     );
-                    self.handle_loop_termination()?;
+                    self.handle_loop_termination().await?;
                     break;
                 }
             }
@@ -2136,6 +2165,10 @@ impl AgentLoop {
             self.engine.add_api_message(assistant_msg);
             self.engine.streaming_mut().assistant_message_saved_to_history = true;
 
+            // Persist API conversation history and cline messages after stream completes
+            let _ = self.engine.save_api_conversation_history().await;
+            let _ = self.engine.save_cline_messages().await;
+
             // ---------------------------------------------------------------
             // Step 13: Handle noToolsUsed / empty response
             // TS: if (noToolsUsed) { ... } / if (!assistantContent.length) { ... }
@@ -2307,7 +2340,7 @@ impl AgentLoop {
                     continue;
                 }
 
-                self.handle_loop_termination()?;
+                self.handle_loop_termination().await?;
                 break;
             }
 
@@ -3107,7 +3140,10 @@ impl AgentLoop {
             self.config.has_mcp,
             self.config.custom_instructions.as_deref(),
             self.config.language.as_deref(),
-            None, // roo_ignore_instructions — placeholder controller not yet functional
+            self.roo_ignore_controller
+                .as_ref()
+                .and_then(|c| c.get_instructions())
+                .as_deref(),
             Some(&settings),
             &self.config.skills,
             &os_info,
@@ -3638,6 +3674,9 @@ impl AgentLoop {
             self.engine.add_api_message(result_msg);
         }
 
+        // Persist cline messages after all tool results have been processed
+        let _ = self.engine.save_cline_messages().await;
+
         Ok(all_succeeded)
     }
 
@@ -3786,14 +3825,20 @@ impl AgentLoop {
                 "File context tracked"
             );
 
-            let store = roo_context_tracking::InMemoryMetadataStore::new();
-            let tracker = roo_context_tracking::FileContextTracker::new(
-                &self.engine.config().task_id,
-                store,
-            );
-
-            if let Err(e) = tracker.track_file_context(&path, source) {
-                debug!(error = %e, "Failed to track file context (non-fatal)");
+            if let Some(ref tracker) = self.file_context_tracker {
+                if let Err(e) = tracker.track_file_context(&path, source) {
+                    debug!(error = %e, "Failed to track file context (non-fatal)");
+                }
+            } else {
+                // Fallback: create a temporary tracker if none is configured
+                let store = roo_context_tracking::InMemoryMetadataStore::new();
+                let temp_tracker = roo_context_tracking::FileContextTracker::new(
+                    &self.engine.config().task_id,
+                    store,
+                );
+                if let Err(e) = temp_tracker.track_file_context(&path, source) {
+                    debug!(error = %e, "Failed to track file context (non-fatal)");
+                }
             }
         }
     }
@@ -4111,7 +4156,7 @@ impl AgentLoop {
     // ===================================================================
 
     /// Handle loop termination based on the current state.
-    fn handle_loop_termination(&mut self) -> Result<(), TaskError> {
+    async fn handle_loop_termination(&mut self) -> Result<(), TaskError> {
         let lc = self.engine.loop_control();
 
         if lc.is_cancelled {
@@ -4128,6 +4173,10 @@ impl AgentLoop {
             self.engine
                 .abort_with_reason("max_iterations_exceeded")?;
         }
+
+        // Persist messages on loop termination
+        let _ = self.engine.save_api_conversation_history().await;
+        let _ = self.engine.save_cline_messages().await;
 
         Ok(())
     }

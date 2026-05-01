@@ -1,4 +1,4 @@
-﻿//! Build the complete tools array for native protocol requests.
+//! Build the complete tools array for native protocol requests.
 //!
 //! Corresponds to `src/core/task/build-tools.ts`.
 
@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use roo_types::mode::ModeConfig;
 
 use crate::definition::{get_native_tools, NativeToolsOptions, ToolDefinition};
-use crate::filter::{filter_native_tools_for_mode, FilterSettings};
+use crate::filter::{filter_mcp_tools_for_mode, filter_native_tools_for_mode, FilterSettings};
 
 // ---------------------------------------------------------------------------
 // BuildToolsOptions
@@ -36,6 +36,11 @@ pub struct BuildToolsOptions {
     pub codebase_search_enabled: bool,
     /// Whether MCP resources are available.
     pub mcp_resources_available: bool,
+    /// MCP tool definitions obtained from McpHub (caller is responsible for
+    /// fetching via `getMcpServerTools` equivalent).
+    ///
+    /// Source: `build-tools.ts` — `getMcpServerTools(mcpHub)`
+    pub mcp_tools: Vec<ToolDefinition>,
 }
 
 impl Default for BuildToolsOptions {
@@ -51,6 +56,7 @@ impl Default for BuildToolsOptions {
             supports_images: false,
             codebase_search_enabled: false,
             mcp_resources_available: false,
+            mcp_tools: vec![],
         }
     }
 }
@@ -84,6 +90,8 @@ pub fn build_native_tools_array(options: BuildToolsOptions) -> Vec<ToolDefinitio
 
 /// Builds the complete tools array with optional mode restrictions.
 ///
+/// Combines native tools, MCP tools, and applies mode filtering.
+///
 /// Source: `src/core/task/build-tools.ts` — `buildNativeToolsArrayWithRestrictions`
 pub fn build_native_tools_array_with_restrictions(options: BuildToolsOptions) -> BuildToolsResult {
     let filter_settings = FilterSettings {
@@ -108,20 +116,41 @@ pub fn build_native_tools_array_with_restrictions(options: BuildToolsOptions) ->
         &filter_settings,
     );
 
+    // Filter MCP tools based on mode restrictions
+    let filtered_mcp_tools = filter_mcp_tools_for_mode(
+        &options.mcp_tools,
+        options.mode.as_deref(),
+        &options.custom_modes,
+        Some(&options.experiments),
+    );
+
+    // Combine filtered tools (native + MCP)
+    let filtered_tools: Vec<ToolDefinition> = filtered_native_tools
+        .into_iter()
+        .chain(filtered_mcp_tools.into_iter())
+        .collect();
+
     if options.include_all_tools_with_restrictions {
         // Return ALL tools but provide allowed names based on mode filtering
-        let allowed_function_names: Vec<String> = filtered_native_tools
+        let allowed_function_names: Vec<String> = filtered_tools
             .iter()
             .map(|t| crate::groups::resolve_tool_alias(&t.name))
             .collect();
 
+        // Combine ALL tools (unfiltered native + all MCP)
+        let all_tools: Vec<ToolDefinition> = native_tools
+            .into_iter()
+            .chain(options.mcp_tools.into_iter())
+            .collect();
+
         BuildToolsResult {
-            tools: native_tools,
+            tools: all_tools,
             allowed_function_names: Some(allowed_function_names),
         }
     } else {
+        // Default behavior: return only filtered tools
         BuildToolsResult {
-            tools: filtered_native_tools,
+            tools: filtered_tools,
             allowed_function_names: None,
         }
     }
@@ -199,5 +228,73 @@ mod tests {
         let tools = build_native_tools_array(opts);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(!names.contains(&"update_todo_list"));
+    }
+
+    #[test]
+    fn test_build_with_mcp_tools() {
+        let mcp_tool = ToolDefinition {
+            name: "mcp_server1_tool1".into(),
+            description: "Test MCP tool".into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+        };
+        let opts = BuildToolsOptions {
+            mcp_tools: vec![mcp_tool.clone()],
+            ..default_options()
+        };
+        let tools = build_native_tools_array(opts);
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        // Code mode should include MCP tools
+        assert!(names.contains(&"mcp_server1_tool1"));
+    }
+
+    #[test]
+    fn test_build_with_mcp_tools_ask_mode() {
+        let mcp_tool = ToolDefinition {
+            name: "mcp_server1_tool1".into(),
+            description: "Test MCP tool".into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+        };
+        let opts = BuildToolsOptions {
+            mode: Some("ask".into()),
+            mcp_tools: vec![mcp_tool],
+            ..default_options()
+        };
+        let tools = build_native_tools_array(opts);
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        // Ask mode has MCP group, so MCP tools should be included
+        assert!(names.contains(&"mcp_server1_tool1"));
+    }
+
+    #[test]
+    fn test_build_with_mcp_tools_included_in_all_tools_with_restrictions() {
+        let mcp_tool = ToolDefinition {
+            name: "mcp_server1_tool1".into(),
+            description: "Test MCP tool".into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+        };
+        let opts = BuildToolsOptions {
+            include_all_tools_with_restrictions: true,
+            mcp_tools: vec![mcp_tool],
+            ..default_options()
+        };
+        let result = build_native_tools_array_with_restrictions(opts);
+        // ALL tools should include MCP tools
+        let names: Vec<&str> = result.tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"mcp_server1_tool1"));
+        // Allowed names should also include MCP tools
+        let allowed = result.allowed_function_names.unwrap();
+        assert!(allowed.contains(&"mcp_server1_tool1".to_string()));
     }
 }

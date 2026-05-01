@@ -3,13 +3,52 @@
 //! Corresponds to `src/core/prompts/tools/filter-tools-for-mode.ts`.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
 
 use roo_types::mode::ModeConfig;
 use roo_types::tool::ToolName;
 
 use crate::definition::ToolDefinition;
-use crate::groups::{get_tools_for_mode, is_always_available, resolve_tool_alias, TOOL_GROUPS};
+use crate::groups::{get_tools_for_mode, is_always_available, resolve_tool_alias, TOOL_ALIASES, TOOL_GROUPS};
 use crate::validate::is_tool_allowed_for_mode;
+
+// ---------------------------------------------------------------------------
+// Alias data structures (built once at module load)
+// ---------------------------------------------------------------------------
+
+/// Canonical → list of alias names.
+///
+/// Source: `filter-tools-for-mode.ts` — `CANONICAL_TO_ALIASES`
+static CANONICAL_TO_ALIASES: LazyLock<HashMap<&'static str, Vec<&'static str>>> = LazyLock::new(|| {
+    let mut m: HashMap<&'static str, Vec<&'static str>> = HashMap::new();
+    for (alias, canonical) in TOOL_ALIASES.iter() {
+        m.entry(canonical.as_str())
+            .or_default()
+            .push(*alias);
+    }
+    m
+});
+
+/// Pre-computed alias groups: any tool name (canonical or alias) → full group.
+///
+/// Source: `filter-tools-for-mode.ts` — `ALIAS_GROUPS`
+static ALIAS_GROUPS: LazyLock<HashMap<String, Vec<String>>> = LazyLock::new(|| {
+    let mut m = HashMap::new();
+    for (canonical, aliases) in CANONICAL_TO_ALIASES.iter() {
+        let mut group = vec![canonical.to_string()];
+        for alias in aliases {
+            group.push(alias.to_string());
+        }
+        let group = group;
+        // Map canonical to group
+        m.insert(canonical.to_string(), group.clone());
+        // Map each alias to the same group
+        for alias in aliases {
+            m.insert(alias.to_string(), group.clone());
+        }
+    }
+    m
+});
 
 // ---------------------------------------------------------------------------
 // FilterSettings
@@ -37,6 +76,128 @@ pub struct ModelToolInfo {
     pub excluded_tools: Vec<String>,
     /// Tools to include (opt-in custom tools).
     pub included_tools: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// ModelToolCustomizationResult
+// ---------------------------------------------------------------------------
+
+/// Result of applying model tool customization.
+/// Contains the set of allowed tools and any alias renames to apply.
+///
+/// Source: `filter-tools-for-mode.ts` — `ModelToolCustomizationResult`
+#[derive(Debug, Clone)]
+pub struct ModelToolCustomizationResult {
+    /// The set of allowed tool names after customization.
+    pub allowed_tools: HashSet<String>,
+    /// Maps canonical tool name → alias name for tools that should be renamed
+    /// in the API request (so the model sees the alias name it requested).
+    pub alias_renames: HashMap<String, String>,
+}
+
+// ---------------------------------------------------------------------------
+// Alias helper functions
+// ---------------------------------------------------------------------------
+
+/// Applies tool alias resolution to a set of allowed tools.
+/// Resolves any aliases to their canonical tool names.
+///
+/// Source: `filter-tools-for-mode.ts` — `applyToolAliases`
+pub fn apply_tool_aliases(allowed_tools: &HashSet<String>) -> HashSet<String> {
+    allowed_tools
+        .iter()
+        .map(|tool| resolve_tool_alias(tool))
+        .collect()
+}
+
+/// Gets all tools in an alias group (including the canonical tool).
+/// Uses pre-computed `ALIAS_GROUPS` map for O(1) lookup.
+///
+/// Source: `filter-tools-for-mode.ts` — `getToolAliasGroup`
+pub fn get_tool_alias_group(tool_name: &str) -> Vec<String> {
+    ALIAS_GROUPS
+        .get(tool_name)
+        .cloned()
+        .unwrap_or_else(|| vec![tool_name.to_string()])
+}
+
+// ---------------------------------------------------------------------------
+// apply_model_tool_customization
+// ---------------------------------------------------------------------------
+
+/// Apply model-specific tool customization to a set of allowed tools.
+///
+/// This function filters tools based on model configuration:
+/// 1. Removes tools specified in `model_info.excluded_tools`
+/// 2. Adds tools from `model_info.included_tools` (only if they belong to
+///    allowed groups)
+/// 3. Tracks alias renames when a model requests a tool by its alias name
+///
+/// Source: `filter-tools-for-mode.ts` — `applyModelToolCustomization`
+pub fn apply_model_tool_customization(
+    allowed_tools: HashSet<String>,
+    mode_config: &ModeConfig,
+    model_info: Option<&ModelToolInfo>,
+) -> ModelToolCustomizationResult {
+    let Some(model_info) = model_info else {
+        return ModelToolCustomizationResult {
+            allowed_tools,
+            alias_renames: HashMap::new(),
+        };
+    };
+
+    let mut result = allowed_tools;
+    let mut alias_renames = HashMap::new();
+
+    // Apply excluded tools (remove from allowed set)
+    for tool in &model_info.excluded_tools {
+        let resolved = resolve_tool_alias(tool);
+        result.remove(&resolved);
+    }
+
+    // Apply included tools (add to allowed set, but only if they belong to an allowed group)
+    if !model_info.included_tools.is_empty() {
+        // Build a map of tool → group for all tools in TOOL_GROUPS (including customTools)
+        let mut tool_to_group: HashMap<String, roo_types::tool::ToolGroup> = HashMap::new();
+        for (group, config) in TOOL_GROUPS.iter() {
+            for tool in &config.tools {
+                tool_to_group.insert(tool.as_str().to_string(), *group);
+            }
+            for tool in &config.custom_tools {
+                tool_to_group.insert(tool.as_str().to_string(), *group);
+            }
+        }
+
+        // Get the list of allowed groups for this mode
+        let allowed_groups: HashSet<roo_types::tool::ToolGroup> = mode_config
+            .groups
+            .iter()
+            .map(|g| match g {
+                roo_types::tool::GroupEntry::Plain(g) => *g,
+                roo_types::tool::GroupEntry::WithOptions(g, _) => *g,
+            })
+            .collect();
+
+        // Add included tools only if they belong to an allowed group
+        // If the tool was specified as an alias, track the rename
+        for tool in &model_info.included_tools {
+            let resolved = resolve_tool_alias(tool);
+            if let Some(tool_group) = tool_to_group.get(&resolved) {
+                if allowed_groups.contains(tool_group) {
+                    result.insert(resolved.clone());
+                    // If the tool was specified as an alias, rename it in the API
+                    if tool != &resolved {
+                        alias_renames.insert(resolved, tool.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    ModelToolCustomizationResult {
+        allowed_tools: result,
+        alias_renames,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -84,34 +245,16 @@ pub fn filter_native_tools_for_mode(
         .map(|t| t.as_str().to_string())
         .collect();
 
-    // Apply model-specific tool customization
-    if let Some(ref model_info) = settings.model_info {
-        // Remove excluded tools
-        for tool in &model_info.excluded_tools {
-            let resolved = resolve_tool_alias(tool);
-            allowed_tool_names.remove(&resolved);
-        }
-
-        // Add included tools only if they belong to an allowed group
-        let allowed_groups: HashSet<roo_types::tool::ToolGroup> = mode_config
-            .groups
-            .iter()
-            .map(|g| match g {
-                roo_types::tool::GroupEntry::Plain(g) => *g,
-                roo_types::tool::GroupEntry::WithOptions(g, _) => *g,
-            })
-            .collect();
-
-        for tool in &model_info.included_tools {
-            let resolved = resolve_tool_alias(tool);
-            // Check if the tool belongs to an allowed group
-            if let Some(group) = find_tool_group(&resolved) {
-                if allowed_groups.contains(&group) {
-                    allowed_tool_names.insert(resolved);
-                }
-            }
-        }
-    }
+    // Apply model-specific tool customization (excluded/included tools + alias renames)
+    let ModelToolCustomizationResult {
+        allowed_tools: customized_tools,
+        alias_renames,
+    } = apply_model_tool_customization(
+        allowed_tool_names,
+        &mode_config,
+        settings.model_info.as_ref(),
+    );
+    allowed_tool_names = customized_tools;
 
     // Conditionally exclude codebase_search if feature is disabled
     if !settings.codebase_search_enabled {
@@ -152,24 +295,60 @@ pub fn filter_native_tools_for_mode(
         allowed_tool_names.remove("access_mcp_resource");
     }
 
-    // Filter native tools based on allowed tool names
-    tools
-        .iter()
-        .filter(|tool| allowed_tool_names.contains(&tool.name))
-        .cloned()
-        .collect()
-}
+    // Filter native tools based on allowed tool names and apply alias renames
+    let mut filtered_tools: Vec<ToolDefinition> = Vec::with_capacity(tools.len());
 
-/// Find which tool group a tool belongs to.
-fn find_tool_group(tool_name: &str) -> Option<roo_types::tool::ToolGroup> {
-    for (group, config) in TOOL_GROUPS.iter() {
-        if config.tools.iter().any(|t| t.as_str() == tool_name)
-            || config.custom_tools.iter().any(|t| t.as_str() == tool_name)
-        {
-            return Some(*group);
+    for tool in tools {
+        if allowed_tool_names.contains(&tool.name) {
+            // Check if this tool should be renamed to an alias
+            if let Some(alias_name) = alias_renames.get(&tool.name) {
+                // Create a renamed tool definition with the alias name
+                filtered_tools.push(ToolDefinition {
+                    name: alias_name.clone(),
+                    description: tool.description.clone(),
+                    parameters: tool.parameters.clone(),
+                });
+            } else {
+                filtered_tools.push(tool.clone());
+            }
         }
     }
-    None
+
+    filtered_tools
+}
+
+// ---------------------------------------------------------------------------
+// filter_mcp_tools_for_mode
+// ---------------------------------------------------------------------------
+
+/// Filters MCP tools based on whether `use_mcp_tool` is allowed in the
+/// current mode. MCP tools are always in the `mcp` group.
+///
+/// Source: `filter-tools-for-mode.ts` — `filterMcpToolsForMode`
+pub fn filter_mcp_tools_for_mode(
+    mcp_tools: &[ToolDefinition],
+    mode: Option<&str>,
+    custom_modes: &[ModeConfig],
+    experiments: Option<&HashMap<String, bool>>,
+) -> Vec<ToolDefinition> {
+    let mode_slug = mode.unwrap_or("code");
+
+    // MCP tools are always in the mcp group, check if use_mcp_tool is allowed
+    let is_mcp_allowed = is_tool_allowed_for_mode(
+        "use_mcp_tool",
+        mode_slug,
+        custom_modes,
+        None,
+        None,
+        experiments,
+        None,
+    );
+
+    if is_mcp_allowed {
+        mcp_tools.to_vec()
+    } else {
+        vec![]
+    }
 }
 
 /// Find a mode configuration by slug.
