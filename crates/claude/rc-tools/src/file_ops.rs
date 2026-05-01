@@ -37,6 +37,13 @@ fn filesystem_permission_confirmed_for_dispatch() -> bool {
         .unwrap_or(false)
 }
 
+fn normalize_quotes(s: &str) -> String {
+    s.replace('\u{201C}', "\"")
+     .replace('\u{201D}', "\"")
+     .replace('\u{2018}', "'")
+     .replace('\u{2019}', "'")
+}
+
 fn normalize_for_comparison(path: PathBuf) -> PathBuf {
     let rendered = path.to_string_lossy();
     if let Some(stripped) = rendered.strip_prefix(r"\\?\") {
@@ -260,6 +267,32 @@ pub fn read_file(input: &Value, context: &ToolExecutionContext) -> Result<String
         return Ok(FILE_UNCHANGED_STUB.to_owned());
     }
 
+    let ext = target.extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg") {
+        let data = std::fs::read(&target)?;
+        let mime = match ext.as_str() {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "webp" => "image/webp",
+            "svg" => "image/svg+xml",
+            _ => "application/octet-stream",
+        };
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
+        return Ok(format!("Image file: {}\nMIME type: {}\nSize: {} bytes\nBase64 data: data:{};base64,{}",
+            target.display(), mime, data.len(), mime, &b64[..b64.len().min(50000)]));
+    }
+
+    if ext == "pdf" {
+        return Ok(format!("PDF file detected: {}\nSize: {} bytes\nPDF reading requires a dedicated PDF parser. Use `pdftotext` or similar tools via Bash for now.",
+            target.display(),
+            std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0)));
+    }
+
     let contents = std::fs::read_to_string(&target)
         .with_context(|| format!("failed to read {}", target.display()))?;
     let raw_selected = contents
@@ -435,6 +468,10 @@ pub(crate) fn replace_in_file(input: &Value, context: &ToolExecutionContext) -> 
             "String to replace not found in file.\nString: {search}"
         ));
     }
+    let match_count = original.matches(search).count();
+    if match_count > 1 && !replace_all {
+        return Err(anyhow!("Found {match_count} occurrences of the search string. Use 'all: true' to replace all, or provide a more specific search string."));
+    }
     let updated = if replace_all {
         original.replace(search, replace)
     } else {
@@ -507,6 +544,8 @@ pub(crate) fn edit_file(input: &Value, context: &ToolExecutionContext) -> Result
             .get("replace")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("edit is missing replace"))?;
+        let search = normalize_quotes(search);
+        let replace = normalize_quotes(replace);
         let replace_all = edit.get("all").and_then(Value::as_bool).unwrap_or(false);
         if search.is_empty() {
             if content.is_empty() {
@@ -520,7 +559,7 @@ pub(crate) fn edit_file(input: &Value, context: &ToolExecutionContext) -> Result
                 "No changes to make: old_string and new_string are exactly the same."
             ));
         }
-        let matches = content.matches(search).count();
+        let matches = content.matches(&*search).count();
         if matches == 0 {
             return Err(anyhow!(
                 "String to replace not found in file.\nString: {search}"
@@ -532,9 +571,9 @@ pub(crate) fn edit_file(input: &Value, context: &ToolExecutionContext) -> Result
             ));
         }
         content = if replace_all {
-            content.replace(search, replace)
+            content.replace(&*search, &*replace)
         } else {
-            content.replacen(search, replace, 1)
+            content.replacen(&*search, &*replace, 1)
         };
     }
     if let Some(parent) = target.parent() {
@@ -608,12 +647,25 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
         .get("output_mode")
         .and_then(Value::as_str)
         .unwrap_or("content");
+    let head_limit = input
+        .get("head_limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(250) as usize;
+
     if !["content", "files_with_matches", "count"].contains(&output_mode) {
         return Err(anyhow!(
             "output_mode must be 'content', 'files_with_matches', or 'count'"
         ));
     }
-    let regex = Regex::new(pattern).or_else(|_| Regex::new(&regex::escape(pattern)))?;
+
+    let case_insensitive = pattern
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || !c.is_alphabetic());
+    let re = regex::RegexBuilder::new(pattern)
+        .case_insensitive(case_insensitive)
+        .build()
+        .or_else(|_| regex::RegexBuilder::new(&regex::escape(pattern)).build())?;
+
     let file_matcher: Option<globset::GlobMatcher> = match include {
         Some(fp) => Some(
             GlobBuilder::new(fp)
@@ -624,101 +676,130 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
         ),
         None => None,
     };
-    let mut content_matches = Vec::new();
-    let mut files_with_matches: Vec<String> = Vec::new();
-    let mut count_per_file: Vec<(String, usize)> = Vec::new();
-    let mut match_count = 0usize;
-    for entry in WalkDir::new(&target).into_iter().filter_map(Result::ok) {
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        if entry.path().components().any(|component| {
-            IGNORED_DIRS.contains(&component.as_os_str().to_string_lossy().as_ref())
-        }) {
-            continue;
-        }
-        if let Some(ref matcher) = file_matcher {
-            let file_name = entry.file_name().to_string_lossy();
-            if !matcher.is_match(file_name.as_ref()) {
-                continue;
+
+    let mut walker = WalkBuilder::new(&target);
+    walker.hidden(false).git_ignore(true).git_exclude(true);
+
+    if let Some(matcher) = file_matcher {
+        walker.filter_entry(move |entry| {
+            if entry.file_type().map_or(false, |ft| ft.is_dir()) {
+                return true;
             }
-        }
-        let Ok(contents) = std::fs::read_to_string(entry.path()) else {
+            entry
+                .path()
+                .file_name()
+                .is_some_and(|name| matcher.is_match(name))
+        });
+    }
+
+    let mut files_with_matches: Vec<(PathBuf, u128)> = Vec::new();
+    let mut count_per_file: Vec<(PathBuf, usize)> = Vec::new();
+    let mut content_matches: Vec<String> = Vec::new();
+    let mut total_content_matches = 0usize;
+
+    for entry in walker.build().filter_map(|e| e.ok()) {
+        if !entry.file_type().map_or(false, |ft| ft.is_file()) {
             continue;
+        }
+        let path = entry.path().to_path_buf();
+        let contents = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
         };
+
+        let relative = path
+            .strip_prefix(&context.cwd)
+            .unwrap_or(&path)
+            .to_path_buf();
         let lines: Vec<&str> = contents.lines().collect();
-        let mut file_match_count = 0usize;
-        for (index, line) in lines.iter().enumerate() {
-            if regex.is_match(line) {
-                file_match_count += 1;
-                if output_mode == "content" {
-                    let relative = entry
-                        .path()
-                        .strip_prefix(&context.cwd)
-                        .unwrap_or(entry.path());
-                    let start = if index > 0 { index - 1 } else { 0 };
-                    let end = (index + 2).min(lines.len());
-                    for (offset, context_line) in lines[start..end].iter().enumerate() {
-                        let line_idx = start + offset;
-                        let prefix = if line_idx == index { ">" } else { " " };
-                        content_matches.push(format!(
-                            "{}:{}{} {}",
-                            relative.display(),
-                            line_idx + 1,
-                            prefix,
-                            context_line.trim()
-                        ));
-                    }
-                    content_matches.push(String::new());
-                    match_count += 1;
-                    if match_count >= 50 {
-                        break;
+
+        match output_mode {
+            "files_with_matches" => {
+                if lines.iter().any(|line| re.is_match(line)) {
+                    let mtime = file_mtime_ms(&path).unwrap_or(0);
+                    files_with_matches.push((relative, mtime));
+                }
+            }
+            "count" => {
+                let count = lines.iter().filter(|l| re.is_match(l)).count();
+                if count > 0 {
+                    count_per_file.push((relative, count));
+                }
+            }
+            _ => {
+                for (index, line) in lines.iter().enumerate() {
+                    if re.is_match(line) {
+                        total_content_matches += 1;
+                        if total_content_matches <= head_limit {
+                            let start = if index > 0 { index - 1 } else { 0 };
+                            let end = (index + 2).min(lines.len());
+                            for (offset, context_line) in lines[start..end].iter().enumerate() {
+                                let line_idx = start + offset;
+                                let prefix = if line_idx == index { ">" } else { " " };
+                                content_matches.push(format!(
+                                    "{}:{}{} {}",
+                                    relative.display(),
+                                    line_idx + 1,
+                                    prefix,
+                                    context_line.trim_end()
+                                ));
+                            }
+                            content_matches.push(String::new());
+                        }
+                        total_content_matches += 1;
                     }
                 }
             }
         }
-        if file_match_count > 0 {
-            let relative = entry
-                .path()
-                .strip_prefix(&context.cwd)
-                .unwrap_or(entry.path())
-                .to_string_lossy()
-                .to_string();
-            if output_mode == "files_with_matches" {
-                files_with_matches.push(relative);
-            } else if output_mode == "count" {
-                count_per_file.push((relative, file_match_count));
-            }
-        }
-        if output_mode == "content" && match_count >= 50 {
+
+        if output_mode == "content" && total_content_matches >= head_limit {
             break;
         }
     }
+
     match output_mode {
         "files_with_matches" => {
             if files_with_matches.is_empty() {
-                Ok("No matches found.".to_owned())
-            } else {
-                Ok(files_with_matches.join("\n"))
+                return Ok("No files matched.".to_owned());
             }
+            files_with_matches.sort_by(|a, b| b.1.cmp(&a.1));
+            let truncated = files_with_matches.len() > head_limit;
+            files_with_matches.truncate(head_limit);
+            let mut out: Vec<String> = files_with_matches
+                .iter()
+                .map(|(p, _)| format!("{}", p.display()))
+                .collect();
+            if truncated {
+                out.push(
+                    "\nFiles still truncated. Consider using a more specific path or pattern."
+                        .to_owned(),
+                );
+            }
+            Ok(out.join("\n"))
         }
         "count" => {
             if count_per_file.is_empty() {
-                Ok("No matches found.".to_owned())
-            } else {
-                let lines: Vec<String> = count_per_file
-                    .iter()
-                    .map(|(path, count)| format!("{}: {}", path, count))
-                    .collect();
-                Ok(lines.join("\n"))
+                return Ok("No files matched.".to_owned());
             }
+            let lines: Vec<String> = count_per_file
+                .iter()
+                .map(|(path, count)| format!("{}:{}", path.display(), count))
+                .collect();
+            Ok(lines.join("\n"))
         }
         _ => {
             if content_matches.is_empty() {
-                Ok("No matches found.".to_owned())
-            } else {
-                Ok(content_matches.join("\n").trim_end().to_owned())
+                return Ok("No files matched.".to_owned());
             }
+            let truncated = total_content_matches > head_limit;
+            if truncated {
+                content_matches.push(format!(
+                    "\n[Showing first {} of {} results. Use a more specific pattern to narrow results.]",
+                    head_limit.min(total_content_matches),
+                    total_content_matches
+                ));
+            }
+            Ok(content_matches.join("\n").trim_end().to_owned())
         }
     }
 }

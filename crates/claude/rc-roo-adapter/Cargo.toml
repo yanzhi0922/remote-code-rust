@@ -1,0 +1,50 @@
+[package]
+name = "rc-roo-adapter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "In-process adapter for Roo Code agent — implements AgentAdapter trait"
+
+[dependencies]
+rc-agent-protocol = { path = "../rc-agent-protocol" }
+roo-app = { path = "../../roo/roo-app" }
+roo-task = { path = "../../roo/roo-task" }
+roo-types = { path = "../../roo/roo-types" }
+roo-provider = { path = "../../roo/roo-provider" }
+roo-provider-anthropic = { path = "../../roo/roo-provider-anthropic" }
+roo-provider-openai = { path = "../../roo/roo-provider-openai" }
+roo-provider-openai-native = { path = "../../roo/roo-provider-openai-native" }
+roo-provider-openrouter = { path = "../../roo/roo-provider-openrouter" }
+roo-provider-deepseek = { path = "../../roo/roo-provider-deepseek" }
+roo-provider-google = { path = "../../roo/roo-provider-google" }
+roo-provider-xai = { path = "../../roo/roo-provider-xai" }
+roo-provider-mistral = { path = "../../roo/roo-provider-mistral" }
+roo-provider-fireworks = { path = "../../roo/roo-provider-fireworks" }
+roo-provider-ollama = { path = "../../roo/roo-provider-ollama" }
+roo-provider-lmstudio = { path = "../../roo/roo-provider-lmstudio" }
+roo-provider-litellm = { path = "../../roo/roo-provider-litellm" }
+roo-provider-qwen = { path = "../../roo/roo-provider-qwen" }
+roo-provider-minimax = { path = "../../roo/roo-provider-minimax" }
+roo-provider-poe = { path = "../../roo/roo-provider-poe" }
+roo-provider-requesty = { path = "../../roo/roo-provider-requesty" }
+roo-provider-unbound = { path = "../../roo/roo-provider-unbound" }
+roo-provider-vercel = { path = "../../roo/roo-provider-vercel" }
+roo-provider-roo = { path = "../../roo/roo-provider-roo" }
+roo-provider-sambanova = { path = "../../roo/roo-provider-sambanova" }
+roo-provider-baseten = { path = "../../roo/roo-provider-baseten" }
+roo-provider-moonshot = { path = "../../roo/roo-provider-moonshot" }
+roo-provider-zai = { path = "../../roo/roo-provider-zai" }
+roo-provider-aws = { path = "../../roo/roo-provider-aws" }
+roo-tools = { path = "../../roo/roo-tools" }
+roo-prompt = { path = "../../roo/roo-prompt" }
+roo-modes = { path = "../../roo/roo-modes" }
+roo-terminal = { path = "../../roo/roo-terminal" }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }

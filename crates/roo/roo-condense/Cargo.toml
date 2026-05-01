@@ -1,0 +1,19 @@
+[package]
+name = "roo-condense"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Conversation condensation for Roo Code Rust"
+
+[dependencies]
+roo-types = { workspace = true }
+roo-provider = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+futures = { workspace = true }
+regex = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }

@@ -396,12 +396,14 @@ enum PendingServerRequestKind {
     Permissions(serde_json::Value),
     McpElicitation,
     ToolUserInput(serde_json::Value),
+    #[allow(dead_code)]
     DynamicTool {
         call_id: String,
         namespace: Option<String>,
         tool: String,
         arguments: serde_json::Value,
     },
+    #[allow(dead_code)]
     ChatgptAuthRefresh {
         reason: String,
         previous_account_id: Option<String>,

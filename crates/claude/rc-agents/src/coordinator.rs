@@ -49,6 +49,9 @@ const GLOB_TOOL_NAME: &str = "Glob";
 /// Tool name for file grep.
 const GREP_TOOL_NAME: &str = "Grep";
 
+/// Tool name for PowerShell execution.
+const POWERSHELL_TOOL_NAME: &str = "PowerShell";
+
 /// Tool name for webpage fetch.
 const WEB_FETCH_TOOL_NAME: &str = "WebFetch";
 
@@ -95,6 +98,9 @@ pub const INTERNAL_WORKER_TOOLS: &[&str] = &[
 ];
 
 /// The set of tools allowed for async agents (workers).
+///
+/// Matches `ASYNC_AGENT_ALLOWED_TOOLS` in `src/constants/tools.ts`.
+/// Shell tool names (Bash + PowerShell) mirror `SHELL_TOOL_NAMES`.
 pub static ASYNC_AGENT_ALLOWED_TOOLS: &[&str] = &[
     FILE_READ_TOOL_NAME,
     WEB_SEARCH_TOOL_NAME,
@@ -103,6 +109,7 @@ pub static ASYNC_AGENT_ALLOWED_TOOLS: &[&str] = &[
     WEB_FETCH_TOOL_NAME,
     GLOB_TOOL_NAME,
     BASH_TOOL_NAME,
+    POWERSHELL_TOOL_NAME,
     FILE_EDIT_TOOL_NAME,
     FILE_WRITE_TOOL_NAME,
     NOTEBOOK_EDIT_TOOL_NAME,
@@ -792,6 +799,7 @@ mod tests {
     fn async_agent_allowed_tools_set_has_core_tools() {
         let tools = async_agent_allowed_tools_set();
         assert!(tools.contains("Bash"));
+        assert!(tools.contains("PowerShell"));
         assert!(tools.contains("Read"));
         assert!(tools.contains("Edit"));
         assert!(tools.contains("Write"));

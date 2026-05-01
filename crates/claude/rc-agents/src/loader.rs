@@ -8,7 +8,9 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
-use rc_context::{RuntimeFeatureGates, RuntimeIdentityContext};
+use rc_context::RuntimeIdentityContext;
+#[cfg(test)]
+use rc_context::RuntimeFeatureGates;
 use serde::Deserialize;
 use walkdir::WalkDir;
 

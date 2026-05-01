@@ -1,0 +1,46 @@
+[package]
+name = "roo-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Application layer for Roo Code Rust — ties all subsystems together"
+
+[dependencies]
+roo-types = { path = "../roo-types" }
+roo-provider = { path = "../roo-provider" }
+roo-prompt = { path = "../roo-prompt" }
+roo-config = { path = "../roo-config" }
+roo-mcp = { path = "../roo-mcp" }
+roo-task = { path = "../roo-task" }
+roo-modes = { path = "../roo-modes" }
+roo-skills = { path = "../roo-skills" }
+roo-ignore = { path = "../roo-ignore" }
+roo-checkpoint = { path = "../roo-checkpoint" }
+roo-context = { path = "../roo-context" }
+roo-condense = { path = "../roo-condense" }
+roo-diff = { path = "../roo-diff" }
+roo-tools = { path = "../roo-tools" }
+roo-terminal = { path = "../roo-terminal" }
+roo-editor = { path = "../roo-editor" }
+roo-environment = { path = "../roo-environment" }
+roo-mentions = { path = "../roo-mentions" }
+roo-message-manager = { path = "../roo-message-manager" }
+roo-context-tracking = { path = "../roo-context-tracking" }
+roo-auto-approval = { path = "../roo-auto-approval" }
+roo-protect = { path = "../roo-protect" }
+roo-telemetry = { path = "../roo-telemetry" }
+roo-message-queue = { path = "../roo-message-queue" }
+roo-custom-tools = { path = "../roo-custom-tools" }
+roo-marketplace = { path = "../roo-marketplace" }
+roo-command = { path = "../roo-command" }
+roo-i18n = { path = "../roo-i18n" }
+roo-worktree = { path = "../roo-worktree" }
+roo-task-persistence = { path = "../roo-task-persistence" }
+tokio = { workspace = true, features = ["full"] }
+async-trait = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

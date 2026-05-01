@@ -1,0 +1,19 @@
+[package]
+name = "roo-tools-fs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "File system tool implementations for Roo Code Rust"
+
+[dependencies]
+roo-types = { path = "../roo-types" }
+roo-diff = { path = "../roo-diff" }
+roo-ignore = { path = "../roo-ignore" }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+
+[dev-dependencies]
+tempfile = "3"

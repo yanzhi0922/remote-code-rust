@@ -5,7 +5,7 @@ use std::env;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::process::Stdio;
+// Stdio removed — no longer needed after Roo in-process migration
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -36,6 +36,7 @@ use rc_codex_adapter::{
     CodexThreadListRequest, CodexThreadRollbackRequest, CodexTurnInterruptRequest,
     CodexTurnSteerRequest,
 };
+use rc_roo_adapter::RooInProcessAdapter;
 use rc_config::{
     AppPaths, ProviderConfig as RuntimeProviderConfig, ProviderOverrides, RuntimeConfig,
     RuntimeOverrides, SettingSource, discover_env_providers, load_runtime_config,
@@ -79,7 +80,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_dialog::DialogExt;
 use tokio::sync::{Mutex, oneshot};
-use tokio::process::Command as TokioCommand;
+// TokioCommand removed — no longer needed after Roo in-process migration
 use tokio::time::{Duration, timeout};
 use uuid::Uuid;
 
@@ -1059,6 +1060,7 @@ struct CodexExecResizeRequest {
     cols: u16,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CodexExecAgentRequest {
@@ -1075,6 +1077,7 @@ struct CodexExecAgentRequest {
     timeout_ms: Option<u64>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CodexExecAgentResponse {
@@ -1204,6 +1207,8 @@ struct AppState {
     active_subprocess_adapters: Arc<Mutex<HashMap<String, SubprocessAdapter>>>,
     /// Codex in-process adapters (session_id → adapter).
     active_codex_adapters: Arc<Mutex<HashMap<String, CodexInProcessAdapter>>>,
+    /// Roo in-process adapters (session_id → adapter).
+    active_roo_adapters: Arc<Mutex<HashMap<String, RooInProcessAdapter>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -3452,6 +3457,7 @@ fn get_session_agent_type(store: &SessionStore, session_id: Uuid) -> String {
 /// Resolve the bridge binary name for the given agent type.
 ///
 /// Only Roo-code uses the bridge binary — Codex uses native in-process integration.
+#[allow(dead_code)]
 fn bridge_binary_name(agent_type: &ProtocolAgentType) -> Option<&'static str> {
     match agent_type {
         ProtocolAgentType::RemoteRoo => Some("remote-code-roo-bridge"),
@@ -3464,6 +3470,7 @@ fn bridge_binary_name(agent_type: &ProtocolAgentType) -> Option<&'static str> {
 /// Search order:
 /// 1. Same directory as the current executable (with and without `.exe` on Windows).
 /// 2. `PATH` environment variable via `which`/`where`.
+#[allow(dead_code)]
 fn bridge_binary_path(agent_type: &ProtocolAgentType) -> Option<PathBuf> {
     let binary_name = bridge_binary_name(agent_type)?;
 
@@ -3503,6 +3510,7 @@ fn bridge_binary_path(agent_type: &ProtocolAgentType) -> Option<PathBuf> {
     None
 }
 
+#[allow(dead_code)]
 fn codex_cli_binary_path() -> Result<PathBuf> {
     let binary_name = if cfg!(windows) { "codex.exe" } else { "codex" };
     if let Some(exe_dir) = std::env::current_exe()
@@ -3886,13 +3894,283 @@ async fn run_codex_in_process_prompt(
 }
 
 // ---------------------------------------------------------------------------
-// Subprocess prompt execution (Roo-code agent)
+// Roo in-process prompt execution
+// ---------------------------------------------------------------------------
+
+/// Execute a prompt via the native Roo in-process adapter.
+///
+/// This creates a [`RooInProcessAdapter`], starts it, sends the user message,
+/// and forwards events to the frontend via Tauri emissions.
+async fn run_roo_in_process_prompt(
+    app: &AppHandle,
+    roo_adapters: &Arc<Mutex<HashMap<String, RooInProcessAdapter>>>,
+    session_id: &str,
+    prompt: &str,
+    working_dir: PathBuf,
+    model: Option<String>,
+    api_key: Option<String>,
+    provider_name: String,
+) -> std::result::Result<String, String> {
+    // Ensure the adapter exists for this session.
+    {
+        let mut adapters = roo_adapters.lock().await;
+        if !adapters.contains_key(session_id) {
+            tracing::info!(session_id, "Creating new RooInProcessAdapter");
+            let mut adapter = RooInProcessAdapter::new();
+            let agent_config = rc_agent_protocol::types::AgentConfig {
+                agent_type: ProtocolAgentType::RemoteRoo,
+                binary_path: None,
+                args: Vec::new(),
+                env: Vec::new(),
+                working_dir: Some(working_dir.clone()),
+                model: model.clone(),
+                provider: Some(provider_name.clone()),
+                api_key: api_key.clone(),
+                base_url: None,
+            };
+            adapter
+                .start(&agent_config)
+                .await
+                .map_err(|e| format!("Failed to start Roo in-process runtime: {e}"))?;
+            adapters.insert(session_id.to_string(), adapter);
+        }
+    }
+
+    // Get the adapter and send the message.
+    let mut adapters = roo_adapters.lock().await;
+    let adapter = adapters
+        .get_mut(session_id)
+        .ok_or_else(|| "Roo adapter not found".to_string())?;
+
+    let mut rx = adapter
+        .send_message(session_id, prompt)
+        .await
+        .map_err(|e| format!("RooInProcessAdapter::send_message failed: {e}"))?;
+
+    // Forward events to the frontend. Drop the lock before streaming.
+    drop(adapters);
+
+    let mut final_text = String::new();
+    let mut tool_calls: Vec<ToolCallDto> = Vec::new();
+    let mut usage_info: rc_agent_protocol::events::UsageInfo = Default::default();
+    let mut stop_reason = "completed".to_owned();
+    while let Some(event) = rx.recv().await {
+        use rc_agent_protocol::events::UnifiedAgentEvent;
+        match event {
+            UnifiedAgentEvent::MessageDelta { delta, .. } => {
+                final_text.push_str(&delta);
+                let _ = app.emit(
+                    APP_EVENT_STREAMING_DELTA,
+                    StreamingDeltaDto {
+                        session_id: session_id.to_string(),
+                        delta,
+                    },
+                );
+            }
+            UnifiedAgentEvent::ToolCallStarted {
+                tool_name,
+                tool_input,
+                ..
+            } => {
+                let tool_call_id = Uuid::new_v4().to_string();
+                tool_calls.push(ToolCallDto {
+                    id: tool_call_id.clone(),
+                    name: tool_name.clone(),
+                    input: tool_input,
+                });
+                let _ = app.emit(
+                    APP_EVENT_TOOL_START,
+                    ToolProgressDto {
+                        tool_call_id,
+                        tool_name,
+                        message: "started".to_owned(),
+                    },
+                );
+            }
+            UnifiedAgentEvent::ToolCallProgress {
+                tool_name,
+                progress,
+                ..
+            } => {
+                let _ = app.emit(
+                    APP_EVENT_TOOL_PROGRESS,
+                    ToolProgressDto {
+                        tool_call_id: String::new(),
+                        tool_name,
+                        message: progress,
+                    },
+                );
+            }
+            UnifiedAgentEvent::ToolCallCompleted {
+                tool_name, result, ..
+            } => {
+                let _ = app.emit(
+                    APP_EVENT_TOOL_RESULT,
+                    ToolResultDto {
+                        tool_call_id: String::new(),
+                        tool_name,
+                        is_error: false,
+                        output: result.to_string(),
+                    },
+                );
+            }
+            UnifiedAgentEvent::SubtaskStarted {
+                task_id,
+                description,
+                ..
+            } => {
+                let _ = app.emit(
+                    APP_EVENT_SUBTASK_STARTED,
+                    SubtaskStartedDto {
+                        session_id: session_id.to_string(),
+                        task_id,
+                        parent_task_id: None,
+                        description,
+                        depth: 0,
+                    },
+                );
+            }
+            UnifiedAgentEvent::SubtaskProgress {
+                task_id, progress, ..
+            } => {
+                let _ = app.emit(
+                    APP_EVENT_SUBTASK_PROGRESS,
+                    SubtaskProgressDto {
+                        session_id: session_id.to_string(),
+                        task_id,
+                        turn: 0,
+                        max_turns: 0,
+                        summary: progress,
+                    },
+                );
+            }
+            UnifiedAgentEvent::SubtaskCompleted {
+                task_id, result, ..
+            } => {
+                let _ = app.emit(
+                    APP_EVENT_SUBTASK_COMPLETED,
+                    SubtaskCompletedDto {
+                        session_id: session_id.to_string(),
+                        task_id,
+                        success: true,
+                        output_preview: result.to_string(),
+                        turns_used: 0,
+                    },
+                );
+            }
+            UnifiedAgentEvent::ContextUsage { used, total, .. } => {
+                let _ = app.emit(
+                    APP_EVENT_CONTEXT_USAGE,
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "used": used,
+                        "total": total,
+                    }),
+                );
+            }
+            UnifiedAgentEvent::ContextOverflow { used, total, .. } => {
+                let _ = app.emit(
+                    APP_EVENT_CONTEXT_OVERFLOW,
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "used": used,
+                        "total": total,
+                    }),
+                );
+            }
+            UnifiedAgentEvent::ContextCompacted {
+                entries_removed,
+                usage_ratio,
+                ..
+            } => {
+                let _ = app.emit(
+                    APP_EVENT_CONTEXT_COMPACTED,
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "entries_removed": entries_removed,
+                        "usage_ratio": usage_ratio,
+                    }),
+                );
+            }
+            UnifiedAgentEvent::Completed { result, .. } => {
+                if !result.response_text.is_empty() {
+                    final_text = result.response_text;
+                }
+                if !result.tool_calls.is_empty() {
+                    tool_calls = result
+                        .tool_calls
+                        .into_iter()
+                        .map(|tc| ToolCallDto {
+                            id: tc.id,
+                            name: tc.name,
+                            input: tc.input,
+                        })
+                        .collect();
+                }
+                if result.usage.input_tokens > 0
+                    || result.usage.output_tokens > 0
+                    || result.usage.cache_read > 0
+                    || result.usage.cache_write > 0
+                {
+                    usage_info = result.usage;
+                }
+                break;
+            }
+            UnifiedAgentEvent::Error {
+                message,
+                recoverable,
+                ..
+            } => {
+                tracing::warn!(error = %message, "Roo error event");
+                if !recoverable {
+                    return Err(message);
+                }
+            }
+            UnifiedAgentEvent::Stopped => {
+                stop_reason = "stopped".to_owned();
+                break;
+            }
+            UnifiedAgentEvent::Started(_) | UnifiedAgentEvent::Ready => {
+                tracing::debug!(event = ?event, "Roo lifecycle event");
+            }
+            // Ignore Codex-specific events that Roo won't emit
+            _ => {}
+        }
+    }
+
+    let _ = app.emit(
+        APP_EVENT_PROMPT_DONE,
+        PromptDoneDto {
+            session_id: session_id.to_string(),
+            is_error: false,
+            error: None,
+            result: Some(PromptResultDto {
+                session_id: session_id.to_string(),
+                text: final_text.clone(),
+                tool_calls,
+                usage: UsageDto {
+                    input_tokens: usage_info.input_tokens,
+                    output_tokens: usage_info.output_tokens,
+                    total_tokens: usage_info.input_tokens + usage_info.output_tokens,
+                },
+                num_turns: 1,
+                stop_reason,
+            }),
+        },
+    );
+
+    Ok(final_text)
+}
+
+// ---------------------------------------------------------------------------
+// Subprocess prompt execution (legacy bridge)
 // ---------------------------------------------------------------------------
 
 /// Execute a prompt via a subprocess bridge binary.
 ///
 /// This creates a [`SubprocessAdapter`], starts the bridge process, sends the
 /// user message, and forwards events to the frontend via Tauri emissions.
+#[allow(dead_code)]
 async fn run_subprocess_prompt(
     app: &AppHandle,
     active_adapters: &Arc<Mutex<HashMap<String, SubprocessAdapter>>>,
@@ -4417,22 +4695,26 @@ async fn send_prompt(
                 running.insert(sid.clone(), handle);
             }
             "remote_roo" => {
-                // Subprocess path: Roo-code uses bridge binary.
-                let active_adapters = Arc::clone(&state.active_subprocess_adapters);
+                // Native in-process path: Roo uses RooInProcessAdapter
+                // (no bridge binary needed).
+                let roo_adapters = Arc::clone(&state.active_roo_adapters);
                 let sid_clone = sid.clone();
                 let prompt_owned = prompt.clone();
-                let working_dir = Some(config.cwd.clone());
+                let working_dir = config.cwd.clone();
+                let model = config.provider.model.clone();
                 let api_key = config.provider.api_key.clone();
+                let provider_name = config.provider.name.clone();
 
                 let handle = tokio::spawn(async move {
-                    let result = run_subprocess_prompt(
+                    let result = run_roo_in_process_prompt(
                         &app,
-                        &active_adapters,
+                        &roo_adapters,
                         &sid_clone,
                         &prompt_owned,
-                        ProtocolAgentType::RemoteRoo,
                         working_dir,
+                        model,
                         api_key,
+                        provider_name,
                     )
                     .await;
 
@@ -6986,6 +7268,7 @@ pub fn run() {
     let running_prompts = Arc::new(Mutex::new(HashMap::new()));
     let active_subprocess_adapters = Arc::new(Mutex::new(HashMap::new()));
     let active_codex_adapters = Arc::new(Mutex::new(HashMap::new()));
+    let active_roo_adapters = Arc::new(Mutex::new(HashMap::new()));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -6997,6 +7280,7 @@ pub fn run() {
             running_prompts,
             active_subprocess_adapters,
             active_codex_adapters,
+            active_roo_adapters,
         })
         .invoke_handler(tauri::generate_handler![
             init_app,
@@ -7205,6 +7489,7 @@ mod tests {
             startup_timeout_secs: Some(5),
             request_timeout_secs: Some(30),
             metadata: BTreeMap::new(),
+            oauth: None,
         }
     }
 

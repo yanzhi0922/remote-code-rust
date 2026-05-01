@@ -1,0 +1,13 @@
+[package]
+name = "roo-ignore"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "File ignore controller for Roo Code Rust"
+
+[dependencies]
+thiserror = { workspace = true }
+glob = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

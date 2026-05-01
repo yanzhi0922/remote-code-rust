@@ -1,0 +1,16 @@
+[package]
+name = "roo-skills"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Skills management for Roo Code Rust"
+
+[dependencies]
+roo-types = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["fs"] }
+regex = { workspace = true }
+tracing = { workspace = true }

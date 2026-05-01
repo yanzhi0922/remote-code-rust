@@ -1755,6 +1755,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "calamine"
+version = "0.26.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "138646b9af2c5d7f1804ea4bf93afc597737d2bd4f7341d67c48b03316976eb1"
+dependencies = [
+ "byteorder",
+ "chrono",
+ "codepage",
+ "encoding_rs",
+ "log",
+ "quick-xml 0.31.0",
+ "serde",
+ "zip",
+]
+
+[[package]]
 name = "camino"
 version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2051,6 +2067,15 @@ name = "cmp_any"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9b18233253483ce2f65329a24072ec414db782531bdbb7d0bbc4bd2ce6b7e21"
+
+[[package]]
+name = "codepage"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48f68d061bc2828ae826206326e61251aca94c1e4a5305cf52d9138639c918b4"
+dependencies = [
+ "encoding_rs",
+]
 
 [[package]]
 name = "codex-agent-identity"
@@ -2736,7 +2761,7 @@ dependencies = [
  "insta",
  "libc",
  "maplit",
- "notify",
+ "notify 8.2.0",
  "once_cell",
  "openssl-sys",
  "opentelemetry",
@@ -2860,7 +2885,7 @@ dependencies = [
  "codex-utils-cargo-bin",
  "ctor 0.6.3",
  "futures",
- "notify",
+ "notify 8.2.0",
  "opentelemetry",
  "opentelemetry_sdk",
  "pretty_assertions",
@@ -6377,6 +6402,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "git2"
+version = "0.20.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b88256088d75a56f8ecfa070513a775dd9107f6530ef14919dac831af9cfe2b"
+dependencies = [
+ "bitflags 2.11.0",
+ "libc",
+ "libgit2-sys",
+ "log",
+ "url",
+]
+
+[[package]]
 name = "gix"
 version = "0.81.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8249,6 +8287,17 @@ dependencies = [
 
 [[package]]
 name = "inotify"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdd168d97690d0b8c412d6b6c10360277f4d7ee495c5d0d5d5fe0854923255cc"
+dependencies = [
+ "bitflags 1.3.2",
+ "inotify-sys",
+ "libc",
+]
+
+[[package]]
+name = "inotify"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bd5b3eaf1a28b758ac0faa5a4254e8ab2705605496f1b1f3fbbc3988ad73d199"
@@ -8896,6 +8945,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "libgit2-sys"
+version = "0.18.3+1.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9b3acc4b91781bb0b3386669d325163746af5f6e4f73e6d2d630e09a35f3487"
+dependencies = [
+ "cc",
+ "libc",
+ "libz-sys",
+ "pkg-config",
+]
+
+[[package]]
 name = "libloading"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8951,6 +9012,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc3a226e576f50782b3305c5ccf458698f92798987f551c6a02efe8276721e22"
 dependencies = [
  "cc",
+ "libc",
  "pkg-config",
  "vcpkg",
 ]
@@ -9592,20 +9654,48 @@ checksum = "61807f77802ff30975e01f4f071c8ba10c022052f98b3294119f3e615d13e5be"
 
 [[package]]
 name = "notify"
+version = "7.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c533b4c39709f9ba5005d8002048266593c1cfaf3c5f0739d5b8ab0c6c504009"
+dependencies = [
+ "bitflags 2.11.0",
+ "filetime",
+ "fsevent-sys",
+ "inotify 0.10.2",
+ "kqueue",
+ "libc",
+ "log",
+ "mio",
+ "notify-types 1.0.1",
+ "walkdir",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "notify"
 version = "8.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d3d07927151ff8575b7087f245456e549fea62edf0ec4e565a5ee50c8402bc3"
 dependencies = [
  "bitflags 2.11.0",
  "fsevent-sys",
- "inotify",
+ "inotify 0.11.1",
  "kqueue",
  "libc",
  "log",
  "mio",
- "notify-types",
+ "notify-types 2.1.0",
  "walkdir",
  "windows-sys 0.60.2",
+]
+
+[[package]]
+name = "notify-types"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "585d3cb5e12e01aed9e8a1f70d5c6b5e86fe2a6e48fc8cd0b3e0b8df6f6eb174"
+dependencies = [
+ "instant",
 ]
 
 [[package]]
@@ -11208,6 +11298,16 @@ checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
 
 [[package]]
 name = "quick-xml"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1004a344b30a54e2ee58d66a71b32d2db2feb0a31f9a2d302bf0536f15de2a33"
+dependencies = [
+ "encoding_rs",
+ "memchr",
+]
+
+[[package]]
+name = "quick-xml"
 version = "0.38.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b66c2058c55a409d601666cffe35f04333cf1013010882cec174a7467cd4e21c"
@@ -12277,6 +12377,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "rc-roo-adapter"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures",
+ "rc-agent-protocol",
+ "roo-app",
+ "roo-modes",
+ "roo-prompt",
+ "roo-provider",
+ "roo-provider-anthropic",
+ "roo-provider-aws",
+ "roo-provider-baseten",
+ "roo-provider-deepseek",
+ "roo-provider-fireworks",
+ "roo-provider-google",
+ "roo-provider-litellm",
+ "roo-provider-lmstudio",
+ "roo-provider-minimax",
+ "roo-provider-mistral",
+ "roo-provider-moonshot",
+ "roo-provider-ollama",
+ "roo-provider-openai",
+ "roo-provider-openai-native",
+ "roo-provider-openrouter",
+ "roo-provider-poe",
+ "roo-provider-qwen",
+ "roo-provider-requesty",
+ "roo-provider-roo",
+ "roo-provider-sambanova",
+ "roo-provider-unbound",
+ "roo-provider-vercel",
+ "roo-provider-xai",
+ "roo-provider-zai",
+ "roo-task",
+ "roo-terminal",
+ "roo-tools",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "rc-runner"
 version = "0.1.0"
 dependencies = [
@@ -12751,6 +12899,7 @@ dependencies = [
  "rc-plugins",
  "rc-provider",
  "rc-query-engine",
+ "rc-roo-adapter",
  "rc-session",
  "rc-skills",
  "rc-tools",
@@ -13004,6 +13153,933 @@ dependencies = [
  "quote",
  "serde_json",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "roo-app"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "roo-auto-approval",
+ "roo-checkpoint",
+ "roo-command",
+ "roo-condense",
+ "roo-config",
+ "roo-context",
+ "roo-context-tracking",
+ "roo-custom-tools",
+ "roo-diff",
+ "roo-editor",
+ "roo-environment",
+ "roo-i18n",
+ "roo-ignore",
+ "roo-marketplace",
+ "roo-mcp",
+ "roo-mentions",
+ "roo-message-manager",
+ "roo-message-queue",
+ "roo-modes",
+ "roo-prompt",
+ "roo-protect",
+ "roo-provider",
+ "roo-skills",
+ "roo-task",
+ "roo-task-persistence",
+ "roo-telemetry",
+ "roo-terminal",
+ "roo-tools",
+ "roo-types",
+ "roo-worktree",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "roo-auto-approval"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "roo-checkpoint"
+version = "0.1.0"
+dependencies = [
+ "git2",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "roo-command"
+version = "0.1.0"
+dependencies = [
+ "roo-config",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "roo-condense"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "regex",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "roo-config"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "dirs",
+ "regex",
+ "reqwest 0.12.28",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "roo-context"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "roo-condense",
+ "roo-provider",
+ "roo-telemetry",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "roo-context-tracking"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "roo-custom-tools"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "roo-diff"
+version = "0.1.0"
+dependencies = [
+ "regex",
+]
+
+[[package]]
+name = "roo-editor"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "calamine",
+ "chrono",
+ "regex-lite",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "similar",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-environment"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "regex",
+ "serde",
+]
+
+[[package]]
+name = "roo-i18n"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "roo-ignore"
+version = "0.1.0"
+dependencies = [
+ "glob",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "roo-index"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "roo-marketplace"
+version = "0.1.0"
+dependencies = [
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-mcp"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "notify 7.0.0",
+ "reqwest 0.12.28",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "roo-mentions"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "reqwest 0.12.28",
+ "roo-command",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "roo-message-manager"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "roo-message-queue"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "roo-modes"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "regex",
+ "roo-tools",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "roo-prompt"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "similar",
+]
+
+[[package]]
+name = "roo-protect"
+version = "0.1.0"
+dependencies = [
+ "glob",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "roo-provider"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "jsonwebtoken",
+ "reqwest 0.12.28",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+]
+
+[[package]]
+name = "roo-provider-anthropic"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "reqwest 0.12.28",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-provider-aws"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "eventsource-stream",
+ "futures",
+ "hex",
+ "hmac 0.12.1",
+ "reqwest 0.12.28",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-provider-baseten"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "reqwest 0.12.28",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-provider-deepseek"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "reqwest 0.12.28",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-provider-fireworks"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "reqwest 0.12.28",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-provider-google"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "reqwest 0.12.28",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-provider-litellm"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "reqwest 0.12.28",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-provider-lmstudio"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "reqwest 0.12.28",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-provider-minimax"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "reqwest 0.12.28",
+ "roo-provider",
+ "roo-provider-anthropic",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-provider-mistral"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "reqwest 0.12.28",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-provider-moonshot"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "reqwest 0.12.28",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-provider-ollama"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "reqwest 0.12.28",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-provider-openai"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "reqwest 0.12.28",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-provider-openai-native"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "reqwest 0.12.28",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "roo-provider-openrouter"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "reqwest 0.12.28",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-provider-poe"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "reqwest 0.12.28",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-provider-qwen"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "reqwest 0.12.28",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-provider-requesty"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "reqwest 0.12.28",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-provider-roo"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "reqwest 0.12.28",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-provider-sambanova"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "reqwest 0.12.28",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-provider-unbound"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "reqwest 0.12.28",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-provider-vercel"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "reqwest 0.12.28",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-provider-xai"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "reqwest 0.12.28",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-provider-zai"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "reqwest 0.12.28",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-skills"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "roo-task"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "dirs",
+ "futures",
+ "regex",
+ "roo-auto-approval",
+ "roo-checkpoint",
+ "roo-command",
+ "roo-condense",
+ "roo-config",
+ "roo-context",
+ "roo-context-tracking",
+ "roo-custom-tools",
+ "roo-editor",
+ "roo-environment",
+ "roo-ignore",
+ "roo-mcp",
+ "roo-mentions",
+ "roo-message-queue",
+ "roo-modes",
+ "roo-prompt",
+ "roo-protect",
+ "roo-provider",
+ "roo-skills",
+ "roo-task-persistence",
+ "roo-telemetry",
+ "roo-terminal",
+ "roo-tools",
+ "roo-tools-command",
+ "roo-tools-fs",
+ "roo-tools-mcp",
+ "roo-tools-misc",
+ "roo-tools-mode",
+ "roo-tools-search",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "roo-task-persistence"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "parking_lot",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "roo-telemetry"
+version = "0.1.0"
+dependencies = [
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-terminal"
+version = "0.1.0"
+dependencies = [
+ "rand 0.8.5",
+ "roo-types",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "roo-tools"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "roo-tools-command"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "roo-terminal",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "roo-tools-fs"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "roo-diff",
+ "roo-ignore",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "roo-tools-mcp"
+version = "0.1.0"
+dependencies = [
+ "roo-mcp",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "roo-tools-misc"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "roo-skills",
+ "roo-telemetry",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "roo-tools-mode"
+version = "0.1.0"
+dependencies = [
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "roo-tools-search"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "roo-ignore",
+ "roo-index",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "roo-types"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "roo-worktree"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

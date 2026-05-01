@@ -112,6 +112,32 @@ pub fn build_agent_prompt_with_options(
         build_current_examples()
     };
 
+    let background_notes = if options.is_fork_enabled {
+        String::new()
+    } else {
+        "\n\
+        - You can optionally run agents in the background using the run_in_background parameter. \
+        When an agent runs in the background, you will be automatically notified when it completes \
+        — do NOT sleep, poll, or proactively check on its progress. Continue with other work or \
+        respond to the user instead.\n\
+        - **Foreground vs background**: Use foreground (default) when you need the agent's results \
+        before you can proceed — e.g., research agents whose findings inform your next steps. Use \
+        background when you have genuinely independent work to do in parallel."
+            .to_owned()
+    };
+
+    let research_suffix = if options.is_fork_enabled {
+        ""
+    } else {
+        ", since it is not aware of the user's intent"
+    };
+
+    let worktree_note = "\n\
+        - You can optionally set `isolation: \"worktree\"` to run the agent in a temporary git \
+        worktree, giving it an isolated copy of the repository. The worktree is automatically \
+        cleaned up if the agent makes no changes; if changes are made, the worktree path and \
+        branch are returned in the result.";
+
     format!(
         "{shared}\n{when_not_to_use}\n\n\
         Usage notes:\n\
@@ -120,23 +146,23 @@ pub fn build_agent_prompt_with_options(
         to do that, use a single message with multiple tool uses\n\
         - When the agent is done, it will return a single message back to you. The result \
         returned by the agent is not visible to the user. To show the user the result, you \
-        should send a text message back to the user with a concise summary of the result.\n\
-        - You can optionally run agents in the background using the run_in_background parameter. \
-        When an agent runs in the background, you will be automatically notified when it completes \
-        — do NOT sleep, poll, or proactively check on its progress.\n\
-        - **Foreground vs background**: Use foreground (default) when you need the agent's results \
-        before you can proceed. Use background when you have genuinely independent work to do in parallel.\n\
+        should send a text message back to the user with a concise summary of the result.{background_notes}\n\
         - To continue a previously spawned agent, use SendMessage with the agent's ID or name as the `to` field. \
-        {continuation_note}\n\
+        The agent resumes with its full context preserved. {continuation_note}\n\
         - The agent's outputs should generally be trusted\n\
-        - Clearly tell the agent whether you expect it to write code or just to do research\n\
+        - Clearly tell the agent whether you expect it to write code or just to do research \
+        (search, file reads, web fetches, etc.){research_suffix}\n\
         - If the agent description mentions that it should be used proactively, then you should \
-        try your best to use it without the user having to ask for it first.\n\
+        try your best to use it without the user having to ask for it first. Use your judgement.\n\
         - If the user specifies that they want you to run agents \"in parallel\", you MUST send a \
-        single message with multiple {AGENT_TOOL_NAME} tool use content blocks.\n\
-        {when_to_fork}\n\
-        {writing_the_prompt}\n\n\
+        single message with multiple {AGENT_TOOL_NAME} tool use content blocks. For example, if \
+        you need to launch both a build-validator agent and a test-runner agent in parallel, send \
+        a single message with both tool calls.{worktree_note}\n\
+        {when_to_fork}{writing_the_prompt}\n\n\
         {examples}",
+        background_notes = background_notes,
+        research_suffix = research_suffix,
+        worktree_note = worktree_note,
         continuation_note = if options.is_fork_enabled {
             "Each fresh Agent invocation with a subagent_type starts without context — provide a complete task description."
         } else {
@@ -317,27 +343,51 @@ fn build_fork_examples() -> String {
         "Example usage:\n\n\
         <example>\n\
         user: \"What's left on this branch before we can ship?\"\n\
-        assistant: Forking this — it's a survey question.\n\
+        assistant: Forking this — it's a survey question. I want the punch list, not the git \
+        output in my context.\n\
         {AGENT_TOOL_NAME}({{\n\
           name: \"ship-audit\",\n\
           description: \"Branch ship-readiness audit\",\n\
           prompt: \"Audit what's left before this branch can ship. Check: uncommitted changes, \
-        commits ahead of main, whether tests exist. Report a punch list — done vs. missing. \
-        Under 200 words.\"\n\
+        commits ahead of main, whether tests exist, whether the GrowthBook gate is wired up, \
+        whether CI-relevant files changed. Report a punch list — done vs. missing. Under 200 words.\"\n\
         }})\n\
+        assistant: Ship-readiness audit running.\n\
+        <commentary>\n\
+        Turn ends here. The coordinator knows nothing about the findings yet. What follows is a \
+        SEPARATE turn — the notification arrives from outside, as a user-role message. It is not \
+        something the coordinator writes.\n\
+        </commentary>\n\
+        [later turn — notification arrives as user message]\n\
+        assistant: Audit's back. Three blockers: no tests for the new prompt path, GrowthBook \
+        gate wired but not in build_flags.yaml, and one uncommitted file.\n\
+        </example>\n\n\
+        <example>\n\
+        user: \"so is the gate wired up or not\"\n\
+        <commentary>\n\
+        User asks mid-wait. The audit fork was launched to answer exactly this, and it hasn't \
+        returned. The coordinator does not have this answer. Give status, not a fabricated result.\n\
+        </commentary>\n\
+        assistant: Still waiting on the audit — that's one of the things it's checking. Should \
+        land shortly.\n\
         </example>\n\n\
         <example>\n\
         user: \"Can you get a second opinion on whether this migration is safe?\"\n\
-        assistant: I'll ask the verification agent — it won't see my analysis, so it can give \
+        assistant: I'll ask the code-reviewer agent — it won't see my analysis, so it can give \
         an independent read.\n\
+        <commentary>\n\
+        A subagent_type is specified, so the agent starts fresh. It needs full context in the \
+        prompt. The briefing explains what to assess and why.\n\
+        </commentary>\n\
         {AGENT_TOOL_NAME}({{\n\
           name: \"migration-review\",\n\
           description: \"Independent migration review\",\n\
-          subagent_type: \"verification\",\n\
+          subagent_type: \"code-reviewer\",\n\
           prompt: \"Review migration 0042_user_schema.sql for safety. Context: we're adding a \
-        NOT NULL column to a 50M-row table. I want a second opinion on whether the backfill \
-        approach is safe under concurrent writes. Report: is this safe, and if not, what \
-        specifically breaks?\"\n\
+        NOT NULL column to a 50M-row table. Existing rows get a backfill default. I want a \
+        second opinion on whether the backfill approach is safe under concurrent writes — I've \
+        checked locking behavior but want independent verification. Report: is this safe, and \
+        if not, what specifically breaks?\"\n\
         }})\n\
         </example>"
     )
@@ -353,10 +403,28 @@ fn build_current_examples() -> String {
         </example_agent_descriptions>\n\n\
         <example>\n\
         user: \"Please write a function that checks if a number is prime\"\n\
-        assistant: I'm going to use the Write tool to write the following code.\n\
+        assistant: I'm going to use the Write tool to write the following code:\n\
+        <code>\n\
+        function isPrime(n) {{\n\
+          if (n <= 1) return false\n\
+          for (let i = 2; i * i <= n; i++) {{\n\
+            if (n % i === 0) return false\n\
+          }}\n\
+          return true\n\
+        }}\n\
+        </code>\n\
+        <commentary>\n\
         Since a significant piece of code was written and the task was completed, now use the \
-        test-runner agent to run the tests.\n\
+        test-runner agent to run the tests\n\
+        </commentary>\n\
         assistant: Uses the {AGENT_TOOL_NAME} tool to launch the test-runner agent\n\
+        </example>\n\n\
+        <example>\n\
+        user: \"Hello\"\n\
+        <commentary>\n\
+        Since the user is greeting, use the greeting-responder agent to respond with a friendly joke\n\
+        </commentary>\n\
+        assistant: \"I'm going to use the {AGENT_TOOL_NAME} tool to launch the greeting-responder agent\"\n\
         </example>"
     )
 }

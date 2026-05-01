@@ -131,6 +131,25 @@ fn default_enabled() -> bool {
     true
 }
 
+fn expand_env_vars(value: &str) -> String {
+    let mut result = value.to_string();
+    while let Some(start) = result.find("${") {
+        let end = result[start..].find('}').map(|i| start + i);
+        if let Some(end) = end {
+            let var_name = &result[start + 2..end];
+            let replacement = std::env::var(var_name).unwrap_or_default();
+            result = format!("{}{}{}", &result[..start], replacement, &result[end + 1..]);
+        } else {
+            break;
+        }
+    }
+    result
+}
+
+fn expand_env_map(env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    env.iter().map(|(k, v)| (k.clone(), expand_env_vars(v))).collect()
+}
+
 fn should_parse_as_json(path: &Path, content: &str) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
@@ -218,7 +237,7 @@ impl McpConfig {
                     command: command.clone(),
                     args: raw_server.args,
                     cwd: raw_server.cwd,
-                    env: raw_server.env,
+                    env: expand_env_map(&raw_server.env),
                 },
                 (None, Some(url)) => {
                     let headers = raw_server.http_headers;
