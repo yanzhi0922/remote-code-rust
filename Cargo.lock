@@ -12407,6 +12407,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "claude-agent-protocol",
+ "dirs",
  "futures",
  "roo-app",
  "roo-modes",

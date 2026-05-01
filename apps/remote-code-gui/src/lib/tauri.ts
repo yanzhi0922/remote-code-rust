@@ -913,6 +913,15 @@ export function onAgentStatusChanged(
 
 // ── Voice / STT APIs ────────────────────────────────────────────────
 
+export function resolveRooPermissionRequest(
+  requestId: string,
+  allowed: boolean,
+): Promise<boolean> {
+  return invoke<boolean>('resolve_roo_permission_request', { requestId, allowed });
+}
+
+// ── Voice / STT APIs ────────────────────────────────────────────────
+
 /**
  * Transcribe audio data via the Rust STT backend (OpenAI Whisper API).
  *

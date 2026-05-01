@@ -40,7 +40,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::StreamExt;
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc, oneshot};
 use tracing::{debug, info, warn};
 
 use claude_agent_protocol::adapter::AgentAdapter;
@@ -48,9 +48,10 @@ use claude_agent_protocol::events::UnifiedAgentEvent;
 use claude_agent_protocol::permission::PermissionDecision;
 use claude_agent_protocol::types::{AgentConfig, AgentInfo, AgentStatus, AgentType};
 
+use roo_prompt::build_system_prompt;
 use roo_provider::handler::{CreateMessageMetadata, Provider};
 use roo_task::tool_dispatcher::{
-    ToolContext, ToolDispatcher, ToolExecutionResult,
+    AutoApprovalChecker, AutoApprovalResult, ToolContext, ToolDispatcher, ToolExecutionResult,
     default_dispatcher_with_terminal,
 };
 use roo_terminal::TerminalRegistry;
@@ -63,10 +64,6 @@ use roo_types::api::{
 // Provider builder — mirrors roo-cli's build_handler()
 // ---------------------------------------------------------------------------
 
-/// Build a boxed [`Provider`] based on the provider name string.
-///
-/// Supports all providers that the Roo CLI supports. The `provider_name`
-/// should match the `ProviderName` serde value (e.g. `"anthropic"`, `"openai"`).
 fn build_handler(
     provider_name: &str,
     api_key: Option<&str>,
@@ -74,7 +71,6 @@ fn build_handler(
     model_id: Option<&str>,
 ) -> anyhow::Result<Box<dyn Provider>> {
     match provider_name {
-        // ── Anthropic ──────────────────────────────────────────────────
         "anthropic" => {
             let api_key = api_key
                 .ok_or_else(|| anyhow::anyhow!("api_key is required for anthropic"))?;
@@ -92,7 +88,6 @@ fn build_handler(
             Ok(Box::new(roo_provider_anthropic::AnthropicHandler::new(cfg)?))
         }
 
-        // ── OpenAI (compatible) ────────────────────────────────────────
         "openai" => {
             let api_key = api_key
                 .ok_or_else(|| anyhow::anyhow!("api_key is required for openai"))?;
@@ -110,7 +105,6 @@ fn build_handler(
             Ok(Box::new(roo_provider_openai::OpenAiHandler::new(cfg)?))
         }
 
-        // ── OpenAI Native (Responses API) ──────────────────────────────
         "openai-native" => {
             let api_key = api_key
                 .ok_or_else(|| anyhow::anyhow!("api_key is required for openai-native"))?;
@@ -129,7 +123,6 @@ fn build_handler(
             ))
         }
 
-        // ── OpenRouter ─────────────────────────────────────────────────
         "openrouter" => {
             let api_key = api_key
                 .ok_or_else(|| anyhow::anyhow!("api_key is required for openrouter"))?;
@@ -145,7 +138,6 @@ fn build_handler(
             Ok(Box::new(roo_provider_openrouter::OpenRouterHandler::new(cfg)?))
         }
 
-        // ── DeepSeek ───────────────────────────────────────────────────
         "deepseek" => {
             let api_key = api_key
                 .ok_or_else(|| anyhow::anyhow!("api_key is required for deepseek"))?;
@@ -161,7 +153,6 @@ fn build_handler(
             Ok(Box::new(roo_provider_deepseek::DeepSeekHandler::new(cfg)?))
         }
 
-        // ── Google Gemini ──────────────────────────────────────────────
         "gemini" | "google" => {
             let api_key = api_key
                 .ok_or_else(|| anyhow::anyhow!("api_key is required for gemini"))?;
@@ -177,7 +168,6 @@ fn build_handler(
             Ok(Box::new(roo_provider_google::GoogleHandler::new(cfg)?))
         }
 
-        // ── Ollama ─────────────────────────────────────────────────────
         "ollama" => {
             let cfg = roo_provider_ollama::OllamaConfig {
                 base_url: base_url
@@ -191,7 +181,6 @@ fn build_handler(
             Ok(Box::new(roo_provider_ollama::OllamaHandler::new(cfg)?))
         }
 
-        // ── LM Studio ──────────────────────────────────────────────────
         "lmstudio" => {
             let cfg = roo_provider_lmstudio::LmStudioConfig {
                 base_url: base_url
@@ -206,7 +195,6 @@ fn build_handler(
             Ok(Box::new(roo_provider_lmstudio::LmStudioHandler::new(cfg)?))
         }
 
-        // ── xAI (Grok) ────────────────────────────────────────────────
         "xai" => {
             let api_key = api_key
                 .ok_or_else(|| anyhow::anyhow!("api_key is required for xai"))?;
@@ -222,7 +210,6 @@ fn build_handler(
             Ok(Box::new(roo_provider_xai::XaiHandler::new(cfg)?))
         }
 
-        // ── Mistral ────────────────────────────────────────────────────
         "mistral" => {
             let api_key = api_key
                 .ok_or_else(|| anyhow::anyhow!("api_key is required for mistral"))?;
@@ -238,7 +225,6 @@ fn build_handler(
             Ok(Box::new(roo_provider_mistral::MistralHandler::new(cfg)?))
         }
 
-        // ── Fireworks ──────────────────────────────────────────────────
         "fireworks" => {
             let api_key = api_key
                 .ok_or_else(|| anyhow::anyhow!("api_key is required for fireworks"))?;
@@ -254,11 +240,8 @@ fn build_handler(
             Ok(Box::new(roo_provider_fireworks::FireworksHandler::new(cfg)?))
         }
 
-        // ── LiteLLM ────────────────────────────────────────────────────
         "litellm" => {
-            let api_key = api_key
-                .unwrap_or("dummy-key")
-                .to_string();
+            let api_key = api_key.unwrap_or("dummy-key").to_string();
             let cfg = roo_provider_litellm::LiteLlmConfig {
                 api_key,
                 base_url: base_url
@@ -272,7 +255,6 @@ fn build_handler(
             Ok(Box::new(roo_provider_litellm::LiteLlmHandler::new(cfg)?))
         }
 
-        // ── Qwen ───────────────────────────────────────────────────────
         "qwen" | "qwen-code" => {
             let api_key = api_key
                 .ok_or_else(|| anyhow::anyhow!("api_key is required for qwen"))?;
@@ -288,7 +270,6 @@ fn build_handler(
             Ok(Box::new(roo_provider_qwen::QwenHandler::new(cfg)?))
         }
 
-        // ── MiniMax ────────────────────────────────────────────────────
         "minimax" => {
             let api_key = api_key
                 .ok_or_else(|| anyhow::anyhow!("api_key is required for minimax"))?;
@@ -305,7 +286,6 @@ fn build_handler(
             Ok(Box::new(roo_provider_minimax::MiniMaxHandler::new(cfg)?))
         }
 
-        // ── Moonshot ───────────────────────────────────────────────────
         "moonshot" => {
             let api_key = api_key
                 .ok_or_else(|| anyhow::anyhow!("api_key is required for moonshot"))?;
@@ -321,7 +301,6 @@ fn build_handler(
             Ok(Box::new(roo_provider_moonshot::MoonshotHandler::new(cfg)?))
         }
 
-        // ── ZAI ────────────────────────────────────────────────────────
         "zai" => {
             let api_key = api_key
                 .ok_or_else(|| anyhow::anyhow!("api_key is required for zai"))?;
@@ -337,7 +316,6 @@ fn build_handler(
             Ok(Box::new(roo_provider_zai::ZaiHandler::new(cfg)?))
         }
 
-        // ── SambaNova ──────────────────────────────────────────────────
         "sambanova" => {
             let api_key = api_key
                 .ok_or_else(|| anyhow::anyhow!("api_key is required for sambanova"))?;
@@ -353,7 +331,6 @@ fn build_handler(
             Ok(Box::new(roo_provider_sambanova::SambaNovaHandler::new(cfg)?))
         }
 
-        // ── Baseten ────────────────────────────────────────────────────
         "baseten" => {
             let api_key = api_key
                 .ok_or_else(|| anyhow::anyhow!("api_key is required for baseten"))?;
@@ -369,7 +346,6 @@ fn build_handler(
             Ok(Box::new(roo_provider_baseten::BasetenHandler::new(cfg)?))
         }
 
-        // ── Poe ────────────────────────────────────────────────────────
         "poe" => {
             let api_key = api_key
                 .ok_or_else(|| anyhow::anyhow!("api_key is required for poe"))?;
@@ -385,7 +361,6 @@ fn build_handler(
             Ok(Box::new(roo_provider_poe::PoeHandler::new(cfg)?))
         }
 
-        // ── Requesty ───────────────────────────────────────────────────
         "requesty" => {
             let api_key = api_key
                 .ok_or_else(|| anyhow::anyhow!("api_key is required for requesty"))?;
@@ -401,7 +376,6 @@ fn build_handler(
             Ok(Box::new(roo_provider_requesty::RequestyHandler::new(cfg)?))
         }
 
-        // ── Unbound ────────────────────────────────────────────────────
         "unbound" => {
             let api_key = api_key
                 .ok_or_else(|| anyhow::anyhow!("api_key is required for unbound"))?;
@@ -414,7 +388,6 @@ fn build_handler(
             Ok(Box::new(roo_provider_unbound::UnboundHandler::new(cfg)?))
         }
 
-        // ── Vercel AI Gateway ──────────────────────────────────────────
         "vercel" | "vercel-ai-gateway" => {
             let api_key = api_key
                 .ok_or_else(|| anyhow::anyhow!("api_key is required for vercel"))?;
@@ -428,11 +401,11 @@ fn build_handler(
             Ok(Box::new(roo_provider_vercel::VercelHandler::new(cfg)?))
         }
 
-        // ── Roo ────────────────────────────────────────────────────────
         "roo" => {
             let cfg = roo_provider_roo::RooConfig {
                 api_key: api_key.map(|s| s.to_string()),
-                base_url: base_url.map(|s| s.to_string())
+                base_url: base_url
+                    .map(|s| s.to_string())
                     .or_else(|| Some(roo_provider_roo::RooConfig::DEFAULT_BASE_URL.to_string())),
                 model_id: model_id.map(|s| s.to_string()),
                 temperature: None,
@@ -441,10 +414,10 @@ fn build_handler(
             Ok(Box::new(roo_provider_roo::RooHandler::new(cfg)?))
         }
 
-        // ── AWS Bedrock ────────────────────────────────────────────────
         "aws" | "bedrock" => {
-            let api_key = api_key
-                .ok_or_else(|| anyhow::anyhow!("api_key is required for bedrock (format: access_key:secret_key)"))?;
+            let api_key = api_key.ok_or_else(|| {
+                anyhow::anyhow!("api_key is required for bedrock (format: access_key:secret_key)")
+            })?;
             let parts: Vec<&str> = api_key.splitn(2, ':').collect();
             let (access_key, secret_key) = if parts.len() == 2 {
                 (parts[0].to_string(), parts[1].to_string())
@@ -483,7 +456,6 @@ fn build_handler(
 // Collected stream data
 // ---------------------------------------------------------------------------
 
-/// Accumulated tool call from streaming.
 struct CollectedToolCall {
     id: String,
     name: String,
@@ -491,37 +463,47 @@ struct CollectedToolCall {
 }
 
 // ---------------------------------------------------------------------------
+// Pending permission
+// ---------------------------------------------------------------------------
+
+struct PendingApproval {
+    response_tx: oneshot::Sender<bool>,
+}
+
+// ---------------------------------------------------------------------------
+// Stream collection result
+// ---------------------------------------------------------------------------
+
+struct StreamCollectionResult {
+    text: String,
+    tool_calls: Vec<CollectedToolCall>,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_read_tokens: u64,
+    cache_write_tokens: u64,
+}
+
+// ---------------------------------------------------------------------------
 // RooInProcessAdapter
 // ---------------------------------------------------------------------------
 
-/// In-process adapter for the Roo Code agent.
-///
-/// Wraps a Roo [`Provider`] and [`ToolDispatcher`] and runs the full
-/// agent loop (user → API → tools → results → API → text) in a background
-/// task, streaming [`UnifiedAgentEvent`]s through an mpsc channel.
 pub struct RooInProcessAdapter {
-    /// Static agent metadata.
     info: AgentInfo,
-    /// Runtime status.
     status: AgentStatus,
-    /// Working directory for tool execution.
     cwd: PathBuf,
-    /// Model override.
     model: Option<String>,
-    /// API key for the provider.
     api_key: Option<String>,
-    /// Provider name (e.g. "anthropic", "openai").
     provider_name: Option<String>,
-    /// Base URL override.
     base_url: Option<String>,
-    /// Cancellation token for the running task.
     cancel_token: Option<tokio_util::sync::CancellationToken>,
-    /// Background worker handle.
     worker_handle: Option<tokio::task::JoinHandle<()>>,
+    conversation_history: Arc<Mutex<Vec<ApiMessage>>>,
+    pending_approvals: Arc<Mutex<HashMap<String, PendingApproval>>>,
+    auto_approval: AutoApprovalChecker,
 }
 
 impl RooInProcessAdapter {
-    /// Create a new adapter in the **Starting** state.
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         let mut caps = HashSet::new();
         caps.insert(claude_agent_protocol::types::AgentCapability::Streaming);
@@ -545,22 +527,41 @@ impl RooInProcessAdapter {
             base_url: None,
             cancel_token: None,
             worker_handle: None,
+            conversation_history: Arc::new(Mutex::new(Vec::new())),
+            pending_approvals: Arc::new(Mutex::new(HashMap::new())),
+            auto_approval: AutoApprovalChecker::new(true),
         }
     }
 
-    /// Build the system prompt using Roo's prompt system.
     fn build_system_prompt(&self) -> String {
-        // Use a basic system prompt for now. Full integration would use
-        // roo_prompt::build_system_prompt() with mode and tool definitions.
-        format!(
-            "You are Roo, a skilled software engineer. You are working in: {}\n\
-             Assist the user by reading, writing, and executing code as needed.\n\
-             Use the available tools to accomplish the user's tasks.",
-            self.cwd.display()
+        let cwd_str = self.cwd.to_string_lossy();
+        let shell = if cfg!(windows) {
+            "cmd.exe".to_string()
+        } else {
+            std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
+        };
+        let home = dirs::home_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "/tmp".to_string());
+        let os_info = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
+
+        build_system_prompt(
+            &cwd_str,
+            "code",
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            &os_info,
+            &shell,
+            &home,
         )
     }
 
-    /// Build tool definitions as JSON values.
     fn build_tools_json() -> Vec<serde_json::Value> {
         let options = NativeToolsOptions::default();
         let tools: Vec<ToolDefinition> = get_native_tools(options);
@@ -576,11 +577,35 @@ impl RooInProcessAdapter {
             .collect()
     }
 
-    /// Build a ToolDispatcher with terminal support.
-    fn build_dispatcher(cwd: &PathBuf) -> ToolDispatcher {
+    fn build_dispatcher(cwd: &std::path::Path) -> ToolDispatcher {
         let registry = Arc::new(TerminalRegistry::new());
         let output_dir = cwd.join(".roo");
         default_dispatcher_with_terminal(registry, output_dir, "code")
+    }
+
+    pub fn set_auto_approval_enabled(&mut self, enabled: bool) {
+        self.auto_approval = AutoApprovalChecker::new(enabled);
+    }
+
+    pub async fn resolve_roo_approval(
+        &self,
+        request_id: &str,
+        approved: bool,
+    ) -> anyhow::Result<()> {
+        let mut pending = self.pending_approvals.lock().await;
+        if let Some(entry) = pending.remove(request_id) {
+            let _ = entry.response_tx.send(approved);
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(
+                "No pending Roo approval found for request_id: {}",
+                request_id
+            ))
+        }
+    }
+
+    pub async fn clear_history(&self) {
+        self.conversation_history.lock().await.clear();
     }
 }
 
@@ -593,7 +618,6 @@ impl AgentAdapter for RooInProcessAdapter {
     async fn start(&mut self, config: &AgentConfig) -> anyhow::Result<()> {
         info!(working_dir = ?config.working_dir, "Starting Roo In-Process adapter");
 
-        // Extract configuration
         if let Some(ref wd) = config.working_dir {
             self.cwd = wd.clone();
         }
@@ -601,21 +625,16 @@ impl AgentAdapter for RooInProcessAdapter {
         self.api_key = config.api_key.clone();
         self.base_url = config.base_url.clone();
 
-        // Extract provider name from config.provider or config.agent_type
-        self.provider_name = config.provider.clone().or_else(|| {
-            // Try to infer from agent_type serialization
-            match config.agent_type {
-                AgentType::RemoteRoo => Some("anthropic".to_string()),
-                _ => None,
-            }
+        self.provider_name = config.provider.clone().or_else(|| match config.agent_type {
+            AgentType::RemoteRoo => Some("anthropic".to_string()),
+            _ => None,
         });
 
-        let provider_name = self.provider_name.as_deref()
+        let provider_name = self
+            .provider_name
+            .as_deref()
             .ok_or_else(|| anyhow::anyhow!("provider name is required for Roo adapter"))?;
 
-        // Verify the provider handler can be built (but don't store it —
-        // we'll create a fresh one per send_message call since dyn Provider
-        // is not Clone).
         let _ = build_handler(
             provider_name,
             self.api_key.as_deref(),
@@ -635,14 +654,11 @@ impl AgentAdapter for RooInProcessAdapter {
         session_id: &str,
         message: &str,
     ) -> anyhow::Result<mpsc::Receiver<UnifiedAgentEvent>> {
-        // Create the event channel
         let (tx, rx) = mpsc::channel(256);
 
-        // Create cancellation token
         let cancel_token = tokio_util::sync::CancellationToken::new();
         self.cancel_token = Some(cancel_token.clone());
 
-        // Build initial messages
         let user_message = ApiMessage {
             role: MessageRole::User,
             content: vec![ContentBlock::Text {
@@ -659,20 +675,28 @@ impl AgentAdapter for RooInProcessAdapter {
             reasoning_details: None,
         };
 
-        // Clone/move everything into the background task
+        {
+            let mut history = self.conversation_history.lock().await;
+            history.push(user_message.clone());
+        }
+
         let system_prompt = self.build_system_prompt();
         let tools_json = Self::build_tools_json();
         let cwd = self.cwd.clone();
         let session_id_owned = session_id.to_string();
 
-        // Create a fresh handler and dispatcher for the background task
         let bg_handler = build_handler(
-            self.provider_name.as_deref().unwrap_or("anthropic"),
+            self.provider_name
+                .as_deref()
+                .unwrap_or("anthropic"),
             self.api_key.as_deref(),
             self.base_url.as_deref(),
             self.model.as_deref(),
         )?;
         let bg_dispatcher = Self::build_dispatcher(&cwd);
+        let history = Arc::clone(&self.conversation_history);
+        let pending_approvals = Arc::clone(&self.pending_approvals);
+        let auto_approval = self.auto_approval.clone();
 
         let worker = tokio::spawn(async move {
             run_agent_loop(
@@ -680,7 +704,9 @@ impl AgentAdapter for RooInProcessAdapter {
                 bg_dispatcher,
                 &tools_json,
                 &system_prompt,
-                user_message,
+                history,
+                pending_approvals,
+                auto_approval,
                 &cwd,
                 &session_id_owned,
                 tx,
@@ -697,12 +723,10 @@ impl AgentAdapter for RooInProcessAdapter {
     async fn cancel(&mut self, _session_id: &str) -> anyhow::Result<()> {
         info!("Cancelling Roo task");
 
-        // Trigger cancellation
         if let Some(ref token) = self.cancel_token {
             token.cancel();
         }
 
-        // Abort the worker task
         if let Some(handle) = self.worker_handle.take() {
             handle.abort();
         }
@@ -713,26 +737,25 @@ impl AgentAdapter for RooInProcessAdapter {
     async fn resolve_permission(
         &mut self,
         _session_id: &str,
-        _request_id: &str,
-        _decision: PermissionDecision,
+        request_id: &str,
+        decision: PermissionDecision,
     ) -> anyhow::Result<()> {
-        // Roo's permission handling is integrated into the tool dispatcher.
-        // For now, this is a no-op. Full integration will wire this to
-        // the tool approval flow.
-        warn!("resolve_permission called on Roo adapter — not yet fully wired");
-        Ok(())
+        let approved = matches!(decision, PermissionDecision::Allow | PermissionDecision::AllowAll);
+        self.resolve_roo_approval(request_id, approved).await
     }
 
     async fn stop(&mut self) -> anyhow::Result<()> {
         info!("Stopping Roo In-Process adapter");
 
-        // Cancel any running task
         if let Some(ref token) = self.cancel_token {
             token.cancel();
         }
         if let Some(handle) = self.worker_handle.take() {
             handle.abort();
         }
+
+        self.conversation_history.lock().await.clear();
+        self.pending_approvals.lock().await.clear();
 
         self.status = AgentStatus::Stopped;
         self.info.status = AgentStatus::Stopped;
@@ -760,17 +783,16 @@ impl AgentAdapter for RooInProcessAdapter {
 // Agent loop — runs in background task
 // ---------------------------------------------------------------------------
 
-/// Run the full agent loop: user → API → tools → results → API → text.
-///
-/// This mirrors the CLI's `run_single()` but sends events through `tx`
-/// instead of printing to stdout.
+#[allow(clippy::too_many_arguments)]
 async fn run_agent_loop(
     handler: Box<dyn Provider>,
     dispatcher: ToolDispatcher,
     tools_json: &[serde_json::Value],
     system_prompt: &str,
-    initial_message: ApiMessage,
-    cwd: &PathBuf,
+    history: Arc<Mutex<Vec<ApiMessage>>>,
+    pending_approvals: Arc<Mutex<HashMap<String, PendingApproval>>>,
+    auto_approval: AutoApprovalChecker,
+    cwd: &std::path::Path,
     session_id: &str,
     tx: mpsc::Sender<UnifiedAgentEvent>,
     cancel_token: tokio_util::sync::CancellationToken,
@@ -779,67 +801,72 @@ async fn run_agent_loop(
     caps.insert(claude_agent_protocol::types::AgentCapability::Streaming);
     caps.insert(claude_agent_protocol::types::AgentCapability::ToolUse);
 
-    // Emit Started event
-    let _ = tx.send(UnifiedAgentEvent::Started(AgentInfo {
-        name: "Roo In-Process".into(),
-        version: env!("CARGO_PKG_VERSION").into(),
-        capabilities: caps,
-        status: AgentStatus::Busy,
-    })).await;
+    let _ = tx
+        .send(UnifiedAgentEvent::Started(AgentInfo {
+            name: "Roo In-Process".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            capabilities: caps,
+            status: AgentStatus::Busy,
+        }))
+        .await;
 
     let _ = tx.send(UnifiedAgentEvent::Ready).await;
 
-    let mut messages = vec![initial_message];
+    let messages = history.lock().await.clone();
+
     let mut final_text = String::new();
     let mut total_tool_calls: Vec<claude_agent_protocol::events::ToolCallInfo> = Vec::new();
     let mut total_input_tokens: u64 = 0;
     let mut total_output_tokens: u64 = 0;
-    let max_turns = 50; // Safety limit
+    let mut total_cache_read: u64 = 0;
+    let mut total_cache_write: u64 = 0;
+    let max_turns = 50;
+
+    let mut loop_messages = messages;
 
     for _turn in 0..max_turns {
-        // Check cancellation
         if cancel_token.is_cancelled() {
             let _ = tx.send(UnifiedAgentEvent::Stopped).await;
             return;
         }
 
-        // Call the provider
         let metadata = CreateMessageMetadata::default();
         let stream = match handler
-            .create_message(system_prompt, messages.clone(), Some(tools_json.to_vec()), metadata)
+            .create_message(
+                system_prompt,
+                loop_messages.clone(),
+                Some(tools_json.to_vec()),
+                metadata,
+            )
             .await
         {
             Ok(s) => s,
             Err(e) => {
-                let _ = tx.send(UnifiedAgentEvent::Error {
-                    session_id: session_id.to_string(),
-                    message: format!("Provider error: {e}"),
-                    recoverable: false,
-                }).await;
+                let _ = tx
+                    .send(UnifiedAgentEvent::Error {
+                        session_id: session_id.to_string(),
+                        message: format!("Provider error: {e}"),
+                        recoverable: false,
+                    })
+                    .await;
                 return;
             }
         };
 
-        // Collect the stream, forwarding text deltas
-        let (text, tool_calls) = collect_stream_and_forward(
-            stream,
-            session_id,
-            &tx,
-            &cancel_token,
-        ).await;
+        let collection = collect_stream_and_forward(stream, session_id, &tx, &cancel_token).await;
 
-        // Update token tracking (approximate)
-        total_input_tokens += text.len() as u64 / 4; // rough estimate
-        total_output_tokens += text.len() as u64 / 4;
+        total_input_tokens += collection.input_tokens;
+        total_output_tokens += collection.output_tokens;
+        total_cache_read += collection.cache_read_tokens;
+        total_cache_write += collection.cache_write_tokens;
 
-        // Build assistant message content blocks
         let mut assistant_content: Vec<ContentBlock> = Vec::new();
-        if !text.is_empty() {
+        if !collection.text.is_empty() {
             assistant_content.push(ContentBlock::Text {
-                text: text.clone(),
+                text: collection.text.clone(),
             });
         }
-        for tc in &tool_calls {
+        for tc in &collection.tool_calls {
             let input: serde_json::Value =
                 serde_json::from_str(&tc.arguments).unwrap_or(serde_json::json!({}));
             assistant_content.push(ContentBlock::ToolUse {
@@ -849,7 +876,7 @@ async fn run_agent_loop(
             });
         }
 
-        messages.push(ApiMessage {
+        let assistant_msg = ApiMessage {
             role: MessageRole::Assistant,
             content: assistant_content,
             reasoning: None,
@@ -861,33 +888,137 @@ async fn run_agent_loop(
             is_summary: None,
             condense_id: None,
             reasoning_details: None,
-        });
+        };
+        loop_messages.push(assistant_msg.clone());
+        {
+            let mut h = history.lock().await;
+            h.push(assistant_msg);
+        }
 
-        // If no tool calls, we're done
-        if tool_calls.is_empty() {
-            final_text = text;
+        if collection.tool_calls.is_empty() {
+            final_text = collection.text;
             break;
         }
 
-        // Execute tool calls
         let mut tool_results: Vec<ContentBlock> = Vec::new();
-        for tc in &tool_calls {
-            // Check cancellation
+        for tc in &collection.tool_calls {
             if cancel_token.is_cancelled() {
                 let _ = tx.send(UnifiedAgentEvent::Stopped).await;
                 return;
             }
 
-            // Parse tool input
             let params: serde_json::Value =
                 serde_json::from_str(&tc.arguments).unwrap_or(serde_json::json!({}));
 
-            // Emit tool started event
-            let _ = tx.send(UnifiedAgentEvent::ToolCallStarted {
-                session_id: session_id.to_string(),
-                tool_name: tc.name.clone(),
-                tool_input: params.clone(),
-            }).await;
+            let approval_result = auto_approval.check(&tc.name, &params);
+            match approval_result {
+                AutoApprovalResult::Denied { reason } => {
+                    let denied_output = format!("Tool denied: {reason}");
+                    let output_value = serde_json::Value::String(denied_output.clone());
+
+                    total_tool_calls.push(claude_agent_protocol::events::ToolCallInfo {
+                        id: tc.id.clone(),
+                        name: tc.name.clone(),
+                        input: serde_json::from_str(&tc.arguments)
+                            .unwrap_or(serde_json::json!({})),
+                        output: output_value.clone(),
+                    });
+
+                    let _ = tx
+                        .send(UnifiedAgentEvent::ToolCallCompleted {
+                            session_id: session_id.to_string(),
+                            tool_name: tc.name.clone(),
+                            result: output_value,
+                        })
+                        .await;
+
+                    tool_results.push(ContentBlock::ToolResult {
+                        tool_use_id: tc.id.clone(),
+                        content: vec![ToolResultContent::Text {
+                            text: denied_output,
+                        }],
+                        is_error: Some(true),
+                    });
+                    continue;
+                }
+                AutoApprovalResult::RequiresApproval { reason } => {
+                    let request_id = uuid::Uuid::new_v4().to_string();
+
+                    let _ = tx
+                        .send(UnifiedAgentEvent::PermissionRequest {
+                            session_id: session_id.to_string(),
+                            request_id: request_id.clone(),
+                            tool_name: tc.name.clone(),
+                            input: params.clone(),
+                        })
+                        .await;
+
+                    let (approval_tx, approval_rx) = oneshot::channel();
+                    {
+                        let mut pending = pending_approvals.lock().await;
+                        pending.insert(
+                            request_id.clone(),
+                            PendingApproval {
+                                response_tx: approval_tx,
+                            },
+                        );
+                    }
+
+                    let _ = tx
+                        .send(UnifiedAgentEvent::ToolCallStarted {
+                            session_id: session_id.to_string(),
+                            tool_name: format!("{} (pending approval: {reason})", tc.name),
+                            tool_input: params.clone(),
+                        })
+                        .await;
+
+                    let approved: bool = approval_rx.await.unwrap_or_default();
+
+                    if cancel_token.is_cancelled() {
+                        let _ = tx.send(UnifiedAgentEvent::Stopped).await;
+                        return;
+                    }
+
+                    if !approved {
+                        let denied_output = "User denied tool execution".to_string();
+                        let output_value = serde_json::Value::String(denied_output.clone());
+
+                        total_tool_calls.push(claude_agent_protocol::events::ToolCallInfo {
+                            id: tc.id.clone(),
+                            name: tc.name.clone(),
+                            input: serde_json::from_str(&tc.arguments)
+                                .unwrap_or(serde_json::json!({})),
+                            output: output_value.clone(),
+                        });
+
+                        let _ = tx
+                            .send(UnifiedAgentEvent::ToolCallCompleted {
+                                session_id: session_id.to_string(),
+                                tool_name: tc.name.clone(),
+                                result: output_value,
+                            })
+                            .await;
+
+                        tool_results.push(ContentBlock::ToolResult {
+                            tool_use_id: tc.id.clone(),
+                            content: vec![ToolResultContent::Text {
+                                text: denied_output,
+                            }],
+                            is_error: Some(true),
+                        });
+                        continue;
+                    }
+                }
+                AutoApprovalResult::Approved => {}
+            }
+
+            let _ = tx
+                .send(UnifiedAgentEvent::ToolCallStarted {
+                    session_id: session_id.to_string(),
+                    tool_name: tc.name.clone(),
+                    tool_input: params.clone(),
+                })
+                .await;
 
             let context = ToolContext::new(cwd, session_id);
             let result = dispatcher.dispatch(&tc.name, params, &context).await;
@@ -906,12 +1037,13 @@ async fn run_agent_loop(
                 output: output_value.clone(),
             });
 
-            // Emit tool completed event
-            let _ = tx.send(UnifiedAgentEvent::ToolCallCompleted {
-                session_id: session_id.to_string(),
-                tool_name: tc.name.clone(),
-                result: output_value,
-            }).await;
+            let _ = tx
+                .send(UnifiedAgentEvent::ToolCallCompleted {
+                    session_id: session_id.to_string(),
+                    tool_name: tc.name.clone(),
+                    result: output_value,
+                })
+                .await;
 
             tool_results.push(ContentBlock::ToolResult {
                 tool_use_id: tc.id.clone(),
@@ -926,8 +1058,7 @@ async fn run_agent_loop(
             });
         }
 
-        // Push tool results as user message
-        messages.push(ApiMessage {
+        let tool_results_msg = ApiMessage {
             role: MessageRole::User,
             content: tool_results,
             reasoning: None,
@@ -939,7 +1070,12 @@ async fn run_agent_loop(
             is_summary: None,
             condense_id: None,
             reasoning_details: None,
-        });
+        };
+        loop_messages.push(tool_results_msg.clone());
+        {
+            let mut h = history.lock().await;
+            h.push(tool_results_msg);
+        }
     }
 
     // Emit completion
@@ -951,29 +1087,32 @@ async fn run_agent_loop(
             usage: claude_agent_protocol::events::UsageInfo {
                 input_tokens: total_input_tokens,
                 output_tokens: total_output_tokens,
-                cache_read: 0,
-                cache_write: 0,
+                cache_read: total_cache_read,
+                cache_write: total_cache_write,
             },
             cost: None,
         },
-    }).await;
+    })
+    .await;
 
     debug!("Roo agent loop completed");
 }
 
-/// Collect a provider stream, forwarding text deltas as events.
 async fn collect_stream_and_forward(
     mut stream: roo_provider::handler::ApiStream,
     session_id: &str,
     tx: &mpsc::Sender<UnifiedAgentEvent>,
     cancel_token: &tokio_util::sync::CancellationToken,
-) -> (String, Vec<CollectedToolCall>) {
+) -> StreamCollectionResult {
     let mut collected_text = String::new();
     let mut tool_calls: Vec<CollectedToolCall> = Vec::new();
     let mut tool_call_index: HashMap<String, usize> = HashMap::new();
+    let mut input_tokens: u64 = 0;
+    let mut output_tokens: u64 = 0;
+    let mut cache_read_tokens: u64 = 0;
+    let mut cache_write_tokens: u64 = 0;
 
     while let Some(chunk_result) = stream.next().await {
-        // Check cancellation
         if cancel_token.is_cancelled() {
             break;
         }
@@ -981,21 +1120,27 @@ async fn collect_stream_and_forward(
         match chunk_result {
             Ok(chunk) => match &chunk {
                 ApiStreamChunk::Text { text } => {
-                    let _ = tx.send(UnifiedAgentEvent::MessageDelta {
-                        session_id: session_id.to_string(),
-                        delta: text.clone(),
-                    }).await;
+                    let _ = tx
+                        .send(UnifiedAgentEvent::MessageDelta {
+                            session_id: session_id.to_string(),
+                            delta: text.clone(),
+                        })
+                        .await;
                     collected_text.push_str(text);
                 }
                 ApiStreamChunk::Reasoning { text, .. } => {
-                    // Forward reasoning as message delta (dimmed)
-                    let _ = tx.send(UnifiedAgentEvent::MessageDelta {
-                        session_id: session_id.to_string(),
-                        delta: format!("[thinking] {}", text),
-                    }).await;
+                    let _ = tx
+                        .send(UnifiedAgentEvent::MessageDelta {
+                            session_id: session_id.to_string(),
+                            delta: format!("[thinking] {}", text),
+                        })
+                        .await;
                 }
-                // Complete tool call (some providers emit this instead of Start/Delta/End)
-                ApiStreamChunk::ToolCall { id, name, arguments } => {
+                ApiStreamChunk::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                } => {
                     tool_calls.push(CollectedToolCall {
                         id: id.clone(),
                         name: name.clone(),
@@ -1017,20 +1162,29 @@ async fn collect_stream_and_forward(
                     }
                 }
                 ApiStreamChunk::Usage {
-                    input_tokens,
-                    output_tokens,
+                    input_tokens: it,
+                    output_tokens: ot,
+                    cache_read_tokens: crt,
+                    cache_write_tokens: cwt,
                     ..
                 } => {
-                    let _ = tx.send(UnifiedAgentEvent::ContextUsage {
-                        session_id: session_id.to_string(),
-                        used: (*input_tokens + *output_tokens) as usize,
-                        total: 200_000, // approximate context window
-                    }).await;
+                    input_tokens = *it;
+                    output_tokens = *ot;
+                    if let Some(crt) = crt {
+                        cache_read_tokens = *crt;
+                    }
+                    if let Some(cwt) = cwt {
+                        cache_write_tokens = *cwt;
+                    }
+                    let _ = tx
+                        .send(UnifiedAgentEvent::ContextUsage {
+                            session_id: session_id.to_string(),
+                            used: (input_tokens + output_tokens) as usize,
+                            total: 200_000,
+                        })
+                        .await;
                 }
-                _ => {
-                    // Ignore other chunk types (ToolCallEnd, ThinkingComplete,
-                    // ToolCallPartial, Grounding, Error, etc.)
-                }
+                _ => {}
             },
             Err(e) => {
                 warn!(error = %e, "Stream error in Roo agent loop");
@@ -1039,5 +1193,12 @@ async fn collect_stream_and_forward(
         }
     }
 
-    (collected_text, tool_calls)
+    StreamCollectionResult {
+        text: collected_text,
+        tool_calls,
+        input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        cache_write_tokens,
+    }
 }

@@ -1,4 +1,4 @@
-//! Agent system integration tests.
+﻿//! Agent system integration tests.
 //!
 //! Validates that rc-agents types flow correctly through the agent pipeline:
 //! definition 鈫?runner 鈫?execution config, fork, coordinator/worker,
@@ -1138,4 +1138,229 @@ fn restart_tracker_zero_max_never_allows() {
     });
     assert!(tracker.request_restart().is_none());
     assert!(!tracker.can_restart());
+}
+
+// ─── Phase 15: Multi-Agent adapter protocol tests ──────────────────────
+
+#[tokio::test]
+async fn remote_roo_adapter_lifecycle_and_routing() {
+    let adapter = claude_agent_protocol::adapters::RemoteRooAdapter::new_roo().with_send_message(
+        |_sid, msg| {
+            Ok(vec![
+                UnifiedAgentEvent::MessageDelta {
+                    session_id: "roo-s1".into(),
+                    delta: format!("roo: {msg}"),
+                },
+                UnifiedAgentEvent::Completed {
+                    session_id: "roo-s1".into(),
+                    result: AgentResult {
+                        response_text: format!("roo response: {msg}"),
+                        tool_calls: vec![],
+                        usage: UsageInfo::default(),
+                        cost: None,
+                    },
+                },
+            ])
+        },
+    );
+
+    let mut boxed: Box<dyn AgentAdapter> = Box::new(adapter);
+    let config = AgentConfig {
+        agent_type: AgentType::RemoteRoo,
+        binary_path: None,
+        args: vec![],
+        env: vec![],
+        working_dir: None,
+        model: Some("claude-sonnet-4-20250514".into()),
+        provider: Some("anthropic".into()),
+        api_key: None,
+        base_url: None,
+    };
+    boxed.start(&config).await.unwrap();
+    assert_eq!(boxed.agent_type(), AgentType::RemoteRoo);
+    assert!(boxed.is_alive());
+    assert_eq!(boxed.info().name, "Remote Roo");
+
+    let mut rx = boxed.send_message("roo-s1", "hello from roo").await.unwrap();
+    let ev1 = rx.recv().await.unwrap();
+    assert!(matches!(ev1, UnifiedAgentEvent::MessageDelta { ref delta, .. } if delta == "roo: hello from roo"));
+    let ev2 = rx.recv().await.unwrap();
+    assert!(matches!(ev2, UnifiedAgentEvent::Completed { .. }));
+}
+
+#[tokio::test]
+async fn remote_codex_adapter_lifecycle_and_routing() {
+    let adapter = claude_agent_protocol::adapters::RemoteCodexAdapter::new_codex().with_send_message(
+        |_sid, msg| {
+            Ok(vec![
+                UnifiedAgentEvent::MessageDelta {
+                    session_id: "codex-s1".into(),
+                    delta: format!("codex: {msg}"),
+                },
+                UnifiedAgentEvent::Completed {
+                    session_id: "codex-s1".into(),
+                    result: AgentResult {
+                        response_text: format!("codex response: {msg}"),
+                        tool_calls: vec![],
+                        usage: UsageInfo::default(),
+                        cost: None,
+                    },
+                },
+            ])
+        },
+    );
+
+    let mut boxed: Box<dyn AgentAdapter> = Box::new(adapter);
+    let config = AgentConfig {
+        agent_type: AgentType::RemoteCodex,
+        binary_path: None,
+        args: vec![],
+        env: vec![],
+        working_dir: None,
+        model: None,
+        provider: None,
+        api_key: None,
+        base_url: None,
+    };
+    boxed.start(&config).await.unwrap();
+    assert_eq!(boxed.agent_type(), AgentType::RemoteCodex);
+    assert!(boxed.is_alive());
+    assert_eq!(boxed.info().name, "Remote Codex");
+
+    let mut rx = boxed.send_message("codex-s1", "hello from codex").await.unwrap();
+    let ev1 = rx.recv().await.unwrap();
+    assert!(matches!(ev1, UnifiedAgentEvent::MessageDelta { ref delta, .. } if delta == "codex: hello from codex"));
+}
+
+#[tokio::test]
+async fn three_agents_route_through_same_router() {
+    let mut router = AgentRouter::new();
+
+    let claude = RemoteClaudeAdapter::new_claude().with_send_message(|_sid, msg| {
+        Ok(vec![UnifiedAgentEvent::MessageDelta {
+            session_id: "s-claude".into(),
+            delta: format!("claude:{msg}"),
+        }])
+    });
+    let mut boxed_c: Box<dyn AgentAdapter> = Box::new(claude);
+    boxed_c.start(&protocol_test_config()).await.unwrap();
+    router.register("s-claude".into(), boxed_c).await;
+
+    let roo = claude_agent_protocol::adapters::RemoteRooAdapter::new_roo()
+        .with_send_message(|_sid, msg| {
+            Ok(vec![UnifiedAgentEvent::MessageDelta {
+                session_id: "s-roo".into(),
+                delta: format!("roo:{msg}"),
+            }])
+        });
+    let mut boxed_r: Box<dyn AgentAdapter> = Box::new(roo);
+    boxed_r.start(&AgentConfig {
+        agent_type: AgentType::RemoteRoo,
+        binary_path: None,
+        args: vec![],
+        env: vec![],
+        working_dir: None,
+        model: None,
+        provider: None,
+        api_key: None,
+        base_url: None,
+    }).await.unwrap();
+    router.register("s-roo".into(), boxed_r).await;
+
+    let codex = claude_agent_protocol::adapters::RemoteCodexAdapter::new_codex()
+        .with_send_message(|_sid, msg| {
+            Ok(vec![UnifiedAgentEvent::MessageDelta {
+                session_id: "s-codex".into(),
+                delta: format!("codex:{msg}"),
+            }])
+        });
+    let mut boxed_x: Box<dyn AgentAdapter> = Box::new(codex);
+    boxed_x.start(&AgentConfig {
+        agent_type: AgentType::RemoteCodex,
+        binary_path: None,
+        args: vec![],
+        env: vec![],
+        working_dir: None,
+        model: None,
+        provider: None,
+        api_key: None,
+        base_url: None,
+    }).await.unwrap();
+    router.register("s-codex".into(), boxed_x).await;
+
+    assert_eq!(router.session_count(), 3);
+
+    let mut rx_c = router.send_message("s-claude", "hi").await.unwrap();
+    match rx_c.recv().await.unwrap() {
+        UnifiedAgentEvent::MessageDelta { delta, .. } => assert_eq!(delta, "claude:hi"),
+        _ => panic!("expected MessageDelta"),
+    }
+
+    let mut rx_r = router.send_message("s-roo", "hi").await.unwrap();
+    match rx_r.recv().await.unwrap() {
+        UnifiedAgentEvent::MessageDelta { delta, .. } => assert_eq!(delta, "roo:hi"),
+        _ => panic!("expected MessageDelta"),
+    }
+
+    let mut rx_x = router.send_message("s-codex", "hi").await.unwrap();
+    match rx_x.recv().await.unwrap() {
+        UnifiedAgentEvent::MessageDelta { delta, .. } => assert_eq!(delta, "codex:hi"),
+        _ => panic!("expected MessageDelta"),
+    }
+}
+
+#[tokio::test]
+async fn agent_type_serialization_covers_all_three_variants() {
+    let types = vec![
+        AgentType::RemoteClaude,
+        AgentType::RemoteCodex,
+        AgentType::RemoteRoo,
+    ];
+    for at in &types {
+        let json = serde_json::to_string(at).unwrap();
+        let back: AgentType = serde_json::from_str(&json).unwrap();
+        assert_eq!(*at, back, "round-trip failed for {at:?}");
+    }
+
+    assert_eq!(
+        serde_json::to_string(&AgentType::RemoteClaude).unwrap(),
+        "\"remote_claude\""
+    );
+    assert_eq!(
+        serde_json::to_string(&AgentType::RemoteCodex).unwrap(),
+        "\"remote_codex\""
+    );
+    assert_eq!(
+        serde_json::to_string(&AgentType::RemoteRoo).unwrap(),
+        "\"remote_roo\""
+    );
+}
+
+#[tokio::test]
+async fn permission_request_event_carries_tool_info() {
+    let request_id = "perm-test-1".to_string();
+    let event = UnifiedAgentEvent::PermissionRequest {
+        session_id: "s1".into(),
+        request_id: request_id.clone(),
+        tool_name: "execute_command".into(),
+        input: serde_json::json!({"command": "rm -rf /tmp/test"}),
+    };
+
+    let json = serde_json::to_string(&event).unwrap();
+    let back: UnifiedAgentEvent = serde_json::from_str(&json).unwrap();
+
+    match back {
+        UnifiedAgentEvent::PermissionRequest {
+            session_id,
+            request_id: rid,
+            tool_name,
+            input,
+        } => {
+            assert_eq!(session_id, "s1");
+            assert_eq!(rid, request_id);
+            assert_eq!(tool_name, "execute_command");
+            assert_eq!(input["command"], "rm -rf /tmp/test");
+        }
+        _ => panic!("expected PermissionRequest"),
+    }
 }
