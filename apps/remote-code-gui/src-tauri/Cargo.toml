@@ -50,5 +50,8 @@ tracing = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 
+[features]
+mobile = []
+
 [lints]
 workspace = true
