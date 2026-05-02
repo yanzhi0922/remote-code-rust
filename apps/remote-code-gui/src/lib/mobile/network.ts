@@ -25,8 +25,10 @@ export function initNetworkMonitoring(): void {
     }
     return;
   }
-  import('@tauri-apps/plugin-network').then((mod) => {
-    const stream = mod.onNetworkStatusChange((status) => {
+  // Use variable to avoid Vite static analysis of the import path
+  const modName = '@tauri-apps/plugin-network';
+  import(/* @vite-ignore */ modName).then((mod: any) => {
+    const stream = mod.onNetworkStatusChange((status: any) => {
       currentStatus = { connected: status.connected, connectionType: status.connectionType ?? 'unknown' };
       listeners.forEach((fn) => fn(currentStatus.connected, currentStatus.connectionType));
     });

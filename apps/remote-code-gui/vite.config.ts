@@ -44,6 +44,9 @@ export default defineConfig(async ({ command }) => ({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  optimizeDeps: {
+    exclude: ['@tauri-apps/plugin-network'],
+  },
   build: {
     chunkSizeWarningLimit: 700,
     rollupOptions: {
