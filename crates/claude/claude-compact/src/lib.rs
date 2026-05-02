@@ -123,8 +123,9 @@ pub(crate) fn estimate_single_message_tokens(msg: &Message) -> u64 {
 // ---------------------------------------------------------------------------
 
 pub use strategy::{
-    CompactOptions, CompactProgressEvent, CompactStrategy, CompactStrategyType, CompactionResult,
-    FnSummaryProvider, PreservedSegment, SummaryProvider,
+    CompactOptions, CompactProgressEvent, CompactStrategy, CompactStrategyType,
+    CompactTelemetryProvider, CompactionResult, FnSummaryProvider, PostCompactAttachmentProvider,
+    PreservedSegment, SessionStartHookProvider, SummaryProvider,
 };
 
 // ---------------------------------------------------------------------------
@@ -144,7 +145,9 @@ pub use auto::{
     AUTOCOMPACT_BUFFER_TOKENS, AutoCompactStrategy, AutoCompactTrackingState,
     ERROR_THRESHOLD_BUFFER_TOKENS, MANUAL_COMPACT_BUFFER_TOKENS,
     MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES, TokenWarningState, WARNING_THRESHOLD_BUFFER_TOKENS,
-    auto_compact, should_auto_compact,
+    auto_compact, get_auto_compact_threshold, get_effective_context_window,
+    is_auto_compact_allowed_for_query_source, is_auto_compact_env_enabled, should_auto_compact,
+    should_auto_compact_with_snip,
 };
 
 // ---------------------------------------------------------------------------

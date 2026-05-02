@@ -226,6 +226,7 @@ fn create_compaction_result_from_session_memory(
         base: {
             let mut base = MessageBase::with_origin(MessageOrigin::Compact);
             base.is_compact_summary = true;
+            base.is_visible_in_transcript_only = true;
             base
         },
         text: summary_text.clone(),
@@ -326,6 +327,10 @@ fn adjust_index_to_preserve_api_invariants(messages: &[Message], start_index: us
     }
 
     let mut adjusted_index = start_index;
+
+    // Step 1: Ensure tool-use/tool-result pairs are complete.
+    // Collect all tool_result IDs in the kept range and pull in any
+    // missing tool_use messages from the summarized range.
     let all_tool_result_ids = messages[start_index..]
         .iter()
         .flat_map(tool_result_ids)
@@ -353,6 +358,32 @@ fn adjust_index_to_preserve_api_invariants(messages: &[Message], start_index: us
                 adjusted_index = index;
                 for id in present_ids {
                     missing_tool_use_ids.remove(&id);
+                }
+            }
+        }
+    }
+
+    // Step 2: Thinking-block coalescing.
+    // Streaming yields separate messages per content block (thinking,
+    // tool_use, etc.) that share the same message UUID but have different
+    // Rust UUIDs. normalizeMessagesForAPI merges them by message UUID.
+    // We must include all fragments sharing a UUID present in the kept range.
+    let kept_assistant_uuids: std::collections::BTreeSet<uuid::Uuid> = messages[adjusted_index..]
+        .iter()
+        .filter_map(|m| match m {
+            Message::Assistant(a) => Some(a.base.uuid),
+            _ => None,
+        })
+        .collect();
+
+    if !kept_assistant_uuids.is_empty() {
+        for index in (0..adjusted_index).rev() {
+            if let Message::Assistant(a) = &messages[index] {
+                // This is a streaming fragment with a matching message UUID
+                // that needs to be coalesced with kept-range messages.
+                // We use the provider_content_blocks to check for thinking blocks.
+                if kept_assistant_uuids.contains(&a.base.uuid) {
+                    adjusted_index = index;
                 }
             }
         }
@@ -410,7 +441,13 @@ fn tool_use_ids(message: &Message) -> Vec<String> {
 
 pub fn has_text_blocks(message: &Message) -> bool {
     match message {
-        Message::User(message) => !message.text.is_empty(),
+        Message::User(message) => {
+            !message.text.is_empty()
+                || message
+                    .provider_content_blocks
+                    .iter()
+                    .any(|block| block.get("type").and_then(|v| v.as_str()) == Some("text"))
+        }
         Message::Assistant(message) => {
             !message.text.is_empty()
                 || message.blocks.iter().any(|block| {

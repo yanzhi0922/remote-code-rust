@@ -184,7 +184,7 @@ on this context will follow after your summary (you do not see them here). \
 Summarize thoroughly so that someone reading only your summary and then the \
 newer messages can fully understand what happened and continue the work.\n\n";
 
-/// Summary sections for partial compaction (both directions).
+/// Summary sections for partial compaction — "from" direction.
 const PARTIAL_SUMMARY_SECTIONS: &str = "\
 Your summary should include the following sections:
 
@@ -238,7 +238,70 @@ Here's an example of how your output should be structured:\n\n\
    [Optional Next step to take]
 
 </summary>
-</example>\n\n";
+</example>\n\n\
+Please provide your summary based on the RECENT messages only (after the retained earlier context), \
+following this structure and ensuring precision and thoroughness in your response.\n";
+
+/// Summary sections for partial compaction — "up_to" direction.
+///
+/// Uses different sections 7-9 ("Work Completed" / "Context for Continuing Work")
+/// instead of "Current Work" / "Optional Next Step" because the summary is placed
+/// at the start of a continuing session where newer messages follow.
+const PARTIAL_SUMMARY_SECTIONS_UP_TO: &str = "\
+Your summary should include the following sections:
+
+1. Primary Request and Intent: Capture the user's explicit requests and intents in detail
+2. Key Technical Concepts: List important technical concepts, technologies, and frameworks discussed.
+3. Files and Code Sections: Enumerate specific files and code sections examined, modified, or created. \
+Include full code snippets where applicable and include a summary of why this file read or edit is important.
+4. Errors and fixes: List errors encountered and how they were fixed.
+5. Problem Solving: Document problems solved and any ongoing troubleshooting efforts.
+6. All user messages: List ALL user messages that are not tool results.
+7. Pending Tasks: Outline any pending tasks.
+8. Work Completed: Describe what was accomplished by the end of this portion.
+9. Context for Continuing Work: Summarize any context, decisions, or state that would be needed to \
+understand and continue the work in subsequent messages.\n\n\
+Here's an example of how your output should be structured:\n\n\
+<example>
+<analysis>
+[Your thought process, ensuring all points are covered thoroughly and accurately]
+</analysis>
+
+<summary>
+1. Primary Request and Intent:
+   [Detailed description]
+
+2. Key Technical Concepts:
+   - [Concept 1]
+   - [Concept 2]
+
+3. Files and Code Sections:
+   - [File Name 1]
+      - [Summary of why this file is important]
+      - [Important Code Snippet]
+
+4. Errors and fixes:
+    - [Error description]:
+      - [How you fixed it]
+
+5. Problem Solving:
+   [Description]
+
+6. All user messages:
+    - [Detailed non tool use user message]
+
+7. Pending Tasks:
+   - [Task 1]
+
+8. Work Completed:
+   [Description of what was accomplished]
+
+9. Context for Continuing Work:
+   [Key context, decisions, or state needed to continue the work]
+
+</summary>
+</example>\n\n\
+Please provide your summary following this structure, ensuring precision and thoroughness in your response.\n";
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -280,19 +343,21 @@ pub fn build_partial_compact_prompt(
     custom_instructions: Option<&str>,
     direction: PartialCompactDirection,
 ) -> String {
-    let (template, analysis) = match direction {
+    let (template, analysis, sections) = match direction {
         PartialCompactDirection::From => (
             PARTIAL_COMPACT_PROMPT,
             DETAILED_ANALYSIS_INSTRUCTION_PARTIAL,
+            PARTIAL_SUMMARY_SECTIONS,
         ),
         PartialCompactDirection::UpTo => (
             PARTIAL_COMPACT_UP_TO_PROMPT,
             DETAILED_ANALYSIS_INSTRUCTION_BASE,
+            PARTIAL_SUMMARY_SECTIONS_UP_TO,
         ),
     };
 
     let mut prompt =
-        format!("{NO_TOOLS_PREAMBLE}{template}{analysis}\n\n{PARTIAL_SUMMARY_SECTIONS}");
+        format!("{NO_TOOLS_PREAMBLE}{template}{analysis}\n\n{sections}");
 
     if let Some(instructions) = custom_instructions {
         let trimmed = instructions.trim();
@@ -318,13 +383,12 @@ pub fn format_compact_summary(summary: &str) -> String {
     let mut formatted = summary.to_string();
 
     // Strip the analysis section — it's a drafting scratchpad.
-    // Using a simple approach: find <analysis>...</analysis> and remove it.
-    while let Some(start) = formatted.find("<analysis>") {
+    // The TS reference uses a non-global regex `.replace(/<analysis>[\s\S]*?<\/analysis>/, '')`
+    // which removes only the first occurrence.
+    if let Some(start) = formatted.find("<analysis>") {
         if let Some(end) = formatted.find("</analysis>") {
             let analysis_end = end + "</analysis>".len();
             formatted = format!("{}{}", &formatted[..start], &formatted[analysis_end..]);
-        } else {
-            break;
         }
     }
 
@@ -359,6 +423,28 @@ pub fn build_compact_user_summary_message(
     transcript_path: Option<&str>,
     recent_messages_preserved: bool,
 ) -> String {
+    build_compact_user_summary_message_ex(
+        summary,
+        suppress_follow_up_questions,
+        transcript_path,
+        recent_messages_preserved,
+        false,
+    )
+}
+
+/// Extended variant that supports proactive/autonomous mode.
+///
+/// When `proactive_active` is true and `suppress_follow_up_questions` is true,
+/// appends the proactive continuation message matching the TS reference:
+/// "You are running in autonomous/proactive mode. This is NOT a first
+/// wake-up — you were already working autonomously before compaction..."
+pub fn build_compact_user_summary_message_ex(
+    summary: &str,
+    suppress_follow_up_questions: bool,
+    transcript_path: Option<&str>,
+    recent_messages_preserved: bool,
+    proactive_active: bool,
+) -> String {
     let formatted = format_compact_summary(summary);
 
     let mut base = format!(
@@ -387,6 +473,16 @@ pub fn build_compact_user_summary_message(
              preface with \"I'll continue\" or similar. Pick up the last task \
              as if the break never happened.",
         );
+
+        if proactive_active {
+            base.push_str(
+                "\n\nYou are running in autonomous/proactive mode. This is NOT \
+                 a first wake-up — you were already working autonomously before \
+                 compaction. Continue your work loop: pick up where you left off \
+                 based on the summary above. Do not greet the user or ask what \
+                 to work on.",
+            );
+        }
     }
 
     base

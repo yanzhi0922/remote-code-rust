@@ -369,6 +369,7 @@ mod tests {
                 is_meta: false,
                 is_virtual: false,
                 is_compact_summary: false,
+                is_visible_in_transcript_only: false,
                 origin: Some(MessageOrigin::Tool),
             },
             tool_call_id: id.to_owned(),

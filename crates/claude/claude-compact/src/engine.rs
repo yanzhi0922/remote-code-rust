@@ -10,6 +10,7 @@ use claude_core::{
 };
 
 use crate::estimate_message_tokens;
+use crate::grouping::group_messages_by_api_round;
 use crate::prompt::{
     COMPACT_SYSTEM_PROMPT, PartialCompactDirection, build_compact_prompt,
     build_compact_user_summary_message, build_partial_compact_prompt, format_compact_summary,
@@ -139,8 +140,32 @@ pub async fn compact_conversation(
         },
     );
 
+    // Fire PreCompact hooks (if configured)
+    let trigger = if options.is_auto_compact {
+        "auto"
+    } else {
+        "manual"
+    };
+    let (merged_instructions, pre_display_message) =
+        if let Some(hook_provider) = options.pre_compact_hook_provider.as_ref() {
+            let result = hook_provider(
+                trigger.to_string(),
+                options.custom_instructions.clone(),
+            )
+            .await;
+            (result.new_custom_instructions, result.user_display_message)
+        } else {
+            (None, None)
+        };
+
+    // Merge hook instructions with existing custom instructions
+    let effective_instructions = merge_hook_instructions(
+        merged_instructions.as_deref().or(options.custom_instructions.as_deref()),
+        None,
+    );
+
     // Build the compact prompt
-    let user_prompt = build_compact_prompt(options.custom_instructions.as_deref());
+    let user_prompt = build_compact_prompt(effective_instructions.as_deref());
 
     emit_progress(
         &progress,
@@ -149,8 +174,9 @@ pub async fn compact_conversation(
         },
     );
 
-    // Call the LLM to generate the summary
-    let mut messages_to_summarize = messages.to_vec();
+    // Call the LLM to generate the summary — strip images/documents and
+    // reinjected skill attachments (skill_discovery / skill_listing) first.
+    let mut messages_to_summarize = strip_media_from_messages_ex(messages, true);
     let mut summary = None;
     let mut ptl_attempts = 0;
 
@@ -166,13 +192,39 @@ pub async fn compact_conversation(
                     if ptl_attempts <= MAX_PTL_RETRIES {
                         let truncated = truncate_head_for_ptl_retry(&messages_to_summarize);
                         if let Some(trunc) = truncated {
+                            emit_telemetry(
+                                &options,
+                                "tengu_compact_ptl_retry",
+                                serde_json::json!({
+                                    "attempt": ptl_attempts,
+                                    "droppedMessages": messages_to_summarize.len().saturating_sub(trunc.len()),
+                                    "remainingMessages": trunc.len(),
+                                }),
+                            );
                             messages_to_summarize = trunc;
                             continue;
                         }
                     }
+                    emit_telemetry(
+                        &options,
+                        "tengu_compact_failed",
+                        serde_json::json!({
+                            "reason": "prompt_too_long",
+                            "preCompactTokenCount": pre_compact_token_count,
+                            "ptlAttempts": ptl_attempts,
+                        }),
+                    );
                     return Err(anyhow::anyhow!(ERROR_MESSAGE_PROMPT_TOO_LONG));
                 }
                 if text.is_empty() {
+                    emit_telemetry(
+                        &options,
+                        "tengu_compact_failed",
+                        serde_json::json!({
+                            "reason": "no_summary",
+                            "preCompactTokenCount": pre_compact_token_count,
+                        }),
+                    );
                     return Err(anyhow::anyhow!(
                         "Failed to generate conversation summary - response did not contain valid text content"
                     ));
@@ -181,6 +233,15 @@ pub async fn compact_conversation(
                 break;
             }
             Err(e) => {
+                emit_telemetry(
+                    &options,
+                    "tengu_compact_failed",
+                    serde_json::json!({
+                        "reason": "api_error",
+                        "preCompactTokenCount": pre_compact_token_count,
+                        "error": format!("{e:#}"),
+                    }),
+                );
                 return Err(e);
             }
         }
@@ -204,18 +265,16 @@ pub async fn compact_conversation(
     let messages_removed = messages.len().saturating_sub(preserve_count);
 
     // Build the compact boundary system message
+    let boundary_metadata = serde_json::json!({
+        "trigger": trigger,
+        "preTokens": pre_compact_token_count,
+    });
     let boundary_marker = Message::System(SystemMessage {
         base: MessageBase::with_origin(MessageOrigin::Compact),
         subtype: SystemMessageSubtype::CompactBoundary,
-        text: format!(
-            "compact_boundary: type={}, pre_tokens={}",
-            if options.is_auto_compact {
-                "auto"
-            } else {
-                "manual"
-            },
-            pre_compact_token_count,
-        ),
+        text: serde_json::to_string(&boundary_metadata).unwrap_or_else(|_| {
+            format!("{{\"trigger\":\"{trigger}\",\"preTokens\":{pre_compact_token_count}}}")
+        }),
         error: None,
     });
 
@@ -228,22 +287,29 @@ pub async fn compact_conversation(
         preserve_count > 0,
     );
 
+    // Estimate post-compact tokens (boundary + summary + kept messages)
+    // Mirrors the TS pattern of counting the full post-compact payload.
+    let boundary_token_estimate = rough_token_count(
+        &serde_json::to_string(&serde_json::json!({"trigger": trigger, "preTokens": pre_compact_token_count}))
+            .unwrap_or_default(),
+    );
+    let post_compact_token_count = boundary_token_estimate
+        + rough_token_count(&summary_text)
+        + preserve_count as u64 * 100;
+
+    let tokens_saved = pre_compact_token_count.saturating_sub(post_compact_token_count);
+
     let summary_message = Message::User(UserMessage {
         base: {
             let mut base = MessageBase::with_origin(MessageOrigin::Compact);
             base.is_compact_summary = true;
+            base.is_visible_in_transcript_only = true;
             base
         },
         text: summary_text,
         attachments: Vec::new(),
         provider_content_blocks: Vec::new(),
     });
-
-    // Estimate post-compact tokens
-    let post_compact_token_count =
-        rough_token_count(&formatted_summary) + preserve_count as u64 * 100;
-
-    let tokens_saved = pre_compact_token_count.saturating_sub(post_compact_token_count);
 
     // Build preserved segments
     let preserved_segments = if preserve_count > 0 {
@@ -256,6 +322,20 @@ pub async fn compact_conversation(
     } else {
         Vec::new()
     };
+
+    // Re-fire SessionStart hooks with source='compact' (TS: processSessionStartHooks)
+    let hook_results = if let Some(hook_provider) = options.session_start_hook_provider.as_ref() {
+        hook_provider().await
+    } else {
+        Vec::new()
+    };
+
+    // Re-inject deferred tools delta / agent listing / MCP instructions
+    // (TS: getDeferredToolsDeltaAttachment with empty messages)
+    let mut attachments = vec![boundary_marker, summary_message];
+    if let Some(att_provider) = options.post_compact_attachment_provider.as_ref() {
+        attachments.extend(att_provider().await);
+    }
 
     let result = CompactionResult {
         summary: formatted_summary,
@@ -271,10 +351,51 @@ pub async fn compact_conversation(
             .take(preserve_count)
             .cloned()
             .collect(),
-        attachments: vec![boundary_marker, summary_message],
-        hook_results: Vec::new(),
-        user_display_message: None,
+        attachments,
+        hook_results,
+        user_display_message: pre_display_message.clone(),
     };
+
+    // Fire PostCompact hooks (if configured)
+    let post_display = if let Some(hook_provider) = options.post_compact_hook_provider.as_ref() {
+        let hook_result = hook_provider(
+            trigger.to_string(),
+            result.summary.clone(),
+        )
+        .await;
+        hook_result.user_display_message
+    } else {
+        None
+    };
+
+    // Merge pre and post display messages
+    let final_display = match (pre_display_message, post_display) {
+        (Some(pre), Some(post)) => Some(format!("{pre}\n{post}")),
+        (Some(pre), None) => Some(pre),
+        (None, Some(post)) => Some(post),
+        (None, None) => None,
+    };
+
+    let mut result = result;
+    result.user_display_message = final_display;
+
+    // Post-compact cleanup (cache resets)
+    if let Some(cleanup_provider) = options.post_compact_cleanup_provider.as_ref() {
+        cleanup_provider().await;
+    }
+
+    // Telemetry: successful full compaction
+    emit_telemetry(
+        &options,
+        "tengu_compact",
+        serde_json::json!({
+            "preCompactTokenCount": result.pre_compact_token_count,
+            "postCompactTokenCount": result.post_compact_token_count,
+            "isAutoCompact": options.is_auto_compact,
+            "messagesRemoved": result.messages_removed,
+            "tokensSaved": result.tokens_saved,
+        }),
+    );
 
     emit_progress(&progress, CompactProgressEvent::Completed(result.clone()));
 
@@ -297,14 +418,29 @@ pub async fn partial_compact_conversation(
         return Err(anyhow::anyhow!(ERROR_MESSAGE_NOT_ENOUGH_MESSAGES));
     }
 
-    let (messages_to_summarize, messages_to_keep): (Vec<Message>, Vec<Message>) = match direction {
+    let (messages_to_summarize_raw, messages_to_keep): (Vec<Message>, Vec<Message>) = match direction {
         PartialCompactDirection::UpTo => {
             let to_summarize: Vec<Message> =
                 all_messages.iter().take(pivot_index).cloned().collect();
+            // Strip stale compact boundaries and old summaries from kept portion
             let to_keep: Vec<Message> = all_messages
                 .iter()
                 .skip(pivot_index)
-                .filter(|m| !matches!(m, Message::Progress(_)))
+                .filter(|m| {
+                    // Filter out Progress messages
+                    if matches!(m, Message::Progress(_)) {
+                        return false;
+                    }
+                    // Filter out stale compact boundaries
+                    if matches!(m, Message::System(s) if s.subtype == SystemMessageSubtype::CompactBoundary) {
+                        return false;
+                    }
+                    // Filter out old compact summaries
+                    if matches!(m, Message::User(u) if u.base.is_compact_summary) {
+                        return false;
+                    }
+                    true
+                })
                 .cloned()
                 .collect();
             (to_summarize, to_keep)
@@ -321,6 +457,9 @@ pub async fn partial_compact_conversation(
             (to_summarize, to_keep)
         }
     };
+
+    // Strip media blocks and reinjected skill attachments before sending to the summarizer
+    let messages_to_summarize = strip_media_from_messages_ex(&messages_to_summarize_raw, true);
 
     if messages_to_summarize.is_empty() {
         return Err(anyhow::anyhow!(
@@ -358,16 +497,81 @@ pub async fn partial_compact_conversation(
         },
     );
 
-    // Call the LLM
-    let summary = provider
-        .generate_summary(&messages_to_summarize, COMPACT_SYSTEM_PROMPT, &user_prompt)
-        .await?;
+    // Call the LLM with PTL retry loop
+    let mut messages_to_summarize = messages_to_summarize;
+    let mut summary = None;
+    let mut ptl_attempts = 0;
 
-    if summary.is_empty() {
-        return Err(anyhow::anyhow!(
-            "Failed to generate conversation summary - response did not contain valid text content"
-        ));
+    for _ in 0..=(MAX_PTL_RETRIES + 1) {
+        let result = provider
+            .generate_summary(&messages_to_summarize, COMPACT_SYSTEM_PROMPT, &user_prompt)
+            .await;
+
+        match result {
+            Ok(text) => {
+                if text.starts_with(ERROR_MESSAGE_PROMPT_TOO_LONG) {
+                    ptl_attempts += 1;
+                    if ptl_attempts <= MAX_PTL_RETRIES {
+                        let truncated = truncate_head_for_ptl_retry(&messages_to_summarize);
+                        if let Some(trunc) = truncated {
+                            emit_telemetry(
+                                &options,
+                                "tengu_compact_ptl_retry",
+                                serde_json::json!({
+                                    "attempt": ptl_attempts,
+                                    "droppedMessages": messages_to_summarize.len().saturating_sub(trunc.len()),
+                                    "remainingMessages": trunc.len(),
+                                    "path": "partial",
+                                }),
+                            );
+                            messages_to_summarize = trunc;
+                            continue;
+                        }
+                    }
+                    emit_telemetry(
+                        &options,
+                        "tengu_partial_compact_failed",
+                        serde_json::json!({
+                            "reason": "prompt_too_long",
+                            "ptlAttempts": ptl_attempts,
+                        }),
+                    );
+                    return Err(anyhow::anyhow!(ERROR_MESSAGE_PROMPT_TOO_LONG));
+                }
+                if text.is_empty() {
+                    emit_telemetry(
+                        &options,
+                        "tengu_partial_compact_failed",
+                        serde_json::json!({
+                            "reason": "no_summary",
+                        }),
+                    );
+                    return Err(anyhow::anyhow!(
+                        "Failed to generate conversation summary - response did not contain valid text content"
+                    ));
+                }
+                summary = Some(text);
+                break;
+            }
+            Err(e) => {
+                emit_telemetry(
+                    &options,
+                    "tengu_partial_compact_failed",
+                    serde_json::json!({
+                        "reason": "api_error",
+                        "error": format!("{e:#}"),
+                    }),
+                );
+                return Err(e);
+            }
+        }
     }
+
+    let summary = summary.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Failed to generate conversation summary - response did not contain valid text content"
+        )
+    })?;
 
     emit_progress(
         &progress,
@@ -377,38 +581,48 @@ pub async fn partial_compact_conversation(
     );
 
     let formatted_summary = format_compact_summary(&summary);
-    let _ = build_compact_user_summary_message(&summary, false, None, !messages_to_keep.is_empty());
+    let summary_text = build_compact_user_summary_message(
+        &formatted_summary,
+        false,
+        None,
+        !messages_to_keep.is_empty(),
+    );
 
     let summary_message = Message::User(UserMessage {
         base: {
             let mut base = MessageBase::with_origin(MessageOrigin::Compact);
             base.is_compact_summary = true;
+            base.is_visible_in_transcript_only = true;
             base
         },
-        text: formatted_summary.clone(),
+        text: summary_text.clone(),
         attachments: Vec::new(),
         provider_content_blocks: Vec::new(),
     });
 
     // Build boundary marker
+    let trigger_str = if options.is_auto_compact {
+        "auto"
+    } else {
+        "manual"
+    };
+    let boundary_metadata = serde_json::json!({
+        "trigger": trigger_str,
+        "preTokens": pre_compact_token_count,
+        "messagesSummarized": messages_to_summarize.len(),
+    });
     let boundary_marker = Message::System(SystemMessage {
         base: MessageBase::with_origin(MessageOrigin::Compact),
         subtype: SystemMessageSubtype::CompactBoundary,
-        text: format!(
-            "compact_boundary: type=partial, direction={}, pre_tokens={}, summarized={}, kept={}",
-            match direction {
-                PartialCompactDirection::From => "from",
-                PartialCompactDirection::UpTo => "up_to",
-            },
-            pre_compact_token_count,
-            messages_to_summarize.len(),
-            messages_to_keep.len(),
-        ),
+        text: serde_json::to_string(&boundary_metadata).unwrap_or_else(|_| {
+            format!("{{\"trigger\":\"{trigger_str}\",\"preTokens\":{pre_compact_token_count}}}")
+        }),
         error: None,
     });
 
-    let post_compact_token_count =
-        rough_token_count(&formatted_summary) + estimate_message_tokens(&messages_to_keep);
+    let post_compact_token_count = rough_token_count(&formatted_summary)
+        + rough_token_count(&summary_text)
+        + estimate_message_tokens(&messages_to_keep);
 
     let tokens_saved = pre_compact_token_count.saturating_sub(post_compact_token_count);
 
@@ -432,6 +646,19 @@ pub async fn partial_compact_conversation(
         Vec::new()
     };
 
+    // Re-fire SessionStart hooks with source='compact'
+    let hook_results = if let Some(hook_provider) = options.session_start_hook_provider.as_ref() {
+        hook_provider().await
+    } else {
+        Vec::new()
+    };
+
+    // Re-inject deferred tools delta / agent listing / MCP instructions
+    let mut attachments = vec![boundary_marker, summary_message];
+    if let Some(att_provider) = options.post_compact_attachment_provider.as_ref() {
+        attachments.extend(att_provider().await);
+    }
+
     let result = CompactionResult {
         summary: formatted_summary,
         messages_removed: messages_to_summarize.len(),
@@ -441,10 +668,48 @@ pub async fn partial_compact_conversation(
         pre_compact_token_count: Some(pre_compact_token_count),
         post_compact_token_count: Some(post_compact_token_count),
         messages_to_keep,
-        attachments: vec![boundary_marker, summary_message],
-        hook_results: Vec::new(),
+        attachments,
+        hook_results,
         user_display_message: None,
     };
+
+    // Fire PostCompact hooks (if configured)
+    let partial_trigger = if options.is_auto_compact {
+        "auto"
+    } else {
+        "manual"
+    };
+    let post_display = if let Some(hook_provider) = options.post_compact_hook_provider.as_ref() {
+        let hook_result = hook_provider(
+            partial_trigger.to_string(),
+            result.summary.clone(),
+        )
+        .await;
+        hook_result.user_display_message
+    } else {
+        None
+    };
+
+    let mut result = result;
+    result.user_display_message = post_display;
+
+    // Post-compact cleanup (cache resets)
+    if let Some(cleanup_provider) = options.post_compact_cleanup_provider.as_ref() {
+        cleanup_provider().await;
+    }
+
+    // Telemetry: successful partial compaction
+    emit_telemetry(
+        &options,
+        "tengu_partial_compact",
+        serde_json::json!({
+            "preCompactTokenCount": result.pre_compact_token_count,
+            "postCompactTokenCount": result.post_compact_token_count,
+            "isAutoCompact": options.is_auto_compact,
+            "messagesRemoved": result.messages_removed,
+            "tokensSaved": result.tokens_saved,
+        }),
+    );
 
     emit_progress(&progress, CompactProgressEvent::Completed(result.clone()));
 
@@ -510,25 +775,79 @@ fn emit_progress(sink: &Option<&ProgressCallback>, event: CompactProgressEvent) 
 /// Attempt to truncate the oldest messages to recover from a prompt-too-long
 /// error during compaction.
 ///
-/// Returns `None` if there's nothing to drop.
-fn truncate_head_for_ptl_retry(messages: &[Message]) -> Option<Vec<Message>> {
-    // Need at least 2 messages to drop something
-    if messages.len() < 2 {
+/// Mirrors `truncateHeadForPTLRetry()` from the TypeScript reference exactly:
+/// 1. Strip any prior retry marker left from a previous attempt
+/// 2. Group messages by API round (assistant UUID boundary)
+/// 3. If a `token_gap` is provided, drop just enough groups to cover it
+/// 4. Otherwise fall back to dropping 20% of groups
+/// 5. Ensure the first message is a user message (prepend synthetic if needed)
+pub fn truncate_head_for_ptl_retry(messages: &[Message]) -> Option<Vec<Message>> {
+    truncate_head_for_ptl_retry_with_gap(messages, None)
+}
+
+/// Extended variant that accepts an optional token gap for precise truncation.
+pub fn truncate_head_for_ptl_retry_with_gap(
+    messages: &[Message],
+    token_gap: Option<u64>,
+) -> Option<Vec<Message>> {
+    // Step 1: Strip any prior retry marker
+    let input: Vec<Message> = if messages.len() > 1 {
+        let first = &messages[0];
+        if let Message::User(u) = first {
+            if u.base.is_meta && u.text == PTL_RETRY_MARKER {
+                messages[1..].to_vec()
+            } else {
+                messages.to_vec()
+            }
+        } else {
+            messages.to_vec()
+        }
+    } else {
+        messages.to_vec()
+    };
+
+    if input.len() < 2 {
         return None;
     }
 
-    // Drop the oldest 20% of messages (at least 1)
-    let drop_count = std::cmp::max(1, messages.len() / 5);
-    let remaining = messages.len().saturating_sub(drop_count);
-
-    if remaining == 0 {
+    // Step 2: Group by API round
+    let groups = group_messages_by_api_round(&input);
+    if groups.len() < 2 {
         return None;
     }
 
-    let truncated: Vec<Message> = messages.iter().skip(drop_count).cloned().collect();
+    // Step 3: Decide how many groups to drop
+    let drop_count = if let Some(gap) = token_gap {
+        // Token-gap-based: accumulate group tokens until we cover the gap
+        let mut acc: u64 = 0;
+        let mut count = 0;
+        for group in &groups {
+            acc += estimate_message_tokens(group);
+            count += 1;
+            if acc >= gap {
+                break;
+            }
+        }
+        count
+    } else {
+        // Percentage fallback: drop 20% of groups
+        std::cmp::max(1, groups.len() / 5)
+    };
 
-    // If the first message is now an assistant message, prepend a synthetic user marker
-    if matches!(truncated.first(), Some(Message::Assistant(_))) {
+    // Step 4: Clamp — must keep at least 1 group
+    let drop_count = std::cmp::min(drop_count, groups.len().saturating_sub(1));
+    if drop_count < 1 {
+        return None;
+    }
+
+    // Step 5: Slice and fix role ordering
+    let remaining: Vec<Message> = groups.into_iter().skip(drop_count).flatten().collect();
+
+    if remaining.is_empty() {
+        return None;
+    }
+
+    if matches!(remaining.first(), Some(Message::Assistant(_))) {
         let mut result = vec![Message::User(UserMessage {
             base: {
                 let mut base = MessageBase::with_origin(MessageOrigin::Compact);
@@ -539,26 +858,39 @@ fn truncate_head_for_ptl_retry(messages: &[Message]) -> Option<Vec<Message>> {
             attachments: Vec::new(),
             provider_content_blocks: Vec::new(),
         })];
-        result.extend(truncated);
+        result.extend(remaining);
         Some(result)
     } else {
-        Some(truncated)
+        Some(remaining)
     }
 }
 
-/// Create a compact boundary system message.
+/// Create a compact boundary system message with structured metadata.
+///
+/// Mirrors `createCompactBoundaryMessage()` from the TS reference.
+/// The boundary stores JSON metadata in the text field.
 pub fn create_compact_boundary_message(
     trigger: &str,
     pre_compact_token_count: u64,
     last_message_uuid: Option<uuid::Uuid>,
 ) -> Message {
+    let mut metadata = serde_json::json!({
+        "trigger": trigger,
+        "preTokens": pre_compact_token_count,
+    });
+    if let Some(uuid) = last_message_uuid {
+        metadata["lastPreCompactMessageUuid"] = serde_json::Value::String(uuid.to_string());
+    }
+
+    let mut base = MessageBase::with_origin(MessageOrigin::Compact);
+    if let Some(uuid) = last_message_uuid {
+        base.parent_uuid = Some(uuid);
+    }
+
     Message::System(SystemMessage {
-        base: MessageBase::with_origin(MessageOrigin::Compact),
+        base,
         subtype: SystemMessageSubtype::CompactBoundary,
-        text: format!(
-            "compact_boundary: type={trigger}, pre_tokens={pre_compact_token_count}, last_uuid={}",
-            last_message_uuid.map(|u| u.to_string()).unwrap_or_default()
-        ),
+        text: serde_json::to_string(&metadata).unwrap_or_else(|_| format!("{{\"trigger\":\"{trigger}\",\"preTokens\":{pre_compact_token_count}}}")),
         error: None,
     })
 }
@@ -602,6 +934,149 @@ pub fn merge_hook_instructions(
     }
 }
 
+/// Strip image and document content blocks from messages before sending to the
+/// summarizer LLM.
+///
+/// Mirrors `stripImagesFromMessages()` from the TypeScript reference.
+/// Replaces `image` blocks with `{ type: "text", text: "[image]" }` and
+/// `document` blocks with `{ type: "text", text: "[document]" }`. Also handles
+/// nested media inside `tool_result` content arrays.
+///
+/// Only processes `User` messages — other message types pass through unchanged.
+///
+/// # Also strips reinjected attachments
+///
+/// If `strip_skill_attachments` is true, also removes `Attachment` messages
+/// whose type is `skill_discovery` or `skill_listing`, as these are re-injected
+/// post-compaction anyway. Mirrors `stripReinjectedAttachments()`.
+pub fn strip_media_from_messages(messages: &[Message]) -> Vec<Message> {
+    strip_media_from_messages_ex(messages, false)
+}
+
+/// Extended variant that can also strip skill-related attachment messages.
+///
+/// When `strip_skill_attachments` is true, removes `Message::Attachment`
+/// messages whose label matches `"skill_discovery"` or `"skill_listing"`.
+/// These are re-injected post-compaction anyway (via
+/// `resetSentSkillNames` + the next turn's discovery signal), so feeding
+/// them to the summarizer wastes tokens and pollutes the summary with
+/// stale skill suggestions.
+///
+/// Mirrors `stripReinjectedAttachments()` from the TS reference.
+pub fn strip_media_from_messages_ex(
+    messages: &[Message],
+    strip_skill_attachments: bool,
+) -> Vec<Message> {
+    messages
+        .iter()
+        .filter(|message| {
+            // Filter out skill attachment messages when requested.
+            if strip_skill_attachments {
+                if let Message::Attachment(att) = message {
+                    if att.label.as_deref() == Some("skill_discovery")
+                        || att.label.as_deref() == Some("skill_listing")
+                    {
+                        return false;
+                    }
+                }
+            }
+            true
+        })
+        .map(|message| {
+            let Message::User(user_msg) = message else {
+                return message.clone();
+            };
+
+            let content = user_msg.provider_content_blocks();
+            let mut has_media = false;
+
+            let new_content: Vec<serde_json::Value> = content
+                .into_iter()
+                .flat_map(|block| strip_media_from_block(block, &mut has_media))
+                .collect();
+
+            if !has_media {
+                return message.clone();
+            }
+
+            let mut stripped = user_msg.clone();
+            stripped.provider_content_blocks = new_content;
+            stripped.attachments = Vec::new();
+            Message::User(stripped)
+        })
+        .collect()
+}
+
+/// Process a single content block, replacing image/document with text
+/// placeholders. Returns a Vec to match the TS `flatMap` behavior.
+fn strip_media_from_block(
+    block: serde_json::Value,
+    has_media: &mut bool,
+) -> Vec<serde_json::Value> {
+    let block_type = block
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+
+    match block_type {
+        "image" => {
+            *has_media = true;
+            vec![serde_json::json!({"type": "text", "text": "[image]"})]
+        }
+        "document" => {
+            *has_media = true;
+            vec![serde_json::json!({"type": "text", "text": "[document]"})]
+        }
+        "tool_result" => {
+            if let Some(content_arr) = block.get("content").and_then(serde_json::Value::as_array) {
+                let mut tool_has_media = false;
+                let new_tool_content: Vec<serde_json::Value> = content_arr
+                    .iter()
+                    .map(|item| {
+                        let item_type = item
+                            .get("type")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("");
+                        match item_type {
+                            "image" => {
+                                tool_has_media = true;
+                                serde_json::json!({"type": "text", "text": "[image]"})
+                            }
+                            "document" => {
+                                tool_has_media = true;
+                                serde_json::json!({"type": "text", "text": "[document]"})
+                            }
+                            _ => item.clone(),
+                        }
+                    })
+                    .collect();
+                if tool_has_media {
+                    *has_media = true;
+                    let mut new_block = block;
+                    new_block["content"] = serde_json::Value::Array(new_tool_content);
+                    vec![new_block]
+                } else {
+                    vec![block]
+                }
+            } else {
+                vec![block]
+            }
+        }
+        _ => vec![block],
+    }
+}
+
+/// Emit a telemetry event if a provider is configured.
+fn emit_telemetry(
+    options: &CompactOptions,
+    event_name: &str,
+    metadata: serde_json::Value,
+) {
+    if let Some(ref provider) = options.telemetry_provider {
+        provider(event_name, metadata);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,6 +1108,85 @@ mod tests {
             provider_content_blocks: Vec::new(),
         })];
         assert!(truncate_head_for_ptl_retry(&msgs).is_none());
+    }
+
+    #[test]
+    fn truncate_head_strips_prior_retry_marker() {
+        let marker = Message::User(UserMessage {
+            base: {
+                let mut b = MessageBase::default();
+                b.is_meta = true;
+                b
+            },
+            text: PTL_RETRY_MARKER.to_string(),
+            attachments: Vec::new(),
+            provider_content_blocks: Vec::new(),
+        });
+        let a1 = Message::Assistant(claude_core::AssistantMessage {
+            base: MessageBase::default(),
+            text: "response".into(),
+            blocks: Vec::new(),
+            tool_calls: Vec::new(),
+            provider_content_blocks: Vec::new(),
+        });
+        let u1 = Message::User(UserMessage {
+            base: MessageBase::default(),
+            text: "followup".into(),
+            attachments: Vec::new(),
+            provider_content_blocks: Vec::new(),
+        });
+        let a2 = Message::Assistant(claude_core::AssistantMessage {
+            base: MessageBase::default(),
+            text: "response2".into(),
+            blocks: Vec::new(),
+            tool_calls: Vec::new(),
+            provider_content_blocks: Vec::new(),
+        });
+        let msgs = vec![marker, a1, u1, a2];
+        let result = truncate_head_for_ptl_retry(&msgs);
+        // Should succeed (2 API rounds after stripping marker)
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn truncate_head_with_token_gap_drops_precise_groups() {
+        let a1 = Message::Assistant(claude_core::AssistantMessage {
+            base: MessageBase::default(),
+            text: "first response".into(),
+            blocks: Vec::new(),
+            tool_calls: Vec::new(),
+            provider_content_blocks: Vec::new(),
+        });
+        let u_big = Message::User(UserMessage {
+            base: MessageBase::default(),
+            text: "x".repeat(4000), // ~1000 tokens
+            attachments: Vec::new(),
+            provider_content_blocks: Vec::new(),
+        });
+        let a2 = Message::Assistant(claude_core::AssistantMessage {
+            base: MessageBase::default(),
+            text: "second response".into(),
+            blocks: Vec::new(),
+            tool_calls: Vec::new(),
+            provider_content_blocks: Vec::new(),
+        });
+        let u_small = Message::User(UserMessage {
+            base: MessageBase::default(),
+            text: "small".into(),
+            attachments: Vec::new(),
+            provider_content_blocks: Vec::new(),
+        });
+        let a3 = Message::Assistant(claude_core::AssistantMessage {
+            base: MessageBase::default(),
+            text: "third".into(),
+            blocks: Vec::new(),
+            tool_calls: Vec::new(),
+            provider_content_blocks: Vec::new(),
+        });
+        let msgs = vec![a1, u_big, a2, u_small, a3];
+        // With a small token gap, should drop only the first group
+        let result = truncate_head_for_ptl_retry_with_gap(&msgs, Some(500));
+        assert!(result.is_some());
     }
 
     #[test]
@@ -679,5 +1233,197 @@ mod tests {
                 .iter()
                 .any(|m| matches!(m, Message::User(u) if u.text == "kept"))
         );
+    }
+
+    #[test]
+    fn strip_media_replaces_image_blocks() {
+        use serde_json::json;
+
+        let msgs = vec![Message::User(UserMessage {
+            base: MessageBase::default(),
+            text: "check this".into(),
+            attachments: Vec::new(),
+            provider_content_blocks: vec![
+                json!({"type": "text", "text": "check this"}),
+                json!({"type": "image", "source": {"type": "base64", "data": "abc123"}}),
+            ],
+        })];
+        let stripped = strip_media_from_messages(&msgs);
+        match &stripped[0] {
+            Message::User(u) => {
+                assert_eq!(u.provider_content_blocks.len(), 2);
+                assert_eq!(u.provider_content_blocks[0]["type"], "text");
+                assert_eq!(u.provider_content_blocks[1]["type"], "text");
+                assert_eq!(u.provider_content_blocks[1]["text"], "[image]");
+            }
+            _ => panic!("expected User message"),
+        }
+    }
+
+    #[test]
+    fn strip_media_replaces_document_blocks() {
+        use serde_json::json;
+
+        let msgs = vec![Message::User(UserMessage {
+            base: MessageBase::default(),
+            text: "read this pdf".into(),
+            attachments: Vec::new(),
+            provider_content_blocks: vec![
+                json!({"type": "text", "text": "read this pdf"}),
+                json!({"type": "document", "source": {"type": "base64", "data": "pdfdata"}}),
+            ],
+        })];
+        let stripped = strip_media_from_messages(&msgs);
+        match &stripped[0] {
+            Message::User(u) => {
+                assert_eq!(u.provider_content_blocks[1]["text"], "[document]");
+            }
+            _ => panic!("expected User message"),
+        }
+    }
+
+    #[test]
+    fn strip_media_handles_nested_tool_result() {
+        use serde_json::json;
+
+        let msgs = vec![Message::User(UserMessage {
+            base: MessageBase::default(),
+            text: String::new(),
+            attachments: Vec::new(),
+            provider_content_blocks: vec![json!({
+                "type": "tool_result",
+                "tool_use_id": "call-1",
+                "content": [
+                    {"type": "text", "text": "output"},
+                    {"type": "image", "source": {"type": "base64", "data": "xyz"}},
+                ]
+            })],
+        })];
+        let stripped = strip_media_from_messages(&msgs);
+        match &stripped[0] {
+            Message::User(u) => {
+                let content = &u.provider_content_blocks[0]["content"];
+                let arr = content.as_array().expect("content should be array");
+                assert_eq!(arr[0]["type"], "text");
+                assert_eq!(arr[0]["text"], "output");
+                assert_eq!(arr[1]["type"], "text");
+                assert_eq!(arr[1]["text"], "[image]");
+            }
+            _ => panic!("expected User message"),
+        }
+    }
+
+    #[test]
+    fn strip_media_preserves_non_user_messages() {
+        use serde_json::json;
+
+        let msgs = vec![
+            Message::System(SystemMessage {
+                base: MessageBase::default(),
+                subtype: SystemMessageSubtype::Informational,
+                text: "system msg".into(),
+                error: None,
+            }),
+            Message::User(UserMessage {
+                base: MessageBase::default(),
+                text: "hello".into(),
+                attachments: Vec::new(),
+                provider_content_blocks: vec![json!({"type": "text", "text": "hello"})],
+            }),
+        ];
+        let stripped = strip_media_from_messages(&msgs);
+        assert!(matches!(stripped[0], Message::System(_)));
+        // User message without media should be unchanged
+        match &stripped[1] {
+            Message::User(u) => {
+                assert_eq!(u.provider_content_blocks[0]["text"], "hello");
+            }
+            _ => panic!("expected User"),
+        }
+    }
+
+    #[test]
+    fn strip_media_clears_attachments() {
+        use claude_core::{Attachment, AttachmentMediaType};
+
+        let msgs = vec![Message::User(UserMessage {
+            base: MessageBase::default(),
+            text: "see pic".into(),
+            attachments: vec![Attachment {
+                media_type: AttachmentMediaType::ImagePng,
+                data: "base64data".into(),
+                filename: None,
+            }],
+            provider_content_blocks: Vec::new(),
+        })];
+        // Materialize and check it would have had image blocks
+        let blocks = match &msgs[0] {
+            Message::User(u) => u.provider_content_blocks(),
+            _ => panic!(),
+        };
+        assert!(blocks.iter().any(|b| b["type"] == "image"));
+
+        let stripped = strip_media_from_messages(&msgs);
+        match &stripped[0] {
+            Message::User(u) => {
+                assert!(u.attachments.is_empty());
+                assert!(u
+                    .provider_content_blocks
+                    .iter()
+                    .all(|b| b["type"] != "image"));
+            }
+            _ => panic!("expected User"),
+        }
+    }
+
+    #[test]
+    fn strip_skill_attachments_filters_skill_discovery() {
+        use claude_core::{AttachmentMessage, MessageBase};
+
+        let msgs = vec![
+            Message::User(UserMessage {
+                base: MessageBase::default(),
+                text: "hello".into(),
+                attachments: Vec::new(),
+                provider_content_blocks: Vec::new(),
+            }),
+            Message::Attachment(AttachmentMessage {
+                base: MessageBase::default(),
+                label: Some("skill_discovery".into()),
+                attachments: Vec::new(),
+            }),
+            Message::Attachment(AttachmentMessage {
+                base: MessageBase::default(),
+                label: Some("skill_listing".into()),
+                attachments: Vec::new(),
+            }),
+            Message::Attachment(AttachmentMessage {
+                base: MessageBase::default(),
+                label: Some("file_state".into()),
+                attachments: Vec::new(),
+            }),
+        ];
+
+        let stripped = strip_media_from_messages_ex(&msgs, true);
+        assert_eq!(stripped.len(), 2, "skill_discovery and skill_listing should be removed");
+        assert!(matches!(&stripped[0], Message::User(_)));
+        assert!(
+            matches!(&stripped[1], Message::Attachment(a) if a.label.as_deref() == Some("file_state")),
+            "non-skill attachments should be preserved"
+        );
+    }
+
+    #[test]
+    fn strip_skill_attachments_noop_when_false() {
+        use claude_core::{AttachmentMessage, MessageBase};
+
+        let msgs = vec![Message::Attachment(AttachmentMessage {
+            base: MessageBase::default(),
+            label: Some("skill_discovery".into()),
+            attachments: Vec::new(),
+        })];
+
+        let stripped = strip_media_from_messages_ex(&msgs, false);
+        assert_eq!(stripped.len(), 1, "strip_skill_attachments=false should preserve all");
     }
 }

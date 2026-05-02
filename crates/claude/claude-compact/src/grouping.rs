@@ -3,6 +3,10 @@
 //! Groups conversation messages into logical turns (user turn, assistant turn,
 //! tool use, system) so that compaction strategies can operate on coherent
 //! units rather than individual messages.
+//!
+//! Also provides [`group_messages_by_api_round`] which partitions messages at
+//! boundaries where a new assistant message (identified by UUID) begins — used
+//! by the PTL retry truncation logic.
 
 use claude_core::Message;
 
@@ -195,6 +199,51 @@ pub fn merge_small_groups(groups: &[MessageGroup], min_tokens: u64) -> Vec<Messa
     }
 
     result.into_iter().flatten().collect()
+}
+
+// ---------------------------------------------------------------------------
+// API-round grouping (for PTL retry)
+// ---------------------------------------------------------------------------
+
+/// Group messages by API round, splitting at boundaries where a new assistant
+/// message (identified by a different UUID) begins.
+///
+/// Mirrors `groupMessagesByApiRound()` from the TypeScript reference
+/// (`services/compact/grouping.ts`).
+///
+/// Each group represents one API request/response cycle: the user messages,
+/// assistant response, and any tool-use/result pairs that belong to that round.
+pub fn group_messages_by_api_round(messages: &[Message]) -> Vec<Vec<Message>> {
+    if messages.is_empty() {
+        return Vec::new();
+    }
+
+    let mut groups: Vec<Vec<Message>> = Vec::new();
+    let mut current: Vec<Message> = Vec::new();
+    let mut last_assistant_uuid: Option<uuid::Uuid> = None;
+
+    for msg in messages {
+        let is_new_assistant_round = matches!(msg, Message::Assistant(_))
+            && Some(msg.uuid()) != last_assistant_uuid
+            && !current.is_empty();
+
+        if is_new_assistant_round {
+            groups.push(current);
+            current = vec![msg.clone()];
+        } else {
+            current.push(msg.clone());
+        }
+
+        if matches!(msg, Message::Assistant(_)) {
+            last_assistant_uuid = Some(msg.uuid());
+        }
+    }
+
+    if !current.is_empty() {
+        groups.push(current);
+    }
+
+    groups
 }
 
 // ---------------------------------------------------------------------------
@@ -399,5 +448,81 @@ mod tests {
         let msg = make_user_message("hello world");
         let tokens = rough_tokens_for_message(&msg);
         assert!(tokens > 0);
+    }
+
+    // -- group_messages_by_api_round --------------------------------------------
+
+    #[test]
+    fn api_round_groups_empty() {
+        let groups = group_messages_by_api_round(&[]);
+        assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn api_round_groups_single_user() {
+        let msgs = vec![make_user_message("hello")];
+        let groups = group_messages_by_api_round(&msgs);
+        assert_eq!(groups.len(), 1);
+    }
+
+    #[test]
+    fn api_round_groups_splits_on_new_assistant_uuid() {
+        // Each assistant message gets a unique UUID by default
+        let a1 = Message::Assistant(claude_core::AssistantMessage {
+            base: MessageBase::default(),
+            text: "first response".into(),
+            blocks: Vec::new(),
+            tool_calls: Vec::new(),
+            provider_content_blocks: Vec::new(),
+        });
+        let a2 = Message::Assistant(claude_core::AssistantMessage {
+            base: MessageBase::default(),
+            text: "second response".into(),
+            blocks: Vec::new(),
+            tool_calls: Vec::new(),
+            provider_content_blocks: Vec::new(),
+        });
+        let msgs = vec![
+            make_user_message("q1"),
+            a1,
+            make_user_message("tool_result_1"),
+            make_user_message("q2"),
+            a2,
+            make_user_message("tool_result_2"),
+        ];
+        let groups = group_messages_by_api_round(&msgs);
+        // Group 0: [user("q1")]
+        // Group 1: [assistant(a1), user("tool_result_1"), user("q2")]
+        // Group 2: [assistant(a2), user("tool_result_2")]
+        assert_eq!(groups.len(), 3);
+        assert_eq!(groups[0].len(), 1);
+        assert_eq!(groups[1].len(), 3);
+        assert_eq!(groups[2].len(), 2);
+    }
+
+    #[test]
+    fn api_round_groups_same_assistant_id_not_split() {
+        let base = MessageBase::default();
+        let shared_uuid = base.uuid;
+        let a1 = Message::Assistant(claude_core::AssistantMessage {
+            base: base.clone(),
+            text: "chunk1".into(),
+            blocks: Vec::new(),
+            tool_calls: Vec::new(),
+            provider_content_blocks: Vec::new(),
+        });
+        let mut base2 = MessageBase::default();
+        base2.uuid = shared_uuid;
+        let a2 = Message::Assistant(claude_core::AssistantMessage {
+            base: base2,
+            text: "chunk2".into(),
+            blocks: Vec::new(),
+            tool_calls: Vec::new(),
+            provider_content_blocks: Vec::new(),
+        });
+        let msgs = vec![make_user_message("q"), a1, make_user_message("result"), a2];
+        let groups = group_messages_by_api_round(&msgs);
+        // Same UUID → no split, all in one group after the initial group
+        assert_eq!(groups.len(), 2); // [user("q")], [a1, user("result"), a2]
     }
 }
