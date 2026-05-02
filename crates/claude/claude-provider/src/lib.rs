@@ -873,18 +873,9 @@ fn apply_request_context_metadata(
         return;
     };
 
-    metadata.insert(
-        "query_source".to_owned(),
-        json!(request_context.query_source.to_string()),
-    );
     metadata
         .entry("session_id".to_owned())
         .or_insert_with(|| json!(request_context.session_id.as_str()));
-    if let Some(agent_id) = request_context.agent_id.as_ref() {
-        metadata
-            .entry("agent_id".to_owned())
-            .or_insert_with(|| json!(agent_id.to_string()));
-    }
 }
 
 pub(crate) fn apply_anthropic_request_metadata(
@@ -1937,8 +1928,21 @@ async fn build_anthropic_request_body(
     request_context: Option<&query_source::ProviderRequestContext>,
     stream: bool,
 ) -> Value {
-    let (system, messages, tools) =
+    let (mut system, messages, tools) =
         prepare_anthropic_request_surface(provider, conversation, carried_discovered_tools).await;
+
+    // Prepend billing attribution as the first system prompt block, matching
+    // the official Claude Code CLI.  The fingerprint is derived from the first
+    // user message text using the same SHA-256 + salt algorithm.
+    if matches!(provider.protocol, ProviderProtocol::Anthropic) {
+        let fp = fingerprint::compute_attribution_fingerprint(&messages, claude_config::RUNTIME_VERSION);
+        let attr_text = attribution::build_billing_attribution_text(&fp);
+        system.insert(0, json!({
+            "type": "text",
+            "text": attr_text,
+        }));
+    }
+
     let mut body = json!({
         "model": provider.model,
         "system": system,
@@ -3420,7 +3424,7 @@ mod tests {
             .insert("session_id".to_owned(), "session-123".to_owned());
         provider
             .request_metadata
-            .insert("client".to_owned(), "remote-code-rust".to_owned());
+            .insert("device_id".to_owned(), "test-device".to_owned());
         let mut body = json!({
             "model": "claude-test",
             "messages": [],
@@ -3429,8 +3433,7 @@ mod tests {
         let request_context = crate::query_source::ProviderRequestContext::new(
             crate::query_source::QuerySource::Agent,
             claude_core::SessionId::from("session-ctx"),
-        )
-        .with_agent_id(claude_core::AgentId::from("agent-ctx"));
+        );
 
         apply_anthropic_request_metadata(&mut body, &provider, Some(&request_context));
 
@@ -3442,9 +3445,7 @@ mod tests {
         let parsed = serde_json::from_str::<serde_json::Value>(metadata)
             .unwrap_or_else(|error| panic!("invalid metadata json: {error}"));
         assert_eq!(parsed["session_id"], "session-123");
-        assert_eq!(parsed["client"], "remote-code-rust");
-        assert_eq!(parsed["query_source"], "agent");
-        assert_eq!(parsed["agent_id"], "agent-ctx");
+        assert_eq!(parsed["device_id"], "test-device");
     }
 
     #[tokio::test]

@@ -1,51 +1,29 @@
 //! Attribution header construction.
 //!
-//! Builds the `x-attribution` header sent with API requests to identify the
-//! client type, version, and session context.
+//! Builds the `x-attribution` HTTP header and the `x-anthropic-billing-header`
+//! text block embedded in the system prompt.
 //!
 //! Based on upstream Claude Code's `getAttributionHeader` in
-//! `constants/system.ts`.
+//! `constants/system.ts` and `computeFingerprint` in `utils/fingerprint.ts`.
 
 use reqwest::header::{HeaderName, HeaderValue};
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-/// The attribution header name.
+/// The HTTP attribution header name.
 pub const ATTRIBUTION_HEADER: &str = "x-attribution";
 
-/// Client identifier.
-const CLIENT_ID: &str = "remote-code-rust";
-
-// ---------------------------------------------------------------------------
-// build_attribution_header
-// ---------------------------------------------------------------------------
-
-/// Build the attribution header value.
+/// Build the `x-attribution` HTTP header value.
 ///
-/// The value is a JSON object containing:
-/// - `client`: The client identifier (`"remote-code-rust"`)
-/// - `version`: The crate version from `CARGO_PKG_VERSION`
-///
-/// # Errors
-///
-/// Returns an error if the header value contains invalid bytes.
+/// The official CLI sends a JSON object with `client` and `version` keys.
+/// We match the exact format used by Claude Code.
 pub fn build_attribution_header() -> Result<HeaderValue, reqwest::header::InvalidHeaderValue> {
     let value = format!(
-        r#"{{"client":"{CLIENT_ID}","version":"{}"}}"#,
-        env!("CARGO_PKG_VERSION")
+        r#"{{"client":"claude-code","version":"{}"}}"#,
+        claude_config::RUNTIME_VERSION
     );
     HeaderValue::from_str(&value)
 }
 
 /// Build the attribution header as a `(HeaderName, HeaderValue)` pair.
-///
-/// Convenience function for adding to a `HeaderMap`.
-///
-/// # Errors
-///
-/// Returns an error if the header value contains invalid bytes.
 pub fn build_attribution_header_pair()
 -> Result<(HeaderName, HeaderValue), reqwest::header::InvalidHeaderValue> {
     let name = HeaderName::from_static(ATTRIBUTION_HEADER);
@@ -53,16 +31,33 @@ pub fn build_attribution_header_pair()
     Ok((name, value))
 }
 
+/// Build the `x-anthropic-billing-header` text that is prepended as the
+/// **first** block of the system prompt array.
+///
+/// Format: `x-anthropic-billing-header: cc_version=VERSION.FINGERPRINT; cc_entrypoint=ENTRYPOINT;`
+///
+/// This matches the TS reference `getAttributionHeader` in `constants/system.ts`.
+pub fn build_billing_attribution_text(fingerprint: &str) -> String {
+    let version = claude_config::RUNTIME_VERSION;
+    let entrypoint = std::env::var("CLAUDE_CODE_ENTRYPOINT")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "cli".to_owned());
+    format!(
+        "x-anthropic-billing-header: cc_version={version}.{fingerprint}; cc_entrypoint={entrypoint};"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn attribution_header_contains_client_id() {
+    fn attribution_header_format() {
         let header = build_attribution_header().expect("should build header");
         let value = header.to_str().expect("should be valid UTF-8");
-        assert!(value.contains(CLIENT_ID));
-        assert!(value.contains("version"));
+        assert!(value.contains("\"client\":\"claude-code\""));
+        assert!(value.contains("\"version\""));
     }
 
     #[test]
@@ -70,5 +65,13 @@ mod tests {
         let (name, value) = build_attribution_header_pair().expect("should build pair");
         assert_eq!(name.as_str(), ATTRIBUTION_HEADER);
         assert!(value.to_str().is_ok());
+    }
+
+    #[test]
+    fn billing_attribution_text_format() {
+        let text = build_billing_attribution_text("abc");
+        assert!(text.starts_with("x-anthropic-billing-header: cc_version="));
+        assert!(text.contains(".abc;"));
+        assert!(text.contains("cc_entrypoint="));
     }
 }
