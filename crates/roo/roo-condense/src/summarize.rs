@@ -388,6 +388,20 @@ pub async fn summarize_conversation(
 
     let new_context_tokens = message_tokens + tool_tokens;
 
+    // Telemetry: log condensation metrics.
+    // Source: `src/core/condense/index.ts` — `TelemetryService.instance.captureContextCondensed`
+    let msg_count_after = new_messages.len();
+    info!(
+        task_id = %_task_id,
+        is_automatic = is_automatic_trigger,
+        has_custom_prompt = custom_condensing_prompt.is_some(),
+        messages_before = _msg_count_before,
+        messages_after = msg_count_after,
+        new_context_tokens = new_context_tokens,
+        cost,
+        "Context condensed"
+    );
+
     Ok(SummarizeResponse {
         messages: new_messages,
         summary,
@@ -397,4 +411,34 @@ pub async fn summarize_conversation(
         error_details: None,
         condense_id: Some(condense_id),
     })
+}
+
+/// Extracts detailed error information from a condensation error, including
+/// HTTP status code, error code, and response body when available.
+///
+/// Source: `src/core/condense/index.ts` — error handling in `summarizeConversation`
+fn extract_error_details(error: &ProviderError) -> String {
+    let mut details = format!("Error: {error}");
+
+    match error {
+        ProviderError::ApiErrorResponse(_, status_code, body) => {
+            details.push_str(&format!("\n\nHTTP Status: {status_code}"));
+            details.push_str(&format!("\n\nResponse Body:\n{body}"));
+        }
+        ProviderError::ApiError(provider, msg) => {
+            details.push_str(&format!("\n\nProvider: {provider}"));
+            details.push_str(&format!("\nError: {msg}"));
+        }
+        ProviderError::Reqwest(reqwest_err) => {
+            if let Some(status) = reqwest_err.status() {
+                details.push_str(&format!("\n\nHTTP Status: {status}"));
+            }
+            if let Some(url) = reqwest_err.url() {
+                details.push_str(&format!("\nURL: {url}"));
+            }
+        }
+        _ => {}
+    }
+
+    details
 }

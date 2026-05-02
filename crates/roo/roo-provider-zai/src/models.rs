@@ -1,7 +1,7 @@
 //! ZAI (Zhipu/GLM) model definitions.
 
 use std::collections::HashMap;
-use roo_types::model::ModelInfo;
+use roo_types::model::{ModelInfo, SupportsReasoningEffort};
 
 /// Default ZAI model ID.
 pub const DEFAULT_MODEL_ID: &str = "glm-4.6";
@@ -179,7 +179,7 @@ pub fn models() -> HashMap<String, ModelInfo> {
             supports_images: Some(false),
             supports_prompt_cache: true,
             supports_reasoning_budget: Some(true),
-            supports_reasoning_effort: Some(serde_json::json!(["disable", "medium"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["disable", "medium"])),
             reasoning_effort: None, // "medium" maps to ReasoningEffortExtended but "disable" is not in that enum
             preserve_reasoning: Some(true),
             input_price: Some(0.6),
@@ -204,7 +204,7 @@ pub fn models() -> HashMap<String, ModelInfo> {
             supports_images: Some(false),
             supports_prompt_cache: true,
             supports_reasoning_budget: Some(true),
-            supports_reasoning_effort: Some(serde_json::json!(["disable", "medium"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["disable", "medium"])),
             reasoning_effort: None,
             preserve_reasoning: Some(true),
             input_price: Some(0.6),

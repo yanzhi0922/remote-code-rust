@@ -383,7 +383,7 @@ mod tests {
     /// Helper: effort-based reasoning model.
     fn effort_model() -> ModelInfo {
         ModelInfo {
-            supports_reasoning_effort: Some(Value::Bool(true)),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::Boolean(true)),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             max_tokens: Some(4096),
             context_window: 128_000,
@@ -547,7 +547,7 @@ mod tests {
     #[test]
     fn test_calculate_params_openai_o1_no_temperature() {
         let model = ModelInfo {
-            supports_reasoning_effort: Some(Value::Bool(true)),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::Boolean(true)),
             reasoning_effort: Some(ReasoningEffortExtended::High),
             max_tokens: Some(100_000),
             context_window: 200_000,
@@ -572,7 +572,7 @@ mod tests {
     #[test]
     fn test_calculate_params_openrouter_o1_pro_no_temperature() {
         let model = ModelInfo {
-            supports_reasoning_effort: Some(Value::Bool(true)),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::Boolean(true)),
             reasoning_effort: Some(ReasoningEffortExtended::High),
             max_tokens: Some(100_000),
             context_window: 200_000,
@@ -705,7 +705,7 @@ mod tests {
     #[test]
     fn test_calculate_params_gemini_effort_based() {
         let model = ModelInfo {
-            supports_reasoning_effort: Some(json!(["low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high"])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             max_tokens: Some(65_536),
             context_window: 1_048_576,

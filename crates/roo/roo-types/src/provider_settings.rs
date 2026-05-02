@@ -215,6 +215,8 @@ pub struct ProviderSettings {
     // --- Mistral-specific ---
     pub mistral_api_key: Option<String>,
     pub mistral_base_url: Option<String>,
+    /// Codestral-specific URL. Serializes as `mistralCodestralUrl` (matching TS).
+    /// Source: `packages/types/src/provider-settings.ts` — `mistralSchema`
     pub mistral_codestral_url: Option<String>,
 
     // --- DeepSeek-specific ---

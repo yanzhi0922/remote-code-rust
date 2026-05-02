@@ -331,6 +331,27 @@ pub enum ProviderName {
     VercelAiGateway,
     #[serde(rename = "fake-ai")]
     FakeAi,
+
+    // --- Retired providers ---
+    // These providers have been removed but are kept for backward-compatible
+    // deserialization of old config files.
+    // Source: `packages/types/src/provider-settings.ts` — `retiredProviderNames`
+    #[serde(rename = "cerebras")]
+    Cerebras,
+    #[serde(rename = "chutes")]
+    Chutes,
+    #[serde(rename = "deepinfra")]
+    Deepinfra,
+    #[serde(rename = "doubao")]
+    Doubao,
+    #[serde(rename = "featherless")]
+    Featherless,
+    #[serde(rename = "groq")]
+    Groq,
+    #[serde(rename = "huggingface")]
+    Huggingface,
+    #[serde(rename = "io-intelligence")]
+    IoIntelligence,
 }
 
 impl ProviderName {
@@ -366,6 +387,14 @@ impl ProviderName {
             Self::Roo => "roo",
             Self::VercelAiGateway => "vercel-ai-gateway",
             Self::FakeAi => "fake-ai",
+            Self::Cerebras => "cerebras",
+            Self::Chutes => "chutes",
+            Self::Deepinfra => "deepinfra",
+            Self::Doubao => "doubao",
+            Self::Featherless => "featherless",
+            Self::Groq => "groq",
+            Self::Huggingface => "huggingface",
+            Self::IoIntelligence => "io-intelligence",
         }
     }
 }
