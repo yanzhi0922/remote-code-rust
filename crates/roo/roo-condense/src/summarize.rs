@@ -9,8 +9,10 @@
 use std::sync::Arc;
 
 use futures::StreamExt;
+use roo_provider::error::ProviderError;
 use roo_provider::handler::{CreateMessageMetadata, Provider};
 use roo_types::api::{ApiMessage, ContentBlock, MessageRole};
+use tracing::info;
 
 use crate::convert::extract_command_blocks;
 use crate::folded_file_context::{generate_folded_file_context, FoldedFileContextOptions};
@@ -221,7 +223,7 @@ pub async fn summarize_conversation(
                         _ => {}
                     },
                     Err(e) => {
-                        let error_details = format!("Error: {e}");
+                        let error_details = extract_error_details(&e);
                         return Ok(SummarizeResponse {
                             cost,
                             error: Some(format!("Condensation API call failed: {e}")),
@@ -233,7 +235,7 @@ pub async fn summarize_conversation(
             }
         }
         Err(e) => {
-            let error_details = format!("Error: {e}");
+            let error_details = extract_error_details(&e);
             return Ok(SummarizeResponse {
                 cost,
                 error: Some(format!("Condensation API call failed: {e}")),
@@ -345,6 +347,7 @@ pub async fn summarize_conversation(
     // NON-DESTRUCTIVE CONDENSE:
     // Tag ALL existing messages with condenseParent so they are filtered out when
     // the effective history is computed.
+    let _msg_count_before = messages.len();
     let mut new_messages: Vec<ApiMessage> = messages
         .into_iter()
         .map(|mut msg| {
