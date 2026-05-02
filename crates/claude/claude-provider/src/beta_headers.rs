@@ -71,7 +71,11 @@ pub const WEB_SEARCH_BETA: &str = "web-search-2025-03-05";
 pub const SUMMARIZE_CONNECTOR_TEXT_BETA: &str = "summarize-connector-text-2026-03-13";
 
 /// Default beta headers for Anthropic first-party requests.
-pub const DEFAULT_BETA_HEADERS: &[&str] = &[CLAUDE_CODE_BETA, PROMPT_CACHING_BETA, PDFS_BETA];
+///
+/// Only `claude-code-20250219` is always-on in the TS reference.  The old
+/// `pdfs-2024-09-25` and `prompt-caching-2024-07-31` betas have been
+/// graduated and are no longer sent by the official CLI.
+pub const DEFAULT_BETA_HEADERS: &[&str] = &[CLAUDE_CODE_BETA];
 
 // ---------------------------------------------------------------------------
 // get_extra_body_params
