@@ -1,18 +1,18 @@
 //! Hooks section — informs the model about user-configurable hooks.
 //!
 //! Matches `getHooksSection()` in Claude Code's `prompts.ts`.
-//! Always included (non-conditional).
+//! Returns a plain paragraph (no header/bullets) that is inlined as one
+//! bullet inside the System section.
 
 use anyhow::Result;
 
 use crate::PromptContext;
-use crate::sections::{BulletItem, SystemPromptSection, section_with_bullets};
+use crate::sections::SystemPromptSection;
 
 /// The hooks section.
 ///
-/// Informs the model that users may configure hooks that run before or
-/// after tool use, and that any feedback from hooks should be incorporated
-/// into the model's behavior.
+/// Returns the raw hooks paragraph. This is used by the System section as
+/// one of its bullet items. It is NOT a standalone section with a header.
 pub struct HooksSection;
 
 impl SystemPromptSection for HooksSection {
@@ -21,22 +21,9 @@ impl SystemPromptSection for HooksSection {
     }
 
     fn compute(&self, _ctx: &PromptContext) -> Result<Option<String>> {
-        let items = vec![
-            BulletItem::Single(
-                "Users may configure hooks that run before or after tool use. These hooks allow users to customize behavior around tool execution."
-                    .to_string(),
-            ),
-            BulletItem::Single(
-                "If a hook provides feedback or modifies a tool result, incorporate that feedback into your response and adjust your approach accordingly."
-                    .to_string(),
-            ),
-            BulletItem::Single(
-                "Hooks may block a tool call, transform its output, or provide additional context. Respect hook decisions and do not attempt to bypass them."
-                    .to_string(),
-            ),
-        ];
-
-        Ok(Some(section_with_bullets("Hooks", &items)))
+        Ok(Some(
+            "Users may configure 'hooks', shell commands that execute in response to events like tool calls, in settings. Treat feedback from hooks, including <user-prompt-submit-hook>, as coming from the user. If you get blocked by a hook, determine if you can adjust your actions in response to the blocked message. If not, ask the user to check their hooks configuration.".to_string(),
+        ))
     }
 }
 
@@ -76,13 +63,17 @@ mod tests {
     }
 
     #[test]
-    fn hooks_section_mentions_hook_feedback() {
+    fn hooks_section_matches_ts_reference() {
         let section = HooksSection;
         let result = section.compute(&test_ctx()).expect("compute ok");
         let content = result.expect("should be Some");
-        assert!(content.starts_with("# Hooks"));
-        assert!(content.contains("hooks that run before or after tool use"));
-        assert!(content.contains("incorporate that feedback"));
+        assert!(content.contains("Users may configure 'hooks'"));
+        assert!(content.contains("<user-prompt-submit-hook>"));
+        assert!(content.contains("check their hooks configuration"));
+        // Should NOT have a section header
+        assert!(!content.starts_with("# "));
+        // Should NOT have bullet markers
+        assert!(!content.contains("\n - "));
     }
 
     #[test]
