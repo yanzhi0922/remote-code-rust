@@ -24,6 +24,7 @@
 pub mod client;
 pub mod diagnostics;
 pub mod registry;
+pub mod transport;
 pub mod types;
 
 // Re-export commonly used types
