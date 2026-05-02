@@ -351,10 +351,12 @@ impl Drop for StdioTransport {
 // SseTransport
 // ---------------------------------------------------------------------------
 
-/// Default maximum number of reconnection attempts for SSE transport.
-const SSE_DEFAULT_MAX_RECONNECT_ATTEMPTS: u32 = 5;
+/// Default maximum delay between reconnection attempts for SSE transport (5 seconds).
+/// Matches TS: `ReconnectingEventSource` with `max_retry_time: 5000`.
+/// Retries indefinitely but never waits longer than this between attempts.
+const SSE_DEFAULT_MAX_RECONNECT_DELAY_MS: u64 = 5000;
 
-/// Default initial reconnect delay in milliseconds.
+/// Default initial reconnect delay in milliseconds (1 second).
 const SSE_DEFAULT_INITIAL_RECONNECT_DELAY_MS: u64 = 1000;
 
 /// SSE (Server-Sent Events) transport.
@@ -392,8 +394,10 @@ pub struct SseTransport {
     post_endpoint: Option<String>,
     // Join handle for the SSE listener task
     listener_handle: Option<tokio::task::JoinHandle<()>>,
-    /// Maximum number of reconnection attempts before giving up.
-    max_reconnect_attempts: u32,
+    /// Maximum delay between reconnection attempts (milliseconds).
+    /// Matches TS: `max_retry_time: 5000` from `ReconnectingEventSource`.
+    /// Retries are indefinite; this caps the wait between attempts.
+    max_reconnect_delay_ms: u64,
     /// Initial delay before reconnecting (milliseconds).
     initial_reconnect_delay_ms: u64,
 }
@@ -409,7 +413,7 @@ impl SseTransport {
             message_rx: None,
             post_endpoint: None,
             listener_handle: None,
-            max_reconnect_attempts: SSE_DEFAULT_MAX_RECONNECT_ATTEMPTS,
+            max_reconnect_delay_ms: SSE_DEFAULT_MAX_RECONNECT_DELAY_MS,
             initial_reconnect_delay_ms: SSE_DEFAULT_INITIAL_RECONNECT_DELAY_MS,
         }
     }
@@ -418,7 +422,7 @@ impl SseTransport {
     pub fn with_reconnect_settings(
         url: String,
         headers: HashMap<String, String>,
-        max_reconnect_attempts: u32,
+        max_reconnect_delay_ms: u64,
         initial_reconnect_delay_ms: u64,
     ) -> Self {
         Self {
@@ -429,7 +433,7 @@ impl SseTransport {
             message_rx: None,
             post_endpoint: None,
             listener_handle: None,
-            max_reconnect_attempts,
+            max_reconnect_delay_ms,
             initial_reconnect_delay_ms,
         }
     }
@@ -480,7 +484,7 @@ impl McpTransport for SseTransport {
         let sse_url = self.url.clone();
         let client = self.http_client.clone();
         let headers = self.headers.clone();
-        let max_reconnect = self.max_reconnect_attempts;
+        let max_reconnect = self.max_reconnect_delay_ms;
         let initial_delay = self.initial_reconnect_delay_ms;
 
         // Start SSE listener in background; it will signal the discovered endpoint
@@ -614,9 +618,9 @@ impl McpTransport for SseTransport {
 impl SseTransport {
     /// Listen to SSE events with automatic reconnection and exponential backoff.
     ///
-    /// When the SSE stream ends or encounters an error, this method will
-    /// attempt to reconnect with exponential backoff up to `max_reconnect_attempts`
-    /// times before giving up.
+    /// Matches TS: `ReconnectingEventSource` with `max_retry_time: 5000`.
+    /// Retries indefinitely with exponential backoff, capped at
+    /// `max_reconnect_delay_ms` between attempts.
     ///
     /// The `endpoint_tx` channel is used to signal the discovered POST endpoint
     /// back to the caller. It is only sent to once (on the first successful
@@ -627,7 +631,7 @@ impl SseTransport {
         headers: &HashMap<String, String>,
         tx: mpsc::Sender<JsonRpcMessage>,
         endpoint_tx: Option<mpsc::Sender<String>>,
-        max_reconnect_attempts: u32,
+        max_reconnect_delay_ms: u64,
         initial_delay_ms: u64,
     ) -> McpResult<()> {
         let mut attempt = 0u32;
@@ -649,43 +653,29 @@ impl SseTransport {
 
             match result {
                 Ok(()) => {
-                    // Stream ended normally (EOF) — try to reconnect
+                    // Stream ended normally (EOF) — retry indefinitely with capped backoff.
+                    // Matches TS: ReconnectingEventSource retries indefinitely.
                     attempt += 1;
-                    if attempt > max_reconnect_attempts {
-                        tracing::warn!(
-                            "SSE stream ended. Max reconnect attempts ({}) reached.",
-                            max_reconnect_attempts
-                        );
-                        return Ok(());
-                    }
 
-                    let delay_ms = initial_delay_ms * 2u64.pow(attempt - 1);
+                    let delay_ms = (initial_delay_ms * 2u64.pow(attempt - 1))
+                        .min(max_reconnect_delay_ms);
                     tracing::info!(
-                        "SSE stream ended. Reconnecting in {}ms (attempt {}/{})",
+                        "SSE stream ended. Reconnecting in {}ms (attempt {})",
                         delay_ms,
-                        attempt,
-                        max_reconnect_attempts
+                        attempt
                     );
                     tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                 }
                 Err(e) => {
                     attempt += 1;
-                    if attempt > max_reconnect_attempts {
-                        tracing::error!(
-                            "SSE error: {}. Max reconnect attempts ({}) reached.",
-                            e,
-                            max_reconnect_attempts
-                        );
-                        return Err(e);
-                    }
 
-                    let delay_ms = initial_delay_ms * 2u64.pow(attempt - 1);
+                    let delay_ms = (initial_delay_ms * 2u64.pow(attempt - 1))
+                        .min(max_reconnect_delay_ms);
                     tracing::warn!(
-                        "SSE error: {}. Reconnecting in {}ms (attempt {}/{})",
+                        "SSE error: {}. Reconnecting in {}ms (attempt {})",
                         e,
                         delay_ms,
-                        attempt,
-                        max_reconnect_attempts
+                        attempt
                     );
                     tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                 }
@@ -1077,7 +1067,7 @@ mod tests {
             HashMap::new(),
         );
         assert!(!transport.is_connected());
-        assert_eq!(transport.max_reconnect_attempts, SSE_DEFAULT_MAX_RECONNECT_ATTEMPTS);
+        assert_eq!(transport.max_reconnect_delay_ms, SSE_DEFAULT_MAX_RECONNECT_DELAY_MS);
         assert_eq!(transport.initial_reconnect_delay_ms, SSE_DEFAULT_INITIAL_RECONNECT_DELAY_MS);
     }
 
@@ -1086,10 +1076,10 @@ mod tests {
         let transport = SseTransport::with_reconnect_settings(
             "http://localhost:8080/sse".to_string(),
             HashMap::new(),
-            10,
+            8000,
             2000,
         );
-        assert_eq!(transport.max_reconnect_attempts, 10);
+        assert_eq!(transport.max_reconnect_delay_ms, 8000);
         assert_eq!(transport.initial_reconnect_delay_ms, 2000);
     }
 

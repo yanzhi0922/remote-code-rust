@@ -30,6 +30,33 @@ use crate::events::TaskEventEmitter;
 use crate::types::TaskError;
 
 // ---------------------------------------------------------------------------
+// Tool alias map
+// ---------------------------------------------------------------------------
+
+/// Central registry of tool aliases.
+///
+/// Maps alias name -> canonical tool name.
+///
+/// Source: `src/shared/tools.ts` — `TOOL_ALIASES` (lines 337–340)
+pub static TOOL_ALIASES: &[(&str, &str)] = &[
+    ("write_file", "write_to_file"),
+    ("search_and_replace", "edit"),
+];
+
+/// Resolve a tool name alias to its canonical name.
+///
+/// Source: `src/shared/tools.ts` — `TOOL_ALIASES` resolution
+/// Source: `src/core/tools/validateToolUse.ts` — line 130: `TOOL_ALIASES[tool] ?? tool`
+pub fn resolve_tool_alias(name: &str) -> &str {
+    for (alias, canonical) in TOOL_ALIASES {
+        if *alias == name {
+            return canonical;
+        }
+    }
+    name
+}
+
+// ---------------------------------------------------------------------------
 // AskResponse
 // ---------------------------------------------------------------------------
 
@@ -199,6 +226,28 @@ pub struct AskSayHandler {
     task_id: Option<String>,
     /// Event emitter for state change events.
     event_emitter: Option<TaskEventEmitter>,
+
+    // ── Abort flag ───────────────────────────────────────────────────────
+    /// Whether the task has been aborted.
+    ///
+    /// Source: TS `this.abort` (line 1279) — checked at start of `ask()`
+    abort: bool,
+
+    // ── Disk persistence flag ────────────────────────────────────────────
+    /// Whether `save_cline_messages` should be called after the current
+    /// operation (set when finalizing a partial=false ask).
+    ///
+    /// Source: TS line 1339 — `await this.saveClineMessages()`
+    needs_save: bool,
+
+    // ── Queue drain callback ─────────────────────────────────────────────
+    /// Optional callback invoked during `wait_for_ask_response()` to check
+    /// for queued messages. Returns `(response_type, text, images)` if a
+    /// queued message should auto-respond the ask, or `None` to continue
+    /// waiting.
+    ///
+    /// Source: TS lines 1456–1467 — pWaitFor loop checks `messageQueueService`
+    queued_message_checker: Option<Arc<dyn Fn() -> Option<(AskResponse, Option<String>, Option<Vec<String>>)> + Send + Sync>>,
 }
 
 impl AskSayHandler {
@@ -218,6 +267,9 @@ impl AskSayHandler {
             interactive_ask: None,
             task_id: None,
             event_emitter: None,
+            abort: false,
+            needs_save: false,
+            queued_message_checker: None,
         }
     }
 
@@ -231,6 +283,36 @@ impl AskSayHandler {
     pub fn with_event_emitter(mut self, emitter: TaskEventEmitter) -> Self {
         self.event_emitter = Some(emitter);
         self
+    }
+
+    /// Set the abort flag.
+    ///
+    /// Source: TS `this.abort` (line 1279) — checked at start of `ask()`
+    pub fn set_abort(&mut self, abort: bool) {
+        self.abort = abort;
+    }
+
+    /// Check if the task has been aborted.
+    pub fn is_aborted(&self) -> bool {
+        self.abort
+    }
+
+    /// Set the queued message checker callback.
+    ///
+    /// Source: TS lines 1456–1467 — pWaitFor loop checks `messageQueueService`
+    pub fn set_queued_message_checker(
+        &mut self,
+        checker: Arc<dyn Fn() -> Option<(AskResponse, Option<String>, Option<Vec<String>>)> + Send + Sync>,
+    ) {
+        self.queued_message_checker = Some(checker);
+    }
+
+    /// Check and clear the `needs_save` flag.
+    ///
+    /// Returns `true` if `save_cline_messages()` should be called.
+    /// Source: TS line 1339 — `await this.saveClineMessages()` after partial finalization
+    pub fn take_needs_save(&mut self) -> bool {
+        std::mem::take(&mut self.needs_save)
     }
 
     // ===================================================================
@@ -482,6 +564,16 @@ impl AskSayHandler {
         progress_status: Option<ToolProgressStatus>,
         is_protected: Option<bool>,
     ) -> Result<AskResult, AskIgnoredError> {
+        // Source: TS lines 1279–1281 — abort check at start of ask()
+        // "If this Cline instance was aborted by the provider, then the only
+        // thing keeping us alive is a promise still running in the background,
+        // in which case we don't want to send its result to the webview..."
+        if self.abort {
+            return Err(AskIgnoredError {
+                reason: "task aborted".to_string(),
+            });
+        }
+
         // Source: TS lines 1285–1359 — handle partial messages
         let ask_ts = self.handle_ask_partial(ask_type, text.clone(), partial, progress_status.clone(), is_protected)?;
 
@@ -603,6 +695,10 @@ impl AskSayHandler {
                         let _ = last;
                         self.emit_message_updated(msg);
                     }
+                    // Source: TS line 1339 — `await this.saveClineMessages()`
+                    // Mark that save_cline_messages should be called after this
+                    // finalization of a partial ask.
+                    self.needs_save = true;
                     Ok(ask_ts)
                 } else {
                     // Source: TS lines 1341–1349 — new complete message
@@ -811,6 +907,29 @@ impl AskSayHandler {
                 }
             }
 
+            // Source: TS lines 1456–1467 — drain queued messages during wait.
+            // "If a queued message arrives while we're blocked on an ask (e.g. a
+            // follow-up suggestion click that was incorrectly queued due to UI
+            // state), consume it immediately so the task doesn't hang."
+            if let Some(ref checker) = self.queued_message_checker {
+                if let Some((ask_resp, text, images)) = checker() {
+                    // Auto-respond the ask with the queued message, matching TS
+                    // behavior where `messageResponse` is sent for followup-type
+                    // asks and `yesButtonClicked` for tool/command/mcp asks.
+                    let result = AskResult {
+                        response: ask_resp,
+                        text,
+                        images,
+                    };
+                    {
+                        let mut guard = response.lock().await;
+                        *guard = Some(result.clone());
+                    }
+                    let _ = self.ask_signal.send(true);
+                    return Ok(result);
+                }
+            }
+
             // Check if the message was superseded
             // Source: TS line 1474 — `this.lastMessageTs !== askTs`
             if let Some(ts) = self.last_message_ts {
@@ -919,8 +1038,14 @@ impl AskSayHandler {
         let mut checkpoint_needed = false;
 
         // Source: TS lines 1512–1514 — checkpoint on messageResponse
+        // "Create a checkpoint whenever the user sends a message.
+        //  Use allowEmpty=true to ensure a checkpoint is recorded even if
+        //  there are no file changes."
         if ask_response == AskResponse::MessageResponse {
             checkpoint_needed = true;
+            // Source: TS lines 1528–1530 — save cline messages after marking
+            // the followup as answered (see mark_last_followup_answered below)
+            self.needs_save = true;
         }
 
         // Source: TS lines 1517–1532 — mark followup as answered

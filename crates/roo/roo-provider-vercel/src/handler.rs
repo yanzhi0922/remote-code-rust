@@ -72,6 +72,7 @@ impl VercelHandler {
             provider_name_enum: ProviderName::VercelAiGateway,
             request_timeout: config.request_timeout,
         reasoning_effort: None,
+            streaming_enabled: None,
         };
 
         let inner = OpenAiCompatibleProvider::new(compatible_config)?;

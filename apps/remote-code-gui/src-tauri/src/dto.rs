@@ -317,6 +317,8 @@ pub(crate) struct ToolProgressDto {
     pub(crate) tool_call_id: String,
     pub(crate) tool_name: String,
     pub(crate) message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) active_form: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

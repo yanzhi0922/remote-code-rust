@@ -110,12 +110,28 @@ impl ToolRunner for GuiToolRunner {
 
         // 2. Emit tool-start event.
         let session_id_str = self.session_id.to_string();
+
+        // Extract activeForm from tool input for TodoWrite
+        let active_form = if tool_call.name == "TodoWrite" {
+            tool_call.input.as_object().and_then(|obj| {
+                obj.get("todos")
+                    .and_then(|todos| todos.as_array())
+                    .and_then(|arr| {
+                        arr.iter().find(|t| t.get("status").and_then(|s| s.as_str()) == Some("in_progress"))
+                            .and_then(|t| t.get("activeForm").and_then(|v| v.as_str()).map(|s| s.to_owned()))
+                    })
+            })
+        } else {
+            None
+        };
+
         let _ = self.app.emit(
             APP_EVENT_TOOL_START,
             ToolProgressDto {
                 tool_call_id: tool_call.id.clone(),
                 tool_name: tool_call.name.clone(),
                 message: "running".to_owned(),
+                active_form,
             },
         );
 
@@ -250,6 +266,7 @@ fn emit_delegate_progress(
                 tool_call_id: String::new(),
                 tool_name: "agent".to_owned(),
                 message: message.to_owned(),
+                active_form: None,
             },
         );
         return;
@@ -296,6 +313,7 @@ fn emit_delegate_progress(
                     tool_call_id: task_id,
                     tool_name: "agent".to_owned(),
                     message: summary,
+                    active_form: None,
                 },
             );
             crate::emit_task_snapshot_for_session(app, paths, session_id);
@@ -382,6 +400,7 @@ impl QueryObserver for GuiQueryObserver {
                         tool_call_id: tool_call.id,
                         tool_name: tool_call.name,
                         message: "running".to_owned(),
+                        active_form: None,
                     },
                 );
             }
@@ -398,6 +417,7 @@ impl QueryObserver for GuiQueryObserver {
                         tool_call_id,
                         tool_name,
                         message: "running".to_owned(),
+                        active_form: None,
                     },
                 );
             }

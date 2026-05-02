@@ -6,6 +6,7 @@
 //! Faithfully ported from `.research/Roo-Code/src/api/providers/gemini.ts`.
 
 use std::pin::Pin;
+use std::sync::Mutex;
 
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
@@ -32,6 +33,10 @@ pub struct GoogleHandler {
     model_id: String,
     model_info: ModelInfo,
     temperature: f64,
+    /// The thought signature from the most recent response, used for
+    /// round-tripping in subsequent tool-calling turns.
+    /// Source: `.research/Roo-Code/src/api/providers/gemini.ts` — `lastThoughtSignature`
+    last_thought_signature: Mutex<Option<String>>,
 }
 
 impl GoogleHandler {
@@ -99,6 +104,7 @@ impl GoogleHandler {
             model_id,
             model_info,
             temperature,
+            last_thought_signature: Mutex::new(None),
         })
     }
 
@@ -111,12 +117,20 @@ impl GoogleHandler {
         Self::new(config)
     }
 
+    /// Get the last thought signature captured from the API response.
+    ///
+    /// Source: `.research/Roo-Code/src/api/providers/gemini.ts` — `getThoughtSignature()`
+    pub fn get_thought_signature(&self) -> Option<String> {
+        self.last_thought_signature.lock().ok().and_then(|g| g.clone())
+    }
+
     /// Build the request body for the Gemini generateContent API.
     fn build_request_body(
         &self,
         system_prompt: &str,
         messages: &[ApiMessage],
         tools: Option<&Vec<Value>>,
+        metadata: &CreateMessageMetadata,
     ) -> Value {
         let tool_id_to_name = build_tool_id_to_name_map(messages);
         let conversion_opts = GeminiConversionOptions {
@@ -195,6 +209,44 @@ impl GoogleHandler {
             }
         }
 
+        // Handle tool_choice / allowed_function_names → Gemini functionCallingConfig.
+        // Source: `.research/Roo-Code/src/api/providers/gemini.ts` — `config.toolConfig`
+        // allowedFunctionNames takes precedence to ensure mode restrictions are honored.
+        if let Some(ref allowed) = metadata.allowed_function_names {
+            if !allowed.is_empty() {
+                body["toolConfig"] = json!({
+                    "functionCallingConfig": {
+                        "mode": "ANY",
+                        "allowedFunctionNames": allowed,
+                    }
+                });
+            }
+        } else if let Some(ref tool_choice) = metadata.tool_choice {
+            let (mode, allowed_fn_names) = match tool_choice {
+                v if v.as_str() == Some("auto") => ("AUTO", None),
+                v if v.as_str() == Some("none") => ("NONE", None),
+                v if v.as_str() == Some("required") => ("ANY", None),
+                v if v.is_object() && v.get("type").and_then(|t| t.as_str()) == Some("function") => {
+                    let name = v.get("function")
+                        .and_then(|f| f.get("name"))
+                        .and_then(|n| n.as_str())
+                        .map(|s| vec![s.to_string()]);
+                    ("ANY", name)
+                }
+                _ => ("AUTO", None),
+            };
+
+            let mut config = json!({
+                "functionCallingConfig": {
+                    "mode": mode,
+                }
+            });
+            if let Some(names) = allowed_fn_names {
+                config["functionCallingConfig"]["allowedFunctionNames"] = json!(names);
+            }
+            body["toolConfig"] = config;
+        }
+
         body
     }
 
@@ -209,6 +261,7 @@ impl GoogleHandler {
     fn parse_sse_stream(
         stream: Pin<Box<dyn Stream<Item = Result<GeminiStreamResponse>> + Send>>,
         model_info: ModelInfo,
+        thought_signature_out: std::sync::Arc<Mutex<Option<String>>>,
     ) -> ApiStream {
         let mut usage_emitted = false;
         let mut tool_call_counter: u64 = 0;
@@ -229,7 +282,11 @@ impl GoogleHandler {
                                         // Capture thought signatures so they can be
                                         // persisted into API history for round-tripping.
                                         // Gemini 3 requires this during tool calling.
-                                        let _thought_signature = &part.thought_signature;
+                                        if let Some(ref sig) = part.thought_signature {
+                                            if let Ok(mut guard) = thought_signature_out.lock() {
+                                                *guard = Some(sig.clone());
+                                            }
+                                        }
 
                                         let is_thought = part.thought.as_ref()
                                             .map(|t| t.is_thinking())
@@ -393,9 +450,15 @@ impl Provider for GoogleHandler {
         system_prompt: &str,
         messages: Vec<ApiMessage>,
         tools: Option<Vec<Value>>,
-        _metadata: CreateMessageMetadata,
+        metadata: CreateMessageMetadata,
     ) -> Result<ApiStream> {
-        let body = self.build_request_body(system_prompt, &messages, tools.as_ref());
+        // Reset per-request metadata that we persist into apiConversationHistory.
+        // Source: `.research/Roo-Code/src/api/providers/gemini.ts` — `this.lastThoughtSignature = undefined`
+        if let Ok(mut sig) = self.last_thought_signature.lock() {
+            *sig = None;
+        }
+
+        let body = self.build_request_body(system_prompt, &messages, tools.as_ref(), &metadata);
         let url = format!(
             "{}/models/{}:streamGenerateContent?alt=sse&key={}",
             self.base_url.trim_end_matches('/'),
@@ -419,6 +482,7 @@ impl Provider for GoogleHandler {
         }
 
         let model_info = self.model_info.clone();
+        let thought_signature_out = std::sync::Arc::new(Mutex::new(None::<String>));
 
         let sse_stream = response
             .bytes_stream()
@@ -440,7 +504,7 @@ impl Provider for GoogleHandler {
         let stream: Pin<Box<dyn Stream<Item = Result<GeminiStreamResponse>> + Send>> =
             Box::pin(sse_stream);
 
-        Ok(Self::parse_sse_stream(stream, model_info))
+        Ok(Self::parse_sse_stream(stream, model_info, thought_signature_out))
     }
 
     fn get_model(&self) -> (String, ModelInfo) {
@@ -738,8 +802,9 @@ impl Provider for VertexHandler {
         system_prompt: &str,
         messages: Vec<ApiMessage>,
         tools: Option<Vec<Value>>,
-        _metadata: CreateMessageMetadata,
+        metadata: CreateMessageMetadata,
     ) -> Result<ApiStream> {
+        let _ = &metadata; // Vertex handler does not use tool_choice metadata yet
         let body = self.build_request_body(system_prompt, &messages, tools.as_ref());
         let url = self.build_stream_url();
         let access_token = self.get_access_token().await?;
@@ -761,6 +826,7 @@ impl Provider for VertexHandler {
         }
 
         let model_info = self.model_info.clone();
+        let thought_signature_out = std::sync::Arc::new(Mutex::new(None::<String>));
 
         let sse_stream = response
             .bytes_stream()
@@ -780,7 +846,7 @@ impl Provider for VertexHandler {
         let stream: Pin<Box<dyn Stream<Item = Result<GeminiStreamResponse>> + Send>> =
             Box::pin(sse_stream);
 
-        Ok(GoogleHandler::parse_sse_stream(stream, model_info))
+        Ok(GoogleHandler::parse_sse_stream(stream, model_info, thought_signature_out))
     }
 
     fn get_model(&self) -> (String, ModelInfo) {

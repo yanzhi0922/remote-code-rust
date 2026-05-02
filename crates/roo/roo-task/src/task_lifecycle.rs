@@ -1007,7 +1007,7 @@ impl TaskLifecycle {
 
         // Source: TS line 1622 — handle the message via handleWebviewAskResponse
         // `this.handleWebviewAskResponse("messageResponse", text, images)`
-        let _checkpoint_needed = self
+        let checkpoint_needed = self
             .ask_say
             .handle_response_full(
                 AskResponse::MessageResponse,
@@ -1015,6 +1015,23 @@ impl TaskLifecycle {
                 if images.is_empty() { None } else { Some(images) },
             )
             .await;
+
+        // Source: TS lines 1512–1514 — checkpointSave on messageResponse
+        // "Create a checkpoint whenever the user sends a message."
+        if checkpoint_needed {
+            // checkpoint_save is async and may fail; fire-and-forget is acceptable
+            // matching TS: `void this.checkpointSave(false, true)`
+            let _ = self.checkpoint_save(false, true).await;
+        }
+
+        // Source: TS lines 1528–1530, 1543–1545 — save cline messages after
+        // marking followup/tool asks as answered. The handler sets needs_save
+        // in handle_response_full when response is messageResponse.
+        if self.ask_say.take_needs_save() {
+            if let Err(e) = self.engine.save_cline_messages().await {
+                tracing::error!("Failed to save cline messages after messageResponse: {}", e);
+            }
+        }
 
         // Telemetry: conversation message
         self.emit_telemetry_conversation_message("user");

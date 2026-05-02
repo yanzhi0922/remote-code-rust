@@ -64,6 +64,7 @@ impl PoeHandler {
             provider_name_enum: ProviderName::Poe,
             request_timeout: config.request_timeout,
         reasoning_effort: None,
+            streaming_enabled: None,
         };
 
         let inner = OpenAiCompatibleProvider::new(compatible_config)?;
@@ -192,6 +193,7 @@ mod tests {
             temperature: None,
             max_thinking_tokens: None,
             reasoning_effort: None,
+            streaming_enabled: None,
             request_timeout: None,
         };
         let handler = PoeHandler::new(config);
@@ -207,6 +209,7 @@ mod tests {
             temperature: None,
             max_thinking_tokens: None,
             reasoning_effort: None,
+            streaming_enabled: None,
             request_timeout: None,
         };
         let handler = PoeHandler::new(config).unwrap();
@@ -223,6 +226,7 @@ mod tests {
             temperature: None,
             max_thinking_tokens: None,
             reasoning_effort: None,
+            streaming_enabled: None,
             request_timeout: None,
         };
         let handler = PoeHandler::new(config).unwrap();
@@ -246,6 +250,7 @@ mod tests {
             temperature: None,
             max_thinking_tokens: None,
             reasoning_effort: None,
+            streaming_enabled: None,
             request_timeout: None,
         };
         let handler = PoeHandler::new(config).unwrap();
@@ -261,6 +266,7 @@ mod tests {
             temperature: None,
             max_thinking_tokens: None,
             reasoning_effort: None,
+            streaming_enabled: None,
             request_timeout: None,
         };
         let handler = PoeHandler::new(config);
@@ -276,6 +282,7 @@ mod tests {
             temperature: None,
             max_thinking_tokens: None,
             reasoning_effort: None,
+            streaming_enabled: None,
             request_timeout: None,
         };
         let handler = PoeHandler::new(config).unwrap();
@@ -295,6 +302,7 @@ mod tests {
             temperature: Some(0.5),
             max_thinking_tokens: None,
             reasoning_effort: None,
+            streaming_enabled: None,
             request_timeout: None,
         };
         let handler = PoeHandler::new(config);
@@ -329,6 +337,7 @@ mod tests {
             temperature: None,
             max_thinking_tokens: None,
             reasoning_effort: None,
+            streaming_enabled: None,
             request_timeout: None,
         };
         let handler = PoeHandler::new(config).unwrap();
@@ -347,6 +356,7 @@ mod tests {
             temperature: None,
             max_thinking_tokens: None,
             reasoning_effort: None,
+            streaming_enabled: None,
             request_timeout: None,
         };
         let handler = PoeHandler::new(config).unwrap();

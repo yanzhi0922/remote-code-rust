@@ -161,7 +161,7 @@ function TasksPane() {
           {liveToolProgress.slice(-5).map((progress: ToolProgressInfo, index) => (
             <div key={`${progress.tool_call_id}-${index}`} className="rounded-lg bg-rc-bg-secondary px-3 py-2 text-xs">
               <div className="font-medium text-rc-text-primary">{progress.tool_name || 'tool'}</div>
-              <div className="mt-1 truncate text-rc-text-secondary">{progress.message}</div>
+              <div className="mt-1 truncate text-rc-text-secondary">{progress.active_form ?? progress.message}</div>
             </div>
           ))}
           {liveToolResults.slice(-3).map((result: ToolResultInfo, index) => (

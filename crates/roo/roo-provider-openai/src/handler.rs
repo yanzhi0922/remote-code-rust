@@ -51,6 +51,7 @@ impl OpenAiHandler {
             provider_name_enum: ProviderName::Openai,
             request_timeout: config.request_timeout,
             reasoning_effort: config.reasoning_effort.clone(),
+            streaming_enabled: None,
         };
 
         let inner = roo_provider::OpenAiCompatibleProvider::new(compatible_config)?;
@@ -162,6 +163,7 @@ mod tests {
             model_id: None,
             temperature: None,
             reasoning_effort: None,
+            streaming_enabled: None,
             request_timeout: None,
         };
         let handler = OpenAiHandler::new(config);
@@ -177,6 +179,7 @@ mod tests {
             model_id: None,
             temperature: None,
             reasoning_effort: None,
+            streaming_enabled: None,
             request_timeout: None,
         };
         let handler = OpenAiHandler::new(config).unwrap();
@@ -193,6 +196,7 @@ mod tests {
             model_id: Some("gpt-4.1".to_string()),
             temperature: None,
             reasoning_effort: None,
+            streaming_enabled: None,
             request_timeout: None,
         };
         let handler = OpenAiHandler::new(config).unwrap();
@@ -209,6 +213,7 @@ mod tests {
             model_id: None,
             temperature: None,
             reasoning_effort: None,
+            streaming_enabled: None,
             request_timeout: None,
         };
         let handler = OpenAiHandler::new(config).unwrap();
@@ -290,6 +295,7 @@ mod tests {
             model_id: Some("gpt-future".to_string()),
             temperature: None,
             reasoning_effort: None,
+            streaming_enabled: None,
             request_timeout: None,
         };
         let handler = OpenAiHandler::new(config).unwrap();

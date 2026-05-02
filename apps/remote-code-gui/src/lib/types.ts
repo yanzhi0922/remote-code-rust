@@ -773,6 +773,7 @@ export interface ToolProgressInfo {
   tool_call_id: string;
   tool_name: string;
   message: string;
+  active_form?: string;
 }
 
 export interface ToolResultInfo {

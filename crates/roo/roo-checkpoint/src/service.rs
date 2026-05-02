@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use git2::Repository;
 use sha2::{Digest, Sha256};
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use crate::error::CheckpointError;
 use crate::excludes::get_exclude_patterns;
@@ -17,6 +17,63 @@ use crate::types::{
     CheckpointDiff, CheckpointEvent, CheckpointResult, CommitSummary, ContentPair, GetDiffParams,
     PathPair, SaveCheckpointOptions,
 };
+
+/// Git environment variables that must be removed before checkpoint operations
+/// to prevent interference from inherited git env vars (e.g. in dev containers).
+///
+/// Source: `src/services/checkpoints/ShadowCheckpointService.ts` — `createSanitizedGit()`
+const GIT_ENV_VARS_TO_SANITIZE: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_TEMPLATE_DIR",
+];
+
+/// Removes git environment variables that could interfere with checkpoint operations.
+///
+/// This prevents checkpoint operations from targeting the wrong repository when
+/// running in environments like dev containers where GIT_DIR, GIT_WORK_TREE, etc.
+/// may be set.
+///
+/// Source: `src/services/checkpoints/ShadowCheckpointService.ts` — `createSanitizedGit()`
+fn sanitize_git_env() {
+    let mut removed = Vec::new();
+    for var in GIT_ENV_VARS_TO_SANITIZE {
+        if std::env::var(var).is_ok() {
+            removed.push(*var);
+            // SAFETY: Removing env vars is safe in single-threaded context
+            // during initialization. This mirrors the TS behavior of `delete process.env[key]`.
+            unsafe { std::env::remove_var(var); }
+        }
+    }
+    if !removed.is_empty() {
+        warn!(
+            "[sanitize_git_env] Removed git environment variables for checkpoint isolation: {}",
+            removed.join(", ")
+        );
+    }
+}
+
+/// Compares two paths for equality, using case-insensitive comparison on Windows.
+///
+/// Source: `src/utils/path.ts` — `arePathsEqual()`
+fn are_paths_equal(path1: &Path, path2: &Path) -> bool {
+    let s1 = path1.to_string_lossy();
+    let s2 = path2.to_string_lossy();
+
+    #[cfg(target_os = "windows")]
+    {
+        s1.to_lowercase() == s2.to_lowercase()
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        s1 == s2
+    }
+}
 
 /// Type alias for event callback.
 pub type EventCallback = Box<dyn Fn(&CheckpointEvent) + Send + Sync>;
@@ -74,7 +131,7 @@ impl ShadowCheckpointService {
         ];
 
         for protected in &protected_paths {
-            if workspace_dir == *protected {
+            if are_paths_equal(&workspace_dir, protected) {
                 return Err(CheckpointError::ProtectedPath(
                     protected.display().to_string(),
                 ));
@@ -141,6 +198,10 @@ impl ShadowCheckpointService {
             return Err(CheckpointError::AlreadyInitialized);
         }
 
+        // Sanitize git environment variables to prevent interference from
+        // inherited env vars (e.g. in dev containers).
+        sanitize_git_env();
+
         let start = Instant::now();
 
         // Create checkpoints directory if needed.
@@ -166,11 +227,11 @@ impl ShadowCheckpointService {
                 }
                 Some(wt) => {
                     let wt_trimmed = wt.trim();
-                    let ws_str = self.workspace_dir.to_string_lossy();
-                    if wt_trimmed != ws_str {
+                    let wt_path = Path::new(wt_trimmed);
+                    if !are_paths_equal(wt_path, &self.workspace_dir) {
                         return Err(CheckpointError::WorktreeMismatch {
                             expected: wt_trimmed.to_string(),
-                            actual: ws_str.to_string(),
+                            actual: self.workspace_dir.to_string_lossy().to_string(),
                         });
                     }
                 }
@@ -670,6 +731,9 @@ impl ShadowCheckpointService {
         task_id: &str,
         workspace_dir: &str,
     ) -> Result<bool, CheckpointError> {
+        // Sanitize git environment variables before git operations.
+        sanitize_git_env();
+
         let workspace_repo_dir = Self::workspace_repo_dir(global_storage_dir, workspace_dir);
         let branch_name = format!("roo-{}", task_id);
 

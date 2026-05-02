@@ -16,8 +16,15 @@ use roo_condense::{
 use roo_provider::handler::{CreateMessageMetadata, Provider};
 use roo_types::api::{ApiMessage, ContentBlock};
 
-/// Default max tokens for Anthropic models when not specified.
-const ANTHROPIC_DEFAULT_MAX_TOKENS: u64 = 8192;
+/// Fallback context window size when no provider-specific max tokens are available.
+///
+/// The previous value (8192) was Anthropic's completion/output limit, not a context window size.
+/// When no provider info is available, use a reasonable default context window of 200K tokens.
+/// This is used as the fallback for `reserved_tokens` in context management calculations.
+///
+/// Source: `src/core/context-management/index.ts` — uses `ANTHROPIC_DEFAULT_MAX_TOKENS` which
+/// is actually Anthropic's max output tokens (8192), not the context window.
+const CONTEXT_WINDOW_FALLBACK: u64 = 200_000;
 
 use crate::token::estimate_token_count;
 use crate::truncation::truncate_conversation;
@@ -104,7 +111,7 @@ pub fn will_manage_context(options: &WillManageContextOptions) -> bool {
         last_message_tokens,
     } = options;
 
-    let reserved_tokens = max_tokens.unwrap_or(ANTHROPIC_DEFAULT_MAX_TOKENS as usize);
+    let reserved_tokens = max_tokens.unwrap_or(CONTEXT_WINDOW_FALLBACK as usize);
     let prev_context_tokens = total_tokens + last_message_tokens;
     let allowed_tokens =
         (*context_window as f64 * (1.0 - TOKEN_BUFFER_PERCENTAGE)) as usize - reserved_tokens;
@@ -164,7 +171,7 @@ pub async fn manage_context(options: ContextManagementOptions) -> anyhow::Result
     let mut cost = 0.0f64;
 
     // Calculate the maximum tokens reserved for response
-    let reserved_tokens = max_tokens.unwrap_or(ANTHROPIC_DEFAULT_MAX_TOKENS as usize);
+    let reserved_tokens = max_tokens.unwrap_or(CONTEXT_WINDOW_FALLBACK as usize);
 
     // Estimate tokens for the last message (which is always a user message)
     let last_message = messages.last().expect("messages should not be empty");
@@ -519,7 +526,7 @@ mod tests {
         let options = WillManageContextOptions {
             total_tokens: 1000,
             context_window: 10000,
-            max_tokens: None,
+            max_tokens: Some(8192),
             auto_condense_context: true,
             auto_condense_context_percent: 50.0,
             profile_thresholds: HashMap::new(),
@@ -537,7 +544,7 @@ mod tests {
         let options = WillManageContextOptions {
             total_tokens: 500,
             context_window: 10000,
-            max_tokens: None,
+            max_tokens: Some(8192),
             auto_condense_context: false,
             auto_condense_context_percent: 50.0,
             profile_thresholds: HashMap::new(),

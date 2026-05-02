@@ -198,9 +198,14 @@ pub struct OpenAiUsage {
 }
 
 #[derive(Debug, Deserialize)]
-struct OpenAiPromptTokensDetails {
+pub(crate) struct OpenAiPromptTokensDetails {
     cached_tokens: Option<u64>,
+    /// OpenAI standard field for cache write tokens.
     cache_write_tokens: Option<u64>,
+    /// DeepSeek-specific field name for prompt cache miss tokens.
+    /// Source: `src/api/providers/deepseek.ts` — `processUsageMetrics`
+    #[serde(default)]
+    cache_miss_tokens: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -219,7 +224,7 @@ pub fn process_usage_metrics(
     let cache_write_tokens = usage
         .prompt_tokens_details
         .as_ref()
-        .and_then(|d| d.cache_write_tokens)
+        .and_then(|d| d.cache_write_tokens.or(d.cache_miss_tokens))
         .unwrap_or(0);
     let cache_read_tokens = usage
         .prompt_tokens_details
@@ -290,6 +295,10 @@ pub struct OpenAiCompatibleConfig {
     ///
     /// Source: `src/api/providers/openai.ts` — `reasoning_effort` in request body
     pub reasoning_effort: Option<String>,
+    /// Whether streaming is enabled. When false, falls back to non-streaming
+    /// chat completion.
+    /// Source: `src/api/providers/openai.ts` — `openAiStreamingEnabled`
+    pub streaming_enabled: Option<bool>,
 }
 
 /// Base class for OpenAI-compatible API providers.
@@ -303,6 +312,7 @@ pub struct OpenAiCompatibleProvider {
     provider_name_str: String,
     default_temperature: f64,
     reasoning_effort: Option<String>,
+    streaming_enabled: bool,
 }
 
 impl OpenAiCompatibleProvider {
@@ -332,6 +342,7 @@ impl OpenAiCompatibleProvider {
             provider_name_str: config.provider_name,
             default_temperature: config.default_temperature,
             reasoning_effort: config.reasoning_effort,
+            streaming_enabled: config.streaming_enabled.unwrap_or(true),
         })
     }
 
@@ -667,6 +678,110 @@ impl OpenAiCompatibleProvider {
 
         Ok(Box::pin(processed))
     }
+
+    /// Non-streaming fallback when streaming is disabled.
+    ///
+    /// Source: `src/api/providers/openai.ts` — the `else` branch when
+    /// `openAiStreamingEnabled` is false. Makes a single chat completion
+    /// request and wraps the result into ApiStreamChunks.
+    async fn create_message_non_streaming(
+        &self,
+        system_prompt: &str,
+        messages: &[ApiMessage],
+        tools: Option<&Vec<serde_json::Value>>,
+        metadata: &CreateMessageMetadata,
+    ) -> Result<ApiStream> {
+        let body = self.build_stream_request_body(system_prompt, messages, tools, metadata)?;
+        // Override stream to false for non-streaming
+        let mut body = body;
+        body["stream"] = serde_json::json!(false);
+        body.as_object_mut().map(|o| o.remove("stream_options"));
+
+        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+
+        let response = self
+            .http_client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ProviderError::api_error(&self.provider_name_str, e))?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(ProviderError::api_error_response(
+                &self.provider_name_str,
+                status,
+                text,
+            ));
+        }
+
+        let (_, model_info) = self.base.get_model();
+
+        let resp: serde_json::Value = response.json().await.map_err(ProviderError::Reqwest)?;
+
+        let mut chunks: Vec<Result<ApiStreamChunk>> = Vec::new();
+
+        // Emit tool calls if present
+        if let Some(tool_calls) = resp.get("choices")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("tool_calls"))
+            .and_then(|tc| tc.as_array())
+        {
+            for (i, tc) in tool_calls.iter().enumerate() {
+                if tc.get("type").and_then(|t| t.as_str()) == Some("function") {
+                    chunks.push(Ok(ApiStreamChunk::ToolCall {
+                        id: tc.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        name: tc.get("function")
+                            .and_then(|f| f.get("name"))
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        arguments: tc.get("function")
+                            .and_then(|f| f.get("arguments"))
+                            .and_then(|a| a.as_str())
+                            .unwrap_or("{}")
+                            .to_string(),
+                    }));
+                    // Also emit tool_call_end
+                    if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
+                        chunks.push(Ok(ApiStreamChunk::ToolCallEnd { id: id.to_string() }));
+                    }
+                    let _ = i; // suppress unused warning
+                }
+            }
+        }
+
+        // Emit text content
+        let content = resp.get("choices")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_str())
+            .unwrap_or("");
+
+        chunks.push(Ok(ApiStreamChunk::Text {
+            text: content.to_string(),
+        }));
+
+        // Emit usage
+        if let Some(usage) = resp.get("usage") {
+            let openai_usage = OpenAiUsage {
+                prompt_tokens: usage.get("prompt_tokens").and_then(|v| v.as_u64()),
+                completion_tokens: usage.get("completion_tokens").and_then(|v| v.as_u64()),
+                prompt_tokens_details: usage.get("prompt_tokens_details").and_then(|d| {
+                    serde_json::from_value::<OpenAiPromptTokensDetails>(d.clone()).ok()
+                }),
+            };
+            chunks.push(Ok(process_usage_metrics(&openai_usage, &model_info)));
+        }
+
+        Ok(Box::pin(futures::stream::iter(chunks)))
+    }
 }
 
 #[async_trait]
@@ -678,6 +793,12 @@ impl Provider for OpenAiCompatibleProvider {
         tools: Option<Vec<serde_json::Value>>,
         metadata: CreateMessageMetadata,
     ) -> Result<ApiStream> {
+        // When streaming is disabled, fall back to non-streaming chat completion.
+        // Source: `src/api/providers/openai.ts` — `openAiStreamingEnabled ?? true`
+        if !self.streaming_enabled {
+            return self.create_message_non_streaming(system_prompt, &messages, tools.as_ref(), &metadata).await;
+        }
+
         let stream = self
             .create_stream(system_prompt, &messages, tools.as_ref(), &metadata)
             .await?;
