@@ -33,22 +33,20 @@ Notes:
 
 /// Prompt for `read_file`.
 pub const READ_FILE: &str = "\
-Reads a UTF-8 text file from the local filesystem. You can access any file directly by using this tool.
+Reads a file from the local filesystem. You can access any file directly by using this tool.
+Assume this tool is able to read all files on the machine. If the User provides a path to a file assume that path is valid. It is okay to read a file that does not exist; an error will be returned.
 
 Usage:
-- The `file_path` parameter must be an absolute path, not a relative path.
-- By default, it reads up to 2000 lines starting from the beginning of the file.
-- Use `offset` and `limit` to read specific ranges, especially for large files.
-- Results are returned with line numbers, starting at 1.
-- This tool can read images (PNG, JPG, etc.) — contents are presented visually.
-- This tool can read Jupyter notebooks (.ipynb) and returns all cells with outputs.
-- This tool can only read files, not directories. Use `list_directory` for directories.
-
-Notes:
-- If you read a file that exists but has empty contents, a warning will be returned.
-- It is okay to read a file that does not exist; an error will be returned.
-- Always read a file before editing it — the edit tool requires a prior read.
-- For very large files, read in chunks using offset/limit to avoid truncation.";
+- The file_path parameter must be an absolute path, not a relative path
+- By default, it reads up to 2000 lines starting from the beginning of the file
+- You can optionally specify a line offset and limit (especially handy for long files), but it's recommended to read the whole file by not providing these parameters
+- Results are returned using cat -n format, with line numbers starting at 1
+- This tool allows Claude Code to read images (eg PNG, JPG, etc). When reading an image file the contents are presented visually as Claude Code is a multimodal LLM.
+- This tool can read PDF files (.pdf). For large PDFs (more than 10 pages), you MUST provide the pages parameter to read specific page ranges (e.g., pages: \"1-5\"). Reading a large PDF without the pages parameter will fail. Maximum 20 pages per request.
+- This tool can read Jupyter notebooks (.ipynb files) and returns all cells with their outputs, combining code, text, and visualizations.
+- This tool can only read files, not directories. To read a directory, use an ls command via the Bash tool.
+- You will regularly be asked to read screenshots. If the user provides a path to a screenshot, ALWAYS use this tool to view the file at the path. This tool will work with all temporary file paths.
+- If you read a file that exists but has empty contents you will receive a system reminder warning in place of file contents.";
 
 /// Prompt for `search_text`.
 pub const SEARCH_TEXT: &str = "\
@@ -69,56 +67,38 @@ Notes:
 
 /// Prompt for `write_file`.
 pub const WRITE_FILE: &str = "\
-Writes a file to the local filesystem. Creates the file if it does not exist; overwrites if it does.
+Writes a file to the local filesystem.
 
 Usage:
-- The `file_path` parameter must be an absolute path, not a relative path.
-- The `content` parameter must contain the COMPLETE file content — partial writes are not supported.
-- If this is an existing file, you MUST read it first to understand its current contents.
-- Prefer the `edit_file` or `replace_in_file` tool for modifying existing files — it only sends the diff.
-
-Notes:
-- NEVER create documentation files (*.md) or README files unless explicitly requested.
-- This tool automatically creates any intermediate directories needed.
-- Do NOT use this tool for small edits to existing files — use `edit_file` instead.
-- ALWAYS provide the COMPLETE intended content. Partial updates or placeholders are forbidden.";
+- This tool will overwrite the existing file if there is one at the provided path.
+- If this is an existing file, you MUST use the Read tool first to read the file's contents. This tool will fail if you did not read the file first.
+- Prefer the Edit tool for modifying existing files \u{2014} it only sends the diff. Only use this tool to create new files or for complete rewrites.
+- NEVER create documentation files (*.md) or README files unless explicitly requested by the User.
+- Only use emojis if the user explicitly requests it. Avoid writing emojis to files unless asked.";
 
 /// Prompt for `replace_in_file`.
 pub const REPLACE_IN_FILE: &str = "\
-Performs a simple string replacement in an existing file.
+Performs exact string replacements in files.
 
 Usage:
-- You must have read the file at least once before editing. The tool will error otherwise.
-- The `file_path` parameter must be an absolute path, not a relative path.
-- The `search` string must match exactly, including whitespace and indentation.
-- The `replace` string replaces the first occurrence of `search` in the file.
-- Set `all` to true to replace every occurrence of `search` in the file.
-- The edit will FAIL if `search` is not found in the file.
-
-Notes:
-- Always preserve exact indentation (tabs/spaces) when writing the search string.
-- For multiple edits in one operation, use `edit_file` instead.
-- Use `all` for renaming variables or updating repeated patterns across a file.
-- If the search string is not unique and `all` is false, only the first match is replaced.";
+- You must use your `Read` tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file.
+- When editing text from Read tool output, ensure you preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix. The line number prefix format is: line number + tab. Everything after that is the actual file content to match. Never include any part of the line number prefix in the old_string or new_string.
+- ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.
+- Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.
+- The edit will FAIL if `old_string` is not unique in the file. Either provide a larger string with more surrounding context to make it unique or use `replace_all` to change every instance of `old_string`.
+- Use `replace_all` for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance.";
 
 /// Prompt for `edit_file`.
 pub const EDIT_FILE: &str = "\
-Performs ordered search/replace edits on a text file. Applies multiple edits in sequence.
+Performs exact string replacements in files.
 
 Usage:
-- You must read the file at least once before editing. The tool will error otherwise.
-- The `file_path` parameter must be an absolute path, not a relative path.
-- The `old_string` string must match exactly, including whitespace and indentation.
-- The `new_string` string replaces `old_string` and must be different from it.
-- The edit will FAIL if `old_string` is not unique in the file. Either provide more context or use `replace_all`.
-- Use `replace_all` for replacing and renaming strings across the file.
-
-Notes:
-- ALWAYS prefer editing existing files over creating new files.
-- Use the smallest search string that is clearly unique — usually 2-4 adjacent lines is sufficient.
-- When editing text from read_file output, ensure you preserve the exact indentation.
-- Never include line number prefixes in the search or replace strings.
-- For multiple replacements, call this tool multiple times or use `replace_all` when the replacement is identical.";
+- You must use your `Read` tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file.
+- When editing text from Read tool output, ensure you preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix. The line number prefix format is: line number + tab. Everything after that is the actual file content to match. Never include any part of the line number prefix in the old_string or new_string.
+- ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.
+- Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.
+- The edit will FAIL if `old_string` is not unique in the file. Either provide a larger string with more surrounding context to make it unique or use `replace_all` to change every instance of `old_string`.
+- Use `replace_all` for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance.";
 
 /// Prompt for `bash_command`.
 pub const BASH_COMMAND: &str = "\
@@ -131,11 +111,12 @@ IMPORTANT: Avoid using this tool to run `find`, `grep`, `cat`, `head`, `tail`, `
 `awk`, or `echo` commands, unless explicitly instructed or after you have verified that \
 a dedicated tool cannot accomplish your task. Instead, use the appropriate dedicated tool \
 as this will provide a much better experience for the user:
+
 - File search: Use Glob (NOT find or ls)
 - Content search: Use Grep (NOT grep or rg)
 - Read files: Use Read (NOT cat/head/tail)
 - Edit files: Use Edit (NOT sed/awk)
-- Write files: Use Write (NOT echo/cat)
+- Write files: Use Write (NOT echo >/cat <<EOF)
 - Communication: Output text directly (NOT echo/printf)
 
 While the Bash tool can do similar things, it's better to use the built-in tools as they \
@@ -149,15 +130,16 @@ to verify the parent directory exists and is the correct location.
 - Try to maintain your current working directory throughout the session by using absolute \
 paths and avoiding usage of `cd`. You may use `cd` if the User explicitly requests it.
 - You may specify an optional timeout in milliseconds (up to 600000ms / 10 minutes). By \
-default, your command will timeout after 600000ms (10 minutes).
+default, your command will timeout after 120000ms (2 minutes).
 - You can use the `run_in_background` parameter to run the command in the background. \
 Only use this if you don't need the result immediately and are OK being notified when the \
-command completes later. You do not need to check the output right away — you'll be \
+command completes later. You do not need to check the output right away - you'll be \
 notified when it finishes. You do not need to use '&' at the end of the command when \
 using this parameter.
 - When issuing multiple commands:
   - If the commands are independent and can run in parallel, make multiple Bash tool \
-calls in a single message.
+calls in a single message. Example: if you need to run \"git status\" and \"git diff\", \
+send a single message with two Bash tool calls in parallel.
   - If the commands depend on each other and must run sequentially, use a single Bash \
 call with '&&' to chain them together.
   - Use ';' only when you need to run commands sequentially but don't care if earlier \
@@ -166,16 +148,21 @@ commands fail.
 - For git commands:
   - Prefer to create a new commit rather than amending an existing commit.
   - Before running destructive operations (e.g., git reset --hard, git push --force, \
-git checkout --), consider whether there is a safer alternative.
-  - Never skip hooks (--no-verify) or bypass signing (--no-gpg-sign) unless the user \
-has explicitly asked for it.
+git checkout --), consider whether there is a safer alternative that achieves the same \
+goal. Only use destructive operations when they are truly the best approach.
+  - Never skip hooks (--no-verify) or bypass signing (--no-gpg-sign, -c \
+commit.gpgsign=false) unless the user has explicitly asked for it. If a hook fails, \
+investigate and fix the underlying issue.
 - Avoid unnecessary `sleep` commands:
   - Do not sleep between commands that can run immediately — just run them.
+  - If you must poll an external process, use a check command (e.g. `gh run view`) \
+rather than sleeping first.
   - If your command is long running and you would like to be notified when it finishes — \
 use `run_in_background`. No sleep needed.
   - Do not retry failing commands in a sleep loop — diagnose the root cause.
   - If waiting for a background task you started with `run_in_background`, you will be \
-notified when it completes — do not poll.";
+notified when it completes — do not poll.
+  - If you must sleep, keep the duration short (1-5 seconds) to avoid blocking the user.";
 
 /// Prompt for `glob`.
 pub const GLOB: &str = "\
