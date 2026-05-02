@@ -472,7 +472,25 @@ impl ApiClient {
 
         // System prompt.
         if !options.system_prompt.is_empty() {
-            body["system"] = json!(options.system_prompt);
+            let mut system = options.system_prompt.clone();
+
+            // Prepend billing attribution as first block for Anthropic providers.
+            if matches!(provider.protocol, ProviderProtocol::Anthropic) {
+                let messages = body
+                    .get("messages")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let fp = crate::fingerprint::compute_attribution_fingerprint(
+                    &messages,
+                    claude_config::runtime_version(),
+                );
+                let attr_text =
+                    crate::attribution::build_billing_attribution_text(&fp);
+                system.insert(0, json!({"type": "text", "text": attr_text}));
+            }
+
+            body["system"] = json!(system);
         }
 
         // Tools.
@@ -591,7 +609,21 @@ fn build_auth_headers(provider: &ProviderConfig) -> Result<HeaderMap> {
     headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
 
     if matches!(provider.protocol, ProviderProtocol::Anthropic) {
+        headers.insert(
+            HeaderName::from_static("x-app"),
+            HeaderValue::from_static("cli"),
+        );
         headers.insert(USER_AGENT, HeaderValue::from_str(&super::claude_code_user_agent())?);
+        let session_id = provider
+            .request_metadata
+            .get("session_id")
+            .filter(|v| !v.trim().is_empty())
+            .cloned()
+            .unwrap_or_else(|| "unknown".to_owned());
+        headers.insert(
+            HeaderName::from_static("x-claude-code-session-id"),
+            HeaderValue::from_str(&session_id)?,
+        );
         headers.insert(
             HeaderName::from_static("anthropic-version"),
             HeaderValue::from_static("2023-06-01"),
