@@ -1951,13 +1951,6 @@ async fn build_anthropic_request_body(
         "max_tokens": provider.max_output_tokens,
         "stream": stream,
     });
-    if body
-        .get("tools")
-        .and_then(Value::as_array)
-        .is_some_and(|tools| !tools.is_empty())
-    {
-        body["tool_choice"] = json!({"type": "auto"});
-    }
 
     merge_anthropic_extra_body_params(&mut body);
     apply_anthropic_request_metadata(&mut body, provider, request_context);
@@ -2461,16 +2454,7 @@ fn add_stable_cache_control(body: &mut Value, is_resume: bool) {
         }
     }
 
-    // 2. Tools — mark the last tool with cache_control.
-    //    In resume scenarios, do NOT add or remove any tools to keep the list stable.
-    if let Some(tools) = body.get_mut("tools")
-        && let Some(tools_arr) = tools.as_array_mut()
-        && let Some(last_tool) = tools_arr.last_mut()
-    {
-        last_tool["cache_control"] = json!({"type": "ephemeral"});
-    }
-
-    // 3. Most recent user message — ensure content is array format, mark cache_control.
+    // 2. Most recent user message — ensure content is array format, mark cache_control.
     if let Some(messages) = body.get_mut("messages")
         && let Some(msg_arr) = messages.as_array_mut()
     {
@@ -3034,7 +3018,6 @@ mod tests {
         )
         .await;
 
-        assert_eq!(body["tool_choice"], json!({"type": "auto"}));
         assert_eq!(body["output_config"]["task_budget"]["total"], 12_000);
         assert_eq!(body["output_config"]["task_budget"]["remaining"], 8_000);
         assert_eq!(body["speed"], "fast");
