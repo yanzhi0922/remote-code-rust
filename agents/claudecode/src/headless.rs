@@ -7,7 +7,7 @@ use std::sync::{
 use std::time::Instant;
 
 use anyhow::Result;
-use claude_config::{RUNTIME_VERSION, RuntimeConfig};
+use claude_config::{runtime_version, RuntimeConfig};
 use claude_core::{InputFormat, PermissionMode, SessionState};
 use claude_permissions::{
     LayeredPermissionBroker, PermissionBroker, PermissionClass, PermissionDecision,
@@ -57,7 +57,7 @@ pub(crate) async fn run_headless(
                     "missing".to_owned()
                 }
             }),
-            version: RUNTIME_VERSION.to_owned(),
+            version: runtime_version().to_owned(),
             cwd: config.cwd.display().to_string(),
             tools: runtime_provider_tool_specs()
                 .await

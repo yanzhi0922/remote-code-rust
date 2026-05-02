@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use claude_config::{RUNTIME_VERSION, RuntimeConfig, SettingSource, validate_provider_config};
+use claude_config::{runtime_version, RuntimeConfig, SettingSource, validate_provider_config};
 use claude_mcp::McpClientInfo;
 use claude_permissions::{load_layered_rules, rules::summarize_rule_sources};
 use claude_tools::mcp_runtime::observe_runtime_mcp_servers;
@@ -145,7 +145,7 @@ pub(crate) async fn collect_report(
         config,
         &[],
         args.probe_mcp,
-        &McpClientInfo::new("remote-code-rust", RUNTIME_VERSION),
+        &McpClientInfo::new("remote-code-rust", runtime_version()),
     )
     .await;
 
