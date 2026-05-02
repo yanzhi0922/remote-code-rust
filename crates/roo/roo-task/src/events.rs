@@ -175,6 +175,13 @@ pub enum TaskEvent {
     /// API request started.
     /// Source: TS `recursivelyMakeClineRequests()` → `say("api_req_started")`
     ApiRequestStarted { task_id: String },
+    /// API request retry delayed (exponential backoff countdown).
+    /// Source: TS `backoffAndAnnounce()` → `say("api_req_retry_delayed", ...)`
+    ApiRequestRetryDelayed {
+        task_id: String,
+        delay_seconds: u64,
+        retry_attempt: u32,
+    },
     /// API request finished.
     /// Source: TS `recursivelyMakeClineRequests()` → update api_req_started
     ApiRequestFinished {
@@ -662,6 +669,23 @@ impl TaskEventEmitter {
     pub fn emit_api_request_started(&self, task_id: &str) {
         self.emit(&TaskEvent::ApiRequestStarted {
             task_id: task_id.to_string(),
+        });
+    }
+
+    /// Emit an API request retry delayed event.
+    ///
+    /// Source: TS `backoffAndAnnounce()` → `say("api_req_retry_delayed", ...)`.
+    /// Emitted during exponential backoff countdown before retrying a failed API request.
+    pub fn emit_api_request_retry_delayed(
+        &self,
+        task_id: &str,
+        delay_seconds: u64,
+        retry_attempt: u32,
+    ) {
+        self.emit(&TaskEvent::ApiRequestRetryDelayed {
+            task_id: task_id.to_string(),
+            delay_seconds,
+            retry_attempt,
         });
     }
 

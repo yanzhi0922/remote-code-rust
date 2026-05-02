@@ -58,13 +58,6 @@ pub struct LoopControl {
     ///
     /// Source: `src/core/task/Task.ts` — `consecutiveMistakeCountForEditFile`
     pub consecutive_mistake_count_for_edit_file: HashMap<String, usize>,
-    /// Whether the one-time mistake limit grace has been used.
-    ///
-    /// When the mistake limit is reached for the first time, the engine can
-    /// reset `consecutive_mistake_count` to 0 and set this flag to `true`,
-    /// giving the model one extra chance. If the limit is reached again,
-    /// the task terminates.
-    pub mistake_grace_used: bool,
     /// Per-tool consecutive error counts.
     ///
     /// Tracks how many times each tool has failed consecutively.
@@ -89,7 +82,6 @@ impl LoopControl {
             consecutive_no_assistant_messages_count: 0,
             consecutive_mistake_count_for_apply_diff: HashMap::new(),
             consecutive_mistake_count_for_edit_file: HashMap::new(),
-            mistake_grace_used: false,
             consecutive_errors: HashMap::new(),
         }
     }
@@ -107,7 +99,6 @@ impl LoopControl {
             consecutive_no_assistant_messages_count: 0,
             consecutive_mistake_count_for_apply_diff: HashMap::new(),
             consecutive_mistake_count_for_edit_file: HashMap::new(),
-            mistake_grace_used: false,
             consecutive_errors: HashMap::new(),
         }
     }
@@ -256,23 +247,6 @@ impl LoopControl {
         self.consecutive_no_assistant_messages_count < 2
     }
 
-    /// Try to use the one-time mistake limit grace.
-    ///
-    /// When the consecutive mistake limit is reached for the first time,
-    /// this method resets the mistake count and marks grace as used,
-    /// giving the model one extra chance. Returns `true` if grace was
-    /// applied (i.e., this is the first time the limit was reached).
-    ///
-    /// If grace has already been used, returns `false` and does nothing.
-    pub fn try_use_mistake_grace(&mut self) -> bool {
-        if self.mistake_grace_used {
-            return false;
-        }
-        self.mistake_grace_used = true;
-        self.consecutive_mistake_count = 0;
-        true
-    }
-
     /// Reset the consecutive mistake count.
     ///
     /// Called when a successful action occurs. Also resets per-tool mistake counts.
@@ -383,7 +357,6 @@ mod tests {
         assert_eq!(lc.consecutive_no_assistant_messages_count, 0);
         assert!(lc.consecutive_mistake_count_for_apply_diff.is_empty());
         assert!(lc.consecutive_mistake_count_for_edit_file.is_empty());
-        assert!(!lc.mistake_grace_used);
         assert!(lc.consecutive_errors.is_empty());
     }
 
@@ -697,47 +670,6 @@ mod tests {
         lc.record_no_tool_use(); // count=4, mistakes=3
         assert_eq!(lc.consecutive_mistake_count, 3);
         assert!(!lc.should_continue()); // 3 >= 3
-    }
-
-    #[test]
-    fn test_loop_control_try_use_mistake_grace_first_time() {
-        let mut lc = LoopControl::new(3);
-        // Reach the mistake limit
-        lc.record_mistake(); // 1
-        lc.record_mistake(); // 2
-        lc.record_mistake(); // 3
-        assert!(!lc.should_continue()); // 3 >= 3
-
-        // Use grace: should reset mistakes and allow continuing
-        let granted = lc.try_use_mistake_grace();
-        assert!(granted);
-        assert!(lc.mistake_grace_used);
-        assert_eq!(lc.consecutive_mistake_count, 0);
-        assert!(lc.should_continue()); // 0 < 3
-    }
-
-    #[test]
-    fn test_loop_control_try_use_mistake_grace_already_used() {
-        let mut lc = LoopControl::new(3);
-        lc.record_mistake();
-        lc.record_mistake();
-        lc.record_mistake();
-
-        // First grace: succeeds
-        assert!(lc.try_use_mistake_grace());
-        assert_eq!(lc.consecutive_mistake_count, 0);
-
-        // Accumulate mistakes again
-        lc.record_mistake(); // 1
-        lc.record_mistake(); // 2
-        lc.record_mistake(); // 3
-        assert!(!lc.should_continue()); // 3 >= 3
-
-        // Second grace: denied
-        let granted = lc.try_use_mistake_grace();
-        assert!(!granted);
-        assert_eq!(lc.consecutive_mistake_count, 3);
-        assert!(!lc.should_continue()); // still at limit
     }
 
     // ---- consecutive_errors tests ----

@@ -3382,6 +3382,14 @@ fn task_event_to_notification(event: &TaskEvent, task_id: &str) -> Option<Messag
             "apiRequestStarted",
             json!({"taskId": task_id}),
         ),
+        TaskEvent::ApiRequestRetryDelayed { delay_seconds, retry_attempt, .. } => (
+            "apiRequestRetryDelayed",
+            json!({
+                "taskId": task_id,
+                "delaySeconds": delay_seconds,
+                "retryAttempt": retry_attempt,
+            }),
+        ),
         TaskEvent::ApiRequestFinished { cost, tokens_in, tokens_out, .. } => (
             "apiRequestFinished",
             json!({
