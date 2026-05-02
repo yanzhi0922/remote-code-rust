@@ -175,21 +175,21 @@ pub const GLOB: &str = "\
 
 /// Prompt for `grep`.
 pub const GREP: &str = "\
-A powerful search tool built on ripgrep.
+A powerful search tool built on ripgrep
 
-Usage:
-- ALWAYS use Grep for search tasks. NEVER invoke `grep` or `rg` as a Bash \
+\t  Usage:
+\t  - ALWAYS use Grep for search tasks. NEVER invoke `grep` or `rg` as a Bash \
 command. The Grep tool has been optimized for correct permissions and access.
-- Supports full regex syntax (e.g., \"log.*Error\", \"function\\s+\\w+\").
-- Filter files with glob parameter (e.g., \"*.js\", \"**/*.tsx\") or type \
-parameter (e.g., \"js\", \"py\", \"rust\").
-- Output modes: \"content\" shows matching lines, \"files_with_matches\" \
-shows only file paths (default), \"count\" shows match counts.
-- Use Agent tool for open-ended searches requiring multiple rounds.
-- Pattern syntax: Uses ripgrep (not grep) - literal braces need escaping \
-(use `interface\\{\\}` to find `interface{}` in Go code).
-- Multiline matching: By default patterns match within single lines only. \
-For cross-line patterns like `struct \\{[\\s\\S]*?field`, use `multiline: true`.";
+\t  - Supports full regex syntax (e.g., \"log.*Error\", \"function\\s+\\w+\")
+\t  - Filter files with glob parameter (e.g., \"*.js\", \"**/*.tsx\") or type \
+parameter (e.g., \"js\", \"py\", \"rust\")
+\t  - Output modes: \"content\" shows matching lines, \"files_with_matches\" \
+shows only file paths (default), \"count\" shows match counts
+\t  - Use Agent tool for open-ended searches requiring multiple rounds
+\t  - Pattern syntax: Uses ripgrep (not grep) - literal braces need escaping \
+(use `interface\\{\\}` to find `interface{}` in Go code)
+\t  - Multiline matching: By default patterns match within single lines only. \
+For cross-line patterns like `struct \\{[\\s\\S]*?field`, use `multiline: true`";
 
 /// Prompt for `web_fetch`.
 pub const WEB_FETCH: &str = "\
@@ -218,34 +218,115 @@ view, gh issue view, gh api).";
 
 /// Prompt for `agent`.
 pub const AGENT: &str = "\
-Spawn a sub-agent to complete a task. The sub-agent runs in its own context and returns the result.
+Launch a new agent to handle complex, multi-step tasks autonomously.
 
-Usage:
-- Write a detailed `prompt` describing what the sub-agent should accomplish and why.
-- Use `subagent_type` to choose a specialized built-in agent. Current built-ins are `general-purpose`, `Explore`, `Plan`, and `verification`.
-- If runtime fork mode is enabled, omitting `subagent_type` forks yourself and inherits your conversation context. Otherwise the default `general-purpose` agent is used.
-- Optionally provide a short `description` to summarize the assignment.
-- Optionally provide `name` together with `team_name` to register a live teammate identity for this run.
-- Optionally set `mode` to control the child runtime. Use `default` for normal execution or `plan` when the teammate must enter plan mode before implementation.
-- Optionally override the sub-agent model with `model`. Omit it or use `inherit` to reuse the parent model. Do not set `model` on an implicit fork.
-- Optionally restrict available tools via the `tools` array.
-- Fresh agents start with zero context — brief them like a smart colleague who just walked in. Forks inherit your context and should receive a directive, not a full restatement.
-- Explain what you're trying to accomplish, what you've already learned, and what the agent should do.
-- If you need a short response, say so ('report in under 200 words').
+The Agent tool launches specialized agents (subprocesses) that autonomously handle \
+complex tasks. Each agent type has specific capabilities and tools available to it.
 
-Writing the prompt:
+Available agent types and the tools they have access to:
+- general-purpose: Use for any complex task that requires multiple steps (Tools: All tools)
+- Explore: Use for open-ended exploration and research tasks (Tools: Read, Glob, Grep, Bash)
+- Plan: Use for planning and designing implementation approaches (Tools: Read, Glob, Grep, Bash)
+- verification: Use for verifying and testing implementations (Tools: Read, Glob, Grep, Bash, Write, Edit)
+
+When using the Agent tool, specify a subagent_type parameter to select which agent \
+type to use. If omitted, the general-purpose agent is used.
+
+When NOT to use the Agent tool:
+- If you want to read a specific file path, use the Read tool or the Glob tool \
+instead of the Agent tool, to find the match more quickly
+- If you are searching for a specific class definition like \"class Foo\", use \
+the Glob tool instead, to find the match more quickly
+- If you are searching for code within a specific file or set of 2-3 files, use \
+the Read tool instead of the Agent tool, to find the match more quickly
+- Other tasks that are not related to the agent descriptions above
+
+Usage notes:
+- Always include a short description (3-5 words) summarizing what the agent will do
+- Launch multiple agents concurrently whenever possible, to maximize performance; \
+to do that, use a single message with multiple tool uses
+- When the agent is done, it will return a single message back to you. The result \
+returned by the agent is not visible to the user. To show the user the result, you \
+should send a text message back to the user with a concise summary of the result.
+- You can optionally run agents in the background using the run_in_background \
+parameter. When an agent runs in the background, you will be automatically notified \
+when it completes — do NOT sleep, poll, or proactively check on its progress. \
+Continue with other work or respond to the user instead.
+- **Foreground vs background**: Use foreground (default) when you need the agent's \
+results before you can proceed — e.g., research agents whose findings inform your \
+next steps. Use background when you have genuinely independent work to do in parallel.
+- To continue a previously spawned agent, use SendMessage with the agent's ID or \
+name as the `to` field. The agent resumes with its full context preserved. Each \
+Agent invocation starts fresh — provide a complete task description.
+- The agent's outputs should generally be trusted
+- Clearly tell the agent whether you expect it to write code or just to do research \
+(search, file reads, web fetches, etc.), since it is not aware of the user's intent
+- If the agent description mentions that it should be used proactively, then you \
+should try your best to use it without the user having to ask for it first. Use \
+your judgement.
+- If the user specifies that they want you to run agents \"in parallel\", you MUST \
+send a single message with multiple Agent tool use content blocks. For example, if \
+you need to launch both a build-validator agent and a test-runner agent in parallel, \
+send a single message with both tool calls.
+- You can optionally set `isolation: \"worktree\"` to run the agent in a temporary \
+git worktree, giving it an isolated copy of the repository. The worktree is \
+automatically cleaned up if the agent makes no changes; if changes are made, the \
+worktree path and branch are returned in the result.
+
+## Writing the prompt
+
+Brief the agent like a smart colleague who just walked into the room — it hasn't \
+seen this conversation, doesn't know what you've tried, doesn't understand why this \
+task matters.
 - Explain what you're trying to accomplish and why.
 - Describe what you've already learned or ruled out.
-- Give enough context for the agent to make judgment calls.
-- Lookups: hand over the exact command. Investigations: hand over the question.
-- Terse command-style prompts produce shallow, generic work.
+- Give enough context about the surrounding problem that the agent can make judgment \
+calls rather than just following a narrow instruction.
+- If you need a short response, say so (\"report in under 200 words\").
+- Lookups: hand over the exact command. Investigations: hand over the question — \
+prescribed steps become dead weight when the premise is wrong.
 
-Notes:
-- Never delegate understanding. Don't write 'based on your findings, fix the bug'.
-- Include file paths, line numbers, and what specifically to change.
-- To continue a previously spawned agent or teammate, use `send_message` with the agent ID or name.
-- Fresh agents cannot see this conversation — provide all necessary context in the prompt. Forks can.
-- Teammates cannot spawn other teammates. Omit `name`, `team_name`, and `mode` when you only need a normal sub-agent.";
+Terse command-style prompts produce shallow, generic work.
+
+**Never delegate understanding.** Don't write \"based on your findings, fix the bug\" \
+or \"based on the research, implement it.\" Those phrases push synthesis onto the \
+agent instead of doing it yourself. Write prompts that prove you understood: include \
+file paths, line numbers, what specifically to change.
+
+Example usage:
+
+<example_agent_descriptions>
+\"test-runner\": use this agent after you are done writing code to run tests
+\"greeting-responder\": use this agent to respond to user greetings with a friendly joke
+</example_agent_descriptions>
+
+<example>
+user: \"Please write a function that checks if a number is prime\"
+assistant: I'm going to use the Write tool to write the following code:
+<code>
+function isPrime(n) {
+  if (n <= 1) return false
+  for (let i = 2; i * i <= n; i++) {
+    if (n % i === 0) return false
+  }
+  return true
+}
+</code>
+<commentary>
+Since a significant piece of code was written and the task was completed, now use \
+the test-runner agent to run the tests
+</commentary>
+assistant: Uses the Agent tool to launch the test-runner agent
+</example>
+
+<example>
+user: \"Hello\"
+<commentary>
+Since the user is greeting, use the greeting-responder agent to respond with a \
+friendly joke
+</commentary>
+assistant: \"I'm going to use the Agent tool to launch the greeting-responder agent\"
+</example>";
 
 // ── System tools (P1) ────────────────────────────────────────────────────────
 
@@ -407,7 +488,7 @@ User: Can you add a comment to the calculateTotal function to explain \
 what it does?
 Assistant: Sure, let me add a comment to the calculateTotal function to \
 explain what it does.
-* Uses the edit_file tool to add a comment to the calculateTotal function *
+* Uses the Edit tool to add a comment to the calculateTotal function *
 
 <reasoning>
 The assistant did not use the todo list because this is a single, \
@@ -926,7 +1007,7 @@ It also helps the user understand the progress of the task and overall progress 
 Use this tool proactively in these scenarios:
 
 - Complex multi-step tasks - When a task requires 3 or more distinct steps or actions
-- Non-trivial and complex tasks - Tasks that require careful planning or multiple operations and potentially assigned to teammates
+- Non-trivial and complex tasks - Tasks that require careful planning or multiple operations
 - Plan mode - When using plan mode, create a task list to track the work
 - User explicitly requests todo list - When the user directly asks you to use the todo list
 - User provides multiple tasks - When users provide a list of things to be done (numbered or comma-separated)
@@ -956,8 +1037,6 @@ All tasks are created with status `pending`.
 
 - Create tasks with clear, specific subjects that describe the outcome
 - After creating tasks, use TaskUpdate to set up dependencies (blocks/blockedBy) if needed
-- Include enough detail in the description for another agent to understand and complete the task
-- New tasks are created with status 'pending' and no owner - use TaskUpdate with the `owner` parameter to assign them
 - Check TaskList first to avoid creating duplicate tasks";
 
 /// Prompt for `task_get`.
@@ -1585,9 +1664,29 @@ including links as markdown hyperlinks
 - Use this tool for accessing information beyond Claude's knowledge cutoff
 - Searches are performed automatically within a single API call
 
+CRITICAL REQUIREMENT - You MUST follow this:
+  - After answering the user's question, you MUST include a \"Sources:\" \
+section at the end of your response
+  - In the Sources section, list all relevant URLs from the search results \
+as markdown hyperlinks: [Title](URL)
+  - This is MANDATORY - never skip including sources in your response
+  - Example format:
+
+    [Your answer here]
+
+    Sources:
+    - [Source Title 1](https://example.com/1)
+    - [Source Title 2](https://example.com/2)
+
 Usage notes:
   - Domain filtering is supported to include or block specific websites
-  - Web search is only available in the US";
+  - Web search is only available in the US
+
+IMPORTANT - Use the correct year in search queries:
+  - The current month is May 2026. You MUST use this year when searching \
+for recent information, documentation, or current events.
+  - Example: If the user asks for \"latest React docs\", search for \
+\"React documentation\" with the current year, NOT last year";
 
 /// Prompt for `tungsten`.
 pub const TUNGSTEN: &str = "\

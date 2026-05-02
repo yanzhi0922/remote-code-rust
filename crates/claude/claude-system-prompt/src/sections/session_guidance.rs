@@ -11,7 +11,7 @@ use crate::sections::{BulletItem, SystemPromptSection, section_with_bullets};
 const ASK_USER_QUESTION_TOOL_NAME: &str = "AskUserQuestion";
 const AGENT_TOOL_NAME: &str = "Agent";
 const SKILL_TOOL_NAME: &str = "Skill";
-const DISCOVER_SKILLS_TOOL_NAME: &str = "DiscoverSkills";
+const DISCOVER_SKILLS_TOOL_NAME: &str = "discover_skills";
 const BASH_TOOL_NAME: &str = "Bash";
 const GLOB_TOOL_NAME: &str = "Glob";
 const GREP_TOOL_NAME: &str = "Grep";
@@ -33,8 +33,7 @@ impl SystemPromptSection for SessionGuidanceSection {
         let has_skills = ctx.features.user_invocable_skills_available
             && ctx.enabled_tools.contains(SKILL_TOOL_NAME);
         let has_discover_skills = has_skills
-            && (ctx.enabled_tools.contains(DISCOVER_SKILLS_TOOL_NAME)
-                || ctx.enabled_tools.contains("discover_skills"));
+            && ctx.enabled_tools.contains(DISCOVER_SKILLS_TOOL_NAME);
         let search_tools = if ctx.features.embedded_search_tools {
             format!("`find` or `grep` via the {BASH_TOOL_NAME} tool")
         } else {
@@ -83,10 +82,9 @@ impl SystemPromptSection for SessionGuidanceSection {
         }
 
         if has_discover_skills {
-            items.push(BulletItem::Single(
-                "Relevant skills are automatically surfaced each turn as \"Skills relevant to your task:\" reminders. If you're about to do something those don't cover — a mid-task pivot, an unusual workflow, a multi-step plan — call DiscoverSkills with a specific description of what you're doing. Skills already visible or loaded are filtered automatically. Skip this if the surfaced skills already cover your next action."
-                    .to_string(),
-            ));
+            items.push(BulletItem::Single(format!(
+                "Relevant skills are automatically surfaced each turn as \"Skills relevant to your task:\" reminders. If you're about to do something those don't cover \u{2014} a mid-task pivot, an unusual workflow, a multi-step plan \u{2014} call {DISCOVER_SKILLS_TOOL_NAME} with a specific description of what you're doing. Skills already visible or loaded are filtered automatically. Skip this if the surfaced skills already cover your next action."
+            )));
         }
 
         if has_agent && ctx.features.verification_agent_enabled {
