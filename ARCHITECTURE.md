@@ -30,7 +30,7 @@ The codex and roo-code directories are excluded from the main repo via `.gitigno
 - `claude-core`: shared runtime types, errors, conversation model, session states, hook types, tool types
 - `claude-config`: CLI parsing, env loading, config precedence, profile resolution, provider config, legacy import
 - `claude-protocol`: typed runtime events plus compatibility serializers for `stream-json`
-- `claude-provider`: provider normalization, request shaping, transport, retries, streaming (SSE), failover, cost tracking, context management
+- `claude-provider`: provider normalization, request shaping, transport, retries, streaming (SSE), failover, cost tracking, context management, **message normalization** (role alternation, tool pairing, thinking cleanup), **stream idle watchdog**, **thinking budget clamping**
 - `claude-session`: session persistence (SQLite + NDJSON), indexes, exports, transcript appenders, resume loading, replay, memory system
 - `claude-tools`: typed tool registry, 65+ built-in tools, tool execution with permission checks, BM25 search engine, lazy loading, sandbox execution
 - `claude-permissions`: permission policies (5 modes), approval requests, tool classification, rule engine with wildcard matching, audit records
@@ -222,6 +222,37 @@ The streaming subsystem provides real-time callbacks:
 - Prompt caching with `cache_control` breakpoints
 - Automatic cache breakpoint insertion for system prompts and large tool definitions
 - Cache hit/miss tracking in cost telemetry
+
+### Message Normalization Pipeline
+
+Before sending messages to the Anthropic API, `claude-provider/src/normalize.rs` runs a 6-pass normalization pipeline to ensure API contract compliance:
+
+1. **Tool-use/tool-result pairing** — every `tool_use` block in an assistant message must have a matching `tool_result` in the next user message; missing results get synthetic error responses injected
+2. **Consecutive same-role merge** — the API requires strict user/assistant alternation; consecutive messages of the same role are merged (content concatenated, duplicates deduplicated)
+3. **Orphaned thinking-only removal** — assistant messages containing only thinking blocks (no text/tool_use) are removed
+4. **Trailing thinking strip** — thinking/redacted_thinking blocks at the end of the last assistant message are stripped (API rejects mismatched signatures)
+5. **Whitespace-only assistant removal** — assistant messages with only whitespace content are removed
+6. **Non-empty content guarantee** — every assistant message is ensured to have at least one content block
+
+The pipeline is order-sensitive — filters run first, then a second merge pass handles consecutive same-role messages created by filters.
+
+### Stream Idle Watchdog
+
+All SSE streaming connections (OpenAI, Anthropic, Bedrock, Vertex) are wrapped with an idle timeout:
+
+- Default: 90 seconds (`DEFAULT_STREAM_IDLE_TIMEOUT_MS`)
+- Configurable via `CLAUDE_STREAM_IDLE_TIMEOUT_MS` environment variable
+- Can be disabled via `CLAUDE_STREAM_WATCHDOG_DISABLED=1`
+- On timeout, the stream is classified as a streaming error and triggers existing fallback/retry logic
+- Prevents hung connections from blocking the conversation loop indefinitely
+
+### Thinking Budget Clamping
+
+When extended thinking is enabled, the `budget_tokens` parameter is clamped to prevent API errors:
+
+- Clamped to `min(requested_budget, max_output_tokens - 1)`
+- Ensures the thinking budget never exceeds the available output token space
+- Applied in `apply_anthropic_thinking_options()` before request submission
 
 ## Tool System Architecture
 

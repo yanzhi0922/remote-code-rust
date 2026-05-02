@@ -280,6 +280,29 @@ Deliverables:
 - [ ] Roo MCP 集成 — 在 `send_message()` 中集成 `McpServerConnection`
 - [ ] 端到端多 Agent 集成测试
 
+## Phase 18.5: Provider API Contract Hardening — ✅ COMPLETE
+
+Objective: fix critical API contract violations causing 400 errors in production.
+
+Deliverables:
+
+- ✅ Message normalization pipeline (`claude-provider/src/normalize.rs`) — 6-pass pipeline ensuring Anthropic API contract: role alternation, tool_use/tool_result pairing, orphaned thinking removal, trailing thinking strip, whitespace-only filter, non-empty content guarantee (11 unit tests)
+- ✅ Stream idle watchdog — 90s configurable timeout (`CLAUDE_STREAM_IDLE_TIMEOUT_MS`) for all SSE streaming paths (OpenAI, Anthropic, Bedrock, Vertex), triggers fallback/retry on timeout (4 unit tests)
+- ✅ Thinking budget clamping — `min(budget, maxTokens - 1)` prevents API errors when extended thinking budget exceeds output token space (4 unit tests)
+- ✅ Model family references updated — Opus 4.6 → 4.7, Haiku model ID updated, knowledge cutoff added
+- ✅ Grep tool schema expanded — from 4 fields to 14+ (glob, context lines, case-insensitive, type filtering, multiline, pagination, offset) matching TS reference
+- ✅ TodoWrite schema enhanced — added `activeForm` field for spinner text during `in_progress` status
+- ✅ Compact engine improvements — expanded auto strategy, attachment handling, snip logic, session memory extraction
+- ✅ Roo provider improvements — MCP hub expansion, OpenAI-compatible streaming, tool dispatcher enhancements, file search helpers
+- ✅ Full workspace compilation — 154 crates, 0 errors
+- ✅ E2E real testing — MiniMax provider (anthropic-compatible) tested successfully with simple prompt + tool use
+
+Exit criteria:
+
+- ✅ `cargo check --workspace` passes with 0 errors
+- ✅ 880+ tests passing (19 new: 11 normalize + 4 watchdog + 4 thinking budget)
+- ✅ Real API calls to MiniMax provider succeed (simple prompt + file read tool use)
+
 ## Phase 19: Enhanced Remote Interaction — 📋 PLANNED
 
 Objective: improve remote user experience with real-time features.
