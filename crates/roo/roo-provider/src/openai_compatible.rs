@@ -231,27 +231,50 @@ impl OpenAiCompatibleProvider {
         let (model, info) = self.base.get_model();
 
         let max_tokens = info.max_tokens;
-        let temperature = self.default_temperature;
+
+        // Detect o-family reasoning models (o1, o3, o4-mini).
+        // Source: `src/api/providers/openai.ts` — `handleO3FamilyMessage`
+        let is_o_family = model.contains("o1") || model.contains("o3") || model.contains("o4");
 
         let openai_messages = convert_to_openai_messages(messages, None)?;
 
-        let mut system_and_messages = vec![serde_json::json!({
-            "role": "system",
-            "content": system_prompt
-        })];
+        // o-family models use "developer" role with formatting prefix.
+        let system_msg = if is_o_family {
+            serde_json::json!({
+                "role": "developer",
+                "content": format!("Formatting re-enabled\n{}", system_prompt)
+            })
+        } else {
+            serde_json::json!({
+                "role": "system",
+                "content": system_prompt
+            })
+        };
+
+        let mut system_and_messages = vec![system_msg];
         system_and_messages.extend(openai_messages);
 
         let mut body = serde_json::json!({
             "model": model,
-            "temperature": temperature,
             "messages": system_and_messages,
             "stream": true,
             "stream_options": { "include_usage": true },
             "parallel_tool_calls": metadata.parallel_tool_calls.unwrap_or(true),
         });
 
+        // o-family models do not accept temperature.
+        if !is_o_family {
+            let temperature = self.default_temperature;
+            body["temperature"] = serde_json::json!(temperature);
+        }
+
+        // o-family models use max_completion_tokens instead of max_tokens.
         if let Some(max_tokens) = max_tokens {
-            body["max_tokens"] = serde_json::json!(max_tokens);
+            if is_o_family {
+                body["max_completion_tokens"] = serde_json::json!(max_tokens);
+            } else {
+                body["max_tokens"] = serde_json::json!(max_tokens);
+            }
         }
 
         if let Some(tools) = convert_tools_for_openai(tools) {
