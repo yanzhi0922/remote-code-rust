@@ -1,7 +1,7 @@
 //! Google Gemini and Vertex AI model definitions.
 
 use std::collections::HashMap;
-use roo_types::model::{ModelInfo, ModelTier, ReasoningEffortExtended};
+use roo_types::model::{ModelInfo, ModelTier, ReasoningEffortExtended, SupportsReasoningEffort};
 
 /// Default Gemini model ID.
 pub const DEFAULT_MODEL_ID: &str = "gemini-3.1-pro-preview";
@@ -18,7 +18,7 @@ pub fn models() -> HashMap<String, ModelInfo> {
             context_window: 1_048_576,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(serde_json::json!(["low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high"])),
             reasoning_effort: Some(ReasoningEffortExtended::Low),
             supports_temperature: Some(true),
             default_temperature: Some(1.0),
@@ -56,7 +56,7 @@ pub fn models() -> HashMap<String, ModelInfo> {
             context_window: 1_048_576,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(serde_json::json!(["low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high"])),
             reasoning_effort: Some(ReasoningEffortExtended::Low),
             supports_temperature: Some(true),
             default_temperature: Some(1.0),
@@ -94,7 +94,7 @@ pub fn models() -> HashMap<String, ModelInfo> {
             context_window: 1_048_576,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(serde_json::json!(["low", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "high"])),
             reasoning_effort: Some(ReasoningEffortExtended::Low),
             supports_temperature: Some(true),
             default_temperature: Some(1.0),
@@ -131,7 +131,7 @@ pub fn models() -> HashMap<String, ModelInfo> {
             context_window: 1_048_576,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(serde_json::json!(["minimal", "low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["minimal", "low", "medium", "high"])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             supports_temperature: Some(true),
             default_temperature: Some(1.0),
@@ -409,7 +409,7 @@ pub fn vertex_models() -> HashMap<String, ModelInfo> {
             context_window: 1_048_576,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(serde_json::json!(["low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high"])),
             reasoning_effort: Some(ReasoningEffortExtended::Low),
             supports_temperature: Some(true),
             default_temperature: Some(1.0),
@@ -429,7 +429,7 @@ pub fn vertex_models() -> HashMap<String, ModelInfo> {
             context_window: 1_048_576,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(serde_json::json!(["low", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "high"])),
             reasoning_effort: Some(ReasoningEffortExtended::Low),
             supports_temperature: Some(true),
             default_temperature: Some(1.0),
@@ -448,7 +448,7 @@ pub fn vertex_models() -> HashMap<String, ModelInfo> {
             context_window: 1_048_576,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(serde_json::json!(["minimal", "low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["minimal", "low", "medium", "high"])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             supports_temperature: Some(true),
             default_temperature: Some(1.0),

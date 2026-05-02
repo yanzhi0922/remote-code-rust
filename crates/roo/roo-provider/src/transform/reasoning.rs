@@ -6,7 +6,7 @@
 
 use serde_json::{json, Value};
 
-use roo_types::model::{ModelInfo, ReasoningEffortExtended, ReasoningEffortSetting};
+use roo_types::model::{ModelInfo, ReasoningEffortExtended, ReasoningEffortSetting, SupportsReasoningEffort};
 use roo_types::provider_settings::ProviderSettings;
 
 // ---------------------------------------------------------------------------
@@ -139,16 +139,16 @@ pub fn should_use_reasoning_effort(model: &ModelInfo, settings: &ProviderSetting
     let cap = &model.supports_reasoning_effort;
 
     // Capability array: use only if selected is included
-    if let Some(Value::Array(arr)) = cap {
+    if let Some(SupportsReasoningEffort::Array(arr)) = cap {
         if let Some(effort) = &selected_effort {
             let effort_str = effort_setting_to_str(*effort);
-            return arr.iter().any(|v| v.as_str() == Some(effort_str));
+            return arr.iter().any(|v| v == effort_str);
         }
         return false;
     }
 
     // Boolean capability: true → require a selected effort
-    if let Some(Value::Bool(true)) = cap {
+    if let Some(SupportsReasoningEffort::Boolean(true)) = cap {
         return selected_effort.is_some();
     }
 
@@ -288,9 +288,9 @@ pub fn get_gemini_reasoning(opts: &GetModelReasoningOptions) -> Option<Value> {
     // Validate that the selected effort is supported by this specific model.
     // e.g. gemini-3-pro-preview only supports ["low", "high"] — sending
     // "medium" (carried over from a different model's settings) causes errors.
-    let effort_to_use = if let Some(Value::Array(arr)) = &opts.model.supports_reasoning_effort {
+    let effort_to_use = if let Some(SupportsReasoningEffort::Array(arr)) = &opts.model.supports_reasoning_effort {
         if is_gemini_thinking_level(effort_str)
-            && !arr.iter().any(|v| v.as_str() == Some(effort_str))
+            && !arr.iter().any(|v| v == effort_str)
         {
             // Fall back to model default
             opts.model
@@ -349,10 +349,9 @@ pub fn get_roo_reasoning(opts: &GetModelReasoningOptions) -> Option<Value> {
     // Check if model supports reasoning effort
     let cap = &opts.model.supports_reasoning_effort;
     let supports = match cap {
-        None | Some(Value::Bool(false)) | Some(Value::Null) => false,
-        Some(Value::Bool(true)) => true,
-        Some(Value::Array(_)) => true,
-        _ => false,
+        None | Some(SupportsReasoningEffort::Boolean(false)) => false,
+        Some(SupportsReasoningEffort::Boolean(true)) => true,
+        Some(SupportsReasoningEffort::Array(_)) => true,
     };
 
     if !supports {
@@ -422,7 +421,7 @@ mod tests {
     /// Helper to create a basic model with reasoning effort support (boolean).
     fn effort_model_bool() -> ModelInfo {
         ModelInfo {
-            supports_reasoning_effort: Some(Value::Bool(true)),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::Boolean(true)),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             context_window: 128_000,
             ..Default::default()
@@ -432,7 +431,7 @@ mod tests {
     /// Helper to create a model with reasoning effort support (array).
     fn effort_model_array() -> ModelInfo {
         ModelInfo {
-            supports_reasoning_effort: Some(json!(["low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high"])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             context_window: 128_000,
             ..Default::default()
@@ -525,7 +524,7 @@ mod tests {
     #[test]
     fn test_should_use_reasoning_effort_array_excludes_selected() {
         let model = ModelInfo {
-            supports_reasoning_effort: Some(json!(["low", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "high"])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             context_window: 128_000,
             ..Default::default()
@@ -541,7 +540,7 @@ mod tests {
     #[test]
     fn test_should_use_reasoning_effort_bool_requires_selected() {
         let model = ModelInfo {
-            supports_reasoning_effort: Some(Value::Bool(true)),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::Boolean(true)),
             context_window: 128_000,
             ..Default::default() // no reasoning_effort default
         };
@@ -673,7 +672,7 @@ mod tests {
     #[test]
     fn test_get_gemini_reasoning_effort_based() {
         let model = ModelInfo {
-            supports_reasoning_effort: Some(json!(["low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high"])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             context_window: 128_000,
             ..Default::default()
@@ -696,7 +695,7 @@ mod tests {
     #[test]
     fn test_get_gemini_reasoning_unsupported_effort_fallback() {
         let model = ModelInfo {
-            supports_reasoning_effort: Some(json!(["low", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "high"])),
             reasoning_effort: Some(ReasoningEffortExtended::Low),
             context_window: 128_000,
             ..Default::default()
@@ -783,7 +782,7 @@ mod tests {
     #[test]
     fn test_get_roo_reasoning_required_with_valid_effort() {
         let model = ModelInfo {
-            supports_reasoning_effort: Some(Value::Bool(true)),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::Boolean(true)),
             required_reasoning_effort: Some(true),
             context_window: 128_000,
             ..Default::default()
@@ -803,7 +802,7 @@ mod tests {
     #[test]
     fn test_get_roo_reasoning_required_with_disable() {
         let model = ModelInfo {
-            supports_reasoning_effort: Some(Value::Bool(true)),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::Boolean(true)),
             required_reasoning_effort: Some(true),
             context_window: 128_000,
             ..Default::default()

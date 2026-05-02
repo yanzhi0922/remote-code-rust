@@ -6,6 +6,43 @@
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
+// SupportsReasoningEffort
+// ---------------------------------------------------------------------------
+
+/// Whether a model supports reasoning effort.
+///
+/// Can be a simple boolean (`true`/`false`) or an array of allowed effort
+/// level strings (e.g. `["low", "medium", "high"]`).
+///
+/// Source: `packages/types/src/model.ts` — `supportsReasoningEffort`
+///   `z.union([z.boolean(), z.array(z.enum([...]))])`
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SupportsReasoningEffort {
+    /// Simple boolean flag.
+    Boolean(bool),
+    /// Array of allowed reasoning effort level strings.
+    Array(Vec<String>),
+}
+
+impl SupportsReasoningEffort {
+    /// Returns `true` if the model supports reasoning effort (either the
+    /// boolean is true, or a non-empty array is provided).
+    pub fn is_supported(&self) -> bool {
+        match self {
+            Self::Boolean(b) => *b,
+            Self::Array(arr) => !arr.is_empty(),
+        }
+    }
+}
+
+impl<const N: usize> From<[&str; N]> for SupportsReasoningEffort {
+    fn from(arr: [&str; N]) -> Self {
+        Self::Array(arr.iter().map(|s| s.to_string()).collect())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ReasoningEffort
 // ---------------------------------------------------------------------------
 
@@ -169,7 +206,8 @@ pub struct ModelInfo {
     pub required_reasoning_budget: Option<bool>,
     /// Whether the model supports reasoning effort.
     /// Can be a boolean or an array of allowed effort values.
-    pub supports_reasoning_effort: Option<serde_json::Value>,
+    /// Source: `packages/types/src/model.ts` — `supportsReasoningEffort`
+    pub supports_reasoning_effort: Option<SupportsReasoningEffort>,
     /// Whether reasoning effort is required.
     pub required_reasoning_effort: Option<bool>,
     /// Whether to preserve reasoning in the conversation.
